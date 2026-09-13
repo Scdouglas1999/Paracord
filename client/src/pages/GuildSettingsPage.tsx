@@ -1,7 +1,7 @@
+import { useCurrentGuilds } from '../hooks/useGuilds';
 import { GuildSettings } from '../components/guild/GuildSettings';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { Loader2, ShieldAlert } from 'lucide-react';
-import { useGuildStore } from '../stores/guildStore';
 import { usePermissions } from '../hooks/usePermissions';
 import { canAccessGuildSettings } from '../lib/guildSettingsAccess';
 import { useUIStore } from '../stores/uiStore';
@@ -27,7 +27,7 @@ export function GuildSettingsPage() {
   const initialSection = overlayInitialSection || searchParams.get('section');
   const initialChannelId = overlayChannelId || searchParams.get('channelId');
 
-  const guilds = useGuildStore((s) => s.guilds);
+  const guilds = useCurrentGuilds();
   const guild = guilds.find((g) => g.id === guildId);
   const { permissions, isAdmin, isLoading } = usePermissions(guildId || null);
   const canOpenSettings = canAccessGuildSettings(permissions, isAdmin);

@@ -1,4 +1,5 @@
 import { getApi } from './activeClient';
+import type { RestClient } from './restClient';
 
 /** 0 = every message, 1 = only mentions, 2 = nothing. */
 export type NotificationLevel = 0 | 1 | 2;
@@ -37,7 +38,7 @@ export interface UpdateNotificationSettings {
   suppress_everyone?: boolean;
 }
 
-export const notificationSettingsApi = {
+export function createNotificationSettingsApi(getApi: () => RestClient) { return {
   /**
    * Every override the current user holds, both scopes, in one request — the
    * sidebar needs all of it before it can render.
@@ -78,4 +79,6 @@ export const notificationSettingsApi = {
   async clearChannel(channelId: string): Promise<void> {
     await getApi().delete(`/channels/${channelId}/notification-settings`);
   },
-};
+}; }
+
+export const notificationSettingsApi = createNotificationSettingsApi(getApi);

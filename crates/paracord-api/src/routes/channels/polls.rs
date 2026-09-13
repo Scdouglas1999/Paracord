@@ -20,6 +20,20 @@ pub async fn create_poll(
     Path(channel_id): Path<i64>,
     Json(body): Json<CreatePollRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let channel = paracord_db::channels::get_channel(&state.db, channel_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    ensure_channel_permissions(
+        &state,
+        &channel,
+        auth.user_id,
+        &[Permissions::VIEW_CHANNEL, Permissions::SEND_MESSAGES],
+    )
+    .await?;
+
+    require_supported_action(channel.channel_type, "poll")?;
+
     let question = body.question.trim();
     if question.is_empty() || question.chars().count() > MAX_POLL_QUESTION_LEN {
         return Err(ApiError::BadRequest(
@@ -68,18 +82,6 @@ pub async fn create_poll(
         None => None,
     };
 
-    let channel = paracord_db::channels::get_channel(&state.db, channel_id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
-        .ok_or(ApiError::NotFound)?;
-    ensure_channel_permissions(
-        &state,
-        &channel,
-        auth.user_id,
-        &[Permissions::VIEW_CHANNEL, Permissions::SEND_MESSAGES],
-    )
-    .await?;
-
     let message_id = paracord_util::snowflake::generate(1);
     let msg = paracord_core::message::create_message_with_type(
         &state.db,
@@ -107,7 +109,7 @@ pub async fn create_poll(
     .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
     let msg_json = message_to_json(&state, &msg, auth.user_id).await;
-    dispatch_channel_event(&state, &channel, "MESSAGE_CREATE", msg_json.clone()).await;
+    dispatch_channel_event(&state, &channel, "MESSAGE_CREATE", msg_json.clone()).await?;
 
     Ok((StatusCode::CREATED, Json(msg_json)))
 }
@@ -195,7 +197,7 @@ pub async fn add_poll_vote(
         "user_id": auth.user_id.to_string(),
         "poll": poll_json,
     });
-    dispatch_channel_event(&state, &channel, "POLL_VOTE_ADD", event_payload).await;
+    dispatch_channel_event(&state, &channel, "POLL_VOTE_ADD", event_payload).await?;
 
     Ok(Json(poll_to_json(&updated)))
 }
@@ -245,7 +247,7 @@ pub async fn remove_poll_vote(
         "user_id": auth.user_id.to_string(),
         "poll": poll_json,
     });
-    dispatch_channel_event(&state, &channel, "POLL_VOTE_REMOVE", event_payload).await;
+    dispatch_channel_event(&state, &channel, "POLL_VOTE_REMOVE", event_payload).await?;
 
     Ok(Json(poll_to_json(&updated)))
 }

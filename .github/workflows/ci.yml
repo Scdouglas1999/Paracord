@@ -11,8 +11,8 @@ env:
   SQLX_OFFLINE: "true"
 
 jobs:
-  security-gate:
-    name: Security Gate
+  rust-dependency-audit:
+    name: Rust Dependency Audit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,6 +23,12 @@ jobs:
         run: python3 scripts/check_audit_exceptions.py
       - name: Cargo audit
         run: cargo audit
+
+  npm-dependency-audit:
+    name: Client Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -31,6 +37,13 @@ jobs:
       - name: npm audit
         working-directory: client
         run: npm ci && npm audit --audit-level=moderate
+
+  security-gate:
+    name: Security Gate
+    runs-on: ubuntu-latest
+    needs: [rust-dependency-audit, npm-dependency-audit]
+    steps:
+      - uses: actions/checkout@v4
       - name: Enforce P0 release gate
         run: python3 scripts/security_gate_check.py
 
@@ -92,7 +105,7 @@ jobs:
       - name: Python release helper syntax
         run: python3 scripts/check_python_syntax.py
       - name: Shell script syntax
-        run: bash -n scripts/setup.sh scripts/backup-db.sh scripts/restore-db.sh
+        run: bash -n scripts/setup.sh scripts/backup-db.sh scripts/restore-db.sh scripts/install.sh scripts/ci_install_smoke.sh
       - name: GitHub workflow lint
         run: |
           docker run --rm -v "${GITHUB_WORKSPACE}:/repo" -w /repo \
@@ -108,6 +121,21 @@ jobs:
         run: npm ci && npm run build
       - name: Cargo check (default features)
         run: cargo check --workspace
+
+  install-smoke:
+    name: Installer Smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      # End-to-end: lint both installers, package a fake release archive,
+      # exercise the local/HTTP/checksum/upgrade paths, and — ubuntu-latest
+      # has passwordless sudo and a live systemd — the root path too (a stub
+      # paracord binary stands in so no real ports are bound). The script
+      # self-skips anything the environment cannot support.
+      - name: Installer end-to-end smoke
+        run: bash scripts/ci_install_smoke.sh
 
   rust:
     name: Rust Check
@@ -156,6 +184,8 @@ jobs:
       - name: Build client
         working-directory: client
         run: npm ci && npm run build
+      - name: Verify Rust API schema export
+        run: cargo run --locked -p paracord-contracts --bin export-contracts -- --check contracts/api-contracts.json
       - name: Check
         run: cargo check --workspace
       - name: Test
@@ -249,8 +279,8 @@ jobs:
         # database cloned from a migrated template, so isolation matches SQLite's
         # and the migration cost is paid once per test binary.
         run: cargo test -p paracord-api --tests --no-fail-fast -- --test-threads=4
-      - name: Install SQLite CLI (migrator fixture)
-        run: sudo apt-get update && sudo apt-get install -y sqlite3
+      - name: Install database recovery tools
+        run: sudo apt-get update && sudo apt-get install -y sqlite3 postgresql-client-16 openssl
       - name: SQLite -> PostgreSQL migrator end-to-end
         # Seeds a freshly migrated temp SQLite database, runs
         # `paracord-server migrate-to-postgres` against the live PG service, and
@@ -258,6 +288,10 @@ jobs:
         # throwaway target database so it does not collide with the smoke data
         # loaded above.
         run: python3 scripts/ci_pg_migrator_smoke.py
+      - name: Verify isolated SQLite and PostgreSQL archive recovery
+        env:
+          PARACORD_RESTORE_BINARY: ${{ github.workspace }}/target/debug/paracord-server
+        run: python3 scripts/ci_restore_smoke.py
 
   client:
     name: Client Build
@@ -273,9 +307,15 @@ jobs:
       - name: Install dependencies
         working-directory: client
         run: npm ci
+      - name: Verify generated client API contracts
+        working-directory: client
+        run: npm run contracts:check
       - name: Type check
         working-directory: client
         run: npm run typecheck
+      - name: Lint
+        working-directory: client
+        run: npm run lint
       - name: Static accessibility audit
         working-directory: client
         run: npm run test:a11y:static

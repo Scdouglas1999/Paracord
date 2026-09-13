@@ -137,7 +137,7 @@ export async function deleteSession(
 
 // ── Prekey Store ─────────────────────────────────────────────────
 
-function serializePrekeyStore(store: LocalPrekeyStore): SerializedLocalPrekeyStore {
+export function serializePrekeyStore(store: LocalPrekeyStore): SerializedLocalPrekeyStore {
   return {
     signedPrekey: {
       id: store.signedPrekey.id,
@@ -158,10 +158,13 @@ function serializePrekeyStore(store: LocalPrekeyStore): SerializedLocalPrekeySto
         }
       : null,
     nextOPKId: store.nextOPKId,
+    signedPrekeyArchive: (store.signedPrekeyArchive ?? []).map(key => ({ ...key,
+      publicKey: toBase64(key.publicKey), privateKey: toBase64(key.privateKey),
+    })),
   };
 }
 
-function deserializePrekeyStore(s: SerializedLocalPrekeyStore): LocalPrekeyStore {
+export function deserializePrekeyStore(s: SerializedLocalPrekeyStore): LocalPrekeyStore {
   return {
     signedPrekey: {
       id: s.signedPrekey.id,
@@ -182,6 +185,9 @@ function deserializePrekeyStore(s: SerializedLocalPrekeyStore): LocalPrekeyStore
         }
       : null,
     nextOPKId: s.nextOPKId,
+    signedPrekeyArchive: (s.signedPrekeyArchive ?? []).map(key => ({ ...key,
+      publicKey: fromBase64(key.publicKey), privateKey: fromBase64(key.privateKey),
+    })),
   };
 }
 
@@ -327,9 +333,10 @@ export function ensureLocalLastResortPrekey(store: LocalPrekeyStore): LocalPreke
 /**
  * Get the signed prekey pair from the store as an X25519KeyPair.
  */
-export function getSignedPrekeyPair(store: LocalPrekeyStore): X25519KeyPair {
-  return {
-    publicKey: store.signedPrekey.publicKey,
-    privateKey: store.signedPrekey.privateKey,
-  };
+export function getSignedPrekeyPair(store: LocalPrekeyStore, id?: number): X25519KeyPair {
+  if (id !== undefined && (!Number.isSafeInteger(id) || id < 0)) throw new Error('Invalid signed-prekey ID.');
+  const key = id === undefined || store.signedPrekey.id === id ? store.signedPrekey
+    : store.signedPrekeyArchive?.find(key => key.id === id);
+  if (!key) throw new Error('The signed key for this message is missing. Restore the account’s encrypted key backup.');
+  return { publicKey: key.publicKey, privateKey: key.privateKey };
 }

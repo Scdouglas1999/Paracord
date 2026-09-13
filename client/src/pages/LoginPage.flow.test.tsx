@@ -8,6 +8,10 @@ import { setAccessToken, setRefreshToken } from '../lib/authToken';
 import { useAccountStore } from '../stores/accountStore';
 import { LoginPage } from './LoginPage';
 
+const legacyAttachment = vi.hoisted(() => vi.fn());
+
+const mockGetSetupStatus = vi.hoisted(() => vi.fn());
+
 vi.mock('../api/auth', () => ({
   authApi: {
     options: vi.fn(),
@@ -15,7 +19,7 @@ vi.mock('../api/auth', () => ({
     forgotPassword: vi.fn(),
     resetPassword: vi.fn(),
     mfaLogin: vi.fn(),
-    attachPublicKey: vi.fn(),
+    attachPublicKey: legacyAttachment,
     getMe: vi.fn(),
   },
 }));
@@ -47,12 +51,19 @@ vi.mock('../lib/authToken', () => ({
   setRefreshToken: vi.fn(),
 }));
 
+vi.mock('../api/instance', () => ({
+  instanceApi: {
+    getSetupStatus: mockGetSetupStatus,
+  },
+}));
+
 function renderLoginPage() {
   render(
     <MemoryRouter initialEntries={['/login']}>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/app" element={<div>App shell</div>} />
+        <Route path="/setup-server" element={<div>Set up your Paracord server</div>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -61,6 +72,7 @@ function renderLoginPage() {
 describe('LoginPage password reset and MFA flows', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetSetupStatus.mockResolvedValue({ data: { setup_required: false } });
     vi.mocked(authApi.options).mockResolvedValue({
       data: { allow_username_login: true, require_email: false },
     } as never);
@@ -68,7 +80,7 @@ describe('LoginPage password reset and MFA flows', () => {
     vi.mocked(authApi.forgotPassword).mockReset();
     vi.mocked(authApi.resetPassword).mockReset();
     vi.mocked(authApi.mfaLogin).mockReset();
-    vi.mocked(authApi.attachPublicKey).mockReset();
+    legacyAttachment.mockReset();
     vi.mocked(authApi.getMe).mockResolvedValue({
       data: {
         id: 'user-1',
@@ -167,7 +179,7 @@ describe('LoginPage password reset and MFA flows', () => {
     expect(await screen.findByText('App shell')).toBeInTheDocument();
   });
 
-  it('uses rotated tokens returned by public-key attachment during login', async () => {
+  it('keeps the login session and does not enroll an unlocked identity implicitly', async () => {
     const user = userEvent.setup();
     vi.mocked(hasAccount).mockReturnValue(true);
     vi.mocked(useAccountStore.getState).mockReturnValue({
@@ -189,35 +201,54 @@ describe('LoginPage password reset and MFA flows', () => {
         },
       },
     } as never);
-    vi.mocked(authApi.attachPublicKey).mockResolvedValue({
-      data: {
-        token: 'rotated-access-token',
-        refresh_token: 'rotated-refresh-token',
-        user: {
-          id: 'user-1',
-          username: 'adminuser',
-          discriminator: 1,
-          flags: 1,
-          bot: false,
-          system: false,
-          public_key: 'a'.repeat(64),
-          created_at: '2026-01-01T00:00:00.000Z',
-        },
-      },
-    } as never);
-
     renderLoginPage();
 
     await user.type(screen.getByLabelText(/Email or Username/), 'admin@example.com');
     await user.type(screen.getByLabelText(/^Password/), 'OriginalPass123!');
     await user.click(screen.getByRole('button', { name: 'Log In' }));
 
-    // The password must travel with the key — see authApi.attachPublicKey.
-    await waitFor(() =>
-      expect(authApi.attachPublicKey).toHaveBeenCalledWith('a'.repeat(64), 'OriginalPass123!'),
-    );
-    expect(setAccessToken).toHaveBeenLastCalledWith('rotated-access-token');
-    expect(setRefreshToken).toHaveBeenLastCalledWith('rotated-refresh-token');
     expect(await screen.findByText('App shell')).toBeInTheDocument();
+    expect(legacyAttachment).not.toHaveBeenCalled();
+    expect(setAccessToken).toHaveBeenLastCalledWith('initial-access-token');
+    expect(setRefreshToken).toHaveBeenLastCalledWith('initial-refresh-token');
+  });
+  it('clears the previous refresh-token copy when the login response uses cookies only', async () => {
+    vi.mocked(authApi.login).mockResolvedValue({ data: {
+      token: 'cookie-session-access', user: { id: 'user-1', username: 'resetuser' },
+    } } as never);
+    renderLoginPage();
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(/Email or Username/), 'resetuser');
+    await user.type(screen.getByLabelText(/^Password/), 'OriginalPass123!');
+    await user.click(screen.getByRole('button', { name: 'Log In' }));
+    expect(await screen.findByText('App shell')).toBeInTheDocument();
+    expect(setRefreshToken).toHaveBeenLastCalledWith(null);
+  });
+
+});
+
+describe('LoginPage on a server that has no owner yet', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(authApi.options).mockResolvedValue({
+      data: { allow_username_login: true, require_email: false },
+    } as never);
+  });
+
+  it('redirects to the claim flow instead of showing a sign-in form nobody can use', async () => {
+    mockGetSetupStatus.mockResolvedValue({ data: { setup_required: true } });
+
+    renderLoginPage();
+
+    expect(await screen.findByText('Set up your Paracord server')).toBeInTheDocument();
+  });
+
+  it('stays on sign-in when the setup check fails, rather than guessing', async () => {
+    mockGetSetupStatus.mockRejectedValue(new Error('offline'));
+
+    renderLoginPage();
+
+    await waitFor(() => expect(mockGetSetupStatus).toHaveBeenCalled());
+    expect(screen.queryByText('Set up your Paracord server')).not.toBeInTheDocument();
   });
 });

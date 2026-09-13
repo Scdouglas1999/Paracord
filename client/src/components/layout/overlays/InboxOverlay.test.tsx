@@ -1,3 +1,4 @@
+import { useAuthStore } from '../../../stores/authStore';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -21,6 +22,7 @@ vi.mock('framer-motion', async () => {
 });
 
 vi.mock('../../../api/channels', () => ({
+  createChannelApi: () => channelApi,
   channelApi: {
     getMessages: vi.fn(),
     updateReadState: vi.fn(),
@@ -80,6 +82,7 @@ function LocationProbe() {
 describe('InboxOverlay', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useAuthStore.setState({ token: 'token', user: { id: 'viewer' } as never });
     useReadStateStore.getState().reset();
     useSavedMessageStore.getState().reset();
     vi.mocked(channelApi.getMessages).mockResolvedValue({ data: [message] } as never);
@@ -103,7 +106,7 @@ describe('InboxOverlay', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Mark all read' }));
 
     await waitFor(() => expect(channelApi.updateReadState).toHaveBeenCalledWith('channel-2', 'message-3'));
-    expect(useReadStateStore.getState().readStates['channel-2']).toMatchObject({
+    expect(useReadStateStore.getState().getReadState({ serverId: '__local__', userId: 'viewer' }, 'channel-2')).toMatchObject({
       last_message_id: 'message-3',
       mention_count: 0,
     });

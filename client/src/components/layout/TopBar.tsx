@@ -1,3 +1,9 @@
+import { ConversationHeaderActions, attentionDescription, type HeaderAction, type ActiveHeaderSurface } from './ConversationHeaderActions';
+import type { ContextMenuItem } from '../ui/ContextMenu';
+import { useConversationActions } from '../../hooks/useConversationActions';
+import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
+import { useCurrentReadStates } from '../../hooks/useReadStates';
+import { useCurrentChannelStore } from '../../hooks/useChannels';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import {
@@ -21,21 +27,17 @@ import {
   Phone,
   PhoneOff,
   Loader2,
-  MoreHorizontal,
   TrendingUp,
   Settings,
 } from 'lucide-react';
-import type { LucideIcon } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router';
 import { extractApiError } from '../../api/client';
 import { channelApi } from '../../api/channels';
-import { authApi } from '../../api/auth';
 import { useVoice } from '../../hooks/useVoice';
 import { isMessageUnread } from '../../hooks/useUnreadCounts';
 import { usePermissions } from '../../hooks/usePermissions';
 import { useUIStore } from '../../stores/uiStore';
 import type { ContextPanelMode } from '../../stores/uiStore';
-import { useChannelStore } from '../../stores/channelStore';
 import { useReadStateStore } from '../../stores/readStateStore';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { toast } from '../../stores/toastStore';
@@ -44,10 +46,12 @@ import { canAccessGuildSettings } from '../../lib/guildSettingsAccess';
 import { Tooltip } from '../ui/Tooltip';
 import { cn } from '../../lib/utils';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
-import { getVersionedJson } from '../../lib/versionedStorage';
+import { useMutedGuilds } from '../../hooks/useMutedGuilds';
+import { entityScopeKey } from '../../lib/serverScope';
 import { TopBarOverlay } from './overlays/TopBarOverlay';
 import { InboxOverlay } from './overlays/InboxOverlay';
 import { HelpOverlay } from './overlays/HelpOverlay';
+import { VoiceConnectionCheck } from '../voice/VoiceConnectionCheck';
 import { ChannelSwitcher } from './ChannelSwitcher';
 
 interface TopBarProps {
@@ -69,7 +73,7 @@ function ConnectionLatencyBadge() {
   const connectionLatency = useUIStore((s) => s.connectionLatency);
   return (
     <Tooltip content={`Latency: ${connectionLatency}ms`} side="bottom">
-      <div className="ml-1 hidden items-center gap-1.5 rounded-sm bg-bg-mod-subtle px-2 py-1 md:flex">
+      <div className="chat-header-connection ml-1 items-center gap-1.5 rounded-sm bg-bg-mod-subtle px-2 py-1">
         <Wifi size={12} className={cn(
           connectionLatency < 100
             ? 'text-accent-success'
@@ -92,7 +96,14 @@ function ConnectionLatencyBadge() {
   );
 }
 
-export function TopBar({
+export function TopBar(props: TopBarProps) {
+  const scope = useCurrentAccountScope();
+  const { channelId } = useParams();
+  const target = props.dmChannelId ?? channelId ?? 'header';
+  return <OwnedTopBar key={scope ? entityScopeKey(scope, target) : `unavailable:${target}`} {...props} />;
+}
+
+function OwnedTopBar({
   channelName,
   channelTopic,
   isVoice,
@@ -106,17 +117,20 @@ export function TopBar({
   const navigate = useNavigate();
   const { guildId: paramGuildId, channelId } = useParams();
   const resolvedGuildId = guildId ?? paramGuildId;
+  const { actions } = useConversationActions(dmChannelId ?? channelId);
 
   // contextPanelMode is the single source of truth for the right panel.
   const contextPanelMode = useUIStore((s) => s.contextPanelMode);
   const toggleContextPanelMode = useUIStore((s) => s.toggleContextPanelMode);
   const sidebarCollapsed = useUIStore((s) => s.sidebarCollapsed);
   const connectionStatus = useUIStore((s) => s.connectionStatus);
-  const channelsById = useChannelStore((s) => s.channelsById);
-  const channelsByGuild = useChannelStore((s) => s.channelsByGuild);
+  const channelsById = useCurrentChannelStore((s) => s.channelsById);
+  const channelsByGuild = useCurrentChannelStore((s) => s.channelsByGuild);
   const systemAudioCaptureActive = useVoiceStore((s) => s.systemAudioCaptureActive);
   const { connected: voiceConnected, channelId: voiceChannelId, joinChannel, leaveChannel } = useVoice();
   const [dmCallLoading, setDmCallLoading] = useState(false);
+  // A failed DM call offers the guided check right where the failure appeared.
+  const [showVoiceCheck, setShowVoiceCheck] = useState(false);
 
   const setGuildSettingsId = useUIStore((s) => s.setGuildSettingsId);
   const { permissions, isAdmin: isGuildAdmin } = usePermissions(
@@ -128,7 +142,7 @@ export function TopBar({
   const isInDmCall = isDM && voiceConnected && voiceChannelId === (dmChannelId || channelId);
 
   const handleDmCallToggle = async () => {
-    if (!isDM) return;
+    if (!isDM || (!isInDmCall && !actions.voice.allowed)) return;
     const targetChannelId = dmChannelId || channelId;
     if (!targetChannelId) return;
 
@@ -146,10 +160,16 @@ export function TopBar({
         voiceState.connectionError
         && voiceState.connectionErrorChannelId === targetChannelId
       ) {
-        toast.error(`Could not start voice call: ${voiceState.connectionError}`);
+        toast.error(`Could not start voice call: ${voiceState.connectionError}`, undefined, {
+          label: 'Run connection check',
+          onClick: () => setShowVoiceCheck(true),
+        });
       }
     } catch {
-      toast.error('Could not start voice call.');
+      toast.error('Could not start voice call.', undefined, {
+        label: 'Run connection check',
+        onClick: () => setShowVoiceCheck(true),
+      });
     } finally {
       setDmCallLoading(false);
     }
@@ -164,26 +184,24 @@ export function TopBar({
   const [followBusyTargetId, setFollowBusyTargetId] = useState<string | null>(null);
   const [showInbox, setShowInbox] = useState(false);
   const [inboxError, setInboxError] = useState<string | null>(null);
-  const readStateRecord = useReadStateStore((s) => s.readStates);
+  const readScope = useCurrentAccountScope();
+  const readStateRecord = useCurrentReadStates();
   const readStates = useMemo(() => Object.values(readStateRecord), [readStateRecord]);
   const [showHelp, setShowHelp] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
-  const [showMoreActions, setShowMoreActions] = useState(false);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryText, setSummaryText] = useState('');
   const [summaryMeta, setSummaryMeta] = useState<{ provider: string; model: string; messageCount: number } | null>(null);
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const followDialogRef = useRef<HTMLDivElement>(null);
   const summaryDialogRef = useRef<HTMLDivElement>(null);
-  const moreActionsRef = useRef<HTMLDivElement>(null);
-  const [mutedGuildIds, setMutedGuildIds] = useState<string[]>([]);
+  const { mutedGuildKeys } = useMutedGuilds();
 
   const closeTopBarSurfaces = useCallback(() => {
     setShowFollowManager(false);
     setShowInbox(false);
     setShowHelp(false);
     setShowSummary(false);
-    setShowMoreActions(false);
   }, []);
 
   const closeContextPanel = useCallback(() => {
@@ -203,6 +221,7 @@ export function TopBar({
 
   const selectedChannel = channelId ? channelsById[channelId] : undefined;
   const allChannels = useMemo(() => Object.values(channelsById), [channelsById]);
+  const isGroupDm = isDM && (selectedChannel?.type === 3 || selectedChannel?.channel_type === 3);
   const isAnnouncementChannel = selectedChannel?.type === 5 || selectedChannel?.channel_type === 5;
   const followTargets = useMemo(() => {
     if (!selectedChannel?.guild_id) return [];
@@ -218,7 +237,7 @@ export function TopBar({
     const stateByChannel = new Map(readStates.map((state) => [state.channel_id, state]));
     for (const channel of allChannels) {
       if (channel.id === channelId) continue;
-      if (channel?.guild_id && mutedGuildIds.includes(channel.guild_id)) {
+      if (channel?.guild_id && readScope && mutedGuildKeys.includes(entityScopeKey(readScope, channel.guild_id))) {
         continue;
       }
       if (!channel.last_message_id || channel.type === 4 || channel.channel_type === 4) continue;
@@ -237,11 +256,8 @@ export function TopBar({
     }
     result.sort((a, b) => b.state.mention_count - a.state.mention_count);
     return result;
-  }, [readStates, allChannels, mutedGuildIds, channelId]);
-  const inboxBadge = useMemo(() => {
-    const mentions = unreadItems.reduce((total, item) => total + item.state.mention_count, 0);
-    return mentions > 0 ? mentions : unreadItems.length;
-  }, [unreadItems]);
+  }, [readStates, allChannels, mutedGuildKeys, channelId, readScope]);
+  const inboxMentions = unreadItems.reduce((total, item) => total + item.state.mention_count, 0);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -256,11 +272,12 @@ export function TopBar({
         && channelId
       ) {
         event.preventDefault();
+        closeTopBarSurfaces();
         useUIStore.getState().setContextPanelMode('search');
       }
       if (event.key === 'Escape') {
         const anyOpen =
-          showFollowManager || showInbox || showHelp || showSummary || showMoreActions;
+          showFollowManager || showInbox || showHelp || showSummary;
         if (!anyOpen) return;
         event.preventDefault();
         closeTopBarSurfaces();
@@ -275,46 +292,17 @@ export function TopBar({
     showFollowManager,
     showHelp,
     showInbox,
-    showMoreActions,
     showSummary,
   ]);
-
-  useEffect(() => {
-    if (!showMoreActions) return;
-    const onPointerDown = (event: MouseEvent) => {
-      if (!moreActionsRef.current?.contains(event.target as Node)) {
-        setShowMoreActions(false);
-      }
-    };
-    document.addEventListener('mousedown', onPointerDown);
-    return () => document.removeEventListener('mousedown', onPointerDown);
-  }, [showMoreActions]);
 
   // Read state lives in the shared store, kept live by dispatch and mark-read
   // call sites; pull an authoritative snapshot once on mount.
   useEffect(() => {
-    void useReadStateStore.getState().refresh();
-  }, []);
-
-  useEffect(() => {
-    const readMutedGuilds = () => {
-      try {
-        setMutedGuildIds(getVersionedJson<string[]>('muted-guilds', [], ['muted-guilds']));
-      } catch {
-        setMutedGuildIds([]);
-      }
-    };
-    readMutedGuilds();
-    window.addEventListener('storage', readMutedGuilds);
-    window.addEventListener('paracord-muted-guilds-updated', readMutedGuilds as EventListener);
-    return () => {
-      window.removeEventListener('storage', readMutedGuilds);
-      window.removeEventListener('paracord-muted-guilds-updated', readMutedGuilds as EventListener);
-    };
+    void useReadStateStore.getState().refreshAll();
   }, []);
 
   const openSummary = async () => {
-    if (!channelId) return;
+    if (!channelId || !actions.summary.allowed) return;
     prepareTopBarSurface();
     setShowSummary(true);
     setSummaryLoading(true);
@@ -396,13 +384,8 @@ export function TopBar({
     prepareTopBarSurface();
     setInboxError(null);
     try {
-      setMutedGuildIds(getVersionedJson<string[]>('muted-guilds', [], ['muted-guilds']));
-    } catch {
-      setMutedGuildIds([]);
-    }
-    try {
-      const { data } = await authApi.getReadStates();
-      useReadStateStore.getState().setAll(data);
+      if (!readScope) throw new Error('Sign in to this server before opening the inbox.');
+      await useReadStateStore.getState().refresh(readScope);
     } catch (err) {
       setInboxError(`Failed to load inbox: ${extractApiError(err)}`);
     }
@@ -420,96 +403,57 @@ export function TopBar({
     setGuildSettingsId(resolvedGuildId);
   };
 
-  const TopBarIcon = ({
-    onClick,
-    icon: Icon,
-    active,
-    tooltip,
-    disabled,
-    className,
-    badge,
-    controlsPanel,
-  }: {
-    onClick: () => void;
-    icon: LucideIcon;
-    active?: boolean;
-    tooltip: string;
-    disabled?: boolean;
-    className?: string;
-    badge?: number;
-    /** True for toggles that drive the ContextPanel → expose aria-expanded. */
-    controlsPanel?: boolean;
-  }) => (
-    <div className={className}>
-      <Tooltip content={tooltip} side="bottom">
-        <button
-          aria-label={tooltip}
-          aria-pressed={active}
-          aria-expanded={controlsPanel ? Boolean(active) : undefined}
-          onClick={onClick}
-          disabled={disabled}
-          className={cn(
-            'relative inline-flex h-9 w-9 items-center justify-center rounded-sm text-interactive-normal outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-interactive-hover focus-visible:shadow-[var(--focus-ring)]',
-            active && 'bg-accent-tint text-accent-primary hover:bg-accent-tint-strong hover:text-accent-primary',
-            disabled && 'cursor-not-allowed opacity-40 hover:bg-transparent hover:text-interactive-muted',
-          )}
-        >
-          <Icon size={18} />
-          {badge != null && badge > 0 && (
-            <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-accent-primary px-1 text-[10px] font-bold tabular-nums text-text-on-accent">
-              {badge > 99 ? '99+' : badge}
-            </span>
-          )}
-        </button>
-      </Tooltip>
-    </div>
-  );
-
-  const MoreAction = ({
-    label,
-    icon: Icon,
-    onClick,
-    active,
-    disabled,
-  }: {
-    label: string;
-    icon: LucideIcon;
-    onClick: () => void;
-    active?: boolean;
-    disabled?: boolean;
-  }) => (
-    <button
-      type="button"
-      role="menuitem"
-      disabled={disabled}
-      onClick={() => {
-        onClick();
-        setShowMoreActions(false);
-      }}
-      className={cn(
-        'flex h-9 w-full items-center gap-2.5 rounded-sm px-2.5 text-left text-label outline-none transition-colors',
-        active
-          ? 'bg-accent-tint text-text-primary'
-          : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary focus:bg-accent-tint focus:text-text-primary',
-        disabled && 'cursor-not-allowed opacity-40',
-      )}
-    >
-      <Icon size={17} className={active ? 'text-accent-primary' : 'text-channel-icon'} />
-      <span className="min-w-0 flex-1 truncate">{label}</span>
-    </button>
-  );
-
   // Drives a ContextPanel mode off the single source of truth.
   const panelToggle = (mode: Exclude<ContextPanelMode, null>) => () => {
     closeTopBarSurfaces();
     toggleContextPanelMode(mode);
   };
 
+  const primaryActions: HeaderAction[] = [
+    ...(isDM && (dmChannelId || channelId) ? [{
+      label: isInDmCall ? 'End direct message call' : 'Start direct message voice call',
+      icon: isInDmCall ? PhoneOff : Phone,
+      onClick: () => void handleDmCallToggle(),
+      active: Boolean(isInDmCall),
+      disabled: dmCallLoading || (!isInDmCall && !actions.voice.allowed),
+      reason: isInDmCall ? null : actions.voice.reason,
+    }] : []),
+    { label: 'Search Messages', icon: Search, onClick: panelToggle('search'),
+      active: contextPanelMode === 'search', controlsPanel: true, disabled: !channelId,
+      reason: channelId ? null : 'Select a channel to search' },
+    ...(!isDM || isGroupDm ? [{ label: 'Member List', icon: Users, onClick: panelToggle('members'),
+      active: contextPanelMode === 'members', controlsPanel: true }] : []),
+  ];
+  const secondaryActions: ContextMenuItem[] = [
+    { label: 'Catch up summary', icon: <Sparkles size={17} />, action: () => void openSummary(),
+      disabled: !actions.summary.allowed, description: actions.summary.reason ?? undefined },
+    { label: 'Pinned messages', icon: <Pin size={17} />, action: panelToggle('pins'), disabled: !channelId },
+    ...(!isDM && !isVoice ? [{ label: 'Threads', icon: <MessagesSquare size={17} />, action: panelToggle('threads') }] : []),
+    ...(isAnnouncementChannel ? [{ label: 'Manage follows', icon: <Share2 size={17} />, action: () => void openFollowManager(), disabled: !channelId }] : []),
+    ...(!isDM ? [{ label: 'Space leaderboard', icon: <TrendingUp size={17} />, action: panelToggle('economy') }] : []),
+    ...(canOpenSpaceSettings && resolvedGuildId ? [{ label: 'Space settings', icon: <Settings size={17} />, action: openSpaceSettings }] : []),
+    { label: '', action: () => {}, divider: true },
+    { label: 'Inbox', icon: <Inbox size={17} />, action: () => void openInbox(), description: attentionDescription(unreadItems.length, inboxMentions) },
+    { label: 'Keyboard shortcuts', icon: <HelpCircle size={17} />, action: openHelp },
+  ];
+  const contextualSurfaces: Partial<Record<Exclude<ContextPanelMode, null>, ActiveHeaderSurface>> = {
+    pins: { label: 'Pinned messages', icon: Pin, onClose: panelToggle('pins') },
+    threads: { label: 'Threads', icon: MessagesSquare, onClose: panelToggle('threads') },
+    economy: { label: 'Space leaderboard', icon: TrendingUp, onClose: panelToggle('economy') },
+  };
+  const activeSurface: ActiveHeaderSurface | undefined = showSummary
+    ? { label: 'Catch up summary', icon: Sparkles, onClose: () => setShowSummary(false) }
+    : showFollowManager ? { label: 'Channel follows', icon: Share2, onClose: () => setShowFollowManager(false) }
+    : showInbox ? { label: 'Inbox', icon: Inbox, onClose: () => setShowInbox(false) }
+    : showHelp ? { label: 'Keyboard shortcuts', icon: HelpCircle, onClose: () => setShowHelp(false) }
+    : contextPanelMode ? contextualSurfaces[contextPanelMode] : undefined;
+
   const ChannelIcon = isVoice ? Volume2 : isForum ? MessageSquare : Hash;
   const showBreadcrumb = !isDM && Boolean(resolvedGuildId) && Boolean(guildName);
 
   return (
-    <div className="relative z-10 flex h-[3.25rem] w-full shrink-0 items-center justify-between gap-2 border-b border-border-subtle bg-bg-secondary px-3 sm:px-4">
+    <div className={cn("chat-header relative z-10 w-full shrink-0 border-b border-border-subtle bg-bg-secondary", isGroupDm && "chat-header-group-dm")}>
+      <div className="chat-header-grid">
       {/* Left: breadcrumb + channel info */}
       <div className="relative flex min-w-0 flex-1 items-center gap-2">
         <button
@@ -525,7 +469,7 @@ export function TopBar({
             }
             ui.setSidebarCollapsed(true);
           }}
-          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-interactive-normal outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-interactive-hover focus-visible:shadow-[var(--focus-ring)]"
+          className="chat-header-navigation inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-interactive-normal outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-interactive-hover focus-visible:shadow-[var(--focus-ring)]"
           title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >
@@ -536,21 +480,21 @@ export function TopBar({
             <button
               type="button"
               onClick={() => navigate('/app/dms')}
-              className="inline-flex h-8 shrink-0 items-center gap-1 rounded-sm px-1.5 text-label font-medium text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)] sm:px-2"
+              className="chat-header-navigation inline-flex h-8 shrink-0 items-center gap-1 rounded-sm px-1.5 text-label font-medium text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)] sm:px-2"
               aria-label="Back to Messages"
               title="Back to Messages"
             >
               <ChevronLeft size={16} aria-hidden />
               <span className="hidden sm:inline">Messages</span>
             </button>
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-primary text-label font-semibold text-text-on-accent">
+            <span className="chat-header-avatar flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-primary text-label font-semibold text-text-on-accent">
               {recipientName?.charAt(0).toUpperCase() || '?'}
             </span>
-            <span className="truncate text-[15px] font-semibold text-text-primary">
+            <span className="chat-header-dm-name truncate text-[15px] font-semibold text-text-primary">
               {recipientName || 'Direct Message'}
             </span>
-            <span className="hidden h-4 w-px shrink-0 bg-border-strong sm:block" aria-hidden />
-            <span className="hidden truncate text-label text-text-secondary sm:block">Direct message</span>
+            <span className="chat-header-detail h-4 w-px shrink-0 bg-border-strong" aria-hidden />
+            <span className="chat-header-detail truncate text-label text-text-secondary">Direct message</span>
           </div>
         ) : (
           <div className="flex min-w-0 items-center gap-1.5">
@@ -559,13 +503,13 @@ export function TopBar({
                 <button
                   type="button"
                   onClick={() => navigate(`/app/guilds/${resolvedGuildId}`)}
-                  className="hidden max-w-[10rem] shrink-0 items-center gap-1 rounded-sm px-1.5 py-1 text-label font-medium text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)] lg:inline-flex"
+                  className="chat-header-breadcrumb max-w-[10rem] shrink-0 items-center gap-1 rounded-sm px-1.5 py-1 text-label font-medium text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
                   aria-label={`Go to ${guildName} home`}
                   title={`Go to ${guildName} home`}
                 >
                   <span className="truncate">{guildName}</span>
                 </button>
-                <ChevronRight size={14} className="hidden shrink-0 text-text-muted lg:block" aria-hidden />
+                <ChevronRight size={14} className="chat-header-breadcrumb shrink-0 text-text-muted" aria-hidden />
               </>
             )}
             {resolvedGuildId ? (
@@ -597,196 +541,14 @@ export function TopBar({
         )}
       </div>
 
-      {/* Right: context toggles + anchored popovers */}
-      <div className="flex shrink-0 items-center gap-0.5">
-        {systemAudioCaptureActive && (
-          <Tooltip content="System audio capture is active" side="bottom">
-            <button
-              type="button"
-              disabled
-              aria-label="System audio capture is active"
-              className="inline-flex h-9 w-9 cursor-default items-center justify-center rounded-sm bg-warning-tint text-accent-warning"
-            >
-              <AlertTriangle size={18} />
-            </button>
-          </Tooltip>
-        )}
-        {isDM && (dmChannelId || channelId) && (
-          <Tooltip content={isInDmCall ? 'End Call' : 'Start Voice Call'} side="bottom">
-            <button
-              aria-label={isInDmCall ? 'End direct message call' : 'Start direct message voice call'}
-              onClick={() => void handleDmCallToggle()}
-              disabled={dmCallLoading}
-              className={cn(
-                'inline-flex h-9 w-9 items-center justify-center rounded-sm outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
-                isInDmCall ? 'text-accent-danger hover:bg-danger-tint' : 'text-accent-success hover:bg-success-tint',
-                dmCallLoading && 'cursor-not-allowed opacity-40'
-              )}
-            >
-              {isInDmCall ? <PhoneOff size={18} /> : <Phone size={18} />}
-            </button>
-          </Tooltip>
-        )}
-        <TopBarIcon
-          icon={Search}
-          onClick={panelToggle('search')}
-          active={contextPanelMode === 'search'}
-          controlsPanel
-          tooltip={channelId ? 'Search Messages' : 'Select a channel to search'}
-          disabled={!channelId}
-        />
-        <TopBarIcon
-          className="hidden md:block"
-          icon={Sparkles}
-          onClick={() => void openSummary()}
-          active={showSummary}
-          tooltip={channelId ? 'Summarize Channel' : 'Select a channel to summarize'}
-          disabled={!channelId}
-        />
-        <TopBarIcon
-          className="hidden md:block"
-          icon={Pin}
-          onClick={panelToggle('pins')}
-          active={contextPanelMode === 'pins'}
-          controlsPanel
-          tooltip={channelId ? 'Pinned Messages' : 'Select a channel to view pins'}
-          disabled={!channelId}
-        />
-        {!isDM && !isVoice && (
-          <TopBarIcon
-            className="hidden md:block"
-            icon={MessagesSquare}
-            onClick={panelToggle('threads')}
-            active={contextPanelMode === 'threads'}
-            controlsPanel
-            tooltip="Threads"
-          />
-        )}
-        {isAnnouncementChannel && (
-          <TopBarIcon
-            className="hidden md:block"
-            icon={Share2}
-            onClick={() => void openFollowManager()}
-            active={showFollowManager}
-            tooltip="Manage follows"
-            disabled={!channelId}
-          />
-        )}
-        {!isDM && (
-          <>
-            <TopBarIcon
-              className="hidden md:block"
-              icon={TrendingUp}
-              onClick={panelToggle('economy')}
-              active={contextPanelMode === 'economy'}
-              controlsPanel
-              tooltip="Guild Leaderboard"
-            />
-            <TopBarIcon
-              icon={Users}
-              onClick={panelToggle('members')}
-              active={contextPanelMode === 'members'}
-              controlsPanel
-              tooltip="Member List"
-            />
-            {canOpenSpaceSettings && resolvedGuildId && (
-              <TopBarIcon
-                className="hidden md:block"
-                icon={Settings}
-                onClick={openSpaceSettings}
-                tooltip="Space settings"
-              />
-            )}
-          </>
-        )}
-        <TopBarIcon className="hidden md:block" icon={Inbox} onClick={() => void openInbox()} tooltip="Inbox" badge={inboxBadge} />
-        <TopBarIcon className="hidden md:block" icon={HelpCircle} onClick={openHelp} tooltip="Shortcuts" />
-
-        <div ref={moreActionsRef} className="relative md:hidden">
-          <button
-            type="button"
-            aria-label="More channel actions"
-            aria-haspopup="menu"
-            aria-expanded={showMoreActions}
-            onClick={() => setShowMoreActions((value) => !value)}
-            className={cn(
-              'inline-flex h-9 w-9 items-center justify-center rounded-sm text-interactive-normal outline-none transition-colors',
-              'hover:bg-bg-mod-subtle hover:text-interactive-hover focus-visible:shadow-[var(--focus-ring)]',
-              showMoreActions && 'bg-accent-tint text-accent-primary',
-            )}
-          >
-            <MoreHorizontal size={18} />
-          </button>
-
-          {showMoreActions && (
-            <div
-              role="menu"
-              aria-label="More channel actions"
-              className="absolute right-0 top-[calc(100%+0.45rem)] z-50 w-56 rounded-md border border-border-subtle bg-bg-floating p-1.5 shadow-lg"
-            >
-              <MoreAction
-                label="Catch up summary"
-                icon={Sparkles}
-                onClick={() => void openSummary()}
-                active={showSummary}
-                disabled={!channelId}
-              />
-              <MoreAction
-                label="Pinned messages"
-                icon={Pin}
-                onClick={panelToggle('pins')}
-                active={contextPanelMode === 'pins'}
-                disabled={!channelId}
-              />
-              {!isDM && !isVoice && (
-                <MoreAction
-                  label="Threads"
-                  icon={MessagesSquare}
-                  onClick={panelToggle('threads')}
-                  active={contextPanelMode === 'threads'}
-                />
-              )}
-              {isAnnouncementChannel && (
-                <MoreAction
-                  label="Manage follows"
-                  icon={Share2}
-                  onClick={() => void openFollowManager()}
-                  active={showFollowManager}
-                  disabled={!channelId}
-                />
-              )}
-              {!isDM && (
-                <MoreAction
-                  label="Space leaderboard"
-                  icon={TrendingUp}
-                  onClick={panelToggle('economy')}
-                  active={contextPanelMode === 'economy'}
-                />
-              )}
-              {canOpenSpaceSettings && resolvedGuildId && (
-                <MoreAction
-                  label="Space settings"
-                  icon={Settings}
-                  onClick={openSpaceSettings}
-                />
-              )}
-              <div className="my-1 h-px bg-border-subtle" aria-hidden />
-              <MoreAction
-                label="Inbox"
-                icon={Inbox}
-                onClick={() => void openInbox()}
-              />
-              <MoreAction
-                label="Keyboard shortcuts"
-                icon={HelpCircle}
-                onClick={openHelp}
-              />
-            </div>
-          )}
-        </div>
-
-        {/* Connection latency indicator — isolated so latency ticks don't re-render TopBar */}
-        {connectionStatus === 'connected' && <ConnectionLatencyBadge />}
+      {isGroupDm && <div className="chat-header-mobile-dm-title">{recipientName || 'Group message'}</div>}
+      <ConversationHeaderActions primary={primaryActions} items={secondaryActions}
+        activeSurface={activeSurface} unread={unreadItems.length} mentions={inboxMentions}
+        indicator={connectionStatus === 'connected' ? <ConnectionLatencyBadge /> : undefined} />
+      {systemAudioCaptureActive && <div role="status" aria-label="System audio capture is active" className="chat-header-capture-status">
+        <AlertTriangle size={16} aria-hidden className="shrink-0" />
+        <span>System audio capture is active</span>
+      </div>}
       </div>
 
       {/* Summary overlay */}
@@ -917,6 +679,13 @@ export function TopBar({
       <HelpOverlay
         open={showHelp}
         onClose={() => setShowHelp(false)}
+      />
+
+      {/* Guided voice check, offered when a DM call fails to start. */}
+      <VoiceConnectionCheck
+        open={showVoiceCheck}
+        onClose={() => setShowVoiceCheck(false)}
+        autoStart
       />
     </div>
   );

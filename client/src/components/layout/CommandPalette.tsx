@@ -1,3 +1,10 @@
+import { activateChannel } from '../../lib/channelNavigation';
+import { guildLandingPath } from '../../lib/guildNavigation';
+import { entityScopeKey } from '../../lib/serverScope';
+import { useAvailableChannels } from '../../hooks/useChannels';
+import { activateGuild } from '../../lib/guildNavigation';
+import { useAvailableGuilds } from '../../hooks/useGuilds';
+import { useCurrentUser } from '../../hooks/useCurrentUser';
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router';
 import { Search, Hash, Volume2, Settings, Home, Shield, MessageCircle, ArrowRight, Bot, UserPlus, Users, MessagesSquare, MessageSquarePlus } from 'lucide-react';
@@ -6,14 +13,10 @@ import { DmPickerModal } from '../message/DmPickerModal';
 import { useUIStore } from '../../stores/uiStore';
 import { useGuildStore } from '../../stores/guildStore';
 import { useChannelStore } from '../../stores/channelStore';
-import { useAuthStore } from '../../stores/authStore';
-import { useServerListStore } from '../../stores/serverListStore';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
-import { LOCAL_SERVER_ID } from '../../lib/connectionManager';
 import { canAccessGuildSettingsSync } from '../../lib/guildSettingsAccess';
 import { isAdmin } from '../../types';
 import { cn } from '../../lib/utils';
-import type { Channel, Guild } from '../../types';
 import { displayName } from '../../lib/displayName';
 
 interface PaletteItem {
@@ -26,19 +29,15 @@ interface PaletteItem {
   keywords?: string;
 }
 
-const EMPTY_CHANNELS: Channel[] = [];
 
 export function CommandPalette() {
   const open = useUIStore((s) => s.commandPaletteOpen);
   const setOpen = useUIStore((s) => s.setCommandPaletteOpen);
-  const guilds = useGuildStore((s) => s.guilds);
+  const guilds = useAvailableGuilds();
   const channelsByGuild = useChannelStore((s) => s.channelsByGuild);
-  const dmChannels = useChannelStore((s) => s.channelsByGuild[''] ?? EMPTY_CHANNELS);
-  const dmChannelsByServer = useChannelStore((s) => s.dmChannelsByServer);
-  const activeServerId = useServerListStore((s) => s.activeServerId);
+  const availableChannels = useAvailableChannels();
   const selectGuild = useGuildStore((s) => s.selectGuild);
-  const selectChannel = useChannelStore((s) => s.selectChannel);
-  const user = useAuthStore((s) => s.user);
+  const user = useCurrentUser();
   const navigate = useNavigate();
 
   const [query, setQuery] = useState('');
@@ -127,7 +126,6 @@ export function CommandPalette() {
       icon: <Home size={16} />,
       action: () => {
         selectGuild(null);
-        useChannelStore.getState().selectGuild(null);
         navigate('/app');
       },
       category: 'Navigation',
@@ -167,21 +165,20 @@ export function CommandPalette() {
     }
 
     // Guild channels
-    guilds.forEach((guild: Guild) => {
-      const guildChannels = channelsByGuild[guild.id] || [];
-      guildChannels.forEach((channel: Channel) => {
+    guilds.forEach((guild) => {
+      const guildChannels = channelsByGuild[entityScopeKey(guild.scope, guild.id)] || [];
+      guildChannels.forEach((channel) => {
         if (channel.type === 4) return; // Skip categories
 
         const isVoice = channel.type === 2 || channel.channel_type === 2;
         items.push({
-          id: `channel-${guild.id}-${channel.id}`,
+          id: `channel-${guild.key}-${channel.id}`,
           label: channel.name || 'unknown',
           sublabel: guild.name,
           icon: isVoice ? <Volume2 size={16} /> : <Hash size={16} />,
           action: () => {
-            selectGuild(guild.id);
-            useChannelStore.getState().selectGuild(guild.id);
-            selectChannel(channel.id);
+            activateGuild(guild);
+            activateChannel(channel);
             navigate(`/app/guilds/${guild.id}/channels/${channel.id}`);
           },
           category: 'Channels',
@@ -190,13 +187,13 @@ export function CommandPalette() {
       });
 
       // Space settings — only when the viewer can open them (not instance admin).
-      if (canAccessGuildSettingsSync(guild.id)) {
+      if (canAccessGuildSettingsSync(guild.id, guild.scope)) {
         items.push({
           id: `guild-settings-${guild.id}`,
           label: 'Space settings',
           sublabel: guild.name,
           icon: <Settings size={16} />,
-          action: () => useUIStore.getState().setGuildSettingsId(guild.id),
+          action: () => { activateGuild(guild); useUIStore.getState().setGuildSettingsId(guild.id); },
           category: 'Navigation',
           keywords: `${guild.name} space settings server settings admin manage`,
         });
@@ -204,7 +201,7 @@ export function CommandPalette() {
 
       // Guild itself (navigate to first channel)
       items.push({
-        id: `guild-${guild.id}`,
+        id: `guild-${guild.key}`,
         label: guild.name,
         sublabel: `${(guildChannels.filter(c => c.type !== 4)).length} channels`,
         icon: (
@@ -213,37 +210,15 @@ export function CommandPalette() {
           </div>
         ),
         action: async () => {
-          selectGuild(guild.id);
-          await useChannelStore.getState().selectGuild(guild.id);
-          await useChannelStore.getState().fetchChannels(guild.id);
-          const channels = useChannelStore.getState().channelsByGuild[guild.id] || [];
-          const firstChannel = channels.find(c => c.type === 0) || channels.find(c => c.type !== 4) || channels[0];
-          if (firstChannel) {
-            selectChannel(firstChannel.id);
-            navigate(`/app/guilds/${guild.id}/channels/${firstChannel.id}`);
-          }
+          navigate(await guildLandingPath(guild));
         },
         category: 'Spaces',
         keywords: `${guild.name} server space`,
       });
     });
 
-    // DM channels — merged across EVERY connected server (mirrors the unified
-    // sidebar's dmChannelsByServer), deduped by channel id, with the active
-    // server's '' mirror seeding the list for back-compat. Without this, ⌘K
-    // could only reach DMs on the active server even though background-server
-    // DMs are clickable in the sidebar.
-    const dmById = new Map<string, { channel: Channel; serverId: string }>();
-    const activeId = activeServerId ?? LOCAL_SERVER_ID;
-    for (const dm of dmChannels) {
-      if (!dmById.has(dm.id)) dmById.set(dm.id, { channel: dm, serverId: activeId });
-    }
-    for (const [serverId, list] of Object.entries(dmChannelsByServer)) {
-      for (const dm of list) {
-        if (!dmById.has(dm.id)) dmById.set(dm.id, { channel: dm, serverId });
-      }
-    }
-    dmById.forEach(({ channel: dm, serverId }) => {
+    availableChannels.filter(channel => !channel.guild_id).forEach(dm => {
+      const serverId = dm.scope.serverId;
       const recipientName = dm.recipient ? displayName(dm.recipient) : 'Direct Message';
       items.push({
         id: `dm-${serverId}-${dm.id}`,
@@ -251,12 +226,8 @@ export function CommandPalette() {
         sublabel: 'Direct Message',
         icon: <MessageCircle size={16} />,
         action: () => {
-          if (useServerListStore.getState().activeServerId !== serverId) {
-            useServerListStore.getState().setActive(serverId);
-          }
+          activateChannel(dm);
           selectGuild(null);
-          useChannelStore.getState().selectGuild(null);
-          selectChannel(dm.id);
           navigate(`/app/dms/${dm.id}`);
         },
         category: 'Direct Messages',
@@ -265,7 +236,7 @@ export function CommandPalette() {
     });
 
     return items;
-  }, [guilds, channelsByGuild, dmChannels, dmChannelsByServer, activeServerId, user, navigate, selectGuild, selectChannel, setDmPickerOpen]);
+  }, [guilds, channelsByGuild, availableChannels, user, navigate, selectGuild, setDmPickerOpen]);
 
   // Filter items based on query
   const filteredItems = useMemo(() => {

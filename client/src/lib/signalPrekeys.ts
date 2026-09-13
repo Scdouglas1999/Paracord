@@ -74,6 +74,7 @@ export async function ensurePrekeysUploaded(): Promise<void> {
         const newId = Date.now();
         store = {
           ...store,
+          signedPrekeyArchive: [...(store.signedPrekeyArchive ?? []), store.signedPrekey],
           signedPrekey: {
             id: newId,
             publicKey: newPub,

@@ -8,6 +8,7 @@ function makeEntry(over: Partial<ConversationEntry> = {}): ConversationEntry {
   return {
     key: 'srv:100',
     serverId: 'srv',
+    scope: { serverId: 'srv', userId: 'user-1' },
     channelId: '100',
     guildId: 'g1',
     userId: null,

@@ -123,7 +123,8 @@ describe('TopBar channel summary', () => {
     vi.mocked(channelApi.summarizeChannel).mockRejectedValue(new Error('AI provider is not configured.'));
     renderChannelTopBar();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Summarize Channel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'More channel actions' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Catch up summary/ }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Failed to summarize channel: AI provider is not configured.',
@@ -134,9 +135,29 @@ describe('TopBar channel summary', () => {
     mockUIState.contextPanelMode = 'members';
     renderChannelTopBar();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Summarize Channel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'More channel actions' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Catch up summary/ }));
 
     expect(mockUIState.toggleContextPanelMode).toHaveBeenCalledWith('members');
     expect(await screen.findByText('Nothing to summarize.')).toBeInTheDocument();
   });
 });
+
+vi.mock('../../hooks/useChannels', async () => {
+  const actual = await vi.importActual<typeof import('../../hooks/useChannels')>('../../hooks/useChannels');
+  const { useChannelStore } = await import('../../stores/channelStore');
+  return {
+    ...actual,
+    useCurrentChannelStore: useChannelStore,
+    useChannelActions: () => useChannelStore.getState(),
+    getAccountChannelView: () => useChannelStore.getState(),
+    useGuildChannels: (id: string) => useChannelStore(state => state.channelsByGuild[id] ?? []),
+  };
+});
+
+vi.mock('../../hooks/useConversationActions', () => ({
+  useConversationActions: () => ({
+    actions: Object.fromEntries(['send', 'poll', 'schedule', 'attach', 'summary', 'voice', 'video', 'screen_share'].map(action => [action, { supported: true, allowed: true, reason: null }])),
+    error: null, loading: false, refresh: vi.fn(),
+  }),
+}));

@@ -108,6 +108,7 @@ describe('authStore', () => {
       });
       const state = useAuthStore.getState();
       expect(state.token).toBe('tok123');
+      expect(setRefreshToken).toHaveBeenLastCalledWith(null);
       expect(state.user).toEqual(fakeUser);
       expect(state.isLoading).toBe(false);
       expect(state.error).toBeNull();
@@ -162,6 +163,7 @@ describe('authStore', () => {
       await useAuthStore.getState().register('test@example.com', 'testuser', 'pass123', 'Test User');
       const state = useAuthStore.getState();
       expect(state.token).toBe('reg-tok');
+      expect(setRefreshToken).toHaveBeenLastCalledWith(null);
       expect(state.user).toEqual(fakeUser);
       expect(state.isLoading).toBe(false);
     });

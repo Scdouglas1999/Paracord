@@ -1,3 +1,6 @@
+import { useAuthStore } from '../stores/authStore';
+import { guildLandingPath } from '../lib/guildNavigation';
+vi.mock('../lib/guildNavigation', () => ({ guildLandingPath: vi.fn() }));
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
@@ -8,7 +11,7 @@ import { DiscoveryPage } from './DiscoveryPage';
 
 const mockGuildState = vi.hoisted(() => ({
   guilds: [] as Array<{ id: string; name: string }>,
-  addGuild: vi.fn(),
+  joinPublic: vi.fn(),
 }));
 
 const mockChannelState = vi.hoisted(() => ({
@@ -75,6 +78,9 @@ function renderDiscoveryPage() {
 describe('DiscoveryPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useAuthStore.setState({ user: { id: 'user-1' } as never, token: 'token' });
+    mockGuildState.joinPublic.mockResolvedValue({ id: 'guild-1', name: 'Launch Guild', scope: { serverId: '__local__', userId: 'user-1' } });
+    vi.mocked(guildLandingPath).mockResolvedValue('/app/guilds/guild-1/channels/channel-1');
     mockGuildState.guilds = [];
     mockChannelState.channelsByGuild = {
       'guild-1': [{ id: 'channel-1', guild_id: 'guild-1', type: 0, name: 'general' }],
@@ -131,14 +137,9 @@ describe('DiscoveryPage', () => {
     await user.click(screen.getByRole('button', { name: 'Join Launch Guild' }));
 
     await waitFor(() => {
-      expect(apiClient.put).toHaveBeenCalledWith('/guilds/guild-1/members/@me');
+      expect(mockGuildState.joinPublic).toHaveBeenCalledWith('guild-1', { serverId: '__local__', userId: 'user-1' });
     });
-    expect(mockGuildState.addGuild).toHaveBeenCalledWith({
-      id: 'guild-1',
-      name: 'Launch Guild',
-      default_channel_id: null,
-    });
-    expect(mockChannelState.fetchChannels).toHaveBeenCalledWith('guild-1');
+    expect(guildLandingPath).toHaveBeenCalledWith(expect.objectContaining({ id: 'guild-1', scope: { serverId: '__local__', userId: 'user-1' } }));
     expect(toast.success).toHaveBeenCalledWith('Joined Launch Guild!');
     expect(await screen.findByText('Guild channel route')).toBeInTheDocument();
   });
@@ -157,7 +158,7 @@ describe('DiscoveryPage', () => {
 
   it('shows concrete join errors inside the preview and keeps it open for retry', async () => {
     const user = userEvent.setup();
-    vi.mocked(apiClient.put).mockRejectedValue(new Error('Membership service is temporarily unavailable.'));
+    mockGuildState.joinPublic.mockRejectedValue(new Error('Membership service is temporarily unavailable.'));
 
     renderDiscoveryPage();
 
@@ -188,4 +189,16 @@ describe('DiscoveryPage', () => {
     expect(screen.getByText(/Cross-server joining is not available/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Join Launch Guild/i })).toBeNull();
   });
+});
+
+vi.mock('../hooks/useChannels', async () => {
+  const actual = await vi.importActual<typeof import('../hooks/useChannels')>('../hooks/useChannels');
+  const { useChannelStore } = await import('../stores/channelStore');
+  return {
+    ...actual,
+    useCurrentChannelStore: useChannelStore,
+    useChannelActions: () => useChannelStore.getState(),
+    getAccountChannelView: () => useChannelStore.getState(),
+    useGuildChannels: (id: string) => useChannelStore(state => state.channelsByGuild[id] ?? []),
+  };
 });

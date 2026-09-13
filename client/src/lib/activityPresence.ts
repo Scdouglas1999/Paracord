@@ -18,7 +18,7 @@ export function normalizeDetectedAppId(processName: string): string {
 export function readableAppName(processName: string): string {
   const trimmed = processName.trim();
   const withoutExt = trimmed.replace(/\.exe$/i, '');
-  const normalized = withoutExt.replace(/[_\-]+/g, ' ').replace(/\s+/g, ' ');
+  const normalized = withoutExt.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ');
   const labeled = toTitleCase(normalized.trim());
   return labeled || 'Unknown App';
 }

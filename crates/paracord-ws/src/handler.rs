@@ -1307,13 +1307,39 @@ pub async fn handle_connection(
     }
     connection_guard.user_id = Some(session.user_id);
 
+    // Subscribe before the authoritative handshake. Mutations committed during
+    // READY construction or durable client recovery must remain in a live lane.
+    let Some(event_rx) = state.event_bus.register_session(
+        session.session_id.clone(),
+        session.user_id,
+        &session.guild_ids,
+    ) else {
+        let _ = send_ws_close_logged(
+            &mut sender,
+            WS_CLOSE_AUTH_REVOKED,
+            "Session id is not available",
+            Some(session.user_id),
+            Some(session.session_id.as_str()),
+            "session_id_conflict_close",
+        )
+        .await;
+        return;
+    };
+    let _event_registration = SessionEventRegistration::new(&state, &session, &event_rx);
+
     if resumed {
-        // Send RESUMED first so the client knows the session was accepted
+        // Confirm only the client's completed checkpoint. Advertising the cached
+        // server head here would let a dropped connection skip the replay that
+        // follows, especially when the client must persist each event first.
         let resumed_payload = json!({
             "op": OP_DISPATCH,
             "t": EVENT_RESUMED,
-            "s": session.sequence,
-            "d": { "session_id": &session.session_id }
+            "s": requested_seq,
+            "d": {
+                "session_id": &session.session_id,
+                "database_history_epoch": &state.database_history_epoch,
+                "recovery_required": true,
+            }
         });
         if send_ws_text_logged(
             &mut sender,
@@ -1324,7 +1350,7 @@ pub async fn handle_connection(
             "resumed",
             Some(OP_DISPATCH),
             Some(EVENT_RESUMED),
-            Some(session.sequence),
+            Some(requested_seq),
         )
         .await
         .is_err()
@@ -1378,41 +1404,9 @@ pub async fn handle_connection(
             "session resumed with event replay"
         );
     } else {
-        // Fresh IDENTIFY (not a resume) — the client just loaded, so any
-        // voice state in the DB from a prior session is stale.  Clean it
-        // up *before* building the READY payload so other clients don't
-        // see ghost entries.
-        if let Ok(stale) =
-            paracord_db::voice_states::get_all_user_voice_states(&state.db, session.user_id).await
-        {
-            for vs in &stale {
-                // Only clean up if they're not actually in the LiveKit room
-                // (safety check in case of race with a concurrent join).
-                match state
-                    .voice
-                    .is_participant_in_livekit_room(vs.channel_id, vs.guild_id(), session.user_id)
-                    .await
-                {
-                    Some(false) => {
-                        let _ = paracord_db::voice_states::remove_voice_state(
-                            &state.db,
-                            session.user_id,
-                            vs.guild_id(),
-                        )
-                        .await;
-                        let _ = state.voice.leave_room(vs.channel_id, session.user_id).await;
-                    }
-                    Some(true) => {}
-                    None => {
-                        tracing::warn!(
-                            "Skipping stale voice cleanup for user {} channel {} because LiveKit presence is unknown",
-                            session.user_id,
-                            vs.channel_id
-                        );
-                    }
-                }
-            }
-        }
+        // A fresh gateway identifies a transport, not a new call. Existing REST
+        // call receipts and media connections outlive gateway reconnects; only
+        // their scoped leave/media lifecycle may remove that membership.
 
         // Send READY with full user data
         let user = paracord_db::users::get_user_by_id(&state.db, session.user_id)
@@ -1444,128 +1438,23 @@ pub async fn handle_connection(
         // single connect allocated `guilds * total_users` JSON values before it
         // had looked at a single member.
 
-        // Fetch guild data for READY with bounded concurrency.
-        //
-        // READY used to cost `3N + 2 + 2*voice` queries: a `get_guild` per guild
-        // (already fetched and discarded at IDENTIFY), a member-id query per
-        // guild (already held in `state.member_index`), and a voice-state query
-        // per guild. With `Semaphore::new(10)` and a `tokio::join!` pair that
-        // meant 20 concurrent queries per connect. Two of the three are now
-        // gone, leaving one query per guild.
-        let sem = Arc::new(Semaphore::new(10));
-        let ready_user_id = session.user_id;
         let ready_guilds = std::mem::take(&mut session.ready_guilds);
-        let guild_futures: Vec<_> = ready_guilds
-            .iter()
-            .map(|g| {
-                let state = state.clone();
-                let sem = sem.clone();
-                let g = g.clone();
-                async move {
-                    let _permit = sem.acquire_owned().await.ok()?;
-                    let gid = g.id;
-
-                    let voice_states =
-                        paracord_db::voice_states::get_guild_voice_states(&state.db, gid)
-                            .await
-                            .unwrap_or_default();
-                    // Same in-memory source the presence fan-out already uses.
-                    let member_ids = state.member_index.members_of(gid);
-
-                    // Only expose the voice roster of channels this user can view.
-                    // The live voice-join path filters via can_receive_channel_event;
-                    // apply the same VIEW_CHANNEL gate to the READY snapshot so a
-                    // hidden voice channel's participant list is not leaked. Compute
-                    // permissions once per distinct channel to bound extra queries.
-                    let mut channel_visibility: std::collections::HashMap<i64, bool> =
-                        std::collections::HashMap::new();
-                    for vs in &voice_states {
-                        if let std::collections::hash_map::Entry::Vacant(e) =
-                            channel_visibility.entry(vs.channel_id)
-                        {
-                            let visible =
-                                paracord_core::permissions::compute_channel_permissions_cached(
-                                    &state.permission_cache,
-                                    &state.db,
-                                    gid,
-                                    vs.channel_id,
-                                    g.owner_id,
-                                    ready_user_id,
-                                )
-                                .await
-                                .map(|perms| perms.contains(Permissions::VIEW_CHANNEL))
-                                .unwrap_or(false);
-                            e.insert(visible);
-                        }
-                    }
-
-                    // Build voice_states JSON
-                    let voice_states_json: Vec<Value> = voice_states
-                        .iter()
-                        .filter(|vs| {
-                            channel_visibility
-                                .get(&vs.channel_id)
-                                .copied()
-                                .unwrap_or(false)
-                        })
-                        .map(|vs| {
-                            json!({
-                                "user_id": vs.user_id.to_string(),
-                                "channel_id": vs.channel_id.to_string(),
-                                "guild_id": vs.guild_id().map(|id| id.to_string()),
-                                "session_id": &vs.session_id,
-                                "self_mute": vs.self_mute,
-                                "self_deaf": vs.self_deaf,
-                                "self_stream": vs.self_stream,
-                                "self_video": vs.self_video,
-                                "suppress": vs.suppress,
-                                "mute": false,
-                                "deaf": false,
-                                "username": &vs.username,
-                                "avatar_hash": &vs.avatar_hash,
-                            })
-                        })
-                        .collect();
-
-                    // Build presences from member IDs (lightweight query). Direct
-                    // lookups only touch the members of this guild who are
-                    // actually online; no guard is held across an await.
-                    let presences_json: Vec<Value> = member_ids
-                        .iter()
-                        .filter(|uid| state.online_users.contains(uid))
-                        .map(|uid| {
-                            state
-                                .user_presences
-                                .get(uid)
-                                .map(|entry| entry.value().clone())
-                                .unwrap_or_else(|| {
-                                    json!({
-                                        "user_id": uid.to_string(),
-                                        "status": "online",
-                                        "custom_status": Value::Null,
-                                        "activities": [],
-                                    })
-                                })
-                        })
-                        .collect();
-
-                    Some(json!({
-                        "id": g.id.to_string(),
-                        "name": g.name,
-                        "owner_id": g.owner_id.to_string(),
-                        "icon_hash": g.icon_hash,
-                        "member_count": member_ids.len(),
-                        "channels": [],
-                        "voice_states": voice_states_json,
-                        "presences": presences_json,
-                        "lazy": true,
-                    }))
-                }
-            })
-            .collect();
-
-        let guild_results = futures_util::future::join_all(guild_futures).await;
-        let guilds_json: Vec<Value> = guild_results.into_iter().flatten().collect();
+        let guilds_json = match build_ready_guilds(&state, session.user_id, &ready_guilds).await {
+            Ok(guilds) => guilds,
+            Err(error) => {
+                tracing::warn!(user_id = session.user_id, %error, "gateway READY snapshot failed");
+                let _ = send_ws_close_logged(
+                    &mut sender,
+                    1011,
+                    "Unable to load server state",
+                    Some(session.user_id),
+                    Some(session.session_id.as_str()),
+                    "ready_snapshot_failed",
+                )
+                .await;
+                return;
+            }
+        };
 
         // Consume a sequence number for READY so it doesn't collide with the
         // first dispatched event.  READY becomes s=1, the first real event s=2,
@@ -1580,6 +1469,8 @@ pub async fn handle_connection(
                 "user": user_json,
                 "guilds": guilds_json,
                 "session_id": &session.session_id,
+                "database_history_epoch": &state.database_history_epoch,
+                "recovery_required": true,
             }
         });
         if send_ws_text_logged(
@@ -1634,7 +1525,15 @@ pub async fn handle_connection(
         .event_bus
         .dispatch_to_users(EVENT_PRESENCE_UPDATE, online_presence, online_recipient_ids);
 
-    let session = run_session(sender, receiver, session, state.clone(), &compressor).await;
+    let session = run_session_with_events(
+        sender,
+        receiver,
+        session,
+        state.clone(),
+        &compressor,
+        event_rx,
+    )
+    .await;
 
     // Voice cleanup: when the gateway WebSocket drops, don't remove voice
     // state immediately — the user may still be connected to LiveKit (their
@@ -1643,10 +1542,15 @@ pub async fn handle_connection(
     if let Ok(states) =
         paracord_db::voice_states::get_all_user_voice_states(&state.db, session_user_id).await
     {
+        let states: Vec<_> = states
+            .into_iter()
+            .filter(|voice_state| voice_state.session_id == session.session_id)
+            .collect();
         if !states.is_empty() {
             let state_clone = state.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_secs(8)).await;
+                let _membership = state_clone.voice.lock_membership(session_user_id).await;
 
                 let dc_user = paracord_db::users::get_user_by_id(&state_clone.db, session_user_id)
                     .await
@@ -1663,6 +1567,17 @@ pub async fn handle_connection(
                 .unwrap_or_default();
 
                 for voice_state in current_states {
+                    if !states.iter().any(|old| {
+                        old.channel_id == voice_state.channel_id
+                            && old.guild_id() == voice_state.guild_id()
+                            && old.session_id == voice_state.session_id
+                    }) {
+                        continue;
+                    }
+                    // Native membership is owned by the media transport, not LiveKit.
+                    if state_clone.native_media.is_some() {
+                        continue;
+                    }
                     // Check LiveKit ground truth: is the user actually still
                     // connected to the media room?  If yes, keep the state.
                     match state_clone
@@ -1696,15 +1611,24 @@ pub async fn handle_connection(
                         session_user_id, voice_state.channel_id
                     );
 
-                    let _ = paracord_db::voice_states::remove_voice_state(
+                    let removed = paracord_db::voice_states::remove_voice_state_if_session(
                         &state_clone.db,
                         session_user_id,
                         voice_state.guild_id(),
+                        &voice_state.session_id,
                     )
-                    .await;
+                    .await
+                    .unwrap_or(false);
+                    if !removed {
+                        continue;
+                    }
                     if let Some(participants) = state_clone
                         .voice
-                        .leave_room(voice_state.channel_id, session_user_id)
+                        .leave_room_if_session(
+                            voice_state.channel_id,
+                            session_user_id,
+                            Some(&voice_state.session_id),
+                        )
                         .await
                     {
                         if participants.is_empty() {
@@ -1785,6 +1709,137 @@ pub async fn handle_connection(
     }
 }
 
+/// Authoritative READY metadata; database errors invalidate the whole snapshot.
+/// Bounded count batches and per-guild work avoid unbounded pool pressure.
+async fn build_ready_guilds(
+    state: &AppState,
+    ready_user_id: i64,
+    ready_guilds: &[crate::session::ReadyGuild],
+) -> Result<Vec<Value>, paracord_core::error::CoreError> {
+    let guild_ids: Vec<i64> = ready_guilds.iter().map(|guild| guild.id).collect();
+    let member_counts =
+        paracord_db::members::get_member_counts_for_guilds(&state.db, &guild_ids).await?;
+    let sem = Arc::new(Semaphore::new(10));
+
+    let guild_futures: Vec<_> = ready_guilds
+        .iter()
+        .map(|g| {
+            let state = state.clone();
+            let sem = sem.clone();
+            let g = g.clone();
+            let member_count = member_counts.get(&g.id).copied().unwrap_or_default();
+            async move {
+                let _permit = sem.acquire_owned().await.map_err(|error| {
+                    paracord_core::error::CoreError::Internal(error.to_string())
+                })?;
+                let gid = g.id;
+
+                let voice_states =
+                    paracord_db::voice_states::get_guild_voice_states(&state.db, gid).await?;
+                let member_ids =
+                    paracord_db::members::get_guild_member_user_ids(&state.db, gid).await?;
+
+                // Only expose the voice roster of channels this user can view.
+                // The live voice-join path filters via can_receive_channel_event;
+                // apply the same VIEW_CHANNEL gate to the READY snapshot so a
+                // hidden voice channel's participant list is not leaked. Compute
+                // permissions once per distinct channel to bound extra queries.
+                let mut channel_visibility: std::collections::HashMap<i64, bool> =
+                    std::collections::HashMap::new();
+                for vs in &voice_states {
+                    if let std::collections::hash_map::Entry::Vacant(e) =
+                        channel_visibility.entry(vs.channel_id)
+                    {
+                        let visible =
+                            paracord_core::permissions::compute_channel_permissions_cached(
+                                &state.permission_cache,
+                                &state.db,
+                                gid,
+                                vs.channel_id,
+                                g.owner_id,
+                                ready_user_id,
+                            )
+                            .await?
+                            .contains(Permissions::VIEW_CHANNEL);
+                        e.insert(visible);
+                    }
+                }
+
+                // Build voice_states JSON
+                let voice_states_json: Vec<Value> = voice_states
+                    .iter()
+                    .filter(|vs| {
+                        channel_visibility
+                            .get(&vs.channel_id)
+                            .copied()
+                            .unwrap_or(false)
+                    })
+                    .map(|vs| {
+                        json!({
+                            "user_id": vs.user_id.to_string(),
+                            "channel_id": vs.channel_id.to_string(),
+                            "guild_id": vs.guild_id().map(|id| id.to_string()),
+                            "session_id": &vs.session_id,
+                            "self_mute": vs.self_mute,
+                            "self_deaf": vs.self_deaf,
+                            "self_stream": vs.self_stream,
+                            "self_video": vs.self_video,
+                            "suppress": vs.suppress,
+                            "mute": false,
+                            "deaf": false,
+                            "username": &vs.username,
+                            "avatar_hash": &vs.avatar_hash,
+                        })
+                    })
+                    .collect();
+
+                // Build presences from member IDs (lightweight query). Direct
+                // lookups only touch the members of this guild who are
+                // actually online; no guard is held across an await.
+                let presences_json: Vec<Value> = member_ids
+                    .iter()
+                    .filter(|uid| state.online_users.contains(uid))
+                    .map(|uid| {
+                        state
+                            .user_presences
+                            .get(uid)
+                            .map(|entry| entry.value().clone())
+                            .unwrap_or_else(|| {
+                                json!({
+                                    "user_id": uid.to_string(),
+                                    "status": "online",
+                                    "custom_status": Value::Null,
+                                    "activities": [],
+                                })
+                            })
+                    })
+                    .collect();
+
+                let mut guild_json = json!(paracord_contracts::guild::ReadyGuildCore {
+                    id: g.id.to_string(),
+                    name: g.name,
+                    owner_id: g.owner_id.to_string(),
+                    icon_hash: g.icon_hash,
+                    member_count: u32::try_from(member_count).map_err(|_| {
+                        paracord_core::error::CoreError::Internal(
+                            "invalid guild member count".into(),
+                        )
+                    })?,
+                    created_at: g.created_at.to_rfc3339(),
+                });
+                guild_json["channels"] = json!([]);
+                guild_json["voice_states"] = json!(voice_states_json);
+                guild_json["presences"] = json!(presences_json);
+                guild_json["lazy"] = json!(true);
+                Ok::<Value, paracord_core::error::CoreError>(guild_json)
+            }
+        })
+        .collect();
+
+    let guild_results = futures_util::future::join_all(guild_futures).await;
+    guild_results.into_iter().collect()
+}
+
 fn ready_guilds_from_rows(
     rows: &[paracord_db::guilds::SpaceRow],
 ) -> Vec<crate::session::ReadyGuild> {
@@ -1794,6 +1849,7 @@ fn ready_guilds_from_rows(
             name: g.name.clone(),
             owner_id: g.owner_id,
             icon_hash: g.icon_hash.clone(),
+            created_at: g.created_at,
         })
         .collect()
 }
@@ -1870,7 +1926,7 @@ pub async fn wait_for_identify_or_resume(
                             let guilds =
                                 paracord_db::guilds::get_user_guilds(&state.db, claims.sub.into())
                                     .await
-                                    .unwrap_or_default();
+                                    .ok()?;
                             let guild_ids = guilds.iter().map(|g| g.id).collect();
                             let guild_owner_ids =
                                 guilds.iter().map(|g| (g.id, g.owner_id)).collect();
@@ -1888,7 +1944,7 @@ pub async fn wait_for_identify_or_resume(
                             let requested_seq = d.get("seq").and_then(|v| v.as_u64()).unwrap_or(0);
                             if let Some(cached) = session_cache().get(&requested_session_id).await {
                                 if cached.user_id == claims.sub {
-                                    let mut can_replay = true;
+                                    let mut can_replay = requested_seq <= cached.sequence;
                                     if cached.sequence > requested_seq {
                                         if let Some(buffer) =
                                             event_buffers().get(&requested_session_id)
@@ -1919,7 +1975,7 @@ pub async fn wait_for_identify_or_resume(
                                             claims.sub.into(),
                                         )
                                         .await
-                                        .unwrap_or_default();
+                                        .ok()?;
                                         let guild_ids = guilds.iter().map(|g| g.id).collect();
                                         let guild_owner_ids =
                                             guilds.iter().map(|g| (g.id, g.owner_id)).collect();
@@ -1932,7 +1988,7 @@ pub async fn wait_for_identify_or_resume(
                                         resumed.session_id = requested_session_id;
                                         resumed.auth_session_id = session_id.to_string();
                                         resumed.token_expires_at = token_expires_at;
-                                        resumed.sequence = cached.sequence.max(requested_seq);
+                                        resumed.sequence = cached.sequence;
                                         return Some((resumed, true, requested_seq));
                                     } else {
                                         let oldest_buffered = event_buffers()
@@ -1953,7 +2009,7 @@ pub async fn wait_for_identify_or_resume(
                             let guilds =
                                 paracord_db::guilds::get_user_guilds(&state.db, claims.sub.into())
                                     .await
-                                    .unwrap_or_default();
+                                    .ok()?;
                             let guild_ids = guilds.iter().map(|g| g.id).collect();
                             let guild_owner_ids =
                                 guilds.iter().map(|g| (g.id, g.owner_id)).collect();
@@ -2028,12 +2084,12 @@ async fn revalidate_session_credential(state: &AppState, session: &Session) -> C
 #[doc(hidden)] // internal seam exposed for the crate's integration tests
 pub async fn run_session(
     mut sender: impl SinkExt<Message> + Unpin,
-    mut receiver: impl StreamExt<Item = Result<Message, axum::Error>> + Unpin,
-    mut session: Session,
+    receiver: impl StreamExt<Item = Result<Message, axum::Error>> + Unpin,
+    session: Session,
     state: AppState,
     compressor: &WsCompressor,
 ) -> Session {
-    let Some(mut event_rx) = state.event_bus.register_session(
+    let Some(event_rx) = state.event_bus.register_session(
         session.session_id.clone(),
         session.user_id,
         &session.guild_ids,
@@ -2057,6 +2113,43 @@ pub async fn run_session(
         .await;
         return session;
     };
+    run_session_with_events(sender, receiver, session, state, compressor, event_rx).await
+}
+
+struct SessionEventRegistration {
+    event_bus: paracord_core::events::EventBus,
+    session_id: String,
+    receiver: tokio::sync::broadcast::Receiver<paracord_core::events::ServerEvent>,
+}
+impl SessionEventRegistration {
+    fn new(
+        state: &AppState,
+        session: &Session,
+        receiver: &tokio::sync::broadcast::Receiver<paracord_core::events::ServerEvent>,
+    ) -> Self {
+        Self {
+            event_bus: state.event_bus.clone(),
+            session_id: session.session_id.clone(),
+            receiver: receiver.resubscribe(),
+        }
+    }
+}
+impl Drop for SessionEventRegistration {
+    fn drop(&mut self) {
+        self.event_bus
+            .unregister_session_receiver(&self.session_id, &self.receiver);
+    }
+}
+
+async fn run_session_with_events(
+    mut sender: impl SinkExt<Message> + Unpin,
+    mut receiver: impl StreamExt<Item = Result<Message, axum::Error>> + Unpin,
+    mut session: Session,
+    state: AppState,
+    compressor: &WsCompressor,
+    mut event_rx: tokio::sync::broadcast::Receiver<paracord_core::events::ServerEvent>,
+) -> Session {
+    let _event_registration = SessionEventRegistration::new(&state, &session, &event_rx);
     let heartbeat_timeout = Duration::from_millis(HEARTBEAT_TIMEOUT_MS);
     let rate_limits = user_rate_limits();
     let mut ws_ping_interval = tokio::time::interval(Duration::from_secs(20));
@@ -2432,7 +2525,13 @@ pub async fn run_session(
             disconnect_reason
         );
     }
-    state.event_bus.unregister_session(&session.session_id);
+    if !state
+        .event_bus
+        .unregister_session_receiver(&session.session_id, &event_rx)
+    {
+        // Replacement transport owns this session and its replay cache now.
+        return session;
+    }
     if credential_terminated {
         // A socket closed because its credential is gone must not be able to
         // RESUME straight back into the same state. Dropping the cached session
@@ -2638,6 +2737,12 @@ async fn handle_client_message(
         }
         OP_VOICE_STATE_UPDATE => {
             if let Some(d) = payload.get("d") {
+                let _membership = state.voice.lock_membership(session.user_id).await;
+                let expected_session = match d.get("session_id") {
+                    None | Some(Value::Null) => None, // Explicit legacy compatibility.
+                    Some(Value::String(value)) if !value.is_empty() => Some(value.as_str()),
+                    _ => return,
+                };
                 let self_mute = d
                     .get("self_mute")
                     .and_then(|v| v.as_bool())
@@ -2656,6 +2761,30 @@ async fn handle_client_message(
                     .and_then(|v| v.as_str())
                     .and_then(|raw| raw.parse::<i64>().ok());
 
+                if let Some(expected) = expected_session {
+                    let current = paracord_db::voice_states::get_user_voice_state(
+                        &state.db,
+                        session.user_id,
+                        requested_guild_id,
+                    )
+                    .await
+                    .ok()
+                    .flatten();
+                    let requested_channel = d.get("channel_id");
+                    if !current.as_ref().is_some_and(|current| {
+                        current.session_id == expected
+                            && match requested_channel {
+                                Some(Value::Null) => true,
+                                Some(Value::String(id)) => {
+                                    id.parse::<i64>().ok() == Some(current.channel_id)
+                                }
+                                _ => false,
+                            }
+                    }) {
+                        return;
+                    }
+                }
+
                 let vs_user = paracord_db::users::get_user_by_id(&state.db, session.user_id)
                     .await
                     .ok()
@@ -2672,20 +2801,37 @@ async fn handle_client_message(
                     .ok()
                     .flatten();
                     if let Some(existing_state) = existing {
-                        let _ = paracord_db::voice_states::remove_voice_state(
+                        let removed = paracord_db::voice_states::remove_voice_state_if_session(
                             &state.db,
                             session.user_id,
                             existing_state.guild_id(),
+                            &existing_state.session_id,
                         )
-                        .await;
+                        .await
+                        .unwrap_or(false);
+                        if !removed {
+                            return;
+                        }
                         if let Some(participants) = state
                             .voice
-                            .leave_room(existing_state.channel_id, session.user_id)
+                            .leave_room_if_session(
+                                existing_state.channel_id,
+                                session.user_id,
+                                Some(&existing_state.session_id),
+                            )
                             .await
                         {
                             if participants.is_empty() {
                                 let _ = state.voice.cleanup_room(existing_state.channel_id).await;
                             }
+                        }
+                        if let Some(native) = state.native_media.as_ref() {
+                            native.rooms.leave_room_if_session(
+                                existing_state.guild_id().unwrap_or(0),
+                                existing_state.channel_id,
+                                session.user_id,
+                                Some(&existing_state.session_id),
+                            );
                         }
                         state.event_bus.dispatch(
                             EVENT_VOICE_STATE_UPDATE,
@@ -2757,47 +2903,65 @@ async fn handle_client_message(
                             return;
                         }
 
+                        let existing = match paracord_db::voice_states::get_user_voice_state(
+                            &state.db,
+                            session.user_id,
+                            Some(guild_id),
+                        )
+                        .await
+                        {
+                            Ok(existing) => existing,
+                            Err(_) => return,
+                        };
+                        let voice_session_id = existing
+                            .as_ref()
+                            .filter(|current| current.channel_id == channel_id)
+                            .map(|current| current.session_id.as_str())
+                            .unwrap_or(&session.session_id);
+
                         // Propagate: on failure the user would be broadcast as
                         // present in voice while `resolve_active_media_room`
                         // finds no voice state and rejects their QUIC
                         // connection — joined, visible to everyone, no audio,
                         // no error anywhere.
-                        if let Err(err) = paracord_db::voice_states::upsert_voice_state(
-                            &state.db,
-                            session.user_id,
-                            Some(guild_id),
-                            channel_id,
-                            &session.session_id,
-                        )
-                        .await
-                        {
-                            tracing::error!(
-                                user_id = session.user_id,
+                        if expected_session.is_none() {
+                            if let Err(err) = paracord_db::voice_states::upsert_voice_state(
+                                &state.db,
+                                session.user_id,
+                                Some(guild_id),
                                 channel_id,
-                                "voice join aborted: failed to persist voice state: {err}"
-                            );
-                            let _ = send_ws_text_logged(
-                                sender,
-                                json!({
-                                    "op": OP_DISPATCH,
-                                    "t": "VOICE_STATE_UPDATE_FAILED",
-                                    "d": {
-                                        "channel_id": channel_id.to_string(),
-                                        "guild_id": guild_id.to_string(),
-                                        "reason": "voice_state_persist_failed",
-                                    },
-                                })
-                                .to_string(),
-                                compressor,
-                                Some(session.user_id),
-                                Some(session.session_id.as_str()),
-                                "voice_state_update_failed",
-                                Some(OP_DISPATCH),
-                                Some("VOICE_STATE_UPDATE_FAILED"),
-                                None,
+                                voice_session_id,
                             )
-                            .await;
-                            return;
+                            .await
+                            {
+                                tracing::error!(
+                                    user_id = session.user_id,
+                                    channel_id,
+                                    "voice join aborted: failed to persist voice state: {err}"
+                                );
+                                let _ = send_ws_text_logged(
+                                    sender,
+                                    json!({
+                                        "op": OP_DISPATCH,
+                                        "t": "VOICE_STATE_UPDATE_FAILED",
+                                        "d": {
+                                            "channel_id": channel_id.to_string(),
+                                            "guild_id": guild_id.to_string(),
+                                            "reason": "voice_state_persist_failed",
+                                        },
+                                    })
+                                    .to_string(),
+                                    compressor,
+                                    Some(session.user_id),
+                                    Some(session.session_id.as_str()),
+                                    "voice_state_update_failed",
+                                    Some(OP_DISPATCH),
+                                    Some("VOICE_STATE_UPDATE_FAILED"),
+                                    None,
+                                )
+                                .await;
+                                return;
+                            }
                         }
                         state
                             .voice
@@ -2855,6 +3019,7 @@ async fn handle_client_message(
                         .and_then(|v| v.as_str())
                         .and_then(|s| s.parse::<i64>().ok());
                     if let (Some(guild_id), Some(channel_id)) = (guild_id, channel_id) {
+                        let _membership = state.voice.lock_membership(session.user_id).await;
                         // ── Permission checks (mirrors REST join_voice) ──
                         // 1. Verify guild membership
                         if paracord_core::permissions::ensure_guild_member(

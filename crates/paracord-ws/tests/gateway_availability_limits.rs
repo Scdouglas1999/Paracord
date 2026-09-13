@@ -163,6 +163,11 @@ async fn build_env() -> TestEnv {
     });
 
     let state = AppState {
+        database_history_epoch: paracord_db::server_settings::get_or_create_database_history_epoch(
+            &db,
+        )
+        .await
+        .unwrap(),
         db: db.clone(),
         event_bus: paracord_core::events::EventBus::default(),
         config: AppConfig {

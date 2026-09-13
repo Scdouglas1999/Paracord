@@ -1,3 +1,5 @@
+import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
+import { useCurrentUser } from '../../hooks/useCurrentUser';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ChangeEvent, ReactNode } from 'react';
 import { X, Shield, ShieldAlert, Users, Hash, Link, Gavel, ScrollText, RefreshCw, Smile, Calendar, Bot, ArrowLeft, HardDrive, LayoutTemplate, MessageSquare, TrendingUp } from 'lucide-react';
@@ -9,7 +11,6 @@ import { botApi, type BotApplication, type GuildBotEntry } from '../../api/bots'
 import { emojiApi } from '../../api/emojis';
 import { AutomodSection } from './AutomodSection';
 import { useGuildStore } from '../../stores/guildStore';
-import { useAuthStore } from '../../stores/authStore';
 import { invalidateGuildPermissionCache, usePermissions } from '../../hooks/usePermissions';
 import { Permissions, hasPermission } from '../../types';
 import type { AuditLogEntry, Ban, Channel, Guild, GuildBotConfig, GuildEmoji, Invite, Member, ModerationReport, Role } from '../../types';
@@ -105,9 +106,10 @@ const NATIVE_BOT_LABELS: Record<string, { name: string; description: string }> =
 export function GuildSettings({ guildId, guildName, onClose, initialSection, initialChannelId }: GuildSettingsProps) {
   const location = useLocation();
   const navigate = useNavigate();
+  const guildScope = useCurrentAccountScope();
   const leaveGuild = useGuildStore((s) => s.leaveGuild);
-  const removeGuild = useGuildStore((s) => s.removeGuild);
-  const authUser = useAuthStore((s) => s.user);
+  const deleteGuild = useGuildStore((s) => s.deleteGuild);
+  const authUser = useCurrentUser();
   const { permissions, isAdmin } = usePermissions(guildId);
   const canManageRoles = isAdmin || hasPermission(permissions, Permissions.MANAGE_ROLES);
   const canManageRoleSettings = isAdmin || hasPermission(permissions, Permissions.MANAGE_GUILD);
@@ -227,7 +229,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
     }
   };
 
-  const refreshAll = async () => {
+  const refreshAll = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -333,10 +335,10 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
         setAuditLoadError(getGuildSettingsErrorMessage(results[11].reason, 'Failed to load audit log'));
       }
       if (results[12].status === 'fulfilled') setModTemplates(results[12].value.data);
-      if (!newWebhookChannelId && normalizedChannels.length > 0) {
+      if (normalizedChannels.length > 0) {
         const firstTextChannel = normalizedChannels.find((c) => c.type === 0 || c.channel_type === 0);
         if (firstTextChannel) {
-          setNewWebhookChannelId(firstTextChannel.id);
+          setNewWebhookChannelId((current) => current || firstTextChannel.id);
         }
       }
     } catch (err: unknown) {
@@ -344,11 +346,11 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
     } finally {
       setLoading(false);
     }
-  };
+  }, [guildId, guildName, canManageWebhooks, webhookFilterChannelId, canManageRoleSettings, reportStatusFilter, canBan, canViewAuditLog, auditActionFilter, auditUserFilter]);
 
   useEffect(() => {
     void refreshAll();
-  }, [guildId, canManageWebhooks, webhookFilterChannelId, canManageRoleSettings, reportStatusFilter, canBan, canViewAuditLog, auditActionFilter, auditUserFilter]);
+  }, [refreshAll]);
 
   // Live-refresh roles/bans/invites when gateway events arrive while settings are open.
   useEffect(() => {
@@ -1049,21 +1051,21 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
   };
 
   const handleLeaveGuild = async () => {
+    if (!guildScope) return;
     if (!(await confirm({ title: 'Leave this space?', description: 'You will need a new invite to rejoin.', confirmLabel: 'Leave', variant: 'danger' }))) return;
     await runAction(async () => {
-      await leaveGuild(guildId);
+      await leaveGuild(guildId, guildScope);
       onClose();
       navigate('/app/friends');
     }, 'Failed to leave server');
   };
 
   const handleDeleteGuild = async () => {
-    if (!guild || !authUser || guild.owner_id !== authUser.id) return;
+    if (!guildScope || !guild || !authUser || guild.owner_id !== authUser.id) return;
     if (deleteGuildConfirmName !== guild.name) return;
     setDeletingGuild(true);
     try {
-      await guildApi.delete(guildId);
-      removeGuild(guildId);
+      await deleteGuild(guildId, guildScope);
       onClose();
       navigate('/app/friends');
     } catch (err: unknown) {

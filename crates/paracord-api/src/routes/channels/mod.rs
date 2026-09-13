@@ -21,6 +21,7 @@ use crate::routes::mod_log;
 // forwarding stay here in the module root. The `pub use` re-exports keep every
 // handler reachable at `crate::routes::channels::<fn>` so `lib.rs` routing and
 // other callers are unchanged.
+mod capabilities;
 mod forums;
 mod messages;
 mod pins;
@@ -29,6 +30,7 @@ mod reactions;
 mod saved;
 mod threads;
 
+pub use capabilities::*;
 pub use forums::*;
 pub use messages::*;
 pub use pins::*;
@@ -46,77 +48,42 @@ async fn dispatch_channel_event(
     channel: &paracord_db::channels::ChannelRow,
     event: &str,
     payload: Value,
-) {
+) -> Result<(), ApiError> {
+    let message_event = matches!(
+        event,
+        "MESSAGE_CREATE" | "MESSAGE_UPDATE" | "MESSAGE_DELETE" | "MESSAGE_DELETE_BULK"
+    );
     match channel.guild_id() {
-        Some(guild_id) => state.event_bus.dispatch(event, payload, Some(guild_id)),
-        None => {
-            let recipient_ids = paracord_db::dms::get_dm_recipient_ids(&state.db, channel.id)
-                .await
-                .unwrap_or_default();
-            state
-                .event_bus
-                .dispatch_to_users(event, payload, recipient_ids);
-        }
-    }
-}
-
-/// Parse user mentions from message content. Matches `<@id>` and `<@!id>` patterns.
-fn parse_mentions(content: &str) -> Vec<i64> {
-    let mut ids = Vec::new();
-    let mut i = 0;
-    let bytes = content.as_bytes();
-    while i + 2 < bytes.len() {
-        if bytes[i] == b'<' && bytes[i + 1] == b'@' {
-            let start = if i + 2 < bytes.len() && bytes[i + 2] == b'!' {
-                i + 3
+        Some(guild_id) => {
+            if message_event {
+                state
+                    .event_bus
+                    .dispatch_message(&state.db, event, payload, Some(guild_id))
+                    .await;
             } else {
-                i + 2
-            };
-            if let Some(end) = content[start..].find('>') {
-                if let Ok(id) = content[start..start + end].parse::<i64>() {
-                    if !ids.contains(&id) {
-                        ids.push(id);
-                    }
-                }
-                i = start + end + 1;
-                continue;
+                state.event_bus.dispatch(event, payload, Some(guild_id));
             }
         }
-        i += 1;
+        None => {
+            let recipient_ids =
+                paracord_db::dms::get_dm_recipient_ids(&state.db, channel.id).await?;
+            if message_event {
+                state
+                    .event_bus
+                    .dispatch_message_to_users(&state.db, event, payload, recipient_ids)
+                    .await;
+            } else {
+                state
+                    .event_bus
+                    .dispatch_to_users(event, payload, recipient_ids);
+            }
+        }
     }
-    ids
+    Ok(())
 }
 
-/// Detects a mass-mention token (`@everyone` or `@here`) using word boundaries so
-/// that embedded occurrences such as `foo@everyone.com` or `@everyone` glued to a
-/// surrounding word do not trigger a guild-wide fan-out. A token matches only when
-/// it is preceded by the start of input or whitespace and followed by the end of
-/// input or a non-word character (anything other than an ASCII alphanumeric or `_`).
-/// Trailing sentence punctuation (`@everyone!`, `@everyone.`) is therefore a valid
-/// boundary, while a directly attached word character (`@everyoneish`) is not.
-fn contains_mass_mention(content: &str) -> bool {
-    fn is_word_char(c: char) -> bool {
-        c.is_ascii_alphanumeric() || c == '_'
-    }
-    for token in ["@everyone", "@here"] {
-        let mut search_start = 0;
-        while let Some(rel) = content[search_start..].find(token) {
-            let idx = search_start + rel;
-            let preceded_ok = idx == 0
-                || content[..idx]
-                    .chars()
-                    .next_back()
-                    .is_some_and(|c| c.is_whitespace());
-            let after = &content[idx + token.len()..];
-            let followed_ok = after.chars().next().is_none_or(|c| !is_word_char(c));
-            if preceded_ok && followed_ok {
-                return true;
-            }
-            search_start = idx + token.len();
-        }
-    }
-    false
-}
+#[cfg(test)]
+use paracord_util::mentions::contains_mass_mention;
 
 const MAX_CHANNEL_TOPIC_LEN: usize = 1_024;
 /// Matches the `channels.name` column, and the bound the thread handlers in
@@ -254,6 +221,7 @@ pub fn channel_to_json(c: &paracord_db::channels::ChannelRow) -> Value {
         "nsfw": c.nsfw,
         "rate_limit_per_user": c.rate_limit_per_user,
         "last_message_id": c.last_message_id.map(|id| id.to_string()),
+            "message_revision": c.message_revision.to_string(),
         "required_role_ids": required_role_ids,
         "thread_metadata": thread_metadata,
         "owner_id": c.owner_id.map(|id| id.to_string()),
@@ -320,7 +288,7 @@ async fn normalize_required_role_ids(
     ))
 }
 
-async fn ensure_channel_permissions(
+pub(crate) async fn ensure_channel_permissions(
     state: &AppState,
     channel: &paracord_db::channels::ChannelRow,
     user_id: i64,
@@ -351,12 +319,18 @@ async fn ensure_channel_permissions(
         {
             return Err(ApiError::Forbidden);
         }
-        // Re-enforce the block-list on every 1:1 DM send. Blocks are only checked
+        // Re-enforce the block-list on every 1:1 DM send or call. Blocks are only checked
         // at DM-creation time, but DM channels are persistent: once A and V share a
         // channel and V later blocks A, A must be stopped from continuing to message
-        // V. Only gate sends (not reads/typing/etc.) so an existing conversation can
+        // V. Gate sends and calls, while reads remain available so a conversation can
         // still be viewed by either party.
-        if channel.channel_type == 1 && required.contains(&Permissions::SEND_MESSAGES) {
+        if channel.channel_type == 1
+            && required.iter().any(|permission| {
+                permission.intersects(
+                    Permissions::SEND_MESSAGES | Permissions::CONNECT | Permissions::STREAM,
+                )
+            })
+        {
             let recipients = paracord_db::dms::get_dm_recipient_ids(&state.db, channel.id)
                 .await
                 .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
@@ -755,9 +729,11 @@ fn build_message_json(
 
     json!({
         "id": msg.id.to_string(),
+        "message_revision": msg.recovery_revision.to_string(),
         "channel_id": msg.channel_id.to_string(),
         "author": author,
         "content": content,
+        "nonce": msg.delivery_nonce,
         "e2ee": e2ee_payload,
         "pinned": msg.pinned,
         "type": msg.message_type,
@@ -1148,7 +1124,7 @@ pub async fn typing(
         "user_id": auth.user_id.to_string(),
         "timestamp": chrono::Utc::now().timestamp(),
     });
-    dispatch_channel_event(&state, &channel, "TYPING_START", typing_payload).await;
+    dispatch_channel_event(&state, &channel, "TYPING_START", typing_payload).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1431,101 +1407,67 @@ async fn federation_forward_message(
         .await
         .unwrap_or_default();
 
-    let envelope = if outbound.uses_remote_mapping {
-        let mut message_content = serde_json::json!({
-            "body": content,
-            "msgtype": "m.text",
-            "guild_id": outbound.payload_guild_id,
-            "channel_id": outbound
-                .payload_channel_id
-                .clone()
-                .unwrap_or_else(|| channel_id.to_string()),
-            "message_id": message_id.to_string(),
-        });
-        if let Some(name) = channel_meta
-            .as_ref()
-            .and_then(|channel| channel.name.as_deref())
-        {
-            message_content["channel_name"] = Value::String(name.to_string());
+    let mention_identities = match crate::routes::federation::outbound_message_mentions(
+        state, &service, channel_id, message_id,
+    )
+    .await
+    {
+        Ok(identities) => identities,
+        Err(error) => {
+            tracing::warn!(message_id, %error, "federation: cannot read committed message audience");
+            return;
         }
-        if let Some(kind) = channel_meta.as_ref().map(|channel| channel.channel_type) {
-            message_content["channel_type"] = Value::Number(serde_json::Number::from(kind));
-        }
-        if let Some(name) = guild_meta.as_ref().map(|guild| guild.name.as_str()) {
-            message_content["guild_name"] = Value::String(name.to_string());
-        }
-        if !attachments_meta.is_empty() {
-            let meta: Vec<serde_json::Value> = attachments_meta
-                .iter()
-                .map(|a| {
-                    serde_json::json!({
-                        "id": a.id.to_string(),
-                        "filename": a.filename,
-                        "size": a.size,
-                        "content_type": a.content_type,
-                        "content_hash": a.content_hash,
-                        "origin_url": format!("/_paracord/federation/v1/file/{}", a.id),
-                    })
+    };
+    let mut message_content = serde_json::json!({
+        "body": content,
+        "msgtype": "m.text",
+        "guild_id": outbound.payload_guild_id,
+        "channel_id": outbound.payload_channel_id.clone().unwrap_or_else(|| channel_id.to_string()),
+        "message_id": message_id.to_string(),
+        "m.mentions": { "user_ids": mention_identities },
+    });
+    if let Some(name) = channel_meta
+        .as_ref()
+        .and_then(|channel| channel.name.as_deref())
+    {
+        message_content["channel_name"] = Value::String(name.to_string());
+    }
+    if let Some(kind) = channel_meta.as_ref().map(|channel| channel.channel_type) {
+        message_content["channel_type"] = Value::Number(serde_json::Number::from(kind));
+    }
+    if let Some(name) = guild_meta.as_ref().map(|guild| guild.name.as_str()) {
+        message_content["guild_name"] = Value::String(name.to_string());
+    }
+    if !attachments_meta.is_empty() {
+        message_content["attachments"] = serde_json::json!(attachments_meta
+            .iter()
+            .map(|a| {
+                serde_json::json!({
+                    "id": a.id.to_string(),
+                    "filename": a.filename,
+                    "size": a.size,
+                    "content_type": a.content_type,
+                    "content_hash": a.content_hash,
+                    "origin_url": format!("/_paracord/federation/v1/file/{}", a.id),
                 })
-                .collect();
-            message_content["attachments"] = serde_json::json!(meta);
-        }
-        match service.build_custom_envelope(
-            "m.message",
-            outbound.room_id.clone(),
-            &username,
-            &message_content,
-            timestamp_ms,
-            None,
-            Some(&message_id.to_string()),
-        ) {
-            Ok(env) => env,
-            Err(e) => {
-                tracing::warn!(
-                    "federation: failed to build mapped envelope for message {message_id}: {e}"
-                );
-                return;
-            }
-        }
-    } else {
-        match service.build_message_envelope(
-            message_id,
-            channel_id,
-            guild_id,
-            &username,
-            content,
-            channel_meta
-                .as_ref()
-                .and_then(|channel| channel.name.as_deref()),
-            channel_meta.as_ref().map(|channel| channel.channel_type),
-            guild_meta.as_ref().map(|guild| guild.name.as_str()),
-            timestamp_ms,
-        ) {
-            Ok(mut env) => {
-                if !attachments_meta.is_empty() {
-                    let meta: Vec<serde_json::Value> = attachments_meta
-                        .iter()
-                        .map(|a| {
-                            serde_json::json!({
-                                "id": a.id.to_string(),
-                                "filename": a.filename,
-                                "size": a.size,
-                                "content_type": a.content_type,
-                                "content_hash": a.content_hash,
-                                "origin_url": format!("/_paracord/federation/v1/file/{}", a.id),
-                            })
-                        })
-                        .collect();
-                    env.content["attachments"] = serde_json::json!(meta);
-                }
-                env
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "federation: failed to build envelope for message {message_id}: {e}"
-                );
-                return;
-            }
+            })
+            .collect::<Vec<_>>());
+    }
+    // Rich metadata and the recipient audience must be part of the signed body;
+    // mutating an envelope after signing invalidates its signature.
+    let envelope = match service.build_custom_envelope(
+        "m.message",
+        outbound.room_id,
+        &username,
+        &message_content,
+        timestamp_ms,
+        None,
+        Some(&message_id.to_string()),
+    ) {
+        Ok(envelope) => envelope,
+        Err(error) => {
+            tracing::warn!(message_id, %error, "federation: cannot sign message envelope");
+            return;
         }
     };
 

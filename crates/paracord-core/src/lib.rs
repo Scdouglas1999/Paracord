@@ -12,9 +12,11 @@ pub mod events;
 pub mod guild;
 pub mod health;
 pub mod identity;
+pub mod instance_setup;
 pub mod interactions;
 pub mod member_index;
 pub mod message;
+pub mod message_attention;
 pub mod observability;
 pub mod permissions;
 pub mod presence_manager;
@@ -89,6 +91,9 @@ pub fn build_permission_cache(max_entries: u64) -> permissions::PermissionCache 
 #[derive(Clone)]
 pub struct AppState {
     pub db: DbPool,
+    /// Immutable identity of this database history, shared by all replicas.
+    /// Offline restore rotates the stored epoch before a new instance starts.
+    pub database_history_epoch: String,
     pub event_bus: events::EventBus,
     pub config: AppConfig,
     pub runtime: Arc<RwLock<RuntimeSettings>>,

@@ -407,7 +407,7 @@ describe('Full Signal Protocol Integration', () => {
       );
 
       let aliceState = initializeInitiator(x3dhResult.sharedSecret, serverBundle.signedPrekey.publicKey);
-      let bobState = initializeResponder(bobSecret, getSignedPrekeyPair(bobStore));
+      const bobState = initializeResponder(bobSecret, getSignedPrekeyPair(bobStore));
 
       const enc = await ratchetEncrypt(aliceState, 'wire format test');
       aliceState = enc.state;

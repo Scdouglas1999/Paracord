@@ -14,6 +14,41 @@ monitoring, and S3 storage see the
 > credentials at all. LiveKit is optional; enable it only if you specifically need
 > a WebRTC SFU (see [Getting Started](getting-started.md#native-media-vs-livekit)).
 
+## 0. Fastest path: the install script
+
+For a dedicated Linux host, [`scripts/install.sh`](../scripts/install.sh) does
+the whole base install in one command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Scdouglas1999/Paracord/main/scripts/install.sh | sudo sh
+```
+
+It installs the latest release to `/opt/paracord`, creates a `paracord` system
+user, writes a hardened `paracord.service` systemd unit (`Restart=always`,
+`ProtectSystem=strict` with the install dir writable, no ambient privileges),
+generates `config/paracord.toml` via `paracord-server init`, and starts the
+service. Re-running it is the upgrade path: `config/` and `data/` are preserved
+and the previous binary lands in `backups/`. All paths inside the generated
+config are pinned to the install directory, so nothing depends on the process
+working directory.
+
+On Windows, [`scripts/install.ps1`](../scripts/install.ps1) is the equivalent
+one-command path from an elevated PowerShell: it installs under
+`%ProgramFiles%\Paracord`, registers an auto-start scheduled task running as
+`SYSTEM` with crash restarts, and opens inbound firewall rules for TCP and UDP
+`8443`.
+
+That gives you a working self-signed-HTTPS server on `8443`. The rest of this
+page is about turning that into an internet-facing production deployment: a
+real domain, proxy-terminated TLS, `public_url`, and optionally PostgreSQL.
+
+> **Integrity note.** The release pipeline currently does **not** publish
+> SHA-256 checksums for the archives, so the installer verifies the download
+> only via TLS to the official GitHub releases and prints a prominent warning.
+> If you need out-of-band verification, download the archive yourself, check it,
+> and install with `PARACORD_LOCAL_ARCHIVE=<file>` (a sibling `<file>.sha256`
+> is then verified when present).
+
 ## 1. TLS: terminate at a reverse proxy
 
 For a production deployment behind a domain name, terminate TLS at a reverse proxy
@@ -99,8 +134,10 @@ paracord-server migrate-to-postgres \
 ```
 
 Stop the server first (the SQLite file must be idle); the copy runs inside a single
-all-or-nothing transaction and verifies every table's row count. Add `--dry-run`
-to validate without writing. Full runbook:
+transaction and verifies copied row counts. Tail repair and a new database
+history epoch commit with the copy. Target schema migrations and seed rows run
+first and remain applied even with `--dry-run`, which validates without copying
+source rows. Full runbook:
 [docs/sqlite-to-postgres-migration.md](sqlite-to-postgres-migration.md). Pool
 sizing and tuning guidance lives in the
 [README PostgreSQL section](../README.md#using-postgresql-instead-of-sqlite).
@@ -111,9 +148,16 @@ Back up both the database and the media, and validate restores on a staging node
 
 - **Database:** SQLite file snapshot, or `pg_dump`/`pg_restore` on PostgreSQL. The
   admin settings panel and API can trigger backups on either backend.
-- **Media & config:** `data/uploads`, `data/files`, `data/backups`, and the
-  `paracord.toml` config (which holds the generated JWT secret and cert material —
-  keep it protected and backed up separately from database/file snapshots).
+- **Media, config & keys:** Retain `data/uploads`, `data/files`, the original
+  `paracord.toml` and deployment environment, the at-rest master key, and separate
+  TLS/federation key files. The config contains the JWT secret, not TLS key bytes.
+
+Use `paracord-server restore-backup` to prepare and verify a new SQLite directory
+or isolated PostgreSQL database, then stop every old instance before activating
+its generated configuration. The admin panel provides downloads and offline
+instructions; it does not replace the running database. Follow the
+[backup and recovery runbook](backup-recovery.md) for keys, media verification,
+cutover and rollback.
 
 See the
 [Self-Hosting Deployment Guide](../SELF_HOSTING_DEPLOYMENT_GUIDE.md#6-backups-database--media)
@@ -140,6 +184,62 @@ The Compose files ship a working local LiveKit key/secret pair for development;
 override `PARACORD_LIVEKIT_API_SECRET` with a strong random value before exposing
 LiveKit to a network. See [docs/docker-setup.md](docker-setup.md) and
 `docker-compose.yml` for the full LiveKit wiring.
+
+## 7. Voice troubleshooting: the connection check
+
+<!-- Added for the guided voice connection check (improvement item 13). Keep
+     this section self-contained so install-doc rewrites can move it whole. -->
+
+Chat and calls do not travel the same way. Messages ride TCP through your reverse
+proxy; native voice and video ride **QUIC on UDP**, straight to the server host.
+That is why a server can be perfectly healthy for chat and completely unusable
+for calls — and why "voice doesn't work" reports are rarely about voice.
+
+Paracord ships a guided check so a user can find the answer themselves. It is
+reached from **Settings → Voice & Video → Run connection check**, and it is
+offered directly on a failed join (the voice lobby's error state, and the toast
+shown when a DM call fails to start). It never joins a call and never changes an
+active one; closing it returns the user to chat unchanged.
+
+The check reports each cause separately:
+
+| Step | What it proves |
+|---|---|
+| Secure connection | The page is on `https://` or `localhost`. Browsers block microphones and QUIC anywhere else. |
+| Browser and codec support | WebTransport, Opus encoding, VP9 decoding, AudioWorklet. The desktop app is judged on its own native stack instead. |
+| Microphone | Permission, that the selected input still exists, and that sound actually reaches it (a live level meter). |
+| Speaker | A test tone on the selected output, confirmed by the person running the check. |
+| Camera | Optional; only affects video calls. |
+| Server call settings | What this server actually configured: native QUIC, LiveKit, or nothing. Read from `GET /api/v1/voice/transport-diagnostics`, which has no side effects. |
+| Media certificate | Whether this client can pin the certificate the media port presents. |
+| Voice connection | A real WebTransport session to the media endpoint, with a bounded timeout and a reported round-trip time. |
+
+A failing step names the cause in plain language and says what to do, for
+example: *"Your server's UDP port 8443 is not reachable from this network. Ask
+the operator to forward UDP 8443 to the server host…"*. **Export diagnostics**
+writes a redacted JSON report — browser, OS, engine, step results, timings and
+error codes, with no tokens, cookies, account ids or credential-bearing URLs —
+that a user can send to you.
+
+### What operators should check when the transport step fails
+
+1. **Forward UDP.** The media port (`[voice] port`, default `8443/udp`) must reach
+   the server host directly. A reverse proxy does not carry it. See §2 above.
+2. **Forward it to the right host.** "Something answered but the QUIC handshake
+   did not finish" usually means the UDP port is published to a different service
+   than the one serving chat.
+3. **Certificate refusals are not network problems.** The media port always
+   presents a certificate the server generates for itself at start-up; an
+   operator's CA-issued TLS material terminates the *TCP* HTTPS listener and is
+   never presented on the QUIC port. Chromium only pins a self-signed
+   WebTransport certificate when it is ECDSA P-256 and valid for 14 days or less.
+   Firefox and Safari cannot pin one at all, so their users must use a
+   Chromium-based browser or the desktop app.
+4. **The admin health view will not tell you this.** It reads local configuration
+   and reports `Native media: On (UDP 8443)` as soon as the listener binds. That
+   is not a reachability probe — see
+   [Known limitations](known-limitations.md#server-health). The connection check,
+   run from the user's own network, is.
 
 ## See also
 

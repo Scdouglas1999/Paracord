@@ -11,6 +11,7 @@ export interface HomeResumeHeroProps {
   memberCount?: number;
   live?: boolean;
   unread?: boolean;
+  activityKnown?: boolean;
   onOpenHome: () => void;
   onOpenChannel: (entry: ConversationEntry) => void;
 }
@@ -26,6 +27,7 @@ export function HomeResumeHero({
   memberCount,
   live,
   unread,
+  activityKnown = true,
   onOpenHome,
   onOpenChannel,
 }: HomeResumeHeroProps) {
@@ -36,7 +38,7 @@ export function HomeResumeHero({
   }
   if (live) metaParts.push('Live room open');
   if (unread) metaParts.push('Unread waiting');
-  if (!live && !unread) metaParts.push('Quiet right now');
+  if (!live && !unread) metaParts.push(activityKnown ? 'No unread conversations or live rooms' : 'Activity not yet confirmed');
 
 
   return (

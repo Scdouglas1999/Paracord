@@ -1,3 +1,5 @@
+import { useSelectedGuildId } from '../../hooks/useGuilds';
+import { entityScopeKey as memberScopeKey } from '../../lib/serverScope';
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -6,9 +8,8 @@ import type { Role } from '../../types/index';
 import { UserProfilePopup } from '../user/UserProfile';
 import { useMemberStore } from '../../stores/memberStore';
 import { usePresenceStore } from '../../stores/presenceStore';
-import { useGuildStore } from '../../stores/guildStore';
 import { useServerListStore } from '../../stores/serverListStore';
-import { useAuthStore } from '../../stores/authStore';
+import { useCurrentUser, useCurrentAccountScope } from '../../hooks/useCurrentUser';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { formatActivityLabel, getPrimaryActivity } from '../../lib/activityPresence';
 import { SkeletonMember } from '../ui/Skeleton';
@@ -63,14 +64,11 @@ export function resolveMemberStatus(
 }
 
 export function MemberList({ members: propMembers, roles: propRoles = [], compact = false, hideStatsHeader = false }: MemberListProps) {
-  const selectedGuildId = useGuildStore(s => s.selectedGuildId);
+  const selectedGuildId = useSelectedGuildId();
   const activeServerId = useServerListStore(s => s.activeServerId);
-  const activeServer = useServerListStore((s) =>
-    s.activeServerId ? s.servers.find((server) => server.id === s.activeServerId) : undefined
-  );
-  const authUserId = useAuthStore((s) => s.user?.id);
-  const authToken = useAuthStore((s) => s.token);
-  const storeMembers = useMemberStore(s => selectedGuildId ? s.members.get(selectedGuildId) : undefined);
+  const currentUser = useCurrentUser();
+  const memberScope = useCurrentAccountScope();
+  const storeMembers = useMemberStore(s => selectedGuildId ? (memberScope ? s.members.get(memberScopeKey(memberScope, selectedGuildId)) : undefined) : undefined);
   const fetchMembers = useMemberStore(s => s.fetchMembers);
   // Fingerprint presence writes for visible members only (any scope), so
   // unrelated presence Map updates don't re-render the whole list.
@@ -105,8 +103,8 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
   );
   const getPresence = usePresenceStore((s) => s.getPresence);
   const voiceParticipants = useVoiceStore((s) => s.participants);
-  const selfUserId = activeServer?.userId ?? authUserId;
-  const isAuthenticated = Boolean(authToken && selfUserId);
+  const selfUserId = currentUser?.id;
+  const isAuthenticated = Boolean(selfUserId);
   const [fetchedRoles, setFetchedRoles] = useState<Role[]>([]);
 
   // Use prop roles if provided, otherwise use fetched roles
@@ -117,9 +115,9 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
   // guild, and depending on the list would re-run it on every member update.
   useEffect(() => {
     if (!selectedGuildId) return;
-    if (useMemberStore.getState().members.get(selectedGuildId)) return;
-    void fetchMembers(selectedGuildId);
-  }, [selectedGuildId, fetchMembers]);
+    if (!memberScope || useMemberStore.getState().membersLoaded[memberScopeKey(memberScope, selectedGuildId)]) return;
+    void fetchMembers(selectedGuildId, memberScope);
+  }, [selectedGuildId, fetchMembers, memberScope]);
 
   useEffect(() => {
     if (!selectedGuildId || propRoles.length > 0) return;

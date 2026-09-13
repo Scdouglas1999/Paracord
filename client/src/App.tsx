@@ -6,6 +6,7 @@ import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
 import { ServerConnectPage } from './pages/ServerConnectPage';
 import { AccountSetupPage } from './pages/AccountSetupPage';
+import { InstanceSetupPage } from './pages/InstanceSetupPage';
 import { AccountUnlockPage } from './pages/AccountUnlockPage';
 import { AccountRecoverPage } from './pages/AccountRecoverPage';
 import { TermsPage } from './pages/TermsPage';
@@ -281,6 +282,10 @@ export default function App() {
 
       {/* Server connection */}
       <Route path="/connect" element={route(<ServerConnectPage />)} />
+
+      {/* First-owner claim. `/setup` above is the per-device crypto identity;
+          this is the server itself getting an owner for the first time. */}
+      <Route path="/setup-server" element={route(<InstanceSetupPage />)} />
 
       {/* Password auth */}
       <Route path="/login" element={route(<AuthRoute><LoginPage /></AuthRoute>)} />

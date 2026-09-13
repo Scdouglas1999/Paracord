@@ -134,7 +134,7 @@ async function readFallbackValue(key: string): Promise<string | null> {
   return invoke<string>('secure_store_fallback_decrypt', { payload });
 }
 
-export async function secureSet(key: string, value: string): Promise<void> {
+async function performSecureSet(key: string, value: string): Promise<void> {
   if (isWorkerContext()) {
     await workerBridgeRequest('set', key, value);
     return;
@@ -148,6 +148,7 @@ export async function secureSet(key: string, value: string): Promise<void> {
   }
   try {
     await invoke('secure_store_set', { key, value });
+    webMemoryStore.delete(key);
     if (hasLocalStorage()) {
       localStorage.removeItem(key);
     }
@@ -162,7 +163,7 @@ export async function secureSet(key: string, value: string): Promise<void> {
   }
 }
 
-export async function secureGet(key: string): Promise<string | null> {
+async function performSecureGet(key: string): Promise<string | null> {
   if (isWorkerContext()) {
     return workerBridgeRequest('get', key);
   }
@@ -184,7 +185,8 @@ export async function secureGet(key: string): Promise<string | null> {
   return webMemoryStore.get(key) ?? null;
 }
 
-export async function secureDelete(key: string): Promise<void> {
+async function performSecureDelete(key: string): Promise<void> {
+  webMemoryStore.delete(key);
   if (isWorkerContext()) {
     await workerBridgeRequest('delete', key);
     return;
@@ -204,4 +206,54 @@ export async function secureDelete(key: string): Promise<void> {
   if (hasLocalStorage()) {
     localStorage.removeItem(key);
   }
+}
+
+// Native keychain and worker IPC complete asynchronously. Serialize operations
+// per key so a late save cannot undo logout, and a late delete cannot erase a
+// new login. Reads join the same queue and see all prior writes for that key.
+const storageOperations = new Map<string, Promise<void>>();
+function orderedStorageOperation<T>(key: string, operation: () => Promise<T>): Promise<T> {
+  const previous = storageOperations.get(key) ?? Promise.resolve();
+  const result = previous.then(operation);
+  const settled = result.then(() => undefined, () => undefined);
+  storageOperations.set(key, settled);
+  void settled.then(() => {
+    if (storageOperations.get(key) === settled) storageOperations.delete(key);
+  });
+  return result;
+}
+
+export function secureSet(key: string, value: string): Promise<void> {
+  return orderedStorageOperation(key, () => performSecureSet(key, value));
+}
+
+export function secureGet(key: string): Promise<string | null> {
+  return orderedStorageOperation(key, () => performSecureGet(key));
+}
+
+export function secureDelete(key: string): Promise<void> {
+  return orderedStorageOperation(key, () => performSecureDelete(key));
+}
+
+/**
+ * Read historical storage for an explicit, verified migration. Unlike the
+ * compatibility getter, unavailable keychains and undecryptable data are errors,
+ * never an absent key. This read leaves every original source intact.
+ */
+export function readStoredValueForMigration(key: string): Promise<string | null> {
+  return orderedStorageOperation(key, async () => {
+    if (isWorkerContext()) throw new Error('Private-key migration must run in the owning account window.');
+    const native = isTauri();
+    if (native && key.startsWith('paracord:')) {
+      const value = await invoke<string | null>('secure_store_get', { key });
+      if (value !== null && value !== undefined) return value;
+    }
+    const memory = webMemoryStore.get(key);
+    if (memory !== undefined) return memory;
+    const stored = hasLocalStorage() ? localStorage.getItem(key) : null;
+    if (stored === null) return null;
+    if (!stored.startsWith(ENCRYPTED_FALLBACK_PREFIX)) return stored;
+    if (!native) throw new Error('These legacy keys are encrypted by the desktop profile. Open that profile to recover them.');
+    return invoke<string>('secure_store_fallback_decrypt', { payload: stored.slice(ENCRYPTED_FALLBACK_PREFIX.length) });
+  });
 }

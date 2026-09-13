@@ -1,4 +1,6 @@
-import { getApi } from './activeClient';
+import type { Guild } from '../types';
+import { getApi as getActiveApi } from './activeClient';
+import type { RestClient } from './restClient';
 
 export interface GuildTemplate {
   id: string;
@@ -14,11 +16,14 @@ export interface GuildTemplate {
   created_at: string;
 }
 
-export const templateApi = {
-  list: () => getApi().get<GuildTemplate[]>('/templates'),
-  apply: (templateId: string, name: string) =>
-    getApi().post(`/templates/${templateId}/apply`, { name }),
-  remove: (templateId: string) => getApi().delete(`/templates/${templateId}`),
-  createFromGuild: (guildId: string) => getApi().post(`/guilds/${guildId}/template`),
-};
+export function createTemplateApi(getApi: () => RestClient) {
+  return {
+  list: async () => getApi().get<GuildTemplate[]>('/templates'),
+  apply: async (templateId: string, name: string) =>
+    getApi().post<Guild>(`/templates/${templateId}/apply`, { name }),
+  remove: async (templateId: string) => getApi().delete(`/templates/${templateId}`),
+  createFromGuild: async (guildId: string) => getApi().post(`/guilds/${guildId}/template`),
+  };
+}
 
+export const templateApi = createTemplateApi(getActiveApi);

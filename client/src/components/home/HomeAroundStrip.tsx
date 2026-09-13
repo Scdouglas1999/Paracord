@@ -7,6 +7,7 @@ import { resolveUserAvatarUrl } from '../../lib/userAvatar';
 import { displayName } from '../../lib/displayName';
 import { cn } from '../../lib/utils';
 import type { Activity, User } from '../../types';
+import type { Relationship } from '../../api/relationships';
 
 const STATUS_RING: Record<string, string> = {
   online: 'bg-status-online',
@@ -18,7 +19,8 @@ const STATUS_RING: Record<string, string> = {
 const MAX_VISIBLE = 16;
 
 export interface AroundFriend {
-  user: User;
+  /** Minimal wire identity is enough — the strip only reads id/username/avatar. */
+  user: Relationship['user'] & Partial<User>;
   status: string;
   /** Cheap activity / custom-status line when present. */
   activity?: string | null;

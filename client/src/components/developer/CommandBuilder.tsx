@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { Plus, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
 import {
   ApplicationCommandType,
@@ -282,6 +282,7 @@ function OptionEditor({ option, index, depth, onChange, onRemove }: OptionEditor
 // ---- Main CommandBuilder ----
 
 export function CommandBuilder({ appId, editingCommand, onSaved, onCancel }: CommandBuilderProps) {
+  const formId = useId();
   const [name, setName] = useState(editingCommand?.name ?? '');
   const [description, setDescription] = useState(editingCommand?.description ?? '');
   const [type, setType] = useState<ApplicationCommandType>(
@@ -354,9 +355,9 @@ export function CommandBuilder({ appId, editingCommand, onSaved, onCancel }: Com
 
       <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
         <div>
-          <label className="mb-1.5 block text-section uppercase text-text-muted">Name</label>
+          <label htmlFor={`${formId}-command-name`} className="mb-1.5 block text-section uppercase text-text-muted">Name</label>
           <Input
-            aria-label="Command name"
+            id={`${formId}-command-name`} aria-label="Command name"
             error={name.length > 0 && !nameValid}
             placeholder="command-name"
             value={name}
@@ -370,9 +371,9 @@ export function CommandBuilder({ appId, editingCommand, onSaved, onCancel }: Com
           )}
         </div>
         <div>
-          <label className="mb-1.5 block text-section uppercase text-text-muted">Description</label>
+          <label htmlFor={`${formId}-command-description`} className="mb-1.5 block text-section uppercase text-text-muted">Description</label>
           <Input
-            aria-label="Command description"
+            id={`${formId}-command-description`} aria-label="Command description"
             placeholder="A brief description"
             value={description}
             maxLength={100}
@@ -381,9 +382,9 @@ export function CommandBuilder({ appId, editingCommand, onSaved, onCancel }: Com
           <p className="mt-1 text-meta tabular-nums text-text-muted">{description.length}/100</p>
         </div>
         <div>
-          <label className="mb-1.5 block text-section uppercase text-text-muted">Type</label>
+          <label htmlFor={`${formId}-command-type`} className="mb-1.5 block text-section uppercase text-text-muted">Type</label>
           <Select
-            aria-label="Command type"
+            id={`${formId}-command-type`} aria-label="Command type"
             value={type}
             onChange={(e) => setType(Number(e.target.value) as ApplicationCommandType)}
           >

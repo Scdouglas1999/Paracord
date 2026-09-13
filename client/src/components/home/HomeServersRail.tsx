@@ -19,7 +19,7 @@ interface HomeServersRailProps {
   attention: Map<string, HomeServerAttention>;
   onOpen: (space: GuildSummary) => void;
   /** Highlight the primary / resume space. */
-  primaryId?: string | null;
+  primaryKey?: string | null;
 }
 
 /**
@@ -31,7 +31,7 @@ export function HomeServersRail({
   spaces,
   attention,
   onOpen,
-  primaryId,
+  primaryKey,
 }: HomeServersRailProps) {
   if (spaces.length === 0) return null;
 
@@ -45,9 +45,9 @@ export function HomeServersRail({
         )}
       >
         {spaces.map((space) => {
-          const attn = attention.get(space.id);
+          const attn = attention.get(space.key);
           const iconSrc = resolveGuildIconUrl({ icon_hash: space.icon });
-          const isPrimary = primaryId === space.id;
+          const isPrimary = primaryKey === space.key;
           const memberCount = attn?.memberCount;
           const statusParts: string[] = [];
           if (attn?.live) statusParts.push('Live');
@@ -61,7 +61,7 @@ export function HomeServersRail({
 
           return (
             <button
-              key={space.id}
+              key={space.key}
               type="button"
               onClick={() => onOpen(space)}
               className={cn(

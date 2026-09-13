@@ -43,7 +43,13 @@ const CHALLENGE_MAX_AGE_SECONDS: i64 = 60;
 // Acceptable skew between the client-echoed timestamp and the server-issued one.
 // The client echoes the exact issued timestamp, so a tight bound is safe.
 const CHALLENGE_SKEW_SECONDS: i64 = 5;
-const MAX_DISPLAY_NAME_LEN: usize = 64;
+pub(crate) const MAX_DISPLAY_NAME_LEN: usize = 64;
+
+/// Returned by every account-creating path while the instance is unclaimed.
+/// Worded for the person staring at the screen, not for a log line: the fix is
+/// to finish setup, and the claim token is in the server's terminal output.
+pub(crate) const SETUP_REQUIRED_MESSAGE: &str =
+    "This server has not been set up yet. Finish server setup with the claim token from the server's terminal before creating accounts.";
 const AUTH_GUARD_TTL_SECONDS: i64 = 3600;
 const AUTH_GUARD_CLEANUP_LIMIT: i64 = 512;
 /// Prefix for the shared per-account auth-guard key. This key is scoped to the
@@ -328,7 +334,7 @@ fn auth_guard_hard_blocked(rows: &[paracord_db::rate_limits::AuthGuardStateRow],
     })
 }
 
-async fn auth_guard_enforce(
+pub(crate) async fn auth_guard_enforce(
     state: &AppState,
     headers: &HeaderMap,
     peer_ip: Option<&str>,
@@ -348,7 +354,7 @@ async fn auth_guard_enforce(
     Ok(())
 }
 
-async fn auth_guard_record_failure(
+pub(crate) async fn auth_guard_record_failure(
     state: &AppState,
     headers: &HeaderMap,
     peer_ip: Option<&str>,
@@ -395,7 +401,7 @@ fn decayable_shared_guard_keys(
         .collect()
 }
 
-async fn auth_guard_record_success(
+pub(crate) async fn auth_guard_record_success(
     state: &AppState,
     headers: &HeaderMap,
     peer_ip: Option<&str>,
@@ -445,15 +451,15 @@ fn refresh_session_ttl_days() -> i64 {
         .unwrap_or(30)
 }
 
-fn normalize_email_for_auth(value: &str) -> String {
+pub(crate) fn normalize_email_for_auth(value: &str) -> String {
     value.trim().to_ascii_lowercase()
 }
 
-fn username_login_effective(allow_username_login: bool, require_email: bool) -> bool {
+pub(crate) fn username_login_effective(allow_username_login: bool, require_email: bool) -> bool {
     allow_username_login || !require_email
 }
 
-fn normalize_login_identifier_for_auth(value: &str) -> String {
+pub(crate) fn normalize_login_identifier_for_auth(value: &str) -> String {
     value.trim().to_ascii_lowercase()
 }
 
@@ -706,7 +712,7 @@ fn parse_username_with_discriminator(identifier: &str) -> Option<(&str, i16)> {
     Some((username, discriminator))
 }
 
-fn synthesized_local_email(user_id: i64) -> String {
+pub(crate) fn synthesized_local_email(user_id: i64) -> String {
     format!("u{user_id}@local.invalid")
 }
 
@@ -1058,7 +1064,7 @@ fn request_can_use_refresh_cookie(
 /// is the `Origin` header itself, and it is one the client cannot forge: `Origin`
 /// is a forbidden header name in browsers, so script on the served page cannot
 /// spoof "I am cross-origin" to have the token handed back to it.
-fn refresh_token_for_body(
+pub(crate) fn refresh_token_for_body(
     state: &AppState,
     headers: &HeaderMap,
     peer_ip: Option<&str>,
@@ -1173,7 +1179,7 @@ pub(crate) async fn dispatch_email_verification(
     }
 }
 
-fn header_value(value: &str) -> Result<HeaderValue, ApiError> {
+pub(crate) fn header_value(value: &str) -> Result<HeaderValue, ApiError> {
     HeaderValue::from_str(value)
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("invalid header value: {}", e)))
 }
@@ -1198,39 +1204,55 @@ fn request_metadata(
     (device_id, user_agent, ip_address)
 }
 
-/// Result of issuing a new auth session:
-/// (access_token, access_cookie, refresh_cookie, csrf_cookie, session_id, raw_refresh_token)
-async fn issue_auth_session(
+type AuthSessionResponse = (String, String, String, String, String, String);
+
+struct PreparedAuthSession {
+    response: AuthSessionResponse,
+    user_id: i64,
+    public_key: Option<String>,
+    refresh_token_hash: String,
+    jti: String,
+    device_id: Option<String>,
+    user_agent: Option<String>,
+    ip_address: Option<String>,
+    expires_at: chrono::DateTime<Utc>,
+}
+
+impl PreparedAuthSession {
+    async fn persist(&self, connection: &mut paracord_db::DbConnection) -> Result<(), ApiError> {
+        paracord_db::sessions::create_session_in_connection(
+            connection,
+            &self.response.4,
+            self.user_id,
+            &self.refresh_token_hash,
+            &self.jti,
+            self.public_key.as_deref(),
+            self.device_id.as_deref(),
+            self.user_agent.as_deref(),
+            self.ip_address.as_deref(),
+            self.expires_at,
+        )
+        .await?;
+        Ok(())
+    }
+}
+
+/// Prepare credentials before committing any database mutation. Attachment can
+/// persist them in the same transaction as the key and old-session revocation.
+fn prepare_auth_session(
     state: &AppState,
     user_id: i64,
     public_key: Option<&str>,
     headers: &HeaderMap,
     peer_ip: Option<&str>,
-) -> Result<(String, String, String, String, String, String), ApiError> {
+) -> Result<PreparedAuthSession, ApiError> {
     let session_id = Uuid::new_v4().to_string();
     let jti = Uuid::new_v4().to_string();
     let refresh_token = random_token_hex(48);
     let refresh_token_hash = sha256_hex(&refresh_token);
     let ttl_days = refresh_session_ttl_days();
-    let now = Utc::now();
-    let expires_at = now + Duration::days(ttl_days);
+    let expires_at = Utc::now() + Duration::days(ttl_days);
     let (device_id, user_agent, ip_address) = request_metadata(headers, peer_ip);
-
-    paracord_db::sessions::create_session(
-        &state.db,
-        &session_id,
-        user_id,
-        &refresh_token_hash,
-        &jti,
-        public_key,
-        device_id.as_deref(),
-        user_agent.as_deref(),
-        ip_address.as_deref(),
-        expires_at,
-    )
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-
     let access_token = paracord_core::auth::create_session_token(
         user_id,
         public_key,
@@ -1240,20 +1262,50 @@ async fn issue_auth_session(
         &jti,
     )
     .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-
     let secure = should_use_secure_cookie(state);
     let access_cookie = build_access_cookie(&access_token, state.config.jwt_expiry_seconds, secure);
     let refresh_cookie = build_refresh_cookie(&refresh_token, ttl_days, secure);
-    let csrf_token = random_token_hex(24);
-    let csrf_cookie = build_csrf_cookie(&csrf_token, state.config.jwt_expiry_seconds, secure);
-    Ok((
-        access_token,
-        access_cookie,
-        refresh_cookie,
-        csrf_cookie,
-        session_id,
-        refresh_token,
-    ))
+    let csrf_cookie = build_csrf_cookie(
+        &random_token_hex(24),
+        state.config.jwt_expiry_seconds,
+        secure,
+    );
+    Ok(PreparedAuthSession {
+        response: (
+            access_token,
+            access_cookie,
+            refresh_cookie,
+            csrf_cookie,
+            session_id,
+            refresh_token,
+        ),
+        user_id,
+        public_key: public_key.map(str::to_owned),
+        refresh_token_hash,
+        jti,
+        device_id,
+        user_agent,
+        ip_address,
+        expires_at,
+    })
+}
+
+/// (access_token, access_cookie, refresh_cookie, csrf_cookie, session_id, raw_refresh_token)
+pub(crate) async fn issue_auth_session(
+    state: &AppState,
+    user_id: i64,
+    public_key: Option<&str>,
+    headers: &HeaderMap,
+    peer_ip: Option<&str>,
+) -> Result<AuthSessionResponse, ApiError> {
+    let prepared = prepare_auth_session(state, user_id, public_key, headers, peer_ip)?;
+    let mut connection = state
+        .db
+        .acquire()
+        .await
+        .map_err(|e| ApiError::Internal(e.into()))?;
+    prepared.persist(&mut connection).await?;
+    Ok(prepared.response)
 }
 
 /// What a login path must do once the primary credential has checked out but
@@ -1356,7 +1408,7 @@ async fn reauthenticate_for_credential_change(
     user_id: i64,
     password: &str,
     mfa_code: Option<&str>,
-) -> Result<(), ApiError> {
+) -> Result<String, ApiError> {
     let user = paracord_db::users::get_user_auth_by_id(&state.db, user_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
@@ -1373,7 +1425,7 @@ async fn reauthenticate_for_credential_change(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     let Some(mfa_config) = mfa_config.filter(|config| config.enabled) else {
-        return Ok(());
+        return Ok(user.password_hash);
     };
 
     let code = mfa_code.map(str::trim).unwrap_or_default();
@@ -1385,7 +1437,7 @@ async fn reauthenticate_for_credential_change(
 
     let totp_secret = decrypt_totp_secret(state, &mfa_config.totp_secret)?;
     if verify_totp_code(user_id, &totp_secret, code, &user.email)? {
-        return Ok(());
+        return Ok(user.password_hash);
     }
 
     let code_hash = sha256_hex(&normalize_backup_code(code));
@@ -1394,7 +1446,7 @@ async fn reauthenticate_for_credential_change(
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     if consumed {
-        Ok(())
+        Ok(user.password_hash)
     } else {
         Err(ApiError::Unauthorized)
     }
@@ -1479,7 +1531,7 @@ async fn rotate_auth_session(
     ))
 }
 
-fn user_json(user: &paracord_db::users::UserRow) -> Value {
+pub(crate) fn user_json(user: &paracord_db::users::UserRow) -> Value {
     json!({
         "id": user.id.to_string(),
         "username": user.username,
@@ -1521,7 +1573,10 @@ fn user_auth_json(user: &paracord_db::users::UserAuthRow) -> Value {
 /// cap is still discoverable and joinable by hand.
 const MAX_AUTO_JOIN_SPACES: usize = 25;
 
-async fn auto_join_public_spaces(state: &AppState, user_id: i64) -> Result<(), ApiError> {
+pub(crate) async fn auto_join_public_spaces(
+    state: &AppState,
+    user_id: i64,
+) -> Result<(), ApiError> {
     let spaces = paracord_db::guilds::list_all_spaces(&state.db)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
@@ -1602,7 +1657,10 @@ pub async fn auth_options(State(state): State<AppState>) -> Json<AuthOptionsResp
 /// True when `username` is already registered at discriminator 0 — the slot
 /// every password registration takes, and the one the unique constraint guards.
 /// The lookup is case-insensitive to match how username login resolves accounts.
-async fn username_is_registered(state: &AppState, username: &str) -> Result<bool, ApiError> {
+pub(crate) async fn username_is_registered(
+    state: &AppState,
+    username: &str,
+) -> Result<bool, ApiError> {
     paracord_db::users::get_user_auth_by_username(&state.db, username, 0)
         .await
         .map(|row| row.is_some())
@@ -1612,7 +1670,11 @@ async fn username_is_registered(state: &AppState, username: &str) -> Result<bool
 /// Best-effort check used to classify a failed insert: did the username or email
 /// get claimed underneath us? A lookup failure answers `false` so the caller
 /// falls back to reporting an internal error.
-async fn registration_identity_taken(state: &AppState, username: &str, email: &str) -> bool {
+pub(crate) async fn registration_identity_taken(
+    state: &AppState,
+    username: &str,
+    email: &str,
+) -> bool {
     if username_is_registered(state, username)
         .await
         .unwrap_or(false)
@@ -1626,6 +1688,80 @@ async fn registration_identity_taken(state: &AppState, username: &str, email: &s
         .await
         .map(|row| row.is_some())
         .unwrap_or(false)
+}
+
+/// A rejected account input, and whether it counts as an abuse signal.
+pub(crate) struct NewAccountRejection {
+    /// The user-facing reason.
+    pub message: String,
+    /// Whether the auth guard should record a failure for it.
+    ///
+    /// Identity-shaped rejections (username, e-mail, display name) do; a
+    /// password that simply misses the policy does not. Someone choosing a weak
+    /// password is a person following instructions badly, not an attacker
+    /// probing the server, and counting it would push a legitimate operator
+    /// towards the same lockout as a credential-guessing client. This mirrors
+    /// exactly what `register` did before the rules were shared.
+    pub counts_against_guard: bool,
+}
+
+fn guarded(message: &str) -> Option<NewAccountRejection> {
+    Some(NewAccountRejection {
+        message: message.to_string(),
+        counts_against_guard: true,
+    })
+}
+
+/// The complete set of rules a new password account must satisfy, in the exact
+/// order `POST /auth/register` has always applied them.
+///
+/// The first-owner claim (`POST /api/v1/setup/claim`) creates an account too,
+/// and it calls this rather than restating the rules: a claim page that
+/// accepted a password the registration page rejects — or vice versa — is how
+/// the two surfaces drift apart. Callers own the rate-limit bookkeeping, guided
+/// by [`NewAccountRejection::counts_against_guard`].
+pub(crate) fn new_account_input_error(
+    state: &AppState,
+    username: &str,
+    normalized_email: &str,
+    password: &str,
+    display_name: Option<&str>,
+) -> Option<NewAccountRejection> {
+    if paracord_util::validation::is_valid_new_username(username).is_err() {
+        return guarded("Username must be between 2 and 32 valid characters");
+    }
+    // Registration writes `display_name` too (after the account row exists) but
+    // never bounded it, unlike `PATCH /users/@me`. The column is
+    // length-limited, so an over-long value was accepted on SQLite and 500ed on
+    // PostgreSQL. Checked here rather than at the write so a rejected display
+    // name cannot leave a half-created account behind.
+    if let Some(display_name) = display_name {
+        if display_name.trim().len() > MAX_DISPLAY_NAME_LEN {
+            return guarded("display_name is too long");
+        }
+    }
+    if state.config.require_email && normalized_email.is_empty() {
+        return guarded("Email is required");
+    }
+    if !normalized_email.is_empty()
+        && paracord_util::validation::validate_email(normalized_email).is_err()
+    {
+        return guarded("Invalid email address");
+    }
+    let allow_username_login = username_login_effective(
+        state.config.allow_username_login,
+        state.config.require_email,
+    );
+    if normalized_email.is_empty() && !allow_username_login {
+        return guarded("Server requires email login or username login support");
+    }
+    if paracord_util::validation::validate_password(password).is_err() {
+        return Some(NewAccountRejection {
+            message: "Password must be between 10 and 128 characters".into(),
+            counts_against_guard: false,
+        });
+    }
+    None
 }
 
 pub async fn register(
@@ -1649,6 +1785,19 @@ pub async fn register(
     )
     .await?;
 
+    // An unclaimed instance has no members yet, only an owner waiting to be
+    // established. Letting an ordinary registration through here is exactly the
+    // behaviour this gate exists to remove: on a freshly exposed server the
+    // first stranger to find the URL became its administrator. The claim flow
+    // (`POST /api/v1/setup/claim`) is the only way to create that first
+    // account, and it needs the bootstrap token the operator's terminal printed.
+    if paracord_db::instance_setup::is_pending(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+    {
+        return Err(ApiError::Conflict(SETUP_REQUIRED_MESSAGE.into()));
+    }
+
     // Check runtime settings for registration status
     if !state.runtime.read().await.registration_enabled {
         auth_guard_record_failure(
@@ -1661,25 +1810,14 @@ pub async fn register(
         return Err(ApiError::Forbidden);
     }
 
-    if paracord_util::validation::is_valid_new_username(&body.username).is_err() {
-        auth_guard_record_failure(
-            &state,
-            &headers,
-            Some(peer_ip.as_str()),
-            Some(&account_hint),
-        )
-        .await;
-        return Err(ApiError::BadRequest(
-            "Username must be between 2 and 32 valid characters".into(),
-        ));
-    }
-    // Registration writes `display_name` too (further down, after the account
-    // row exists) but never bounded it, unlike `PATCH /users/@me`. The column
-    // is length-limited, so an over-long value was accepted on SQLite and 500ed
-    // on PostgreSQL. Checked here rather than at the write so a rejected
-    // display name cannot leave a half-created account behind.
-    if let Some(display_name) = body.display_name.as_deref() {
-        if display_name.trim().len() > MAX_DISPLAY_NAME_LEN {
+    if let Some(rejection) = new_account_input_error(
+        &state,
+        &body.username,
+        &normalized_email,
+        &body.password,
+        body.display_name.as_deref(),
+    ) {
+        if rejection.counts_against_guard {
             auth_guard_record_failure(
                 &state,
                 &headers,
@@ -1687,50 +1825,9 @@ pub async fn register(
                 Some(&account_hint),
             )
             .await;
-            return Err(ApiError::BadRequest("display_name is too long".into()));
         }
+        return Err(ApiError::BadRequest(rejection.message));
     }
-    if state.config.require_email && normalized_email.is_empty() {
-        auth_guard_record_failure(
-            &state,
-            &headers,
-            Some(peer_ip.as_str()),
-            Some(&account_hint),
-        )
-        .await;
-        return Err(ApiError::BadRequest("Email is required".into()));
-    }
-    if !normalized_email.is_empty()
-        && paracord_util::validation::validate_email(&normalized_email).is_err()
-    {
-        auth_guard_record_failure(
-            &state,
-            &headers,
-            Some(peer_ip.as_str()),
-            Some(&account_hint),
-        )
-        .await;
-        return Err(ApiError::BadRequest("Invalid email address".into()));
-    }
-    let allow_username_login = username_login_effective(
-        state.config.allow_username_login,
-        state.config.require_email,
-    );
-    if normalized_email.is_empty() && !allow_username_login {
-        auth_guard_record_failure(
-            &state,
-            &headers,
-            Some(peer_ip.as_str()),
-            Some(&account_hint),
-        )
-        .await;
-        return Err(ApiError::BadRequest(
-            "Server requires email login or username login support".into(),
-        ));
-    }
-    paracord_util::validation::validate_password(&body.password).map_err(|_| {
-        ApiError::BadRequest("Password must be between 10 and 128 characters".into())
-    })?;
 
     if !normalized_email.is_empty() {
         let existing = paracord_db::users::get_user_by_email(&state.db, &normalized_email)
@@ -2358,6 +2455,10 @@ pub struct AttachPublicKeyRequest {
     pub detach: bool,
     #[serde(default)]
     pub public_key: String,
+    /// Omit/null for first enrollment. Replacing an existing identity requires
+    /// its exact current key, preventing concurrent setup from overwriting it.
+    #[serde(default)]
+    pub expected_public_key: Option<String>,
     #[serde(default)]
     pub nonce: String,
     #[serde(default)]
@@ -2389,7 +2490,7 @@ pub async fn attach_public_key(
     // installs a permanent standalone login credential; detaching removes one.
     // Neither may rest on a bearer session alone, and this is also what stops an
     // attach from silently overwriting the key the account already trusts.
-    reauthenticate_for_credential_change(
+    let verified_password_hash = reauthenticate_for_credential_change(
         &state,
         auth.user_id,
         &body.password,
@@ -2397,21 +2498,31 @@ pub async fn attach_public_key(
     )
     .await?;
 
+    let current_session_id = auth.session_id.as_deref().ok_or(ApiError::Unauthorized)?;
     if body.detach {
-        let removed = paracord_db::users::clear_user_public_key(&state.db, auth.user_id)
+        let mut transaction = state
+            .db
+            .begin()
             .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-
-        // Trust material changed: drop every session, this one included. Any
-        // session minted through the key goes with it.
-        let _ = paracord_db::sessions::revoke_all_user_sessions_except(
-            &state.db,
+            .map_err(|e| ApiError::Internal(e.into()))?;
+        let (user, removed) = paracord_db::users::detach_identity_in_transaction(
+            &mut transaction,
             auth.user_id,
-            None,
-            "public_key_detached",
-            Utc::now(),
+            current_session_id,
+            &verified_password_hash,
         )
-        .await;
+        .await?;
+        let observers = paracord_db::users::identity_observer_ids_in_transaction(
+            &mut transaction,
+            auth.user_id,
+        )
+        .await?;
+        transaction
+            .commit()
+            .await
+            .map_err(|e| ApiError::Internal(e.into()))?;
+
+        publish_identity_update(&state, &user, observers);
 
         security::log_security_event(
             &state,
@@ -2456,51 +2567,53 @@ pub async fn attach_public_key(
         &body.signature,
     )?;
 
-    let current_user = paracord_db::users::get_user_by_id(&state.db, auth.user_id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
-        .ok_or(ApiError::NotFound)?;
-
-    // Check that this public key isn't already attached to a different account
-    let existing = paracord_db::users::get_user_by_public_key(&state.db, &body.public_key)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-
-    if let Some(existing_user) = existing {
-        if existing_user.id != auth.user_id {
-            return Err(ApiError::Conflict(
-                "This public key is already in use by another account".into(),
-            ));
-        }
+    let public_key = body.public_key.to_ascii_lowercase();
+    let expected_public_key = body
+        .expected_public_key
+        .as_deref()
+        .map(str::to_ascii_lowercase);
+    if expected_public_key
+        .as_ref()
+        .is_some_and(|key| key.len() != 64 || !key.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
+        return Err(ApiError::BadRequest(
+            "The expected identity must be a 32-byte hexadecimal public key".into(),
+        ));
     }
-
-    let user = if current_user.public_key.as_deref() == Some(body.public_key.as_str()) {
-        current_user
-    } else {
-        paracord_db::users::update_user_public_key(&state.db, auth.user_id, &body.public_key)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
-    };
-
-    // Force global session invalidation on trust material change.
-    let _ = paracord_db::sessions::revoke_all_user_sessions_except(
-        &state.db,
+    let prepared = prepare_auth_session(
+        &state,
         auth.user_id,
-        None,
-        "public_key_rotated",
-        Utc::now(),
+        Some(&public_key),
+        &headers,
+        Some(&peer_ip),
+    )?;
+    let mut transaction = state
+        .db
+        .begin()
+        .await
+        .map_err(|e| ApiError::Internal(e.into()))?;
+    let (user, changed) = paracord_db::users::lock_identity_attachment(
+        &mut transaction,
+        auth.user_id,
+        current_session_id,
+        &verified_password_hash,
+        expected_public_key.as_deref(),
+        &public_key,
     )
-    .await;
-
+    .await?;
+    prepared.persist(&mut transaction).await?;
+    let observers =
+        paracord_db::users::identity_observer_ids_in_transaction(&mut transaction, auth.user_id)
+            .await?;
+    transaction
+        .commit()
+        .await
+        .map_err(|e| ApiError::Internal(e.into()))?;
     let (token, access_cookie, refresh_cookie, csrf_cookie, session_id, raw_refresh) =
-        issue_auth_session(
-            &state,
-            user.id,
-            user.public_key.as_deref(),
-            &headers,
-            Some(peer_ip.as_str()),
-        )
-        .await?;
+        prepared.response;
+
+    publish_identity_update(&state, &user, observers);
+
     security::log_security_event(
         &state,
         "auth.public_key.attach",
@@ -2509,7 +2622,7 @@ pub async fn attach_public_key(
         Some(&session_id),
         Some(&headers),
         Some(peer_ip.as_str()),
-        Some(json!({ "sessions_revoked": true })),
+        Some(json!({ "sessions_revoked": changed, "identity_changed": changed })),
     )
     .await;
 
@@ -2531,6 +2644,37 @@ pub async fn attach_public_key(
         }),
     )
         .into_response())
+}
+
+/// Publish only the public profile after the credential transaction commits.
+/// Self, shared-guild members, DM recipients and accepted friends are resolved
+/// from the database, with one delivery per observer's session. The auth response
+/// must never be used here: it contains private account fields and credentials.
+pub(super) fn publish_identity_update(
+    state: &AppState,
+    user: &paracord_db::users::UserRow,
+    observer_ids: Vec<i64>,
+) {
+    state.event_bus.dispatch_to_users(
+        "USER_UPDATE",
+        json!({
+            "user": {
+                "id": user.id.to_string(),
+                "username": &user.username,
+                "display_name": &user.display_name,
+                "discriminator": user.discriminator,
+                "avatar_hash": &user.avatar_hash,
+                "banner_hash": &user.banner_hash,
+                "bio": &user.bio,
+                "flags": user.flags,
+                "bot": paracord_core::is_bot(user.flags),
+                "system": false,
+                "public_key": &user.public_key,
+                "created_at": user.created_at.to_rfc3339(),
+            }
+        }),
+        observer_ids,
+    );
 }
 
 // --- Password reset flow ---
@@ -2728,43 +2872,37 @@ pub async fn reset_password(
         ));
     };
 
-    // Mark token as used before updating password to prevent race conditions.
-    let marked = paracord_db::password_reset::mark_reset_token_used(&state.db, &token_hash, now)
+    let new_hash = paracord_core::auth::hash_password(&body.new_password)
+        .map_err(|e| ApiError::Internal(e.into()))?;
+    let mut transaction = state
+        .db
+        .begin()
         .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-
-    if !marked {
+        .map_err(|e| ApiError::Internal(e.into()))?;
+    let changed = paracord_db::users::reset_password_credential_in_transaction(
+        &mut transaction,
+        token_row.user_id,
+        &token_hash,
+        &new_hash,
+    )
+    .await?;
+    let Some((user, public_key_removed)) = changed else {
+        transaction
+            .rollback()
+            .await
+            .map_err(|e| ApiError::Internal(e.into()))?;
         auth_guard_record_failure(&state, &headers, Some(peer_ip.as_str()), None).await;
         return Err(ApiError::BadRequest(
             "Invalid or expired reset token".into(),
         ));
-    }
-
-    let new_hash = paracord_core::auth::hash_password(&body.new_password)
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-
-    paracord_db::users::update_user_password_hash(&state.db, token_row.user_id, &new_hash)
+    };
+    let observers =
+        paracord_db::users::identity_observer_ids_in_transaction(&mut transaction, user.id).await?;
+    transaction
+        .commit()
         .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-
-    // A password reset is the user saying "I have been compromised". An attached
-    // Ed25519 key is a standalone login credential that outlives both the old
-    // password and every revoked session, so recovery has to evict it too —
-    // otherwise whoever planted one keeps a way back in.
-    let public_key_removed =
-        paracord_db::users::clear_user_public_key(&state.db, token_row.user_id)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-
-    // Revoke all existing sessions to force re-login with new password.
-    let _ = paracord_db::sessions::revoke_all_user_sessions_except(
-        &state.db,
-        token_row.user_id,
-        None,
-        "password_reset",
-        now,
-    )
-    .await;
+        .map_err(|e| ApiError::Internal(e.into()))?;
+    publish_identity_update(&state, &user, observers);
 
     security::log_security_event(
         &state,

@@ -3,7 +3,7 @@ import { scryptAsync } from '@noble/hashes/scrypt.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex, utf8ToBytes, randomBytes } from '@noble/hashes/utils.js';
 import { wordlist } from './bip39-wordlist';
-import { secureDelete, secureGet, secureSet } from './secureStorage';
+import { IDENTITY_KEYSTORE_STORAGE_KEY, readIdentityKeystore, writeIdentityKeystore, updateIdentityKeystore, deleteIdentityKeystore } from './crypto/identityKeystore';
 import { toArrayBuffer, toBase64, fromBase64 } from './crypto/util';
 
 export interface AccountKeystore {
@@ -39,10 +39,9 @@ async function deriveAesKey(password: string, salt: Uint8Array): Promise<CryptoK
     p: SCRYPT_P,
     dkLen: SCRYPT_DKLEN,
   });
-  return crypto.subtle.importKey('raw', toArrayBuffer(keyBytes), { name: 'AES-GCM' }, false, [
-    'encrypt',
-    'decrypt',
-  ]);
+  try {
+    return await crypto.subtle.importKey('raw', toArrayBuffer(keyBytes), { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+  } finally { keyBytes.fill(0); }
 }
 
 async function encryptPrivateKey(
@@ -86,39 +85,36 @@ async function decryptPrivateKey(
   }
 }
 
-async function storeKeystore(keystore: AccountKeystore): Promise<void> {
-  await secureSet(ACCOUNT_STORAGE_KEY, JSON.stringify(keystore));
-  localStorage.setItem(ACCOUNT_EXISTS_KEY, '1');
-}
-
 export async function createAccount(
   username: string,
   password: string,
   displayName?: string,
 ): Promise<UnlockedAccount> {
   const privateKey = utils.randomSecretKey();
-  const publicKeyBytes = await getPublicKeyAsync(privateKey);
-  const publicKey = bytesToHex(publicKeyBytes);
+  try {
+    const publicKeyBytes = await getPublicKeyAsync(privateKey);
+    const publicKey = bytesToHex(publicKeyBytes);
 
-  const { encrypted, salt, iv } = await encryptPrivateKey(privateKey, password);
+    const { encrypted, salt, iv } = await encryptPrivateKey(privateKey, password);
 
-  const keystore: AccountKeystore = {
-    version: 1,
-    publicKey,
-    encryptedPrivateKey: encrypted,
-    salt,
-    iv,
-    username,
-    ...(displayName !== undefined && { displayName }),
-  };
-  await storeKeystore(keystore);
+    const keystore: AccountKeystore = {
+      version: 1,
+      publicKey,
+      encryptedPrivateKey: encrypted,
+      salt,
+      iv,
+      username,
+      ...(displayName !== undefined && { displayName }),
+    };
+    await writeIdentityKeystore(keystore, false);
 
-  return {
-    publicKey,
-    privateKey: new Uint8Array(privateKey),
-    username,
-    ...(displayName !== undefined && { displayName }),
-  };
+    return {
+      publicKey,
+      privateKey: new Uint8Array(privateKey),
+      username,
+      ...(displayName !== undefined && { displayName }),
+    };
+  } finally { privateKey.fill(0); }
 }
 
 export async function unlockAccount(password: string): Promise<UnlockedAccount> {
@@ -133,11 +129,9 @@ export async function unlockAccount(password: string): Promise<UnlockedAccount> 
     keystore.iv,
     password,
   );
-
-  const derivedPubBytes = await getPublicKeyAsync(privateKey);
-  const derivedPubHex = bytesToHex(derivedPubBytes);
-  if (derivedPubHex !== keystore.publicKey) {
-    throw new Error('Decrypted key does not match stored public key');
+  if (bytesToHex(await getPublicKeyAsync(privateKey)) !== keystore.publicKey.toLowerCase()) {
+    privateKey.fill(0);
+    throw new Error('The encrypted private key does not match this identity. Restore a valid backup.');
   }
 
   return {
@@ -161,42 +155,28 @@ export async function signChallenge(
 
 export function hasAccount(): boolean {
   return (
+    localStorage.getItem(IDENTITY_KEYSTORE_STORAGE_KEY) !== null ||
     localStorage.getItem(ACCOUNT_EXISTS_KEY) === '1' ||
     localStorage.getItem(ACCOUNT_STORAGE_KEY) !== null
   );
 }
 
 export async function getStoredKeystore(): Promise<AccountKeystore | null> {
-  const raw = await secureGet(ACCOUNT_STORAGE_KEY);
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as AccountKeystore;
-    if (parsed.version !== 1 || !parsed.publicKey || !parsed.encryptedPrivateKey) {
-      return null;
-    }
-    return parsed;
-  } catch {
-    return null;
-  }
+  return readIdentityKeystore();
 }
 
 export async function updateKeystoreProfile(username: string, displayName?: string): Promise<void> {
-  const keystore = await getStoredKeystore();
-  if (!keystore) {
-    throw new Error('No account found in storage');
-  }
-  keystore.username = username;
-  if (displayName !== undefined) {
-    keystore.displayName = displayName;
-  } else {
-    delete keystore.displayName;
-  }
-  await storeKeystore(keystore);
+  await updateIdentityKeystore(keystore => {
+    const next = { ...keystore, username };
+    if (displayName !== undefined) next.displayName = displayName;
+    else delete next.displayName;
+    return next;
+  });
 }
 
 export async function exportKeystore(): Promise<string | null> {
-  const raw = await secureGet(ACCOUNT_STORAGE_KEY);
-  return raw;
+  const keystore = await getStoredKeystore();
+  return keystore ? JSON.stringify(keystore) : null;
 }
 
 export async function importKeystore(json: string): Promise<void> {
@@ -216,12 +196,11 @@ export async function importKeystore(json: string): Promise<void> {
   ) {
     throw new Error('Invalid keystore format');
   }
-  await storeKeystore(parsed);
+  await writeIdentityKeystore(parsed, true);
 }
 
 export async function deleteAccount(): Promise<void> {
-  await secureDelete(ACCOUNT_STORAGE_KEY);
-  localStorage.removeItem(ACCOUNT_EXISTS_KEY);
+  await deleteIdentityKeystore();
 }
 
 export function generateRecoveryPhrase(privateKey: Uint8Array): string {
@@ -332,7 +311,7 @@ export async function recoverFromPhrase(
     username,
     ...(displayName !== undefined && { displayName }),
   };
-  await storeKeystore(keystore);
+  await writeIdentityKeystore(keystore, true);
 
   return {
     publicKey,

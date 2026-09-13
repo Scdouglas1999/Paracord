@@ -59,18 +59,18 @@ export interface LevelRolesResponse {
 }
 
 export const economyApi = {
-  getMyProgress: (guildId: string) =>
+  getMyProgress: async (guildId: string) =>
     getApi().get<EconomyProgressResponse>(`/guilds/${guildId}/economy/me`),
 
-  getLeaderboard: (guildId: string, limit = 20) =>
+  getLeaderboard: async (guildId: string, limit = 20) =>
     getApi().get<EconomyLeaderboardResponse>(`/guilds/${guildId}/economy/leaderboard`, {
       params: { limit },
     }),
 
-  getLevelRoles: (guildId: string) =>
+  getLevelRoles: async (guildId: string) =>
     getApi().get<LevelRolesResponse>(`/guilds/${guildId}/economy/level-roles`),
 
-  updateLevelRoles: (guildId: string, mappings: LevelRoleMapping[]) =>
+  updateLevelRoles: async (guildId: string, mappings: LevelRoleMapping[]) =>
     getApi().put<LevelRolesResponse>(`/guilds/${guildId}/economy/level-roles`, {
       mappings,
     }),

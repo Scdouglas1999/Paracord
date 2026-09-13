@@ -47,6 +47,28 @@ fn ai_config_from_state(state: &AppState) -> Result<AiRuntimeConfig, ApiError> {
             ApiError::ServiceUnavailable("AI provider is not configured on this server".to_string())
         })?;
 
+    if !matches!(
+        provider.as_str(),
+        "openai" | "openai_compatible" | "anthropic" | "ollama"
+    ) {
+        return Err(ApiError::ServiceUnavailable(format!(
+            "Unsupported AI provider '{}'",
+            provider
+        )));
+    }
+    let api_key = state
+        .config
+        .ai_api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    if provider == "anthropic" && api_key.is_none() {
+        return Err(ApiError::ServiceUnavailable(
+            "Anthropic provider requires ai.api_key".into(),
+        ));
+    }
+
     let base_url = state
         .config
         .ai_base_url
@@ -76,7 +98,7 @@ fn ai_config_from_state(state: &AppState) -> Result<AiRuntimeConfig, ApiError> {
     Ok(AiRuntimeConfig {
         provider,
         base_url,
-        api_key: state.config.ai_api_key.clone(),
+        api_key,
         model,
         timeout,
     })
@@ -319,4 +341,9 @@ mod tests {
         };
         let _ = ai_http_client(&config).expect("AI HTTP client should build");
     }
+}
+
+/// Availability only; this does not contact a provider or expose its configuration.
+pub(crate) fn summaries_configured(state: &AppState) -> bool {
+    ai_config_from_state(state).is_ok()
 }

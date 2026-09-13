@@ -152,6 +152,21 @@ pub async fn create_message_with_options(
     content: &str,
     options: CreateMessageOptions,
 ) -> Result<paracord_db::messages::MessageRow, CoreError> {
+    create_message_with_attention(pool, msg_id, channel_id, author_id, content, options)
+        .await
+        .map(|(message, _)| message)
+}
+
+/// Return the committed audience alongside the message for recipient-only events.
+pub async fn create_message_with_attention(
+    pool: &DbPool,
+    msg_id: i64,
+    channel_id: i64,
+    author_id: i64,
+    content: &str,
+    options: CreateMessageOptions,
+) -> Result<(paracord_db::messages::MessageRow, Vec<i64>), CoreError> {
+    let mut mentioned_users = Vec::new();
     let mut stored_content = content.to_string();
     let mut flags = 0_i32;
     let mut nonce = options
@@ -165,6 +180,8 @@ pub async fn create_message_with_options(
             return Err(CoreError::BadRequest("Invalid message nonce".into()));
         }
     }
+
+    let delivery_nonce = nonce.clone();
 
     let channel = paracord_db::channels::get_channel(pool, channel_id)
         .await?
@@ -211,6 +228,16 @@ pub async fn create_message_with_options(
         .await?;
         permissions::require_permission(perms, Permissions::VIEW_CHANNEL)?;
         permissions::require_permission(perms, Permissions::SEND_MESSAGES)?;
+        mentioned_users = resolve_message_mentions(
+            pool,
+            guild_id,
+            channel_id,
+            guild.owner_id,
+            author_id,
+            content,
+            perms.contains(Permissions::MENTION_EVERYONE),
+        )
+        .await?;
 
         // A locked thread has to actually reject messages. Nothing read
         // `thread_metadata` on the send path, so locking was purely cosmetic:
@@ -327,7 +354,7 @@ pub async fn create_message_with_options(
 
     let e2ee_header = options.dm_e2ee.as_ref().and_then(|p| p.header.clone());
 
-    let msg = paracord_db::messages::create_message_with_meta(
+    let msg = paracord_db::messages::create_message_with_delivery_mentions(
         pool,
         msg_id,
         channel_id,
@@ -338,10 +365,53 @@ pub async fn create_message_with_options(
         flags,
         nonce.as_deref(),
         e2ee_header.as_deref(),
+        delivery_nonce.as_deref(),
+        &mentioned_users,
     )
     .await?;
 
-    Ok(msg)
+    Ok((msg, mentioned_users))
+}
+
+/// Capture recipients while author permissions and membership are known. Later
+/// membership/role changes do not retarget an already delivered notification.
+pub(crate) async fn resolve_message_mentions(
+    pool: &DbPool,
+    guild_id: i64,
+    channel_id: i64,
+    owner_id: i64,
+    author_id: i64,
+    content: &str,
+    can_mention_all: bool,
+) -> Result<Vec<i64>, CoreError> {
+    use paracord_util::mentions::{contains_mass_mention, parse_mentions, parse_role_mentions};
+    let mut candidates: std::collections::BTreeSet<i64> =
+        parse_mentions(content).into_iter().collect();
+    let role_ids = parse_role_mentions(content);
+    if can_mention_all && contains_mass_mention(content) {
+        candidates.extend(paracord_db::members::get_guild_member_user_ids(pool, guild_id).await?);
+    }
+    candidates.extend(
+        paracord_db::roles::get_role_mention_recipients(pool, guild_id, &role_ids, can_mention_all)
+            .await?,
+    );
+    candidates.remove(&author_id);
+    let mut recipients = Vec::new();
+    for user_id in candidates {
+        if paracord_db::members::get_member(pool, user_id, guild_id)
+            .await?
+            .is_none()
+        {
+            continue;
+        }
+        let perms =
+            permissions::compute_channel_permissions(pool, guild_id, channel_id, owner_id, user_id)
+                .await?;
+        if perms.contains(Permissions::VIEW_CHANNEL) {
+            recipients.push(user_id);
+        }
+    }
+    Ok(recipients)
 }
 
 /// Edit a message. Only the author can edit, unless user has MANAGE_MESSAGES.
@@ -355,25 +425,14 @@ pub async fn edit_message(
     edit_message_with_options(pool, channel_id, message_id, user_id, content, None).await
 }
 
-/// Edit a message with optional DM E2EE payload.
-pub async fn edit_message_with_options(
+/// Resolve current channel visibility and moderator authority. A successful
+/// receipt can be read after its target is gone, so visibility is independent
+/// of fetching that target. Authors must retain membership, including in DMs.
+async fn authorize_message_channel(
     pool: &DbPool,
     channel_id: i64,
-    message_id: i64,
     user_id: i64,
-    content: &str,
-    dm_e2ee: Option<DmE2eePayload>,
-) -> Result<paracord_db::messages::MessageRow, CoreError> {
-    let mut stored_content = content.to_string();
-    let mut nonce: Option<String> = None;
-    let mut flags: Option<i32> = None;
-
-    let msg = paracord_db::messages::get_message(pool, message_id)
-        .await?
-        .ok_or(CoreError::NotFound)?;
-    if msg.channel_id != channel_id {
-        return Err(CoreError::NotFound);
-    }
+) -> Result<(paracord_db::channels::ChannelRow, bool), CoreError> {
     let channel = paracord_db::channels::get_channel(pool, channel_id)
         .await?
         .ok_or(CoreError::NotFound)?;
@@ -381,33 +440,15 @@ pub async fn edit_message_with_options(
     // For the non-author (moderator) case, decide MANAGE_MESSAGES authority via
     // compute_channel_permissions so channel permission overwrites are honored.
     // Trusting base role bits here would let a role denied MANAGE_MESSAGES on this
-    // channel still edit other users' messages. Mirrors delete_message.
+    // channel still mutate other users' messages.
     let mut can_manage = false;
 
     if let Some(guild_id) = channel.guild_id() {
-        if dm_e2ee.is_some() {
-            return Err(CoreError::BadRequest(
-                "DM E2EE payloads are only valid for direct messages".into(),
-            ));
-        }
-        paracord_util::validation::validate_message_content(content).map_err(|_| {
-            CoreError::BadRequest("Content must be between 1 and 2000 characters".into())
-        })?;
-
         // Authorization applies to the author too. Gating these checks on
         // "editing someone else's message" let a kicked, banned or timed-out user
         // with a still-valid session keep rewriting their own history and fan a
         // MESSAGE_UPDATE out to the whole guild.
         permissions::ensure_guild_member(pool, guild_id, user_id).await?;
-        if let Some(member) = paracord_db::members::get_member(pool, user_id, guild_id).await? {
-            if let Some(until) = member.communication_disabled_until {
-                if until > chrono::Utc::now() {
-                    return Err(CoreError::BadRequest(
-                        "You are timed out and cannot edit messages".into(),
-                    ));
-                }
-            }
-        }
         let guild = paracord_db::guilds::get_guild(pool, guild_id)
             .await?
             .ok_or(CoreError::NotFound)?;
@@ -420,13 +461,187 @@ pub async fn edit_message_with_options(
         )
         .await?;
         permissions::require_permission(perms, Permissions::VIEW_CHANNEL)?;
-        if msg.author_id != user_id {
-            can_manage = perms.contains(Permissions::MANAGE_MESSAGES);
+        can_manage = perms.contains(Permissions::MANAGE_MESSAGES);
+    } else if !paracord_db::dms::is_dm_recipient(pool, channel_id, user_id).await? {
+        return Err(CoreError::Forbidden);
+    }
+    Ok((channel, can_manage))
+}
+
+/// Resolve a visible target without granting permission to mutate it.
+async fn authorize_message_edit_visibility(
+    pool: &DbPool,
+    channel_id: i64,
+    message_id: i64,
+    user_id: i64,
+) -> Result<(paracord_db::channels::ChannelRow, bool, i64), CoreError> {
+    let (channel, can_manage) = authorize_message_channel(pool, channel_id, user_id).await?;
+    let msg = paracord_db::messages::get_message(pool, message_id)
+        .await?
+        .ok_or(CoreError::NotFound)?;
+    if msg.channel_id != channel_id {
+        return Err(CoreError::NotFound);
+    }
+    Ok((channel, can_manage, msg.author_id))
+}
+
+/// Require current edit authority for a new mutation. Replays need only the
+/// originating actor's receipt and channel visibility, because they do not edit.
+pub async fn authorize_message_edit(
+    pool: &DbPool,
+    channel_id: i64,
+    message_id: i64,
+    user_id: i64,
+) -> Result<(paracord_db::channels::ChannelRow, bool), CoreError> {
+    let (channel, can_manage, author_id) =
+        authorize_message_edit_visibility(pool, channel_id, message_id, user_id).await?;
+    if let Some(guild_id) = channel.guild_id() {
+        if let Some(member) = paracord_db::members::get_member(pool, user_id, guild_id).await? {
+            if let Some(until) = member.communication_disabled_until {
+                if until > chrono::Utc::now() {
+                    return Err(CoreError::BadRequest(
+                        "You are timed out and cannot edit messages".into(),
+                    ));
+                }
+            }
         }
+    }
+    if author_id != user_id && !can_manage {
+        return Err(if channel.guild_id().is_some() {
+            CoreError::MissingPermission
+        } else {
+            CoreError::Forbidden
+        });
+    }
+    Ok((channel, can_manage))
+}
+
+/// Edit a message with optional DM E2EE payload.
+pub async fn edit_message_with_options(
+    pool: &DbPool,
+    channel_id: i64,
+    message_id: i64,
+    user_id: i64,
+    content: &str,
+    dm_e2ee: Option<DmE2eePayload>,
+) -> Result<paracord_db::messages::MessageRow, CoreError> {
+    prepare_message_edit(pool, channel_id, message_id, user_id, content, dm_e2ee)
+        .await?
+        .apply(pool, None, &[])
+        .await
+        .map(|result| result.message)
+}
+
+pub struct PreparedMessageEdit {
+    pub channel: paracord_db::channels::ChannelRow,
+    message_id: i64,
+    actor_id: i64,
+    content: String,
+    nonce: Option<String>,
+    header: Option<String>,
+    flags: Option<i32>,
+}
+
+impl PreparedMessageEdit {
+    pub async fn replayed_message(
+        &self,
+        pool: &DbPool,
+        edit_nonce: &str,
+    ) -> Result<Option<paracord_db::messages::MessageRow>, CoreError> {
+        authorize_message_edit_visibility(pool, self.channel.id, self.message_id, self.actor_id)
+            .await?;
+        let Some(receipt) = paracord_db::messages::find_message_edit_receipt(
+            pool,
+            self.channel.id,
+            self.actor_id,
+            edit_nonce,
+        )
+        .await?
+        else {
+            return Ok(None);
+        };
+        let expected = paracord_db::messages::message_edit_request_hash(
+            self.message_id,
+            &self.content,
+            self.nonce.as_deref(),
+            self.header.as_deref(),
+            self.flags,
+        );
+        if receipt.message_id == self.message_id && receipt.cancelled != 0 {
+            return Err(paracord_db::DbError::EditCancelled.into());
+        }
+        if receipt.message_id != self.message_id || receipt.request_hash != expected {
+            return Err(CoreError::Conflict(
+                "This edit nonce was already used for a different request.".into(),
+            ));
+        }
+        Ok(Some(
+            paracord_db::messages::get_message(pool, self.message_id)
+                .await?
+                .ok_or(CoreError::NotFound)?,
+        ))
+    }
+
+    pub async fn apply(
+        self,
+        pool: &DbPool,
+        edit_nonce: Option<&str>,
+        hits: &[paracord_db::automod::AutomodHitRow],
+    ) -> Result<paracord_db::messages::MessageEditResult, CoreError> {
+        if let Some(nonce) = edit_nonce {
+            if let Some(message) = self.replayed_message(pool, nonce).await? {
+                return Ok(paracord_db::messages::MessageEditResult {
+                    message,
+                    replayed: true,
+                });
+            }
+        }
+        use paracord_models::id::{ChannelId, MessageId, UserId};
+        let (_, can_manage) =
+            authorize_message_edit(pool, self.channel.id, self.message_id, self.actor_id).await?;
+        paracord_db::messages::update_message_authorized_with_receipt(
+            pool,
+            MessageId::new(self.message_id),
+            ChannelId::new(self.channel.id),
+            UserId::new(self.actor_id),
+            &self.content,
+            self.nonce.as_deref(),
+            self.header.as_deref(),
+            self.flags,
+            can_manage,
+            edit_nonce,
+            hits,
+        )
+        .await?
+        .ok_or(CoreError::NotFound)
+    }
+}
+
+/// Validate under channel visibility. New mutations still require full edit authority.
+pub async fn prepare_message_edit(
+    pool: &DbPool,
+    channel_id: i64,
+    message_id: i64,
+    user_id: i64,
+    content: &str,
+    dm_e2ee: Option<DmE2eePayload>,
+) -> Result<PreparedMessageEdit, CoreError> {
+    let mut stored_content = content.to_string();
+    let mut nonce: Option<String> = None;
+    let mut flags: Option<i32> = None;
+
+    let (channel, _, _) =
+        authorize_message_edit_visibility(pool, channel_id, message_id, user_id).await?;
+    if channel.guild_id().is_some() {
+        if dm_e2ee.is_some() {
+            return Err(CoreError::BadRequest(
+                "DM E2EE payloads are only valid for direct messages".into(),
+            ));
+        }
+        paracord_util::validation::validate_message_content(content).map_err(|_| {
+            CoreError::BadRequest("Content must be between 1 and 2000 characters".into())
+        })?;
     } else {
-        if !paracord_db::dms::is_dm_recipient(pool, channel_id, user_id).await? {
-            return Err(CoreError::Forbidden);
-        }
         if let Some(payload) = dm_e2ee.as_ref() {
             payload.validate()?;
             if !content.trim().is_empty() {
@@ -448,36 +663,15 @@ pub async fn edit_message_with_options(
         }
     }
 
-    // Save the old content as an edit history snapshot before updating
-    if let Some(old_content) = msg.content.as_deref() {
-        let _ = paracord_db::messages::save_edit_snapshot(pool, message_id, old_content).await;
-    }
-
-    let updated = paracord_db::messages::update_message_authorized_with_meta(
-        pool,
+    Ok(PreparedMessageEdit {
+        channel,
         message_id,
-        channel_id,
-        user_id,
-        &stored_content,
-        nonce.as_deref(),
+        actor_id: user_id,
+        content: stored_content,
+        nonce,
+        header: dm_e2ee.and_then(|payload| payload.header),
         flags,
-        can_manage,
-    )
-    .await?;
-    if let Some(updated) = updated {
-        return Ok(updated);
-    }
-
-    if msg.author_id == user_id {
-        return Err(CoreError::Internal(
-            "message update failed unexpectedly".to_string(),
-        ));
-    }
-
-    if channel.guild_id().is_none() {
-        return Err(CoreError::Forbidden);
-    }
-    Err(CoreError::MissingPermission)
+    })
 }
 
 /// Delete a message. Author can delete own, or MANAGE_MESSAGES can delete any.
@@ -487,62 +681,47 @@ pub async fn delete_message(
     channel_id: i64,
     user_id: i64,
 ) -> Result<(), CoreError> {
-    let msg = paracord_db::messages::get_message(pool, message_id)
-        .await?
-        .ok_or(CoreError::NotFound)?;
+    delete_message_with_receipt(pool, message_id, channel_id, user_id, None, false).await?;
+    Ok(())
+}
 
-    if msg.channel_id != channel_id {
-        return Err(CoreError::NotFound);
-    }
-
-    let channel = paracord_db::channels::get_channel(pool, channel_id)
-        .await?
-        .ok_or(CoreError::NotFound)?;
-
-    // For the non-author (moderator) case, decide MANAGE_MESSAGES authority via
-    // compute_channel_permissions so channel permission overwrites are honored.
-    // Trusting base role bits here would let a role denied MANAGE_MESSAGES on this
-    // channel still delete other users' messages.
-    let mut can_manage = false;
-    if let Some(guild_id) = channel.guild_id() {
-        // Membership and visibility are required of the author too: a kicked or
-        // banned user with a live session must not keep mutating guild history.
-        permissions::ensure_guild_member(pool, guild_id, user_id).await?;
-        let guild = paracord_db::guilds::get_guild(pool, guild_id)
-            .await?
-            .ok_or(CoreError::NotFound)?;
-        let perms = permissions::compute_channel_permissions(
-            pool,
-            guild_id,
-            channel_id,
-            guild.owner_id,
-            user_id,
-        )
-        .await?;
-        permissions::require_permission(perms, Permissions::VIEW_CHANNEL)?;
-        if msg.author_id != user_id {
-            can_manage = perms.contains(Permissions::MANAGE_MESSAGES);
-        }
-    }
-
-    let deleted = paracord_db::messages::delete_message_authorized(
-        pool, message_id, channel_id, user_id, can_manage,
+/// Replay proves only this actor's earlier deletion. New deletions and pending
+/// resolutions require current target authority; all paths require visibility.
+pub async fn delete_message_with_receipt(
+    pool: &DbPool,
+    message_id: i64,
+    channel_id: i64,
+    user_id: i64,
+    delete_nonce: Option<&str>,
+    resolve_only: bool,
+) -> Result<
+    (
+        paracord_db::channels::ChannelRow,
+        paracord_db::messages::MessageDeletionResult,
+    ),
+    CoreError,
+> {
+    let (channel, can_manage) = authorize_message_channel(pool, channel_id, user_id).await?;
+    let result = paracord_db::messages::delete_message_with_receipt(
+        pool,
+        message_id,
+        channel_id,
+        user_id,
+        can_manage,
+        delete_nonce,
+        resolve_only,
     )
     .await?;
-    if deleted {
-        return Ok(());
+    use paracord_db::messages::MessageDeletionResult;
+    match result {
+        MessageDeletionResult::Missing => Err(CoreError::NotFound),
+        MessageDeletionResult::Forbidden => Err(if channel.guild_id().is_some() {
+            CoreError::MissingPermission
+        } else {
+            CoreError::Forbidden
+        }),
+        _ => Ok((channel, result)),
     }
-
-    if msg.author_id == user_id {
-        return Err(CoreError::Internal(
-            "message delete failed unexpectedly".to_string(),
-        ));
-    }
-
-    if channel.guild_id().is_none() {
-        return Err(CoreError::Forbidden);
-    }
-    Err(CoreError::MissingPermission)
 }
 
 #[cfg(test)]
@@ -683,4 +862,29 @@ mod tests {
             .await
             .unwrap();
     }
+}
+
+/// Attach a single committed channel snapshot to message events. Its revision
+/// orders activity independently of message IDs and event publication order.
+pub async fn prepare_message_event(
+    pool: &DbPool,
+    channel_id: i64,
+    mut payload: serde_json::Value,
+) -> Result<serde_json::Value, CoreError> {
+    let channel = paracord_db::channels::get_channel(pool, channel_id)
+        .await?
+        .ok_or(CoreError::NotFound)?;
+    let object = payload
+        .as_object_mut()
+        .ok_or_else(|| CoreError::Internal("Message event must be an object".into()))?;
+    object.insert(
+        "channel_activity".into(),
+        serde_json::json!({
+            "channel_id": channel_id.to_string(),
+            "last_message_id": channel.last_message_id.map(|id| id.to_string()),
+            "revision": channel.message_revision.to_string(),
+        "guild_id": channel.guild_id().map(|id| id.to_string()),
+        }),
+    );
+    Ok(payload)
 }

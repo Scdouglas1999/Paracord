@@ -3,6 +3,7 @@ import { isTauri } from './tauriEnv';
 
 let accessToken: string | null = null;
 let refreshTokenCache: string | null = null;
+let refreshTokenRevision = 0;
 let refreshTokenHydrationPromise: Promise<void> | null = null;
 
 const LEGACY_REFRESH_TOKEN_KEY = 'paracord:refresh-token';
@@ -128,10 +129,12 @@ export async function hydrateRefreshTokenStorage(): Promise<void> {
     return refreshTokenHydrationPromise;
   }
 
-  refreshTokenHydrationPromise = (async () => {
+  const revision = refreshTokenRevision;
+  const hydration = (async () => {
     const secureToken = normalizeToken(
       await secureGet(SECURE_REFRESH_TOKEN_KEY).catch(() => null),
     );
+    if (revision !== refreshTokenRevision) return;
     if (secureToken) {
       refreshTokenCache = secureToken;
       writeLegacyRefreshToken(null);
@@ -145,10 +148,10 @@ export async function hydrateRefreshTokenStorage(): Promise<void> {
       writeLegacyRefreshToken(null);
     }
   })().finally(() => {
-    refreshTokenHydrationPromise = null;
+    if (refreshTokenHydrationPromise === hydration) refreshTokenHydrationPromise = null;
   });
-
-  return refreshTokenHydrationPromise;
+  refreshTokenHydrationPromise = hydration;
+  return hydration;
 }
 
 export function getRefreshToken(): string | null {
@@ -156,6 +159,8 @@ export function getRefreshToken(): string | null {
 }
 
 export function setRefreshToken(token: string | null): void {
+  refreshTokenRevision += 1;
+  refreshTokenHydrationPromise = null;
   const normalized = normalizeToken(token);
   refreshTokenCache = normalized;
 

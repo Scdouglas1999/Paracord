@@ -1,3 +1,5 @@
+import { guildLandingPath } from '../lib/guildNavigation';
+vi.mock('../lib/guildNavigation', () => ({ guildLandingPath: vi.fn() }));
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
@@ -6,6 +8,7 @@ import { InvitePage } from './InvitePage';
 
 const mockAuthState = vi.hoisted(() => ({
   token: 'auth-token' as string | null,
+  user: { id: 'user-1', username: 'User' },
 }));
 
 const mockInviteApi = vi.hoisted(() => ({
@@ -14,7 +17,7 @@ const mockInviteApi = vi.hoisted(() => ({
 }));
 
 const mockGuildState = vi.hoisted(() => ({
-  addGuild: vi.fn(),
+  acceptInvite: vi.fn(),
 }));
 
 const mockChannelState = vi.hoisted(() => ({
@@ -89,7 +92,8 @@ describe('InvitePage', () => {
     vi.clearAllMocks();
     mockAuthState.token = 'auth-token';
     mockInviteApi.get.mockResolvedValue({ data: invitePreview });
-    mockInviteApi.accept.mockResolvedValue({ data: { guild: invitePreview.guild } });
+    mockGuildState.acceptInvite.mockResolvedValue({ ...invitePreview.guild, scope: { serverId: '__local__', userId: 'user-1' } });
+    vi.mocked(guildLandingPath).mockResolvedValue('/app/guilds/guild-1/channels/channel-1');
     mockChannelState.channelsByGuild = {
       'guild-1': [{ id: 'channel-1', guild_id: 'guild-1', type: 0, name: 'general' }],
     };
@@ -132,15 +136,24 @@ describe('InvitePage', () => {
     await user.click(screen.getByRole('button', { name: 'Accept invite' }));
 
     await waitFor(() =>
-      expect(mockInviteApi.accept).toHaveBeenCalledWith('abc123', {
+      expect(mockGuildState.acceptInvite).toHaveBeenCalledWith('abc123', { serverId: '__local__', userId: 'user-1' }, {
         verification_ack: true,
         verification_answers: ['I accept the rules', 'I am over 13'],
       }),
     );
-    expect(mockGuildState.addGuild).toHaveBeenCalledWith(invitePreview.guild);
-    expect(mockChannelState.fetchChannels).toHaveBeenCalledWith('guild-1');
-    expect(mockChannelState.selectGuild).toHaveBeenCalledWith('guild-1');
-    expect(mockChannelState.selectChannel).toHaveBeenCalledWith('channel-1');
+    expect(guildLandingPath).toHaveBeenCalledWith(expect.objectContaining({ id: 'guild-1', scope: { serverId: '__local__', userId: 'user-1' } }));
     expect(await screen.findByText('Guild channel')).toBeInTheDocument();
   });
+});
+
+vi.mock('../hooks/useChannels', async () => {
+  const actual = await vi.importActual<typeof import('../hooks/useChannels')>('../hooks/useChannels');
+  const { useChannelStore } = await import('../stores/channelStore');
+  return {
+    ...actual,
+    useCurrentChannelStore: useChannelStore,
+    useChannelActions: () => useChannelStore.getState(),
+    getAccountChannelView: () => useChannelStore.getState(),
+    useGuildChannels: (id: string) => useChannelStore(state => state.channelsByGuild[id] ?? []),
+  };
 });

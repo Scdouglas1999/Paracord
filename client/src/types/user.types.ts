@@ -7,7 +7,7 @@ export interface User {
   avatar_hash?: string | null;
   public_key?: string | null;
   banner?: string;
-  bio?: string;
+  bio?: string | null;
   pronouns?: string | null;
   linked_accounts?: Array<{ label: string; url: string }>;
   display_name?: string | null;
@@ -19,12 +19,14 @@ export interface User {
 
 export interface UserSettings {
   user_id: string;
-  theme: 'dark' | 'light' | 'amoled' | 'high-contrast';
+  /** Opaque server-stored string; known values are dark/light/amoled/high-contrast. */
+  theme: string;
   locale: string;
   message_display_compact: boolean;
-  custom_css?: string;
-  status: 'online' | 'idle' | 'dnd' | 'invisible';
-  custom_status?: string;
+  custom_css?: string | null;
+  /** Opaque server-stored string; known values are online/idle/dnd/invisible. */
+  status: string;
+  custom_status?: string | null;
   crypto_auth_enabled: boolean;
   notifications?: Record<string, unknown>;
   keybinds?: Record<string, unknown>;

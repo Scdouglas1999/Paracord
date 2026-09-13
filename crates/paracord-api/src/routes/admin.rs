@@ -564,12 +564,19 @@ pub async fn create_backup(
     let peer_ip = addr.ip().to_string();
     let include_media = body.and_then(|b| b.include_media).unwrap_or(true);
 
-    let filename = paracord_core::backup::create_backup(
+    let filename = paracord_core::backup::create_backup_from_pool(
+        &state.db,
         &state.config.database_url,
         &state.config.backup_dir,
         &state.config.storage_path,
         &state.config.media_storage_path,
         include_media,
+        matches!(
+            state.storage_backend.as_ref(),
+            paracord_media::Storage::Local(_)
+        ),
+        state.config.file_cryptor.as_ref(),
+        state.config.totp_cryptor.as_ref(),
     )
     .await?;
 
@@ -643,18 +650,14 @@ pub async fn restore_backup(
     let peer_ip = addr.ip().to_string();
     validate_backup_filename(&body.name)?;
 
-    paracord_core::backup::restore_backup(
-        &body.name,
-        &state.config.backup_dir,
-        &state.config.database_url,
-        &state.config.storage_path,
-        &state.config.media_storage_path,
-    )
-    .await?;
+    let archive = paracord_core::backup::backup_file_path(&state.config.backup_dir, &body.name);
+    if !archive.is_file() {
+        return Err(ApiError::NotFound);
+    }
 
     security::log_security_event(
         &state,
-        "admin.backup.restore",
+        "admin.backup.recovery_instructions",
         Some(admin.user_id),
         None,
         None,
@@ -665,8 +668,18 @@ pub async fn restore_backup(
     .await;
 
     Ok(Json(json!({
-        "message": "Backup restored. Server restart recommended.",
+        "status": "offline_restore_required",
+        "message": "Prepare and verify an isolated recovery with the server CLI, then stop every old server instance before selecting its generated configuration.",
         "filename": body.name,
+        "command": format!("paracord-server --config /path/to/original-config.toml restore-backup --archive '{}' --output-dir /path/to/new-recovery", body.name),
+        "postgres_argument": "--postgres-url-env PARACORD_RECOVERY_DATABASE_URL",
+        "steps": [
+            "Download this archive and retain the original server configuration, at-rest master key environment, TLS certificate/private key and federation signing key.",
+            "Run restore-backup into a new recovery directory. PostgreSQL also needs a new empty, isolated database and its URL in a separate environment variable.",
+            "Database-only archives and S3 exports require --media-dir with matching uploads/ and files/ directories. Missing or unverifiable media prevents activation.",
+            "Read verification.json and ACTIVATE.md. Stop every old instance, supply the original at-rest key environment, then run the generated activation script or install its config/environment in the service.",
+            "Retain the old config/database/media for rollback. Users still need their client vault/session backups to recover end-to-end encrypted history."
+        ],
     })))
 }
 

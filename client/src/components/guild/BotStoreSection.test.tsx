@@ -1,3 +1,4 @@
+import { useAuthStore } from '../../stores/authStore';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -30,7 +31,7 @@ const mockState = vi.hoisted(() => ({
 
 vi.mock('../../stores/guildStore', () => ({
   useGuildStore: (selector: (state: { guilds: typeof mockState.guilds; updateGuild: typeof mockState.updateGuild }) => unknown) =>
-    selector({ guilds: mockState.guilds, updateGuild: mockState.updateGuild }),
+    selector({ guilds: mockState.guilds.map(guild => ({ ...guild, scope: { serverId: '__local__', userId: 'viewer' }, key: JSON.stringify(['__local__', 'viewer', guild.id]) })), updateGuild: mockState.updateGuild }),
 }));
 
 vi.mock('../../stores/channelStore', () => ({
@@ -84,6 +85,7 @@ vi.mock('./BotStoreCard', () => ({
 describe('BotStoreSection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useAuthStore.setState({ user: { id: 'viewer' } as never, token: 'token' });
     mockState.guilds = [
       {
         id: 'guild-1',
@@ -196,4 +198,16 @@ describe('BotStoreSection', () => {
     await user.click(screen.getByRole('button', { name: 'Open a channel' }));
     expect(onOpenChannel).toHaveBeenCalledWith('channel-1');
   });
+});
+
+vi.mock('../../hooks/useChannels', async () => {
+  const actual = await vi.importActual<typeof import('../../hooks/useChannels')>('../../hooks/useChannels');
+  const { useChannelStore } = await import('../../stores/channelStore');
+  return {
+    ...actual,
+    useCurrentChannelStore: useChannelStore,
+    useChannelActions: () => useChannelStore.getState(),
+    getAccountChannelView: () => useChannelStore.getState(),
+    useGuildChannels: (id: string) => useChannelStore(state => state.channelsByGuild[id] ?? []),
+  };
 });

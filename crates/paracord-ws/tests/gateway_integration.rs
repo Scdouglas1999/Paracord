@@ -148,6 +148,11 @@ async fn build_env() -> TestEnv {
     });
 
     let state = AppState {
+        database_history_epoch: paracord_db::server_settings::get_or_create_database_history_epoch(
+            &db,
+        )
+        .await
+        .unwrap(),
         db: db.clone(),
         event_bus,
         config: AppConfig {
@@ -431,6 +436,24 @@ async fn resume_with_sequence_gap_falls_back_to_fresh() {
     // Fresh session gets a brand-new id and reloads guilds from the DB.
     assert_ne!(session.session_id, gw_session);
     assert!(session.guild_ids.contains(&guild_id));
+}
+
+#[tokio::test]
+async fn resume_with_future_sequence_requires_fresh_identification() {
+    let env = build_env().await;
+    let (user_id, token) = make_user_token(&env).await;
+    let gw_session = format!("gw-{}", uuid::Uuid::new_v4().simple());
+    test_insert_cached_session(gw_session.clone(), user_id, vec![], Default::default(), 4).await;
+    let (mut client, tx, _srv, _srv_rx) = duplex();
+    tx.send(resume_frame(&token, &gw_session, u64::MAX))
+        .unwrap();
+    let (session, resumed, requested_seq) = wait_for_identify_or_resume(&mut client, &env.state)
+        .await
+        .expect("fresh identification");
+    assert!(!resumed);
+    assert_eq!(requested_seq, 0);
+    assert_ne!(session.session_id, gw_session);
+    assert_eq!(session.sequence, 0);
 }
 
 #[tokio::test]
@@ -780,4 +803,282 @@ async fn event_buffer_with_nothing_to_replay_is_removed_on_disconnect() {
         None,
         "a disconnected buffer with nothing to replay must be dropped outright"
     );
+}
+
+/// Drive the real WebSocket upgrade and both authenticated handshake paths so
+/// the published epoch cannot diverge from the instance's database identity.
+#[tokio::test]
+async fn ready_and_resumed_publish_the_instance_database_history_epoch() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message as ClientMessage;
+
+    let env = build_env().await;
+    let (user_id, token) = make_user_token(&env).await;
+    let (peer_id, _) = make_user_token(&env).await;
+    let guild_id = make_guild(&env, user_id).await;
+    paracord_db::members::add_member(&env.db, peer_id, guild_id)
+        .await
+        .unwrap();
+    assert!(
+        env.state.member_index.members_of(guild_id).is_empty(),
+        "fixture deliberately leaves the process cache stale"
+    );
+    let guild = paracord_db::guilds::get_guild(&env.db, guild_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let epoch = env.state.database_history_epoch.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let router = paracord_ws::gateway_router().with_state(env.state.clone());
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+    let url = format!("ws://{address}/gateway");
+    let (mut identified, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    let hello = timeout(Duration::from_secs(5), identified.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(hello.to_text().unwrap()).unwrap()["op"],
+        10
+    );
+    identified.send(ClientMessage::Text(json!({
+        "op":OP_IDENTIFY,"d":{"token":token,"database_history_epoch":"client-cannot-choose-history"},
+    }).to_string().into())).await.unwrap();
+    let ready = timeout(Duration::from_secs(5), identified.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let ready: Value = serde_json::from_str(ready.to_text().unwrap()).unwrap();
+    assert_eq!(ready["t"], "READY");
+    assert_eq!(ready["d"]["database_history_epoch"], epoch);
+    assert_eq!(ready["d"]["recovery_required"], true);
+    assert_eq!(ready["d"]["guilds"][0]["id"], guild_id.to_string());
+    assert_eq!(
+        ready["d"]["guilds"][0]["member_count"], 2,
+        "READY must use persisted membership, not the process cache"
+    );
+    assert_eq!(
+        ready["d"]["guilds"][0]["created_at"],
+        guild.created_at.to_rfc3339()
+    );
+    let session_id = ready["d"]["session_id"].as_str().unwrap().to_owned();
+    let seq = ready["s"].as_u64().unwrap();
+    // A live connection need not have disconnected yet for the authenticated
+    // resume path to read its cached session, so seed the same known snapshot.
+    test_insert_cached_session(
+        session_id.clone(),
+        user_id,
+        vec![],
+        Default::default(),
+        seq + 2,
+    )
+    .await;
+    test_push_buffered_event(
+        &session_id,
+        seq + 1,
+        "MESSAGE_UPDATE",
+        json!({"id":"first"}),
+    );
+    test_push_buffered_event(
+        &session_id,
+        seq + 2,
+        "MESSAGE_UPDATE",
+        json!({"id":"second"}),
+    );
+    let (mut resumed, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    let _ = timeout(Duration::from_secs(5), resumed.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    resumed
+        .send(ClientMessage::Text(
+            json!({
+                "op":OP_RESUME,"d":{"token":token,"session_id":session_id,"seq":seq},
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let resumed_frame = timeout(Duration::from_secs(5), resumed.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let resumed_frame: Value = serde_json::from_str(resumed_frame.to_text().unwrap()).unwrap();
+    assert_eq!(resumed_frame["t"], "RESUMED");
+    assert_eq!(resumed_frame["d"]["database_history_epoch"], epoch);
+    assert_eq!(resumed_frame["d"]["recovery_required"], true);
+    assert_eq!(
+        resumed_frame["s"], seq,
+        "RESUMED must not acknowledge replay before delivery"
+    );
+    for (expected_seq, expected_id) in [(seq + 1, "first"), (seq + 2, "second")] {
+        let replay = timeout(Duration::from_secs(5), resumed.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let replay: Value = serde_json::from_str(replay.to_text().unwrap()).unwrap();
+        assert_eq!(replay["s"], expected_seq);
+        assert_eq!(replay["d"]["id"], expected_id);
+    }
+    let _ = identified.close(None).await;
+    let _ = resumed.close(None).await;
+    server.abort();
+}
+
+#[tokio::test]
+async fn voice_status_and_leave_require_the_current_call_receipt() {
+    let env = build_env().await;
+    let (user_id, _) = make_user_token(&env).await;
+    let guild_id = make_guild(&env, user_id).await;
+    let channel_id = paracord_util::snowflake::generate(1);
+    paracord_db::channels::create_channel(&env.db, channel_id, guild_id, "voice", 2, 0, None, None)
+        .await
+        .unwrap();
+    paracord_db::voice_states::upsert_voice_state(
+        &env.db,
+        user_id,
+        Some(guild_id),
+        channel_id,
+        "call-current",
+    )
+    .await
+    .unwrap();
+    env.state
+        .voice
+        .join_room(guild_id, channel_id, user_id, "call-current")
+        .await;
+    let mut session = Session::new(user_id, vec![guild_id], Default::default());
+    session.guild_owner_ids.insert(guild_id, user_id);
+    let (handle, tx, mut rx) = spawn_session(session, env.state.clone());
+    for (receipt, target) in [
+        ("call-old", Some(channel_id)),
+        ("call-old", None),
+        ("call-current", Some(channel_id)),
+    ] {
+        tx.send(Ok(Message::Text(json!({"op":4,"d":{"guild_id":guild_id.to_string(),"channel_id":target.map(|id| id.to_string()),"session_id":receipt,"self_mute":true}}).to_string().into()))).unwrap();
+        tx.send(Ok(Message::Text(json!({"op":1}).to_string().into())))
+            .unwrap();
+        loop {
+            if next_text(&mut rx, 1000)
+                .await
+                .expect("heartbeat after command")["op"]
+                == 11
+            {
+                break;
+            }
+        }
+        let current =
+            paracord_db::voice_states::get_user_voice_session(&env.db, user_id, Some(guild_id))
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(current.session_id, "call-current");
+    }
+    tx.send(Ok(Message::Text(json!({"op":4,"d":{"guild_id":guild_id.to_string(),"channel_id":null,"session_id":"call-current"}}).to_string().into()))).unwrap();
+    tx.send(Ok(Message::Text(json!({"op":1}).to_string().into())))
+        .unwrap();
+    loop {
+        if next_text(&mut rx, 1000)
+            .await
+            .expect("heartbeat after leave")["op"]
+            == 11
+        {
+            break;
+        }
+    }
+    assert!(
+        paracord_db::voice_states::get_user_voice_session(&env.db, user_id, Some(guild_id))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    drop(tx);
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn websocket_snapshot_query_failures_never_publish_empty_ready_state() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message as ClientMessage;
+
+    let env = build_env().await;
+    let (user_id, token) = make_user_token(&env).await;
+    make_guild(&env, user_id).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let router = paracord_ws::gateway_router().with_state(env.state.clone());
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+    for table in ["members", "voice_states"] {
+        let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/gateway"))
+            .await
+            .unwrap();
+        let hello = timeout(Duration::from_secs(5), socket.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(hello.to_text().unwrap()).unwrap()["op"],
+            10
+        );
+        sqlx::query(&format!(
+            "ALTER TABLE {table} RENAME TO unavailable_snapshot_table"
+        ))
+        .execute(&env.db)
+        .await
+        .unwrap();
+        socket
+            .send(ClientMessage::Text(
+                json!({"op": OP_IDENTIFY, "d": {"token": token}})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        let reply = timeout(Duration::from_secs(5), socket.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        if table == "members" {
+            assert_eq!(
+                serde_json::from_str::<Value>(reply.to_text().unwrap()).unwrap()["op"],
+                9
+            );
+        } else {
+            assert!(
+                matches!(reply, ClientMessage::Close(Some(ref frame)) if u16::from(frame.code) == 1011),
+                "failed READY snapshot must close for retry: {reply:?}"
+            );
+        }
+        let _ = socket.close(None).await;
+        sqlx::query(&format!(
+            "ALTER TABLE unavailable_snapshot_table RENAME TO {table}"
+        ))
+        .execute(&env.db)
+        .await
+        .unwrap();
+    }
+    server.abort();
 }

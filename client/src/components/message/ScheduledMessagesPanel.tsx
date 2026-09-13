@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Clock3, Pencil, Trash2 } from 'lucide-react';
 import { channelApi, type ScheduledMessage } from '../../api/channels';
-import { useMessageStore } from '../../stores/messageStore';
+import { useCurrentMessageStoreApi } from '../../hooks/useMessageStore';
 import { toast } from '../../stores/toastStore';
 import { confirm } from '../../stores/confirmStore';
 import { extractApiError } from '../../api/client';
@@ -47,6 +47,7 @@ export function ScheduledMessagesPanel({
   onClose,
   onCountChange,
 }: ScheduledMessagesPanelProps) {
+  const messageStore = useCurrentMessageStoreApi();
   const [items, setItems] = useState<ScheduledMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -121,7 +122,7 @@ export function ScheduledMessagesPanel({
     setSavingId(id);
     try {
       const sendAtIso = parsed.toISOString();
-      await useMessageStore.getState().editScheduledMessage(channelId, id, trimmed, sendAtIso);
+      await messageStore.getState().editScheduledMessage(channelId, id, trimmed, sendAtIso);
       setItems((prev) => {
         const next = prev.map((m) =>
           m.id === id

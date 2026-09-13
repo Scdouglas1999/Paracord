@@ -38,11 +38,10 @@ describe('voiceStore.applyAudioOutputDevice (native path)', () => {
     vi.restoreAllMocks();
   });
 
-  it('invokes voice_switch_output_device with the mapped cpal index', async () => {
+  it('rejects a synthetic native engine without a call owner', async () => {
     await useVoiceStore.getState().applyAudioOutputDevice('HDMI Audio');
 
-    expect(invokeMock).toHaveBeenCalledWith('voice_list_output_devices', undefined);
-    expect(invokeMock).toHaveBeenCalledWith('voice_switch_output_device', { deviceId: '2' });
+    expect(invokeMock).not.toHaveBeenCalledWith('voice_switch_output_device', expect.anything());
   });
 
   it('does not switch natively when no native session is active', async () => {

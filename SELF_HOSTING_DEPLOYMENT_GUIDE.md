@@ -5,6 +5,16 @@ It covers Docker Compose, systemd, reverse proxy/TLS, PostgreSQL, backups, monit
 
 ## 1. Production Baseline
 
+0. **Claim the server before you publish its address.** A new instance has no
+   owner and refuses every registration until it is claimed. The first start
+   prints a one-time claim token and writes it to `first-owner-claim.txt` beside
+   the config (mode 0600); open `<public URL>/setup-server` and paste it to
+   create the owner account, name the instance and open its first space. Pin the
+   token in advance with `[setup] claim_token` / `PARACORD_SETUP_CLAIM_TOKEN`
+   (minimum 32 characters) for provisioning systems. Set
+   `PARACORD_SETUP_REQUIRE_CLAIM=false` **only** for an unattended deployment
+   whose first account is created by a script you control — with it, the first
+   account registered owns the instance, and the server logs a warning saying so.
 1. Use PostgreSQL for sustained multi-user production workloads.
 2. Keep Paracord behind a reverse proxy (nginx or caddy) with TLS.
 3. Run Paracord as a non-root user.
@@ -72,7 +82,18 @@ The example disables Paracord's built-in TLS because TLS is terminated at the re
 
 ## 3. systemd Service (Binary Deployment)
 
-Create `/etc/systemd/system/paracord.service`:
+The fastest route is the install script, which performs this entire section for
+you — it installs the release under `/opt/paracord`, creates the `paracord`
+system user, writes `config/paracord.toml`, and enables a hardened unit
+(`Restart=always`, `NoNewPrivileges`, `ProtectSystem=strict` with the install
+dir writable):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Scdouglas1999/Paracord/main/scripts/install.sh | sudo sh
+```
+
+Re-running the same command upgrades the binary while preserving `config/` and
+`data/`. To do it by hand instead, create `/etc/systemd/system/paracord.service`:
 
 ```ini
 [Unit]
@@ -190,7 +211,12 @@ Suggested schedule:
 2. Daily full backup retained 30d.
 3. Weekly backup retained 12w.
 
-Validate restores regularly on a staging node.
+Validate restores regularly with the offline `restore-backup` CLI. Retain the
+original config/environment, at-rest master key and separate TLS/federation
+keys. Follow the [backup recovery runbook](docs/backup-recovery.md) to prepare
+a new database/media generation, verify it, and stop every old instance before
+activation. The admin panel provides downloads and recovery instructions; it
+does not replace the running database.
 
 ## 7. Monitoring and Health
 
@@ -244,4 +270,5 @@ intentionally rely on AWS-managed credentials.
 3. Restrict `PARACORD_TRUSTED_PROXY_IPS` to exact proxy CIDRs.
 4. Rotate JWT/federation/secrets periodically.
 5. Enable malware scanning for uploads (`PARACORD_MALWARE_SCAN_BIN`) in untrusted communities.
-6. Leave `PARACORD_AUTH_LOGIN_LEGACY_PARSER` and `PARACORD_AUTH_CHALLENGE_TOKEN` unset. These are development/testing escape hatches that MUST NOT be set in production: the first broadens login body parsing, and the second bypasses the auth-guard hard-block. Both weaken authentication and must never be present on an internet-facing server.
+6. Claim the instance yourself before the address is reachable by anyone else, and delete `first-owner-claim.txt` once the claim is done (the token is already invalid, but the file has no further purpose). Do not set `PARACORD_SETUP_REQUIRE_CLAIM=false` on an internet-facing server unless a script you control registers the first account in the same automated step.
+7. Leave `PARACORD_AUTH_LOGIN_LEGACY_PARSER` and `PARACORD_AUTH_CHALLENGE_TOKEN` unset. These are development/testing escape hatches that MUST NOT be set in production: the first broadens login body parsing, and the second bypasses the auth-guard hard-block. Both weaken authentication and must never be present on an internet-facing server.

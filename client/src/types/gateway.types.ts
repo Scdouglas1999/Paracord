@@ -23,6 +23,8 @@ export interface GatewayPayload {
 }
 
 export interface ReadyEvent {
+  database_history_epoch?: string;
+  recovery_required?: boolean;
   user: User;
   guilds: Guild[];
   session_id: string;

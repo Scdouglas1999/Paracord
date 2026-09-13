@@ -1,10 +1,21 @@
+import { Link } from 'react-router';
+import { useStore } from 'zustand';
+import { useChannelStore } from '../../stores/channelStore';
+import { getAccountChannelView } from '../../lib/channelView';
+import { runtimeAttachDecision, runtimeSendDecision } from '../../lib/messages/messagingReadiness';
+import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
+import { entityScopeKey as memberScopeKey, type AccountScope } from '../../lib/serverScope';
 import { useState, useRef, useEffect, useMemo, useCallback, lazy, Suspense } from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { Plus, Smile, Send, X, FileText, BarChart3, PlusCircle, MinusCircle, Image, Clock3, EyeOff, Type, Loader2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Input, Select } from '../ui/Input';
 import { Button } from '../ui/Button';
-import { useMessageStore } from '../../stores/messageStore';
+import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
+import { useCurrentMessageStoreApi } from '../../hooks/useMessageStore';
+import { useMessageDraft } from '../../hooks/useMessageDraft';
+import { MessagingQueuePanel } from './MessagingQueuePanel';
+import { MessagingRecoveryNotice } from './MessagingRecoveryNotice';
 import { useMemberStore } from '../../stores/memberStore';
 import { useFileUpload } from '../../hooks/useFileUpload';
 import { useTyping } from '../../hooks/useTyping';
@@ -12,7 +23,6 @@ import { MAX_MESSAGE_LENGTH, SCHEDULED_MESSAGE_MIN_LEAD_MS } from '../../lib/con
 import { channelApi } from '../../api/channels';
 import type { ChannelFeatureSettings } from '../../api/channels';
 import { usePollStore } from '../../stores/pollStore';
-import { useChannelStore } from '../../stores/channelStore';
 import { MarkdownToolbar, applyMarkdownToolbarAction, resolveMarkdownShortcut } from './MarkdownToolbar';
 import { SlashCommandPopup } from './SlashCommandPopup';
 import { ScheduledMessagesPanel } from './ScheduledMessagesPanel';
@@ -23,19 +33,14 @@ import { InteractionType } from '../../types/interactions';
 import { interactionApi } from '../../api/interactions';
 import { useCommandStore } from '../../stores/commandStore';
 import { useInteractionStore, type AutocompleteChoice } from '../../stores/interactionStore';
-import { usePermissions } from '../../hooks/usePermissions';
-import { Permissions, hasPermission, type ChannelOverwrite } from '../../types';
-import {
-  getVersionedStorageItem,
-  removeVersionedStorageItem,
-  setVersionedStorageItem,
-} from '../../lib/versionedStorage';
+import { useConversationActions } from '../../hooks/useConversationActions';
+import { captureScopedOperation } from '../../lib/operationContext';
+import type { Message } from '../../types';
 import { isAllowedImageMimeType } from '../../lib/security';
 import { formatFileSize, toDatetimeLocalValue } from '../../lib/formatters';
 import { toast } from '../../stores/toastStore';
 import { extractApiError } from '../../api/client';
 import { displayName } from '../../lib/displayName';
-import { fetchChannelOverwrites } from '../../lib/permissionDataCache';
 
 const EmojiPicker = lazy(() =>
   import('../ui/EmojiPicker').then((m) => ({ default: m.EmojiPicker })),
@@ -268,26 +273,6 @@ async function resolveGuildSlashCommand(
   );
 }
 
-function loadDraft(channelId: string): string {
-  try {
-    return getVersionedStorageItem(`draft:${channelId}`, [`draft:${channelId}`]) || '';
-  } catch {
-    return '';
-  }
-}
-
-function saveDraft(channelId: string, content: string) {
-  try {
-    if (content.trim()) {
-      setVersionedStorageItem(`draft:${channelId}`, content);
-    } else {
-      removeVersionedStorageItem(`draft:${channelId}`, [`draft:${channelId}`]);
-    }
-  } catch {
-    // localStorage unavailable
-  }
-}
-
 function messageInputError(err: unknown, fallback: string): string {
   const responseData = (err as { response?: { data?: { message?: string; error?: string } } }).response?.data;
   if (responseData?.message) return responseData.message;
@@ -296,11 +281,28 @@ function messageInputError(err: unknown, fallback: string): string {
   return extracted === 'An unexpected error occurred' ? fallback : extracted;
 }
 
-export function MessageInput({ channelId, guildId, channelName, replyingTo, onCancelReply }: MessageInputProps) {
-  const [content, setContent] = useState(() => loadDraft(channelId));
+export function MessageInput(props: MessageInputProps) {
+  const messageStore = useCurrentMessageStoreApi();
+  const scope = messageStore.scope;
+  if (!scope) return <p className="px-4 py-3 text-meta text-text-muted">Sign in to this server to write a message.</p>;
+  return <OwnedMessageInput key={memberScopeKey(scope, props.channelId)} {...props} scope={scope} messageStore={messageStore} />;
+}
+
+function OwnedMessageInput({ channelId, guildId, channelName, replyingTo, onCancelReply, scope, messageStore }: MessageInputProps & {
+  scope: AccountScope;
+  messageStore: ReturnType<typeof useCurrentMessageStoreApi>;
+}) {
+  const { content, setContent, error: draftError, retrySave, capture: captureDraft, clearSubmitted, runtime: messagingRuntime } = useMessageDraft(scope, channelId);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
   const [stagedFiles, setStagedFiles] = useState<File[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [toolsPosition, setToolsPosition] = useState<{ x: number; y: number } | null>(null);
+  const toolsButtonRef = useRef<HTMLButtonElement>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [showGifPicker, setShowGifPicker] = useState(false);
   const [showStickerPicker, setShowStickerPicker] = useState(false);
@@ -324,38 +326,23 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
   const { upload, uploading, maxUploadSize } = useFileUpload(channelId);
   const { triggerTyping } = useTyping(channelId);
   const reduceMotion = useReducedMotion();
-  const activeChannel = useChannelStore((s) => s.channelsById[channelId]);
-  const activeChannelType = activeChannel?.channel_type ?? activeChannel?.type;
-  const canCreatePoll = activeChannelType == null || (activeChannelType !== 2 && activeChannelType !== 4);
-
-  const [channelOverwrites, setChannelOverwrites] = useState<ChannelOverwrite[]>([]);
-  useEffect(() => {
-    if (!guildId || !channelId) {
-      setChannelOverwrites([]);
-      return;
-    }
-    let cancelled = false;
-    fetchChannelOverwrites(channelId)
-      .then((data) => {
-        if (!cancelled) setChannelOverwrites(data);
-      })
-      .catch(() => {
-        if (!cancelled) setChannelOverwrites([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [guildId, channelId]);
-
-  const { permissions, isAdmin } = usePermissions(guildId ?? null, {
-    channelId,
-    channelOverwrites,
+  const { actions: serverActions, encrypted, encryption, error: capabilityError, refresh: refreshActions } = useConversationActions(channelId);
+  const runtimeState = useStore(messagingRuntime.store);
+  const channelType = useChannelStore(state => {
+    const channel = getAccountChannelView(scope, state).channelsById[channelId];
+    return channel?.channel_type ?? channel?.type;
   });
-  // DMs have no guild permission bits — recipients can always send/attach.
-  const canSendMessages =
-    !guildId || isAdmin || hasPermission(permissions, Permissions.SEND_MESSAGES);
-  const canAttachFiles =
-    !guildId || isAdmin || hasPermission(permissions, Permissions.ATTACH_FILES);
+  const actions = { ...serverActions,
+    send: runtimeSendDecision(serverActions.send, runtimeState, encrypted, channelId, channelType),
+    // Encrypted attachment seam: attaching needs the same unlocked encrypted
+    // storage and ready peer that sending does, and group DMs stay refused
+    // until their message encryption is migrated.
+    attach: runtimeAttachDecision(serverActions.attach, runtimeState, encrypted, channelId, channelType) };
+  const canCreatePoll = actions.poll.allowed;
+  const canSendMessages = actions.send.allowed;
+  const canAttachFiles = actions.attach.allowed;
+  const composerAction = showPollComposer ? actions.poll : showScheduleComposer ? actions.schedule
+    : stagedFiles.length > 0 && !actions.attach.allowed ? actions.attach : actions.send;
 
   const channelWaiting = useInteractionStore((s) => s.isChannelWaiting(channelId));
   const showCommandThinking = channelWaiting;
@@ -394,7 +381,8 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
   }, []);
 
   // @mention autocomplete — subscribe only to this guild's member list
-  const guildMembers = useMemberStore((s) => (guildId ? s.members.get(guildId) : undefined));
+  const memberScope = useCurrentAccountScope();
+  const guildMembers = useMemberStore((s) => (guildId ? (memberScope ? s.members.get(memberScopeKey(memberScope, guildId)) : undefined) : undefined));
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
   const mentionResults = useMemo(() => {
@@ -408,66 +396,32 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
       .slice(0, 8);
   }, [mentionQuery, guildId, guildMembers]);
 
-  // Draft persistence: save on content change (debounced), restore on channel switch
-  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Cancel any pending debounced save. Must be called alongside an explicit
-  // saveDraft clear on send/schedule: the pending timer captured the old content
-  // in its closure and would otherwise re-persist that stale draft in the window
-  // before the content-change effect re-runs (or after an unmount that races it).
-  const clearDraftTimer = useCallback(() => {
-    if (draftTimerRef.current) {
-      clearTimeout(draftTimerRef.current);
-      draftTimerRef.current = null;
-    }
+  const resizeDraft = useCallback(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.min(textarea.scrollHeight, Math.max(44, viewportHeight * 0.45))}px`;
   }, []);
+  useEffect(() => { resizeDraft(); }, [content, resizeDraft]);
   useEffect(() => {
-    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
-    draftTimerRef.current = setTimeout(() => saveDraft(channelId, content), 500);
+    const shell = composerShellRef.current;
+    if (!shell) return;
+    let width = shell.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (shell.clientWidth === width) return;
+      width = shell.clientWidth;
+      resizeDraft();
+    });
+    observer.observe(shell);
+    window.addEventListener('resize', resizeDraft);
+    window.visualViewport?.addEventListener('resize', resizeDraft);
     return () => {
-      if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+      observer.disconnect();
+      window.removeEventListener('resize', resizeDraft);
+      window.visualViewport?.removeEventListener('resize', resizeDraft);
     };
-  }, [content, channelId]);
-
-  useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, window.innerHeight * 0.5) + 'px';
-    }
-  }, [content]);
-
-  useEffect(() => {
-    // Restore draft for this channel; clear composer UI that must not leak across channels.
-    setContent(loadDraft(channelId));
-    setMentionQuery(null);
-    setSlashQuery(null);
-    setSlashOptionMode(false);
-    useInteractionStore.getState().clearAutocompleteChoices();
-    setAutocompleteLoading(false);
-    if (autocompleteTimerRef.current) {
-      clearTimeout(autocompleteTimerRef.current);
-      autocompleteTimerRef.current = null;
-    }
-    autocompleteRequestIdRef.current += 1;
-    setStagedFiles([]);
-    setShowPollComposer(false);
-    setShowFormattingTools(false);
-    setShowEmojiPicker(false);
-    setShowGifPicker(false);
-    setShowStickerPicker(false);
-    setPollQuestion('');
-    setPollOptions(['', '']);
-    setPollAllowMultiselect(false);
-    setPollDurationMinutes(1440);
-    setCreatingPoll(false);
-    setShowScheduleComposer(false);
-    setScheduledAt('');
-    setSchedulingMessage(false);
-    setSending(false);
-    sendingRef.current = false;
-    setSubmitError(null);
-    setShowScheduledPanel(false);
-    setScheduledCount(0);
-  }, [channelId]);
+  }, [resizeDraft]);
 
   // Click-outside dismiss for inline emoji picker and formatting toolbar.
   useEffect(() => {
@@ -526,6 +480,12 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
 
   const handleSubmit = async () => {
     if (sendingRef.current || uploading || creatingPoll || schedulingMessage) return;
+    let submittedDraft: Awaited<ReturnType<typeof captureDraft>>;
+    sendingRef.current = true;
+    try { submittedDraft = await captureDraft(); }
+    catch (error) { setSubmitError(messageInputError(error, 'Save this draft before sending.')); return; }
+    finally { sendingRef.current = false; }
+    if (!composerAction.allowed) { setSubmitError(composerAction.reason); return; }
 
     if (showPollComposer) {
       const question = pollQuestion.trim();
@@ -547,17 +507,21 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
       try {
         setSubmitError(null);
         setCreatingPoll(true);
-        const { data } = await channelApi.createPoll(channelId, {
+        const context = captureScopedOperation(scope);
+        let response;
+        try { response = await context.request<Message>({ method: 'POST', url: `/channels/${encodeURIComponent(channelId)}/polls`, data: {
           question,
           options: options.map((text) => ({ text })),
           allow_multiselect: pollAllowMultiselect,
           expires_in_minutes: pollDurationMinutes > 0 ? pollDurationMinutes : undefined,
-        });
+        } }); } finally { context.dispose(); }
+        const { data } = response;
         if (data.poll) {
           usePollStore.getState().upsertPoll(data.poll);
         }
-        useMessageStore.getState().addMessage(channelId, data);
-        onCancelReply?.();
+        messageStore.getState().addMessage(channelId, data);
+        if (mounted.current) onCancelReply?.();
+        if (question === submittedDraft.content.trim()) await clearSubmitted(submittedDraft);
         resetPollComposer();
       } catch (err) {
         setSubmitError(messageInputError(err, 'Failed to create poll.'));
@@ -567,7 +531,7 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
       return;
     }
     if (showScheduleComposer) {
-      if (!content.trim()) {
+      if (!submittedDraft.content.trim()) {
         setSubmitError('Enter a message to schedule.');
         return;
       }
@@ -592,20 +556,18 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
         setSubmitError(null);
         setSchedulingMessage(true);
         const sendAtIso = parsedSendAt.toISOString();
-        await useMessageStore.getState().scheduleMessage(
+        await messageStore.getState().scheduleMessage(
           channelId,
-          content.trim(),
+          submittedDraft.content.trim(),
           sendAtIso,
           replyingTo?.id,
         );
         toast.success('Message scheduled.');
-        clearDraftTimer();
-        setContent('');
+        await clearSubmitted(submittedDraft);
         setScheduledAt('');
         setScheduledCount((prev) => prev + 1);
         setShowScheduleComposer(false);
-        saveDraft(channelId, '');
-        onCancelReply?.();
+        if (mounted.current) onCancelReply?.();
       } catch (err) {
         setSubmitError(messageInputError(err, 'Failed to schedule message.'));
       } finally {
@@ -619,13 +581,13 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
       return;
     }
     if (stagedFiles.length > 0 && !canAttachFiles) {
-      setSubmitError("You don't have permission to attach files in this channel.");
+      setSubmitError(actions.attach.reason);
       return;
     }
 
-    if (!content.trim() && stagedFiles.length === 0) return;
-    if (content.length > MAX_MESSAGE_LENGTH) {
-      setSubmitError(`Message is too long (${content.length}/${MAX_MESSAGE_LENGTH}).`);
+    if (!submittedDraft.content.trim() && stagedFiles.length === 0) return;
+    if (submittedDraft.content.length > MAX_MESSAGE_LENGTH) {
+      setSubmitError(`Message is too long (${submittedDraft.content.length}/${MAX_MESSAGE_LENGTH}).`);
       return;
     }
 
@@ -634,7 +596,7 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
     sendingRef.current = true;
     setSending(true);
 
-    const trimmed = content.trim();
+    const trimmed = submittedDraft.content.trim();
     try {
       const slashMatch = trimmed.match(/^\/(\w+)(?:\s+([\s\S]*))?$/);
       if (guildId && slashMatch && stagedFiles.length === 0) {
@@ -651,10 +613,8 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
               options: parseSlashCommandOptions(command, argsText),
             });
             useInteractionStore.getState().addPendingInteraction(interaction);
-            clearDraftTimer();
-            setContent('');
-            saveDraft(channelId, '');
-            onCancelReply?.();
+            await clearSubmitted(submittedDraft);
+            if (mounted.current) onCancelReply?.();
             if (textareaRef.current) textareaRef.current.style.height = 'auto';
           } catch (err) {
             setSubmitError(messageInputError(err, 'Failed to run command.'));
@@ -664,24 +624,33 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
       }
 
       setSubmitError(null);
+      // Encrypted attachment seam: in an encrypted conversation the files never
+      // take the plaintext upload path. They are handed to the encrypted
+      // producer, which encrypts each one on this device, stages the ciphertext
+      // in the account vault and uploads only that.
       const attachmentIds: string[] = [];
-      for (const file of stagedFiles) {
-        const uploaded = await upload(file);
-        if (uploaded?.id) {
-          attachmentIds.push(uploaded.id);
+      if (!encrypted) {
+        for (const file of stagedFiles) {
+          const uploaded = await upload(file);
+          if (uploaded?.id) {
+            attachmentIds.push(uploaded.id);
+          }
         }
       }
-      await useMessageStore.getState().sendMessage(
+      await messageStore.getState().sendMessage(
         channelId,
         trimmed,
         replyingTo?.id,
         attachmentIds,
+        undefined,
+        submittedDraft,
+        encrypted && stagedFiles.length > 0
+          ? { files: stagedFiles, maxCiphertextBytes: maxUploadSize }
+          : undefined,
       );
-      clearDraftTimer();
-      setContent('');
-      saveDraft(channelId, '');
-      setStagedFiles([]);
-      onCancelReply?.();
+      await clearSubmitted(submittedDraft);
+      setStagedFiles(current => current.filter(file => !stagedFiles.includes(file)));
+      if (mounted.current) onCancelReply?.();
       if (textareaRef.current) textareaRef.current.style.height = 'auto';
     } catch (err) {
       setSubmitError(messageInputError(err, 'Failed to send message.'));
@@ -804,7 +773,7 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
         textarea.setSelectionRange(pos, pos);
       });
     },
-    [content, clearAutocompleteChoices],
+    [content, clearAutocompleteChoices, setContent],
   );
 
   const insertMention = useCallback((userId: string) => {
@@ -824,7 +793,7 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
       textarea.focus();
       textarea.setSelectionRange(newPos, newPos);
     });
-  }, [content]);
+  }, [content, setContent]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Dismiss composer popovers first (including mention mode with zero matches).
@@ -896,6 +865,7 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
       setSubmitError('Disable poll composer before adding attachments.');
       return;
     }
+    if (!canAttachFiles) { setSubmitError(actions.attach.reason); return; }
     const files = Array.from(e.dataTransfer.files);
     if (files.length > 0) {
       setStagedFiles(prev => [...prev, ...files]);
@@ -910,6 +880,7 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
       .filter((f): f is File => f !== null);
 
     if (imageFiles.length > 0) {
+      if (!canAttachFiles) { e.preventDefault(); setSubmitError(actions.attach.reason); return; }
       if (showPollComposer) {
         setSubmitError('Disable poll composer before adding attachments.');
         return;
@@ -917,9 +888,10 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
       e.preventDefault();
       setStagedFiles((prev) => [...prev, ...imageFiles]);
     }
-  }, [showPollComposer]);
+  }, [showPollComposer, canAttachFiles, actions.attach.reason]);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!canAttachFiles) { setSubmitError(actions.attach.reason); e.target.value = ''; return; }
     if (showPollComposer) {
       setSubmitError('Disable poll composer before adding attachments.');
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -937,7 +909,7 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
   };
 
   const togglePollComposer = () => {
-    if (!canCreatePoll) return;
+    if (!showPollComposer && !canCreatePoll) { setSubmitError(actions.poll.reason); return; }
     if (showPollComposer) {
       if (pollQuestion.trim()) setContent(pollQuestion);
       resetPollComposer();
@@ -950,7 +922,6 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
     }
     if (!pollQuestion.trim() && content.trim()) {
       setPollQuestion(content.trim().slice(0, 300));
-      setContent('');
     }
     setShowPollComposer(true);
     setSubmitError(null);
@@ -976,10 +947,31 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
     });
   };
 
+  const attachFiles = () => {
+    if (!canAttachFiles) {
+      setSubmitError(actions.attach.reason);
+      return;
+    }
+    if (showPollComposer) {
+      setSubmitError('Disable poll composer before adding attachments.');
+      return;
+    }
+    fileInputRef.current?.click();
+  };
+  const composerTools: ContextMenuItem[] = [
+    { label: 'Attach files', icon: <Plus size={18} />, action: attachFiles, disabled: showPollComposer || !canAttachFiles || !canSendMessages, description: actions.attach.reason ?? undefined },
+    { label: 'Formatting tools', icon: <Type size={18} />, action: () => setShowFormattingTools((value) => !value) },
+    { label: 'Create a poll', icon: <BarChart3 size={18} />, action: togglePollComposer, disabled: !canCreatePoll, description: actions.poll.reason ?? undefined },
+    { label: 'Schedule message', icon: <Clock3 size={18} />, action: () => setShowScheduleComposer((value) => !value), disabled: showPollComposer || !actions.schedule.allowed, description: actions.schedule.reason ?? undefined },
+    ...(guildId ? [{ label: 'Stickers', icon: <Image size={18} />, action: () => { setShowStickerPicker(true); setShowGifPicker(false); setShowEmojiPicker(false); }, disabled: showPollComposer || !canSendMessages, description: actions.send.reason ?? undefined }] : []),
+    { label: 'GIFs', icon: <Image size={18} />, action: () => { setShowGifPicker(true); setShowEmojiPicker(false); setShowStickerPicker(false); }, disabled: showPollComposer || !canSendMessages, description: actions.send.reason ?? undefined },
+    { label: 'Emoji', icon: <Smile size={18} />, action: () => { setShowEmojiPicker(true); setShowGifPicker(false); setShowStickerPicker(false); }, disabled: showPollComposer },
+  ];
+
   const busy = uploading || creatingPoll || schedulingMessage || sending;
   const sendDisabled =
     busy ||
-    !canSendMessages ||
+    !composerAction.allowed ||
     (showScheduleComposer
       ? !content.trim() || !scheduledAt
       : !showPollComposer && !content.trim() && stagedFiles.length === 0);
@@ -992,7 +984,7 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
 
   return (
     <div
-      className="relative flex w-full flex-col gap-2 px-4 pb-[calc(var(--safe-bottom)+1.25rem)] pt-2 sm:px-6 sm:pb-8"
+      className="message-composer-surface relative flex w-full min-w-0 flex-col gap-2 px-4 pb-[calc(var(--safe-bottom)+1.25rem)] pt-2 sm:px-6 sm:pb-8"
       onDragOver={(e) => {
         if (!canAttachFiles || !canSendMessages) return;
         e.preventDefault();
@@ -1011,12 +1003,15 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
           <span>Waiting for command response…</span>
         </div>
       )}
-      {!canSendMessages && (
-        <div
-          role="status"
-          className="rounded-sm border border-border-subtle bg-bg-mod-subtle px-3 py-2 text-meta text-text-muted"
-        >
-          You don&apos;t have permission to send messages in this channel.
+      {!composerAction.allowed && (
+        <div role="status" className="rounded-sm border border-border-subtle bg-bg-mod-subtle px-3 py-2 text-meta text-text-muted">
+          {composerAction.reason}
+          {encrypted && encryption === 'setup' && <Link className="ml-2 underline" to={`/setup?${new URLSearchParams({ migrate: '1', server: scope.serverId, user: scope.userId, returnTo: window.location.pathname + window.location.search })}`}>Set up encryption</Link>}
+          {encrypted && encryption === 'unlock' && <Link className="ml-2 underline" to={`/unlock?${new URLSearchParams({ returnTo: window.location.pathname + window.location.search })}`}>Unlock encryption</Link>}
+          {/* A blocker can be resolved by someone else (a recipient finishing
+              encryption setup, a restored permission), so the check is always
+              repeatable from here instead of only after a request failure. */}
+          <button type="button" className="ml-2 underline" onClick={refreshActions}>{capabilityError ? 'Retry' : 'Check again'}</button>
         </div>
       )}
       {isAnonymousChannel && (
@@ -1210,6 +1205,14 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
         />
       )}
 
+      <MessagingRecoveryNotice runtime={messagingRuntime} encryptedConversation={!guildId} channelId={channelId} />
+      <MessagingQueuePanel runtime={messagingRuntime} channelId={channelId} />
+      {draftError && (
+        <div role="alert" className="mb-2 flex items-center justify-between gap-2 text-meta text-accent-danger">
+          <span>{draftError}</span>
+          <Button variant="ghost" onClick={() => void retrySave().catch(() => {})}>Retry saving draft</Button>
+        </div>
+      )}
       {submitError && (
         <div
           className="rounded-md border border-accent-danger/40 bg-danger-tint px-3 py-2 text-meta font-semibold text-accent-danger"
@@ -1330,21 +1333,35 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
         )}
 
         <button
-          onClick={() => {
-            if (!canAttachFiles) {
-              setSubmitError("You don't have permission to attach files in this channel.");
-              return;
-            }
-            if (showPollComposer) {
-              setSubmitError('Disable poll composer before adding attachments.');
-              return;
-            }
-            fileInputRef.current?.click();
+          ref={toolsButtonRef}
+          type="button"
+          className={cn(ICON_BTN, 'message-composer-more')}
+          aria-label="More message tools"
+          aria-haspopup="menu"
+          aria-expanded={toolsPosition !== null}
+          onClick={(event) => {
+            const rect = event.currentTarget.getBoundingClientRect();
+            setToolsPosition((current) => current ? null : { x: rect.left, y: rect.top });
           }}
-          className={ICON_BTN}
+        >
+          <Plus size={18} />
+        </button>
+        {toolsPosition && <ContextMenu
+          label="Message tools"
+          position={toolsPosition}
+          items={composerTools}
+          onClose={() => {
+            setToolsPosition(null);
+            toolsButtonRef.current?.focus();
+          }}
+        />}
+
+        <button
+          onClick={attachFiles}
+          className={cn(ICON_BTN, 'message-composer-secondary')}
           disabled={showPollComposer || !canAttachFiles || !canSendMessages}
           aria-label="Attach files"
-          title={canAttachFiles ? 'Attach files' : "You can't attach files here"}
+          title={actions.attach.reason ?? 'Attach files'}
         >
           <Plus size={18} />
         </button>
@@ -1354,20 +1371,21 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
           data-composer-picker-toggle="formatting"
           onMouseDown={(e) => e.stopPropagation()}
           onClick={() => setShowFormattingTools((prev) => !prev)}
-          className={cn(ICON_BTN, showFormattingTools && ICON_BTN_ACTIVE)}
+          className={cn(ICON_BTN, 'message-composer-secondary', showFormattingTools && ICON_BTN_ACTIVE)}
           aria-label="Formatting tools"
           title="Formatting tools"
         >
           <Type size={18} />
         </button>
 
-        {canCreatePoll && (
+        {actions.poll.supported && (
           <button
             type="button"
             onClick={togglePollComposer}
-            className={cn(ICON_BTN, showPollComposer && ICON_BTN_ACTIVE)}
+            className={cn(ICON_BTN, 'message-composer-secondary', showPollComposer && ICON_BTN_ACTIVE)}
+            disabled={!canCreatePoll && !showPollComposer}
             aria-label={showPollComposer ? 'Poll composer enabled' : 'Create a poll'}
-            title={showPollComposer ? 'Poll composer enabled' : 'Create a poll'}
+            title={actions.poll.reason ?? (showPollComposer ? 'Poll composer enabled' : 'Create a poll')}
           >
             <BarChart3 size={18} />
           </button>
@@ -1376,10 +1394,10 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
         <button
           type="button"
           onClick={() => setShowScheduleComposer((prev) => !prev)}
-          className={cn(ICON_BTN, showScheduleComposer && ICON_BTN_ACTIVE)}
+          className={cn(ICON_BTN, 'message-composer-secondary', showScheduleComposer && ICON_BTN_ACTIVE)}
           aria-label={showScheduleComposer ? 'Scheduling enabled' : 'Schedule message'}
-          title={showScheduleComposer ? 'Scheduling enabled' : 'Schedule message'}
-          disabled={showPollComposer}
+          title={actions.schedule.reason ?? (showScheduleComposer ? 'Scheduling enabled' : 'Schedule message')}
+          disabled={showPollComposer || (!showScheduleComposer && !actions.schedule.allowed)}
         >
           <Clock3 size={18} />
         </button>
@@ -1394,7 +1412,7 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
 
         <textarea
           ref={textareaRef}
-          value={content}
+          value={showPollComposer ? '' : content}
           onChange={(e) => {
             setContent(e.target.value);
             detectMentionQuery(e.target.value, e.target.selectionStart);
@@ -1403,9 +1421,7 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           placeholder={
-            !canSendMessages
-              ? "You can't send messages here"
-              : showPollComposer
+            showPollComposer
                 ? 'Poll question above will be sent as a poll message'
                 : showScheduleComposer
                   ? `Schedule message for ${channelName ? '#' + channelName : 'this channel'}`
@@ -1413,21 +1429,21 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
           }
           rows={1}
           maxLength={MAX_MESSAGE_LENGTH}
-          disabled={showPollComposer || !canSendMessages}
-          className="flex-1 resize-none self-center bg-transparent px-1.5 py-2 text-body text-text-primary outline-none placeholder:text-text-muted disabled:cursor-not-allowed disabled:opacity-70"
+          disabled={showPollComposer}
+          className="min-w-0 flex-1 resize-none self-center bg-transparent px-1.5 py-2 text-body text-text-primary outline-none placeholder:text-text-muted disabled:cursor-not-allowed disabled:opacity-70"
           style={{ maxHeight: '50vh' }}
         />
 
         {guildId && (
           <div className="relative">
             <button
-              className={ICON_BTN}
+              className={cn(ICON_BTN, 'message-composer-secondary')}
               data-composer-picker-toggle="sticker"
               onMouseDown={(e) => e.stopPropagation()}
               onClick={() => { setShowStickerPicker(!showStickerPicker); setShowGifPicker(false); setShowEmojiPicker(false); }}
-              disabled={showPollComposer}
+              disabled={showPollComposer || !canSendMessages}
               aria-label="Stickers"
-              title="Stickers"
+              title={actions.send.reason ?? 'Stickers'}
             >
               {/* Sticker icon: a square with a folded corner (lucide-style stroke). */}
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1443,11 +1459,12 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
                   <StickerPicker
                     guildId={guildId}
                     onSelect={(stickerId) => {
+                      if (!actions.send.allowed) { setSubmitError(actions.send.reason); return; }
                       setShowStickerPicker(false);
                       void (async () => {
                         try {
-                          await useMessageStore.getState().sendMessage(channelId, '', replyingTo?.id, undefined, [stickerId]);
-                          onCancelReply?.();
+                          await messageStore.getState().sendMessage(channelId, '', replyingTo?.id, undefined, [stickerId]);
+                      if (mounted.current) onCancelReply?.();
                         } catch (err) {
                           setSubmitError(`Failed to send sticker: ${messageInputError(err, 'Request failed')}`);
                         }
@@ -1463,13 +1480,13 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
 
         <div className="relative">
           <button
-            className={ICON_BTN}
+            className={cn(ICON_BTN, 'message-composer-secondary')}
             data-composer-picker-toggle="gif"
             onMouseDown={(e) => e.stopPropagation()}
             onClick={() => { setShowGifPicker(!showGifPicker); setShowEmojiPicker(false); setShowStickerPicker(false); }}
-            disabled={showPollComposer}
+            disabled={showPollComposer || !canSendMessages}
             aria-label="GIF"
-            title="GIF"
+            title={actions.send.reason ?? 'GIF'}
           >
             <Image size={18} />
           </button>
@@ -1478,11 +1495,12 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
               <Suspense fallback={null}>
                 <GifPicker
                   onSelect={(gifUrl) => {
+                    if (!actions.send.allowed) { setSubmitError(actions.send.reason); return; }
                     setShowGifPicker(false);
                     void (async () => {
                       try {
-                        await useMessageStore.getState().sendMessage(channelId, gifUrl, replyingTo?.id);
-                        onCancelReply?.();
+                        await messageStore.getState().sendMessage(channelId, gifUrl, replyingTo?.id);
+                    if (mounted.current) onCancelReply?.();
                       } catch (err) {
                         setSubmitError(`Failed to send GIF: ${messageInputError(err, 'Request failed')}`);
                       }
@@ -1497,7 +1515,7 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
 
         <div className="relative">
           <button
-            className={ICON_BTN}
+            className={cn(ICON_BTN, 'message-composer-secondary')}
             data-composer-picker-toggle="emoji"
             onMouseDown={(e) => e.stopPropagation()}
             onClick={() => { setShowEmojiPicker(!showEmojiPicker); setShowGifPicker(false); setShowStickerPicker(false); }}

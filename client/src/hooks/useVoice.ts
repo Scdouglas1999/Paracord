@@ -1,9 +1,8 @@
 import { useCallback } from 'react';
 import { useVoiceStore } from '../stores/voiceStore';
-import { gateway } from '../gateway/manager';
 
 /**
- * Toggle self-mute and sync the resulting state to every connected gateway.
+ * Toggle self-mute and sync the resulting state to the owning server.
  * Exported as a stable, render-independent function so all mute entry points
  * (the useVoice hook, keyboard shortcuts) converge on a single code path.
  * The gateway update runs after the async mic operation settles so the server
@@ -12,26 +11,14 @@ import { gateway } from '../gateway/manager';
 export async function toggleVoiceMute(): Promise<void> {
   await useVoiceStore.getState().toggleMute();
   const state = useVoiceStore.getState();
-  gateway.updateVoiceStateAll(
-    state.guildId,
-    state.channelId,
-    state.selfMute,
-    state.selfDeaf,
-    state.selfVideo
-  );
+  state.publishVoiceState();
 }
 
-/** Toggle self-deafen and sync the resulting state to every connected gateway. */
+/** Toggle self-deafen and sync the resulting state to the owning server. */
 export async function toggleVoiceDeaf(): Promise<void> {
   await useVoiceStore.getState().toggleDeaf();
   const state = useVoiceStore.getState();
-  gateway.updateVoiceStateAll(
-    state.guildId,
-    state.channelId,
-    state.selfMute,
-    state.selfDeaf,
-    state.selfVideo
-  );
+  state.publishVoiceState();
 }
 
 export function useVoice() {
@@ -68,13 +55,7 @@ export function useVoice() {
         // mute/deafen state immediately after connecting.
         const state = useVoiceStore.getState();
         if (state.selfMute || state.selfDeaf || state.selfVideo) {
-          gateway.updateVoiceStateAll(
-            targetGuildId || state.guildId,
-            targetChannelId,
-            state.selfMute,
-            state.selfDeaf,
-            state.selfVideo
-          );
+          state.publishVoiceState();
         }
       } catch (err) {
         console.error('[voice] Failed to join channel:', err);
@@ -102,13 +83,7 @@ export function useVoice() {
   const toggleVideo = useCallback(async () => {
     await useVoiceStore.getState().toggleVideo();
     const state = useVoiceStore.getState();
-    gateway.updateVoiceStateAll(
-      state.guildId,
-      state.channelId,
-      state.selfMute,
-      state.selfDeaf,
-      state.selfVideo,
-    );
+    state.publishVoiceState();
   }, []);
 
   return {

@@ -67,6 +67,36 @@ pub async fn create_session(
     ip_address: Option<&str>,
     expires_at: DateTime<Utc>,
 ) -> Result<AuthSessionRow, DbError> {
+    let mut connection = pool.acquire().await?;
+    create_session_in_connection(
+        &mut connection,
+        id,
+        user_id,
+        refresh_token_hash,
+        current_jti,
+        pub_key,
+        device_id,
+        user_agent,
+        ip_address,
+        expires_at,
+    )
+    .await
+}
+
+/// Participate in the caller's transaction; callers own user-level serialization.
+#[allow(clippy::too_many_arguments)]
+pub async fn create_session_in_connection(
+    connection: &mut sqlx::AnyConnection,
+    id: &str,
+    user_id: i64,
+    refresh_token_hash: &str,
+    current_jti: &str,
+    pub_key: Option<&str>,
+    device_id: Option<&str>,
+    user_agent: Option<&str>,
+    ip_address: Option<&str>,
+    expires_at: DateTime<Utc>,
+) -> Result<AuthSessionRow, DbError> {
     let max_sessions = max_sessions_per_user();
     let active_count: (i64,) = sqlx::query_as(
         "SELECT COUNT(*)
@@ -77,7 +107,7 @@ pub async fn create_session(
     )
     .bind(user_id)
     .bind(datetime_to_db_text(Utc::now()))
-    .fetch_one(pool)
+    .fetch_one(&mut *connection)
     .await?;
 
     if active_count.0 >= max_sessions {
@@ -99,7 +129,7 @@ pub async fn create_session(
         .bind(user_id)
         .bind(datetime_to_db_text(now))
         .bind(revoke_count)
-        .execute(pool)
+        .execute(&mut *connection)
         .await?;
     }
 
@@ -120,7 +150,7 @@ pub async fn create_session(
     .bind(user_agent)
     .bind(ip_address)
     .bind(datetime_to_db_text(expires_at))
-    .fetch_one(pool)
+    .fetch_one(&mut *connection)
     .await?;
     Ok(row)
 }

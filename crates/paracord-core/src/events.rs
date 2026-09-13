@@ -47,6 +47,7 @@ pub fn default_event_bus_capacity() -> usize {
 #[derive(Clone)]
 pub struct EventBus {
     capacity: usize,
+    registration_lock: Arc<std::sync::Mutex<()>>,
     sessions: Arc<DashMap<String, SessionSubscription>>,
     guild_sessions: Arc<DashMap<i64, HashSet<String>>>,
     user_sessions: Arc<DashMap<i64, HashSet<String>>>,
@@ -65,11 +66,160 @@ impl EventBus {
         let (system_sender, _) = broadcast::channel(capacity);
         Self {
             capacity,
+            registration_lock: Arc::new(std::sync::Mutex::new(())),
             sessions: Arc::new(DashMap::new()),
             guild_sessions: Arc::new(DashMap::new()),
             user_sessions: Arc::new(DashMap::new()),
             system_sender,
         }
+    }
+
+    /// Publish a message mutation with committed, ordered channel activity.
+    /// The message has already committed. A failed snapshot is logged and never
+    /// replaced with a guessed tail; reconnect snapshots restore channel state.
+    pub async fn dispatch_message(
+        &self,
+        pool: &paracord_db::DbPool,
+        event_type: &str,
+        payload: serde_json::Value,
+        guild_id: Option<i64>,
+    ) {
+        match Self::message_payload(pool, event_type, payload).await {
+            Ok(payload) => {
+                let mentions = self
+                    .message_mention_recipients(pool, event_type, &payload)
+                    .await;
+                self.dispatch(event_type, payload.clone(), guild_id);
+                if !mentions.is_empty() {
+                    self.dispatch_to_users(
+                        "MESSAGE_MENTION",
+                        serde_json::json!({
+                            "channel_id": payload["channel_id"],
+                            "message_id": payload["id"],
+                            "channel_activity": payload["channel_activity"],
+                        }),
+                        mentions,
+                    );
+                }
+            }
+            Err(error) => {
+                tracing::error!(event_type, %error, "failed to publish committed message activity")
+            }
+        }
+    }
+
+    pub async fn dispatch_message_to_users(
+        &self,
+        pool: &paracord_db::DbPool,
+        event_type: &str,
+        payload: serde_json::Value,
+        user_ids: Vec<i64>,
+    ) {
+        match Self::message_payload(pool, event_type, payload).await {
+            Ok(payload) => {
+                let mut mentions = self
+                    .message_mention_recipients(pool, event_type, &payload)
+                    .await;
+                mentions.retain(|id| user_ids.contains(id));
+                self.dispatch_to_users(event_type, payload.clone(), user_ids);
+                if !mentions.is_empty() {
+                    self.dispatch_to_users(
+                        "MESSAGE_MENTION",
+                        serde_json::json!({
+                            "channel_id": payload["channel_id"],
+                            "message_id": payload["id"],
+                            "channel_activity": payload["channel_activity"],
+                        }),
+                        mentions,
+                    );
+                }
+            }
+            Err(error) => {
+                tracing::error!(event_type, %error, "failed to publish committed private message activity")
+            }
+        }
+    }
+
+    // The create producer decides whether the insert is new. Every new message
+    // dispatch then uses its committed audience, including rich/system/federated
+    // producers; edits never reconstruct or republish mentions.
+    async fn message_mention_recipients(
+        &self,
+        pool: &paracord_db::DbPool,
+        event_type: &str,
+        payload: &serde_json::Value,
+    ) -> Vec<i64> {
+        if event_type != "MESSAGE_CREATE" {
+            return Vec::new();
+        }
+        let parse_id = |key| {
+            payload
+                .get(key)
+                .and_then(|id| id.as_str())
+                .and_then(|id| id.parse::<i64>().ok())
+        };
+        let (Some(channel_id), Some(message_id)) = (parse_id("channel_id"), parse_id("id")) else {
+            return Vec::new();
+        };
+        match paracord_db::messages::get_message_mention_recipients(pool, channel_id, message_id)
+            .await
+        {
+            Ok(recipients) => recipients,
+            Err(error) => {
+                tracing::error!(channel_id, message_id, %error, "failed to publish committed mention audience");
+                Vec::new()
+            }
+        }
+    }
+
+    async fn message_payload(
+        pool: &paracord_db::DbPool,
+        event_type: &str,
+        mut payload: serde_json::Value,
+    ) -> Result<serde_json::Value, crate::error::CoreError> {
+        let channel_id = payload
+            .get("channel_id")
+            .and_then(|id| id.as_str())
+            .and_then(|id| id.parse::<i64>().ok())
+            .filter(|id| *id > 0)
+            .ok_or_else(|| {
+                crate::error::CoreError::Internal("Message event has an invalid channel ID".into())
+            })?;
+        if payload.get("message_revision").is_none()
+            && matches!(event_type, "MESSAGE_CREATE" | "MESSAGE_DELETE")
+        {
+            let message_id = payload
+                .get("id")
+                .and_then(|id| id.as_str())
+                .and_then(|id| id.parse::<i64>().ok());
+            let revision = if let Some(message_id) = message_id {
+                paracord_db::message_recovery::mutation_revision(
+                    pool,
+                    channel_id,
+                    message_id,
+                    if event_type == "MESSAGE_CREATE" {
+                        "create"
+                    } else {
+                        "delete"
+                    },
+                )
+                .await?
+            } else {
+                None
+            };
+            if let Some(revision) = revision {
+                payload["message_revision"] = serde_json::json!(revision.to_string());
+            } else {
+                payload["recovery_required"] = serde_json::json!(true);
+            }
+        } else if (event_type == "MESSAGE_UPDATE" && payload.get("message_revision").is_none())
+            || (event_type == "MESSAGE_DELETE_BULK" && payload.get("message_revisions").is_none())
+        {
+            // A delayed publisher can outlive the bounded archive. Never label
+            // that mutation with the current channel head or guess its order.
+            payload["recovery_required"] = serde_json::json!(true);
+        }
+        crate::message::prepare_message_event(pool, channel_id, payload).await
     }
 
     /// Per-session event queue depth this bus hands to `register_session`.
@@ -102,6 +252,10 @@ impl EventBus {
         user_id: i64,
         guild_ids: &[i64],
     ) -> Option<broadcast::Receiver<ServerEvent>> {
+        let _registration = self
+            .registration_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let sid = session_id.into();
         // Bound to a local first: a `match` scrutinee's temporaries live for the
         // whole match, and holding a DashMap read guard across the
@@ -117,7 +271,7 @@ impl EventBus {
                 );
                 return None;
             }
-            Some(_) => self.unregister_session(&sid),
+            Some(_) => self.unregister_session_locked(&sid),
             None => {}
         }
 
@@ -147,6 +301,35 @@ impl EventBus {
     }
 
     pub fn unregister_session(&self, session_id: &str) {
+        let _registration = self
+            .registration_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        self.unregister_session_locked(session_id);
+    }
+
+    /// An old transport may finish after the same session has reattached.
+    /// Release only the registration that handed out this receiver.
+    pub fn unregister_session_receiver(
+        &self,
+        session_id: &str,
+        receiver: &broadcast::Receiver<ServerEvent>,
+    ) -> bool {
+        let _registration = self
+            .registration_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let current = self
+            .sessions
+            .get(session_id)
+            .is_some_and(|sub| sub.sender.subscribe().same_channel(receiver));
+        if current {
+            self.unregister_session_locked(session_id);
+        }
+        current
+    }
+
+    fn unregister_session_locked(&self, session_id: &str) {
         // Read subscription data before removing
         if let Some((_, sub)) = self.sessions.remove(session_id) {
             // Remove from guild_sessions index
@@ -365,6 +548,20 @@ mod tests {
             target_user_ids,
             serialized_payload: None,
         }
+    }
+
+    #[test]
+    fn old_transport_cleanup_cannot_unregister_reattached_session() {
+        let bus = EventBus::new(16);
+        let old = bus.register_session("reattached", 7, &[9]).unwrap();
+        let mut replacement = bus.register_session("reattached", 7, &[9]).unwrap();
+        assert!(!bus.unregister_session_receiver("reattached", &old));
+        bus.publish(test_event(Some(9), None));
+        assert!(replacement.try_recv().is_ok());
+        assert!(bus.unregister_session_receiver("reattached", &replacement));
+        assert!(bus.sessions.is_empty());
+        assert!(bus.guild_sessions.is_empty());
+        assert!(bus.user_sessions.is_empty());
     }
 
     #[test]

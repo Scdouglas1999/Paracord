@@ -149,10 +149,36 @@ async fn emit_bot_message(
     bot_id: i64,
     bot_name: &str,
     content: &str,
+    intended_recipients: &[i64],
 ) -> Option<i64> {
+    let mentioned_users = match paracord_core::message_attention::explicit_mentions(
+        &state.db,
+        guild_id,
+        channel_id,
+        bot_id,
+        intended_recipients,
+    )
+    .await
+    {
+        Ok(recipients) => recipients,
+        Err(error) => {
+            tracing::warn!(guild_id, channel_id, %error, "failed to authorize system message audience");
+            return None;
+        }
+    };
     let msg_id = paracord_util::snowflake::generate(1);
-    let Ok(msg) = paracord_db::messages::create_message(
-        &state.db, msg_id, channel_id, bot_id, content, 0, None,
+    let Ok(msg) = paracord_db::messages::create_message_with_payload_mentions(
+        &state.db,
+        msg_id,
+        channel_id,
+        bot_id,
+        content,
+        0,
+        None,
+        0,
+        None,
+        None,
+        &mentioned_users,
     )
     .await
     else {
@@ -182,7 +208,8 @@ async fn emit_bot_message(
     });
     state
         .event_bus
-        .dispatch("MESSAGE_CREATE", msg_json, Some(guild_id));
+        .dispatch_message(&state.db, "MESSAGE_CREATE", msg_json, Some(guild_id))
+        .await;
     Some(msg.id)
 }
 
@@ -207,6 +234,7 @@ async fn emit_mod_log(state: &AppState, guild_id: i64, bot_settings: &Value, con
                 AUTO_MOD_ID,
                 "Auto-Moderator",
                 content,
+                &[],
             )
             .await;
         }
@@ -324,6 +352,24 @@ async fn create_automod_quarantine_report(
     } else {
         vec![evidence_excerpt]
     };
+    // Preserve send-time recipients before AutoMod deletes the original message.
+    // Approval must not reinterpret role membership or markup in stored evidence.
+    let original_mention_user_ids = match paracord_db::messages::get_message_mention_recipients(
+        &state.db,
+        ctx.channel_id,
+        ctx.message_id,
+    )
+    .await
+    {
+        Ok(recipients) => recipients
+            .into_iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>(),
+        Err(error) => {
+            tracing::error!(message_id = ctx.message_id, %error, "cannot preserve quarantined message audience");
+            return;
+        }
+    };
     let changes = json!({
         "target_type": "message",
         "target_id": ctx.message_id.to_string(),
@@ -334,6 +380,7 @@ async fn create_automod_quarantine_report(
         "auto_generated": true,
         "rule_name": rule_name,
         "original_content": ctx.content.clone(),
+        "original_mention_user_ids": original_mention_user_ids,
         "original_channel_id": ctx.channel_id.to_string(),
         "quarantine_channel_id": quarantine_channel_id.map(|id| id.to_string()),
         "quarantine_message_id": quarantine_message_id.map(|id| id.to_string()),
@@ -467,6 +514,7 @@ async fn handle_welcome_bot(
         WELCOME_BOT_ID,
         "Welcome Bot",
         &content,
+        &[],
     )
     .await;
 }
@@ -846,6 +894,7 @@ async fn apply_rule_actions(
                 AUTO_MOD_ID,
                 "Auto-Moderator",
                 &quarantine_content,
+                &[],
             )
             .await;
         }
@@ -865,14 +914,18 @@ async fn apply_rule_actions(
             .await
             .is_ok()
         {
-            state.event_bus.dispatch(
-                "MESSAGE_DELETE",
-                json!({
-                    "id": ctx.message_id_raw,
-                    "channel_id": ctx.channel_id_raw,
-                }),
-                Some(guild_id),
-            );
+            state
+                .event_bus
+                .dispatch_message(
+                    &state.db,
+                    "MESSAGE_DELETE",
+                    json!({
+                        "id": ctx.message_id_raw,
+                        "channel_id": ctx.channel_id_raw,
+                    }),
+                    Some(guild_id),
+                )
+                .await;
         }
     }
 
@@ -888,6 +941,7 @@ async fn apply_rule_actions(
             AUTO_MOD_ID,
             "Auto-Moderator",
             &warning,
+            &[ctx.author_id],
         )
         .await;
     }

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
 import { AlertCircle, CheckCircle2, ShieldCheck, Server, Radio } from 'lucide-react';
 import { cn } from '../lib/utils';
 
@@ -16,6 +16,7 @@ import { cn } from '../lib/utils';
  * server-to-server nature. Used nowhere as a decorative fill.
  */
 export function AppMark({ size = 44, className }: { size?: number; className?: string }) {
+  const gradientId = useId();
   return (
     <svg
       width={size}
@@ -27,12 +28,12 @@ export function AppMark({ size = 44, className }: { size?: number; className?: s
       className={cn('shrink-0', className)}
     >
       <defs>
-        <linearGradient id="paracord-mark" x1="4" y1="4" x2="40" y2="40" gradientUnits="userSpaceOnUse">
+        <linearGradient id={gradientId} x1="4" y1="4" x2="40" y2="40" gradientUnits="userSpaceOnUse">
           <stop stopColor="var(--accent-secondary)" />
           <stop offset="1" stopColor="var(--accent-primary)" />
         </linearGradient>
       </defs>
-      <rect width="44" height="44" rx="12" fill="url(#paracord-mark)" />
+      <rect width="44" height="44" rx="12" fill={`url(#${gradientId})`} />
       <rect
         x="9.5"
         y="15"
@@ -60,13 +61,11 @@ export function AppMark({ size = 44, className }: { size?: number; className?: s
 /** Full-page canvas: a solid, warm-neutral `--bg-primary` field — no gradient hero. */
 export function AuthCanvas({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div
-      className={cn(
-        'flex min-h-screen w-full items-center justify-center bg-bg-primary px-4 py-10',
-        className,
-      )}
-    >
-      {children}
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- Keyboard users must be able to scroll this viewport with Page Up/Down and Home/End.
+    <div role="region" aria-label="Account access" tabIndex={0} className={cn('h-dvh w-full overflow-y-auto bg-bg-primary', className)}>
+      <div className="flex min-h-full w-full items-center justify-center px-4 py-10">
+        {children}
+      </div>
     </div>
   );
 }
@@ -137,12 +136,15 @@ export function Field({
   required,
   hint,
   error,
+  descriptionId,
   children,
 }: {
   label: ReactNode;
   required?: boolean;
   hint?: ReactNode;
   error?: string | null;
+  /** Reference this from the control's aria-describedby. */
+  descriptionId?: string;
   children: ReactNode;
 }) {
   return (
@@ -152,12 +154,12 @@ export function Field({
         {children}
       </label>
       {error ? (
-        <p className="mt-2 flex items-start gap-1.5 text-meta text-accent-danger">
+        <p id={descriptionId} className="mt-2 flex items-start gap-1.5 text-meta text-accent-danger">
           <AlertCircle size={13} className="mt-px shrink-0" />
           <span>{error}</span>
         </p>
       ) : (
-        hint && <p className="mt-2 text-meta text-text-muted">{hint}</p>
+        hint && <p id={descriptionId} className="mt-2 text-meta text-text-muted">{hint}</p>
       )}
     </div>
   );

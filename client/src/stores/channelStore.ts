@@ -1,484 +1,323 @@
-import axios from 'axios';
 import { create } from 'zustand';
 import type { Channel } from '../types';
-import { guildApi } from '../api/guilds';
-import { channelApi } from '../api/channels';
+import { createGuildApi, guildApi } from '../api/guilds';
+import { createChannelApi } from '../api/channels';
+import { createDmApi } from '../api/dms';
 import { extractApiError } from '../api/client';
-import { toast } from './toastStore';
+import { captureScopedOperation, type OperationContext } from '../lib/operationContext';
+import { accountScopeKey, entityScopeKey, entityKeyBelongsToScope, LOCAL_SERVER_ID, type AccountScope } from '../lib/serverScope';
+import { scopeChannel, type ScopedChannel, type ChannelReference } from '../lib/channelScope';
+import { getServerAccountScope } from '../lib/serverIdentity';
+import { fetchVisibleGuildChannels } from '../lib/guildChannels';
 import { useServerListStore } from './serverListStore';
-import { connectionManager } from '../lib/connectionManager';
+import { toast } from './toastStore';
 import { registerSessionReset } from './sessionReset';
-
-function normalizeChannel(channel: Channel): Channel {
-  return {
-    ...channel,
-    type: (channel.type ?? channel.channel_type ?? 0) as Channel['type'],
-    channel_type: channel.channel_type ?? channel.type ?? 0,
-    required_role_ids: channel.required_role_ids ?? [],
-    thread_metadata: channel.thread_metadata ?? null,
-    owner_id: channel.owner_id ?? null,
-    message_count: channel.message_count ?? null,
-    created_at: channel.created_at ?? new Date().toISOString(),
-  };
-}
-
-// channelsByGuild is the single source of truth; channelsById is a derived index
-// maintained incrementally. reindexGuild patches the index for one guild only:
-// it drops the guild's previous channel ids and inserts the new list, leaving
-// every other guild's entries untouched (and identity-stable).
-function reindexGuild(
-  prevById: Record<string, Channel>,
-  oldChannels: Channel[],
-  newChannels: Channel[],
-): Record<string, Channel> {
-  const byId = { ...prevById };
-  for (const c of oldChannels) delete byId[c.id];
-  for (const c of newChannels) byId[c.id] = c;
-  return byId;
-}
+import { isChannelActivity, preserveChannelActivity, type ChannelActivity } from '../lib/channelActivity';
+import { registerAccountHistoryReset } from '../lib/databaseHistory';
 
 interface ChannelState {
-  // Channels indexed by guild ID. Key '' is used for DMs.
-  channelsByGuild: Record<string, Channel[]>;
-  // DM channels indexed by serverId — the cross-server DM source for the
-  // unified sidebar. channelsByGuild[''] mirrors the active server for
-  // back-compat readers (UserProfile).
-  dmChannelsByServer: Record<string, Channel[]>;
-  // Fast channel lookup by channel ID.
-  channelsById: Record<string, Channel>;
-  // Flat accessor for the currently viewed guild (kept for backward compat)
-  channels: Channel[];
+  /** Guild and DM collections, keyed by (server, account, guild ID or empty DM ID). */
+  channelsByGuild: Record<string, ScopedChannel[]>;
+  channelsById: Record<string, ScopedChannel>;
   guildChannelsLoaded: Record<string, boolean>;
-  selectedChannelId: string | null;
-  selectedGuildId: string | null;
-  isLoading: boolean;
-
-  fetchChannels: (guildId: string) => Promise<void>;
-  selectChannel: (channelId: string | null) => void;
-  selectGuild: (guildId: string | null) => void;
-  setChannels: (channels: Channel[]) => void;
-  setDmChannels: (channels: Channel[]) => void;
-  setDmChannelsForServer: (serverId: string, channels: Channel[]) => void;
+  loading: Record<string, boolean>;
+  errors: Record<string, string | undefined>;
+  selectedChannel: ChannelReference | null;
+  fetchChannels: (guildId: string, scope: AccountScope) => Promise<void>;
+  fetchDmChannels: (scope: AccountScope) => Promise<void>;
   loadAllDmChannels: () => Promise<void>;
-  createChannel: (guildId: string, data: Parameters<typeof guildApi.createChannel>[1]) => Promise<Channel>;
-  updateChannelData: (channelId: string, data: Partial<Channel>) => Promise<void>;
-  deleteChannel: (channelId: string) => Promise<void>;
-  reorderChannels: (guildId: string, positions: { id: string; position: number; parent_id?: string | null }[]) => Promise<void>;
-
-  // Gateway event handlers
-  addChannel: (channel: Channel) => void;
-  updateChannel: (channel: Channel) => void;
-  removeChannel: (guildId: string, channelId: string) => void;
-  updateLastMessageId: (channelId: string, messageId: string) => void;
-  /** Drop every cached channel and selection. Called on logout. */
+  selectChannel: (channel: ChannelReference | null) => void;
+  setChannels: (guildId: string, channels: Channel[], scope: AccountScope) => void;
+  changeDmRecipient: (channelId: string, recipientId: string, add: boolean, scope: AccountScope) => Promise<void>;
+  createDm: (recipientId: string, scope: AccountScope) => Promise<ScopedChannel>;
+  createGroupDm: (recipientIds: string[], name: string | undefined, scope: AccountScope) => Promise<ScopedChannel>;
+  createChannel: (guildId: string, data: Parameters<typeof guildApi.createChannel>[1], scope: AccountScope) => Promise<ScopedChannel>;
+  updateChannelData: (channelId: string, data: Partial<Channel>, scope: AccountScope) => Promise<void>;
+  deleteChannel: (channelId: string, scope: AccountScope) => Promise<void>;
+  reorderChannels: (guildId: string, positions: { id: string; position: number; parent_id?: string | null }[], scope: AccountScope) => Promise<void>;
+  addChannel: (channel: Channel, scope: AccountScope) => void;
+  updateChannel: (channel: Partial<Channel> & Pick<Channel, 'id'>, scope: AccountScope) => void;
+  removeChannel: (guildId: string, channelId: string, scope: AccountScope) => void;
+  applyMessageActivity: (channelId: string, activity: unknown, scope: AccountScope) => void;
+  resetAccount: (scope: AccountScope) => void;
   reset: () => void;
 }
 
-const _fetchInFlight = new Set<string>();
-const _channelFetchControllers = new Map<string, AbortController>();
-const MAX_FETCH_RETRIES = 2;
-const RETRY_BASE_DELAY_MS = 500;
-/** Debounce progressive-unlock refreshes so message spam doesn't thrash the API. */
-const _visibilityRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const VISIBILITY_REFRESH_DEBOUNCE_MS = 750;
+type Mutation = { kind: 'delete' } | { kind: 'put'; channel: Channel } | { kind: 'patch'; channel: Partial<Channel> };
+interface Snapshot { context: OperationContext; promise: Promise<void>; mutations: Map<string, Mutation>; activitySerial: number }
+const requests = new Map<string, Snapshot>();
+const operations = new Set<OperationContext>();
+const visibilityTimers = new Map<string, { context: OperationContext; timer: ReturnType<typeof setTimeout> }>();
+const MAX_PENDING_CHANNELS = 10_000;
+interface EarlyActivity { activity: ChannelActivity; observedAt: number }
+const earlyActivity = new Map<string, Map<string, EarlyActivity>>();
+let activitySerial = 0;
 
-/** Re-fetch a guild's channel list after onboarding/XP/message activity that may unlock channels. */
-export function refreshGuildChannelVisibility(guildId: string | null | undefined): void {
+function removeEarlyActivity(scope: AccountScope, channelId: string) {
+  const key = accountScopeKey(scope);
+  const pending = earlyActivity.get(key);
+  pending?.delete(channelId);
+  if (pending?.size === 0) earlyActivity.delete(key);
+}
+
+/** A list started after an event can prove that its channel is no longer visible. */
+function reconcileEarlyActivity(scope: AccountScope, guildId: string, startedAt: number) {
+  const pending = earlyActivity.get(accountScopeKey(scope));
+  if (!pending) return;
+  for (const [id, entry] of pending) {
+    if ((entry.activity.guild_id ?? '') === guildId && entry.observedAt <= startedAt) removeEarlyActivity(scope, id);
+  }
+}
+
+function withEarlyActivity(channel: Channel, scope: AccountScope): Channel {
+  const activity = earlyActivity.get(accountScopeKey(scope))?.get(channel.id)?.activity;
+  if (!activity) return channel;
+  removeEarlyActivity(scope, channel.id);
+  if ((channel.guild_id ?? null) !== activity.guild_id) return channel;
+  const patch = { last_message_id: activity.last_message_id, message_revision: activity.revision };
+  return preserveChannelActivity(channel, { ...channel, ...patch });
+}
+
+function own(scope: AccountScope) {
+  const context = captureScopedOperation(scope);
+  operations.add(context);
+  context.signal.addEventListener('abort', () => operations.delete(context), { once: true });
+  return context;
+}
+function record(scope: AccountScope, guildId: string, id: string, mutation: Mutation) {
+  const key = entityScopeKey(scope, guildId);
+  const request = requests.get(key);
+  if (!request) return;
+  if (!request.mutations.has(id) && request.mutations.size >= MAX_PENDING_CHANNELS) {
+    request.context.dispose();
+    const error = 'Channel activity exceeded this snapshot. Reload the channel list to refresh.';
+    useChannelStore.setState(state => ({ guildChannelsLoaded: { ...state.guildChannelsLoaded, [key]: false }, errors: { ...state.errors, [key]: error } }));
+    toast.error(error);
+    return;
+  }
+  const previous = request.mutations.get(id);
+  if (mutation.kind === 'patch' && previous) {
+    if (previous.kind === 'delete') return;
+    request.mutations.set(id, { ...previous, channel: preserveChannelActivity(previous.channel, { ...previous.channel, ...mutation.channel }) } as Mutation);
+  } else request.mutations.set(id, mutation);
+}
+function replaceCollection(state: ChannelState, guildId: string, channels: Channel[], scope: AccountScope) {
+  const key = entityScopeKey(scope, guildId);
+  const list = [...new Map(channels.map(channel => [channel.id, state.channelsById[entityScopeKey(scope, channel.id)] === channel ? channel as ScopedChannel : scopeChannel(preserveChannelActivity(state.channelsById[entityScopeKey(scope, channel.id)], withEarlyActivity(channel, scope)), scope)])).values()]
+    .sort((a, b) => a.position - b.position);
+  const index = { ...state.channelsById };
+  for (const old of state.channelsByGuild[key] ?? []) delete index[old.key];
+  for (const channel of list) index[channel.key] = channel;
+  return { channelsByGuild: { ...state.channelsByGuild, [key]: list }, channelsById: index };
+}
+async function fetchCollection(guildId: string, scope: AccountScope) {
+  const key = entityScopeKey(scope, guildId);
+  const previous = requests.get(key);
+  if (previous) return previous.promise;
+  let context: OperationContext;
+  try { context = own(scope); } catch (err) {
+    useChannelStore.setState(state => ({ errors: { ...state.errors, [key]: extractApiError(err) } }));
+    return;
+  }
+  const request: Snapshot = { context, promise: Promise.resolve(), mutations: new Map(), activitySerial };
+  requests.set(key, request);
+  context.signal.addEventListener('abort', () => {
+    request.mutations.clear();
+    if (requests.get(key) !== request) return;
+    requests.delete(key);
+    useChannelStore.setState(state => ({ loading: { ...state.loading, [key]: false } }));
+  }, { once: true });
+  useChannelStore.setState(state => ({ loading: { ...state.loading, [key]: true }, errors: { ...state.errors, [key]: undefined } }));
+  request.promise = (async () => {
+    try {
+      const channels = guildId ? await fetchVisibleGuildChannels(context, guildId) : (await createDmApi(() => context.api).list()).data;
+      context.assertCurrent();
+      if (requests.get(key) !== request) return;
+      const merged = new Map(channels.map(channel => [channel.id, channel]));
+      for (const [id, mutation] of request.mutations) {
+        if (mutation.kind === 'delete') merged.delete(id);
+        else if (mutation.kind === 'put') merged.set(id, preserveChannelActivity(merged.get(id), mutation.channel));
+        else {
+          const channel = merged.get(id);
+          if (channel) merged.set(id, preserveChannelActivity(channel, { ...channel, ...mutation.channel }));
+        }
+      }
+      useChannelStore.getState().setChannels(guildId, [...merged.values()], scope);
+      reconcileEarlyActivity(scope, guildId, request.activitySerial);
+    } catch (err) {
+      if (!context.signal.aborted) {
+        const error = `Failed to load channels: ${extractApiError(err)}`;
+        useChannelStore.setState(state => ({ errors: { ...state.errors, [key]: error } }));
+        toast.error(error);
+      }
+    } finally { context.dispose(); }
+  })();
+  return request.promise;
+}
+
+/** Debounced work retains its account even when the visible server changes. */
+export function refreshGuildChannelVisibility(guildId: string | null | undefined, scope: AccountScope): void {
   if (!guildId) return;
-  const existing = _visibilityRefreshTimers.get(guildId);
-  if (existing) clearTimeout(existing);
+  const key = entityScopeKey(scope, guildId);
+  visibilityTimers.get(key)?.context.dispose();
+  let context: OperationContext;
+  try { context = own(scope); } catch { return; }
   const timer = setTimeout(() => {
-    _visibilityRefreshTimers.delete(guildId);
-    // If a fetch is already in flight, reschedule rather than dropping the unlock refresh.
-    if (_fetchInFlight.has(guildId)) {
-      refreshGuildChannelVisibility(guildId);
+    if (requests.has(key)) {
+      refreshGuildChannelVisibility(guildId, scope);
       return;
     }
-    void useChannelStore.getState().fetchChannels(guildId);
-  }, VISIBILITY_REFRESH_DEBOUNCE_MS);
-  _visibilityRefreshTimers.set(guildId, timer);
+    context.assertCurrent();
+    context.dispose();
+    void useChannelStore.getState().fetchChannels(guildId, scope);
+  }, 750);
+  const entry = { context, timer };
+  visibilityTimers.set(key, entry);
+  context.signal.addEventListener('abort', () => {
+    clearTimeout(timer);
+    if (visibilityTimers.get(key) === entry) visibilityTimers.delete(key);
+  }, { once: true });
 }
 
 export const useChannelStore = create<ChannelState>()((set, get) => ({
-  channelsByGuild: {},
-  dmChannelsByServer: {},
-  channelsById: {},
-  channels: [],
-  guildChannelsLoaded: {},
-  selectedChannelId: null,
-  selectedGuildId: null,
-  isLoading: false,
-
-  fetchChannels: async (guildId) => {
-    // Abort any in-flight fetch for a different guild
-    for (const [key, ctrl] of _channelFetchControllers) {
-      if (key !== guildId) {
-        ctrl.abort();
-        _channelFetchControllers.delete(key);
-        _fetchInFlight.delete(key);
-      }
-    }
-
-    if (_fetchInFlight.has(guildId)) return;
-    _fetchInFlight.add(guildId);
-    set({ isLoading: true });
-
-    const controller = new AbortController();
-    _channelFetchControllers.set(guildId, controller);
-
-    let lastErr: unknown;
-    for (let attempt = 0; attempt <= MAX_FETCH_RETRIES; attempt++) {
-      if (controller.signal.aborted) {
-        _fetchInFlight.delete(guildId);
-        _channelFetchControllers.delete(guildId);
-        return;
-      }
-      try {
-        if (attempt > 0) {
-          await new Promise((r) => setTimeout(r, RETRY_BASE_DELAY_MS * attempt));
-        }
-        if (controller.signal.aborted) {
-          _fetchInFlight.delete(guildId);
-          _channelFetchControllers.delete(guildId);
-          return;
-        }
-        // Progressive / rules onboarding can hide channels the member is not
-        // ready for yet. Prefer the visible-id list when the endpoint responds;
-        // fall back to the full permission-filtered list on failure.
-        //
-        // Both requests are independent, so issue them together and give the
-        // visibility probe the same abort signal — run serially and unabortable
-        // it doubled the switch latency and kept running after the user had
-        // already moved to another guild.
-        const [{ data }, visibleIds] = await Promise.all([
-          guildApi.getChannels(guildId, {
-            timeout: 5_000,
-            signal: controller.signal,
-          }),
-          channelApi
-            .getVisibleChannels(guildId, { timeout: 5_000, signal: controller.signal })
-            .then((visible) =>
-              Array.isArray(visible.data?.channel_ids)
-                ? new Set(visible.data.channel_ids.map(String))
-                : null,
-            )
-            .catch(() => null),
-        ]);
-        if (controller.signal.aborted) {
-          _fetchInFlight.delete(guildId);
-          _channelFetchControllers.delete(guildId);
-          return;
-        }
-        const sorted = data
-          .map(normalizeChannel)
-          .filter((channel) => (visibleIds ? visibleIds.has(channel.id) : true))
-          .sort((a, b) => a.position - b.position);
-        set((state) => {
-          const channelsById = reindexGuild(
-            state.channelsById,
-            state.channelsByGuild[guildId] || [],
-            sorted,
-          );
-          const channelsByGuild = { ...state.channelsByGuild, [guildId]: sorted };
-          const channels = state.selectedGuildId === guildId ? sorted : state.channels;
-          const guildChannelsLoaded = { ...state.guildChannelsLoaded, [guildId]: true };
-          return { channelsByGuild, channelsById, channels, isLoading: false, guildChannelsLoaded };
-        });
-        _fetchInFlight.delete(guildId);
-        _channelFetchControllers.delete(guildId);
-        return;
-      } catch (err) {
-        if (axios.isCancel(err) || controller.signal.aborted) {
-          _fetchInFlight.delete(guildId);
-          _channelFetchControllers.delete(guildId);
-          return;
-        }
-        lastErr = err;
-      }
-    }
-    set({ isLoading: false });
-    toast.error(`Failed to load channels: ${extractApiError(lastErr)}`);
-    _fetchInFlight.delete(guildId);
-    _channelFetchControllers.delete(guildId);
-  },
-
-  selectChannel: (channelId) => set({ selectedChannelId: channelId }),
-
-  selectGuild: (guildId) =>
-    set((state) => ({
-      selectedGuildId: guildId,
-      channels: guildId ? state.channelsByGuild[guildId] || [] : [],
-    })),
-
-  setChannels: (channels) =>
-    set((state) => {
-      const normalized = channels.map(normalizeChannel);
-      // Group by guild so channelsByGuild stays the source of truth, then patch
-      // the derived index for each touched guild.
-      const groups: Record<string, Channel[]> = {};
-      for (const c of normalized) {
-        const gid = c.guild_id || '';
-        (groups[gid] ??= []).push(c);
-      }
-      const channelsByGuild = { ...state.channelsByGuild };
-      let channelsById = state.channelsById;
-      for (const [gid, list] of Object.entries(groups)) {
-        const sorted = [...list].sort((a, b) => a.position - b.position);
-        channelsById = reindexGuild(channelsById, channelsByGuild[gid] || [], sorted);
-        channelsByGuild[gid] = sorted;
-      }
-      return { channelsByGuild, channelsById, channels: normalized };
-    }),
-  setDmChannels: (channels) =>
-    set((state) => {
-      const normalized = channels.map(normalizeChannel);
-      const channelsById = reindexGuild(state.channelsById, state.channelsByGuild[''] || [], normalized);
-      return {
-        channelsByGuild: { ...state.channelsByGuild, '': normalized },
-        channelsById,
-        channels: state.selectedGuildId ? state.channels : normalized,
-      };
-    }),
-
-  setDmChannelsForServer: (serverId, channels) =>
-    set((state) => {
-      const normalized = channels.map(normalizeChannel);
-      const dmChannelsByServer = { ...state.dmChannelsByServer, [serverId]: normalized };
-      // Only the active server's DMs mirror into channelsByGuild[''] + the
-      // derived index, so back-compat readers (UserProfile) keep seeing
-      // the active server. Background servers land only in dmChannelsByServer.
-      const activeServerId = useServerListStore.getState().activeServerId;
-      if (serverId !== activeServerId) {
-        return { dmChannelsByServer };
-      }
-      const channelsById = reindexGuild(state.channelsById, state.channelsByGuild[''] || [], normalized);
-      return {
-        dmChannelsByServer,
-        channelsByGuild: { ...state.channelsByGuild, '': normalized },
-        channelsById,
-        channels: state.selectedGuildId ? state.channels : normalized,
-      };
-    }),
-
+  channelsByGuild: {}, channelsById: {}, guildChannelsLoaded: {}, loading: {}, errors: {}, selectedChannel: null,
+  fetchChannels: fetchCollection,
+  fetchDmChannels: scope => fetchCollection('', scope),
   loadAllDmChannels: async () => {
-    const { servers } = useServerListStore.getState();
-    const connected = servers.filter((s) => s.connected);
-    await Promise.all(
-      connected.map(async (server) => {
-        const client = connectionManager.getApiClient(server.id);
-        if (!client) return;
-        try {
-          // Mirror dmApi.list()'s request path against the per-server client.
-          const { data } = await client.get<Channel[]>('/users/@me/dms');
-          get().setDmChannelsForServer(server.id, data);
-        } catch {
-          // Swallow per-server errors so an unreachable background server
-          // degrades gracefully (§9 flag 2) — other servers still load.
-        }
-      }),
-    );
+    const serverIds = [LOCAL_SERVER_ID, ...useServerListStore.getState().servers.filter(server => server.connected).map(server => server.id)];
+    const scopes = serverIds.map(getServerAccountScope).filter((scope): scope is AccountScope => !!scope);
+    await Promise.all(scopes.map(scope => get().fetchDmChannels(scope)));
   },
-
-  createChannel: async (guildId, channelData) => {
-    const { data } = await guildApi.createChannel(guildId, channelData);
-    set((state) => {
-      const existing = state.channelsByGuild[guildId] || [];
-      const updated = [...existing, normalizeChannel(data)].sort((a, b) => a.position - b.position);
-      const channelsById = reindexGuild(state.channelsById, existing, updated);
-      const channelsByGuild = { ...state.channelsByGuild, [guildId]: updated };
-      const channels = state.selectedGuildId === guildId ? updated : state.channels;
-      return { channelsByGuild, channelsById, channels };
-    });
-    return data;
-  },
-
-  updateChannelData: async (channelId, data) => {
-    const { data: updated } = await channelApi.update(channelId, data);
-    set((state) => {
-      const normalized = normalizeChannel(updated);
-      const guildId = normalized.guild_id || '';
-      const existing = state.channelsByGuild[guildId] || [];
-      const list = existing.map((c) => (c.id === channelId ? normalized : c));
-      const channelsById = reindexGuild(state.channelsById, existing, list);
-      const channelsByGuild = { ...state.channelsByGuild, [guildId]: list };
-      const channels = state.selectedGuildId === guildId ? list : state.channels;
-      return { channelsByGuild, channelsById, channels };
-    });
-  },
-
-  deleteChannel: async (channelId) => {
-    await channelApi.delete(channelId);
-    set((state) => {
-      const existing = state.channelsById[channelId];
-      if (!existing) return state;
-      const gid = existing.guild_id || '';
-      const guildChannels = state.channelsByGuild[gid] || [];
-      const updated = guildChannels.filter((c) => c.id !== channelId);
-      const channelsById = reindexGuild(state.channelsById, guildChannels, updated);
-      const channelsByGuild = { ...state.channelsByGuild, [gid]: updated };
-      const channels = state.channels.some((c) => c.id === channelId)
-        ? state.channels.filter((c) => c.id !== channelId)
-        : state.channels;
-      return { channelsByGuild, channelsById, channels };
-    });
-  },
-
-  reorderChannels: async (guildId, positions) => {
-    // Snapshot for rollback
-    const prev = get().channelsByGuild[guildId] || [];
-
-    // Optimistic update
-    set((state) => {
-      const existing = state.channelsByGuild[guildId] || [];
-      const posMap = new Map(positions.map((p) => [p.id, p]));
-      const updated = existing
-        .map((ch) => {
-          const patch = posMap.get(ch.id);
-          if (!patch) return ch;
-          return {
-            ...ch,
-            position: patch.position,
-            parent_id: patch.parent_id !== undefined ? patch.parent_id : ch.parent_id,
-          };
-        })
-        .sort((a, b) => a.position - b.position);
-      const channelsById = reindexGuild(state.channelsById, existing, updated);
-      const channelsByGuild = { ...state.channelsByGuild, [guildId]: updated };
-      const channels = state.selectedGuildId === guildId ? updated : state.channels;
-      return { channelsByGuild, channelsById, channels };
-    });
-
+  selectChannel: channel => set({ selectedChannel: channel ? { id: channel.id, scope: { ...channel.scope } } : null }),
+  setChannels: (guildId, channels, scope) => set(state => ({
+    ...replaceCollection(state, guildId, channels, scope),
+    guildChannelsLoaded: { ...state.guildChannelsLoaded, [entityScopeKey(scope, guildId)]: true },
+  })),
+  changeDmRecipient: async (id, recipientId, add, scope) => {
+    const context = own(scope);
     try {
-      await channelApi.updatePositions(guildId, positions);
-    } catch (err) {
-      // Rollback on failure
-      set((state) => {
-        const channelsById = reindexGuild(state.channelsById, state.channelsByGuild[guildId] || [], prev);
-        const channelsByGuild = { ...state.channelsByGuild, [guildId]: prev };
-        const channels = state.selectedGuildId === guildId ? prev : state.channels;
-        return { channelsByGuild, channelsById, channels };
-      });
-      toast.error(`Failed to reorder channels: ${extractApiError(err)}`);
-    }
+      const api = createDmApi(() => context.api);
+      if (add) await api.addRecipient(id, recipientId);
+      else await api.removeRecipient(id, recipientId);
+      context.assertCurrent();
+      if (!add && recipientId === scope.userId) get().removeChannel('', id, scope);
+      else {
+        const { data: recipients } = await api.listRecipients(id);
+        context.assertCurrent(); get().updateChannel({ id, recipients }, scope);
+      }
+    } finally { context.dispose(); }
   },
-
-  addChannel: (channel) =>
-    set((state) => {
-      const normalized = normalizeChannel(channel);
-      const guildId = normalized.guild_id || '';
-      const existing = state.channelsByGuild[guildId] || [];
-      if (existing.some((c) => c.id === normalized.id)) return state;
-      const updated = [...existing, normalized].sort((a, b) => a.position - b.position);
-      const channelsById = reindexGuild(state.channelsById, existing, updated);
-      const channelsByGuild = { ...state.channelsByGuild, [guildId]: updated };
-      const channels = state.selectedGuildId === guildId ? updated : state.channels;
-
-      // Keep the live DM index in sync for DM / group-DM creates (CHANNEL_CREATE).
-      let dmChannelsByServer = state.dmChannelsByServer;
-      const isDm = !guildId && (normalized.type === 1 || normalized.type === 3
-        || normalized.channel_type === 1 || normalized.channel_type === 3);
-      if (isDm) {
-        const serverId = useServerListStore.getState().activeServerId;
-        if (serverId) {
-          const serverDms = dmChannelsByServer[serverId] || [];
-          if (!serverDms.some((c) => c.id === normalized.id)) {
-            dmChannelsByServer = {
-              ...dmChannelsByServer,
-              [serverId]: [...serverDms, normalized],
-            };
-          }
-        }
-      }
-
-      return { channelsByGuild, channelsById, channels, dmChannelsByServer };
-    }),
-
-  updateChannel: (channel) =>
-    set((state) => {
-      const normalized = normalizeChannel(channel);
-      const guildId = normalized.guild_id || '';
-      const existing = state.channelsByGuild[guildId] || [];
-      const updated = existing
-        .map((c) => (c.id === normalized.id ? normalized : c))
-        .sort((a, b) => a.position - b.position);
-      const channelsById = reindexGuild(state.channelsById, existing, updated);
-      const channelsByGuild = { ...state.channelsByGuild, [guildId]: updated };
-      const channels = state.selectedGuildId === guildId ? updated : state.channels;
-
-      let dmChannelsByServer = state.dmChannelsByServer;
-      if (!guildId) {
-        const next: Record<string, Channel[]> = {};
-        for (const [serverId, list] of Object.entries(dmChannelsByServer)) {
-          next[serverId] = list.map((c) => (c.id === normalized.id ? normalized : c));
-        }
-        dmChannelsByServer = next;
-      }
-
-      return { channelsByGuild, channelsById, channels, dmChannelsByServer };
-    }),
-
-  removeChannel: (guildId, channelId) =>
-    set((state) => {
-      const gid = guildId || '';
-      const existing = state.channelsByGuild[gid] || [];
-      const updated = existing.filter((c) => c.id !== channelId);
-      const channelsById = reindexGuild(state.channelsById, existing, updated);
-      const channelsByGuild = { ...state.channelsByGuild, [gid]: updated };
-      const channels = state.selectedGuildId === gid ? updated : state.channels;
-
-      let dmChannelsByServer = state.dmChannelsByServer;
-      if (!gid) {
-        const next: Record<string, Channel[]> = {};
-        for (const [serverId, list] of Object.entries(dmChannelsByServer)) {
-          const filtered = list.filter((c) => c.id !== channelId);
-          if (filtered.length > 0) next[serverId] = filtered;
-        }
-        dmChannelsByServer = next;
-      }
-
-      return { channelsByGuild, channelsById, channels, dmChannelsByServer };
-    }),
-
-  updateLastMessageId: (channelId, messageId) =>
-    set((state) => {
-      // O(1): resolve the channel via the index, then patch only its guild
-      // bucket, its index entry, and (if visible) its flat-array slot. Every
-      // other guild's array and channel objects keep their identity.
-      const existing = state.channelsById[channelId];
-      if (!existing) return state;
-      const gid = existing.guild_id || '';
-      const patched = { ...existing, last_message_id: messageId };
-      const guildChannels = state.channelsByGuild[gid] || [];
-      const newGuildChannels = guildChannels.map((c) => (c.id === channelId ? patched : c));
-      const channelsByGuild = { ...state.channelsByGuild, [gid]: newGuildChannels };
-      const channelsById = { ...state.channelsById, [channelId]: patched };
-      const channels = state.channels.some((c) => c.id === channelId)
-        ? state.channels.map((c) => (c.id === channelId ? patched : c))
-        : state.channels;
-      return { channelsByGuild, channelsById, channels };
-    }),
-
-  reset: () => {
-    // Cancel in-flight work and pending debounced refreshes first: either would
-    // otherwise repopulate the store with the previous account's channels.
-    for (const [, controller] of _channelFetchControllers) controller.abort();
-    _channelFetchControllers.clear();
-    _fetchInFlight.clear();
-    for (const [, timer] of _visibilityRefreshTimers) clearTimeout(timer);
-    _visibilityRefreshTimers.clear();
-    set({
-      channelsByGuild: {},
-      dmChannelsByServer: {},
-      channelsById: {},
-      channels: [],
-      guildChannelsLoaded: {},
-      selectedChannelId: null,
-      selectedGuildId: null,
-      isLoading: false,
+  createDm: async (recipientId, scope) => {
+    const context = own(scope);
+    try {
+      const { data } = await createDmApi(() => context.api).create(recipientId);
+      context.assertCurrent(); get().addChannel(data, scope); return scopeChannel(data, scope);
+    } finally { context.dispose(); }
+  },
+  createGroupDm: async (ids, name, scope) => {
+    const context = own(scope);
+    try {
+      const { data } = await createDmApi(() => context.api).createGroup(ids, name);
+      context.assertCurrent(); get().addChannel(data, scope); return scopeChannel(data, scope);
+    } finally { context.dispose(); }
+  },
+  createChannel: async (guildId, data, scope) => {
+    const context = own(scope);
+    try {
+      const response = await createGuildApi(() => context.api).createChannel(guildId, data);
+      context.assertCurrent(); get().addChannel(response.data, scope); return scopeChannel(response.data, scope);
+    } finally { context.dispose(); }
+  },
+  updateChannelData: async (id, patch, scope) => {
+    const context = own(scope);
+    try {
+      const { data } = await createChannelApi(() => context.api).update(id, patch);
+      context.assertCurrent(); get().updateChannel(data, scope);
+    } finally { context.dispose(); }
+  },
+  deleteChannel: async (id, scope) => {
+    const context = own(scope);
+    const channel = get().channelsById[entityScopeKey(scope, id)];
+    try {
+      await createChannelApi(() => context.api).delete(id);
+      context.assertCurrent();
+      if (channel) get().removeChannel(channel.guild_id ?? '', id, scope);
+    } finally { context.dispose(); }
+  },
+  reorderChannels: async (guildId, positions, scope) => {
+    const context = own(scope);
+    try {
+      // Commit after acknowledgement; a failed reorder must never restore a stale snapshot.
+      await createChannelApi(() => context.api).updatePositions(guildId, positions);
+      context.assertCurrent();
+      for (const position of positions) get().updateChannel(position, scope);
+    } finally { context.dispose(); }
+  },
+  addChannel: (channel, scope) => {
+    channel = preserveChannelActivity(get().channelsById[entityScopeKey(scope, channel.id)], withEarlyActivity(channel, scope));
+    const guildId = channel.guild_id ?? '';
+    record(scope, guildId, channel.id, { kind: 'put', channel });
+    set(state => {
+      const key = entityScopeKey(scope, guildId);
+      const previous = state.channelsByGuild[key] ?? [];
+      return replaceCollection(state, guildId, [...previous.filter(item => item.id !== channel.id), channel], scope);
     });
+  },
+  updateChannel: (patch, scope) => {
+    const existing = get().channelsById[entityScopeKey(scope, patch.id)];
+    patch = preserveChannelActivity(existing, patch);
+    const guildId = patch.guild_id ?? existing?.guild_id ?? '';
+    record(scope, guildId, patch.id, { kind: 'patch', channel: patch });
+    if (!existing) return;
+    set(state => replaceCollection(state, guildId, (state.channelsByGuild[entityScopeKey(scope, guildId)] ?? []).map(channel => channel.id === patch.id ? { ...channel, ...patch } : channel), scope));
+  },
+  removeChannel: (guildId, id, scope) => {
+    removeEarlyActivity(scope, id);
+    record(scope, guildId, id, { kind: 'delete' });
+    set(state => ({
+      ...replaceCollection(state, guildId, (state.channelsByGuild[entityScopeKey(scope, guildId)] ?? []).filter(channel => channel.id !== id), scope),
+      selectedChannel: state.selectedChannel?.id === id && accountScopeKey(state.selectedChannel.scope) === accountScopeKey(scope) ? null : state.selectedChannel,
+    }));
+  },
+  applyMessageActivity: (id, activity, scope) => {
+    if (!isChannelActivity(activity) || activity.channel_id !== id) return;
+    const existing = get().channelsById[entityScopeKey(scope, id)];
+    if (existing && (existing.guild_id ?? null) !== activity.guild_id) return;
+    if (!existing) {
+      const key = accountScopeKey(scope);
+      const pending = earlyActivity.get(key) ?? new Map<string, EarlyActivity>();
+      const previous = pending.get(id);
+      if (!previous && pending.size >= MAX_PENDING_CHANNELS) {
+        const group = entityScopeKey(scope, activity.guild_id ?? '');
+        const error = 'Channel activity exceeded the pending channel list. Refresh channels to reconcile it.';
+        requests.get(group)?.context.dispose();
+        set(state => ({ guildChannelsLoaded: { ...state.guildChannelsLoaded, [group]: false }, errors: { ...state.errors, [group]: error } }));
+        return;
+      }
+      if (!previous || BigInt(activity.revision) > BigInt(previous.activity.revision)) {
+        pending.set(id, { activity, observedAt: ++activitySerial });
+        earlyActivity.set(key, pending);
+      }
+    }
+    get().updateChannel({ id, guild_id: activity.guild_id, last_message_id: activity.last_message_id, message_revision: activity.revision }, scope);
+  },
+  resetAccount: scope => {
+    const key = accountScopeKey(scope);
+    for (const context of operations) if (context.key === key) context.dispose();
+    earlyActivity.delete(key);
+    const retain = <T,>(values: Record<string, T>) => Object.fromEntries(Object.entries(values).filter(([id]) => !entityKeyBelongsToScope(id, scope)));
+    set(state => ({
+      channelsByGuild: retain(state.channelsByGuild), channelsById: retain(state.channelsById),
+      guildChannelsLoaded: retain(state.guildChannelsLoaded), loading: retain(state.loading), errors: retain(state.errors),
+      selectedChannel: state.selectedChannel && accountScopeKey(state.selectedChannel.scope) === key ? null : state.selectedChannel,
+    }));
+  },
+  reset: () => {
+    for (const context of operations) context.dispose();
+    operations.clear(); requests.clear(); visibilityTimers.clear(); earlyActivity.clear();
+    activitySerial = 0;
+    set({ channelsByGuild: {}, channelsById: {}, guildChannelsLoaded: {}, loading: {}, errors: {}, selectedChannel: null });
   },
 }));
-
-// Cleared on logout; see `sessionReset` for why this is a registration
-// rather than a direct import from `authStore`.
 registerSessionReset('channels', () => useChannelStore.getState().reset());
+registerAccountHistoryReset('channels', scope => useChannelStore.getState().resetAccount(scope));

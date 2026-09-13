@@ -16,6 +16,7 @@ mod config;
 #[cfg(feature = "embed-ui")]
 mod embedded_ui;
 mod livekit_proc;
+mod restore;
 mod tls;
 
 const PUBLIC_IP_DETECTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
@@ -94,6 +95,9 @@ async fn main() -> Result<()> {
                 run_migrate_to_postgres(migrate_args).await
             }
             cli::Command::Init(init_args) => run_init(init_args, &args.config),
+            cli::Command::RestoreBackup(restore_args) => {
+                restore::run(restore_args, &args.config).await
+            }
         };
     }
 
@@ -355,6 +359,12 @@ async fn main() -> Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("Failed to run {} migrations: {}", db_engine.as_str(), e))?;
 
+    // ── First-owner claim ───────────────────────────────────────────────────
+    // Decided before anything can serve a request: while the instance is
+    // unclaimed the API refuses every registration, so the bootstrap token has
+    // to exist by the time the listener opens.
+    let setup_state = provision_instance_setup(&db, &config, &args.config).await?;
+
     // Clear stale voice states from the database. After a server restart no
     // client is actually connected to a LiveKit room, so any leftover rows
     // are ghosts from a previous process.
@@ -499,7 +509,12 @@ async fn main() -> Result<()> {
         .context("failed to load memberships for member index")?;
     let member_index = paracord_core::member_index::MemberIndex::from_memberships(memberships);
 
+    let database_history_epoch =
+        paracord_db::server_settings::get_or_create_database_history_epoch(&db)
+            .await
+            .context("failed to load database history epoch")?;
     let mut state = paracord_core::AppState {
+        database_history_epoch,
         db,
         event_bus: paracord_core::events::EventBus::default(),
         runtime,
@@ -714,9 +729,7 @@ async fn main() -> Result<()> {
     );
     spawn_auto_backup(
         config.backup.clone(),
-        config.database.url.clone(),
-        config.storage.path.clone(),
-        config.media.storage_path.clone(),
+        state.clone(),
         shutdown_notify.clone(),
     );
     spawn_federation_delivery_worker(state.clone(), shutdown_notify.clone());
@@ -727,7 +740,7 @@ async fn main() -> Result<()> {
     spawn_member_index_reconcile_worker(state.clone(), shutdown_notify.clone());
     bots::spawn_bot_manager(state.clone(), shutdown_notify.clone());
 
-    let router = paracord_api::build_router()
+    let router = paracord_api::build_router(&state)
         .merge(paracord_ws::gateway_router())
         .with_state(state);
 
@@ -865,6 +878,7 @@ async fn main() -> Result<()> {
         &config.server.bind_address,
         &share_url,
         config.first_run,
+        setup_state.as_ref(),
         &livekit_status,
         &config.database.url,
         &port_forwarding_status,
@@ -986,12 +1000,13 @@ async fn main() -> Result<()> {
 async fn run_migrate_to_postgres(args: &cli::MigrateToPostgresArgs) -> Result<()> {
     if args.dry_run {
         tracing::info!(
-            "Dry run: validating column maps and counting rows (no data will be written)"
+            "Dry run: applying target schema migrations and seeds, validating column maps and \
+             counting source rows (no source rows will be copied)"
         );
     } else {
         tracing::info!(
-            "Migrating SQLite -> PostgreSQL (single transaction, all-or-nothing). \
-             Ensure the server is stopped and the SQLite file is idle."
+            "Migrating SQLite -> PostgreSQL (row copy and repairs commit together after target \
+             schema migrations). Ensure both databases are offline and the SQLite file is idle."
         );
     }
 
@@ -1002,7 +1017,9 @@ async fn run_migrate_to_postgres(args: &cli::MigrateToPostgresArgs) -> Result<()
         args.dry_run,
     )
     .await
-    .map_err(|e| anyhow::anyhow!("migration failed (target left unchanged): {e}"))?;
+    .map_err(|e| {
+        anyhow::anyhow!("migration failed; target schema migrations may remain applied: {e}")
+    })?;
 
     for table in &report.tables {
         if report.dry_run {
@@ -1024,7 +1041,8 @@ async fn run_migrate_to_postgres(args: &cli::MigrateToPostgresArgs) -> Result<()
 
     if report.dry_run {
         tracing::info!(
-            "Dry run complete: {} tables, {} source rows. No data written.",
+            "Dry run complete: {} tables, {} source rows. No source rows copied; target schema \
+             migrations and seeds remain applied.",
             report.tables.len(),
             report.total_source_rows()
         );
@@ -1033,6 +1051,10 @@ async fn run_migrate_to_postgres(args: &cli::MigrateToPostgresArgs) -> Result<()
             "Migration complete: {} tables, {} rows copied and verified.",
             report.tables.len(),
             report.total_copied_rows()
+        );
+        tracing::info!(
+            "Repaired {} channel message tails and committed a new database history epoch.",
+            report.repaired_channel_tails
         );
     }
 
@@ -1666,6 +1688,11 @@ async fn run_scheduled_message_worker_once(state: &paracord_core::AppState) -> R
     }
 
     for scheduled in due {
+        if paracord_db::scheduled_messages::reconcile_committed_delivery(&state.db, &scheduled)
+            .await?
+        {
+            continue;
+        }
         let channel =
             match paracord_db::channels::get_channel(&state.db, scheduled.channel_id).await {
                 Ok(Some(channel)) => channel,
@@ -1715,7 +1742,7 @@ async fn run_scheduled_message_worker_once(state: &paracord_core::AppState) -> R
                 reference_id: scheduled.reference_id,
                 allow_empty_content: allow_empty,
                 dm_e2ee,
-                nonce: scheduled.nonce.clone(),
+                nonce: Some(scheduled.delivery_nonce()),
             },
         )
         .await;
@@ -1740,19 +1767,26 @@ async fn run_scheduled_message_worker_once(state: &paracord_core::AppState) -> R
         )
         .await?;
 
+        // A receipt may return the message committed by an earlier worker run
+        // whose mark-sent operation failed. Replays must not re-notify recipients.
+        if message.id != msg_id {
+            continue;
+        }
         let payload =
             paracord_api::routes::channels::message_to_json(state, &message, scheduled.author_id)
                 .await;
         if let Some(guild_id) = channel.guild_id() {
             state
                 .event_bus
-                .dispatch("MESSAGE_CREATE", payload, Some(guild_id));
+                .dispatch_message(&state.db, "MESSAGE_CREATE", payload, Some(guild_id))
+                .await;
         } else {
             let recipients =
                 paracord_db::dms::get_dm_recipient_ids(&state.db, scheduled.channel_id).await?;
             state
                 .event_bus
-                .dispatch_to_users("MESSAGE_CREATE", payload, recipients);
+                .dispatch_message_to_users(&state.db, "MESSAGE_CREATE", payload, recipients)
+                .await;
         }
     }
 
@@ -1812,14 +1846,21 @@ async fn run_disappearing_message_worker_once(state: &paracord_core::AppState) -
                 if let Some(guild_id) = channel.guild_id() {
                     state
                         .event_bus
-                        .dispatch("MESSAGE_DELETE_BULK", payload, Some(guild_id));
+                        .dispatch_message(&state.db, "MESSAGE_DELETE_BULK", payload, Some(guild_id))
+                        .await;
                 } else {
                     let recipients = paracord_db::dms::get_dm_recipient_ids(&state.db, channel_id)
                         .await
                         .unwrap_or_default();
                     state
                         .event_bus
-                        .dispatch_to_users("MESSAGE_DELETE_BULK", payload, recipients);
+                        .dispatch_message_to_users(
+                            &state.db,
+                            "MESSAGE_DELETE_BULK",
+                            payload,
+                            recipients,
+                        )
+                        .await;
                 }
             }
 
@@ -2461,21 +2502,255 @@ fn derive_share_url(
     format!("{scheme}://{host}:{port}")
 }
 
+/// Where an operator can find the bootstrap claim token for an unclaimed
+/// instance, and (for a freshly minted one) the token itself.
+pub struct PendingSetup {
+    /// The plaintext token, shown only when this process minted or was handed
+    /// it. `None` when a token from a previous run is being reused and the
+    /// plaintext is no longer available in memory.
+    token: Option<String>,
+    /// Where the token came from, in words an operator can act on.
+    source: String,
+    /// Path of the 0600 file the token was written to, when one was written.
+    token_file: Option<String>,
+}
+
+/// Decide, before the server can accept a request, whether this instance still
+/// needs a first owner — and if so make sure exactly one bootstrap credential
+/// exists for it.
+///
+/// Returns `Some` while the instance is unclaimed, so the startup banner can
+/// tell the operator what to do. Never derives the answer from the user count
+/// or from whether a config file exists: the `instance_setup` row decides.
+async fn provision_instance_setup(
+    db: &paracord_db::DbPool,
+    config: &config::Config,
+    config_path: &str,
+) -> Result<Option<PendingSetup>> {
+    let row = paracord_db::instance_setup::get(db)
+        .await
+        .context("Failed to read instance setup state")?;
+    if !row.is_pending() {
+        return Ok(None);
+    }
+
+    if !config.setup.require_claim {
+        paracord_db::instance_setup::complete_bootstrap(db, chrono::Utc::now())
+            .await
+            .context("Failed to record the bootstrap completion of instance setup")?;
+        tracing::warn!(
+            target: "paracord::setup",
+            "[setup] require_claim is false: the FIRST account registered on this server becomes its owner. \
+             Anyone who reaches this server before you do will own it. Use this only for automated deployments."
+        );
+        return Ok(None);
+    }
+
+    // A token pinned in configuration wins: it is what a provisioning system or
+    // a test harness expects to be able to present, and it is reproducible
+    // across restarts by construction.
+    if let Some(configured) = config
+        .setup
+        .claim_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if configured.chars().count() < paracord_core::instance_setup::MIN_CLAIM_TOKEN_LEN {
+            anyhow::bail!(
+                "[setup] claim_token must be at least {} characters; it is the only credential \
+                 protecting ownership of this server",
+                paracord_core::instance_setup::MIN_CLAIM_TOKEN_LEN
+            );
+        }
+        let hash = paracord_core::instance_setup::hash_claim_token(configured);
+        paracord_db::instance_setup::set_claim_token(
+            db,
+            &hash,
+            paracord_db::instance_setup::TOKEN_SOURCE_CONFIG,
+            chrono::Utc::now(),
+        )
+        .await
+        .context("Failed to store the configured setup claim token")?;
+        return Ok(Some(PendingSetup {
+            token: Some(configured.to_string()),
+            source: format!("[setup] claim_token in {config_path}"),
+            token_file: None,
+        }));
+    }
+
+    // Otherwise reuse the token this server minted on an earlier run, as long
+    // as the file it was written to still holds the matching secret. A missing
+    // or edited file means the operator no longer has the token, so churning it
+    // is the useful behaviour — and it is announced rather than silent.
+    let token_path = claim_token_file_path(config_path);
+    let token_path_display = token_path.display().to_string();
+    if row.claim_token_source.as_deref()
+        == Some(paracord_db::instance_setup::TOKEN_SOURCE_GENERATED)
+    {
+        if let Some(stored_hash) = row.claim_token_hash.as_deref() {
+            if let Ok(contents) = std::fs::read_to_string(&token_path) {
+                let existing = contents.trim();
+                if paracord_core::instance_setup::claim_token_matches(existing, stored_hash) {
+                    return Ok(Some(PendingSetup {
+                        token: Some(existing.to_string()),
+                        source: "generated on a previous start".to_string(),
+                        token_file: Some(token_path_display),
+                    }));
+                }
+            }
+            tracing::warn!(
+                target: "paracord::setup",
+                path = %token_path_display,
+                "the previously generated setup claim token file is missing or no longer matches; minting a new token"
+            );
+        }
+    }
+
+    let token = paracord_core::instance_setup::generate_claim_token();
+    let hash = paracord_core::instance_setup::hash_claim_token(&token);
+    paracord_db::instance_setup::set_claim_token(
+        db,
+        &hash,
+        paracord_db::instance_setup::TOKEN_SOURCE_GENERATED,
+        chrono::Utc::now(),
+    )
+    .await
+    .context("Failed to store the generated setup claim token")?;
+
+    let token_file = match write_claim_token_file(&token_path, &token) {
+        Ok(()) => Some(token_path_display.clone()),
+        Err(err) => {
+            // Not fatal: the token is also printed below. But say so, because
+            // an operator who scrolls past the banner has nowhere else to look.
+            tracing::error!(
+                target: "paracord::setup",
+                path = %token_path_display,
+                error = %err,
+                "could not write the setup claim token file; the token below is the only copy"
+            );
+            None
+        }
+    };
+
+    Ok(Some(PendingSetup {
+        token: Some(token),
+        source: "generated for this first run".to_string(),
+        token_file,
+    }))
+}
+
+/// `first-owner-claim.txt`, beside the config file.
+fn claim_token_file_path(config_path: &str) -> std::path::PathBuf {
+    let base = std::path::Path::new(config_path);
+    match base
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        Some(parent) => parent.join("first-owner-claim.txt"),
+        None => std::path::PathBuf::from("first-owner-claim.txt"),
+    }
+}
+
+/// Write the token with owner-only permissions, established before any bytes
+/// are written so there is no window in which another local user can read it.
+fn write_claim_token_file(path: &std::path::Path, token: &str) -> std::io::Result<()> {
+    use std::io::Write;
+
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+    // A leftover file from a previous run must not keep its old contents or its
+    // old permissions.
+    let _ = std::fs::remove_file(path);
+
+    #[cfg(unix)]
+    let mut file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)?
+    };
+    #[cfg(not(unix))]
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+
+    writeln!(file, "{token}")?;
+    file.sync_all()?;
+    Ok(())
+}
+
+/// The claim-token block, printed whenever the instance is still unclaimed.
+fn print_claim_instructions(share_url: &str, pending: &PendingSetup) {
+    println!();
+    println!("  ┌─ This server has no owner yet ─────────────────────");
+    println!("  │");
+    println!("  │  Claim it at:");
+    println!("  │       {share_url}/setup-server");
+    println!("  │");
+    match pending.token.as_deref() {
+        Some(token) => {
+            println!("  │  One-time claim token ({}):", pending.source);
+            println!("  │       {token}");
+        }
+        None => {
+            println!("  │  One-time claim token: {}", pending.source);
+        }
+    }
+    if let Some(path) = pending.token_file.as_deref() {
+        println!("  │");
+        println!("  │  Also saved (owner-readable only) at:");
+        println!("  │       {path}");
+    }
+    println!("  │");
+    println!("  │  Until it is claimed, nobody can register an");
+    println!("  │  account here — including anyone who finds this");
+    println!("  │  address before you do.");
+    println!("  │");
+    println!("  └────────────────────────────────────────────────────");
+}
+
 /// Friendly onboarding block, printed on a genuine first run and by `init`.
 /// Uses a single left border (not a fully-closed box) so variable-width URLs
 /// never produce a ragged right edge across terminals.
-fn print_next_steps(share_url: &str, media_port: u16) {
+fn print_next_steps(share_url: &str, media_port: u16, claim_required: bool) {
     println!();
     println!("  ┌─ Next steps ───────────────────────────────────────");
     println!("  │");
     println!("  │  1. Open Paracord in your browser:");
     println!("  │       {share_url}");
     println!("  │");
-    println!("  │  2. Register the FIRST account — it automatically");
-    println!("  │     becomes the server owner/admin.");
+    // Step 2 has to match how this server actually bootstraps. Telling an
+    // operator to paste a claim token that was never minted — because
+    // `require_claim` is off — sends them looking for a secret that does not
+    // exist, and hides the fact that the next person to register owns the box.
+    if claim_required {
+        println!("  │  2. Claim the server: open {share_url}/setup-server");
+        println!("  │     and paste the one-time claim token printed above");
+        println!("  │     (also saved as first-owner-claim.txt next to your");
+        println!("  │     config). That creates the OWNER account — the");
+        println!("  │     person who runs this server — names the instance");
+        println!("  │     and makes its first space.");
+    } else {
+        println!("  │  2. The first-owner claim is DISABLED for this server");
+        println!("  │     ([setup] require_claim = false), so the FIRST");
+        println!("  │     account registered becomes the owner/admin —");
+        println!("  │     including anyone who reaches this address before");
+        println!("  │     you do. Register yours now, or turn the claim back");
+        println!("  │     on before sharing the URL.");
+    }
     println!("  │");
     println!("  │  3. Invite others: share the URL above, or create an");
     println!("  │     invite link from any channel once you're in.");
+    println!("  │     They register normally and join as members, not");
+    println!("  │     as operators.");
     println!("  │");
     println!("  │  4. Voice & video run on Paracord's native QUIC engine");
     println!("  │     — no extra setup. For access outside your network,");
@@ -2489,6 +2764,7 @@ fn print_startup_banner(
     bind_address: &str,
     share_url: &str,
     first_run: bool,
+    pending_setup: Option<&PendingSetup>,
     livekit_status: &str,
     db_url: &str,
     port_forwarding_status: &str,
@@ -2534,10 +2810,16 @@ fn print_startup_banner(
     println!("  Web UI:      {}", web_ui);
     println!("  TLS/HTTPS:   {}", tls_status);
 
+    // An unclaimed instance is the single most important thing on this screen:
+    // nobody can register until it is claimed, and the token is shown once.
+    if let Some(pending) = pending_setup {
+        print_claim_instructions(share_url, pending);
+    }
+
     if first_run {
         // Genuine first run: the Next-steps block already covers the port to
         // forward, so the standalone forwarding box below is redundant here.
-        print_next_steps(share_url, server_port);
+        print_next_steps(share_url, server_port, pending_setup.is_some());
     } else if needs_manual_forwarding {
         println!();
         println!("  ╔══════════════════════════════════════════════════╗");
@@ -2611,18 +2893,28 @@ fn run_init(init_args: &cli::InitArgs, default_config: &str) -> Result<()> {
 
     println!();
     println!("  Generated a new Paracord config at: {path}");
-    print_next_steps(&share_url, media_port);
+    print_next_steps(&share_url, media_port, config.setup.require_claim);
     println!();
     println!("  Start the server with:  paracord-server -c {path}");
     println!();
+    // The claim token needs the database, which `init` deliberately does not
+    // open, so it is minted on the first real start. Say exactly where it will
+    // appear rather than leaving step 2 above hanging.
+    if config.setup.require_claim {
+        println!("  The one-time claim token for step 2 is printed by that first");
+        println!("  start, and saved (owner-readable only) as:");
+        println!("      {}", claim_token_file_path(path).display());
+        println!();
+        println!("  To pin it in advance instead, set [setup] claim_token in the");
+        println!("  config, or PARACORD_SETUP_CLAIM_TOKEN in the environment.");
+        println!();
+    }
     Ok(())
 }
 
 fn spawn_auto_backup(
     backup_config: config::BackupConfig,
-    db_url: String,
-    storage_path: String,
-    media_storage_path: String,
+    state: paracord_core::AppState,
     shutdown: Arc<tokio::sync::Notify>,
 ) {
     if !backup_config.auto_backup_enabled {
@@ -2651,12 +2943,16 @@ fn spawn_auto_backup(
             tokio::select! {
                 _ = shutdown.notified() => break,
                 _ = interval.tick() => {
-                    match paracord_core::backup::create_backup(
-                        &db_url,
+                    match paracord_core::backup::create_backup_from_pool(
+                        &state.db,
+                        &state.config.database_url,
                         &backup_dir,
-                        &storage_path,
-                        &media_storage_path,
+                        &state.config.storage_path,
+                        &state.config.media_storage_path,
                         include_media,
+                        matches!(state.storage_backend.as_ref(), paracord_media::Storage::Local(_)),
+                        state.config.file_cryptor.as_ref(),
+                        state.config.totp_cryptor.as_ref(),
                     )
                     .await
                     {
@@ -2865,7 +3161,12 @@ async fn handle_raw_quic_connection(
         return;
     }
 
-    let handle = paracord_relay::relay::ConnectionHandle::new(user_id, room_id.clone(), conn);
+    let handle = paracord_relay::relay::ConnectionHandle::new(
+        user_id,
+        room_id.clone(),
+        session_id.to_string(),
+        conn,
+    );
     relay.add_connection(handle.clone());
     relay.spawn_forwarding_task(handle.clone());
     relay.spawn_control_task(handle.clone());
@@ -3201,6 +3502,9 @@ async fn handle_webtransport_connection(
     let mut total = 0usize;
     let user_id: i64;
     let room_id: String;
+    // The media-session receipt the relay fences this connection on. Taken from
+    // the media JWT here, never from a later control frame.
+    let media_session_id: String;
 
     loop {
         match tokio::time::timeout(
@@ -3307,6 +3611,7 @@ async fn handle_webtransport_connection(
                             return;
                         };
                         let claimed_room = claims.get("room").and_then(|r| r.as_str());
+                        media_session_id = session_id.to_string();
                         room_id =
                             match resolve_active_media_room(&db, user_id, session_id, claimed_room)
                                 .await
@@ -3376,6 +3681,7 @@ async fn handle_webtransport_connection(
     let handle = paracord_relay::relay::ConnectionHandle::new_bridged(
         user_id,
         room_id.clone(),
+        media_session_id,
         outbound_tx,
         inbound_rx,
         Some(wt_session.quinn_conn().clone()),

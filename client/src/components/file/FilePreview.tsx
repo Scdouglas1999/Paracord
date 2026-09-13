@@ -4,17 +4,31 @@ import { fileApi } from '../../api/files';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { isAllowedImageMimeType, safeClientResourceUrl } from '../../lib/security';
 import { formatFileSize } from '../../lib/formatters';
+import { MediaPreview } from './MediaPreview';
 
 interface FilePreviewProps {
   url: string;
   filename: string;
   mimeType: string;
   size: number;
+  /**
+   * How to turn `url` into something the browser can render.
+   *
+   * Defaults to the ordinary authenticated attachment fetch. An end-to-end
+   * encrypted attachment passes a resolver that downloads the ciphertext and
+   * decrypts it on this device, so the same previews work without the server
+   * ever holding a readable copy.
+   */
+  resolveObjectUrl?: (url: string) => Promise<string>;
 }
 
-export function FilePreview({ url, filename, mimeType, size }: FilePreviewProps) {
+export function FilePreview({ url, filename, mimeType, size, resolveObjectUrl }: FilePreviewProps) {
   const [lightbox, setLightbox] = useState(false);
   const [resolvedSrc, setResolvedSrc] = useState<string | null>(null);
+  // A preview that cannot be fetched — or, for an encrypted attachment, cannot
+  // be decrypted or fails its integrity check — says so instead of sitting on
+  // "Loading attachment…" forever.
+  const [error, setError] = useState<string | null>(null);
   const lightboxRef = useRef<HTMLDivElement>(null);
   const closeLightbox = useCallback(() => setLightbox(false), []);
   useFocusTrap(lightboxRef, lightbox, closeLightbox);
@@ -26,28 +40,41 @@ export function FilePreview({ url, filename, mimeType, size }: FilePreviewProps)
     let cancelled = false;
     let blobUrl: string | null = null;
 
-    void fileApi.resolveAttachmentObjectUrl(safeRawUrl).then((src) => {
+    const resolve = resolveObjectUrl ?? fileApi.resolveAttachmentObjectUrl;
+    void resolve(safeRawUrl).then((src) => {
       if (cancelled) {
         if (src.startsWith('blob:')) URL.revokeObjectURL(src);
         return;
       }
       if (src.startsWith('blob:')) blobUrl = src;
       setResolvedSrc(src);
-    }).catch(() => {
-      if (!cancelled) setResolvedSrc(null);
+      setError(null);
+    }).catch((failure: unknown) => {
+      if (cancelled) return;
+      setResolvedSrc(null);
+      setError(failure instanceof Error ? failure.message : 'This attachment could not be opened.');
     });
 
     return () => {
       cancelled = true;
       if (blobUrl) URL.revokeObjectURL(blobUrl);
     };
-  }, [safeRawUrl]);
+  }, [safeRawUrl, resolveObjectUrl]);
 
   if (!safeRawUrl) {
     return (
       <div className="mt-1 flex max-w-sm items-center gap-2.5 rounded-md border border-border-subtle bg-bg-secondary px-3.5 py-3 text-meta text-text-muted">
         <FileWarning size={16} className="shrink-0 text-accent-warning" />
         Attachment link blocked.
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div role="alert" className="mt-1 flex max-w-sm items-center gap-2.5 rounded-md border border-accent-danger/40 bg-bg-secondary px-3.5 py-3 text-meta text-accent-danger">
+        <FileWarning size={16} className="shrink-0" />
+        <span className="min-w-0">{filename}: {error}</span>
       </div>
     );
   }
@@ -114,11 +141,7 @@ export function FilePreview({ url, filename, mimeType, size }: FilePreviewProps)
   if (mimeType.startsWith('video/')) {
     return (
       <div className="mt-1 max-w-md">
-        <video
-          src={resolvedSrc}
-          controls
-          className="max-h-72 rounded-md border border-border-subtle"
-        />
+        <MediaPreview key={resolvedSrc} src={resolvedSrc} filename={filename} kind="video" />
         <div className="mt-1.5 flex items-center gap-2 text-meta text-text-muted">
           <span className="truncate">{filename}</span>
           <span className="tabular-nums">{formatFileSize(size)}</span>
@@ -132,7 +155,7 @@ export function FilePreview({ url, filename, mimeType, size }: FilePreviewProps)
     return (
       <div className="mt-1 max-w-md">
         <div className="flex items-center gap-3 rounded-md border border-border-subtle bg-bg-secondary p-3.5">
-          <audio src={resolvedSrc} controls className="h-9 flex-1" />
+          <MediaPreview key={resolvedSrc} src={resolvedSrc} filename={filename} kind="audio" />
         </div>
         <div className="mt-1.5 flex items-center gap-2 text-meta text-text-muted">
           <span className="truncate">{filename}</span>

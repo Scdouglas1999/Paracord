@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { authApi } from '../../api/auth';
+import { useAuthStore } from '../../stores/authStore';
 import { useReadStateStore } from '../../stores/readStateStore';
 import { TopBar } from './TopBar';
 
@@ -117,14 +117,16 @@ describe('TopBar inbox', () => {
     mockChannelState.channelsByGuild = {};
     mockChannelState.channelsById = {};
     useReadStateStore.getState().reset();
-    vi.mocked(authApi.getReadStates).mockResolvedValue({ data: [] } as never);
+    useAuthStore.setState({ token: 'token', user: { id: 'viewer' } as never });
+    vi.spyOn(useReadStateStore.getState(), 'refresh').mockResolvedValue(undefined);
   });
 
   it('shows an inline alert when inbox unread state fails to load', async () => {
-    vi.mocked(authApi.getReadStates).mockRejectedValue(new Error('Read-state service unavailable.'));
+    vi.mocked(useReadStateStore.getState().refresh).mockRejectedValue(new Error('Read-state service unavailable.'));
     renderChannelTopBar();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Inbox' }));
+    fireEvent.click(screen.getByRole('button', { name: 'More channel actions' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Inbox/ }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Failed to load inbox: Read-state service unavailable.',
@@ -160,13 +162,34 @@ describe('TopBar inbox', () => {
     useReadStateStore.getState().setAll([
       { channel_id: 'channel-1', last_message_id: '100', mention_count: 0 },
       { channel_id: 'channel-2', last_message_id: '100', mention_count: 0 },
-    ]);
+    ], { serverId: '__local__', userId: 'viewer' });
 
     renderChannelTopBar();
+    expect(screen.getByRole('button', { name: 'More channel actions' })).toHaveAccessibleDescription('1 unread conversation');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Inbox' }));
+    fireEvent.click(screen.getByRole('button', { name: 'More channel actions' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Inbox/ }));
 
     expect(await screen.findByText('#random')).toBeInTheDocument();
     expect(screen.queryByText('#general')).not.toBeInTheDocument();
   });
 });
+
+vi.mock('../../hooks/useChannels', async () => {
+  const actual = await vi.importActual<typeof import('../../hooks/useChannels')>('../../hooks/useChannels');
+  const { useChannelStore } = await import('../../stores/channelStore');
+  return {
+    ...actual,
+    useCurrentChannelStore: useChannelStore,
+    useChannelActions: () => useChannelStore.getState(),
+    getAccountChannelView: () => useChannelStore.getState(),
+    useGuildChannels: (id: string) => useChannelStore(state => state.channelsByGuild[id] ?? []),
+  };
+});
+
+vi.mock('../../hooks/useConversationActions', () => ({
+  useConversationActions: () => ({
+    actions: Object.fromEntries(['send', 'poll', 'schedule', 'attach', 'summary', 'voice', 'video', 'screen_share'].map(action => [action, { supported: true, allowed: true, reason: null }])),
+    error: null, loading: false, refresh: vi.fn(),
+  }),
+}));

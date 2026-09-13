@@ -1,4 +1,5 @@
 import { getApi } from './activeClient';
+import type { OperationContext } from '../lib/operationContext';
 
 export interface VoiceJoinResponse {
   token: string;
@@ -40,7 +41,7 @@ function resolveV2VoiceUrl(path: string): string {
 }
 
 export const voiceApi = {
-  joinChannel: (channelId: string, options?: { fallback?: 'livekit' }) =>
+  joinChannel: async (channelId: string, options?: { fallback?: 'livekit' }) =>
     getApi().post<VoiceJoinResponse>(
       resolveV2VoiceUrl(`/api/v2/voice/${channelId}/join${options?.fallback ? '?fallback=livekit' : ''}`),
       undefined,
@@ -51,15 +52,15 @@ export const voiceApi = {
         timeout: 30_000,
       },
     ),
-  joinDmChannel: (channelId: string, options?: { fallback?: 'livekit' }) =>
+  joinDmChannel: async (channelId: string, options?: { fallback?: 'livekit' }) =>
     getApi().post<VoiceJoinResponse>(
       `/api/v1/dms/${channelId}/voice/join${options?.fallback ? '?fallback=livekit' : ''}`,
       undefined,
       { timeout: 30_000 },
     ),
-  leaveDmChannel: (channelId: string) =>
+  leaveDmChannel: async (channelId: string) =>
     getApi().post(`/api/v1/dms/${channelId}/voice/leave`, undefined, { timeout: 10_000 }),
-  leaveChannel: (
+  leaveChannel: async (
     channelId: string,
     options?: {
       sessionId?: string;
@@ -73,7 +74,7 @@ export const voiceApi = {
       timeout: options?.timeoutMs ?? 10_000,
     });
   },
-  startStream: (
+  startStream: async (
     channelId: string,
     options?: { title?: string; quality_preset?: string; fallback?: 'livekit' }
   ) => {
@@ -85,10 +86,35 @@ export const voiceApi = {
       { timeout: 45_000 }
     );
   },
-  stopStream: (channelId: string) =>
+  stopStream: async (channelId: string) =>
     getApi().post(`/voice/${channelId}/stream/stop`, undefined, {
       // Short timeout — the server also detects stream end from the voice
       // leave / disconnect, so this is best-effort. Don't block the user.
       timeout: 5_000,
     }),
 };
+
+/** Every request made by a call retains its captured server/account. */
+export function createCallVoiceApi(context: OperationContext, membership?: () => string | null) {
+  const streamReceipt = () => {
+    const sessionId = membership?.();
+    if (!sessionId) throw new Error("Voice membership is not confirmed. Rejoin before sharing a stream.");
+    return `session_id=${encodeURIComponent(sessionId)}`;
+  };
+  const post = <T = unknown>(url: string, data?: unknown, timeout = 10_000) =>
+    context.requestRoot<T>({ method: 'POST', url, data, timeout });
+  return {
+    join: (channelId: string, dm: boolean, fallback?: 'livekit') => post<VoiceJoinResponse>(
+      `/api/${dm ? `v1/dms/${encodeURIComponent(channelId)}/voice` : `v2/voice/${encodeURIComponent(channelId)}`}/join${fallback ? '?fallback=livekit' : ''}`,
+      undefined, 30_000,
+    ),
+    leave: (channelId: string, dm: boolean, sessionId: string) => post(
+      `/api/${dm ? `v1/dms/${encodeURIComponent(channelId)}/voice` : `v2/voice/${encodeURIComponent(channelId)}`}/leave?session_id=${encodeURIComponent(sessionId)}`,
+    ),
+    startStream: (channelId: string, options?: { title?: string; quality_preset?: string; fallback?: 'livekit' }) => {
+      const { fallback, ...body } = options ?? {};
+      return post<VoiceJoinResponse>(`/api/v1/voice/${encodeURIComponent(channelId)}/stream?${streamReceipt()}${fallback ? '&fallback=livekit' : ''}`, body, 45_000);
+    },
+    stopStream: (channelId: string) => post(`/api/v1/voice/${encodeURIComponent(channelId)}/stream/stop?${streamReceipt()}`, undefined, 5_000),
+  };
+}

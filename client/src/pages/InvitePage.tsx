@@ -1,25 +1,26 @@
+import { useCurrentAccountScope } from '../hooks/useCurrentUser';
+import { guildLandingPath } from '../lib/guildNavigation';
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import { ArrowRight, Hash, Users } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import { inviteApi } from '../api/invites';
 import { useGuildStore } from '../stores/guildStore';
-import { useChannelStore } from '../stores/channelStore';
-import { useUIStore } from '../stores/uiStore';
 import { extractApiError } from '../api/client';
 import { safeStoredImageDataUrl } from '../lib/security';
 import { ErrorBanner } from '../components/ui/Feedback';
 import { Button } from '../components/ui/Button';
 import { AuthCanvas, AuthCard } from './authScaffold';
-import type { Invite } from '../types';
+import type { InvitePreview } from '../api/generated/InvitePreview';
 
 export function InvitePage() {
+  const guildScope = useCurrentAccountScope();
   const { code } = useParams();
   const navigate = useNavigate();
   const token = useAuthStore(s => s.token);
   const [loading, setLoading] = useState(false);
   const [loadingPreview, setLoadingPreview] = useState(true);
-  const [invitePreview, setInvitePreview] = useState<Invite | null>(null);
+  const [invitePreview, setInvitePreview] = useState<InvitePreview | null>(null);
   const [error, setError] = useState('');
   const [verificationAck, setVerificationAck] = useState(true);
   const [verificationAnswers, setVerificationAnswers] = useState('');
@@ -36,7 +37,7 @@ export function InvitePage() {
   }, [code]);
 
   const handleAccept = async () => {
-    if (!token) {
+    if (!token || !guildScope) {
       if (code) {
         try {
           sessionStorage.setItem('paracord:pending-invite', code);
@@ -54,28 +55,11 @@ export function InvitePage() {
         .split('\n')
         .map((line) => line.trim())
         .filter((line) => line.length > 0);
-      const { data } = await inviteApi.accept(code!, {
+      const guild = await useGuildStore.getState().acceptInvite(code!, guildScope, {
         verification_ack: verificationAck,
         verification_answers: answers.length ? answers : undefined,
       });
-      const guild = 'guild' in data ? data.guild : data;
-      useGuildStore.getState().addGuild(guild);
-      // Fetch channels so the sidebar isn't empty
-      await useChannelStore.getState().fetchChannels(guild.id);
-      const channels = useChannelStore.getState().channelsByGuild[guild.id] || [];
-      const firstChannelId =
-        guild.default_channel_id ||
-        channels.find(c => c.type === 0)?.id ||
-        channels.find(c => c.type !== 4)?.id ||
-        channels[0]?.id;
-      if (firstChannelId) {
-        useChannelStore.getState().selectGuild(guild.id);
-        useChannelStore.getState().selectChannel(firstChannelId);
-        navigate(`/app/guilds/${guild.id}/channels/${firstChannelId}`);
-      } else {
-        useUIStore.getState().setGuildSettingsId(guild.id);
-        navigate(`/app`);
-      }
+      navigate(await guildLandingPath(guild));
     } catch (err: unknown) {
       setError(extractApiError(err) || 'Failed to accept invite');
     } finally {

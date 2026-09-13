@@ -31,7 +31,7 @@ vi.mock('../stores/authStore', () => ({
 
 vi.mock('../stores/guildStore', () => ({
   useGuildStore: {
-    getState: () => ({ guilds: guildState.guilds }),
+    getState: () => ({ guilds: guildState.guilds.map(guild => ({ ...guild, key: JSON.stringify(['__local__', 'user-1', guild.id]), scope: { serverId: '__local__', userId: 'user-1' } })) }),
   },
 }));
 
@@ -81,7 +81,7 @@ describe('canAccessGuildSettingsSync', () => {
   });
 
   it('allows members with a cached manage permission', () => {
-    memberState.members.set('guild-1', [
+    memberState.members.set(JSON.stringify(['__local__', 'user-1', 'guild-1']), [
       { user: { id: 'user-1' }, roles: ['role-mod'] },
     ]);
     roleCache.get.mockReturnValue(new Map([['role-mod', Permissions.MANAGE_CHANNELS]]));
@@ -89,7 +89,7 @@ describe('canAccessGuildSettingsSync', () => {
   });
 
   it('denies members whose roles lack management bits', () => {
-    memberState.members.set('guild-1', [
+    memberState.members.set(JSON.stringify(['__local__', 'user-1', 'guild-1']), [
       { user: { id: 'user-1' }, roles: ['role-member'] },
     ]);
     roleCache.get.mockReturnValue(new Map([['role-member', Permissions.SEND_MESSAGES]]));
@@ -97,7 +97,7 @@ describe('canAccessGuildSettingsSync', () => {
   });
 
   it('allows members with ADMINISTRATOR via cached roles', () => {
-    memberState.members.set('guild-1', [
+    memberState.members.set(JSON.stringify(['__local__', 'user-1', 'guild-1']), [
       { user: { id: 'user-1' }, roles: ['role-admin'] },
     ]);
     roleCache.get.mockReturnValue(new Map([['role-admin', Permissions.ADMINISTRATOR]]));

@@ -3,51 +3,41 @@ use axum::{
     http::StatusCode,
     Json,
 };
+use paracord_contracts::relationship::{CreateRelationshipRequest, Relationship, RelationshipUser};
 use paracord_core::AppState;
-use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::json;
 
 use crate::error::ApiError;
 use crate::middleware::AuthUser;
 
-#[derive(Deserialize)]
-pub struct CreateRelationshipRequest {
-    pub user_id: Option<String>,
-    pub username: Option<String>,
-    #[serde(rename = "type")]
-    pub rel_type: Option<i16>,
-}
-
 pub async fn list_relationships(
     State(state): State<AppState>,
     auth: AuthUser,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<Vec<Relationship>>, ApiError> {
     let rels = paracord_db::relationships::get_relationships(&state.db, auth.user_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
-    let result: Vec<Value> = rels
+    let result: Vec<Relationship> = rels
         .iter()
-        .map(|r| {
-            json!({
-                "id": format!("{}:{}", r.user_id, r.target_id),
-                "user_id": r.user_id.to_string(),
-                "target_id": r.target_id.to_string(),
-                "type": r.rel_type,
-                "rel_type": r.rel_type,
-                "created_at": r.created_at.to_rfc3339(),
-                "user": {
-                    "id": r.target_id.to_string(),
-                    "username": r.target_username,
-                    "display_name": r.target_display_name,
-                    "discriminator": r.target_discriminator,
-                    "avatar_hash": r.target_avatar_hash,
-                }
-            })
+        .map(|r| Relationship {
+            id: format!("{}:{}", r.user_id, r.target_id),
+            user_id: r.user_id.to_string(),
+            target_id: r.target_id.to_string(),
+            relationship_type: i32::from(r.rel_type),
+            rel_type: i32::from(r.rel_type),
+            created_at: r.created_at.to_rfc3339(),
+            user: RelationshipUser {
+                id: r.target_id.to_string(),
+                username: r.target_username.clone(),
+                display_name: r.target_display_name.clone(),
+                discriminator: i32::from(r.target_discriminator),
+                avatar_hash: r.target_avatar_hash.clone(),
+            },
         })
         .collect();
 
-    Ok(Json(json!(result)))
+    Ok(Json(result))
 }
 
 pub async fn add_friend(
@@ -83,7 +73,7 @@ pub async fn add_friend(
     // Only "friend" (1) and "block" (2) are valid request types. Friend requests
     // are represented internally as an outgoing-pending row (type=4); callers must
     // not be able to inject arbitrary rel_type values.
-    let rel_type = body.rel_type.unwrap_or(1);
+    let rel_type = body.relationship_type.unwrap_or(1);
     if !matches!(rel_type, 1 | 2) {
         return Err(ApiError::BadRequest("Invalid relationship type".into()));
     }

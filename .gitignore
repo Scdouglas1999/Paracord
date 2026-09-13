@@ -114,3 +114,6 @@ client/target/
 .build-tmp/
 .codex
 .deepsec/
+
+# Local verification evidence (screenshots, logs) referenced by docs/improvement-program.md; not versioned
+/output/

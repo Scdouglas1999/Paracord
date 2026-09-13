@@ -3,9 +3,15 @@ use axum::{
     http::{HeaderMap, StatusCode},
     Json,
 };
+use paracord_contracts::user::{
+    ChangeEmailRequest, ChangePasswordRequest, CurrentUser, LinkedAccount, MutualFriend,
+    MutualGuild, ProfileRole, PublicUser, PublicUserProfile, UpdateMeRequest,
+    UpdateSettingsRequest, UpdatedCurrentUser, UserCore, UserSettingsResponse,
+};
 use paracord_core::AppState;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::OnceLock;
@@ -174,7 +180,7 @@ fn profile_pronouns_from_notifications(
 
 fn profile_linked_accounts_from_notifications(
     notifications: Option<&serde_json::Value>,
-) -> Vec<Value> {
+) -> Vec<LinkedAccount> {
     let Some(accounts) = notifications
         .and_then(|n| n.get("profileLinkedAccounts"))
         .and_then(|v| v.as_array())
@@ -201,10 +207,10 @@ fn profile_linked_accounts_from_notifications(
 
             let url = safe_profile_linked_account_url(url)?;
 
-            Some(json!({
-                "label": label.chars().take(MAX_PROFILE_LINKED_LABEL_LEN).collect::<String>(),
-                "url": url,
-            }))
+            Some(LinkedAccount {
+                label: label.chars().take(MAX_PROFILE_LINKED_LABEL_LEN).collect(),
+                url,
+            })
         })
         .take(MAX_PROFILE_LINKED_ACCOUNTS)
         .collect()
@@ -231,7 +237,7 @@ fn safe_profile_linked_account_url(raw: &str) -> Option<String> {
 
 fn profile_extras_from_settings(
     settings: Option<&paracord_db::users::UserSettingsRow>,
-) -> (Option<String>, Vec<Value>) {
+) -> (Option<String>, Vec<LinkedAccount>) {
     let notifications = settings.map(|s| &s.notifications);
     (
         profile_pronouns_from_notifications(notifications),
@@ -239,10 +245,58 @@ fn profile_extras_from_settings(
     )
 }
 
+fn user_core(user: &paracord_db::users::UserRow) -> UserCore {
+    UserCore {
+        id: user.id.to_string(),
+        username: user.username.clone(),
+        discriminator: i32::from(user.discriminator),
+        display_name: user.display_name.clone(),
+        avatar_hash: user.avatar_hash.clone(),
+        banner_hash: user.banner_hash.clone(),
+        bio: user.bio.clone(),
+        flags: user.flags,
+        bot: paracord_core::is_bot(user.flags),
+        system: false,
+        created_at: user.created_at.to_rfc3339(),
+    }
+}
+
+/// The stored `notifications`/`keybinds` payloads are JSON objects. Anything
+/// else is malformed server-side state, not a wire variant.
+fn settings_object(
+    value: &Value,
+    field: &'static str,
+) -> Result<BTreeMap<String, Value>, ApiError> {
+    serde_json::from_value(value.clone()).map_err(|e| {
+        ApiError::Internal(anyhow::anyhow!(
+            "stored user_settings.{field} is not an object: {e}"
+        ))
+    })
+}
+
+fn settings_response(
+    s: &paracord_db::users::UserSettingsRow,
+    status: &str,
+    custom_status: Option<String>,
+) -> Result<UserSettingsResponse, ApiError> {
+    Ok(UserSettingsResponse {
+        user_id: s.user_id.to_string(),
+        theme: s.theme.clone(),
+        locale: s.locale.clone(),
+        message_display_compact: s.message_display == "compact",
+        custom_css: s.custom_css.clone(),
+        status: status.to_string(),
+        custom_status,
+        crypto_auth_enabled: s.crypto_auth_enabled,
+        notifications: settings_object(&s.notifications, "notifications")?,
+        keybinds: settings_object(&s.keybinds, "keybinds")?,
+    })
+}
+
 pub async fn get_me(
     State(state): State<AppState>,
     auth: AuthUser,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<CurrentUser>, ApiError> {
     let user = paracord_db::users::get_user_by_id(&state.db, auth.user_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
@@ -252,37 +306,20 @@ pub async fn get_me(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     let (pronouns, linked_accounts) = profile_extras_from_settings(settings.as_ref());
 
-    Ok(Json(json!({
-        "id": user.id.to_string(),
-        "username": user.username,
-        "discriminator": user.discriminator,
-        "email": user.email,
-        "display_name": user.display_name,
-        "avatar_hash": user.avatar_hash,
-        "banner_hash": user.banner_hash,
-        "bio": user.bio,
-        "flags": user.flags,
-        "bot": paracord_core::is_bot(user.flags),
-        "system": false,
-        "pronouns": pronouns,
-        "linked_accounts": linked_accounts,
-        "created_at": user.created_at.to_rfc3339(),
-        "email_verified": user.email_verified,
+    Ok(Json(CurrentUser {
+        user: PublicUser {
+            core: user_core(&user),
+            pronouns,
+            linked_accounts,
+        },
+        email: user.email.clone(),
+        email_verified: user.email_verified,
         // An attached Ed25519 key logs this account in on its own through
         // `POST /auth/verify`. The owner has to be able to see that one exists
         // — and which one — or a planted key stays invisible.
-        "public_key": user.public_key,
-        "has_public_key": user.public_key.is_some(),
-    })))
-}
-
-#[derive(Deserialize)]
-pub struct UpdateMeRequest {
-    pub display_name: Option<String>,
-    pub bio: Option<String>,
-    /// Legacy data-URL avatars are still accepted for backward compatibility,
-    /// but clients should prefer `POST /users/@me/avatar`.
-    pub avatar_hash: Option<String>,
+        has_public_key: user.public_key.is_some(),
+        public_key: user.public_key.clone(),
+    }))
 }
 
 fn avatar_api_path(user_id: i64) -> String {
@@ -333,7 +370,7 @@ pub async fn upload_avatar(
     State(state): State<AppState>,
     auth: AuthUser,
     mut multipart: Multipart,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<UpdatedCurrentUser>, ApiError> {
     let mut image_data: Option<Vec<u8>> = None;
     let mut content_type: Option<String> = None;
 
@@ -416,19 +453,10 @@ pub async fn upload_avatar(
         }
     }
 
-    Ok(Json(json!({
-        "id": updated.id.to_string(),
-        "username": updated.username,
-        "discriminator": updated.discriminator,
-        "email": updated.email,
-        "display_name": updated.display_name,
-        "avatar_hash": updated.avatar_hash,
-        "banner_hash": updated.banner_hash,
-        "bio": updated.bio,
-        "flags": updated.flags,
-        "bot": paracord_core::is_bot(updated.flags),
-        "system": false,
-    })))
+    Ok(Json(UpdatedCurrentUser {
+        core: user_core(&updated),
+        email: updated.email.clone(),
+    }))
 }
 
 pub async fn get_user_avatar(
@@ -492,7 +520,7 @@ pub async fn update_me(
     State(state): State<AppState>,
     auth: AuthUser,
     Json(body): Json<UpdateMeRequest>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<UpdatedCurrentUser>, ApiError> {
     // Length is measured on the raw value, not on `trim()`ed one, because the
     // raw value is what reaches the column below. Checking the trimmed length
     // let `"  ".repeat(n) + "ab"` through at any size, which SQLite stored and
@@ -571,27 +599,17 @@ pub async fn update_me(
         }
     }
 
-    Ok(Json(json!({
-        "id": updated.id.to_string(),
-        "username": updated.username,
-        "discriminator": updated.discriminator,
-        "email": updated.email,
-        "display_name": updated.display_name,
-        "avatar_hash": updated.avatar_hash,
-        "banner_hash": updated.banner_hash,
-        "bio": updated.bio,
-        "flags": updated.flags,
-        "bot": paracord_core::is_bot(updated.flags),
-        "system": false,
-        "created_at": updated.created_at.to_rfc3339(),
-    })))
+    Ok(Json(UpdatedCurrentUser {
+        core: user_core(&updated),
+        email: updated.email.clone(),
+    }))
 }
 
 pub async fn get_settings(
     State(state): State<AppState>,
     auth: AuthUser,
     headers: HeaderMap,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<UserSettingsResponse>, ApiError> {
     let route_started = Instant::now();
     let trace_id = headers
         .get(TRACE_ID_HEADER)
@@ -650,45 +668,21 @@ pub async fn get_settings(
                 .and_then(|v| v.as_str())
                 .map(|v| v.to_string())
         });
-        Ok(Json(json!({
-            "user_id": s.user_id.to_string(),
-            "theme": s.theme,
-            "locale": s.locale,
-            "message_display_compact": s.message_display == "compact",
-            "custom_css": s.custom_css,
-            "status": status,
-            "custom_status": custom_status,
-            "crypto_auth_enabled": s.crypto_auth_enabled,
-            "notifications": s.notifications,
-            "keybinds": s.keybinds,
-        })))
+        Ok(Json(settings_response(&s, status, custom_status)?))
     } else {
-        Ok(Json(json!({
-            "user_id": auth.user_id.to_string(),
-            "theme": "dark",
-            "locale": "en-US",
-            "message_display_compact": false,
-            "custom_css": null,
-            "status": "online",
-            "custom_status": null,
-            "crypto_auth_enabled": false,
-            "notifications": {},
-            "keybinds": {},
-        })))
+        Ok(Json(UserSettingsResponse {
+            user_id: auth.user_id.to_string(),
+            theme: "dark".to_string(),
+            locale: "en-US".to_string(),
+            message_display_compact: false,
+            custom_css: None,
+            status: "online".to_string(),
+            custom_status: None,
+            crypto_auth_enabled: false,
+            notifications: BTreeMap::new(),
+            keybinds: BTreeMap::new(),
+        }))
     }
-}
-
-#[derive(Deserialize)]
-pub struct UpdateSettingsRequest {
-    pub theme: Option<String>,
-    pub locale: Option<String>,
-    pub message_display_compact: Option<bool>,
-    pub custom_css: Option<String>,
-    pub status: Option<String>,
-    pub custom_status: Option<String>,
-    pub crypto_auth_enabled: Option<bool>,
-    pub notifications: Option<serde_json::Value>,
-    pub keybinds: Option<serde_json::Value>,
 }
 
 pub async fn update_settings(
@@ -697,7 +691,7 @@ pub async fn update_settings(
     auth: AuthUser,
     headers: HeaderMap,
     Json(body): Json<UpdateSettingsRequest>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<UserSettingsResponse>, ApiError> {
     let peer_ip = addr.ip().to_string();
     let route_started = Instant::now();
     let trace_id = headers
@@ -844,18 +838,11 @@ pub async fn update_settings(
         }
     }
 
-    Ok(Json(json!({
-        "user_id": settings.user_id.to_string(),
-        "theme": settings.theme,
-        "locale": settings.locale,
-        "message_display_compact": settings.message_display == "compact",
-        "custom_css": settings.custom_css,
-        "status": settings.presence_status,
-        "custom_status": settings.custom_status,
-        "crypto_auth_enabled": settings.crypto_auth_enabled,
-        "notifications": settings.notifications,
-        "keybinds": settings.keybinds,
-    })))
+    Ok(Json(settings_response(
+        &settings,
+        &settings.presence_status,
+        settings.custom_status.clone(),
+    )?))
 }
 
 pub async fn get_read_states(
@@ -1046,7 +1033,7 @@ pub async fn get_user_profile(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(user_id): Path<i64>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<PublicUserProfile>, ApiError> {
     let user = paracord_db::users::get_user_by_id(&state.db, user_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
@@ -1061,27 +1048,21 @@ pub async fn get_user_profile(
                 .await
                 .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
         if target_block.map(|r| r.rel_type) == Some(2) {
-            return Ok(Json(json!({
-                "user": {
-                    "id": user.id.to_string(),
-                    "username": user.username,
-                    "discriminator": user.discriminator,
-                    "display_name": user.display_name,
-                    "avatar_hash": user.avatar_hash,
-                    "banner_hash": null,
-                    "bio": null,
-                    "flags": user.flags,
-                    "bot": paracord_core::is_bot(user.flags),
-                    "system": false,
-                    "pronouns": null,
-                    "linked_accounts": [],
-                    "created_at": user.created_at.to_rfc3339(),
+            return Ok(Json(PublicUserProfile {
+                user: PublicUser {
+                    core: UserCore {
+                        banner_hash: None,
+                        bio: None,
+                        ..user_core(&user)
+                    },
+                    pronouns: None,
+                    linked_accounts: Vec::new(),
                 },
-                "roles": [],
-                "mutual_guilds": [],
-                "mutual_friends": [],
-                "created_at": user.created_at.to_rfc3339(),
-            })));
+                roles: Vec::new(),
+                mutual_guilds: Vec::new(),
+                mutual_friends: Vec::new(),
+                created_at: user.created_at.to_rfc3339(),
+            }));
         }
     }
 
@@ -1099,60 +1080,54 @@ pub async fn get_user_profile(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
     // Get roles from the first mutual guild (if any) for context
-    let roles: Vec<Value> = if let Some(first_guild) = mutual_guilds.first() {
+    let roles: Vec<ProfileRole> = if let Some(first_guild) = mutual_guilds.first() {
         let role_rows = paracord_db::roles::get_member_roles(&state.db, user_id, first_guild.id)
             .await
             .unwrap_or_default();
         role_rows
             .iter()
-            .map(|r| {
-                json!({
-                    "id": r.id.to_string(),
-                    "guild_id": r.space_id.to_string(),
-                    "name": r.name,
-                    "color": r.color,
-                    "hoist": r.hoist,
-                    "position": r.position,
-                    "permissions": r.permissions.to_string(),
-                    "mentionable": r.mentionable,
-                    "created_at": r.created_at.to_rfc3339(),
-                })
+            .map(|r| ProfileRole {
+                id: r.id.to_string(),
+                guild_id: r.space_id.to_string(),
+                name: r.name.clone(),
+                color: r.color,
+                hoist: r.hoist,
+                position: r.position,
+                permissions: r.permissions.to_string(),
+                mentionable: r.mentionable,
+                created_at: r.created_at.to_rfc3339(),
             })
             .collect()
     } else {
         vec![]
     };
 
-    Ok(Json(json!({
-        "user": {
-            "id": user.id.to_string(),
-            "username": user.username,
-            "discriminator": user.discriminator,
-            "display_name": user.display_name,
-            "avatar_hash": user.avatar_hash,
-            "banner_hash": user.banner_hash,
-            "bio": user.bio,
-            "flags": user.flags,
-            "bot": paracord_core::is_bot(user.flags),
-            "system": false,
-            "pronouns": pronouns,
-            "linked_accounts": linked_accounts,
-            "created_at": user.created_at.to_rfc3339(),
+    Ok(Json(PublicUserProfile {
+        user: PublicUser {
+            core: user_core(&user),
+            pronouns,
+            linked_accounts,
         },
-        "roles": roles,
-        "mutual_guilds": mutual_guilds.iter().map(|g| json!({
-            "id": g.id.to_string(),
-            "name": g.name,
-            "icon_url": g.icon_hash,
-        })).collect::<Vec<Value>>(),
-        "mutual_friends": mutual_friends.iter().map(|f| json!({
-            "id": f.id.to_string(),
-            "username": f.username,
-            "discriminator": f.discriminator,
-            "avatar_hash": f.avatar_hash,
-        })).collect::<Vec<Value>>(),
-        "created_at": user.created_at.to_rfc3339(),
-    })))
+        roles,
+        mutual_guilds: mutual_guilds
+            .iter()
+            .map(|g| MutualGuild {
+                id: g.id.to_string(),
+                name: g.name.clone(),
+                icon_url: g.icon_hash.clone(),
+            })
+            .collect(),
+        mutual_friends: mutual_friends
+            .iter()
+            .map(|f| MutualFriend {
+                id: f.id.to_string(),
+                username: f.username.clone(),
+                discriminator: i32::from(f.discriminator),
+                avatar_hash: f.avatar_hash.clone(),
+            })
+            .collect(),
+        created_at: user.created_at.to_rfc3339(),
+    }))
 }
 
 pub async fn delete_me(
@@ -1183,12 +1158,6 @@ pub async fn delete_me(
 
     paracord_core::admin::admin_delete_user(&state.db, auth.user_id).await?;
     Ok(StatusCode::NO_CONTENT)
-}
-
-#[derive(Deserialize)]
-pub struct ChangePasswordRequest {
-    pub current_password: String,
-    pub new_password: String,
 }
 
 pub async fn change_password(
@@ -1224,29 +1193,29 @@ pub async fn change_password(
 
     let new_hash = paracord_core::auth::hash_password(&body.new_password)
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    paracord_db::users::update_user_password_hash(&state.db, auth.user_id, &new_hash)
+    let session_id = auth.session_id.as_deref().ok_or(ApiError::Unauthorized)?;
+    let mut transaction = state
+        .db
+        .begin()
         .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-
-    // Rotating the password is half of the standard recovery flow; revoking the
-    // other sessions below is the other half. Neither touches an attached
-    // Ed25519 key, which authenticates the account on its own via
-    // `POST /auth/verify` and mints a brand-new session each time — so a key
-    // planted through one stolen session would survive the whole recovery. Drop
-    // it with the password. Re-attaching requires this same password.
-    let public_key_removed = paracord_db::users::clear_user_public_key(&state.db, auth.user_id)
+        .map_err(|e| ApiError::Internal(e.into()))?;
+    let (updated, public_key_removed) =
+        paracord_db::users::change_password_credential_in_transaction(
+            &mut transaction,
+            auth.user_id,
+            session_id,
+            &user.password_hash,
+            &new_hash,
+        )
+        .await?;
+    let observers =
+        paracord_db::users::identity_observer_ids_in_transaction(&mut transaction, auth.user_id)
+            .await?;
+    transaction
+        .commit()
         .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-
-    let now = chrono::Utc::now();
-    let _ = paracord_db::sessions::revoke_all_user_sessions_except(
-        &state.db,
-        auth.user_id,
-        auth.session_id.as_deref(),
-        "password_changed",
-        now,
-    )
-    .await;
+        .map_err(|e| ApiError::Internal(e.into()))?;
+    super::auth::publish_identity_update(&state, &updated, observers);
 
     security::log_security_event(
         &state,
@@ -1264,12 +1233,6 @@ pub async fn change_password(
     .await;
 
     Ok(StatusCode::NO_CONTENT)
-}
-
-#[derive(Deserialize)]
-pub struct ChangeEmailRequest {
-    pub current_password: String,
-    pub new_email: String,
 }
 
 pub async fn change_email(

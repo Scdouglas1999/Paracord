@@ -1,6 +1,19 @@
 services:
   paracord:
-    build: .
+    # Default behaviour in a source checkout is unchanged: `build` policy +
+    # local context means `docker compose up -d` builds from this tree.
+    #
+    # Two env overrides make the same file work with NO checkout:
+    #   PARACORD_PULL_POLICY=missing   # pull ghcr.io image instead of building
+    #   PARACORD_BUILD_CONTEXT=https://github.com/Scdouglas1999/Paracord.git#main
+    #                                  # build straight from the remote repo
+    # Example no-clone run:
+    #   curl -fsSL -o docker-compose.yml \
+    #     https://raw.githubusercontent.com/Scdouglas1999/Paracord/main/docker-compose.yml
+    #   PARACORD_PULL_POLICY=missing docker compose up -d
+    image: ghcr.io/scdouglas1999/paracord:latest
+    pull_policy: ${PARACORD_PULL_POLICY:-build}
+    build: ${PARACORD_BUILD_CONTEXT:-.}
     container_name: paracord
     ports:
       # HTTP API + WebSocket gateway. Published to the HOST LOOPBACK ONLY
@@ -28,6 +41,21 @@ services:
       # jwt_secret on first run and persists it to /data/paracord.toml, then
       # reuses it on every restart. Nothing to set, nothing to leak in env.
       - PARACORD_REGISTRATION_ENABLED=true
+
+      # First-owner claim: until this server is claimed nobody can register,
+      # which is what stops whoever finds the address first from owning it.
+      # The one-time claim token is printed on startup (`docker compose logs
+      # paracord`) and saved as /data/first-owner-claim.txt. Open
+      # http://localhost:8090/setup-server and paste it.
+      #
+      # To pin the token in advance (provisioning, CI), uncomment and set at
+      # least 32 random characters:
+      # - PARACORD_SETUP_CLAIM_TOKEN=${PARACORD_SETUP_CLAIM_TOKEN:-}
+      #
+      # To skip the claim entirely for an unattended deployment where a script
+      # you control creates the first account, uncomment the line below. The
+      # FIRST account registered then owns this server:
+      # - PARACORD_SETUP_REQUIRE_CLAIM=false
 
       # Voice: native QUIC/WebTransport media is the default and works with zero
       # configuration. LiveKit is an opt-in fallback (see the `livekit` profile).

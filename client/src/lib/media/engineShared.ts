@@ -2,6 +2,7 @@
 // media engines. These functions carry no engine instance state so they can be
 // unit-tested in isolation and reused verbatim by both implementations.
 
+import type { OperationContext } from '../operationContext';
 import type { PublishedLayerDescriptor, PublishedTrackDescriptor } from './mediaEngine';
 import { decodeVideoFrameMetadata, type VideoFrameMetadata } from './transport/protocol';
 import { wrapMediaSenderKeyForRecipient } from './mediaSenderKeyEnvelope';
@@ -213,16 +214,20 @@ export async function wrapSenderKeyForRecipients(
   rawKey: Uint8Array,
   epoch: number,
   recipientUserIds: string[],
+  account?: OperationContext,
 ): Promise<Array<{ recipientUserId: string; wrapped: Uint8Array }>> {
+  if (!account) throw new Error('An owned account context is required for encrypted media.');
+  account.assertCurrent();
   const wrappedEntries = await Promise.all(
     recipientUserIds.map(async (recipientUserId) => {
-      const wrapped = await wrapMediaSenderKeyForRecipient(scope, rawKey, epoch, recipientUserId);
+      const wrapped = await wrapMediaSenderKeyForRecipient(scope, rawKey, epoch, recipientUserId, account);
       if (!wrapped) {
         return null;
       }
       return { recipientUserId, wrapped };
     }),
   );
+  account.assertCurrent();
   return wrappedEntries.filter(
     (entry): entry is { recipientUserId: string; wrapped: Uint8Array } => entry != null,
   );

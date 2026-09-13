@@ -4,36 +4,18 @@ use axum::{
     Json,
 };
 use chrono::Utc;
+use paracord_contracts::invite::{
+    AcceptInviteRequest, CreateInviteRequest, GuildInvite, InviteAcceptGuild, InviteAcceptResponse,
+    InviteGuildPreview, InvitePreview,
+};
 use paracord_core::AppState;
 use paracord_federation::client::{FederationInviteRequest, FederationJoinRequest};
 use paracord_models::permissions::Permissions;
-use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::error::ApiError;
 use crate::middleware::AuthUser;
 use crate::routes::audit;
-
-#[derive(Deserialize)]
-pub struct CreateInviteRequest {
-    #[serde(default = "default_max_uses")]
-    pub max_uses: i32,
-    #[serde(default = "default_max_age")]
-    pub max_age: i32,
-}
-
-#[derive(Deserialize, Default)]
-pub struct AcceptInviteRequest {
-    pub verification_ack: Option<bool>,
-    pub verification_answers: Option<Vec<String>>,
-}
-
-fn default_max_uses() -> i32 {
-    0
-}
-fn default_max_age() -> i32 {
-    86400
-}
 
 const MAX_INVITE_USES: i32 = 100;
 const MAX_INVITE_AGE_SECONDS: i32 = 604_800;
@@ -48,6 +30,19 @@ fn parse_i64(value: Option<&Value>, default: i64) -> i64 {
 
 fn parse_bool(value: Option<&Value>, default: bool) -> bool {
     value.and_then(|v| v.as_bool()).unwrap_or(default)
+}
+
+fn guild_invite(invite: &paracord_db::invites::InviteRow, guild_id: i64) -> GuildInvite {
+    GuildInvite {
+        code: invite.code.clone(),
+        guild_id: guild_id.to_string(),
+        channel_id: invite.channel_id.to_string(),
+        inviter_id: invite.inviter_id.map(|id| id.to_string()),
+        max_uses: invite.max_uses,
+        uses: invite.uses,
+        max_age: invite.max_age,
+        created_at: invite.created_at.to_rfc3339(),
+    }
 }
 
 async fn federation_send_join_rpc_for_mirrored_guild(
@@ -157,7 +152,7 @@ pub async fn create_invite(
     auth: AuthUser,
     Path(channel_id): Path<i64>,
     Json(body): Json<CreateInviteRequest>,
-) -> Result<(StatusCode, Json<Value>), ApiError> {
+) -> Result<(StatusCode, Json<GuildInvite>), ApiError> {
     let channel = paracord_db::channels::get_channel(&state.db, channel_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
@@ -233,25 +228,13 @@ pub async fn create_invite(
         Some(space_id),
     );
 
-    Ok((
-        StatusCode::CREATED,
-        Json(json!({
-            "code": invite.code,
-            "guild_id": space_id.to_string(),
-            "channel_id": invite.channel_id.to_string(),
-            "inviter_id": invite.inviter_id.map(|id| id.to_string()),
-            "max_uses": invite.max_uses,
-            "uses": invite.uses,
-            "max_age": invite.max_age,
-            "created_at": invite.created_at.to_rfc3339(),
-        })),
-    ))
+    Ok((StatusCode::CREATED, Json(guild_invite(&invite, space_id))))
 }
 
 pub async fn get_invite(
     State(state): State<AppState>,
     Path(code): Path<String>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<InvitePreview>, ApiError> {
     let invite = paracord_db::invites::get_invite(&state.db, &code)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
@@ -281,16 +264,18 @@ pub async fn get_invite(
     } else {
         member_count
     };
+    let member_count = u32::try_from(member_count)
+        .map_err(|_| ApiError::Internal(anyhow::anyhow!("Invalid member count")))?;
 
-    Ok(Json(json!({
-        "code": invite.code,
-        "guild": guild.map(|g| json!({
-            "id": g.id.to_string(),
-            "name": g.name,
-            "icon_hash": g.icon_hash,
-            "member_count": member_count,
-        })),
-    })))
+    Ok(Json(InvitePreview {
+        code: invite.code.clone(),
+        guild: guild.map(|g| InviteGuildPreview {
+            id: g.id.to_string(),
+            name: g.name.clone(),
+            icon_hash: g.icon_hash.clone(),
+            member_count,
+        }),
+    }))
 }
 
 pub async fn accept_invite(
@@ -298,7 +283,7 @@ pub async fn accept_invite(
     auth: AuthUser,
     Path(code): Path<String>,
     body: Option<Json<AcceptInviteRequest>>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<InviteAcceptResponse>, ApiError> {
     let preview = paracord_db::invites::get_invite(&state.db, &code)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
@@ -565,17 +550,19 @@ pub async fn accept_invite(
     let member_count = paracord_db::members::get_member_count(&state.db, space_id)
         .await
         .unwrap_or(0);
+    let member_count = u32::try_from(member_count)
+        .map_err(|_| ApiError::Internal(anyhow::anyhow!("Invalid member count")))?;
 
-    let guild_json = json!({
-        "id": guild.id.to_string(),
-        "name": guild.name,
-        "description": guild.description,
-        "icon_hash": guild.icon_hash,
-        "owner_id": guild.owner_id.to_string(),
-        "created_at": guild.created_at.to_rfc3339(),
-        "default_channel_id": default_channel_id,
-        "member_count": member_count,
-    });
+    let accept_guild = InviteAcceptGuild {
+        id: guild.id.to_string(),
+        name: guild.name.clone(),
+        description: guild.description.clone(),
+        icon_hash: guild.icon_hash.clone(),
+        owner_id: guild.owner_id.to_string(),
+        created_at: guild.created_at.to_rfc3339(),
+        default_channel_id,
+        member_count,
+    };
 
     // Only dispatch GUILD_MEMBER_ADD for genuinely new members
     if !already_member {
@@ -611,14 +598,16 @@ pub async fn accept_invite(
         }
     }
 
-    Ok(Json(json!({ "guild": guild_json })))
+    Ok(Json(InviteAcceptResponse {
+        guild: accept_guild,
+    }))
 }
 
 pub async fn list_guild_invites(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(guild_id): Path<i64>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<Vec<GuildInvite>>, ApiError> {
     let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
@@ -647,23 +636,9 @@ pub async fn list_guild_invites(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
-    let result: Vec<Value> = invites
-        .iter()
-        .map(|i| {
-            json!({
-                "code": i.code,
-                "guild_id": guild_id.to_string(),
-                "channel_id": i.channel_id.to_string(),
-                "inviter_id": i.inviter_id.map(|id| id.to_string()),
-                "max_uses": i.max_uses,
-                "uses": i.uses,
-                "max_age": i.max_age,
-                "created_at": i.created_at.to_rfc3339(),
-            })
-        })
-        .collect();
+    let result: Vec<GuildInvite> = invites.iter().map(|i| guild_invite(i, guild_id)).collect();
 
-    Ok(Json(json!(result)))
+    Ok(Json(result))
 }
 
 pub async fn delete_invite(

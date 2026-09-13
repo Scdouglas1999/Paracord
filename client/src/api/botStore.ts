@@ -60,18 +60,18 @@ export interface BotMetricsResult {
 }
 
 export const botStoreApi = {
-  search: (params?: { q?: string; category?: string; limit?: number; offset?: number }) =>
+  search: async (params?: { q?: string; category?: string; limit?: number; offset?: number }) =>
     getApi().get<StoreBotSearchResult>('/bots/store', { params }),
-  featured: () =>
+  featured: async () =>
     getApi().get<StoreBotFeaturedResult>('/bots/store/featured'),
-  categories: () =>
+  categories: async () =>
     getApi().get<StoreBotCategoriesResult>('/bots/store/categories'),
-  listReviews: (botAppId: string, params?: { limit?: number; offset?: number }) =>
+  listReviews: async (botAppId: string, params?: { limit?: number; offset?: number }) =>
     getApi().get<BotReviewListResult>(`/bots/store/${botAppId}/reviews`, { params }),
-  upsertMyReview: (
+  upsertMyReview: async (
     botAppId: string,
     payload: { rating: number; title?: string; body?: string },
   ) => getApi().put<BotReviewListResult>(`/bots/store/${botAppId}/reviews/@me`, payload),
-  getDeveloperMetrics: (botAppId: string) =>
+  getDeveloperMetrics: async (botAppId: string) =>
     getApi().get<BotMetricsResult>(`/bots/applications/${botAppId}/metrics`),
 };

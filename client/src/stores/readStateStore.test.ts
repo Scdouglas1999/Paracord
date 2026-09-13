@@ -1,46 +1,34 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { waitFor } from '@testing-library/react';
+import axios, { AxiosHeaders, type AxiosInstance, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useReadStateStore } from './readStateStore';
-import { useServerListStore, type ServerEntry } from './serverListStore';
+import { useServerListStore } from './serverListStore';
+import { useAuthStore } from './authStore';
+import { accountScopeKey, type AccountScope } from '../lib/serverScope';
 import { computeGuildUnread } from '../hooks/useUnreadCounts';
-import type { Channel, ReadState } from '../types';
-
-// Mock the per-server transport so refresh() fan-out is deterministic.
-vi.mock('../api/auth', () => ({
-  authApi: { getReadStates: vi.fn() },
-}));
-vi.mock('../lib/connectionManager', () => ({
-  LOCAL_SERVER_ID: '__local__',
-  connectionManager: { getApiClient: vi.fn() },
-}));
-
-// Imported after the mock so we get the mocked instances.
-import { authApi } from '../api/auth';
-import { connectionManager } from '../lib/connectionManager';
-
-const mockGetReadStates = vi.mocked(authApi.getReadStates);
-const mockGetApiClient = vi.mocked(connectionManager.getApiClient);
-
-function channel(id: string, lastMessageId: string | null, type = 0): Channel {
-  return { id, type, last_message_id: lastMessageId } as unknown as Channel;
+import type { Channel, ReadState, User } from '../types';
+const clients = vi.hoisted(() => new Map<string, AxiosInstance>());
+vi.mock('../lib/connectionManager', () => ({ connectionManager: { getApiClient: (id: string) => clients.get(id) } }));
+vi.mock('../lib/secureStorage', () => ({ secureSet: vi.fn(), secureDelete: vi.fn(), secureGet: vi.fn() }));
+const a: AccountScope = { serverId: 'a', userId: '42' };
+const b: AccountScope = { serverId: 'b', userId: '42' };
+const rs = (channelId: string, lastMessageId: string, mentions = 0): ReadState => ({ channel_id: channelId, last_message_id: lastMessageId, mention_count: mentions });
+const channel = (id: string, lastMessageId: string | null, type = 0) => ({ id, type, last_message_id: lastMessageId }) as Channel;
+const toMap = (states: ReadState[]) => new Map(states.map(value => [value.channel_id, value]));
+const store = () => useReadStateStore.getState();
+const reply = (config: InternalAxiosRequestConfig, data: unknown): AxiosResponse => ({ config, data, headers: new AxiosHeaders(), status: 200, statusText: 'OK' });
+function delay(serverId = 'a') {
+  let finish!: (data: unknown) => void;
+  const adapter = vi.fn(async (config: InternalAxiosRequestConfig) => new Promise<AxiosResponse>(resolve => { finish = data => resolve(reply(config, data)); }));
+  clients.get(serverId)!.defaults.adapter = adapter;
+  return { adapter, finish: (data: unknown) => finish(data) };
 }
-
-function rs(channelId: string, lastMessageId: string, mentions = 0): ReadState {
-  return { channel_id: channelId, last_message_id: lastMessageId, mention_count: mentions };
-}
-
-function server(id: string, connected = true): ServerEntry {
-  return { id, url: `https://${id}`, name: id, token: 't', connected } as ServerEntry;
-}
-
-function toMap(states: ReadState[]): Map<string, ReadState> {
-  return new Map(states.map((s) => [s.channel_id, s]));
-}
-
-// Point the active-server adapters at a known server.
-function setActive(activeServerId: string | null, servers: ServerEntry[] = []) {
-  useServerListStore.setState({ activeServerId, servers });
-}
-
+beforeEach(() => {
+  store().reset(); clients.clear(); useAuthStore.setState({ user: null, token: null });
+  useServerListStore.setState({ activeServerId: 'a', servers: ['a', 'b'].map(id => ({ id, url: `https://${id}.test`, name: id, token: 'token', userId: '42', user: { id: '42', username: id } as User, connected: true })) });
+  for (const id of ['a', 'b']) clients.set(id, axios.create({ adapter: async config => reply(config, [rs('1', id === 'a' ? '100' : '200')]) }));
+});
+afterEach(() => { store().reset(); vi.useRealTimers(); vi.restoreAllMocks(); });
 describe('computeGuildUnread', () => {
   it('counts channels whose latest message is past the read cursor', () => {
     const channels = [
@@ -74,156 +62,118 @@ describe('computeGuildUnread', () => {
   });
 });
 
-describe('readStateStore — serverId-scoped byServer', () => {
-  beforeEach(() => {
-    useReadStateStore.getState().reset();
-    setActive('srv-a', [server('srv-a')]);
-    mockGetReadStates.mockReset();
-    mockGetApiClient.mockReset();
+describe('account-owned read state', () => {
+  it('keeps colliding channel and user IDs separate across hosts', async () => {
+    await store().refreshAll();
+    expect(store().getReadState(a, '1')).toEqual(rs('1', '100'));
+    expect(store().getReadState(b, '1')).toEqual(rs('1', '200'));
+    store().incrementMention(a, '1'); expect(store().getReadState(a, '1')?.mention_count).toBe(1); expect(store().getReadState(b, '1')?.mention_count).toBe(0);
   });
-
-  it('setAll writes into the named server bucket; accessors read it back', () => {
-    useReadStateStore.getState().setAll([rs('c1', 'm1'), rs('c2', 'm2')], 'srv-b');
-
-    expect(useReadStateStore.getState().getReadStateMap('srv-b')).toEqual({
-      c1: rs('c1', 'm1'),
-      c2: rs('c2', 'm2'),
-    });
-    expect(useReadStateStore.getState().getReadState('srv-b', 'c1')).toEqual(rs('c1', 'm1'));
-    // Unknown servers/channels resolve empty.
-    expect(useReadStateStore.getState().getReadStateMap('srv-z')).toEqual({});
-    expect(useReadStateStore.getState().getReadState('srv-b', 'nope')).toBeUndefined();
+  it('keeps different accounts on the same host separate', () => {
+    const other = { serverId: 'a', userId: '99' };
+    store().setAll([rs('1', '100', 2)], a); store().setAll([rs('1', '200', 4)], other);
+    store().markRead(other, '1', '300');
+    expect(store().getReadState(a, '1')).toEqual(rs('1', '100', 2)); expect(store().getReadState(other, '1')).toEqual(rs('1', '300'));
   });
-
-  it('serverId mutators isolate each server bucket', () => {
-    useReadStateStore.getState().markRead('srv-a', 'c1', 'm9');
-    useReadStateStore.getState().incrementMention('srv-b', 'c1');
-
-    expect(useReadStateStore.getState().getReadState('srv-a', 'c1')).toEqual(rs('c1', 'm9', 0));
-    expect(useReadStateStore.getState().getReadState('srv-b', 'c1')).toEqual(rs('c1', '', 1));
-    // srv-a's c1 is untouched by srv-b's mention.
-    expect(useReadStateStore.getState().getReadStateMap('srv-a')).toEqual({ c1: rs('c1', 'm9', 0) });
+  it('coalesces only requests owned by the same account', async () => {
+    const pending = delay(); const first = store().refresh(a); const second = store().refresh(a);
+    await vi.waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(1));
+    await store().refresh(b); expect(store().loading[accountScopeKey(a)]).toBe(true);
+    pending.finish([rs('1', '100')]); await Promise.all([first, second]); expect(store().loading[accountScopeKey(a)]).toBe(false);
   });
-
-  it('legacy single-arg adapters target the active server and update the mirror', () => {
-    // 1-arg setAll → active server (srv-a).
-    useReadStateStore.getState().setAll([rs('c1', 'm4', 3)]);
-    expect(useReadStateStore.getState().getReadStateMap('srv-a')).toEqual({ c1: rs('c1', 'm4', 3) });
-    expect(useReadStateStore.getState().readStates).toEqual({ c1: rs('c1', 'm4', 3) });
-
-    // 2-arg markRead → active server; clears mentions + advances cursor.
-    useReadStateStore.getState().markRead('c1', 'm9');
-    expect(useReadStateStore.getState().getReadState('srv-a', 'c1')).toEqual(rs('c1', 'm9', 0));
-    expect(useReadStateStore.getState().readStates.c1).toEqual(rs('c1', 'm9', 0));
-
-    // 1-arg incrementMention → active server (dispatch's legacy shape).
-    useReadStateStore.getState().incrementMention('c2');
-    expect(useReadStateStore.getState().getReadState('srv-a', 'c2')).toEqual(rs('c2', '', 1));
-    expect(useReadStateStore.getState().readStates.c2).toEqual(rs('c2', '', 1));
+  it('preserves reads and mentions received during a delayed snapshot', async () => {
+    store().setAll([rs('1', '100', 2)], a);
+    const pending = delay(); const load = store().refresh(a);
+    await vi.waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(1));
+    store().markRead(a, '1', '200'); store().incrementMention(a, '1'); store().incrementMention(a, '2');
+    pending.finish([rs('1', '100', 2)]); await load;
+    expect(store().getReadState(a, '1')).toEqual(rs('1', '200', 1)); expect(store().getReadState(a, '2')).toEqual(rs('2', '', 1));
   });
-
-  it('markRead flips a channel to read (via computeGuildUnread over the per-server map)', () => {
-    const channels = [channel('c1', 'm9')];
-    useReadStateStore.getState().setAll([rs('c1', 'm4', 3)], 'srv-a');
-
-    let map = toMap(Object.values(useReadStateStore.getState().getReadStateMap('srv-a')));
-    expect(computeGuildUnread(channels, map)).toEqual({ unreadCount: 1, mentionCount: 3 });
-
-    useReadStateStore.getState().markRead('srv-a', 'c1', 'm9');
-    map = toMap(Object.values(useReadStateStore.getState().getReadStateMap('srv-a')));
-    expect(computeGuildUnread(channels, map)).toBeNull();
+  it('retains a failed account snapshot and reports its error while other hosts update', async () => {
+    store().setAll([rs('1', '50')], a);
+    clients.get('a')!.defaults.adapter = async () => { throw new Error('offline'); };
+    await store().refreshAll();
+    expect(store().getReadState(a, '1')).toEqual(rs('1', '50')); expect(store().errors[accountScopeKey(a)]).toContain('offline');
+    expect(store().getReadState(b, '1')).toEqual(rs('1', '200'));
   });
-
-  it('active adapters fall back to the __local__ bucket when no server is active', () => {
-    setActive(null);
-    useReadStateStore.getState().incrementMention('c9');
-    expect(useReadStateStore.getState().getReadState('__local__', 'c9')).toEqual(rs('c9', '', 1));
-    expect(useReadStateStore.getState().readStates.c9).toEqual(rs('c9', '', 1));
+  it('lets an explicit refresh caller display its failure', async () => {
+    clients.get('a')!.defaults.adapter = async () => { throw new Error('permission revoked'); };
+    await expect(store().refresh(a)).rejects.toThrow('permission revoked');
+    expect(store().loading[accountScopeKey(a)]).toBe(false);
   });
-
-  it('reset clears every bucket and the mirror', () => {
-    useReadStateStore.getState().setAll([rs('c1', 'm1')], 'srv-a');
-    useReadStateStore.getState().setAll([rs('c2', 'm2')], 'srv-b');
-
-    useReadStateStore.getState().reset();
-
-    expect(useReadStateStore.getState().byServer).toEqual({});
-    expect(useReadStateStore.getState().readStates).toEqual({});
+  it('revokes an old snapshot without clearing replacement request ownership', async () => {
+    const old = delay(); const oldLoad = store().refresh(a); const rejected = expect(oldLoad).rejects.toThrow();
+    await vi.waitFor(() => expect(old.adapter).toHaveBeenCalledTimes(1));
+    await useServerListStore.getState().clearSessions();
+    expect(store().loading[accountScopeKey(a)]).toBe(false);
+    useServerListStore.getState().updateToken('a', 'new'); useServerListStore.getState().setAuthenticatedUser('a', { id: '42' } as User);
+    const fresh = delay(); const load = store().refresh(a);
+    await vi.waitFor(() => expect(fresh.adapter).toHaveBeenCalledTimes(1));
+    old.finish([rs('1', '100')]); await rejected;
+    expect(store().loading[accountScopeKey(a)]).toBe(true); expect(store().getReadState(a, '1')).toBeUndefined();
+    fresh.finish([rs('1', '200')]); await load; expect(store().getReadState(a, '1')?.last_message_id).toBe('200');
+  });
+  it('reset cancels pending snapshots and clears all accounts', async () => {
+    const pending = delay(); const load = store().refresh(a); const rejected = expect(load).rejects.toThrow();
+    await vi.waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(1));
+    store().reset(); pending.finish([rs('1', '100')]); await rejected;
+    expect(store().byAccount).toEqual({}); expect(store().loading).toEqual({});
+  });
+  it('coalesces many mutations per channel within the snapshot bound', async () => {
+    const pending = delay(); const load = store().refresh(a);
+    await vi.waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(1));
+    for (let i = 0; i < 12_000; i++) store().markRead(a, '1', String(i));
+    pending.finish([rs('1', '0')]); await load; expect(store().getReadState(a, '1')?.last_message_id).toBe('11999');
+  });
+  it('captures the account before a read-position debounce', async () => {
+    vi.useFakeTimers(); const adapter = vi.fn(async (config: InternalAxiosRequestConfig) => reply(config, rs('1', '100'))); clients.get('a')!.defaults.adapter = adapter;
+    const write = store().saveReadPosition(a, '1', '100', { delayMs: 300 }); useServerListStore.getState().setActive('b');
+    await vi.advanceTimersByTimeAsync(301); await write;
+    expect(adapter.mock.calls[0][0]).toMatchObject({ baseURL: 'https://a.test/api/v1', url: '/channels/1/read', method: 'put', data: '{"last_message_id":"100"}' });
+  });
+  it('logout cancels a debounced write before a replacement account can use it', async () => {
+    vi.useFakeTimers(); const adapter = vi.fn(); clients.get('a')!.defaults.adapter = adapter;
+    const write = store().saveReadPosition(a, '1', '100', { delayMs: 300 }); const rejected = expect(write).rejects.toThrow();
+    await useServerListStore.getState().clearSessions(); await rejected; await vi.advanceTimersByTimeAsync(301);
+    expect(adapter).not.toHaveBeenCalled();
+  });
+  it('cancels obsolete debounced writes without issuing their request', async () => {
+    vi.useFakeTimers(); const adapter = vi.fn(); clients.get('a')!.defaults.adapter = adapter; const controller = new AbortController();
+    const write = store().saveReadPosition(a, '1', '100', { delayMs: 300, signal: controller.signal }); const rejected = expect(write).rejects.toThrow();
+    controller.abort(); await rejected; await vi.advanceTimersByTimeAsync(301); expect(adapter).not.toHaveBeenCalled();
   });
 });
 
-describe('readStateStore.refresh — per-server fan-out', () => {
-  beforeEach(() => {
-    useReadStateStore.getState().reset();
-    mockGetReadStates.mockReset();
-    mockGetApiClient.mockReset();
+describe('authoritative mention event refresh', () => {
+  it('coalesces replayed events and refetches after a snapshot that started before the event', async () => {
+    const pending = delay();
+    const old = store().refresh(a);
+    await waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(1));
+    store().refreshAfterEvent(a);
+    store().refreshAfterEvent(a);
+    pending.finish([rs('1', '100', 0)]);
+    await old;
+    await waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(2));
+    pending.finish([rs('1', '100', 2)]);
+    await waitFor(() => expect(store().getReadState(a, '1')?.mention_count).toBe(2));
+    expect(pending.adapter).toHaveBeenCalledTimes(2);
   });
 
-  it('fetches the active server via authApi and background servers via their clients', async () => {
-    setActive('srv-a', [server('srv-a'), server('srv-b')]);
-    mockGetReadStates.mockResolvedValue({ data: [rs('a1', 'm1')] } as never);
-    const bClient = { get: vi.fn().mockResolvedValue({ data: [rs('b1', 'm2')] }) };
-    mockGetApiClient.mockImplementation((id: string) =>
-      id === 'srv-b' ? (bClient as never) : undefined,
-    );
-
-    await useReadStateStore.getState().refresh();
-
-    expect(mockGetReadStates).toHaveBeenCalledTimes(1);
-    expect(bClient.get).toHaveBeenCalledWith('/users/@me/read-states');
-    expect(useReadStateStore.getState().getReadStateMap('srv-a')).toEqual({ a1: rs('a1', 'm1') });
-    expect(useReadStateStore.getState().getReadStateMap('srv-b')).toEqual({ b1: rs('b1', 'm2') });
-    // Mirror reflects the active server.
-    expect(useReadStateStore.getState().readStates).toEqual({ a1: rs('a1', 'm1') });
-  });
-
-  it('keeps each server\'s prior snapshot when its fetch fails (graceful degrade)', async () => {
-    setActive('srv-a', [server('srv-a'), server('srv-b')]);
-    // Seed prior snapshots.
-    useReadStateStore.getState().setAll([rs('a1', 'old')], 'srv-a');
-    useReadStateStore.getState().setAll([rs('b1', 'old')], 'srv-b');
-
-    mockGetReadStates.mockRejectedValue(new Error('offline'));
-    const bClient = { get: vi.fn().mockRejectedValue(new Error('offline')) };
-    mockGetApiClient.mockImplementation(() => bClient as never);
-
-    await useReadStateStore.getState().refresh();
-
-    expect(useReadStateStore.getState().getReadStateMap('srv-a')).toEqual({ a1: rs('a1', 'old') });
-    expect(useReadStateStore.getState().getReadStateMap('srv-b')).toEqual({ b1: rs('b1', 'old') });
-  });
-
-  it('does not let a stale refresh overwrite a read made while it was in flight', async () => {
-    setActive('srv-a', [server('srv-a')]);
-    let resolveFetch!: (value: unknown) => void;
-    mockGetReadStates.mockReturnValueOnce(
-      new Promise<any>((resolve) => {
-        resolveFetch = resolve;
-      }),
-    );
-    useReadStateStore.getState().setAll([rs('c1', 'm1', 2)], 'srv-a');
-
-    const refresh = useReadStateStore.getState().refresh();
-    useReadStateStore.getState().markRead('srv-a', 'c1', 'm9');
-    resolveFetch({ data: [rs('c1', 'm1', 2)] });
-    await refresh;
-
-    expect(useReadStateStore.getState().getReadState('srv-a', 'c1')).toEqual(rs('c1', 'm9', 0));
-  });
-
-  it('skips disconnected servers and servers without an API client', async () => {
-    setActive('srv-a', [server('srv-a'), server('srv-b', false), server('srv-c')]);
-    mockGetReadStates.mockResolvedValue({ data: [] } as never);
-    const cClient = { get: vi.fn().mockResolvedValue({ data: [rs('c1', 'm1')] }) };
-    // srv-c has a client; srv-b is disconnected (never reached).
-    mockGetApiClient.mockImplementation((id: string) =>
-      id === 'srv-c' ? (cClient as never) : undefined,
-    );
-
-    await useReadStateStore.getState().refresh();
-
-    expect(mockGetApiClient).not.toHaveBeenCalledWith('srv-b');
-    expect(cClient.get).toHaveBeenCalledTimes(1);
-    expect(useReadStateStore.getState().getReadStateMap('srv-c')).toEqual({ c1: rs('c1', 'm1') });
+  it('keeps a queued refresh on its original server and stops queued work on reset', async () => {
+    const pending = delay();
+    store().refreshAfterEvent(a);
+    await waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(1));
+    useServerListStore.setState({ activeServerId: 'b' });
+    pending.finish([rs('1', '100', 2)]);
+    await waitFor(() => expect(store().getReadState(a, '1')?.mention_count).toBe(2));
+    expect(store().getReadState(b, '1')).toBeUndefined();
+    store().refreshAfterEvent(a);
+    await waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(2));
+    store().refreshAfterEvent(a);
+    store().reset();
+    pending.finish([rs('1', '100', 9)]);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(store().getReadState(a, '1')).toBeUndefined();
+    expect(pending.adapter).toHaveBeenCalledTimes(2);
   });
 });

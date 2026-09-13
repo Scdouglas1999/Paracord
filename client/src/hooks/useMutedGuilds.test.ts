@@ -1,104 +1,104 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import axios, { AxiosHeaders, type AxiosInstance, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
+import { act, renderHook } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useMutedGuilds } from './useMutedGuilds';
+import { useNotificationPreferenceStore } from '../stores/notificationPreferenceStore';
+import { useServerListStore } from '../stores/serverListStore';
+import { useAuthStore } from '../stores/authStore';
+import { accountScopeKey, entityScopeKey } from '../lib/serverScope';
+import type { SpaceNotificationSetting } from '../api/notificationSettings';
+import type { User } from '../types';
+import { setVersionedJson } from '../lib/versionedStorage';
+const clients = vi.hoisted(() => new Map<string, AxiosInstance>());
+vi.mock('../lib/connectionManager', () => ({ connectionManager: { getApiClient: (id: string) => clients.get(id) } }));
+vi.mock('../lib/secureStorage', () => ({ secureSet: vi.fn(), secureDelete: vi.fn(), secureGet: vi.fn() }));
+const a = { serverId: 'a', userId: '42' };
+const b = { serverId: 'b', userId: '42' };
+const state = () => useNotificationPreferenceStore.getState();
+const setting = (muted = true, id = '1'): SpaceNotificationSetting => ({ space_id: id, level: 2, muted, muted_now: muted, muted_until: null, suppress_everyone: true });
+const response = (config: InternalAxiosRequestConfig, data: unknown): AxiosResponse => ({ config, data, headers: new AxiosHeaders(), status: 200, statusText: 'OK' });
+function delay(id = 'a') {
+  let finish!: (data: unknown) => void;
+  const adapter = vi.fn(async (config: InternalAxiosRequestConfig) => new Promise<AxiosResponse>(resolve => { finish = data => resolve(response(config, data)); }));
+  clients.get(id)!.defaults.adapter = adapter;
+  return { adapter, finish: (data: unknown) => finish(data) };
+}
+beforeEach(() => {
+  state().reset(); localStorage.clear(); clients.clear();
+  useAuthStore.setState({ user: null, token: null });
+  useServerListStore.setState({ activeServerId: 'a', servers: ['a', 'b'].map(id => ({ id, url: `https://${id}.test`, name: id, token: 'token', userId: '42', user: { id: '42', username: id } as User, connected: true })) });
+  for (const id of ['a', 'b']) clients.set(id, axios.create({ adapter: async config => response(config, config.method === 'get' ? { spaces: [setting(id === 'a')], channels: [] } : setting(JSON.parse(config.data).muted)) }));
+});
+afterEach(() => { state().reset(); vi.restoreAllMocks(); vi.useRealTimers(); });
 
-const list = vi.fn();
-const setSpace = vi.fn();
-const clearSpace = vi.fn();
-
-vi.mock('../api/notificationSettings', () => ({
-  notificationSettingsApi: {
-    list: (...args: unknown[]) => list(...args),
-    setSpace: (...args: unknown[]) => setSpace(...args),
-    clearSpace: (...args: unknown[]) => clearSpace(...args),
-  },
-}));
-
-import {
-  readMutedGuildIds,
-  syncMutedGuildsFromServer,
-  toggleGuildMuted,
-  writeMutedGuildIds,
-} from './useMutedGuilds';
-
-describe('useMutedGuilds', () => {
-  beforeEach(() => {
-    localStorage.clear();
-    list.mockReset();
-    setSpace.mockReset().mockResolvedValue({});
-    clearSpace.mockReset().mockResolvedValue(undefined);
+describe('account-owned notification preferences', () => {
+  it('keeps colliding guild IDs distinct and exposes only verified accounts', async () => {
+    const { result } = renderHook(() => useMutedGuilds());
+    await vi.waitFor(() => expect(result.current.mutedGuildKeys).toEqual([entityScopeKey(a, '1')]));
+    expect(result.current.isMuted({ id: '1', scope: b })).toBe(false);
+    act(() => useServerListStore.getState().updateToken('a', ''));
+    expect(result.current.mutedGuildKeys).toEqual([]);
   });
-
-  /// The mute used to live only in localStorage, so it never followed the user
-  /// to another device. The server is now the source of truth.
-  it('replaces the local set with the server set on sync', async () => {
-    writeMutedGuildIds(['stale-local-only']);
-    list.mockResolvedValue({
-      spaces: [
-        { space_id: '111', muted: true, muted_now: true },
-        { space_id: '222', muted: false, muted_now: false },
-      ],
-      channels: [],
-    });
-
-    const ids = await syncMutedGuildsFromServer();
-
-    expect(ids).toEqual(['111']);
-    expect(readMutedGuildIds()).toEqual(['111']);
+  it('does not assign the old unowned cache to the next signed-in account', async () => {
+    setVersionedJson('muted-guilds', ['unowned']);
+    const { result } = renderHook(() => useMutedGuilds());
+    await vi.waitFor(() => expect(result.current.mutedGuildKeys).toEqual([entityScopeKey(a, '1')]));
+    expect(result.current.mutedGuildKeys.some(key => key.includes('unowned'))).toBe(false);
   });
-
-  /// A timed mute that has already lapsed must stop counting without needing a
-  /// sweep, so the resolved `muted_now` is what decides — not the stored flag.
-  it('ignores a mute whose timer has already lapsed', async () => {
-    list.mockResolvedValue({
-      spaces: [
-        {
-          space_id: '333',
-          muted: true,
-          muted_now: false,
-          muted_until: '2020-01-01T00:00:00Z',
-        },
-      ],
-      channels: [],
-    });
-
-    expect(await syncMutedGuildsFromServer()).toEqual([]);
+  it('persists only account-qualified settings, excluding pending operations and errors', async () => {
+    await state().refresh(a);
+    const persisted = JSON.parse(localStorage.getItem('paracord:notification-preferences-by-account')!);
+    expect(persisted).toEqual({ version: 1, state: { byAccount: { [accountScopeKey(a)]: { '1': setting() } } } });
   });
-
-  it('mutes through the server and updates the local set', async () => {
-    expect(await toggleGuildMuted('444')).toBe(true);
-
-    expect(setSpace).toHaveBeenCalledWith('444', { muted: true });
-    expect(readMutedGuildIds()).toEqual(['444']);
+  it('unmutes without clearing notification level or suppression preferences', async () => {
+    await state().refresh(a);
+    const adapter = vi.fn(async (config: InternalAxiosRequestConfig) => response(config, setting(false))); clients.get('a')!.defaults.adapter = adapter;
+    await state().setMuted({ id: '1', scope: a }, false);
+    expect(adapter.mock.calls[0][0]).toMatchObject({ method: 'put', url: '/guilds/1/notification-settings', data: '{"muted":false}' });
+    expect(state().byAccount[accountScopeKey(a)]['1']).toMatchObject({ muted_now: false, level: 2, suppress_everyone: true });
   });
-
-  /// Unmuting clears the override rather than storing an explicit "not muted"
-  /// row, so the space returns to the default.
-  it('unmuting clears the override instead of storing a false row', async () => {
-    writeMutedGuildIds(['555']);
-
-    expect(await toggleGuildMuted('555')).toBe(false);
-
-    expect(clearSpace).toHaveBeenCalledWith('555');
-    expect(setSpace).not.toHaveBeenCalled();
-    expect(readMutedGuildIds()).toEqual([]);
+  it('keeps a background mutation on its originating account through a selection switch', async () => {
+    const pending = delay(); const save = state().setMuted({ id: '1', scope: a }, true);
+    useServerListStore.getState().setActive('b');
+    await vi.waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(1));
+    expect(pending.adapter.mock.calls[0][0].baseURL).toBe('https://a.test/api/v1');
+    pending.finish(setting()); await save;
+    expect(state().byAccount[accountScopeKey(a)]['1'].muted_now).toBe(true); expect(state().byAccount[accountScopeKey(b)]).toBeUndefined();
   });
-
-  /// The write is optimistic so the UI responds immediately. If the server
-  /// rejects it, the local set must go back — otherwise the sidebar shows a
-  /// mute that does not exist anywhere else.
-  it('rolls the local set back when the server rejects the write', async () => {
-    setSpace.mockRejectedValue(new Error('nope'));
-
-    await expect(toggleGuildMuted('666')).rejects.toThrow('nope');
-
-    expect(readMutedGuildIds()).toEqual([]);
+  it('leaves confirmed settings intact when a save fails', async () => {
+    await state().refresh(a);
+    clients.get('a')!.defaults.adapter = async () => { throw new Error('offline'); };
+    await expect(state().setMuted({ id: '1', scope: a }, false)).rejects.toThrow('offline');
+    expect(state().byAccount[accountScopeKey(a)]['1'].muted_now).toBe(true);
+    expect(state().saving[entityScopeKey(a, '1')]).toBe(false);
   });
-
-  it('rolls back an unmute that fails, keeping the space muted', async () => {
-    writeMutedGuildIds(['777']);
-    clearSpace.mockRejectedValue(new Error('nope'));
-
-    await expect(toggleGuildMuted('777')).rejects.toThrow('nope');
-
-    expect(readMutedGuildIds()).toEqual(['777']);
+  it('retains an acknowledged mutation over a delayed older snapshot', async () => {
+    let finish!: () => void;
+    const adapter = vi.fn(async (config: InternalAxiosRequestConfig) => config.method === 'get' ? new Promise<AxiosResponse>(resolve => { finish = () => resolve(response(config, { spaces: [setting(true)], channels: [] })); }) : response(config, setting(false)));
+    clients.get('a')!.defaults.adapter = adapter;
+    const load = state().refresh(a); await vi.waitFor(() => expect(adapter).toHaveBeenCalledTimes(1));
+    await state().setMuted({ id: '1', scope: a }, false);
+    finish(); await load;
+    expect(state().byAccount[accountScopeKey(a)]['1'].muted_now).toBe(false);
+  });
+  it('rejects overlapping writes to one space while allowing another account to save', async () => {
+    const pending = delay(); const save = state().setMuted({ id: '1', scope: a }, true);
+    await vi.waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(1));
+    await expect(state().setMuted({ id: '1', scope: a }, false)).rejects.toThrow('still being saved');
+    await state().setMuted({ id: '1', scope: b }, false);
+    expect(state().saving[entityScopeKey(a, '1')]).toBe(true);
+    pending.finish(setting()); await save;
+  });
+  it('cancels pending writes on reset and refuses their delayed response', async () => {
+    const pending = delay(); const save = state().setMuted({ id: '1', scope: a }, true); const rejected = expect(save).rejects.toThrow();
+    await vi.waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(1));
+    state().reset(); pending.finish(setting()); await rejected;
+    expect(state().byAccount).toEqual({}); expect(state().saving).toEqual({});
+  });
+  it('uses the server-resolved state of a lapsed timed mute', async () => {
+    clients.get('a')!.defaults.adapter = async config => response(config, { spaces: [{ ...setting(true), muted_now: false, muted_until: '2020-01-01' }], channels: [] });
+    const { result } = renderHook(() => useMutedGuilds());
+    await vi.waitFor(() => expect(state().byAccount[accountScopeKey(a)]).toBeDefined());
+    expect(result.current.mutedGuildKeys).toEqual([]);
   });
 });

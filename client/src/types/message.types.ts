@@ -1,4 +1,5 @@
 import type { Component } from './components';
+import type { EncryptedAttachmentDescriptor } from '../lib/messages/attachments/attachmentEnvelope';
 
 export enum MessageType {
   Default = 0,
@@ -54,6 +55,13 @@ export interface Attachment {
   height?: number;
   origin_server?: string;
   content_hash?: string;
+  /**
+   * Present only for an end-to-end encrypted conversation: the per-file key and
+   * the real name/type/length/hash, taken from the encrypted message body. It is
+   * client-side state projected onto the message and is never sent to a server.
+   * See `lib/messages/attachments/`.
+   */
+  encryption?: EncryptedAttachmentDescriptor;
 }
 
 export interface Sticker {
@@ -101,6 +109,10 @@ export interface MessageInteraction {
 }
 
 export interface Message {
+  /** Exact channel body mutation revision; decimal string to preserve 64-bit ordering. */
+  message_revision?: string;
+  /** Original creation idempotency key, independent of the encrypted payload IV. */
+  nonce?: string | null;
   id: string;
   channel_id: string;
   author: MessageAuthor;

@@ -18,6 +18,14 @@ pub enum ApiError {
     BadRequest(String),
     #[error("conflict: {0}")]
     Conflict(String),
+    #[error("Database history changed; refresh this account before retrying.")]
+    HistoryChanged,
+    #[error("This message was already delivered and has since been deleted.")]
+    DeliveryAlreadyDeleted,
+    #[error("This message delivery was cancelled before it was created.")]
+    DeliveryCancelled,
+    #[error("This message edit was cancelled before it committed.")]
+    EditCancelled,
     /// An AutoMod rule rejected the content. The message is operator-authored
     /// and shown verbatim to the author.
     #[error("{0}")]
@@ -42,6 +50,10 @@ impl ApiError {
             ApiError::Forbidden => "FORBIDDEN",
             ApiError::BadRequest(_) => "BAD_REQUEST",
             ApiError::Conflict(_) => "CONFLICT",
+            ApiError::HistoryChanged => "HISTORY_CHANGED",
+            ApiError::DeliveryAlreadyDeleted => "DELIVERY_ALREADY_DELETED",
+            ApiError::DeliveryCancelled => "DELIVERY_CANCELLED",
+            ApiError::EditCancelled => "EDIT_CANCELLED",
             ApiError::AutomodBlocked(_) => "AUTOMOD_BLOCKED",
             ApiError::UpgradeRequired(_) => "UPGRADE_REQUIRED",
             ApiError::RateLimited(_) => "RATE_LIMITED",
@@ -57,6 +69,10 @@ impl ApiError {
             ApiError::Forbidden => StatusCode::FORBIDDEN,
             ApiError::BadRequest(_) => StatusCode::BAD_REQUEST,
             ApiError::Conflict(_) => StatusCode::CONFLICT,
+            ApiError::HistoryChanged => StatusCode::CONFLICT,
+            ApiError::DeliveryAlreadyDeleted => StatusCode::GONE,
+            ApiError::DeliveryCancelled => StatusCode::GONE,
+            ApiError::EditCancelled => StatusCode::GONE,
             ApiError::AutomodBlocked(_) => StatusCode::FORBIDDEN,
             ApiError::UpgradeRequired(_) => StatusCode::UPGRADE_REQUIRED,
             ApiError::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
@@ -113,9 +129,7 @@ impl From<paracord_core::error::CoreError> for ApiError {
             paracord_core::error::CoreError::Conflict(msg) => ApiError::Conflict(msg),
             paracord_core::error::CoreError::RateLimited(secs) => ApiError::RateLimited(secs),
             paracord_core::error::CoreError::AutomodBlocked(msg) => ApiError::AutomodBlocked(msg),
-            paracord_core::error::CoreError::Database(_) => {
-                ApiError::Internal(anyhow::anyhow!("database error"))
-            }
+            paracord_core::error::CoreError::Database(error) => error.into(),
             paracord_core::error::CoreError::Internal(msg) => {
                 ApiError::Internal(anyhow::anyhow!(msg))
             }
@@ -127,6 +141,10 @@ impl From<paracord_db::DbError> for ApiError {
     fn from(e: paracord_db::DbError) -> Self {
         match e {
             paracord_db::DbError::NotFound => ApiError::NotFound,
+            paracord_db::DbError::Conflict(message) => ApiError::Conflict(message),
+            paracord_db::DbError::DeliveryAlreadyDeleted => ApiError::DeliveryAlreadyDeleted,
+            paracord_db::DbError::DeliveryCancelled => ApiError::DeliveryCancelled,
+            paracord_db::DbError::EditCancelled => ApiError::EditCancelled,
             paracord_db::DbError::LimitReached(msg) => ApiError::Conflict(msg),
             paracord_db::DbError::Sqlx(_) => ApiError::Internal(anyhow::anyhow!("database error")),
         }

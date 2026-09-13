@@ -64,14 +64,15 @@ vi.mock('../gateway/manager', () => ({
   gateway: mockGateway,
 }));
 
-function renderUnlockPage() {
+function renderUnlockPage(entry = '/unlock') {
   render(
-    <MemoryRouter initialEntries={['/unlock']}>
+    <MemoryRouter initialEntries={[entry]}>
       <Routes>
         <Route path="/unlock" element={<AccountUnlockPage />} />
         <Route path="/login" element={<div>Login page</div>} />
         <Route path="/recover" element={<div>Recover page</div>} />
         <Route path="/app" element={<div>App shell</div>} />
+        <Route path="/app/dms/:id" element={<div>Original conversation</div>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -155,4 +156,12 @@ describe('AccountUnlockPage', () => {
     expect(mockGateway.connectServer).toHaveBeenCalledWith('server-1');
     expect(await screen.findByText('App shell')).toBeInTheDocument();
   });
+  it('returns to the original conversation after unlocking from its composer', async () => {
+    const user = userEvent.setup();
+    renderUnlockPage('/unlock?returnTo=%2Fapp%2Fdms%2F123');
+    await user.type(screen.getByLabelText(/Password/), 'correct horse battery staple');
+    await user.click(screen.getByRole('button', { name: 'Unlock' }));
+    expect(await screen.findByText('Original conversation')).toBeInTheDocument();
+  });
+
 });

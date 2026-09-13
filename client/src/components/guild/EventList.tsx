@@ -1,8 +1,8 @@
+import { useCurrentUser } from '../../hooks/useCurrentUser';
 import { useCallback, useEffect, useState } from 'react';
 import { Calendar, Clock, MapPin, Users, Plus, Check, Download, Repeat, Bell } from 'lucide-react';
 import { extractApiError } from '../../api/client';
 import { getApi } from '../../api/activeClient';
-import { useAuthStore } from '../../stores/authStore';
 import { usePermissions } from '../../hooks/usePermissions';
 import { Permissions, hasPermission } from '../../types';
 import { Modal, ModalTitle } from '../ui/Modal';
@@ -330,7 +330,7 @@ export function EventList({ guildId }: EventListProps) {
   const [loadError, setLoadError] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingEvent, setEditingEvent] = useState<ScheduledEvent | null>(null);
-  const user = useAuthStore((s) => s.user);
+  const user = useCurrentUser();
   const { permissions, isAdmin } = usePermissions(guildId);
   const canManageEvents = isAdmin || hasPermission(permissions, Permissions.MANAGE_GUILD);
 

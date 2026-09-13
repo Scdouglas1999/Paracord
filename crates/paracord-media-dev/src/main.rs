@@ -54,7 +54,8 @@ struct AppState {
     jwt_secret: String,
     quic_addr: SocketAddr,
     /// Track which user is in which room (user_id -> (guild_id, channel_id)).
-    user_rooms: RwLock<HashMap<i64, (i64, i64)>>,
+    /// user_id -> (guild_id, channel_id, media session receipt)
+    user_rooms: RwLock<HashMap<i64, (i64, i64, String)>>,
 }
 
 #[tokio::main]
@@ -330,7 +331,7 @@ async fn handle_voice_join(
 
     // Create participant
     let session_id = format!("session-{}-{}", user_id, chrono::Utc::now().timestamp());
-    let participant = MediaParticipant::new(user_id, session_id);
+    let participant = MediaParticipant::new(user_id, session_id.clone());
 
     // Join room
     match state
@@ -343,7 +344,7 @@ async fn handle_voice_join(
             // Track user -> room mapping
             {
                 let mut user_rooms = state.user_rooms.write().await;
-                user_rooms.insert(user_id, (guild_id, channel_id));
+                user_rooms.insert(user_id, (guild_id, channel_id, session_id.clone()));
             }
 
             // Generate JWT token for QUIC auth
@@ -394,9 +395,14 @@ async fn handle_voice_leave(_socket: &mut WebSocket, state: &Arc<AppState>, user
         user_rooms.remove(&user_id)
     };
 
-    if let Some((guild_id, channel_id)) = room_info {
+    if let Some((guild_id, channel_id, session_id)) = room_info {
         let room_id = format!("guild_{}_channel_{}", guild_id, channel_id);
-        let remaining = state.room_manager.leave_room(guild_id, channel_id, user_id);
+        let remaining = state.room_manager.leave_room_if_session(
+            guild_id,
+            channel_id,
+            user_id,
+            Some(&session_id),
+        );
 
         // Clean up P2P and speaker state
         state.p2p_coordinator.remove_address(user_id);
@@ -494,23 +500,30 @@ async fn quic_accept_loop(endpoint: MediaEndpoint, state: Arc<AppState>) {
             state.p2p_coordinator.register_address(user_id, remote_addr);
 
             // Look up user's room
-            let room_id = {
+            let membership = {
                 let user_rooms = state.user_rooms.read().await;
                 user_rooms
                     .get(&user_id)
-                    .map(|(g, c)| format!("guild_{}_channel_{}", g, c))
+                    .map(|(guild_id, channel_id, session_id)| {
+                        (
+                            format!("guild_{}_channel_{}", guild_id, channel_id),
+                            session_id.clone(),
+                        )
+                    })
             };
 
-            let room_id = match room_id {
-                Some(r) => r,
+            let (room_id, session_id) = match membership {
+                Some(membership) => membership,
                 None => {
                     warn!(user_id, "QUIC: user not in any room");
                     return;
                 }
             };
 
-            // Create connection handle and start forwarding
-            let handle = ConnectionHandle::new(user_id, room_id.clone(), conn);
+            // Create connection handle and start forwarding. The session id is
+            // the receipt minted at join: the relay fences every mutation this
+            // connection makes on it.
+            let handle = ConnectionHandle::new(user_id, room_id.clone(), session_id, conn);
             state.relay_forwarder.add_connection(handle.clone());
             state.relay_forwarder.spawn_forwarding_task(handle);
 

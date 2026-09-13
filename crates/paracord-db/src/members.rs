@@ -367,6 +367,100 @@ pub async fn get_member_count(pool: &DbPool, guild_id: i64) -> Result<i64, DbErr
     get_member_count_typed(pool, GuildId::new(guild_id)).await
 }
 
+/// Outcome of [`add_member_and_count`]: the real post-write member count read
+/// inside the same transaction, plus whether this call actually inserted the
+/// membership row (so callers can skip member-add side effects on a duplicate
+/// join).
+#[derive(Debug, Clone, Copy)]
+pub struct MemberInsertCount {
+    pub member_count: i64,
+    pub inserted: bool,
+}
+
+/// Transactional core of [`add_member_and_count_typed`], reusable inside a
+/// larger caller-owned transaction.
+///
+/// The idempotent `ON CONFLICT DO NOTHING` insert and the `COUNT(*)` read share
+/// one transaction: a concurrent join can slip between a separate membership
+/// check and insert, so the post-join count must be read, never inferred. A
+/// failed count rolls the insert back instead of reporting success for a
+/// membership that cannot be counted.
+pub async fn add_member_and_count_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Any>,
+    user_id: UserId,
+    guild_id: GuildId,
+) -> Result<MemberInsertCount, DbError> {
+    let inserted = sqlx::query(
+        "INSERT INTO members (user_id, guild_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+    )
+    .bind(user_id)
+    .bind(guild_id)
+    .execute(&mut **tx)
+    .await?
+    .rows_affected()
+        > 0;
+    let (member_count,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM members WHERE guild_id = $1")
+            .bind(guild_id)
+            .fetch_one(&mut **tx)
+            .await?;
+    Ok(MemberInsertCount {
+        member_count,
+        inserted,
+    })
+}
+
+/// Core implementation using newtype IDs.
+pub async fn add_member_and_count_typed(
+    pool: &DbPool,
+    user_id: UserId,
+    guild_id: GuildId,
+) -> Result<MemberInsertCount, DbError> {
+    let mut tx = pool.begin().await?;
+    let outcome = add_member_and_count_tx(&mut tx, user_id, guild_id).await?;
+    tx.commit().await?;
+    Ok(outcome)
+}
+
+/// Raw i64 shim kept for API compat.
+pub async fn add_member_and_count(
+    pool: &DbPool,
+    user_id: i64,
+    guild_id: i64,
+) -> Result<MemberInsertCount, DbError> {
+    add_member_and_count_typed(pool, UserId::new(user_id), GuildId::new(guild_id)).await
+}
+
+/// Per-statement cap on the `IN (…)` list for [`get_member_counts_for_guilds`].
+/// The caller's id slice is chunked to this size so one query never carries an
+/// unbounded bind list, matching the other batch helpers in this crate.
+const MEMBER_COUNT_BATCH_SIZE: usize = 500;
+
+/// Member counts for a set of guilds in grouped batch queries, replacing the
+/// per-guild `COUNT(*)` N+1 the guild list route used to need. Ids are bound
+/// with numbered `$n` placeholders because sqlx `Any`'s `?` placeholders are
+/// rejected by PostgreSQL. Guilds with no member rows are absent from the map.
+pub async fn get_member_counts_for_guilds(
+    pool: &DbPool,
+    guild_ids: &[i64],
+) -> Result<std::collections::HashMap<i64, i64>, DbError> {
+    let mut counts = std::collections::HashMap::with_capacity(guild_ids.len());
+    for chunk in guild_ids.chunks(MEMBER_COUNT_BATCH_SIZE) {
+        let placeholders = crate::messages::build_placeholders(1, chunk.len());
+        let sql = format!(
+            "SELECT guild_id, COUNT(*) AS member_count FROM members WHERE guild_id IN ({placeholders}) GROUP BY guild_id"
+        );
+        let mut query = sqlx::query_as::<_, (i64, i64)>(&sql);
+        for guild_id in chunk {
+            query = query.bind(*guild_id);
+        }
+        for (guild_id, count) in query.fetch_all(pool).await? {
+            counts.insert(guild_id, count);
+        }
+    }
+    Ok(counts)
+}
+
 pub async fn get_all_memberships(pool: &DbPool) -> Result<Vec<(i64, i64)>, DbError> {
     let rows: Vec<(i64, i64)> = sqlx::query_as("SELECT guild_id, user_id FROM members")
         .fetch_all(pool)
@@ -548,6 +642,36 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    /// The join+count helper must be idempotent and report the count it read
+    /// inside the transaction — a duplicate call inserts nothing and returns
+    /// the same real count, while another member still moves it.
+    #[tokio::test]
+    async fn test_add_member_and_count_idempotent() {
+        let pool = test_pool().await;
+        let (user_id, guild_id) = setup_guild(&pool).await;
+
+        let first = add_member_and_count_typed(&pool, UserId::new(user_id), GuildId::new(guild_id))
+            .await
+            .unwrap();
+        assert!(first.inserted);
+        assert_eq!(first.member_count, 1);
+
+        let again = add_member_and_count_typed(&pool, UserId::new(user_id), GuildId::new(guild_id))
+            .await
+            .unwrap();
+        assert!(!again.inserted);
+        assert_eq!(again.member_count, 1);
+
+        crate::users::create_user(&pool, 2, "user2", 1, "u2@example.com", "hash")
+            .await
+            .unwrap();
+        let second = add_member_and_count_typed(&pool, UserId::new(2), GuildId::new(guild_id))
+            .await
+            .unwrap();
+        assert!(second.inserted);
+        assert_eq!(second.member_count, 2);
     }
 
     #[tokio::test]

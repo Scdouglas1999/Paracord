@@ -51,6 +51,10 @@ jobs:
         shell: bash
         run: cargo install cargo-audit --version 0.22.2 --locked
 
+      - name: Enforce audit exception review dates
+        shell: bash
+        run: python3 scripts/check_audit_exceptions.py
+
       - name: Audit Rust dependencies
         shell: bash
         run: cargo audit

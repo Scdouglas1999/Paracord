@@ -261,6 +261,43 @@ async fn admin_backup_routes_reject_header_unsafe_filenames() -> anyhow::Result<
 }
 
 #[tokio::test]
+async fn admin_restore_provides_offline_instructions_without_replacing_live_data(
+) -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    promote_default_user_to_admin(&ctx).await?;
+    let original_epoch = paracord_db::server_settings::get_database_history_epoch(&ctx.db).await?;
+    let archive =
+        std::path::Path::new(&ctx._test_app.state.config.backup_dir).join("recovery.tar.gz");
+    std::fs::write(
+        &archive,
+        b"archive validation belongs to the offline staging command",
+    )?;
+    let (status, payload) = ctx
+        .request_json(
+            Method::POST,
+            "/api/v1/admin/restore",
+            Some(json!({"name": "recovery.tar.gz"})),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{payload}");
+    assert_eq!(payload["status"], "offline_restore_required");
+    assert!(payload["command"]
+        .as_str()
+        .unwrap()
+        .contains("restore-backup"));
+    assert!(payload["steps"].as_array().unwrap().len() >= 4);
+    assert_eq!(
+        paracord_db::server_settings::get_database_history_epoch(&ctx.db).await?,
+        original_epoch
+    );
+    assert_eq!(
+        std::fs::read(archive)?,
+        b"archive validation belongs to the offline staging command"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn upload_policy_uses_active_content_downgraded_type() -> anyhow::Result<()> {
     let ctx = TestContext::new().await?;
     let guild_id = create_guild(&ctx, "Upload Policy").await?;

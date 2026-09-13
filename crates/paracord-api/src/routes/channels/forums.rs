@@ -194,6 +194,20 @@ pub async fn create_forum_post(
         None => None,
     };
 
+    if let Some(content) = body
+        .content
+        .as_deref()
+        .filter(|content| !content.trim().is_empty())
+    {
+        paracord_util::validation::validate_message_content(content).map_err(|_| {
+            ApiError::BadRequest("Message content must be 1-2000 characters".into())
+        })?;
+        if paracord_util::validation::contains_dangerous_markup_except_mentions(content) {
+            return Err(ApiError::BadRequest(
+                "Message content contains unsafe markup".into(),
+            ));
+        }
+    }
     let post_id = paracord_util::snowflake::generate(1);
     let post = paracord_db::channels::create_forum_post(
         &state.db,
@@ -207,6 +221,7 @@ pub async fn create_forum_post(
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
+    let mut first_message = None;
     if let Some(content) = body
         .content
         .as_deref()
@@ -214,23 +229,27 @@ pub async fn create_forum_post(
         .filter(|value| !value.is_empty())
     {
         let message_id = paracord_util::snowflake::generate(1);
-        let _ = paracord_db::messages::create_message(
+        let message = paracord_core::message::create_message(
             &state.db,
             message_id,
             post.id,
             auth.user_id,
             content,
-            0,
             None,
         )
-        .await;
-        let _ = paracord_db::channels::increment_thread_message_count(&state.db, post.id).await;
+        .await?;
+        paracord_db::channels::increment_thread_message_count(&state.db, post.id).await?;
+        first_message = Some(message);
     }
 
     let post_json = channel_to_json(&post);
     state
         .event_bus
         .dispatch("THREAD_CREATE", post_json.clone(), Some(guild_id));
+    if let Some(message) = first_message {
+        let payload = message_to_json(&state, &message, auth.user_id).await;
+        dispatch_channel_event(&state, &post, "MESSAGE_CREATE", payload).await?;
+    }
 
     Ok((StatusCode::CREATED, Json(post_json)))
 }

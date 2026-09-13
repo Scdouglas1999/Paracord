@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{
     atomic::{AtomicU32, AtomicU64, Ordering},
-    Arc,
+    Arc, OnceLock, Weak,
 };
 use std::time::{Duration, Instant};
 
@@ -411,20 +411,44 @@ impl Clone for MediaTransport {
     }
 }
 
+/// Immutable ownership token for exactly one media connection.
+///
+/// Every task spawned for a connection (datagram forwarding, control, uni
+/// streams, bandwidth) holds a clone of the same `ConnectionHandle` and thus a
+/// pointer to the same lease. The relay's connection map holds the lease of the
+/// connection that currently *owns* the user, so a task can ask
+/// "am I still the owner?" by pointer identity — a comparison no wire field can
+/// forge and that a reconnecting client cannot accidentally satisfy.
+///
+/// The two gates are resolved once, when the connection is registered, and then
+/// cached here: the hot path must never take the process-wide gate registries.
+#[derive(Debug, Default)]
+struct ConnectionLease {
+    /// Per-account connection gate (owned by [`RelayForwarder`]).
+    gate: OnceLock<Arc<std::sync::Mutex<()>>>,
+    /// Per-account membership gate (owned by [`MediaRoomManager`]).
+    membership_gate: OnceLock<Arc<std::sync::Mutex<()>>>,
+}
+
 /// Handle to a connected participant's QUIC connection for datagram forwarding.
 #[derive(Clone)]
 pub struct ConnectionHandle {
     pub user_id: i64,
     pub room_id: String,
+    /// Receipt verified from the media JWT, never from a control frame.
+    session_id: String,
+    lease: Arc<ConnectionLease>,
     transport: MediaTransport,
 }
 
 impl ConnectionHandle {
     /// Create a handle wrapping a raw QUIC connection.
-    pub fn new(user_id: i64, room_id: String, conn: quinn::Connection) -> Self {
+    pub fn new(user_id: i64, room_id: String, session_id: String, conn: quinn::Connection) -> Self {
         Self {
             user_id,
             room_id,
+            session_id,
+            lease: Arc::new(ConnectionLease::default()),
             transport: MediaTransport::Quic(conn),
         }
     }
@@ -433,6 +457,7 @@ impl ConnectionHandle {
     pub fn new_bridged(
         user_id: i64,
         room_id: String,
+        session_id: String,
         outbound_tx: mpsc::Sender<Bytes>,
         inbound_rx: mpsc::Receiver<Bytes>,
         control_conn: Option<quinn::Connection>,
@@ -440,6 +465,8 @@ impl ConnectionHandle {
         Self {
             user_id,
             room_id,
+            session_id,
+            lease: Arc::new(ConnectionLease::default()),
             transport: MediaTransport::Bridged {
                 outbound_tx,
                 inbound_rx: Arc::new(Mutex::new(inbound_rx)),
@@ -447,6 +474,14 @@ impl ConnectionHandle {
                 keyframe_streams: Arc::new(Mutex::new(BridgedKeyframeStreams::default())),
             },
         }
+    }
+
+    /// Media-session receipt this connection authenticated with.
+    ///
+    /// Taken from the media JWT at connection setup and never from a control
+    /// frame, so it identifies exactly one call for the life of the connection.
+    pub fn session_id(&self) -> &str {
+        &self.session_id
     }
 
     /// Send a datagram to this connection.
@@ -658,6 +693,7 @@ impl ConnectionHandle {
 pub struct RelayForwarder {
     /// Map of user_id -> ConnectionHandle for active connections.
     connections: DashMap<i64, ConnectionHandle>,
+    connection_gates: std::sync::Mutex<HashMap<i64, Weak<std::sync::Mutex<()>>>>,
     /// Room manager for subscription lookups.
     room_manager: Arc<MediaRoomManager>,
     /// Currently announced active media sessions keyed by user id.
@@ -701,6 +737,7 @@ pub struct RelayForwarder {
 
 #[derive(Clone, Debug)]
 struct ActiveSessionInfo {
+    lease: Arc<ConnectionLease>,
     room_id: String,
     session_id: String,
     video_capabilities: Vec<VideoCodecCapability>,
@@ -744,6 +781,7 @@ impl RelayForwarder {
     ) -> Self {
         Self {
             connections: DashMap::new(),
+            connection_gates: std::sync::Mutex::new(HashMap::new()),
             room_manager,
             active_sessions: DashMap::new(),
             speaker_detector,
@@ -776,8 +814,101 @@ impl RelayForwarder {
     /// therefore pin an unbounded number of connections by reconnecting in a
     /// loop. Closing the displaced handle makes each of those tasks' next read
     /// fail, so they wind down and the effective per-user cap is one.
+    /// Per-account connection gate.
+    ///
+    /// Serialises replacement (`add_connection`) against every lease-checked
+    /// mutation, so a superseded connection's cleanup can never interleave
+    /// between its replacement's ownership check and that replacement's writes.
+    ///
+    /// Resolving a gate takes a process-wide lock, so it happens exactly once
+    /// per connection (in [`Self::add_connection`]) and is cached on the lease.
+    /// The map holds `Weak`s and is swept on miss, so it is bounded by the set
+    /// of accounts with a live gate.
+    fn connection_gate(&self, user_id: i64) -> Arc<std::sync::Mutex<()>> {
+        let mut gates = self
+            .connection_gates
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(gate) = gates.get(&user_id).and_then(Weak::upgrade) {
+            return gate;
+        }
+        gates.retain(|_, gate| gate.strong_count() > 0);
+        let gate = Arc::new(std::sync::Mutex::new(()));
+        gates.insert(user_id, Arc::downgrade(&gate));
+        gate
+    }
+
+    /// True when `handle` is still the connection the relay routes this user on.
+    ///
+    /// Pointer identity on the lease, so a reconnect (even one that reuses the
+    /// same user, room and session id) yields a distinct owner.
+    fn owns_connection(&self, handle: &ConnectionHandle) -> bool {
+        self.connections
+            .get(&handle.user_id)
+            .is_some_and(|current| Arc::ptr_eq(&current.lease, &handle.lease))
+    }
+
+    /// Lock-free ownership read: this connection still owns the user *and* its
+    /// media receipt still owns the user's membership of the room.
+    ///
+    /// Read-only guards (fan-out, control delivery, liveness polling) use this;
+    /// anything that mutates relay or room state must use [`Self::with_owned`],
+    /// which closes the check-then-act window.
+    fn is_current_participant(&self, handle: &ConnectionHandle) -> bool {
+        self.owns_connection(handle)
+            && self.room_manager.participant_session_matches(
+                &handle.room_id,
+                handle.user_id,
+                &handle.session_id,
+            )
+    }
+
+    /// Run `run` only while `handle` still owns both the connection slot and the
+    /// room membership, holding both per-account gates for the whole call.
+    ///
+    /// This is the single fence every state mutation goes through. Returns
+    /// `None` — without running the closure — when the connection has been
+    /// superseded, evicted, or its call receipt replaced by a newer one.
+    ///
+    /// `run` must not block, must not perform I/O, and must not call back into
+    /// [`MediaRoomManager::join_room`]/`leave_room*` (the gates are not
+    /// reentrant). Gate order is always connection → membership.
+    fn with_owned<R>(&self, handle: &ConnectionHandle, run: impl FnOnce() -> R) -> Option<R> {
+        let gate = handle.lease.gate.get()?;
+        let membership_gate = handle.lease.membership_gate.get()?;
+        let _guard = gate.lock().unwrap_or_else(|error| error.into_inner());
+        if !self.owns_connection(handle) {
+            return None;
+        }
+        self.room_manager.with_held_membership_gate(
+            membership_gate,
+            &handle.room_id,
+            handle.user_id,
+            &handle.session_id,
+            run,
+        )
+    }
+
     pub fn add_connection(&self, handle: ConnectionHandle) {
         let user_id = handle.user_id;
+        let gate = self.connection_gate(user_id);
+        // The lease is created with the handle and only ever set once; a handle
+        // re-registered after its first registration keeps its original gates,
+        // which are exactly the gates of the account it is keyed by.
+        let _ = handle.lease.gate.set(Arc::clone(&gate));
+        let _ = handle
+            .lease
+            .membership_gate
+            .set(self.room_manager.membership_gate(user_id));
+        let _guard = gate.lock().unwrap_or_else(|error| error.into_inner());
+        // The incoming connection owns this user from here on, so drop every
+        // piece of per-user relay state the displaced connection accumulated
+        // (announced session, rate-limiter buckets, bandwidth estimates,
+        // keyframe throttles, cached fan-out plans) *under the gate*. The
+        // displaced connection's own cleanup is lease-checked and will now
+        // find itself unowned, so it cannot re-clear any of this afterwards.
+        self.active_sessions.remove(&user_id);
+        self.forget_sender_state(user_id);
         let room_id = handle.room_id.clone();
         info!(user_id, room_id = %room_id, "relay: participant connected");
         if let Some(previous) = self.connections.insert(user_id, handle) {
@@ -791,16 +922,69 @@ impl RelayForwarder {
         self.invalidate_connection_cache();
     }
 
-    /// Remove a participant's connection.
+    /// Explicit administrative removal of whatever connection currently owns
+    /// `user_id`.
+    ///
+    /// Transport-driven cleanup must use [`Self::finish_connection`] instead,
+    /// which is fenced by the caller's own lease; this entry point is for
+    /// callers acting on the account rather than on one connection.
     pub fn remove_connection(&self, user_id: i64) {
+        let gate = self.connection_gate(user_id);
+        let _guard = gate.lock().unwrap_or_else(|error| error.into_inner());
         if self.connections.remove(&user_id).is_some() {
             info!(user_id, "relay: participant disconnected");
         }
+        self.active_sessions.remove(&user_id);
+        self.forget_sender_state(user_id);
+    }
+
+    fn forget_sender_state(&self, user_id: i64) {
         self.forget_sender_cache(user_id);
         self.forget_keyframe_state(user_id);
         self.sender_rate_limiter.forget(user_id);
         self.control_rate_limiter.forget(user_id);
+        self.bandwidth_estimator.remove_user(user_id);
+        self.downlink_estimator.remove_user(user_id);
         self.invalidate_connection_cache();
+    }
+
+    /// Retire one connection's relay state on transport close.
+    ///
+    /// Fenced on the caller's own lease: a delayed cleanup task belonging to a
+    /// connection that has already been superseded finds itself unowned and
+    /// removes nothing, so it cannot unroute, un-announce or reset the state of
+    /// the replacement that took its place.
+    ///
+    /// Returns whether *this* connection's active-session announcement was the
+    /// one still standing (i.e. whether a `SessionParticipantLeave` is owed).
+    ///
+    /// Note this deliberately checks connection ownership only, not room
+    /// membership: a participant whose REST membership has already been removed
+    /// still needs its connection state torn down here.
+    fn finish_connection(&self, handle: &ConnectionHandle) -> bool {
+        let Some(gate) = handle.lease.gate.get() else {
+            return false;
+        };
+        let _guard = gate.lock().unwrap_or_else(|error| error.into_inner());
+        if !self.owns_connection(handle) {
+            return false;
+        }
+        self.connections.remove(&handle.user_id);
+        let announced = self
+            .active_sessions
+            .remove_if(&handle.user_id, |_, session| {
+                Arc::ptr_eq(&session.lease, &handle.lease)
+            })
+            .is_some();
+        self.forget_sender_state(handle.user_id);
+        announced
+    }
+
+    /// The handle that currently owns `user_id`, for tests that need to drive a
+    /// registered connection's control/selection paths.
+    #[cfg(test)]
+    pub(crate) fn connection_for_test(&self, user_id: i64) -> Option<ConnectionHandle> {
+        self.connections.get(&user_id).map(|entry| entry.clone())
     }
 
     /// Bump the connection generation so every cached recipient snapshot
@@ -836,17 +1020,14 @@ impl RelayForwarder {
     /// task so they can no longer *inject* media, and the per-sender relay state
     /// is cleared. Safe to call for a user with no live connection (no-op).
     pub fn disconnect_user(&self, user_id: i64) {
+        let gate = self.connection_gate(user_id);
+        let _guard = gate.lock().unwrap_or_else(|error| error.into_inner());
         if let Some((_, handle)) = self.connections.remove(&user_id) {
             handle.close("evicted");
             info!(user_id, "relay: participant force-disconnected");
         }
         self.active_sessions.remove(&user_id);
-        self.sender_rate_limiter.forget(user_id);
-        self.bandwidth_estimator.remove_user(user_id);
-        self.downlink_estimator.remove_user(user_id);
-        self.forget_sender_cache(user_id);
-        self.forget_keyframe_state(user_id);
-        self.invalidate_connection_cache();
+        self.forget_sender_state(user_id);
     }
 
     /// Spawn the forwarding loop for a single participant.
@@ -920,54 +1101,64 @@ impl RelayForwarder {
                     continue;
                 }
 
-                // Throttle abusive senders before amplifying the packet to every
-                // subscriber. Excess packets are dropped, not queued.
-                if !forwarder.sender_rate_limiter.try_acquire(user_id) {
-                    debug!(
+                // Everything below mutates per-user relay state (rate-limiter
+                // buckets, bandwidth estimates, speaker levels, the fan-out
+                // cache), so it runs behind the ownership fence. Once this
+                // connection has been superseded or its receipt replaced, the
+                // task stops rather than writing over the replacement's state.
+                let owned = forwarder.with_owned(&handle, || {
+                    // Throttle abusive senders before amplifying the packet to
+                    // every subscriber. Excess packets are dropped, not queued.
+                    if !forwarder.sender_rate_limiter.try_acquire(user_id) {
+                        debug!(
+                            user_id,
+                            "relay: sender rate limit exceeded, dropping datagram"
+                        );
+                        return;
+                    }
+
+                    // Feed publisher-ingress goodput + per-SSRC loss to the uplink
+                    // bandwidth estimator (all accepted track types count).
+                    forwarder.bandwidth_estimator.record_ingress(
                         user_id,
-                        "relay: sender rate limit exceeded, dropping datagram"
+                        header.ssrc,
+                        header.sequence,
+                        datagram.len() as u32,
                     );
-                    continue;
+
+                    // Speaker detection is audio-only: video floods the level
+                    // window at thousands of packets per second and would skew it.
+                    if matches!(
+                        header.track_type,
+                        paracord_transport::protocol::TrackType::Audio
+                    ) {
+                        forwarder.speaker_detector.report_audio_level(
+                            user_id,
+                            &room_id,
+                            header.audio_level,
+                        );
+                    }
+
+                    // Look up the sender's room and find subscribers
+                    forwarder.forward_to_subscribers(user_id, &room_id, &header, &datagram);
+                });
+                if owned.is_none() {
+                    disconnect_reason.get_or_insert_with(|| "media session superseded".to_string());
+                    break;
                 }
-
-                // Feed publisher-ingress goodput + per-SSRC loss to the uplink
-                // bandwidth estimator (all accepted track types count).
-                forwarder.bandwidth_estimator.record_ingress(
-                    user_id,
-                    header.ssrc,
-                    header.sequence,
-                    datagram.len() as u32,
-                );
-
-                // Speaker detection is audio-only: video floods the level
-                // window at thousands of packets per second and would skew it.
-                if matches!(
-                    header.track_type,
-                    paracord_transport::protocol::TrackType::Audio
-                ) {
-                    forwarder.speaker_detector.report_audio_level(
-                        user_id,
-                        &room_id,
-                        header.audio_level,
-                    );
-                }
-
-                // Look up the sender's room and find subscribers
-                forwarder.forward_to_subscribers(user_id, &room_id, &header, &datagram);
             }
 
             // Clean up on disconnect
-            let had_active_session = forwarder.active_sessions.remove(&user_id).is_some();
-            forwarder.sender_rate_limiter.forget(user_id);
-            forwarder.bandwidth_estimator.remove_user(user_id);
-            forwarder.downlink_estimator.remove_user(user_id);
-            forwarder.remove_connection(user_id);
+            let had_active_session = forwarder.finish_connection(&handle);
             if had_active_session {
                 forwarder
                     .broadcast_control_in_room(
                         &room_id,
                         Some(user_id),
-                        &ControlMessage::SessionParticipantLeave { user_id },
+                        &ControlMessage::SessionParticipantLeave {
+                            user_id,
+                            session_id: Some(handle.session_id.clone()),
+                        },
                     )
                     .await;
             }
@@ -987,7 +1178,6 @@ impl RelayForwarder {
     fn spawn_bandwidth_task(self: &Arc<Self>, handle: ConnectionHandle) {
         let forwarder = Arc::clone(self);
         let user_id = handle.user_id;
-        let room_id = handle.room_id.clone();
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(BANDWIDTH_SAMPLE_INTERVAL);
@@ -1001,7 +1191,7 @@ impl RelayForwarder {
                     _ = forwarder.shutdown.notified() => break,
                 }
 
-                if !handle.is_alive() {
+                if !handle.is_alive() || !forwarder.is_current_participant(&handle) {
                     break;
                 }
 
@@ -1010,11 +1200,18 @@ impl RelayForwarder {
                 // §4.2). Bridged viewers sample their WebTransport control
                 // connection, so the selection is identical for both transports.
                 if let Some(conn) = handle.quinn_connection() {
-                    forwarder
-                        .downlink_estimator
-                        .record_from_connection(user_id, conn);
+                    if forwarder
+                        .with_owned(&handle, || {
+                            forwarder
+                                .downlink_estimator
+                                .record_from_connection(user_id, conn)
+                        })
+                        .is_none()
+                    {
+                        break;
+                    }
                 }
-                forwarder.run_layer_selection(user_id, &room_id).await;
+                forwarder.run_layer_selection_for(&handle).await;
 
                 // Uplink feedback derives from measured publisher ingress at the
                 // relay (goodput + per-SSRC loss), not the relay's send-side
@@ -1030,7 +1227,8 @@ impl RelayForwarder {
 
                 if materially_changed || stale {
                     forwarder
-                        .send_control_to_user(
+                        .send_control_from(
+                            &handle,
                             user_id,
                             &ControlMessage::BandwidthFeedback { available_kbps },
                         )
@@ -1039,9 +1237,11 @@ impl RelayForwarder {
                     last_feedback_at = Instant::now();
                 }
             }
-
-            forwarder.bandwidth_estimator.remove_user(user_id);
-            forwarder.downlink_estimator.remove_user(user_id);
+            // Per-user estimator state is cleared by whichever of
+            // `finish_connection` / `add_connection` / `disconnect_user` retires
+            // this connection, all of them gated. Clearing it here would let a
+            // superseded connection's bandwidth task wipe its replacement's
+            // measurements the next time this loop woke up.
         });
     }
 
@@ -1100,6 +1300,7 @@ impl RelayForwarder {
                 // cull the stale one it is still draining.
                 let task_forwarder = Arc::clone(&forwarder);
                 let task_room_id = room_id.clone();
+                let task_handle = handle.clone();
                 tokio::spawn(async move {
                     let _permit = permit;
                     let body = match recv.read_to_end(MAX_STREAM_FRAME_SIZE).await {
@@ -1119,9 +1320,18 @@ impl RelayForwarder {
                             return;
                         }
                     };
-                    task_forwarder
-                        .forward_stream_frame_to_subscribers(user_id, &task_room_id, &header, body)
-                        .await;
+                    // Same fence as the datagram path: a keyframe still
+                    // draining from a superseded connection must not be
+                    // forwarded on the replacement's behalf, and must not touch
+                    // its layer-switch or bandwidth state.
+                    task_forwarder.with_owned(&task_handle, || {
+                        task_forwarder.forward_stream_frame_to_subscribers(
+                            user_id,
+                            &task_room_id,
+                            &header,
+                            body,
+                        );
+                    });
                 });
             }
         });
@@ -1133,7 +1343,7 @@ impl RelayForwarder {
     /// Reuses the exact recipient snapshot (SPEAK gate + subscription filter +
     /// self/deafen rules) the datagram fan-out uses, so a stream keyframe reaches
     /// precisely the viewers a delta datagram for the same SSRC would.
-    async fn forward_stream_frame_to_subscribers(
+    fn forward_stream_frame_to_subscribers(
         &self,
         sender_id: i64,
         room_id: &str,
@@ -1274,7 +1484,18 @@ impl RelayForwarder {
                 // and invalidate routing caches; `StreamKeyAnnounce` fans out to
                 // named recipients. None of that was rate limited — the token
                 // bucket on the datagram path covers media only.
-                if !forwarder.control_rate_limiter.try_acquire(user_id) {
+                let Some(allowed) = forwarder.with_owned(&handle, || {
+                    forwarder.control_rate_limiter.try_acquire(user_id)
+                }) else {
+                    debug!(
+                        user_id,
+                        room_id = %room_id,
+                        "relay: control task stopping, connection superseded"
+                    );
+                    disconnect_reason.get_or_insert_with(|| "media session superseded".to_string());
+                    break;
+                };
+                if !allowed {
                     debug!(
                         user_id,
                         room_id = %room_id,
@@ -1287,9 +1508,7 @@ impl RelayForwarder {
                     continue;
                 };
 
-                forwarder
-                    .handle_control_message(user_id, &room_id, message)
-                    .await;
+                forwarder.handle_control_message(&handle, message).await;
             }
 
             info!(
@@ -1526,17 +1745,33 @@ impl RelayForwarder {
 
     pub(crate) async fn handle_control_message(
         &self,
-        user_id: i64,
-        room_id: &str,
+        handle: &ConnectionHandle,
         message: ControlMessage,
     ) {
+        let user_id = handle.user_id;
+        let room_id = handle.room_id.as_str();
+        // Every state mutation below runs through `owned!`, which performs the
+        // operation only while this connection still owns the user *and* its
+        // media receipt still owns the room membership; otherwise the whole
+        // message is abandoned. A control frame from a connection that has been
+        // superseded (or whose call has been replaced) therefore cannot reach
+        // room state, the announced session set, or any per-user relay state.
+        macro_rules! owned {
+            ($operation:expr) => {
+                match self.with_owned(handle, || $operation) {
+                    Some(result) => result,
+                    None => return,
+                }
+            };
+        }
+        owned!(());
         match message {
             ControlMessage::SessionJoin {
                 room_id: requested_room_id,
                 session_id,
                 video_capabilities,
             } => {
-                if requested_room_id != room_id {
+                if requested_room_id != room_id || session_id != handle.session_id {
                     warn!(
                         user_id,
                         room_id = %room_id,
@@ -1545,20 +1780,38 @@ impl RelayForwarder {
                     );
                     return;
                 }
-                self.active_sessions.insert(
-                    user_id,
-                    ActiveSessionInfo {
-                        room_id: room_id.to_string(),
-                        session_id: session_id.clone(),
-                        video_capabilities: video_capabilities.clone(),
-                    },
-                );
-                let _ = self.room_manager.update_participant_session_metadata(
-                    room_id,
-                    user_id,
-                    session_id.clone(),
-                    video_capabilities.clone(),
-                );
+                // Announcing the session and recording it on the participant
+                // are one step: a half-applied join would leave the room
+                // advertising capabilities for a session the relay no longer
+                // announces (or the reverse).
+                let announced = owned!(self
+                    .room_manager
+                    .update_participant_session_metadata(
+                        room_id,
+                        user_id,
+                        handle.session_id.clone(),
+                        video_capabilities.clone(),
+                    )
+                    .inspect(|()| {
+                        self.active_sessions.insert(
+                            user_id,
+                            ActiveSessionInfo {
+                                lease: Arc::clone(&handle.lease),
+                                room_id: room_id.to_string(),
+                                session_id: handle.session_id.clone(),
+                                video_capabilities: video_capabilities.clone(),
+                            },
+                        );
+                    }));
+                if let Err(error) = announced {
+                    warn!(
+                        user_id,
+                        room_id = %room_id,
+                        error = %error,
+                        "relay: failed to record session join"
+                    );
+                    return;
+                }
 
                 let participants = self
                     .active_sessions
@@ -1577,14 +1830,16 @@ impl RelayForwarder {
                     })
                     .collect::<Vec<_>>();
 
-                self.send_control_to_user(user_id, &ControlMessage::SessionState { participants })
-                    .await;
-                if let Some(handle) = self.connections.get(&user_id).map(|entry| entry.clone()) {
-                    self.send_initial_track_state(&handle).await;
-                }
+                self.send_control_from(
+                    handle,
+                    user_id,
+                    &ControlMessage::SessionState { participants },
+                )
+                .await;
+                self.send_initial_track_state(handle).await;
 
-                self.broadcast_control_in_room(
-                    room_id,
+                self.broadcast_control_from(
+                    handle,
                     Some(user_id),
                     &ControlMessage::SessionParticipantJoin {
                         participant: SessionParticipant {
@@ -1598,27 +1853,40 @@ impl RelayForwarder {
             }
             ControlMessage::SessionLeave {
                 room_id: requested_room_id,
-                ..
+                session_id,
             } => {
-                let active_room_id = self
-                    .active_sessions
-                    .remove(&user_id)
-                    .map(|(_, active_session)| active_session.room_id);
-                let room_to_broadcast = active_room_id.as_deref().unwrap_or(room_id);
-                if requested_room_id != room_to_broadcast {
+                // A leave names the call it ends. Both the room and the receipt
+                // must be the ones this connection authenticated with, so a
+                // delayed leave carrying an older receipt cannot tear down the
+                // call that replaced it.
+                if requested_room_id != room_id || session_id != handle.session_id {
                     debug!(
                         user_id,
-                        room_id = %room_to_broadcast,
+                        room_id = %room_id,
                         requested_room_id = %requested_room_id,
-                        "relay: session leave room id differs from active room"
+                        "relay: ignoring session leave for another call"
                     );
+                    return;
                 }
-                self.broadcast_control_in_room(
-                    room_to_broadcast,
-                    Some(user_id),
-                    &ControlMessage::SessionParticipantLeave { user_id },
-                )
-                .await;
+                let removed = owned!(self
+                    .active_sessions
+                    .remove_if(&user_id, |_, active| {
+                        Arc::ptr_eq(&active.lease, &handle.lease)
+                            && active.room_id == room_id
+                            && active.session_id == session_id
+                    })
+                    .is_some());
+                if removed {
+                    self.broadcast_control_from(
+                        handle,
+                        Some(user_id),
+                        &ControlMessage::SessionParticipantLeave {
+                            user_id,
+                            session_id: Some(handle.session_id.clone()),
+                        },
+                    )
+                    .await;
+                }
             }
             ControlMessage::TrackPublish { track } => {
                 // `layers` arrives verbatim from the publisher and is
@@ -1635,15 +1903,16 @@ impl RelayForwarder {
                     );
                     return;
                 }
-                if let Err(err) = self
-                    .room_manager
-                    .publish_track(room_id, user_id, track.clone())
+                if let Err(err) =
+                    owned!(self
+                        .room_manager
+                        .publish_track(room_id, user_id, track.clone()))
                 {
                     warn!(user_id, room_id = %room_id, error = %err, "relay: failed to publish track");
                     return;
                 }
-                self.broadcast_control_in_room(
-                    room_id,
+                self.broadcast_control_from(
+                    handle,
                     Some(user_id),
                     &ControlMessage::TrackPublish { track },
                 )
@@ -1653,17 +1922,20 @@ impl RelayForwarder {
                 stream_id,
                 track_id,
             } => {
-                if let Err(err) = self
+                if let Err(err) = owned!(self
                     .room_manager
-                    .unpublish_track(room_id, user_id, &stream_id, &track_id)
+                    .unpublish_track(room_id, user_id, &stream_id, &track_id))
                 {
                     warn!(user_id, room_id = %room_id, error = %err, "relay: failed to unpublish track");
                     return;
                 }
-                self.keyframe_throttle
-                    .remove(&(user_id, stream_id.clone(), track_id.clone()));
-                self.broadcast_control_in_room(
-                    room_id,
+                owned!(self.keyframe_throttle.remove(&(
+                    user_id,
+                    stream_id.clone(),
+                    track_id.clone()
+                )));
+                self.broadcast_control_from(
+                    handle,
                     Some(user_id),
                     &ControlMessage::TrackUnpublish {
                         stream_id,
@@ -1692,13 +1964,15 @@ impl RelayForwarder {
                     self.resolve_published_track(room_id, user_id, &stream_id, &track_id)
                 {
                     track.layers = layers.clone();
-                    if let Err(err) = self.room_manager.publish_track(room_id, user_id, track) {
+                    if let Err(err) =
+                        owned!(self.room_manager.publish_track(room_id, user_id, track))
+                    {
                         warn!(user_id, room_id = %room_id, error = %err, "relay: failed to refresh track layers");
                         return;
                     }
                 }
-                self.broadcast_control_in_room(
-                    room_id,
+                self.broadcast_control_from(
+                    handle,
                     Some(user_id),
                     &ControlMessage::TrackLayers {
                         stream_id,
@@ -1709,10 +1983,11 @@ impl RelayForwarder {
                 .await;
             }
             ControlMessage::SubscribeStream { subscription } => {
-                if let Err(err) =
-                    self.room_manager
-                        .subscribe_track(room_id, user_id, subscription.clone())
-                {
+                if let Err(err) = owned!(self.room_manager.subscribe_track(
+                    room_id,
+                    user_id,
+                    subscription.clone()
+                )) {
                     warn!(user_id, room_id = %room_id, error = %err, "relay: failed to register track subscription");
                     return;
                 }
@@ -1721,7 +1996,8 @@ impl RelayForwarder {
                     &subscription.stream_id,
                     &subscription.track_id,
                 );
-                self.send_control_to_user(
+                self.send_control_from(
+                    handle,
                     user_id,
                     &ControlMessage::SubscriptionAck {
                         stream_id: subscription.stream_id.clone(),
@@ -1739,7 +2015,8 @@ impl RelayForwarder {
                         &subscription.track_id,
                         user_id,
                     ) {
-                        self.send_control_to_user(
+                        self.send_control_from(
+                            handle,
                             user_id,
                             &ControlMessage::StreamKeyDeliver {
                                 stream_id: subscription.stream_id.clone(),
@@ -1751,7 +2028,8 @@ impl RelayForwarder {
                         )
                         .await;
                     } else {
-                        self.send_control_to_user(
+                        self.send_control_from(
+                            handle,
                             track.publisher_user_id,
                             &ControlMessage::RequestStreamKey {
                                 stream_id: subscription.stream_id.clone(),
@@ -1761,7 +2039,8 @@ impl RelayForwarder {
                         )
                         .await;
                     }
-                    self.send_control_to_user(
+                    self.send_control_from(
+                        handle,
                         track.publisher_user_id,
                         &ControlMessage::RequestKeyframe {
                             stream_id: subscription.stream_id,
@@ -1776,17 +2055,21 @@ impl RelayForwarder {
                 stream_id,
                 track_id,
             } => {
-                if let Err(err) = self
+                if let Err(err) = owned!(self
                     .room_manager
-                    .unsubscribe_track(room_id, user_id, &stream_id, &track_id)
+                    .unsubscribe_track(room_id, user_id, &stream_id, &track_id))
                 {
                     warn!(user_id, room_id = %room_id, error = %err, "relay: failed to unregister track subscription");
                     return;
                 }
                 // Drop any relay-driven layer-selection state for this viewer/track.
-                self.layer_selection
-                    .remove(&(user_id, stream_id.clone(), track_id.clone()));
-                self.send_control_to_user(
+                owned!(self.layer_selection.remove(&(
+                    user_id,
+                    stream_id.clone(),
+                    track_id.clone()
+                )));
+                self.send_control_from(
+                    handle,
                     user_id,
                     &ControlMessage::SubscriptionAck {
                         stream_id,
@@ -1812,12 +2095,12 @@ impl RelayForwarder {
                 // Coalesce keyframe-request storms: a single lossy viewer can
                 // otherwise pump the publisher for an IDR many times a second,
                 // collapsing the shared stream's average bitrate for everyone.
-                if !self.allow_keyframe_request(
+                if !owned!(self.allow_keyframe_request(
                     track.publisher_user_id,
                     &stream_id,
                     &track_id,
                     Instant::now(),
-                ) {
+                )) {
                     debug!(
                         user_id,
                         room_id = %room_id,
@@ -1827,7 +2110,8 @@ impl RelayForwarder {
                     );
                     return;
                 }
-                self.send_control_to_user(
+                self.send_control_from(
+                    handle,
                     track.publisher_user_id,
                     &ControlMessage::RequestKeyframe {
                         stream_id,
@@ -1850,13 +2134,13 @@ impl RelayForwarder {
                 // layer is no longer applied to forwarding. The report still
                 // carries the viewport hint (which re-caps the relay's selection)
                 // and is forwarded to the publisher for its top-layer adaptation.
-                if let Err(err) = self.room_manager.update_subscription_viewport(
+                if let Err(err) = owned!(self.room_manager.update_subscription_viewport(
                     room_id,
                     user_id,
                     &stream_id,
                     &track_id,
                     viewport.clone(),
-                ) {
+                )) {
                     warn!(
                         user_id,
                         room_id = %room_id,
@@ -1866,12 +2150,13 @@ impl RelayForwarder {
                 }
                 // A fresh viewport can change the layer cap; re-evaluate this
                 // viewer's selection now rather than waiting for the next sample.
-                self.run_layer_selection(user_id, room_id).await;
+                self.run_layer_selection_for(handle).await;
 
                 if let Some(track) =
                     self.resolve_any_published_track(room_id, &stream_id, &track_id)
                 {
-                    self.send_control_to_user(
+                    self.send_control_from(
+                        handle,
                         track.publisher_user_id,
                         &ControlMessage::ReceiverReport {
                             stream_id,
@@ -1907,31 +2192,28 @@ impl RelayForwarder {
                     return;
                 }
                 for (recipient_user_id, ciphertext) in encrypted_keys {
-                    let delivered = self
-                        .send_control_to_user_in_room(
-                            room_id,
+                    // Authorisation is membership, not reachability: a peer that
+                    // has joined the call but whose media connection has not
+                    // come up yet must still have its key stored, so
+                    // `send_initial_track_state` can hand it over on connect.
+                    if !self.is_room_member(room_id, recipient_user_id) {
+                        debug!(
+                            user_id,
                             recipient_user_id,
-                            &ControlMessage::StreamKeyDeliver {
-                                stream_id: stream_id.clone(),
-                                track_id: track_id.clone(),
-                                sender_user_id: user_id,
-                                epoch,
-                                ciphertext: ciphertext.clone(),
-                            },
-                        )
-                        .await;
-                    if !delivered {
+                            room_id = %room_id,
+                            "relay: refusing to announce a track key to a non-member"
+                        );
                         continue;
                     }
-                    if let Err(err) = self.room_manager.store_track_key(
+                    if let Err(err) = owned!(self.room_manager.store_track_key(
                         room_id,
                         user_id,
                         &stream_id,
                         &track_id,
                         epoch,
                         recipient_user_id,
-                        ciphertext,
-                    ) {
+                        ciphertext.clone(),
+                    )) {
                         warn!(
                             user_id,
                             recipient_user_id,
@@ -1939,13 +2221,26 @@ impl RelayForwarder {
                             error = %err,
                             "relay: failed to store published track key"
                         );
+                        continue;
                     }
+                    self.send_control_from(
+                        handle,
+                        recipient_user_id,
+                        &ControlMessage::StreamKeyDeliver {
+                            stream_id: stream_id.clone(),
+                            track_id: track_id.clone(),
+                            sender_user_id: user_id,
+                            epoch,
+                            ciphertext,
+                        },
+                    )
+                    .await;
                 }
                 if let Some(track) =
                     self.resolve_any_published_track(room_id, &stream_id, &track_id)
                 {
-                    self.broadcast_control_in_room(
-                        room_id,
+                    self.broadcast_control_from(
+                        handle,
                         Some(user_id),
                         &ControlMessage::TrackPublish {
                             track: PublishedTrack { codec, ..track },
@@ -1970,8 +2265,8 @@ impl RelayForwarder {
                     return;
                 }
                 for (recipient_user_id, ciphertext) in encrypted_keys {
-                    self.send_control_to_user_in_room(
-                        room_id,
+                    self.send_control_from(
+                        handle,
                         recipient_user_id,
                         &ControlMessage::KeyDeliver {
                             sender_user_id: user_id,
@@ -1989,10 +2284,11 @@ impl RelayForwarder {
                 // Audio fan-out is gated by the participant-level subscription
                 // set; video is negotiated per-track via SubscribeStream.
                 if matches!(track_type, TrackKind::Audio) {
-                    if let Err(err) =
-                        self.room_manager
-                            .subscribe_participant(room_id, user_id, target_user_id)
-                    {
+                    if let Err(err) = owned!(self.room_manager.subscribe_participant(
+                        room_id,
+                        user_id,
+                        target_user_id
+                    )) {
                         warn!(user_id, target_user_id, room_id = %room_id, error = %err, "relay: failed to register audio subscription");
                     }
                 }
@@ -2002,10 +2298,11 @@ impl RelayForwarder {
                 track_type,
             } => {
                 if matches!(track_type, TrackKind::Audio) {
-                    if let Err(err) =
-                        self.room_manager
-                            .unsubscribe_participant(room_id, user_id, target_user_id)
-                    {
+                    if let Err(err) = owned!(self.room_manager.unsubscribe_participant(
+                        room_id,
+                        user_id,
+                        target_user_id
+                    )) {
                         warn!(user_id, target_user_id, room_id = %room_id, error = %err, "relay: failed to unregister audio subscription");
                     }
                 }
@@ -2033,6 +2330,52 @@ impl RelayForwarder {
         }
     }
 
+    /// Emit a control message *on behalf of* one connection.
+    ///
+    /// Re-checks the sender's ownership immediately before each send, so a
+    /// superseded connection with a message already in flight stops speaking for
+    /// the user the moment its replacement is registered. Returns whether the
+    /// message actually reached a live connection of `recipient`.
+    async fn send_control_from(
+        &self,
+        handle: &ConnectionHandle,
+        recipient: i64,
+        message: &ControlMessage,
+    ) -> bool {
+        if !self.is_current_participant(handle) {
+            return false;
+        }
+        self.send_control_to_user_in_room(&handle.room_id, recipient, message)
+            .await
+    }
+
+    /// Room-wide fan-out on behalf of one connection, with the same fence as
+    /// [`Self::send_control_from`] applied per recipient.
+    async fn broadcast_control_from(
+        &self,
+        handle: &ConnectionHandle,
+        exclude: Option<i64>,
+        message: &ControlMessage,
+    ) {
+        let recipients = self
+            .room_manager
+            .with_room(&handle.room_id, |room| {
+                room.participants
+                    .keys()
+                    .copied()
+                    .filter(|recipient| exclude.is_none_or(|excluded| excluded != *recipient))
+                    .collect::<Vec<i64>>()
+            })
+            .unwrap_or_default();
+        for recipient in recipients {
+            if !self.is_current_participant(handle) {
+                return;
+            }
+            self.send_control_to_user_in_room(&handle.room_id, recipient, message)
+                .await;
+        }
+    }
+
     pub(crate) async fn broadcast_control_in_room(
         &self,
         room_id: &str,
@@ -2055,11 +2398,15 @@ impl RelayForwarder {
             .unwrap_or_default();
 
         for user_id in recipients {
-            self.send_control_to_user(user_id, message).await;
+            self.send_control_to_user_in_room(room_id, user_id, message)
+                .await;
         }
     }
 
     pub async fn send_initial_track_state(&self, handle: &ConnectionHandle) {
+        if !self.is_current_participant(handle) {
+            return;
+        }
         // Snapshot only the published tracks (not the whole room) and drop the
         // read guard before the first await.
         let published: Vec<(i64, PublishedTrack)> = self
@@ -2078,6 +2425,9 @@ impl RelayForwarder {
             .unwrap_or_default();
 
         for (publisher_user_id, track) in &published {
+            if !self.is_current_participant(handle) {
+                return;
+            }
             let participant_user_id = *publisher_user_id;
             if let Err(err) = handle
                 .send_control(&ControlMessage::TrackPublish {
@@ -2091,6 +2441,9 @@ impl RelayForwarder {
                     error = %err,
                     "relay: failed to send initial published track state"
                 );
+            }
+            if !self.is_current_participant(handle) {
+                return;
             }
             if let Some((epoch, ciphertext)) = self.latest_track_key_delivery(
                 &handle.room_id,
@@ -2140,36 +2493,32 @@ impl RelayForwarder {
         }
     }
 
-    async fn send_control_to_user(&self, user_id: i64, message: &ControlMessage) {
-        let Some(handle) = self.connections.get(&user_id).map(|entry| entry.clone()) else {
-            return;
-        };
-        if let Err(err) = handle.send_control(message).await {
-            debug!(recipient = user_id, error = %err, "relay: failed to send control message");
-        }
+    /// Whether `user_id` is a participant of `room_id`.
+    ///
+    /// A recipient id a client put in a message (`StreamKeyAnnounce` and
+    /// `KeyAnnounce` both carry a caller-supplied `recipient_user_id`) is only
+    /// ever authorised against the announcing participant's own room; without
+    /// that scoping a participant in any room could target users in every other
+    /// call on the server. This is the *authorisation* question, kept separate
+    /// from whether the recipient currently has a live media connection.
+    fn is_room_member(&self, room_id: &str, user_id: i64) -> bool {
+        self.room_manager
+            .with_room(room_id, |room| room.participants.contains_key(&user_id))
+            .unwrap_or(false)
     }
 
     /// Send a control message to `user_id` **only if that user is a participant
-    /// of `room_id`**.
+    /// of `room_id`** and the connection the relay currently routes them on is
+    /// still the owner of that membership.
     ///
-    /// [`send_control_to_user`] resolves against the global connection map with
-    /// no room scoping. That is correct for recipients the relay itself derived
-    /// from room state, but not for a recipient id a client put in a message:
-    /// `StreamKeyAnnounce`/`KeyAnnounce` carry a caller-supplied
-    /// `recipient_user_id`, so without this check a participant in any room
-    /// could inject `KeyDeliver`/`StreamKeyDeliver` at arbitrary users in every
-    /// other call on the server.
+    /// Returns whether the message was handed to a live connection.
     async fn send_control_to_user_in_room(
         &self,
         room_id: &str,
         user_id: i64,
         message: &ControlMessage,
     ) -> bool {
-        let in_room = self
-            .room_manager
-            .with_room(room_id, |room| room.participants.contains_key(&user_id))
-            .unwrap_or(false);
-        if !in_room {
+        if !self.is_room_member(room_id, user_id) {
             debug!(
                 recipient = user_id,
                 room_id = %room_id,
@@ -2177,7 +2526,18 @@ impl RelayForwarder {
             );
             return false;
         }
-        self.send_control_to_user(user_id, message).await;
+        let Some(handle) = self.connections.get(&user_id).map(|entry| entry.clone()) else {
+            return false;
+        };
+        // A recipient whose connection has been superseded must not be written
+        // to on the old transport: the replacement is the only live one.
+        if handle.room_id != room_id || !self.is_current_participant(&handle) {
+            return false;
+        }
+        if let Err(err) = handle.send_control(message).await {
+            debug!(recipient = user_id, error = %err, "relay: failed to send control message");
+            return false;
+        }
         true
     }
 
@@ -2269,9 +2629,14 @@ impl RelayForwarder {
     /// Selection defers until the relay has at least one real downlink sample for
     /// the viewer, so a freshly connected viewer is never downswitched off the
     /// pre-measurement default before it has been measured.
-    pub(crate) async fn run_layer_selection(&self, viewer_id: i64, room_id: &str) {
+    ///
+    /// Returns the keyframe requests the new selection implies, for the caller to
+    /// emit once the ownership guard has been released: the selection itself must
+    /// be atomic with respect to connection replacement, but the sends must not
+    /// hold a lock across the network.
+    fn prepare_layer_selection(&self, viewer_id: i64, room_id: &str) -> Vec<(i64, ControlMessage)> {
         if !self.downlink_estimator.is_sampled(viewer_id) {
-            return;
+            return Vec::new();
         }
         // Snapshot each video subscription (stream/track/viewport/active layer)
         // *and* the track it resolves to under a single borrow of the room, so
@@ -2322,8 +2687,9 @@ impl RelayForwarder {
         let loss = self.downlink_estimator.windowed_loss(viewer_id);
         let now = Instant::now();
 
+        let mut messages = Vec::new();
         for (stream_id, track_id, viewport, active_layer, track) in subscriptions {
-            self.evaluate_layer_selection(
+            if let Some(message) = self.evaluate_layer_selection(
                 viewer_id,
                 &track,
                 &stream_id,
@@ -2333,8 +2699,27 @@ impl RelayForwarder {
                 egress_kbps,
                 loss,
                 now,
-            )
-            .await;
+            ) {
+                messages.push(message);
+            }
+        }
+        messages
+    }
+
+    /// Re-evaluate one viewer's simulcast selection and emit any staged keyframe
+    /// requests, on behalf of the connection that owns that viewer.
+    ///
+    /// Selection mutates `layer_selection` and the keyframe throttle, so the
+    /// decision runs behind the ownership fence; the resulting messages are then
+    /// emitted with the fence re-checked per send, so no guard crosses an await.
+    pub(crate) async fn run_layer_selection_for(&self, handle: &ConnectionHandle) {
+        let Some(messages) = self.with_owned(handle, || {
+            self.prepare_layer_selection(handle.user_id, &handle.room_id)
+        }) else {
+            return;
+        };
+        for (recipient, message) in messages {
+            self.send_control_from(handle, recipient, &message).await;
         }
     }
 
@@ -2343,7 +2728,7 @@ impl RelayForwarder {
     /// layer, requesting a keyframe on the target layer (throttled) so the switch
     /// can land at its next keyframe boundary.
     #[allow(clippy::too_many_arguments)]
-    async fn evaluate_layer_selection(
+    fn evaluate_layer_selection(
         &self,
         viewer_id: i64,
         track: &PublishedTrack,
@@ -2354,7 +2739,7 @@ impl RelayForwarder {
         egress_kbps: u32,
         loss: f64,
         now: Instant,
-    ) {
+    ) -> Option<(i64, ControlMessage)> {
         let key = (viewer_id, stream_id.clone(), track_id.clone());
         let target = {
             let mut entry = self.layer_selection.entry(key.clone()).or_insert_with(|| {
@@ -2374,7 +2759,7 @@ impl RelayForwarder {
             if let Some(mut entry) = self.layer_selection.get_mut(&key) {
                 entry.pending_layer = None;
             }
-            return;
+            return None;
         };
 
         // Stage the switch; the actual flip happens when the target layer's next
@@ -2385,15 +2770,16 @@ impl RelayForwarder {
         // Request a keyframe on the TARGET layer, throttled per (publisher,
         // stream, track) so a churn of switches cannot pump the publisher.
         if self.allow_keyframe_request(track.publisher_user_id, stream_id, track_id, now) {
-            self.send_control_to_user(
+            Some((
                 track.publisher_user_id,
-                &ControlMessage::RequestKeyframe {
+                ControlMessage::RequestKeyframe {
                     stream_id: stream_id.clone(),
                     track_id: track_id.clone(),
                     layer_id: Some(target),
                 },
-            )
-            .await;
+            ))
+        } else {
+            None
         }
     }
 
@@ -2725,6 +3111,7 @@ mod tests {
         forwarder.active_sessions.insert(
             user_id,
             ActiveSessionInfo {
+                lease: Arc::new(ConnectionLease::default()),
                 room_id: "1:100".to_string(),
                 session_id: "sess".to_string(),
                 video_capabilities: vec![],
@@ -3170,14 +3557,23 @@ mod tests {
     #[tokio::test]
     async fn session_join_with_mismatched_room_is_rejected() {
         let mgr = MediaRoomManager::new();
+        mgr.join_room(
+            1,
+            100,
+            crate::participant::MediaParticipant::new(42, "sess".into()),
+        )
+        .unwrap();
+        let room_id = mgr.get_or_create_room(1, 100);
         let forwarder = RelayForwarder::new(Arc::new(mgr), Arc::new(SpeakerDetector::new()));
+        add_bridged_session(&forwarder, 42, &room_id, "sess");
+        let handle = forwarder.connection_for_test(42).unwrap();
 
-        // The control task is bound to "room-a"; a join claiming "room-b" must
-        // be dropped without registering an active session.
+        // The control task is bound to the connection's own room; a join
+        // claiming another room must be dropped without registering an active
+        // session.
         forwarder
             .handle_control_message(
-                42,
-                "room-a",
+                &handle,
                 ControlMessage::SessionJoin {
                     room_id: "room-b".to_string(),
                     session_id: "sess".to_string(),
@@ -3187,6 +3583,40 @@ mod tests {
             .await;
 
         assert!(forwarder.active_sessions.is_empty());
+    }
+
+    /// The session id in a `SessionJoin`/`SessionLeave` is a claim by the peer.
+    /// Only the receipt the connection authenticated with may move relay state,
+    /// so a frame naming a different (for example, superseded) call is dropped.
+    #[tokio::test]
+    async fn session_join_with_a_foreign_receipt_is_rejected() {
+        let mgr = MediaRoomManager::new();
+        mgr.join_room(
+            1,
+            100,
+            crate::participant::MediaParticipant::new(42, "sess-new".into()),
+        )
+        .unwrap();
+        let room_id = mgr.get_or_create_room(1, 100);
+        let forwarder = RelayForwarder::new(Arc::new(mgr), Arc::new(SpeakerDetector::new()));
+        add_bridged_session(&forwarder, 42, &room_id, "sess-new");
+        let handle = forwarder.connection_for_test(42).unwrap();
+
+        forwarder
+            .handle_control_message(
+                &handle,
+                ControlMessage::SessionJoin {
+                    room_id: room_id.clone(),
+                    session_id: "sess-old".to_string(),
+                    video_capabilities: vec![],
+                },
+            )
+            .await;
+
+        assert!(
+            forwarder.active_sessions.is_empty(),
+            "a join naming another call's receipt must not announce a session"
+        );
     }
 
     /// `encrypted_keys` is a client-supplied `(recipient_user_id, ciphertext)`
@@ -3207,6 +3637,8 @@ mod tests {
         let room_id = mgr.get_or_create_room(1, 100);
         let mgr = Arc::new(mgr);
         let forwarder = RelayForwarder::new(Arc::clone(&mgr), Arc::new(SpeakerDetector::new()));
+        add_bridged_session(&forwarder, 1, &room_id, "s1");
+        let handle = forwarder.connection_for_test(1).unwrap();
 
         let stream_id = StreamId::new("stream-1");
         let track_id = TrackId::new("screen");
@@ -3216,8 +3648,7 @@ mod tests {
 
         forwarder
             .handle_control_message(
-                1,
-                &room_id,
+                &handle,
                 ControlMessage::StreamKeyAnnounce {
                     stream_id: stream_id.clone(),
                     track_id: track_id.clone(),
@@ -3268,13 +3699,15 @@ mod tests {
         let room_id = mgr.get_or_create_room(1, 100);
         let mgr = Arc::new(mgr);
         let forwarder = RelayForwarder::new(Arc::clone(&mgr), Arc::new(SpeakerDetector::new()));
+        add_bridged_session(&forwarder, 1, &room_id, "s1");
+        add_bridged_session(&forwarder, 2, &room_id, "s2");
+        let handle = forwarder.connection_for_test(1).unwrap();
 
         let stream_id = StreamId::new("stream-1");
         let track_id = TrackId::new("screen");
         forwarder
             .handle_control_message(
-                1,
-                &room_id,
+                &handle,
                 ControlMessage::StreamKeyAnnounce {
                     stream_id: stream_id.clone(),
                     track_id: track_id.clone(),
@@ -3317,6 +3750,8 @@ mod tests {
         let room_id = mgr.get_or_create_room(1, 100);
         let mgr = Arc::new(mgr);
         let forwarder = RelayForwarder::new(Arc::clone(&mgr), Arc::new(SpeakerDetector::new()));
+        add_bridged_session(&forwarder, 1, &room_id, "s1");
+        let handle = forwarder.connection_for_test(1).unwrap();
 
         let layers: Vec<PublishedLayer> = (0..(MAX_TRACK_LAYERS as u32 + 1))
             .map(|i| PublishedLayer {
@@ -3331,8 +3766,7 @@ mod tests {
 
         forwarder
             .handle_control_message(
-                1,
-                &room_id,
+                &handle,
                 ControlMessage::TrackPublish {
                     track: PublishedTrack {
                         stream_id: StreamId::new("stream-1"),
@@ -3451,15 +3885,7 @@ mod tests {
         // Bridged handles need no quinn connection, so the fan-out plan can be
         // resolved entirely in-process.
         for uid in [1, 2, 3] {
-            let (tx, _out_rx) = mpsc::channel::<Bytes>(8);
-            let (_in_tx, rx) = mpsc::channel::<Bytes>(8);
-            forwarder.add_connection(ConnectionHandle::new_bridged(
-                uid,
-                room_id.clone(),
-                tx,
-                rx,
-                None,
-            ));
+            add_bridged_session(&forwarder, uid, &room_id, &format!("s{uid}"));
         }
 
         let header = audio_header(11);
@@ -3553,15 +3979,7 @@ mod tests {
         let mgr = Arc::new(mgr);
         let forwarder = RelayForwarder::new(Arc::clone(&mgr), Arc::new(SpeakerDetector::new()));
         for uid in [1, 2, 3, 4] {
-            let (tx, _out_rx) = mpsc::channel::<Bytes>(8);
-            let (_in_tx, rx) = mpsc::channel::<Bytes>(8);
-            forwarder.add_connection(ConnectionHandle::new_bridged(
-                uid,
-                room_id.clone(),
-                tx,
-                rx,
-                None,
-            ));
+            add_bridged_session(&forwarder, uid, &room_id, &format!("s{uid}"));
         }
 
         let snapshot = forwarder.recipient_snapshot(1, &room_id, &video_header(500));
@@ -3650,7 +4068,8 @@ mod tests {
         // this is the unreachable state the retired skip-warning now flags.
         let (tx, _out) = mpsc::channel::<Bytes>(8);
         let (_in, rx) = mpsc::channel::<Bytes>(8);
-        let no_control = ConnectionHandle::new_bridged(9, "1:100".into(), tx, rx, None);
+        let no_control =
+            ConnectionHandle::new_bridged(9, "1:100".into(), "s9".into(), tx, rx, None);
         assert!(!no_control.supports_media_uni_streams());
         assert!(no_control.accept_uni().await.is_err());
         assert!(no_control
@@ -3661,7 +4080,14 @@ mod tests {
         // With a control connection it carries the same uni-stream path as raw QUIC.
         let (tx, _out) = mpsc::channel::<Bytes>(8);
         let (_in, rx) = mpsc::channel::<Bytes>(8);
-        let bridged = ConnectionHandle::new_bridged(9, "1:100".into(), tx, rx, Some(server_conn));
+        let bridged = ConnectionHandle::new_bridged(
+            9,
+            "1:100".into(),
+            "s9".into(),
+            tx,
+            rx,
+            Some(server_conn),
+        );
         assert!(bridged.supports_media_uni_streams());
     }
 
@@ -3719,12 +4145,18 @@ mod tests {
         // subscriber whose control connection carries its uni streams.
         let (quic_server, quic_client) = quinn_pair().await;
         let (bridged_server, bridged_client) = quinn_pair().await;
-        forwarder.add_connection(ConnectionHandle::new(2, room_id.clone(), quic_server));
+        forwarder.add_connection(ConnectionHandle::new(
+            2,
+            room_id.clone(),
+            "s2".to_string(),
+            quic_server,
+        ));
         let (tx, _out) = mpsc::channel::<Bytes>(8);
         let (_in, rx) = mpsc::channel::<Bytes>(8);
         forwarder.add_connection(ConnectionHandle::new_bridged(
             3,
             room_id.clone(),
+            "s3".to_string(),
             tx,
             rx,
             Some(bridged_server),
@@ -3735,9 +4167,12 @@ mod tests {
         let mut body = video_header(500).to_bytes().to_vec();
         body.extend_from_slice(b"opaque-encrypted-keyframe-payload");
 
-        forwarder
-            .forward_stream_frame_to_subscribers(1, &room_id, &video_header(500), body.clone())
-            .await;
+        forwarder.forward_stream_frame_to_subscribers(
+            1,
+            &room_id,
+            &video_header(500),
+            body.clone(),
+        );
 
         // Both viewers receive the identical bytes on a fresh uni stream.
         let read_one = |conn: quinn::Connection| async move {
@@ -3945,16 +4380,24 @@ mod tests {
         );
     }
 
-    fn add_bridged(forwarder: &RelayForwarder, uid: i64, room_id: &str) {
+    /// Register a bridged connection whose media receipt matches the session id
+    /// the participant joined the room with, which is what the relay's ownership
+    /// fence checks on every mutation.
+    fn add_bridged_session(forwarder: &RelayForwarder, uid: i64, room_id: &str, session_id: &str) {
         let (tx, _out_rx) = mpsc::channel::<Bytes>(8);
         let (_in_tx, rx) = mpsc::channel::<Bytes>(8);
         forwarder.add_connection(ConnectionHandle::new_bridged(
             uid,
             room_id.to_string(),
+            session_id.to_string(),
             tx,
             rx,
             None,
         ));
+    }
+
+    fn add_bridged(forwarder: &RelayForwarder, uid: i64, room_id: &str) {
+        add_bridged_session(forwarder, uid, room_id, &format!("s{uid}"));
     }
 
     #[tokio::test]
@@ -4019,9 +4462,7 @@ mod tests {
 
         // The L keyframe arrives: the pending switch commits at its boundary.
         let body = keyframe_body(&track, 0);
-        forwarder
-            .forward_stream_frame_to_subscribers(1, &room_id, &video_header(10), body)
-            .await;
+        forwarder.forward_stream_frame_to_subscribers(1, &room_id, &video_header(10), body);
 
         // Selection state and subscription both flipped to L; forwarding follows.
         let state = *forwarder
@@ -4100,7 +4541,10 @@ mod tests {
         // Run the relay's selection for each viewer; it stages keyframe-gated
         // switches (viewer 4 already at its target stages nothing).
         for uid in [2, 3, 4] {
-            forwarder.run_layer_selection(uid, &room_id).await;
+            let handle = forwarder
+                .connection_for_test(uid)
+                .expect("viewer connection is registered");
+            forwarder.run_layer_selection_for(&handle).await;
         }
         assert_eq!(
             forwarder
@@ -4120,22 +4564,18 @@ mod tests {
         );
 
         // The next keyframe on each staged layer commits that viewer's switch.
-        forwarder
-            .forward_stream_frame_to_subscribers(
-                1,
-                &room_id,
-                &video_header(10),
-                keyframe_body(&track, 0),
-            )
-            .await;
-        forwarder
-            .forward_stream_frame_to_subscribers(
-                1,
-                &room_id,
-                &video_header(11),
-                keyframe_body(&track, 1),
-            )
-            .await;
+        forwarder.forward_stream_frame_to_subscribers(
+            1,
+            &room_id,
+            &video_header(10),
+            keyframe_body(&track, 0),
+        );
+        forwarder.forward_stream_frame_to_subscribers(
+            1,
+            &room_id,
+            &video_header(11),
+            keyframe_body(&track, 1),
+        );
 
         // One publisher, three viewers, three different layers: each layer's ssrc
         // fans out to exactly the viewer selected onto it.
@@ -4152,5 +4592,438 @@ mod tests {
         assert_eq!(recipients(10), vec![2], "L (ssrc 10) → the 1.5 Mbps viewer");
         assert_eq!(recipients(11), vec![3], "M (ssrc 11) → the 5 Mbps viewer");
         assert_eq!(recipients(12), vec![4], "H (ssrc 12) → the 15 Mbps viewer");
+    }
+
+    // ── Call-session lifecycle: one connection owns one call ────────────────
+    //
+    // Two ids decide who may change a user's relay state: the *lease* (which
+    // connection currently owns the user) and the *receipt* (which media
+    // session currently owns the user's room membership). Everything below
+    // drives the two ways those go stale — a connection superseded by a
+    // reconnect, and a receipt superseded by a new call — and asserts the stale
+    // side cannot reach through to the live one.
+
+    fn bridged_with_control(
+        user_id: i64,
+        room_id: &str,
+        session_id: &str,
+        control: Option<quinn::Connection>,
+    ) -> ConnectionHandle {
+        let (tx, _out_rx) = mpsc::channel::<Bytes>(8);
+        let (_in_tx, rx) = mpsc::channel::<Bytes>(8);
+        ConnectionHandle::new_bridged(
+            user_id,
+            room_id.to_string(),
+            session_id.to_string(),
+            tx,
+            rx,
+            control,
+        )
+    }
+
+    /// A one-publisher, one-viewer room where user 1 holds `session_id`.
+    fn lifecycle_room(session_id: &str) -> (Arc<MediaRoomManager>, Arc<RelayForwarder>, String) {
+        let mgr = MediaRoomManager::new();
+        mgr.join_room(
+            1,
+            100,
+            crate::participant::MediaParticipant::new(1, session_id.into()),
+        )
+        .unwrap();
+        let mut viewer = crate::participant::MediaParticipant::new(2, "s2".into());
+        viewer.subscribe(1);
+        mgr.join_room(1, 100, viewer).unwrap();
+        let room_id = mgr.get_or_create_room(1, 100);
+        let mgr = Arc::new(mgr);
+        let forwarder = Arc::new(RelayForwarder::new(
+            Arc::clone(&mgr),
+            Arc::new(SpeakerDetector::new()),
+        ));
+        add_bridged_session(&forwarder, 2, &room_id, "s2");
+        (mgr, forwarder, room_id)
+    }
+
+    fn simple_track(publisher: i64, stream: &str, track: &str) -> PublishedTrack {
+        PublishedTrack {
+            stream_id: StreamId::new(stream),
+            track_id: TrackId::new(track),
+            publisher_user_id: publisher,
+            kind: TrackKind::Video,
+            codec: Some(VideoCodec::Vp9),
+            layers: vec![PublishedLayer {
+                layer_id: 0,
+                ssrc: 4_100,
+                width: Some(640),
+                height: Some(360),
+                max_bitrate_kbps: Some(800),
+                active: true,
+            }],
+        }
+    }
+
+    fn announced_session(forwarder: &RelayForwarder, user_id: i64) -> Option<String> {
+        forwarder
+            .active_sessions
+            .get(&user_id)
+            .map(|session| session.session_id.clone())
+    }
+
+    /// A superseded connection's cleanup task can run at any point after its
+    /// replacement is live. It must not unroute, un-announce, or reset any of
+    /// the replacement's state.
+    #[tokio::test]
+    async fn a_superseded_connections_cleanup_cannot_disturb_its_replacement() {
+        let (mgr, forwarder, room_id) = lifecycle_room("call-1");
+
+        // The first connection joins and announces its session.
+        add_bridged_session(&forwarder, 1, &room_id, "call-1");
+        let first = forwarder.connection_for_test(1).unwrap();
+        forwarder
+            .handle_control_message(
+                &first,
+                ControlMessage::SessionJoin {
+                    room_id: room_id.clone(),
+                    session_id: "call-1".to_string(),
+                    video_capabilities: vec![],
+                },
+            )
+            .await;
+        assert_eq!(announced_session(&forwarder, 1).as_deref(), Some("call-1"));
+
+        // The user reconnects: a fresh REST join re-issues the receipt and a new
+        // media connection takes the slot. The displaced handle is still held by
+        // its own (now doomed) tasks.
+        mgr.join_room(
+            1,
+            100,
+            crate::participant::MediaParticipant::new(1, "call-2".into()),
+        )
+        .unwrap();
+        add_bridged_session(&forwarder, 1, &room_id, "call-2");
+        let second = forwarder.connection_for_test(1).unwrap();
+        assert_eq!(second.session_id(), "call-2");
+        forwarder
+            .handle_control_message(
+                &second,
+                ControlMessage::SessionJoin {
+                    room_id: room_id.clone(),
+                    session_id: "call-2".to_string(),
+                    video_capabilities: vec![],
+                },
+            )
+            .await;
+        forwarder
+            .handle_control_message(
+                &second,
+                ControlMessage::TrackPublish {
+                    track: simple_track(1, "stream-new", "cam"),
+                },
+            )
+            .await;
+
+        // Seed the per-user state the replacement now owns.
+        let _ = forwarder.recipient_snapshot(1, &room_id, &audio_header(77));
+        forwarder.record_downlink_sample_for_test(
+            1,
+            12_500,
+            Duration::from_millis(20),
+            Instant::now(),
+        );
+        let throttled_at = Instant::now();
+        assert!(forwarder.allow_keyframe_request(
+            1,
+            &StreamId::new("stream-new"),
+            &TrackId::new("cam"),
+            throttled_at
+        ));
+        assert_eq!(forwarder.cached_plan_count(1), 1);
+
+        // NOW the displaced connection's cleanup finally runs.
+        assert!(
+            !forwarder.finish_connection(&first),
+            "a superseded connection owes no participant-leave for its replacement"
+        );
+
+        // Routing, announcement and per-user relay state all survive.
+        assert_eq!(
+            forwarder.connection_count(),
+            2,
+            "the replacement must stay routable"
+        );
+        assert_eq!(
+            forwarder.connection_for_test(1).unwrap().session_id(),
+            "call-2"
+        );
+        assert_eq!(announced_session(&forwarder, 1).as_deref(), Some("call-2"));
+        assert_eq!(
+            forwarder.cached_plan_count(1),
+            1,
+            "the replacement's fan-out plan must not be evicted"
+        );
+        assert!(
+            forwarder.downlink_estimator.is_sampled(1),
+            "the replacement's bandwidth samples must not be discarded"
+        );
+        assert!(
+            !forwarder.allow_keyframe_request(
+                1,
+                &StreamId::new("stream-new"),
+                &TrackId::new("cam"),
+                throttled_at
+            ),
+            "the replacement's keyframe throttle must not be reset"
+        );
+        assert!(
+            mgr.with_room(&room_id, |room| room.participants[&1]
+                .published_tracks
+                .contains_key(&(StreamId::new("stream-new"), TrackId::new("cam"))))
+                .unwrap(),
+            "the replacement's published track must survive"
+        );
+
+        // And the displaced connection's own control frames are inert too.
+        forwarder
+            .handle_control_message(
+                &first,
+                ControlMessage::SessionLeave {
+                    room_id: room_id.clone(),
+                    session_id: "call-1".to_string(),
+                },
+            )
+            .await;
+        forwarder
+            .handle_control_message(
+                &first,
+                ControlMessage::TrackUnpublish {
+                    stream_id: StreamId::new("stream-new"),
+                    track_id: TrackId::new("cam"),
+                },
+            )
+            .await;
+        assert_eq!(
+            announced_session(&forwarder, 1).as_deref(),
+            Some("call-2"),
+            "a displaced connection must not end its replacement's session"
+        );
+        assert!(
+            mgr.with_room(&room_id, |room| room.participants[&1]
+                .published_tracks
+                .contains_key(&(StreamId::new("stream-new"), TrackId::new("cam"))))
+                .unwrap(),
+            "a displaced connection must not unpublish its replacement's track"
+        );
+    }
+
+    /// The receipt can go stale without the connection being displaced: the user
+    /// starts a *new* call (a fresh REST join issues a new session id) while the
+    /// old connection is still open. Control frames carrying the old receipt
+    /// must not reach the new call's state.
+    #[tokio::test]
+    async fn a_stale_call_receipt_cannot_mutate_a_newer_call() {
+        let (mgr, forwarder, room_id) = lifecycle_room("call-1");
+        add_bridged_session(&forwarder, 1, &room_id, "call-1");
+        let stale = forwarder.connection_for_test(1).unwrap();
+        forwarder
+            .handle_control_message(
+                &stale,
+                ControlMessage::SessionJoin {
+                    room_id: room_id.clone(),
+                    session_id: "call-1".to_string(),
+                    video_capabilities: vec![],
+                },
+            )
+            .await;
+        forwarder
+            .handle_control_message(
+                &stale,
+                ControlMessage::TrackPublish {
+                    track: simple_track(1, "stream-old", "cam"),
+                },
+            )
+            .await;
+        assert_eq!(announced_session(&forwarder, 1).as_deref(), Some("call-1"));
+
+        // A new call is admitted for the same account on the same connection
+        // slot: the room membership receipt is replaced.
+        mgr.join_room(
+            1,
+            100,
+            crate::participant::MediaParticipant::new(1, "call-2".into()),
+        )
+        .unwrap();
+
+        // Every state-changing control frame from the old call is now inert,
+        // whether it names its own (stale) receipt or the new one.
+        for message in [
+            ControlMessage::SessionLeave {
+                room_id: room_id.clone(),
+                session_id: "call-1".to_string(),
+            },
+            ControlMessage::SessionLeave {
+                room_id: room_id.clone(),
+                session_id: "call-2".to_string(),
+            },
+            ControlMessage::SessionJoin {
+                room_id: room_id.clone(),
+                session_id: "call-2".to_string(),
+                video_capabilities: vec![],
+            },
+            ControlMessage::TrackPublish {
+                track: simple_track(1, "stream-forged", "cam"),
+            },
+            ControlMessage::SubscribeStream {
+                subscription: TrackSubscription {
+                    stream_id: StreamId::new("stream-old"),
+                    track_id: TrackId::new("cam"),
+                    requested_layer: Some(0),
+                    active_layer: None,
+                    viewport: None,
+                },
+            },
+        ] {
+            forwarder.handle_control_message(&stale, message).await;
+        }
+
+        assert_eq!(
+            announced_session(&forwarder, 1).as_deref(),
+            Some("call-1"),
+            "a stale receipt must neither end nor re-announce the session"
+        );
+        let (published, subscriptions) = mgr
+            .with_room(&room_id, |room| {
+                let participant = &room.participants[&1];
+                (
+                    participant.published_tracks.len(),
+                    participant.track_subscriptions.len(),
+                )
+            })
+            .unwrap();
+        assert_eq!(
+            published, 0,
+            "the new call starts with no tracks; a stale receipt must not publish into it"
+        );
+        assert_eq!(
+            subscriptions, 0,
+            "a stale receipt must not register subscriptions on the new call"
+        );
+
+        // The connection that actually holds the new receipt still works.
+        add_bridged_session(&forwarder, 1, &room_id, "call-2");
+        let current = forwarder.connection_for_test(1).unwrap();
+        forwarder
+            .handle_control_message(
+                &current,
+                ControlMessage::SessionJoin {
+                    room_id: room_id.clone(),
+                    session_id: "call-2".to_string(),
+                    video_capabilities: vec![],
+                },
+            )
+            .await;
+        assert_eq!(announced_session(&forwarder, 1).as_deref(), Some("call-2"));
+    }
+
+    /// Contract S5: a bridged WebTransport connection is fenced exactly like a
+    /// raw QUIC one. Both transports run the identical supersede scenario and
+    /// must reach the identical outcome.
+    #[tokio::test]
+    async fn bridged_and_raw_connections_are_fenced_identically() {
+        #[derive(Debug, PartialEq, Eq)]
+        struct Outcome {
+            stale_cleanup_owed_leave: bool,
+            connections: usize,
+            owner_session: Option<String>,
+            announced_session: Option<String>,
+            stale_publish_landed: bool,
+        }
+
+        async fn run(bridged: bool) -> Outcome {
+            let (mgr, forwarder, room_id) = lifecycle_room("call-1");
+            let (first_conn, _first_client) = quinn_pair().await;
+            let (second_conn, _second_client) = quinn_pair().await;
+
+            let first = if bridged {
+                bridged_with_control(1, &room_id, "call-1", Some(first_conn))
+            } else {
+                ConnectionHandle::new(1, room_id.clone(), "call-1".to_string(), first_conn)
+            };
+            forwarder.add_connection(first.clone());
+            forwarder
+                .handle_control_message(
+                    &first,
+                    ControlMessage::SessionJoin {
+                        room_id: room_id.clone(),
+                        session_id: "call-1".to_string(),
+                        video_capabilities: vec![],
+                    },
+                )
+                .await;
+
+            mgr.join_room(
+                1,
+                100,
+                crate::participant::MediaParticipant::new(1, "call-2".into()),
+            )
+            .unwrap();
+            let second = if bridged {
+                bridged_with_control(1, &room_id, "call-2", Some(second_conn))
+            } else {
+                ConnectionHandle::new(1, room_id.clone(), "call-2".to_string(), second_conn)
+            };
+            forwarder.add_connection(second.clone());
+            forwarder
+                .handle_control_message(
+                    &second,
+                    ControlMessage::SessionJoin {
+                        room_id: room_id.clone(),
+                        session_id: "call-2".to_string(),
+                        video_capabilities: vec![],
+                    },
+                )
+                .await;
+
+            // The displaced connection's delayed cleanup and a late publish.
+            let stale_cleanup_owed_leave = forwarder.finish_connection(&first);
+            forwarder
+                .handle_control_message(
+                    &first,
+                    ControlMessage::TrackPublish {
+                        track: simple_track(1, "stream-stale", "cam"),
+                    },
+                )
+                .await;
+
+            Outcome {
+                stale_cleanup_owed_leave,
+                connections: forwarder.connection_count(),
+                owner_session: forwarder
+                    .connection_for_test(1)
+                    .map(|handle| handle.session_id().to_string()),
+                announced_session: announced_session(&forwarder, 1),
+                stale_publish_landed: mgr
+                    .with_room(&room_id, |room| {
+                        room.participants[&1]
+                            .published_tracks
+                            .contains_key(&(StreamId::new("stream-stale"), TrackId::new("cam")))
+                    })
+                    .unwrap(),
+            }
+        }
+
+        let expected = Outcome {
+            stale_cleanup_owed_leave: false,
+            connections: 2,
+            owner_session: Some("call-2".to_string()),
+            announced_session: Some("call-2".to_string()),
+            stale_publish_landed: false,
+        };
+        let raw = run(false).await;
+        let bridged = run(true).await;
+        assert_eq!(raw, expected, "raw QUIC must be fenced");
+        assert_eq!(bridged, expected, "bridged WebTransport must be fenced");
+        assert_eq!(
+            raw, bridged,
+            "both transports must reach the identical fenced outcome"
+        );
     }
 }

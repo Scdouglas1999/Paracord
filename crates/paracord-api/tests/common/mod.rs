@@ -25,6 +25,7 @@ use uuid::Uuid;
 
 pub struct TestAppOptions {
     pub database_url: Option<String>,
+    pub database_connections: u32,
     pub run_migrations: bool,
     pub install_http_rate_limiter: bool,
     pub jwt_secret: String,
@@ -41,12 +42,21 @@ pub struct TestAppOptions {
     pub ai_api_key: Option<String>,
     pub ai_model: Option<String>,
     pub ai_timeout_seconds: u64,
+    /// Whether the built app represents an instance that already has an owner.
+    ///
+    /// A migrated database with no users is `pending`: the first-owner claim is
+    /// the only path that can create an account, and `POST /auth/register` is
+    /// refused. Almost every test here models a running community server rather
+    /// than an unclaimed one, so the harness completes setup by default and the
+    /// setup tests opt back into `false`.
+    pub instance_setup_complete: bool,
 }
 
 impl Default for TestAppOptions {
     fn default() -> Self {
         Self {
             database_url: None,
+            database_connections: 1,
             run_migrations: true,
             install_http_rate_limiter: false,
             jwt_secret: "integration-test-secret".to_string(),
@@ -63,6 +73,7 @@ impl Default for TestAppOptions {
             ai_api_key: None,
             ai_model: None,
             ai_timeout_seconds: 20,
+            instance_setup_complete: true,
         }
     }
 }
@@ -75,13 +86,84 @@ pub struct TestApp {
     /// The same `AppState` the router was built with, so tests can assert on
     /// process-global state (e.g. `user_presences`) that has no read endpoint.
     pub state: AppState,
+    _database_dir: TempDir,
     _storage_dir: TempDir,
     _media_dir: TempDir,
     _backup_dir: TempDir,
+    /// Declared last so the pool above is dropped before the database is.
+    _postgres: Option<PostgresDatabase>,
+}
+
+/// A harness-provisioned PostgreSQL database, dropped with the app that owns it.
+///
+/// Each one is roughly 11 MB of files. A full suite run provisions hundreds, so
+/// leaving them behind filled the shared server's temporary filesystem and then
+/// failed every other suite running on the same machine.
+pub struct PostgresDatabase {
+    admin_url: String,
+    name: String,
+}
+
+impl Drop for PostgresDatabase {
+    fn drop(&mut self) {
+        let admin_url = self.admin_url.clone();
+        let name = self.name.clone();
+        // Drop from an owned runtime on its own thread: `Drop` cannot await, and
+        // the test's runtime may already be shutting down.
+        let _ = std::thread::spawn(move || {
+            let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            else {
+                return;
+            };
+            runtime.block_on(async move {
+                if let Ok(admin) = paracord_db::create_pool(&admin_url, 1).await {
+                    // FORCE: this database's own pool may still be closing.
+                    let _ = sqlx::query(&format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"))
+                        .execute(&admin)
+                        .await;
+                    admin.close().await;
+                }
+            });
+        })
+        .join();
+    }
 }
 
 /// Guards one-time creation of the migrated PostgreSQL template database.
 static PG_TEMPLATE: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
+
+/// Stable identifier for the current PostgreSQL migration set: the SHA-256 of
+/// every `migrations_pg/*.sql` file name and body, in name order. Any change to
+/// a migration therefore provisions a fresh template instead of reusing one
+/// built from the old schema.
+fn postgres_template_key() -> anyhow::Result<String> {
+    use sha2::{Digest, Sha256};
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../paracord-db/migrations_pg");
+    let mut files: Vec<_> = std::fs::read_dir(&dir)?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "sql"))
+        .collect();
+    anyhow::ensure!(
+        !files.is_empty(),
+        "no PostgreSQL migrations found under {}",
+        dir.display()
+    );
+    files.sort();
+    let mut hasher = Sha256::new();
+    for path in files {
+        hasher.update(path.file_name().unwrap_or_default().as_encoded_bytes());
+        hasher.update(std::fs::read(&path)?);
+    }
+    Ok(hasher
+        .finalize()
+        .iter()
+        .take(12)
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
 
 /// Swap the database name in a PostgreSQL URL, preserving everything else.
 fn with_database(base: &str, name: &str) -> anyhow::Result<String> {
@@ -103,7 +185,10 @@ fn with_database(base: &str, name: &str) -> anyhow::Result<String> {
 /// PostgreSQL. Isolation matches SQLite's: each test app gets its own database,
 /// cloned from a template that pays the migration cost once (`CREATE DATABASE
 /// … TEMPLATE …` is a file copy, so per-test setup stays cheap).
-async fn provision_postgres_database(base_url: &str, migrated: bool) -> anyhow::Result<String> {
+async fn provision_postgres_database(
+    base_url: &str,
+    migrated: bool,
+) -> anyhow::Result<(String, PostgresDatabase)> {
     // `postgres` is the maintenance database every server has; CREATE DATABASE
     // cannot run from inside the database being cloned.
     let admin_url = with_database(base_url, "postgres")?;
@@ -119,27 +204,85 @@ async fn provision_postgres_database(base_url: &str, migrated: bool) -> anyhow::
             .execute(&admin)
             .await?;
         admin.close().await;
-        return with_database(base_url, &name);
+        let owned = PostgresDatabase {
+            admin_url,
+            name: name.clone(),
+        };
+        return Ok((with_database(base_url, &name)?, owned));
     }
 
     let template = PG_TEMPLATE
         .get_or_try_init(|| async {
-            // Unique per test binary. Cargo runs each integration test as its
-            // own process, so a shared fixed name would let one binary DROP the
-            // template another was mid-clone from — and it lets several `cargo
-            // test` runs share one server without colliding.
-            let name = format!("pctpl_{}", Uuid::new_v4().simple());
+            // One template per migration set, shared by every test binary and
+            // every `cargo test` run against this server. A random per-process
+            // name leaked a ~13 MB template per binary per run (hundreds of
+            // them filled the shared server's disk); a fixed name keyed by the
+            // migration contents lets processes share it, and the advisory lock
+            // serialises the create-and-migrate step so a second process can
+            // never clone a half-migrated template.
+            let key = postgres_template_key()?;
+            let name = format!("pctpl_{key}");
+            let lock_id = i64::from_le_bytes(
+                key.as_bytes()[..16]
+                    .chunks(2)
+                    .map(|pair| u8::from_str_radix(std::str::from_utf8(pair)?, 16).map_err(anyhow::Error::from))
+                    .collect::<anyhow::Result<Vec<u8>>>()?
+                    .try_into()
+                    .expect("eight hex pairs"),
+            );
+            // Pool of exactly one connection: the advisory lock is
+            // session-scoped, so lock and unlock must share it.
             let admin = paracord_db::create_pool(&admin_url, 1).await?;
-            sqlx::query(&format!("CREATE DATABASE {name}"))
+            sqlx::query("SELECT pg_advisory_lock($1)")
+                .bind(lock_id)
                 .execute(&admin)
                 .await?;
+            let provision = async {
+                let exists: i64 =
+                    sqlx::query_scalar("SELECT count(*) FROM pg_database WHERE datname = $1")
+                        .bind(&name)
+                        .fetch_one(&admin)
+                        .await?;
+                if exists == 0 {
+                    sqlx::query(&format!("CREATE DATABASE {name}"))
+                        .execute(&admin)
+                        .await?;
+                    let template_url = with_database(base_url, &name)?;
+                    let pool = paracord_db::create_pool(&template_url, 1).await?;
+                    if let Err(error) = paracord_db::run_migrations(&pool).await {
+                        // Never leave a half-migrated template behind under the
+                        // deterministic name: the next process would clone it.
+                        pool.close().await;
+                        let _ = sqlx::query(&format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"))
+                            .execute(&admin)
+                            .await;
+                        return Err(anyhow::Error::from(error));
+                    }
+                    // A template cannot be cloned while anything is connected to it.
+                    pool.close().await;
+                }
+                // Templates for superseded migration sets are dead weight; a
+                // template mid-clone elsewhere makes DROP fail, which is fine.
+                let stale: Vec<String> = sqlx::query_scalar(
+                    "SELECT datname::text FROM pg_database WHERE datname LIKE 'pctpl_%' AND datname <> $1",
+                )
+                .bind(&name)
+                .fetch_all(&admin)
+                .await?;
+                for old in stale {
+                    let _ = sqlx::query(&format!("DROP DATABASE IF EXISTS {old}"))
+                        .execute(&admin)
+                        .await;
+                }
+                Ok::<(), anyhow::Error>(())
+            }
+            .await;
+            let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
+                .bind(lock_id)
+                .execute(&admin)
+                .await;
             admin.close().await;
-
-            let template_url = with_database(base_url, &name)?;
-            let pool = paracord_db::create_pool(&template_url, 1).await?;
-            paracord_db::run_migrations(&pool).await?;
-            // A template cannot be cloned while anything is connected to it.
-            pool.close().await;
+            provision?;
             Ok::<String, anyhow::Error>(name)
         })
         .await?;
@@ -151,26 +294,46 @@ async fn provision_postgres_database(base_url: &str, migrated: bool) -> anyhow::
         .await?;
     admin.close().await;
 
-    with_database(base_url, &name)
+    let owned = PostgresDatabase {
+        admin_url,
+        name: name.clone(),
+    };
+    Ok((with_database(base_url, &name)?, owned))
 }
 
 pub async fn build_test_app(options: TestAppOptions) -> anyhow::Result<TestApp> {
+    let database_dir = tempfile::tempdir()?;
     // An explicit url in the options always wins (the PostgreSQL-specific
     // smokes pass one directly). Otherwise honour the suite-wide PostgreSQL
     // override, and fall back to in-memory SQLite.
+    let mut owned_postgres = None;
     let (database_url, migrated_by_template) = match options.database_url.clone() {
         Some(url) => (url, false),
         None => match std::env::var("PARACORD_TEST_POSTGRES_URL") {
-            Ok(base) if !base.trim().is_empty() => (
-                provision_postgres_database(base.trim(), options.run_migrations).await?,
-                options.run_migrations,
+            Ok(base) if !base.trim().is_empty() => {
+                let (url, owned) =
+                    provision_postgres_database(base.trim(), options.run_migrations).await?;
+                owned_postgres = Some(owned);
+                (url, options.run_migrations)
+            }
+            _ if options.database_connections > 1 => (
+                format!(
+                    "sqlite://{}?mode=rwc",
+                    database_dir.path().join("test.sqlite").display()
+                ),
+                false,
             ),
             _ => ("sqlite::memory:".to_string(), false),
         },
     };
-    let db = paracord_db::create_pool(&database_url, 1).await?;
+    let db = paracord_db::create_pool(&database_url, options.database_connections).await?;
     if options.run_migrations && !migrated_by_template {
         paracord_db::run_migrations(&db).await?;
+    }
+
+    // See `TestAppOptions::instance_setup_complete`.
+    if options.run_migrations && options.instance_setup_complete {
+        paracord_db::instance_setup::complete_bootstrap(&db, chrono::Utc::now()).await?;
     }
 
     if options.install_http_rate_limiter {
@@ -218,6 +381,13 @@ pub async fn build_test_app(options: TestAppOptions) -> anyhow::Result<TestApp> 
     };
 
     let state = AppState {
+        database_history_epoch: if options.run_migrations {
+            paracord_db::server_settings::get_or_create_database_history_epoch(&db).await?
+        } else {
+            // Schema-failure/migration tests intentionally start without tables;
+            // use a test-only instance identity without repairing their schema.
+            Uuid::new_v4().to_string()
+        },
         db: db.clone(),
         event_bus: event_bus.clone(),
         config: AppConfig {
@@ -304,7 +474,7 @@ pub async fn build_test_app(options: TestAppOptions) -> anyhow::Result<TestApp> 
         )),
         0,
     );
-    let app = paracord_api::build_router()
+    let app = paracord_api::build_router(&state)
         .with_state(state.clone())
         .layer(from_fn(
             move |mut req: Request<Body>, next: Next| async move {
@@ -320,9 +490,11 @@ pub async fn build_test_app(options: TestAppOptions) -> anyhow::Result<TestApp> 
         jwt_secret: options.jwt_secret,
         event_bus,
         state,
+        _database_dir: database_dir,
         _storage_dir: storage_dir,
         _media_dir: media_dir,
         _backup_dir: backup_dir,
+        _postgres: owned_postgres,
     })
 }
 

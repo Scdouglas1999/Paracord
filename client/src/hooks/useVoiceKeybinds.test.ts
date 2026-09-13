@@ -12,6 +12,7 @@ const { voiceState, gatewayMock, authState } = vi.hoisted(() => {
     toggleMute: vi.fn(() => Promise.resolve()),
     toggleDeaf: vi.fn(() => Promise.resolve()),
     setPttEngaged: vi.fn(),
+    publishVoiceState: vi.fn(),
   };
   const gatewayMock = { updateVoiceStateAll: vi.fn() };
   const authState: { settings: { keybinds: Record<string, unknown>; notifications: Record<string, unknown> } } = {
@@ -36,6 +37,7 @@ describe('useVoiceKeybinds PTT teardown', () => {
     voiceState.toggleMute.mockClear();
     voiceState.toggleDeaf.mockClear();
     voiceState.setPttEngaged.mockClear();
+    voiceState.publishVoiceState.mockClear();
     gatewayMock.updateVoiceStateAll.mockClear();
     // Fresh reference each test so the hook's useMemo recomputes on rerender.
     authState.settings = {

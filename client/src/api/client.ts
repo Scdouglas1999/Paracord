@@ -11,6 +11,8 @@ import {
 } from '../lib/authToken';
 import { useAuthStore } from '../stores/authStore';
 import { useServerListStore } from '../stores/serverListStore';
+import type { ApiRequestContext } from './requestContext';
+import { DATABASE_HISTORY_HEADER } from '../lib/databaseHistory';
 
 const API_SLOW_REQUEST_MS = 800;
 const API_TIMING_VERBOSE =
@@ -27,6 +29,7 @@ const API_LOG_INTERACTION_TOKEN_PATH_RE =
 let apiRequestSequence = 0;
 
 type TimedRequestConfig = {
+  _paracordContext?: ApiRequestContext;
   _pcStartMs?: number;
   _pcRequestId?: string;
   _pcAttempt?: number;
@@ -182,14 +185,16 @@ export function refreshSharedSession(): Promise<string> {
   return refreshLegacyToken();
 }
 
-async function refreshLegacyToken(): Promise<string> {
+async function refreshLegacyToken(context?: ApiRequestContext): Promise<string> {
   if (!legacyRefreshPromise) {
     legacyRefreshPromise = (async () => {
       const refreshToken = getRefreshToken();
       const refresh = await apiClient.post<{ token: string; refresh_token?: string }>(
         '/auth/refresh',
         refreshToken ? { refresh_token: refreshToken } : undefined,
+        context ? { _paracordContext: context, signal: context.signal } : undefined,
       );
+      context?.assertCurrent();
       const nextToken = refresh.data.token;
       setAccessToken(nextToken);
       if (refresh.data.refresh_token) setRefreshToken(refresh.data.refresh_token);
@@ -201,17 +206,23 @@ async function refreshLegacyToken(): Promise<string> {
   return legacyRefreshPromise;
 }
 
-function markActiveServerApiReachable(reachable: boolean): void {
+function markRequestApiReachable(baseURL: string | undefined, reachable: boolean): void {
+  if (!baseURL) return;
+  const requestUrl = new URL(baseURL, window.location.href).href;
   const store = useServerListStore.getState();
-  const activeServerId = store.activeServerId;
-  if (!activeServerId) return;
-  store.setApiReachable(activeServerId, reachable);
+  const server = store.getServerByUrl(requestUrl);
+  if (server) store.setApiReachable(server.id, reachable);
 }
 
 // Auth interceptor for legacy client
 apiClient.interceptors.request.use((config) => {
   // Resolve at request time so "Add Server" updates apply without full reload.
-  config.baseURL = resolveApiBaseUrl();
+  config._paracordContext?.assertCurrent();
+  if (config._paracordContext) {
+    if (config._paracordContext.historyEpoch) config.headers.set(DATABASE_HISTORY_HEADER, config._paracordContext.historyEpoch);
+    else config.headers.delete(DATABASE_HISTORY_HEADER);
+  }
+  config.baseURL = config._paracordContext?.baseURL ?? resolveApiBaseUrl();
   startTiming(config as TimedRequestConfig);
   const token = getAccessToken();
   if (shouldAttachCsrf(config.method)) {
@@ -229,6 +240,7 @@ apiClient.interceptors.request.use((config) => {
 // Error interceptor for legacy client
 apiClient.interceptors.response.use(
   (res) => {
+    res.config._paracordContext?.assertResponseCurrent?.(res.headers);
     const cfg = res.config as TimedRequestConfig;
     const tookMs = elapsedMs(cfg);
     if (tookMs != null && (API_TIMING_VERBOSE || tookMs >= API_SLOW_REQUEST_MS)) {
@@ -242,7 +254,7 @@ apiClient.interceptors.response.use(
         traceId,
       });
     }
-    markActiveServerApiReachable(true);
+    markRequestApiReachable(res.config.baseURL, true);
     return res;
   },
   async (err) => {
@@ -251,6 +263,8 @@ apiClient.interceptors.response.use(
       url?: string;
       headers?: Record<string, string>;
     } & TimedRequestConfig);
+    original?._paracordContext?.assertCurrent();
+    if (err.response) original?._paracordContext?.assertResponseCurrent?.(err.response.headers);
     const tookMs = elapsedMs(original ?? {});
     const traceId = readTraceIdFromHeaders(err.response?.headers);
     if (
@@ -272,7 +286,7 @@ apiClient.interceptors.response.use(
     }
     if (err.response) {
       // HTTP response means transport was reachable (even for 4xx/5xx).
-      markActiveServerApiReachable(true);
+      markRequestApiReachable(err.config?.baseURL, true);
     }
 
     if (
@@ -282,11 +296,13 @@ apiClient.interceptors.response.use(
     ) {
       original._retry = true;
       try {
-        const nextToken = await refreshLegacyToken();
+        const nextToken = await refreshLegacyToken(original?._paracordContext);
+        original?._paracordContext?.assertCurrent();
         original.headers = original.headers ?? {};
         original.headers.Authorization = `Bearer ${nextToken}`;
         return apiClient.request(original);
       } catch {
+        original?._paracordContext?.assertCurrent();
         clearPersistedAuth();
         // Clear auth state so ProtectedRoute redirects to /login via React
         // Router.  A hard `window.location.href` navigation would kill all
@@ -330,7 +346,7 @@ export function createApiClient(
   // 401s share one in-flight refresh so rotating refresh tokens are not
   // presented twice (which would fail and tear down the connection).
   let refreshPromise: Promise<string> | null = null;
-  const refreshAccessToken = (): Promise<string> => {
+  const refreshAccessToken = (context?: ApiRequestContext): Promise<string> => {
     if (!refreshPromise) {
       refreshPromise = (async () => {
         // Pass the stored per-server refresh token in the body: for remote
@@ -340,7 +356,9 @@ export function createApiClient(
         const refresh = await client.post<{ token: string; refresh_token?: string }>(
           '/auth/refresh',
           refreshToken ? { refresh_token: refreshToken } : undefined,
+          context ? { _paracordContext: context, signal: context.signal } : undefined,
         );
+        context?.assertCurrent();
         const nextToken = refresh.data.token;
         // Persist the rotated refresh token so the next refresh presents a
         // valid credential (the server rotates on every refresh).
@@ -355,6 +373,12 @@ export function createApiClient(
 
   // Auth interceptor
   client.interceptors.request.use((config) => {
+    config._paracordContext?.assertCurrent();
+    if (config._paracordContext) {
+      if (config._paracordContext.historyEpoch) config.headers.set(DATABASE_HISTORY_HEADER, config._paracordContext.historyEpoch);
+      else config.headers.delete(DATABASE_HISTORY_HEADER);
+    }
+    if (config._paracordContext) config.baseURL = config._paracordContext.baseURL;
     startTiming(config as TimedRequestConfig);
     const token = getToken();
     if (shouldAttachCsrf(config.method)) {
@@ -372,6 +396,7 @@ export function createApiClient(
   // Error + refresh interceptor
   client.interceptors.response.use(
     (res) => {
+      res.config._paracordContext?.assertResponseCurrent?.(res.headers);
       const cfg = res.config as TimedRequestConfig;
       const tookMs = elapsedMs(cfg);
       if (tookMs != null && (API_TIMING_VERBOSE || tookMs >= API_SLOW_REQUEST_MS)) {
@@ -394,6 +419,8 @@ export function createApiClient(
         url?: string;
         headers?: Record<string, string>;
       } & TimedRequestConfig);
+      original?._paracordContext?.assertCurrent();
+      if (err.response) original?._paracordContext?.assertResponseCurrent?.(err.response.headers);
       const tookMs = elapsedMs(original ?? {});
       const traceId = readTraceIdFromHeaders(err.response?.headers);
       if (
@@ -425,11 +452,13 @@ export function createApiClient(
       ) {
         original._retry = true;
         try {
-          const nextToken = await refreshAccessToken();
+          const nextToken = await refreshAccessToken(original?._paracordContext);
+          original?._paracordContext?.assertCurrent();
           original.headers = original.headers ?? {};
           original.headers.Authorization = `Bearer ${nextToken}`;
           return client.request(original);
         } catch {
+          original?._paracordContext?.assertCurrent();
           onAuthFailed?.();
           return Promise.reject(err);
         }

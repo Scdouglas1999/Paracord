@@ -259,3 +259,60 @@ pub async fn mark_scheduled_message_failed(
     .await?;
     Ok(())
 }
+
+impl ScheduledMessageRow {
+    /// Stable even for old schedules that predate client delivery nonces.
+    pub fn delivery_nonce(&self) -> String {
+        self.nonce
+            .as_deref()
+            .map(str::trim)
+            .filter(|nonce| !nonce.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("scheduled:{}", self.id))
+    }
+}
+
+/// Recover a worker interrupted between message commit and schedule completion.
+/// Receipts survive message deletion; a deleted delivery must not be recreated.
+/// Run before evaluating current send permissions/slowmode for a new delivery.
+pub async fn reconcile_committed_delivery(
+    pool: &DbPool,
+    scheduled: &ScheduledMessageRow,
+) -> Result<bool, DbError> {
+    let mut tx = pool.begin().await?;
+    let receipt: Option<(i64, Option<i64>)> = sqlx::query_as(
+        "SELECT CASE WHEN r.cancelled THEN 1 ELSE 0 END, m.id
+         FROM message_delivery_receipts r LEFT JOIN messages m ON m.id = r.message_id
+         WHERE r.channel_id = $1 AND r.author_id = $2 AND r.nonce = $3",
+    )
+    .bind(scheduled.channel_id)
+    .bind(scheduled.author_id)
+    .bind(scheduled.delivery_nonce())
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((cancelled, message_id)) = receipt else {
+        tx.commit().await?;
+        return Ok(false);
+    };
+    sqlx::query(
+        "UPDATE scheduled_messages SET status = $2, delivered_message_id = $3,
+         error = $4, updated_at = datetime('now') WHERE id = $1 AND status = $5",
+    )
+    .bind(scheduled.id)
+    .bind(if cancelled != 0 {
+        STATUS_FAILED
+    } else {
+        STATUS_SENT
+    })
+    .bind(message_id)
+    .bind(if cancelled != 0 {
+        Some("Message delivery was cancelled")
+    } else {
+        None
+    })
+    .bind(STATUS_SCHEDULED)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(true)
+}

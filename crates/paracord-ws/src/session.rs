@@ -4,7 +4,7 @@ use std::collections::HashMap;
 /// The subset of a guild row the READY payload needs.
 ///
 /// IDENTIFY already fetches full guild rows via `get_user_guilds` in order to
-/// derive `guild_ids`/`guild_owner_ids`; carrying these three fields forward
+/// derive `guild_ids`/`guild_owner_ids`; carrying the required persisted metadata forward
 /// removes a per-guild `get_guild` round trip from READY (which previously cost
 /// `3N + 2 + 2*voice` queries and, with `Semaphore::new(10)` plus a
 /// `tokio::join!` pair, could put 20 concurrent queries in flight from a single
@@ -15,6 +15,7 @@ pub struct ReadyGuild {
     pub name: String,
     pub owner_id: i64,
     pub icon_hash: Option<String>,
+    pub created_at: DateTime<Utc>,
 }
 
 pub struct Session {

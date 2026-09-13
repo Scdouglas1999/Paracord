@@ -6,7 +6,7 @@ import { ChannelType, type Channel, type HubSettings } from '../../types';
 
 interface SpaceBriefingProps {
   guildId: string;
-  settings?: HubSettings;
+  settings?: HubSettings | null;
   channels: Channel[];
 }
 

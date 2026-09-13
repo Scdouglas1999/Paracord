@@ -10,6 +10,7 @@ import type { Channel } from '../../types';
 import { GroupDmMembersPanel } from './GroupDmMembersPanel';
 
 vi.mock('../../api/dms', () => ({
+  createDmApi: () => dmApi,
   dmApi: {
     addRecipient: vi.fn(),
     removeRecipient: vi.fn(),
@@ -39,6 +40,8 @@ const bob = {
   bot: false,
   system: false,
   created_at: '2026-01-01T00:00:00.000Z',
+  avatar_hash: null,
+  display_name: null,
 };
 
 const ada = {
@@ -49,6 +52,8 @@ const ada = {
   bot: false,
   system: false,
   created_at: '2026-01-01T00:00:00.000Z',
+  avatar_hash: null,
+  display_name: null,
 };
 
 function groupDm(recipients = [currentUser, bob]): Channel {
@@ -79,14 +84,9 @@ describe('GroupDmMembersPanel — recipient management', () => {
     vi.mocked(dmApi.addRecipient).mockReset();
     vi.mocked(dmApi.removeRecipient).mockReset();
     vi.mocked(dmApi.listRecipients).mockReset();
-    useAuthStore.setState({ user: currentUser });
-    useChannelStore.setState({
-      channelsByGuild: { '': [groupDm()] },
-      channelsById: { 'dm-1': groupDm() },
-      channels: [groupDm()],
-      selectedChannelId: 'dm-1',
-      selectedGuildId: null,
-    });
+    useAuthStore.setState({ token: 'token', user: currentUser });
+    useChannelStore.getState().reset();
+    useChannelStore.getState().setChannels('', [groupDm()], { serverId: '__local__', userId: 'me' });
     useRelationshipStore.setState({
       relationships: [{ id: 'rel-ada', type: 1, user: ada }],
       fetchRelationships: vi.fn().mockResolvedValue(undefined),

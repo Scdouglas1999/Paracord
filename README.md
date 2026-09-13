@@ -113,20 +113,51 @@ Federation is off by default and should be treated as an explicit trust relation
 
 Self-hosting decides *where* your data lives. It is not the same promise as end-to-end encryption everywhere, so it is worth being precise:
 
-- Direct messages are end-to-end encrypted; the server relays ciphertext it cannot read.
+- Direct message **text** is end-to-end encrypted; the server relays ciphertext it cannot read.
+- Direct message **attachments** are encrypted on the sending device, each file under its own
+  AES-256-GCM key. The server receives ciphertext under a generated name as
+  `application/octet-stream`, and stores no filename, media type, dimensions or preview for
+  it. The file key, the original filename, its type, its length and its SHA-256 travel inside
+  the encrypted message, and the recipient decrypts previews and downloads locally.
+- What a direct-message attachment still reveals to the server: that a file was sent, when,
+  between whom, how many files, and roughly how large each one is (ciphertext length). Its
+  contents, name and type are not available to the server or to anyone with database or disk
+  access.
 - Native voice and video frames travel over the encrypted media path.
-- **Space and channel messages are readable by the server**, and by anyone with database access.
-- At-rest AES-256-GCM protection covers configured secret and file paths. It is not a blanket claim that every database column is encrypted.
+- **Space and channel messages and their attachments are readable by the server**, and by
+  anyone with database access. Attachment encryption applies to direct messages only.
+- At-rest AES-256-GCM protection covers configured secret and file paths. It is not a blanket
+  claim that every database column is encrypted. It is also irrelevant to direct-message
+  attachments: those are already unreadable to the server before it receives them.
 
 Read the [known limitations](docs/known-limitations.md) and the deployment guide before running Paracord for a public or high-risk community.
 
 ## Quick start
 
-The first account registered on a new instance becomes the server owner and administrator. Start the server, then claim that account before you share the address with anyone.
+A new instance starts with **no owner and no accounts**, and it refuses every registration until you claim it. Starting the server prints a one-time claim token (also saved as `first-owner-claim.txt` next to your config, readable only by the account that runs the server). Open `<your server URL>/setup-server`, paste that token, and the claim creates your owner account, names the server and opens its first space. Everyone you invite afterwards registers normally and joins as a member — so nobody who finds the address before you can take the server.
 
-### Standalone server
+### One-command server install
 
-Download the server archive from [Releases](../../releases/latest), extract it, and run:
+**Linux** — downloads the latest release, installs it, generates the config, and prints the URL to open:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Scdouglas1999/Paracord/main/scripts/install.sh | sh
+```
+
+Run it with `sudo` for a system-wide install under `/opt/paracord` — it creates a `paracord` service user and a hardened, auto-restarting systemd unit. Without root it installs under `~/.local/share/paracord` with a per-user systemd service when a user manager is available. Re-running the same command upgrades the binary while preserving your config and data (the old binary is kept under `backups/`).
+
+**Windows** — in an elevated PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/Scdouglas1999/Paracord/main/scripts/install.ps1 -OutFile install.ps1
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+Elevated, it installs under `%ProgramFiles%\Paracord`, registers an auto-start scheduled task running as `SYSTEM` with crash restarts, and opens inbound firewall rules for TCP and UDP `8443`. Without elevation it installs under `%LOCALAPPDATA%\Paracord` with Start Menu and logon-startup shortcuts.
+
+### Manual download
+
+Grab `paracord-server-linux-x64-*.tar.gz` or `paracord-server-windows-x64-*.zip` from [Releases](../../releases/latest), extract it, and run:
 
 ```bash
 # Linux
@@ -150,6 +181,16 @@ docker compose up -d
 ```
 
 The default stack needs no `.env` file. It publishes HTTP on `127.0.0.1:8090` and native media on UDP `8443`. Put a TLS reverse proxy in front before exposing the browser client — browsers require HTTPS for microphone, camera, screen share, and WebTransport.
+
+No clone needed — fetch just the compose file and either pull the image CI publishes to GHCR, or build straight from the remote repo:
+
+```bash
+curl -fsSL -o docker-compose.yml https://raw.githubusercontent.com/Scdouglas1999/Paracord/main/docker-compose.yml
+PARACORD_PULL_POLICY=missing docker compose up -d    # pull prebuilt image
+# or: PARACORD_BUILD_CONTEXT=https://github.com/Scdouglas1999/Paracord.git#main docker compose up -d
+```
+
+(If the pull is denied the GHCR package isn't public on your fork — use the remote-build variant, which needs no published image.)
 
 For a walk through the first run, see [Getting Started](docs/getting-started.md). For TLS, PostgreSQL, backups, public URLs, and proxy guidance, see [Deployment](docs/deployment.md) and [Docker Setup](docs/docker-setup.md).
 
@@ -179,12 +220,16 @@ SQLite comfortably carries a small instance. PostgreSQL is the recommendation fo
 
 ### Clients
 
-| Client | Support |
-|---|---|
-| Windows desktop | Tauri v2 installer (`.exe` / `.msi`) |
-| Linux desktop | Tauri v2 builds and release packages (`.AppImage` / `.deb`) |
-| Browser | Served by the Paracord server or your reverse proxy |
-| macOS desktop | Not currently a supported release target |
+Download a desktop build from [Releases](../../releases/latest), or just open the browser client your server serves itself:
+
+| Client | Download | Notes |
+|---|---|---|
+| Windows desktop | `Paracord-Setup-<ver>.exe` — guided installer (recommended) | Also `Paracord_<ver>_x64_en-US.msi` |
+| Linux desktop | `Paracord_<ver>_amd64.AppImage` — portable, no install | Or install `Paracord_<ver>_amd64.deb` |
+| Browser | `https://<your-server>:8443` — served by the Paracord server itself | Accept the self-signed cert warning once |
+| macOS desktop | — | Not currently a supported release target |
+
+On first launch the desktop client asks for a **server URL** — paste the `https://<server>:8443` address the installer printed (or your server's public URL), then register an account. The desktop client speaks raw QUIC and auto-trusts the server's certificate.
 
 Windows is the primary native screen and system-audio capture path. Linux screen sharing depends on the distribution's PipeWire and portal setup, and is worth testing before you publish a build. macOS system-audio capture is not implemented.
 

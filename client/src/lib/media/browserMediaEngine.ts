@@ -1,5 +1,7 @@
+import type { OperationContext } from '../operationContext';
 import type {
   MediaEngine,
+  MediaSessionContext,
   MediaStreamCapabilities,
   MediaStreamDiagnostics,
   PublishedTrackDescriptor,
@@ -174,6 +176,7 @@ interface VideoSubscription {
   streamId?: string;
   trackId?: string;
   activeLayer?: number;
+  stop?: () => void;
 }
 
 interface SessionParticipantCapabilities {
@@ -375,22 +378,59 @@ export class BrowserMediaEngine implements MediaEngine {
   private participantLeaveCb: ((userId: string) => void) | null = null;
   private transportLostCb: ((reason: string) => void) | null = null;
   private disconnecting = false;
+  private disposed = false;
+  private account?: OperationContext;
+  private membershipSessionId: string | null = null;
+  private disposePromise: Promise<void> | null = null;
+  private removeAbortListener: (() => void) | null = null;
+  private cameraGeneration = 0;
+  private screenGeneration = 0;
+
+  private assertOpen(): void {
+    if (this.disposed) throw new DOMException('The media session has ended.', 'AbortError');
+  }
+
+  private failKeyExchange(error: unknown): void {
+    if (this.disposed) return;
+    const reason = `Media encryption could not verify a participant: ${error instanceof Error ? error.message : String(error)}`;
+    this.transportLostCb?.(reason);
+    void this.disconnect();
+  }
 
   // Playback timer
   private playbackInterval: ReturnType<typeof setInterval> | null = null;
 
-  async connect(endpoint: string, token: string, certHash?: string): Promise<void> {
+  async connect(endpoint: string, token: string, certHash?: string, session?: MediaSessionContext): Promise<void> {
+    this.assertOpen();
+    if (session) {
+      this.account = session.account;
+      const abort = () => { void this.disconnect(); };
+      session.signal.addEventListener('abort', abort, { once: true });
+      this.removeAbortListener = () => session.signal.removeEventListener('abort', abort);
+      if (session.signal.aborted) { await this.disconnect(); this.assertOpen(); }
+    }
+    try {
+      const claims = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+      if (typeof claims.sid !== 'string' || !claims.sid) throw new Error('missing sid');
+      this.membershipSessionId = claims.sid;
+    } catch { throw new Error('The media token is missing its voice session receipt.'); }
     // Generate local SSRC
     this.sequence = 0;
     this.localUserId = parseUserIdFromToken(token);
     this.localRoomId = parseRoomIdFromToken(token);
     if (this.localUserId) {
       this.localAudioSsrc = await deriveTrackSsrc(this.localUserId, 'audio');
+      this.assertOpen();
       this.localVideoSsrc = await deriveTrackSsrc(this.localUserId, 'video');
+      this.assertOpen();
       this.localScreenSsrc = await deriveTrackSsrc(this.localUserId, 'screen');
+      this.assertOpen();
       this.localScreenAudioSsrc = await deriveTrackSsrc(this.localUserId, 'screen:audio');
+      this.assertOpen();
       this.localVideoLayerSsrcs = await this.buildLayerSsrcs(this.localUserId, 'video', this.localVideoSsrc);
+      this.assertOpen();
       this.localScreenLayerSsrcs = await this.buildLayerSsrcs(this.localUserId, 'screen', this.localScreenSsrc);
+      this.assertOpen();
     } else {
       this.localAudioSsrc = ((Math.random() * 0xffffffff) >>> 0) || 1;
       this.localVideoSsrc = ((Math.random() * 0xffffffff) >>> 0) || 2;
@@ -410,21 +450,24 @@ export class BrowserMediaEngine implements MediaEngine {
 
     // Generate E2EE sender key
     await this.senderKeys.generateKey();
+    this.assertOpen();
     await this.syncLocalSenderKeyToDecryptor();
+    this.assertOpen();
 
     // Set up WebTransport
     this.transport = new WebTransportManager();
 
-    this.transport.onStreamControl((msg) => this.handleStreamControlMessage(msg));
-    this.transport.onDatagram((data) => this.handleDatagram(data));
-    this.transport.onUniStream((data) => this.handleVideoStreamFrame(data));
+    this.transport.onStreamControl((msg) => { if (!this.disposed) this.handleStreamControlMessage(msg); });
+    this.transport.onDatagram((data) => { if (!this.disposed) this.handleDatagram(data); });
+    this.transport.onUniStream((data) => { if (!this.disposed) this.handleVideoStreamFrame(data); });
     this.transport.onRestored(() => {
+      if (this.disposed) return;
       void this.restoreTransportSession().catch((err) => {
         console.warn('[BrowserMediaEngine] Failed to restore session after reconnect:', err);
       });
     });
     this.transport.onClose((reason) => {
-      if (this.disconnecting) return;
+      if (this.disposed || this.disconnecting) return;
       console.warn('[BrowserMediaEngine] Connection closed:', reason);
       this.cleanupAudio();
       this.cleanupVideo();
@@ -432,11 +475,12 @@ export class BrowserMediaEngine implements MediaEngine {
     });
 
     await this.transport.connect(endpoint, token, certHash);
+    this.assertOpen();
 
     await this.transport.sendStreamControl({
       type: 'session_join',
       room_id: this.localRoomId ?? '',
-      session_id: `browser-${this.localUserId ?? 'unknown'}`,
+      session_id: this.membershipSessionId!,
       video_capabilities: (await this.getStreamCapabilities()).video.map((capability) => ({
         codec: capability.codec,
         encode: capability.encode,
@@ -445,36 +489,32 @@ export class BrowserMediaEngine implements MediaEngine {
         decodeHardware: capability.decodeHardware,
       })),
     });
+    this.assertOpen();
 
     // Set up audio capture pipeline
     await this.setupAudioCapture();
+    this.assertOpen();
 
     // Start playback loop
     this.startPlaybackLoop();
   }
 
-  async disconnect(): Promise<void> {
+  disconnect(): Promise<void> {
+    if (this.disposePromise) return this.disposePromise;
+    this.disposed = true;
     this.disconnecting = true;
-    if (this.transport) {
-      await this.transport
-        .sendStreamControl({
-          type: 'session_leave',
-          room_id: this.localRoomId ?? '',
-          session_id: `browser-${this.localUserId ?? 'unknown'}`,
-        })
-        .catch(() => {});
-      await this.transport.disconnect();
-      this.transport = null;
-    }
+    this.cameraGeneration++;
+    this.screenGeneration++;
+    this.removeAbortListener?.();
+    this.removeAbortListener = null;
+    this.speakingChangeCb = this.participantJoinCb = this.participantLeaveCb = null;
+    this.transportLostCb = this.screenShareEndedCb = null;
+    // Release capture synchronously, before any network work can block teardown.
     this.cleanupAudio();
     this.cleanupVideo();
     this.cleanupScreenShare();
     this.stopPlaybackLoop();
-
-    // Close all participant audio decoders
-    for (const [, participant] of this.participants) {
-      participant.decoder.close();
-    }
+    for (const participant of this.participants.values()) participant.decoder.close();
     this.participants.clear();
     this.ssrcToUserId.clear();
     this.participantMaterializePromises.clear();
@@ -484,16 +524,13 @@ export class BrowserMediaEngine implements MediaEngine {
     this.sessionParticipantIds.clear();
     this.sessionParticipantCapabilities.clear();
     this.sourceVolumes.clear();
-
-    // Close all video subscriptions
-    for (const [, sub] of this.videoSubscriptions) {
-      sub.decoder.close();
-      sub.renderer.destroy();
-    }
+    for (const sub of this.videoSubscriptions.values()) { sub.stop?.(); }
     this.videoSubscriptions.clear();
     this.clearScreenAudioSubscriptions();
-    this.transportLostCb = null;
-    this.disconnecting = false;
+    const transport = this.transport;
+    this.transport = null;
+    this.disposePromise = transport?.disconnect() ?? Promise.resolve();
+    return this.disposePromise;
   }
 
   setMute(muted: boolean): void {
@@ -513,12 +550,16 @@ export class BrowserMediaEngine implements MediaEngine {
   }
 
   async enableVideo(enabled: boolean): Promise<void> {
+    this.assertOpen();
+    if (enabled && this.videoEnabled) return;
+    const generation = ++this.cameraGeneration;
     if (enabled && !this.videoEnabled) {
       this.videoEnabled = true;
       try {
-        await this.setupVideoCapture();
+        await this.setupVideoCapture(generation);
+        this.assertOpen();
       } catch (err) {
-        this.videoEnabled = false;
+        if (generation === this.cameraGeneration) this.videoEnabled = false;
         throw err;
       }
     } else if (!enabled && this.videoEnabled) {
@@ -536,11 +577,15 @@ export class BrowserMediaEngine implements MediaEngine {
   }
 
   async startScreenShare(config: ScreenShareConfig): Promise<void> {
+    this.assertOpen();
+    const generation = ++this.screenGeneration;
     // Stop any existing screen share first
     this.cleanupScreenShare();
     this.screenAudioActive = false;
 
     const resolvedCodec = config.preferredCodec ?? (await this.choosePreferredPublishCodec());
+    this.assertOpen();
+    if (generation !== this.screenGeneration) throw new DOMException("Capture action canceled", "AbortError");
     const constraints: DisplayMediaStreamOptions = {
       video: {
         frameRate: config.maxFrameRate ?? 30,
@@ -556,10 +601,16 @@ export class BrowserMediaEngine implements MediaEngine {
       hintable.surfaceSwitching = 'include';
     }
 
-    this.screenStream = await navigator.mediaDevices.getDisplayMedia(constraints);
+    const acquired = await navigator.mediaDevices.getDisplayMedia(constraints);
+    if (this.disposed || generation !== this.screenGeneration) {
+      acquired.getTracks().forEach(track => track.stop());
+      throw new DOMException('Screen sharing was canceled.', 'AbortError');
+    }
+    this.screenStream = acquired;
 
     const videoTracks = this.screenStream.getVideoTracks();
     if (videoTracks.length === 0) {
+      acquired.getTracks().forEach(track => track.stop());
       this.screenStream = null;
       throw new Error('No video track in screen share stream');
     }
@@ -570,11 +621,15 @@ export class BrowserMediaEngine implements MediaEngine {
     const audioTracks = this.screenStream.getAudioTracks();
     if (config.audio && audioTracks.length > 0) {
       await this.setupScreenAudioCapture(audioTracks);
+      this.assertOpen();
+    if (generation !== this.screenGeneration) throw new DOMException("Capture action canceled", "AbortError");
+      if (generation !== this.screenGeneration) throw new DOMException('Screen sharing was canceled.', 'AbortError');
       this.screenAudioActive = true;
     }
 
     // Listen for the user stopping the share via the browser's built-in UI
     this.screenTrack.addEventListener('ended', () => {
+      if (this.disposed || generation !== this.screenGeneration) return;
       this.cleanupScreenShare();
       this.screenShareEndedCb?.();
     });
@@ -594,6 +649,7 @@ export class BrowserMediaEngine implements MediaEngine {
     });
 
     this.screenEncoder.onEncoded((data) => {
+      if (this.disposed || generation !== this.screenGeneration) return;
       this.sendEncodedVideo(data, this.screenSequence, true);
       // Advance by the number of sequence numbers this frame actually consumes.
       // Advancing by 1 made every multi-fragment frame overlap its successor and
@@ -615,7 +671,11 @@ export class BrowserMediaEngine implements MediaEngine {
         type: 'track_publish',
         track,
       }).catch(() => {});
-      await this.announceTrackSenderKey(track).catch(() => {});
+      this.assertOpen();
+    if (generation !== this.screenGeneration) throw new DOMException("Capture action canceled", "AbortError");
+      await this.announceTrackSenderKey(track);
+      this.assertOpen();
+    if (generation !== this.screenGeneration) throw new DOMException("Capture action canceled", "AbortError");
       if (this.screenAudioActive) {
         const audioTrack = this.buildLocalScreenAudioTrack();
         this.publishedTracks.set(this.trackKey(audioTrack.streamId, audioTrack.trackId), audioTrack);
@@ -624,7 +684,11 @@ export class BrowserMediaEngine implements MediaEngine {
           type: 'track_publish',
           track: audioTrack,
         }).catch(() => {});
-        await this.announceTrackSenderKey(audioTrack).catch(() => {});
+        this.assertOpen();
+    if (generation !== this.screenGeneration) throw new DOMException("Capture action canceled", "AbortError");
+        await this.announceTrackSenderKey(audioTrack);
+        this.assertOpen();
+    if (generation !== this.screenGeneration) throw new DOMException("Capture action canceled", "AbortError");
       }
     }
 
@@ -633,6 +697,7 @@ export class BrowserMediaEngine implements MediaEngine {
   }
 
   async stopScreenShare(): Promise<void> {
+    this.screenGeneration++;
     this.cleanupScreenShare();
 
     if (this.transport) {
@@ -709,8 +774,10 @@ export class BrowserMediaEngine implements MediaEngine {
   }
 
   subscribeScreenShareAudio(userId: string, getVolume: () => number): () => void {
+    if (this.disposed) return () => {};
     const existing = this.screenAudioSubscriptions.get(userId);
     if (existing) {
+      existing.decoder.close();
       existing.playbackContext.close().catch(() => {});
       this.screenAudioSubscriptions.delete(userId);
     }
@@ -731,6 +798,7 @@ export class BrowserMediaEngine implements MediaEngine {
       channels: CHANNELS,
     });
     decoder.onDecoded((audioData) => {
+      if (this.disposed || this.screenAudioSubscriptions.get(userId) !== subscription) { audioData.close(); return; }
       const channelData = new Float32Array(audioData.numberOfFrames);
       audioData.copyTo(channelData, { planeIndex: 0, format: 'f32' });
       const buffer = playbackContext.createBuffer(1, channelData.length, SAMPLE_RATE);
@@ -743,17 +811,18 @@ export class BrowserMediaEngine implements MediaEngine {
     });
     const jitterBuffer = new JitterBuffer(FRAME_MS, 60);
 
-    this.screenAudioSubscriptions.set(userId, {
+    const subscription = {
       ssrc: publishedSsrc,
       decoder,
       jitterBuffer,
       gainNode,
       playbackContext,
-    });
+    };
+    this.screenAudioSubscriptions.set(userId, subscription);
 
     void deriveTrackSsrc(userId, 'screen:audio').then((derived) => {
       const sub = this.screenAudioSubscriptions.get(userId);
-      if (!sub) return;
+      if (sub !== subscription) return;
       // Keep a published layer SSRC when present; otherwise pin the derived value
       // so findScreenAudioUserIdForSsrc can match packets before track_publish.
       if (sub.ssrc === 0 || !publishedTrack) {
@@ -775,7 +844,7 @@ export class BrowserMediaEngine implements MediaEngine {
 
     return () => {
       const sub = this.screenAudioSubscriptions.get(userId);
-      if (!sub) return;
+      if (sub !== subscription) return;
       const track = this.findPublishedScreenAudioTrack(userId);
       if (track) {
         void this.unregisterTrackSubscription(track.streamId, track.trackId).catch(() => {});
@@ -843,6 +912,7 @@ export class BrowserMediaEngine implements MediaEngine {
 
   private async choosePreferredPublishCodec(): Promise<'av1' | 'h264' | 'vp9' | null> {
     const localCapabilities = await this.getStreamCapabilities();
+    this.assertOpen();
     const participants = Array.from(this.sessionParticipantCapabilities.values());
     return this.pickBestCommonCodec(localCapabilities, participants);
   }
@@ -877,11 +947,14 @@ export class BrowserMediaEngine implements MediaEngine {
       type: 'track_publish',
       track,
     }).catch(() => {});
-    await this.announceTrackSenderKey(track).catch(() => {});
+    this.assertOpen();
+    await this.announceTrackSenderKey(track);
+    this.assertOpen();
   }
 
   private async reconcileActivePublishCodecs(): Promise<void> {
     const preferredCodec = await this.choosePreferredPublishCodec();
+    this.assertOpen();
 
     if (this.videoTrack && this.videoEncoder && preferredCodec && this.videoEncoder.codec !== preferredCodec) {
       const settings = this.videoTrack.getSettings();
@@ -910,6 +983,7 @@ export class BrowserMediaEngine implements MediaEngine {
       });
       this.startVideoFrameCapture();
       await this.republishLocalTrack(this.buildLocalCameraTrack(width, height, this.videoEncoder.codec));
+      this.assertOpen();
     }
 
     if (this.screenTrack && this.screenEncoder && preferredCodec && this.screenEncoder.codec !== preferredCodec) {
@@ -939,11 +1013,13 @@ export class BrowserMediaEngine implements MediaEngine {
       });
       this.startScreenFrameCapture();
       await this.republishLocalTrack(this.buildLocalScreenTrack(width, height, this.screenEncoder.codec));
+      this.assertOpen();
     }
   }
 
   async getStreamingDiagnostics(): Promise<MediaStreamDiagnostics> {
     const preferredCommonCodec = await this.choosePreferredPublishCodec().catch(() => null);
+    this.assertOpen();
     const localUserId = String(this.localUserId ?? '');
     const localTracks = Array.from(this.publishedTracks.values()).filter(
       (track) => String(track.publisherUserId) === localUserId,
@@ -1026,6 +1102,7 @@ export class BrowserMediaEngine implements MediaEngine {
           : null,
       },
     });
+    this.assertOpen();
     await this.transport.sendStreamControl({
       type: 'receiver_report',
       stream_id: request.streamId,
@@ -1037,6 +1114,7 @@ export class BrowserMediaEngine implements MediaEngine {
       estimated_bitrate_kbps: estimatedBitrateKbps,
       packet_loss_ppm: 0,
     });
+    this.assertOpen();
   }
 
   async unregisterTrackSubscription(streamId: string, trackId: string): Promise<void> {
@@ -1046,6 +1124,7 @@ export class BrowserMediaEngine implements MediaEngine {
       stream_id: streamId,
       track_id: trackId,
     });
+    this.assertOpen();
   }
 
   /**
@@ -1059,14 +1138,13 @@ export class BrowserMediaEngine implements MediaEngine {
     onFrame?: () => void,
     options?: { preferredTrackId?: 'camera' | 'screen' },
   ): () => void {
+    if (this.disposed) return () => {};
     const preferredTrackId = options?.preferredTrackId;
     const subscriptionKey = preferredTrackId ? `${userId}:${preferredTrackId}` : userId;
     // Tear down any existing subscription for this key
     const existing = this.videoSubscriptions.get(subscriptionKey);
     if (existing) {
-      existing.decoder.close();
-      existing.renderer.destroy();
-      this.videoSubscriptions.delete(subscriptionKey);
+      existing.stop?.();
     }
 
     // Resolve the SSRC for this user
@@ -1097,6 +1175,7 @@ export class BrowserMediaEngine implements MediaEngine {
 
     // Wire decoder output to the renderer
     decoder.onDecoded((frame) => {
+      if (this.disposed || this.videoSubscriptions.get(subscriptionKey) !== subscription) { frame.close(); return; }
       renderer.renderFrame(frame);
       onFrame?.();
     });
@@ -1214,7 +1293,10 @@ export class BrowserMediaEngine implements MediaEngine {
       }
     }
 
-    return () => {
+    let stopped = false;
+    const stop = () => {
+      if (stopped) return;
+      stopped = true;
       if (resizeTimer) {
         clearTimeout(resizeTimer);
       }
@@ -1225,7 +1307,7 @@ export class BrowserMediaEngine implements MediaEngine {
       }
       renderer.setRenderingEnabled(true);
       const current = this.videoSubscriptions.get(subscriptionKey);
-      if (!current) return;
+      if (current !== subscription) return;
       if (current.streamId && current.trackId) {
         void this.unregisterTrackSubscription(current.streamId, current.trackId).catch(() => {});
       }
@@ -1233,6 +1315,8 @@ export class BrowserMediaEngine implements MediaEngine {
       current.renderer.destroy();
       this.videoSubscriptions.delete(subscriptionKey);
     };
+    subscription.stop = stop;
+    return stop;
   }
 
   subscribeLocalPublishedScreen(canvas: HTMLCanvasElement, onFrame?: () => void): () => void {
@@ -1246,7 +1330,7 @@ export class BrowserMediaEngine implements MediaEngine {
   // ---------- Audio capture pipeline (unchanged) ----------
 
   private async setupAudioCapture(): Promise<void> {
-    this.mediaStream = await navigator.mediaDevices.getUserMedia({
+    const acquired = await navigator.mediaDevices.getUserMedia({
       audio: {
         sampleRate: SAMPLE_RATE,
         channelCount: CHANNELS,
@@ -1256,11 +1340,17 @@ export class BrowserMediaEngine implements MediaEngine {
       },
     });
 
+    if (this.disposed) {
+      acquired.getTracks().forEach(track => track.stop());
+      this.assertOpen();
+    }
+    this.mediaStream = acquired;
     this.audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
 
     // Load the AudioWorklet processor
     const processorUrl = new URL('./audio/audioProcessor.ts', import.meta.url).href;
     await this.audioContext.audioWorklet.addModule(processorUrl);
+    this.assertOpen();
 
     const source = this.audioContext.createMediaStreamSource(this.mediaStream);
     this.workletNode = new AudioWorkletNode(this.audioContext, 'media-audio-processor');
@@ -1329,6 +1419,7 @@ export class BrowserMediaEngine implements MediaEngine {
         this.sequence & 0xffff,
         this.localAudioSsrc,
       );
+    this.assertOpen();
 
     const packet = createPacket(header, encrypted);
     this.transport.sendDatagram(packet);
@@ -1338,8 +1429,8 @@ export class BrowserMediaEngine implements MediaEngine {
 
   // ---------- Video capture pipeline ----------
 
-  private async setupVideoCapture(): Promise<void> {
-    this.videoStream = await navigator.mediaDevices.getUserMedia({
+  private async setupVideoCapture(generation: number): Promise<void> {
+    const acquired = await navigator.mediaDevices.getUserMedia({
       video: {
         width: { ideal: 1280 },
         height: { ideal: 720 },
@@ -1347,8 +1438,14 @@ export class BrowserMediaEngine implements MediaEngine {
       },
     });
 
+    if (this.disposed || generation !== this.cameraGeneration) {
+      acquired.getTracks().forEach(track => track.stop());
+      throw new DOMException('Camera capture was canceled.', 'AbortError');
+    }
+    this.videoStream = acquired;
     const videoTracks = this.videoStream.getVideoTracks();
     if (videoTracks.length === 0) {
+      acquired.getTracks().forEach(track => track.stop());
       this.videoStream = null;
       throw new Error('No video track available from camera');
     }
@@ -1359,6 +1456,9 @@ export class BrowserMediaEngine implements MediaEngine {
     const height = settings.height ?? 720;
     const frameRate = settings.frameRate ?? 30;
     const preferredCodec = await this.choosePreferredPublishCodec();
+    this.assertOpen();
+    if (generation !== this.cameraGeneration) throw new DOMException("Capture action canceled", "AbortError");
+    if (generation !== this.cameraGeneration) throw new DOMException('Camera capture was canceled.', 'AbortError');
 
     // Create the simulcast video encoder
     this.videoEncoder = new MediaVideoEncoder({
@@ -1370,6 +1470,7 @@ export class BrowserMediaEngine implements MediaEngine {
     });
 
     this.videoEncoder.onEncoded((data) => {
+      if (this.disposed || generation !== this.cameraGeneration) return;
       this.sendEncodedVideo(data, this.videoSequence, false);
       // See videoSequenceSpan: advancing by 1 reused (key, nonce) pairs.
       this.videoSequence =
@@ -1389,7 +1490,11 @@ export class BrowserMediaEngine implements MediaEngine {
         type: 'track_publish',
         track,
       }).catch(() => {});
-      await this.announceTrackSenderKey(track).catch(() => {});
+      this.assertOpen();
+    if (generation !== this.cameraGeneration) throw new DOMException("Capture action canceled", "AbortError");
+      await this.announceTrackSenderKey(track);
+      this.assertOpen();
+    if (generation !== this.cameraGeneration) throw new DOMException("Capture action canceled", "AbortError");
     }
 
     // Start reading frames from the video track
@@ -1609,6 +1714,7 @@ export class BrowserMediaEngine implements MediaEngine {
         senderSsrc,
         metadataBase,
       });
+      this.assertOpen();
       return;
     }
 
@@ -1645,6 +1751,7 @@ export class BrowserMediaEngine implements MediaEngine {
         header.sequence,
         senderSsrc,
       );
+      this.assertOpen();
 
       const packet = createPacket(header, encrypted);
       this.transport.sendDatagram(packet);
@@ -1696,6 +1803,7 @@ export class BrowserMediaEngine implements MediaEngine {
       header.sequence,
       senderSsrc,
     );
+    this.assertOpen();
 
     const metadata: VideoFrameMetadata = {
       ...metadataBase,
@@ -1704,6 +1812,7 @@ export class BrowserMediaEngine implements MediaEngine {
     };
     const message = buildStreamFrameMessage(header, metadata, ciphertext);
     await this.transport.sendUniStream(message);
+    this.assertOpen();
   }
 
   // ---------- Datagram handling ----------
@@ -1801,6 +1910,7 @@ export class BrowserMediaEngine implements MediaEngine {
         header.ssrc,
       )
       .then((decrypted) => {
+        if (this.disposed) return;
         if (this.deafened) return;
         participant.jitterBuffer.push(header.sequence, header.timestamp, decrypted);
       })
@@ -1826,6 +1936,7 @@ export class BrowserMediaEngine implements MediaEngine {
       header.sequence,
       header.ssrc,
     ).then((decrypted) => {
+        if (this.disposed) return;
       const reassembled = reassembleVideoPayload(this.videoReassembly, decrypted);
       if (!reassembled) {
         return;
@@ -1861,6 +1972,7 @@ export class BrowserMediaEngine implements MediaEngine {
       header.sequence,
       header.ssrc,
     ).then((decrypted) => {
+        if (this.disposed) return;
       this.routeReassembledVideoFrame(header, {
         data: decrypted,
         isKeyframe: metadata.isKeyframe,
@@ -1960,11 +2072,11 @@ export class BrowserMediaEngine implements MediaEngine {
           knownBefore.size !== desired.size ||
           Array.from(knownBefore).some((userId) => !desired.has(userId));
         if (membershipChanged && !initialSync) {
-          void this.rotateAndAnnounceLocalSenderKeys(recipientUserIds).catch(() => {});
+          void this.rotateAndAnnounceLocalSenderKeys(recipientUserIds).catch(error => this.failKeyExchange(error));
           break;
         }
-        void this.announceAudioSenderKey(recipientUserIds).catch(() => {});
-        void this.announcePublishedTrackKeysForRecipients(recipientUserIds);
+        void this.announceAudioSenderKey(recipientUserIds).catch(error => this.failKeyExchange(error));
+        void this.announcePublishedTrackKeysForRecipients(recipientUserIds).catch(error => this.failKeyExchange(error));
         break;
       }
       case 'session_participant_join': {
@@ -1978,9 +2090,8 @@ export class BrowserMediaEngine implements MediaEngine {
         if (!userId || userId === String(this.localUserId ?? '')) {
           break;
         }
-        if (this.sessionParticipantIds.has(userId)) {
-          break;
-        }
+        const receipt = String(participant?.session_id ?? '');
+        if (this.sessionParticipantCapabilities.get(userId)?.sessionId === receipt && this.sessionParticipantIds.has(userId)) break;
         this.sessionParticipantIds.add(userId);
         this.sessionParticipantCapabilities.set(userId, {
           userId,
@@ -2000,8 +2111,8 @@ export class BrowserMediaEngine implements MediaEngine {
             return this.syncLocalSenderKeyToDecryptor()
               .catch(() => {})
               .then(() => {
-                void this.announceAudioSenderKey(recipientUserIds).catch(() => {});
-                void this.announcePublishedTrackKeysForRecipients(recipientUserIds);
+                void this.announceAudioSenderKey(recipientUserIds).catch(error => this.failKeyExchange(error));
+                void this.announcePublishedTrackKeysForRecipients(recipientUserIds).catch(error => this.failKeyExchange(error));
               });
           });
         break;
@@ -2011,6 +2122,9 @@ export class BrowserMediaEngine implements MediaEngine {
         if (!userId || userId === String(this.localUserId ?? '')) {
           break;
         }
+        // Missing receipts are a legacy wire format. A supplied receipt may
+        // only remove that exact peer call, never a replacement with the same ID.
+        if (typeof msg.session_id === 'string' && this.sessionParticipantCapabilities.get(userId)?.sessionId !== msg.session_id) break;
         if (!this.sessionParticipantIds.delete(userId)) {
           break;
         }
@@ -2026,8 +2140,8 @@ export class BrowserMediaEngine implements MediaEngine {
             return this.syncLocalSenderKeyToDecryptor()
               .catch(() => {})
               .then(() => {
-                void this.announceAudioSenderKey(remainingUserIds).catch(() => {});
-                void this.announcePublishedTrackKeysForRecipients(remainingUserIds);
+                void this.announceAudioSenderKey(remainingUserIds).catch(error => this.failKeyExchange(error));
+                void this.announcePublishedTrackKeysForRecipients(remainingUserIds).catch(error => this.failKeyExchange(error));
               });
           });
         break;
@@ -2219,7 +2333,7 @@ export class BrowserMediaEngine implements MediaEngine {
         if (!track || String(track.publisherUserId) !== String(this.localUserId ?? '')) {
           break;
         }
-        void this.announceTrackSenderKey(track, [String(recipientUserId)]).catch(() => {});
+        void this.announceTrackSenderKey(track, [String(recipientUserId)]).catch(error => this.failKeyExchange(error));
         break;
       }
       case 'stream_key_deliver': {
@@ -2234,9 +2348,10 @@ export class BrowserMediaEngine implements MediaEngine {
         void unwrapDeliveredMediaSenderKey(
           this.trackKeyScope(streamId, trackId),
           senderUserId,
-          Uint8Array.from(ciphertext),
+          Uint8Array.from(ciphertext), this.account,
         )
           .then((decrypted) => {
+        if (this.disposed) return;
             this.rememberDeliveredTrackKey(
               streamId,
               trackId,
@@ -2248,7 +2363,7 @@ export class BrowserMediaEngine implements MediaEngine {
               void this.applyDeliveredTrackKeys(existingTrack);
             }
           })
-          .catch(() => {});
+          .catch(error => this.failKeyExchange(error));
         break;
       }
       default:
@@ -2264,7 +2379,9 @@ export class BrowserMediaEngine implements MediaEngine {
     const layerSsrcs = new Map<number, number>();
     layerSsrcs.set(2, primarySsrc);
     layerSsrcs.set(0, await deriveTrackSsrc(userId, `${kind}:layer:0`));
+    this.assertOpen();
     layerSsrcs.set(1, await deriveTrackSsrc(userId, `${kind}:layer:1`));
+    this.assertOpen();
     return layerSsrcs;
   }
 
@@ -2326,7 +2443,7 @@ export class BrowserMediaEngine implements MediaEngine {
   }
 
   private ensureRemoteParticipantState(userId: string): void {
-    void this.materializeRemoteParticipant(userId);
+    void this.materializeRemoteParticipant(userId).catch(() => {});
   }
 
   private materializeRemoteParticipant(userId: string): Promise<void> {
@@ -2344,6 +2461,7 @@ export class BrowserMediaEngine implements MediaEngine {
 
     const promise = (async () => {
       const ssrc = await deriveTrackSsrc(userId, 'audio');
+      this.assertOpen();
       if (this.participants.has(ssrc)) {
         return;
       }
@@ -2375,7 +2493,7 @@ export class BrowserMediaEngine implements MediaEngine {
       }
 
       decoder.onDecoded((audioData) => {
-        if (this.deafened || !this.playbackContext) {
+        if (this.disposed || this.deafened || !this.playbackContext) {
           audioData.close();
           return;
         }
@@ -2482,8 +2600,10 @@ export class BrowserMediaEngine implements MediaEngine {
     rawKey?: Uint8Array,
   ): Promise<void> {
     const keyMaterial = rawKey ?? await this.senderKeys.exportKey();
+    this.assertOpen();
     for (const ssrc of this.localMediaSsrcs()) {
       await this.senderKeys.importPeerKey(ssrc, epoch, keyMaterial);
+      this.assertOpen();
     }
   }
 
@@ -2599,6 +2719,7 @@ export class BrowserMediaEngine implements MediaEngine {
     this.screenAudioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
     const processorUrl = new URL('./audio/audioProcessor.ts', import.meta.url).href;
     await this.screenAudioContext.audioWorklet.addModule(processorUrl);
+    this.assertOpen();
     const source = this.screenAudioContext.createMediaStreamSource(audioOnlyStream);
     this.screenAudioWorkletNode = new AudioWorkletNode(this.screenAudioContext, 'media-audio-processor');
     this.screenAudioWorkletNode.port.onmessage = (event) => {
@@ -2649,6 +2770,7 @@ export class BrowserMediaEngine implements MediaEngine {
       this.screenAudioSequence & 0xffff,
       this.localScreenAudioSsrc,
     );
+    this.assertOpen();
     const packet = createPacket(header, encrypted);
     this.transport.sendDatagram(packet);
     this.screenAudioSequence++;
@@ -2672,6 +2794,7 @@ export class BrowserMediaEngine implements MediaEngine {
       header.sequence,
       header.ssrc,
     ).then((decrypted) => {
+        if (this.disposed) return;
       if (this.deafened) return;
       subscription!.jitterBuffer.push(header.sequence, header.timestamp, decrypted);
     }).catch(() => {});
@@ -2682,7 +2805,7 @@ export class BrowserMediaEngine implements MediaEngine {
     await this.transport.sendStreamControl({
       type: 'session_join',
       room_id: this.localRoomId ?? '',
-      session_id: `browser-${this.localUserId ?? 'unknown'}`,
+      session_id: this.membershipSessionId!,
       video_capabilities: (await this.getStreamCapabilities()).video.map((capability) => ({
         codec: capability.codec,
         encode: capability.encode,
@@ -2691,9 +2814,12 @@ export class BrowserMediaEngine implements MediaEngine {
         decodeHardware: capability.decodeHardware,
       })),
     });
+    this.assertOpen();
     const recipientUserIds = this.currentRemoteParticipantIds();
     await this.announceAudioSenderKey(recipientUserIds);
+    this.assertOpen();
     await this.announcePublishedTrackKeysForRecipients(recipientUserIds);
+    this.assertOpen();
     for (const [, sub] of this.videoSubscriptions) {
       if (!sub.streamId || !sub.trackId) continue;
       const canvas = sub.renderer.canvasElement;
@@ -2715,6 +2841,7 @@ export class BrowserMediaEngine implements MediaEngine {
         requestedLayer: sub.activeLayer,
         viewport,
       }).catch(() => {});
+      this.assertOpen();
     }
     for (const userId of this.screenAudioSubscriptions.keys()) {
       const track = this.findPublishedScreenAudioTrack(userId);
@@ -2724,6 +2851,7 @@ export class BrowserMediaEngine implements MediaEngine {
           trackId: track.trackId,
           requestedLayer: 0,
         }).catch(() => {});
+        this.assertOpen();
       }
     }
   }
@@ -2756,6 +2884,7 @@ export class BrowserMediaEngine implements MediaEngine {
         activeLayer: targetLayer,
         viewport,
       }).catch(() => {});
+      this.assertOpen();
     }
   }
 
@@ -2823,6 +2952,7 @@ export class BrowserMediaEngine implements MediaEngine {
     for (const [epoch, rawKey] of epochs.entries()) {
       for (const layer of track.layers) {
         await this.senderKeys.importPeerKey(layer.ssrc, epoch, rawKey);
+        this.assertOpen();
       }
     }
   }
@@ -2845,7 +2975,8 @@ export class BrowserMediaEngine implements MediaEngine {
     epoch: number,
     recipientUserIds: string[],
   ): Promise<Array<[number, number[]]>> {
-    const wrapped = await wrapSenderKeyForRecipients(scope, rawKey, epoch, recipientUserIds);
+    const wrapped = await wrapSenderKeyForRecipients(scope, rawKey, epoch, recipientUserIds, this.account);
+    this.assertOpen();
     return wrapped.map(
       (entry) => [Number(entry.recipientUserId), Array.from(entry.wrapped)] as [number, number[]],
     );
@@ -2859,12 +2990,14 @@ export class BrowserMediaEngine implements MediaEngine {
       return;
     }
     const rawKey = await this.senderKeys.exportKey();
+    this.assertOpen();
     const encryptedKeys = await this.buildEncryptedSenderKeyPayloads(
       this.trackKeyScope(track.streamId, track.trackId),
       rawKey,
       this.senderKeys.currentEpoch,
       recipientUserIds,
     );
+    this.assertOpen();
     if (encryptedKeys.length === 0) {
       return;
     }
@@ -2876,6 +3009,7 @@ export class BrowserMediaEngine implements MediaEngine {
       epoch: this.senderKeys.currentEpoch,
       encrypted_keys: encryptedKeys,
     });
+    this.assertOpen();
   }
 
   private buildLocalVideoMetadata(
@@ -2919,6 +3053,7 @@ export class BrowserMediaEngine implements MediaEngine {
     );
     for (const track of localTracks) {
       await this.announceTrackSenderKey(track, recipientUserIds);
+      this.assertOpen();
     }
   }
 
@@ -2927,12 +3062,14 @@ export class BrowserMediaEngine implements MediaEngine {
       return;
     }
     const rawKey = await this.senderKeys.exportKey();
+    this.assertOpen();
     const encryptedKeys = await this.buildEncryptedSenderKeyPayloads(
       this.audioKeyScope(),
       rawKey,
       this.senderKeys.currentEpoch,
       recipientUserIds,
     );
+    this.assertOpen();
     if (encryptedKeys.length === 0) {
       return;
     }
@@ -2941,6 +3078,7 @@ export class BrowserMediaEngine implements MediaEngine {
       epoch: this.senderKeys.currentEpoch,
       encrypted_keys: encryptedKeys,
     });
+    this.assertOpen();
   }
 
   private async applyDeliveredAudioKey(
@@ -2948,29 +3086,38 @@ export class BrowserMediaEngine implements MediaEngine {
     epoch: number,
     payload: Uint8Array,
   ): Promise<void> {
-    const decrypted = await unwrapDeliveredMediaSenderKey(this.audioKeyScope(), senderUserId, payload);
+    const decrypted = await unwrapDeliveredMediaSenderKey(this.audioKeyScope(), senderUserId, payload, this.account);
+    this.assertOpen();
     const rawKey = decrypted.rawKey;
     const resolvedEpoch = decrypted.epoch || epoch;
     const ssrc = await deriveTrackSsrc(senderUserId, 'audio');
+    this.assertOpen();
     await this.senderKeys.importPeerKey(ssrc, resolvedEpoch, rawKey);
+    this.assertOpen();
     await this.materializeRemoteParticipant(senderUserId);
+    this.assertOpen();
   }
 
   private async rotateAndAnnounceLocalSenderKeys(recipientUserIds: string[]): Promise<void> {
     const rotated = await this.senderKeys.rotateKey();
+    this.assertOpen();
     await this.syncLocalSenderKeyToDecryptor(rotated.newEpoch, rotated.newKey);
+    this.assertOpen();
     await this.announceAudioSenderKey(recipientUserIds);
+    this.assertOpen();
     await this.announcePublishedTrackKeysForRecipients(recipientUserIds);
+    this.assertOpen();
   }
 
   // ---------- Playback loop ----------
 
   private startPlaybackLoop(): void {
+    if (this.disposed) return;
     // Pull from jitter buffers and decode at 20ms intervals. Decoded PCM is
     // rendered via each decoder's onDecoded callback (wired in
     // materializeRemoteParticipant / subscribeScreenShareAudio).
     this.playbackInterval = setInterval(() => {
-      if (this.deafened || !this.playbackContext) return;
+      if (this.disposed || this.deafened || !this.playbackContext) return;
 
       for (const [, participant] of this.participants) {
         const frame = participant.jitterBuffer.pull();
@@ -2999,7 +3146,7 @@ export class BrowserMediaEngine implements MediaEngine {
   // ---------- Speaking detection ----------
 
   private emitSpeakingChange(): void {
-    if (!this.speakingChangeCb) return;
+    if (this.disposed || !this.speakingChangeCb) return;
     const speakers = new Map<string, number>();
     for (const [, p] of this.participants) {
       if (p.speaking) {

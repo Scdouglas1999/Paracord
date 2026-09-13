@@ -1,14 +1,14 @@
+import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
+import { guildLandingPath } from '../../lib/guildNavigation';
+import type { ScopedGuild } from '../../lib/guildScope';
+import { useCurrentUser } from '../../hooks/useCurrentUser';
 import { useEffect, useState } from 'react';
 import { Upload, LayoutTemplate, Hash, Volume2, Folder, ChevronLeft, ArrowRight } from 'lucide-react';
 import { Modal, ModalTitle } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { ErrorBanner, EmptyState } from '../ui/Feedback';
 import { FieldLabel } from './SettingsPrimitives';
-import { useAuthStore } from '../../stores/authStore';
 import { useGuildStore } from '../../stores/guildStore';
-import { useChannelStore } from '../../stores/channelStore';
-import { useUIStore } from '../../stores/uiStore';
-import { inviteApi } from '../../api/invites';
 import { extractApiError } from '../../api/client';
 import { getApi } from '../../api/activeClient';
 import { useNavigate } from 'react-router';
@@ -42,7 +42,8 @@ const TABS: { id: Tab; label: string }[] = [
 ];
 
 export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
-  const user = useAuthStore(s => s.user);
+  const guildScope = useCurrentAccountScope();
+  const user = useCurrentUser();
   const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>('create');
   const [serverName, setServerName] = useState(`${user?.username || 'My'}'s space`);
@@ -68,14 +69,17 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
   }, [iconPreview]);
 
   useEffect(() => {
-    if (tab === 'template' && templates.length === 0 && !templatesLoading) {
-      setTemplatesLoading(true);
-      getApi()
-        .get<GuildTemplate[]>('/templates')
-        .then(res => setTemplates(res.data))
-        .catch((err: unknown) => setError(`Failed to load templates: ${extractApiError(err)}`))
-        .finally(() => setTemplatesLoading(false));
-    }
+    if (tab !== 'template') return;
+    const controller = new AbortController();
+    setTemplatesLoading(true);
+    getApi()
+      .get<GuildTemplate[]>('/templates', { signal: controller.signal })
+      .then(res => { if (!controller.signal.aborted) setTemplates(res.data); })
+      .catch((err: unknown) => {
+        if (!controller.signal.aborted) setError(`Failed to load templates: ${extractApiError(err)}`);
+      })
+      .finally(() => { if (!controller.signal.aborted) setTemplatesLoading(false); });
+    return () => controller.abort();
   }, [tab]);
 
   const processIconFile = (file: File | undefined) => {
@@ -100,27 +104,18 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
     processIconFile(e.target.files?.[0]);
   };
 
-  const navigateToGuild = async (guild: { id: string }) => {
-    await useChannelStore.getState().fetchChannels(guild.id);
-    const channels = useChannelStore.getState().channelsByGuild[guild.id] || [];
-    const firstChannel = channels.find(c => c.type === 0) || channels.find(c => c.type !== 4) || channels[0];
+  const navigateToGuild = async (guild: ScopedGuild) => {
+    const path = await guildLandingPath(guild);
     onClose();
-    if (firstChannel) {
-      useChannelStore.getState().selectGuild(guild.id);
-      useChannelStore.getState().selectChannel(firstChannel.id);
-      navigate(`/app/guilds/${guild.id}/channels/${firstChannel.id}`);
-    } else {
-      useUIStore.getState().setGuildSettingsId(guild.id);
-      navigate(`/app`);
-    }
+    navigate(path);
   };
 
   const handleCreate = async () => {
-    if (!serverName.trim()) return;
+    if (!serverName.trim() || !guildScope) return;
     setError('');
     setLoading(true);
     try {
-      const guild = await useGuildStore.getState().createGuild(serverName.trim(), iconDataUrl || undefined);
+      const guild = await useGuildStore.getState().createGuild(serverName.trim(), guildScope, iconDataUrl || undefined);
       await navigateToGuild(guild);
     } catch (err: unknown) {
       setError(extractApiError(err) || 'Failed to create space');
@@ -130,30 +125,13 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
   };
 
   const handleJoin = async () => {
-    if (!inviteCode.trim()) return;
+    if (!inviteCode.trim() || !guildScope) return;
     setError('');
     setLoading(true);
     try {
       const code = inviteCode.trim().split('/').pop() || inviteCode.trim();
-      const { data } = await inviteApi.accept(code);
-      const guild = 'guild' in data ? data.guild : data;
-      useGuildStore.getState().addGuild(guild);
-      await useChannelStore.getState().fetchChannels(guild.id);
-      const channels = useChannelStore.getState().channelsByGuild[guild.id] || [];
-      const firstChannelId =
-        guild.default_channel_id ||
-        channels.find((c) => c.type === 0)?.id ||
-        channels.find((c) => c.type !== 4)?.id ||
-        channels[0]?.id;
-      onClose();
-      if (firstChannelId) {
-        useChannelStore.getState().selectGuild(guild.id);
-        useChannelStore.getState().selectChannel(firstChannelId);
-        navigate(`/app/guilds/${guild.id}/channels/${firstChannelId}`);
-      } else {
-        useUIStore.getState().setGuildSettingsId(guild.id);
-        navigate(`/app`);
-      }
+      const guild = await useGuildStore.getState().acceptInvite(code, guildScope);
+      await navigateToGuild(guild);
     } catch (err: unknown) {
       setError(extractApiError(err) || 'Failed to join space');
     } finally {
@@ -162,14 +140,11 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
   };
 
   const handleApplyTemplate = async () => {
-    if (!selectedTemplate || !templateGuildName.trim()) return;
+    if (!selectedTemplate || !templateGuildName.trim() || !guildScope) return;
     setError('');
     setLoading(true);
     try {
-      const { data: guild } = await getApi().post(`/templates/${selectedTemplate.id}/apply`, {
-        name: templateGuildName.trim(),
-      });
-      useGuildStore.getState().addGuild(guild);
+      const guild = await useGuildStore.getState().applyTemplate(selectedTemplate.id, templateGuildName.trim(), guildScope);
       await navigateToGuild(guild);
     } catch (err: unknown) {
       setError(extractApiError(err) || 'Failed to create space from template');

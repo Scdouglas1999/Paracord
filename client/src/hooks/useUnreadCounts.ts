@@ -1,9 +1,8 @@
+import { accountScopeKey, entityScopeKey } from '../lib/serverScope';
+import { useCurrentChannelStore, useAvailableChannels } from './useChannels';
 import { useEffect, useMemo } from 'react';
-import { useChannelStore } from '../stores/channelStore';
-import { useGuildStore } from '../stores/guildStore';
 import { useReadStateStore } from '../stores/readStateStore';
-import { useServerListStore } from '../stores/serverListStore';
-import { LOCAL_SERVER_ID } from '../lib/connectionManager';
+import { useCurrentAccountScope } from './useCurrentUser';
 import type { Channel, ReadState } from '../types';
 
 interface GuildUnreadInfo {
@@ -91,74 +90,49 @@ function recordToMap(record: Record<string, ReadState>): Map<string, ReadState> 
  * Provides per-guild unread counts and mention counts based on read states.
  * Also exposes per-channel unread status for use in the channel sidebar.
  *
- * Read state is the serverId-scoped `byServer` cache. Each guild resolves to its
+ * Read state is the serverId-scoped `byAccount` cache. Each guild resolves to its
  * originating server via `guild.server_url → serverId` so the cross-server merge
  * reads the right per-server bucket; `computeGuildUnread` stays pure and is fed a
  * per-server map. Updates arrive via the store (dispatch, mark-read, gateway
  * (re)connect refresh) so counts stay live without polling.
  */
-export function useUnreadCounts(mutedGuildIds: string[]) {
-  const channelsByGuild = useChannelStore((s) => s.channelsByGuild);
-  const byServer = useReadStateStore((s) => s.byServer);
-  const guilds = useGuildStore((s) => s.guilds);
-  const servers = useServerListStore((s) => s.servers);
-  const activeServerId = useServerListStore((s) => s.activeServerId);
+export function useUnreadCounts(mutedGuildKeys: string[]) {
+  const availableChannels = useAvailableChannels();
+  const channelsByGuild = useCurrentChannelStore((s) => s.channelsByGuild);
+  const byAccount = useReadStateStore((s) => s.byAccount);
+  const scope = useCurrentAccountScope();
 
   // Pull authoritative snapshots once on mount; subsequent updates arrive via
   // the store (dispatch, mark-read, and gateway (re)connect refresh).
   useEffect(() => {
-    void useReadStateStore.getState().refresh();
+    void useReadStateStore.getState().refreshAll();
   }, []);
 
-  const activeId = activeServerId ?? LOCAL_SERVER_ID;
-
-  // guildId → serverId: which server's read-state bucket holds this guild's
-  // channels. Built once from guild.server_url so the merge reads the right
-  // bucket; falls back to the active server (covers guilds without a resolvable
-  // server_url — see layout-spec §9 flag 3). `servers` is a dep so the map
-  // recomputes when connections/attribution change.
-  const serverIdByGuild = useMemo(() => {
-    const map = new Map<string, string>();
-    const getServerByUrl = useServerListStore.getState().getServerByUrl;
-    for (const guild of guilds) {
-      // Prefer the authoritative origin tag (§9 flag 3 fix); fall back to the
-      // server_url map, then the active server, for guilds predating the tag.
-      const resolved =
-        guild.originServerId
-        ?? (guild.server_url ? getServerByUrl(guild.server_url)?.id : undefined);
-      map.set(guild.id, resolved ?? activeId);
-    }
-    return map;
-    // `servers` is read through `useServerListStore.getState()` inside the body,
-    // so it is invisible to the linter but must still invalidate this map when
-    // the server list changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [guilds, servers, activeId]);
-
-  const serverIdForGuild = (guildId: string): string =>
-    guildId ? (serverIdByGuild.get(guildId) ?? activeId) : activeId;
+  const activeId = scope ? accountScopeKey(scope) : '';
 
   // A new array identity each render would bust every downstream memo; derive a
   // stable key + Set from the muted-guild ids instead of depending on the array.
-  const mutedKey = mutedGuildIds.join(',');
-  const mutedSet = useMemo(() => new Set(mutedKey ? mutedKey.split(',') : []), [mutedKey]);
+  const mutedKey = JSON.stringify(mutedGuildKeys);
+  const mutedSet = useMemo(() => new Set<string>(JSON.parse(mutedKey)), [mutedKey]);
 
   const guildUnreads = useMemo(() => {
     const result = new Map<string, GuildUnreadInfo>();
-    for (const [guildId, channels] of Object.entries(channelsByGuild)) {
-      if (!guildId || mutedSet.has(guildId)) continue;
-      const map = recordToMap(byServer[serverIdForGuild(guildId)] ?? {});
-      const info = computeGuildUnread(channels, map);
-      if (info) result.set(guildId, info);
+    for (const channel of availableChannels) {
+      if (!channel.guild_id) continue;
+      const key = entityScopeKey(channel.scope, channel.guild_id);
+      if (mutedSet.has(key)) continue;
+      const info = computeGuildUnread([channel], recordToMap(byAccount[accountScopeKey(channel.scope)] ?? {}));
+      if (!info) continue;
+      const previous = result.get(key);
+      result.set(key, { unreadCount: (previous?.unreadCount ?? 0) + info.unreadCount, mentionCount: (previous?.mentionCount ?? 0) + info.mentionCount });
     }
     return result;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [channelsByGuild, byServer, serverIdByGuild, mutedSet, activeId]);
+  }, [availableChannels, byAccount, mutedSet]);
 
   const isChannelUnread = useMemo(() => {
     const set = new Set<string>();
-    for (const [guildId, channels] of Object.entries(channelsByGuild)) {
-      const record = byServer[serverIdForGuild(guildId)] ?? {};
+    for (const channels of Object.values(channelsByGuild)) {
+      const record = byAccount[activeId] ?? {};
       for (const channel of channels) {
         if (channel.type === 4) continue;
         const rs = record[channel.id];
@@ -172,13 +146,12 @@ export function useUnreadCounts(mutedGuildIds: string[]) {
       }
     }
     return set;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [channelsByGuild, byServer, serverIdByGuild, activeId]);
+  }, [channelsByGuild, byAccount, activeId]);
 
   const channelMentionCounts = useMemo(() => {
     const map = new Map<string, number>();
-    for (const [guildId, channels] of Object.entries(channelsByGuild)) {
-      const record = byServer[serverIdForGuild(guildId)] ?? {};
+    for (const channels of Object.values(channelsByGuild)) {
+      const record = byAccount[activeId] ?? {};
       for (const channel of channels) {
         const rs = record[channel.id];
         if (rs && rs.mention_count > 0) {
@@ -187,11 +160,10 @@ export function useUnreadCounts(mutedGuildIds: string[]) {
       }
     }
     return map;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [channelsByGuild, byServer, serverIdByGuild, activeId]);
+  }, [channelsByGuild, byAccount, activeId]);
 
   // Retained for call-site shape stability; reflects the active server's record.
-  const readStates = useMemo(() => Object.values(byServer[activeId] ?? {}), [byServer, activeId]);
+  const readStates = useMemo(() => Object.values(byAccount[activeId] ?? {}), [byAccount, activeId]);
 
   return { guildUnreads, isChannelUnread, channelMentionCounts, readStates };
 }

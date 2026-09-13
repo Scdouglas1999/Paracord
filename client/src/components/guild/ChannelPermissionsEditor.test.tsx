@@ -15,7 +15,7 @@ vi.mock('../../api/channels', () => ({
 
 vi.mock('../../stores/memberStore', () => ({
   useMemberStore: () => ({
-    getMembersForGuild: () => [],
+    members: new Map(),
     fetchMembers: vi.fn(),
     membersLoaded: { 'guild-1': true },
   }),

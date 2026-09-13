@@ -29,6 +29,8 @@ const mockUIState = vi.hoisted(() => ({
   connectionLatency: 42,
 }));
 
+const mockChannelState = vi.hoisted(() => ({ channelsByGuild: {}, channelsById: {} as Record<string, unknown> }));
+
 const mockPermissions = vi.hoisted(() => ({
   permissions: 0n,
   isAdmin: false,
@@ -62,7 +64,7 @@ vi.mock('../../hooks/usePermissions', () => ({
 
 vi.mock('../../stores/channelStore', () => ({
   useChannelStore: (selector: (state: { channelsByGuild: Record<string, unknown[]>; channelsById: Record<string, unknown> }) => unknown) =>
-    selector({ channelsByGuild: {}, channelsById: {} }),
+    selector(mockChannelState),
 }));
 
 vi.mock('../../hooks/useMobile', () => ({
@@ -102,8 +104,10 @@ function renderDmTopBar() {
 describe('TopBar DM voice calls', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockChannelState.channelsById = {};
     useToastStore.setState({ toasts: [] });
     mockVoiceState.connected = false;
+    mockVoiceState.systemAudioCaptureActive = false;
     mockVoiceState.channelId = null;
     mockVoiceState.connectionError = null;
     mockVoiceState.connectionErrorChannelId = null;
@@ -132,6 +136,27 @@ describe('TopBar DM voice calls', () => {
     });
   });
 
+  it('keeps the member control visible for a group DM', async () => {
+    const user = userEvent.setup();
+    mockChannelState.channelsById = { 'dm-1': { id: 'dm-1', type: 3, channel_type: 3, name: 'Group' } };
+    renderDmTopBar();
+    await user.click(screen.getByRole('button', { name: 'Member List' }));
+    expect(mockUIState.toggleContextPanelMode).toHaveBeenCalledWith('members');
+  });
+
+  it('does not offer a member panel for a one-to-one DM', () => {
+    mockChannelState.channelsById = { 'dm-1': { id: 'dm-1', type: 1, channel_type: 1 } };
+    renderDmTopBar();
+    expect(screen.queryByRole('button', { name: 'Member List' })).not.toBeInTheDocument();
+  });
+
+  it('announces active system audio capture separately from conversation actions', () => {
+    mockVoiceState.systemAudioCaptureActive = true;
+    renderDmTopBar();
+    expect(screen.getByRole('status', { name: 'System audio capture is active' })).toHaveTextContent('System audio capture is active');
+    expect(screen.getByRole('button', { name: 'Start direct message voice call' })).toBeVisible();
+  });
+
   it('returns from a direct-message conversation to the Messages index', async () => {
     const user = userEvent.setup();
     renderDmTopBar();
@@ -141,3 +166,22 @@ describe('TopBar DM voice calls', () => {
     expect(screen.getByText('Messages index')).toBeInTheDocument();
   });
 });
+
+vi.mock('../../hooks/useChannels', async () => {
+  const actual = await vi.importActual<typeof import('../../hooks/useChannels')>('../../hooks/useChannels');
+  const { useChannelStore } = await import('../../stores/channelStore');
+  return {
+    ...actual,
+    useCurrentChannelStore: useChannelStore,
+    useChannelActions: () => useChannelStore.getState(),
+    getAccountChannelView: () => useChannelStore.getState(),
+    useGuildChannels: (id: string) => useChannelStore(state => state.channelsByGuild[id] ?? []),
+  };
+});
+
+vi.mock('../../hooks/useConversationActions', () => ({
+  useConversationActions: () => ({
+    actions: Object.fromEntries(['send', 'poll', 'schedule', 'attach', 'summary', 'voice', 'video', 'screen_share'].map(action => [action, { supported: true, allowed: true, reason: null }])),
+    error: null, loading: false, refresh: vi.fn(),
+  }),
+}));

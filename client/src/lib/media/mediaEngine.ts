@@ -1,3 +1,4 @@
+import type { OperationContext } from '../operationContext';
 export interface ScreenShareConfig {
   audio: boolean;
   maxFrameRate?: number;
@@ -120,8 +121,15 @@ export interface MediaStreamDiagnostics {
   capabilities: MediaStreamCapabilities;
 }
 
+export interface MediaSessionContext {
+  readonly id: string;
+  readonly signal: AbortSignal;
+  readonly account?: OperationContext;
+}
+
 export interface MediaEngine {
-  connect(endpoint: string, token: string, certHash?: string): Promise<void>;
+  readonly sessionOwnerId?: string;
+  connect(endpoint: string, token: string, certHash?: string, session?: MediaSessionContext): Promise<void>;
   disconnect(): Promise<void>;
   setMute(muted: boolean): void;
   setDeaf(deafened: boolean): void;

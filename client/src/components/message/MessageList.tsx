@@ -1,21 +1,26 @@
+import { useCurrentChannelStore, useChannelActions } from '../../hooks/useChannels';
+import { entityScopeKey as memberScopeKey, type AccountScope } from '../../lib/serverScope';
+import { useCurrentUser, useCurrentAccountScope } from '../../hooks/useCurrentUser';
 import { useRef, useEffect, useMemo, useState, useReducer, useCallback, type CSSProperties, type MouseEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { captureScopedOperation, type OperationContext } from '../../lib/operationContext';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ArrowDown, ArrowRight, Smile, Reply, MoreHorizontal, Hash, Check, X as XIcon, Pencil, Pin, PinOff, Copy, Clipboard, Trash2, MessageSquare, Send, Eye, Loader2, Bookmark, BookmarkCheck } from 'lucide-react';
+import { AlertTriangle, ArrowDown, ArrowRight, Smile, Reply, MoreHorizontal, Hash, Check, X as XIcon, Pencil, Pin, PinOff, Copy, Clipboard, Trash2, MessageSquare, Send, Eye, Loader2, Bookmark, BookmarkCheck } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { useMessages } from '../../hooks/useMessages';
 import { useTypingStore } from '../../stores/typingStore';
-import { useAuthStore } from '../../stores/authStore';
-import { useMessageStore } from '../../stores/messageStore';
-import { useChannelStore } from '../../stores/channelStore';
-import { useGuildStore } from '../../stores/guildStore';
+import { useCurrentMessageStore } from '../../hooks/useMessageStore';
+import { useGuild } from '../../hooks/useGuilds';
 import { useServerListStore } from '../../stores/serverListStore';
 import { useReadStateStore } from '../../stores/readStateStore';
 import { useMemberStore } from '../../stores/memberStore';
 import { useSavedMessageStore } from '../../stores/savedMessageStore';
 import { useUIStore } from '../../stores/uiStore';
 import { channelApi } from '../../api/channels';
+import { MessageEditHistoryDialog } from './MessageEditHistoryDialog';
 import { fileApi } from '../../api/files';
+import { EncryptedAttachment } from '../file/EncryptedAttachment';
+import { hasEncryptedAttachments } from '../../lib/messages/attachments/messageBodyProjection';
 import { extractApiError } from '../../api/client';
 import { MessageType, Permissions, hasPermission, type Channel, type ChannelOverwrite, type Member, type Message, type Role } from '../../types';
 import { guildApi } from '../../api/guilds';
@@ -43,8 +48,9 @@ import { PollMessageCard } from './PollMessageCard';
 import { EphemeralMessage } from './EphemeralMessage';
 import { MessageComponents } from './MessageComponents';
 import { toast } from '../../stores/toastStore';
-import { LoadingSpinner, ErrorBanner } from '../ui/Feedback';
+import { ErrorBanner } from '../ui/Feedback';
 import { Button } from '../ui/Button';
+import { Modal, ModalDescription, ModalFooter, ModalHeader, ModalTitle } from '../ui/Modal';
 import { displayName } from '../../lib/displayName';
 import { fetchChannelOverwrites, fetchGuildRoles } from '../../lib/permissionDataCache';
 
@@ -406,8 +412,6 @@ interface AttachmentSlice {
 interface EditHistorySlice {
   editHistoryMsgId: string | null;
   editHistoryPos: { x: number; y: number };
-  editHistoryData: { id: string; content: string; edited_at: string }[];
-  editHistoryLoading: boolean;
 }
 
 interface MessageListUIState {
@@ -473,38 +477,42 @@ const initialMessageListUIState: MessageListUIState = {
   threadCreate: { threadModalForMessageId: null, threadName: '', threadCreateError: null },
   bulkDelete: { bulkDeleteMode: false, selectedMessageIds: [], bulkDeleting: false },
   attachment: { attachmentBusyId: null, downloadProgress: null },
-  editHistory: { editHistoryMsgId: null, editHistoryPos: { x: 0, y: 0 }, editHistoryData: [], editHistoryLoading: false },
+  editHistory: { editHistoryMsgId: null, editHistoryPos: { x: 0, y: 0 } },
 };
 
-export function MessageList({ channelId, onReply }: MessageListProps) {
+export function MessageList(props: MessageListProps) {
+  const scope = useCurrentAccountScope();
+  const key = scope ? memberScopeKey(scope, props.channelId) : `unavailable:${props.channelId}`;
+  return <OwnedMessageList key={key} {...props} scope={scope} />;
+}
+
+function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { scope: AccountScope | null }) {
   const lowBandwidthMode = useUIStore((s) => s.lowBandwidthMode);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { messages, isLoading, hasMore, loadMore, error } = useMessages(channelId);
-  const fetchMessages = useMessageStore((s) => s.fetchMessages);
-  const addReaction = useMessageStore((s) => s.addReaction);
-  const removeReaction = useMessageStore((s) => s.removeReaction);
-  const deleteMessage = useMessageStore((s) => s.deleteMessage);
-  const editMessage = useMessageStore((s) => s.editMessage);
-  const pinMessage = useMessageStore((s) => s.pinMessage);
-  const unpinMessage = useMessageStore((s) => s.unpinMessage);
-  const setMessages = useMessageStore((s) => s.setMessages);
-  const decryptingIds = useMessageStore((s) => s.decryptingIds);
-  const activeChannel = useChannelStore((s) => s.channelsById[channelId]);
+  const fetchMessages = useCurrentMessageStore((s) => s.fetchMessages);
+  const addReaction = useCurrentMessageStore((s) => s.addReaction);
+  const removeReaction = useCurrentMessageStore((s) => s.removeReaction);
+  const deleteMessage = useCurrentMessageStore((s) => s.deleteMessage);
+  const editMessage = useCurrentMessageStore((s) => s.editMessage);
+  const pinMessage = useCurrentMessageStore((s) => s.pinMessage);
+  const unpinMessage = useCurrentMessageStore((s) => s.unpinMessage);
+  const setMessages = useCurrentMessageStore((s) => s.setMessages);
+  const decryptingIds = useCurrentMessageStore((s) => s.decryptingIds);
+  const channelActions = useChannelActions();
+  const activeChannel = useCurrentChannelStore((s) => s.channelsById[channelId]);
   const typingUsers = useTypingStore((s) => s.typingByChannel[channelId] ?? EMPTY_TYPING);
-  const me = useAuthStore((s) => s.user?.id);
+  const me = useCurrentUser()?.id;
   const activeGuildId = activeChannel?.guild_id || null;
-  const originServerId = useGuildStore((state) => {
-    if (!activeChannel?.guild_id) return null;
-    return state.guilds.find((guild) => guild.id === activeChannel.guild_id)?.originServerId ?? null;
-  });
+  const originServerId = useGuild(activeChannel?.guild_id)?.scope.serverId ?? null;
   const activeServerId = useServerListStore((state) => state.activeServerId);
   const savedServerScope = activeServerId ?? '__local__';
   const savedIds = useSavedMessageStore((state) =>
     state.serverId === savedServerScope ? state.savedIds : EMPTY_SAVED_IDS,
   );
   const channelServerId = originServerId ?? activeServerId;
-  const activeGuildChannels = useChannelStore(
+  const activeGuildChannels = useCurrentChannelStore(
     useCallback(
       (s) => (activeGuildId ? (s.channelsByGuild[activeGuildId] ?? EMPTY_CHANNELS) : EMPTY_CHANNELS),
       [activeGuildId],
@@ -598,8 +606,28 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     dispatchUI({ slice: 'popup', patch: { profilePos } });
   const setEmojiPickerFor = (emojiPickerFor: { messageId: string; position: { x: number; y: number } } | null) =>
     dispatchUI({ slice: 'popup', patch: { emojiPickerFor } });
-  const setDeleteConfirmId = (deleteConfirmId: string | null) =>
+  const deleteDialogGeneration = useRef(0);
+  const deleteAttempts = useRef(new Set<string>());
+  const deleteContext = useRef<OperationContext | null>(null);
+  const [deletingMessageId, setDeletingMessageId] = useState<string | null>(null);
+  const setDeleteConfirmId = (deleteConfirmId: string | null) => {
+    const previous = deleteContext.current; deleteContext.current = null; previous?.dispose();
+    deleteDialogGeneration.current++;
+    if (deleteConfirmId !== null) {
+      try {
+        if (!scope) throw new Error('Sign in to this conversation before deleting a message.');
+        const context = captureScopedOperation(scope); deleteContext.current = context;
+        context.signal.addEventListener('abort', () => {
+          if (deleteContext.current === context) setDeleteConfirmId(null);
+        }, { once: true });
+      } catch (error) { toast.error(extractApiError(error)); return; }
+    }
     dispatchUI({ slice: 'popup', patch: { deleteConfirmId } });
+  };
+  useEffect(() => () => {
+    deleteDialogGeneration.current++;
+    const context = deleteContext.current; deleteContext.current = null; context?.dispose();
+  }, []);
   const setContextMenuAnchor = (contextMenuAnchor: { x: number; y: number }) =>
     dispatchUI({ slice: 'popup', patch: { contextMenuAnchor } });
 
@@ -658,21 +686,10 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
   const setDownloadProgress = (downloadProgress: number | null) =>
     dispatchUI({ slice: 'attachment', patch: { downloadProgress } });
 
-  // Edit-history slice
-  const { editHistoryMsgId, editHistoryPos, editHistoryData, editHistoryLoading } = uiState.editHistory;
-  const setEditHistoryMsgId = (editHistoryMsgId: string | null) =>
-    dispatchUI({ slice: 'editHistory', patch: { editHistoryMsgId } });
-  const setEditHistoryPos = (editHistoryPos: { x: number; y: number }) =>
-    dispatchUI({ slice: 'editHistory', patch: { editHistoryPos } });
-  const setEditHistoryData = (editHistoryData: { id: string; content: string; edited_at: string }[]) =>
-    dispatchUI({ slice: 'editHistory', patch: { editHistoryData } });
-  const setEditHistoryLoading = (editHistoryLoading: boolean) =>
-    dispatchUI({ slice: 'editHistory', patch: { editHistoryLoading } });
-  const editHistoryDialogRef = useRef<HTMLDivElement>(null);
+  const { editHistoryMsgId, editHistoryPos } = uiState.editHistory;
   const closeEditHistoryDialog = useCallback(() => {
     dispatchUI({ slice: 'editHistory', patch: { editHistoryMsgId: null } });
   }, []);
-  useFocusTrap(editHistoryDialogRef, Boolean(editHistoryMsgId), closeEditHistoryDialog);
   const [isCoarsePointer, setIsCoarsePointer] = useState(() => {
     if (typeof window === 'undefined') return false;
     return window.matchMedia('(hover: none), (pointer: coarse)').matches;
@@ -695,13 +712,14 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
   const prevMessagesLenRef = useRef(0);
   const isLoadingMoreRef = useRef(false);
 
+  const memberScope = useCurrentAccountScope();
   const activeGuildMembers = useMemberStore(
     useCallback(
       (state) => {
         if (!activeGuildId) return EMPTY_MEMBERS;
-        return state.members.get(activeGuildId) ?? EMPTY_MEMBERS;
+        return (memberScope ? state.members.get(memberScopeKey(memberScope, activeGuildId)) : undefined) ?? EMPTY_MEMBERS;
       },
-      [activeGuildId],
+      [activeGuildId, memberScope],
     ),
   );
 
@@ -803,23 +821,31 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     return el.scrollHeight - el.scrollTop - el.clientHeight <= 140;
   }, []);
 
-  const readStateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const readStateWriteRef = useRef<AbortController | null>(null);
   const readStateRetryRef = useRef(0);
+  useEffect(() => {
+    lastReadStateMessageIdRef.current = null;
+    readStateRetryRef.current = 0;
+    return () => { readStateWriteRef.current?.abort(); };
+  }, [memberScope, channelId]);
+
   const markLatestRead = useCallback(() => {
     const lastMessage = messages[messages.length - 1];
     if (!lastMessage?.id || lastReadStateMessageIdRef.current === lastMessage.id) return;
-    const serverId = channelServerId ?? useServerListStore.getState().activeServerId;
-    if (!serverId) return;
+    const scope = memberScope;
+    if (!scope) return;
 
     // Update the visible state immediately. Persistence is retried below and the
     // server enforces a monotonic cursor, so a delayed older request cannot undo it.
-    useReadStateStore.getState().markRead(serverId, channelId, lastMessage.id);
-    if (readStateTimerRef.current) clearTimeout(readStateTimerRef.current);
-    readStateTimerRef.current = setTimeout(() => {
-      channelApi.updateReadStateForServer(serverId, channelId, lastMessage.id).then(() => {
+    useReadStateStore.getState().markRead(scope, channelId, lastMessage.id);
+    readStateWriteRef.current?.abort();
+    const writeController = new AbortController();
+    readStateWriteRef.current = writeController;
+    useReadStateStore.getState().saveReadPosition(scope, channelId, lastMessage.id, { delayMs: 300, signal: writeController.signal }).then(() => {
         lastReadStateMessageIdRef.current = lastMessage.id;
         readStateRetryRef.current = 0;
       }).catch((error) => {
+        if (writeController.signal.aborted) return;
         // Do not permanently dedupe a failed write. Keep the optimistic cursor,
         // retry on the next near-bottom signal, and make the failure observable.
         lastReadStateMessageIdRef.current = null;
@@ -829,8 +855,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
           readStateRetryRef.current = 0;
         }
       });
-    }, 300);
-  }, [messages, channelId, channelServerId]);
+  }, [messages, channelId, memberScope]);
 
   // Virtualizer
   const virtualizer = useVirtualizer({
@@ -958,7 +983,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     });
     dispatchUI({
       slice: 'editHistory',
-      patch: { editHistoryMsgId: null, editHistoryData: [], editHistoryLoading: false },
+      patch: { editHistoryMsgId: null },
     });
     setDeanonymizedById({});
     setDeanonymizingId(null);
@@ -980,7 +1005,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
         ]);
         if (cancelled) return;
         _threadHydratedAt.set(channelId, Date.now());
-        const upsertChannel = useChannelStore.getState();
+        const upsertChannel = channelActions;
         for (const thread of [...activeRes.data, ...archivedRes.data]) {
           upsertChannel.addChannel(thread);
           upsertChannel.updateChannel(thread);
@@ -993,7 +1018,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     return () => {
       cancelled = true;
     };
-  }, [channelId, activeGuildId, activeChannelType]);
+  }, [channelId, activeGuildId, activeChannelType, channelActions]);
 
   // Clear the load-more guard when the store finishes loading (including failures).
   useEffect(() => {
@@ -1065,7 +1090,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
   // for the lifetime of the tab.
   useEffect(() => () => {
     if (jumpHighlightTimerRef.current) clearTimeout(jumpHighlightTimerRef.current);
-    if (readStateTimerRef.current) clearTimeout(readStateTimerRef.current);
+    readStateWriteRef.current?.abort();
     revokeLightboxBlobUrls();
   }, []);
 
@@ -1341,7 +1366,23 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
   };
 
   const handleDeleteMessage = async (messageId: string) => {
-    await deleteMessage(channelId, messageId);
+    if (deleteAttempts.current.has(messageId)) return;
+    const generation = deleteDialogGeneration.current;
+    const context = deleteContext.current;
+    deleteAttempts.current.add(messageId); setDeletingMessageId(messageId);
+    try {
+      if (!context) throw new Error('Review the current message before deleting it.');
+      context.assertCurrent();
+      await deleteMessage(channelId, messageId);
+      context.assertCurrent();
+    } catch (err) {
+      if (deleteDialogGeneration.current === generation) toast.error(`Failed to delete message: ${extractApiError(err)}`);
+      return;
+    } finally {
+      deleteAttempts.current.delete(messageId);
+      setDeletingMessageId(current => current === messageId ? null : current);
+    }
+    if (deleteDialogGeneration.current !== generation) return;
     setMenuMessageId(null);
     setDeleteConfirmId(null);
   };
@@ -1432,21 +1473,12 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     setProfileUser(msg.author);
   };
 
-  const openEditHistory = async (event: MouseEvent<HTMLElement>, msgId: string) => {
+  const openEditHistory = (event: MouseEvent<HTMLElement>, msgId: string) => {
     event.stopPropagation();
-    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-    setEditHistoryPos({ x: rect.left, y: rect.bottom + 4 });
-    setEditHistoryMsgId(msgId);
-    setEditHistoryLoading(true);
-    setEditHistoryData([]);
-    try {
-      const { data } = await channelApi.getEditHistory(channelId, msgId);
-      setEditHistoryData(data);
-    } catch {
-      setEditHistoryData([]);
-    } finally {
-      setEditHistoryLoading(false);
-    }
+    const rect = event.currentTarget.getBoundingClientRect();
+    dispatchUI({ slice: 'editHistory', patch: {
+      editHistoryMsgId: msgId, editHistoryPos: { x: rect.left, y: rect.bottom + 4 },
+    } });
   };
 
   const handleMentionClick = useCallback((userId: string) => {
@@ -1528,7 +1560,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
 
   const openLinkedThread = (threadId: string) => {
     if (!activeGuildId) return;
-    useChannelStore.getState().selectChannel(threadId);
+    channelActions.selectChannel(threadId);
     navigate(`/app/guilds/${activeGuildId}/channels/${threadId}`);
   };
 
@@ -1546,8 +1578,8 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
         name: trimmed,
         message_id: threadModalForMessageId,
       });
-      useChannelStore.getState().addChannel(thread);
-      useChannelStore.getState().selectChannel(thread.id);
+      channelActions.addChannel(thread);
+      channelActions.selectChannel(thread.id);
       setThreadModalForMessageId(null);
       setThreadName('');
       navigate(`/app/guilds/${activeGuildId}/channels/${thread.id}`);
@@ -1561,7 +1593,10 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
 
   const buildMessageContextMenuItems = (msg: Message): ContextMenuItem[] => {
     const isOwnMessage = msg.author.id === me;
-    const canEditMsg = isOwnMessage;
+    // Editing rewrites the whole encrypted body, and a delivered message's
+    // attachment descriptors cannot be recovered from the server, so an
+    // encrypted message that carries attachments is not editable.
+    const canEditMsg = isOwnMessage && !hasEncryptedAttachments(msg);
     const canDeleteMsg = isOwnMessage || canManageMessages;
     const canPinMsg = canPinInChannel;
     const items: ContextMenuItem[] = [];
@@ -1718,7 +1753,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
       const guildId = activeChannel?.guild_id;
       const guildMembers = guildId === activeGuildId
         ? activeGuildMembers
-        : (guildId ? (useMemberStore.getState().members.get(guildId) ?? null) : null);
+        : (guildId && memberScope ? useMemberStore.getState().members.get(memberScopeKey(memberScope, guildId)) ?? null : null);
       const resolveUsername = (userId: string): string => {
         if (guildMembers) {
           const member = guildMembers.find((m) => m.user.id === userId);
@@ -1765,7 +1800,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     const replyParentMessage = replyParentId ? messageById.get(replyParentId) : undefined;
     const replyIndent = Math.min(replyDepth, MAX_REPLY_NEST_DEPTH) * REPLY_INDENT_PX;
     const isOwnMessage = msg.author.id === me;
-    const canEditMessage = isOwnMessage;
+    const canEditMessage = isOwnMessage && !hasEncryptedAttachments(msg);
     const canDeleteMessage = isOwnMessage || canManageMessages;
     const canPinMessage = canPinInChannel;
     const canReportMessage = Boolean(activeGuildId) && msg.author.id !== me;
@@ -2186,6 +2221,15 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
           {msg.attachments && msg.attachments.length > 0 && (
             <div className="mt-1.5 flex flex-col gap-2">
               {msg.attachments.map((att) => {
+                // Encrypted attachment seam: in an end-to-end encrypted
+                // conversation the server's row is an opaque blob. Its real
+                // name, type and bytes come from the encrypted message body and
+                // are decrypted on this device; an attachment the body never
+                // described is labelled as not encrypted rather than shown as
+                // if it were.
+                if (msg.e2ee) {
+                  return <EncryptedAttachment key={att.id} attachment={att} />;
+                }
                 const src = resolveFederatedAttachmentUrl(att, msg.channel_id);
                 const isFederated = Boolean(att.origin_server);
                 const federatedBadge = isFederated ? (
@@ -2482,26 +2526,6 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
             )}
           </div>
         )}
-        {deleteConfirmId === msg.id && (
-          <div className="glass-modal absolute right-1 top-11 z-10 min-w-[min(13.75rem,calc(100vw-2.75rem))] max-w-[calc(100vw-2.75rem)] rounded-md p-3 sm:right-2">
-            <p className="mb-1 text-label font-semibold text-text-primary">Delete message?</p>
-            <p className="mb-3 text-meta text-text-muted">This can't be undone — the message is gone for everyone.</p>
-            <div className="flex items-center gap-2">
-              <button
-                className="rounded-sm bg-accent-danger-fill px-3 py-1.5 text-label font-semibold text-text-on-danger shadow-sm transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-[color-mix(in_srgb,var(--accent-danger-fill)_90%,#000)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-                onClick={() => void handleDeleteMessage(msg.id)}
-              >
-                Delete
-              </button>
-              <button
-                className="rounded-sm px-3 py-1.5 text-label font-semibold text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-                onClick={() => setDeleteConfirmId(null)}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        )}
       </div>
     );
   };
@@ -2781,65 +2805,46 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
           onClose={closeContextMenu}
         />
       )}
-      {editHistoryMsgId && createPortal(
-        <div
-          className="fixed inset-0 z-[9999]"
-          onClick={(event) => {
-            if (event.target === event.currentTarget) setEditHistoryMsgId(null);
-          }}
+      <Modal
+        open={deleteConfirmId !== null}
+        onClose={() => setDeleteConfirmId(null)}
+        role="alertdialog"
+        size="sm"
+        labelledBy="delete-message-dialog-title"
+        describedBy="delete-message-dialog-desc"
+      >
+        <ModalHeader
+          icon={
+            <div className="flex h-10 w-10 items-center justify-center rounded-md bg-danger-tint text-accent-danger">
+              <AlertTriangle size={20} />
+            </div>
+          }
         >
-          <div
-            ref={editHistoryDialogRef}
-            // Was a bare div: no role, no accessible name, no focus management,
-            // and dismissable only by clicking the backdrop — completely
-            // unreachable by keyboard or screen reader. `useFocusTrap` supplies
-            // focus containment, initial focus and Escape-to-close.
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="edit-history-dialog-title"
-            tabIndex={-1}
-            className="glass-modal absolute max-h-[min(20rem,calc(100dvh-1rem))] w-[min(20rem,calc(100vw-1rem))] overflow-y-auto rounded-md border border-border-subtle shadow-xl backdrop-blur-md focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-            style={{
-              left: Math.max(8, Math.min(editHistoryPos.x, window.innerWidth - Math.min(320, window.innerWidth - 16) - 8)),
-              top: Math.max(8, Math.min(editHistoryPos.y, window.innerHeight - Math.min(320, window.innerHeight - 16) - 8)),
-              boxShadow: 'var(--shadow-lg)',
+          <ModalTitle id="delete-message-dialog-title">Delete message?</ModalTitle>
+          <ModalDescription id="delete-message-dialog-desc">
+            This can't be undone — the message is gone for everyone.
+          </ModalDescription>
+        </ModalHeader>
+        <ModalFooter>
+          <Button variant="secondary" onClick={() => setDeleteConfirmId(null)}>
+            Cancel
+          </Button>
+          <Button
+            variant="destructive"
+            loading={deletingMessageId !== null && deletingMessageId === deleteConfirmId}
+            autoFocus
+            onClick={() => {
+              if (deleteConfirmId) void handleDeleteMessage(deleteConfirmId);
             }}
           >
-            <div
-              id="edit-history-dialog-title"
-              className="border-b border-border-subtle px-3 py-2 text-label font-semibold text-text-primary"
-            >
-              Edit History
-            </div>
-            {editHistoryLoading ? (
-              <div className="px-3 py-4">
-                <LoadingSpinner size="sm" />
-              </div>
-            ) : editHistoryData.length === 0 ? (
-              <div className="px-3 py-4 text-meta text-text-muted">
-                No earlier versions — this is the original text.
-              </div>
-            ) : (
-              <div className="flex flex-col">
-                {editHistoryData.map((entry, i) => (
-                  <div
-                    key={entry.id}
-                    className="border-b border-border-subtle/50 px-3 py-2 last:border-b-0"
-                  >
-                    <div className="mb-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                      Version {i + 1} -- {formatTimestamp(entry.edited_at)}
-                    </div>
-                    <div className="break-words text-sm" style={{ color: 'var(--text-secondary)' }}>
-                      {entry.content}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>,
-        document.body
-      )}
+            Delete
+          </Button>
+        </ModalFooter>
+      </Modal>
+      {editHistoryMsgId && <MessageEditHistoryDialog
+        scope={scope} channelId={channelId} messageId={editHistoryMsgId}
+        position={editHistoryPos} onClose={closeEditHistoryDialog}
+      />}
     </div>
   );
 }

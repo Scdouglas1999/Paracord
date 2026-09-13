@@ -230,6 +230,24 @@ pub async fn create_scheduled_message(
         .ok_or(ApiError::NotFound)?;
     let perms = compute_channel_permissions(&state, &channel, auth.user_id).await?;
     paracord_core::permissions::require_permission(perms, Permissions::SEND_MESSAGES)?;
+    crate::routes::channels::ensure_channel_permissions(
+        &state,
+        &channel,
+        auth.user_id,
+        &[Permissions::VIEW_CHANNEL, Permissions::SEND_MESSAGES],
+    )
+    .await?;
+    crate::routes::channels::require_supported_action(channel.channel_type, "schedule")?;
+    if let Some(reason) = crate::routes::channels::conversation_write_restriction(
+        &state,
+        &channel,
+        auth.user_id,
+        perms,
+    )
+    .await?
+    {
+        return Err(ApiError::BadRequest(reason.into()));
+    }
 
     let send_at = parse_datetime(&body.send_at)?;
     let min_send_at = Utc::now() + chrono::Duration::seconds(5);
@@ -372,6 +390,24 @@ pub async fn update_scheduled_message(
         .ok_or(ApiError::NotFound)?;
     let perms = compute_channel_permissions(&state, &channel, auth.user_id).await?;
     paracord_core::permissions::require_permission(perms, Permissions::SEND_MESSAGES)?;
+    crate::routes::channels::ensure_channel_permissions(
+        &state,
+        &channel,
+        auth.user_id,
+        &[Permissions::VIEW_CHANNEL, Permissions::SEND_MESSAGES],
+    )
+    .await?;
+    crate::routes::channels::require_supported_action(channel.channel_type, "schedule")?;
+    if let Some(reason) = crate::routes::channels::conversation_write_restriction(
+        &state,
+        &channel,
+        auth.user_id,
+        perms,
+    )
+    .await?
+    {
+        return Err(ApiError::BadRequest(reason.into()));
+    }
 
     let send_at = parse_datetime(&body.send_at)?;
     let min_send_at = Utc::now() + chrono::Duration::seconds(5);

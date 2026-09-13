@@ -1,9 +1,9 @@
+import { useCurrentChannelStore } from '../../hooks/useChannels';
 import { useEffect, useMemo, useState } from 'react';
 import { Mic, MicOff, Headphones, HeadphoneOff, PhoneOff, Radio, Video, VideoOff } from 'lucide-react';
 import { ConnectionQuality, RoomEvent } from 'livekit-client';
 import { useNavigate } from 'react-router';
 import { useVoiceStore } from '../../stores/voiceStore';
-import { useChannelStore } from '../../stores/channelStore';
 import { useAuthStore } from '../../stores/authStore';
 import { useVoice } from '../../hooks/useVoice';
 
@@ -32,7 +32,7 @@ export function MiniVoiceBar() {
   // Route mute/deaf/camera through useVoice so the gateway broadcast lives in one
   // place and can't diverge from VoiceControlBar.
   const { toggleMute, toggleDeaf, toggleVideo } = useVoice();
-  const channels = useChannelStore((s) => s.channels);
+  const channels = useCurrentChannelStore((s) => s.channelsById);
   const rawNotifications = useAuthStore((s) => s.settings?.notifications as Record<string, unknown> | undefined);
   const isPttMode = (rawNotifications?.['voiceInputMode'] ?? 'voice_activity') === 'push_to_talk';
   const navigate = useNavigate();
@@ -54,7 +54,7 @@ export function MiniVoiceBar() {
   }, [room]);
 
   const channelName = useMemo(
-    () => channels.find((c) => c.id === channelId)?.name ?? 'Voice Channel',
+    () => channels[channelId ?? '']?.name ?? 'Voice Channel',
     [channels, channelId],
   );
 

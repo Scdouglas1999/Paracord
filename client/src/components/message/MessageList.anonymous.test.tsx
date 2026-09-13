@@ -83,9 +83,9 @@ vi.mock('../../hooks/usePermissions', () => ({
   }),
 }));
 
-vi.mock('../../stores/messageStore', () => {
+vi.mock('../../hooks/useMessageStore', () => {
   return {
-    useMessageStore: (selector: (s: typeof mocks.messageStoreState) => unknown) =>
+    useCurrentMessageStore: (selector: (s: typeof mocks.messageStoreState) => unknown) =>
       selector(mocks.messageStoreState),
   };
 });
@@ -351,4 +351,16 @@ describe('MessageList anonymous and disappearing message display', () => {
     expect(await screen.findByText(/Real author:/)).toBeInTheDocument();
     expect(screen.getByText(/alice/)).toBeInTheDocument();
   });
+});
+
+vi.mock('../../hooks/useChannels', async () => {
+  const actual = await vi.importActual<typeof import('../../hooks/useChannels')>('../../hooks/useChannels');
+  const { useChannelStore } = await import('../../stores/channelStore');
+  return {
+    ...actual,
+    useCurrentChannelStore: useChannelStore,
+    useChannelActions: () => useChannelStore.getState(),
+    getAccountChannelView: () => useChannelStore.getState(),
+    useGuildChannels: (id: string) => useChannelStore(state => state.channelsByGuild[id] ?? []),
+  };
 });

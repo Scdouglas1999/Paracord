@@ -11,8 +11,7 @@ function buildGuild(iconHash: string | null): Guild {
     description: 'Release testing',
     owner_id: 'user-1',
     member_count: 2,
-    features: [],
-    created_at: '2026-05-17T00:00:00Z',
+      created_at: '2026-05-17T00:00:00Z',
   };
 }
 

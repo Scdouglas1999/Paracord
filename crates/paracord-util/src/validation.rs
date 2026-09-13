@@ -154,13 +154,28 @@ pub fn validate_email(email: &str) -> Result<(), ValidationError> {
     Ok(())
 }
 
+/// Shortest accepted password, measured in UTF-8 bytes (not characters).
+///
+/// Published so every surface that advertises the rules before submit — the
+/// registration page and the first-owner setup page — reads them from the same
+/// place the server enforces them, instead of restating a number that drifts.
+pub const PASSWORD_MIN_LENGTH: usize = 10;
+/// Longest accepted password, in UTF-8 bytes.
+pub const PASSWORD_MAX_LENGTH: usize = 128;
+
 pub fn validate_password(password: &str) -> Result<(), ValidationError> {
     let len = password.len();
-    if len < 10 {
-        return Err(ValidationError::TooShort { min: 10, got: len });
+    if len < PASSWORD_MIN_LENGTH {
+        return Err(ValidationError::TooShort {
+            min: PASSWORD_MIN_LENGTH,
+            got: len,
+        });
     }
-    if len > 128 {
-        return Err(ValidationError::TooLong { max: 128, got: len });
+    if len > PASSWORD_MAX_LENGTH {
+        return Err(ValidationError::TooLong {
+            max: PASSWORD_MAX_LENGTH,
+            got: len,
+        });
     }
     let has_upper = password.chars().any(|c| c.is_ascii_uppercase());
     let has_lower = password.chars().any(|c| c.is_ascii_lowercase());
@@ -554,6 +569,65 @@ mod dangerous_markup_tests {
         .take(3)
         {
             assert!(!contains_dangerous_markup(value), "must accept {value:?}");
+        }
+    }
+}
+
+/// Rich-message producers use mention tokens as syntax, not HTML. Permit only
+/// complete positive snowflake mention tokens while retaining the strict markup
+/// rejection used by their existing content validation.
+pub fn contains_dangerous_markup_except_mentions(value: &str) -> bool {
+    let mut remaining = value;
+    while let Some(start) = remaining.find('<') {
+        if contains_dangerous_markup(&remaining[..start]) {
+            return true;
+        }
+        let rest = &remaining[start + 1..];
+        let Some(end) = rest.find('>') else {
+            return true;
+        };
+        let token = &rest[..end];
+        let Some(user_or_role) = token.strip_prefix('@') else {
+            return true;
+        };
+        let number = user_or_role
+            .strip_prefix('!')
+            .or_else(|| user_or_role.strip_prefix('&'))
+            .unwrap_or(user_or_role);
+        if number.is_empty()
+            || !number.bytes().all(|byte| byte.is_ascii_digit())
+            || !number.parse::<i64>().is_ok_and(|id| id > 0)
+        {
+            return true;
+        }
+        remaining = &rest[end + 1..];
+    }
+    contains_dangerous_markup(remaining)
+}
+
+#[cfg(test)]
+mod message_token_markup_tests {
+    use super::contains_dangerous_markup_except_mentions;
+    #[test]
+    fn permits_only_complete_mentions_without_hiding_markup() {
+        for safe in ["<@123> <@!456> <@&789> @everyone", "plain content"] {
+            assert!(!contains_dangerous_markup_except_mentions(safe));
+        }
+        for unsafe_content in [
+            "<@123><script>alert(1)</script>",
+            "<@123 onload=x>",
+            "<@<@123>>",
+            "<@0>",
+            "<@-1>",
+            "<@123",
+            "<@123>javascript:alert(1)",
+            "<img src=x onerror=alert(1)>",
+            "<@9223372036854775808>",
+        ] {
+            assert!(
+                contains_dangerous_markup_except_mentions(unsafe_content),
+                "{unsafe_content}"
+            );
         }
     }
 }

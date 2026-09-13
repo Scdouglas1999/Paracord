@@ -218,7 +218,14 @@ pub async fn process_interaction_response(
 
             let message_id = paracord_util::snowflake::generate(1);
             // Message type 20 = ChatInputCommand (interaction response)
-            let msg = paracord_db::messages::create_message_with_payload(
+            let mentioned_users = crate::message_attention::member_mentions(
+                &state.db,
+                token_row.channel_id,
+                author_id,
+                content,
+            )
+            .await?;
+            let msg = paracord_db::messages::create_message_with_payload_mentions(
                 &state.db,
                 message_id,
                 token_row.channel_id,
@@ -227,10 +234,9 @@ pub async fn process_interaction_response(
                 20, // APPLICATION_COMMAND message type
                 None,
                 flags,
-                None,
-                None,
                 components_json.as_deref(),
                 embeds_json.as_deref(),
+                &mentioned_users,
             )
             .await
             .map_err(|e| CoreError::Internal(e.to_string()))?;
@@ -264,7 +270,8 @@ pub async fn process_interaction_response(
             let guild_id = token_row.guild_id;
             state
                 .event_bus
-                .dispatch("MESSAGE_CREATE", msg_json.clone(), guild_id);
+                .dispatch_message(&state.db, "MESSAGE_CREATE", msg_json.clone(), guild_id)
+                .await;
 
             Ok(Some(msg_json))
         }
@@ -316,7 +323,13 @@ pub async fn process_interaction_response(
 
             state
                 .event_bus
-                .dispatch("MESSAGE_CREATE", msg_json.clone(), token_row.guild_id);
+                .dispatch_message(
+                    &state.db,
+                    "MESSAGE_CREATE",
+                    msg_json.clone(),
+                    token_row.guild_id,
+                )
+                .await;
 
             Ok(Some(msg_json))
         }
@@ -352,6 +365,7 @@ pub async fn process_interaction_response(
 
             let msg_json = json!({
                 "id": updated.id.to_string(),
+                "message_revision": updated.recovery_revision.to_string(),
                 "channel_id": updated.channel_id.to_string(),
                 "author_id": updated.author_id.to_string(),
                 "content": updated.content,
@@ -362,7 +376,13 @@ pub async fn process_interaction_response(
 
             state
                 .event_bus
-                .dispatch("MESSAGE_UPDATE", msg_json.clone(), token_row.guild_id);
+                .dispatch_message(
+                    &state.db,
+                    "MESSAGE_UPDATE",
+                    msg_json.clone(),
+                    token_row.guild_id,
+                )
+                .await;
 
             Ok(Some(msg_json))
         }

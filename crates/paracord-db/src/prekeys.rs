@@ -17,6 +17,164 @@ pub struct OneTimePrekeyRow {
     pub created_at: String,
 }
 
+/// A single-statement snapshot of an account's published material. Reading this
+/// state never consumes a disposable prekey. No private material is stored here.
+#[derive(Debug, sqlx::FromRow)]
+pub struct PublicPrekeyStateRow {
+    pub identity_key: Option<String>,
+    pub signed_prekey_id: Option<i64>,
+    pub signed_prekey_public_key: Option<String>,
+    pub signed_prekey_signature: Option<String>,
+    pub prekey_id: Option<i64>,
+    pub prekey_public_key: Option<String>,
+    pub last_resort: Option<i32>,
+}
+
+pub async fn get_public_prekey_state(
+    pool: &DbPool,
+    user_id: i64,
+) -> Result<Vec<PublicPrekeyStateRow>, DbError> {
+    Ok(sqlx::query_as::<_, PublicPrekeyStateRow>(
+        "SELECT u.public_key AS identity_key,
+                s.id AS signed_prekey_id, s.public_key AS signed_prekey_public_key,
+                s.signature AS signed_prekey_signature,
+                o.id AS prekey_id, o.public_key AS prekey_public_key, o.last_resort
+         FROM users u
+         LEFT JOIN signed_prekeys s ON s.user_id = u.id
+         LEFT JOIN one_time_prekeys o ON o.user_id = u.id
+         WHERE u.id = $1
+         ORDER BY o.id ASC",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?)
+}
+
+pub struct PrekeyPublicationIdentity<'a> {
+    pub request_id: &'a str,
+    pub request_hash: &'a str,
+    pub expected_identity_key: &'a str,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct PrekeyPublication {
+    pub request_id: Option<String>,
+    pub signed_prekey_id: Option<i64>,
+    pub one_time_prekeys_stored: u64,
+    pub one_time_prekeys_total: i64,
+    pub last_resort_prekey_id: Option<i64>,
+}
+
+/// Publish a fully validated request in one transaction, including its count.
+/// Serialize concurrent publications for one owner on both supported databases.
+/// Any database error rolls back every part of the submitted bundle.
+pub async fn publish_prekeys(
+    pool: &DbPool,
+    user_id: i64,
+    signed: Option<(i64, &str, &str)>,
+    disposable: &[(i64, String)],
+    last_resort: Option<(i64, &str)>,
+    identity: Option<PrekeyPublicationIdentity<'_>>,
+) -> Result<PrekeyPublication, DbError> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("UPDATE users SET id = id WHERE id = $1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    if let Some(identity) = &identity {
+        let (enrolled,): (Option<String>,) =
+            sqlx::query_as("SELECT public_key FROM users WHERE id = $1")
+                .bind(user_id)
+                .fetch_one(&mut *tx)
+                .await?;
+        if enrolled
+            .as_deref()
+            .is_none_or(|key| !key.eq_ignore_ascii_case(identity.expected_identity_key))
+        {
+            return Err(DbError::Conflict("The account's enrolled identity changed. Unlock its current identity before publishing keys.".into()));
+        }
+        let previous: Option<(String, String)> = sqlx::query_as(
+            "SELECT request_hash, response_json FROM prekey_publication_receipts WHERE user_id = $1 AND request_id = $2",
+        ).bind(user_id).bind(identity.request_id).fetch_optional(&mut *tx).await?;
+        if let Some((hash, response)) = previous {
+            if hash != identity.request_hash {
+                return Err(DbError::Conflict(
+                    "This prekey publication ID was already used for a different request.".into(),
+                ));
+            }
+            return serde_json::from_str(&response)
+                .map_err(|error| DbError::Sqlx(sqlx::Error::Decode(Box::new(error))));
+        }
+    }
+    if let Some((id, key, signature)) = signed {
+        sqlx::query(
+            "INSERT INTO signed_prekeys (id, user_id, public_key, signature)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (user_id) DO UPDATE SET id = EXCLUDED.id,
+                public_key = EXCLUDED.public_key, signature = EXCLUDED.signature",
+        )
+        .bind(id)
+        .bind(user_id)
+        .bind(key)
+        .bind(signature)
+        .execute(&mut *tx)
+        .await?;
+    }
+    let mut stored = 0;
+    for (id, key) in disposable {
+        stored += sqlx::query(
+            "INSERT INTO one_time_prekeys (id, user_id, public_key)
+             VALUES ($1, $2, $3) ON CONFLICT (user_id, id) DO NOTHING",
+        )
+        .bind(id)
+        .bind(user_id)
+        .bind(key)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    }
+    if let Some((id, key)) = last_resort {
+        sqlx::query("DELETE FROM one_time_prekeys WHERE user_id = $1 AND last_resort = 1")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "INSERT INTO one_time_prekeys (id, user_id, public_key, last_resort)
+             VALUES ($1, $2, $3, 1)
+             ON CONFLICT (user_id, id) DO UPDATE SET
+                public_key = EXCLUDED.public_key, last_resort = 1",
+        )
+        .bind(id)
+        .bind(user_id)
+        .bind(key)
+        .execute(&mut *tx)
+        .await?;
+    }
+    let (total,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM one_time_prekeys WHERE user_id = $1 AND last_resort = 0",
+    )
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let publication = PrekeyPublication {
+        request_id: identity
+            .as_ref()
+            .map(|identity| identity.request_id.to_string()),
+        signed_prekey_id: signed.map(|key| key.0),
+        one_time_prekeys_stored: stored,
+        one_time_prekeys_total: total,
+        last_resort_prekey_id: last_resort.map(|key| key.0),
+    };
+    if let Some(identity) = &identity {
+        let response = serde_json::to_string(&publication)
+            .map_err(|error| DbError::Sqlx(sqlx::Error::Encode(Box::new(error))))?;
+        sqlx::query("INSERT INTO prekey_publication_receipts (user_id, request_id, request_hash, response_json) VALUES ($1, $2, $3, $4)")
+            .bind(user_id).bind(identity.request_id).bind(identity.request_hash).bind(response).execute(&mut *tx).await?;
+    }
+    tx.commit().await?;
+    Ok(publication)
+}
+
 /// Upsert a signed prekey for a user. Each user has at most one signed prekey.
 pub async fn upsert_signed_prekey(
     pool: &DbPool,

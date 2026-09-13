@@ -1,5 +1,6 @@
+import { useServerListStore } from '../../../stores/serverListStore';
 import { act, render, screen, fireEvent } from '@testing-library/react';
-import { MemoryRouter, useLocation } from 'react-router';
+import { MemoryRouter, Routes, Route, useLocation } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { UnifiedSidebar } from './UnifiedSidebar';
@@ -36,6 +37,7 @@ vi.mock('../../../hooks/useUnifiedConversations', () => ({
 function entry(over: Partial<ConversationEntry> & { key: string }): ConversationEntry {
   return {
     serverId: 'srv',
+    scope: { serverId: 'srv', userId: 'user-1' },
     channelId: over.key.split(':')[1] ?? '0',
     guildId: 'g1',
     userId: null,
@@ -50,6 +52,7 @@ function entry(over: Partial<ConversationEntry> & { key: string }): Conversation
     hasVoiceActivity: false,
     pinned: false,
     ...over,
+    key: JSON.stringify([(over.scope?.serverId ?? 'srv'), (over.scope?.userId ?? 'user-1'), over.channelId ?? over.key.split(':')[1] ?? '0']),
   };
 }
 
@@ -64,8 +67,8 @@ function conversations(over: Partial<UnifiedConversations> = {}): UnifiedConvers
     pinned: [entry({ key: 'srv:2', title: 'pinned-channel', pinned: true })],
     recent: [entry({ key: 'srv:3', title: 'lounge-channel' })],
     spaces: [
-      { id: 'g1', name: 'Emerald HQ', icon: null, serverId: 'srv' },
-      { id: 'g2', name: 'Side Space', icon: null, serverId: 'srv' },
+      { scope: { serverId: 'srv', userId: 'user-1' }, key: JSON.stringify(['srv', 'user-1', 'g1']), id: 'g1', name: 'Emerald HQ', icon: null, serverId: 'srv' },
+      { scope: { serverId: 'srv', userId: 'user-1' }, key: JSON.stringify(['srv', 'user-1', 'g2']), id: 'g2', name: 'Side Space', icon: null, serverId: 'srv' },
     ],
     requests: [],
     ...over,
@@ -82,7 +85,11 @@ function LocationProbe() {
 function renderSidebar(initialPath = '/app') {
   return render(
     <MemoryRouter initialEntries={[initialPath]}>
-      <UnifiedSidebar />
+      <Routes>
+        <Route path="/app/guilds/:guildId/channels/:channelId" element={<UnifiedSidebar />} />
+        <Route path="/app/guilds/:guildId" element={<UnifiedSidebar />} />
+        <Route path="*" element={<UnifiedSidebar />} />
+      </Routes>
       <LocationProbe />
     </MemoryRouter>,
   );
@@ -94,6 +101,7 @@ beforeEach(() => {
   useAuthStore.setState({ user: { id: 'u1', username: 'Wren', flags: 0 } as never });
   useUIStore.setState({ sidebarCollapsed: false, sidebarWidth: 300 });
   useVoiceStore.setState({ connected: false });
+  useServerListStore.setState({ activeServerId: 'srv', servers: [{ id: 'srv', url: 'https://srv.example', name: 'Test', token: 'token', userId: 'user-1', user: { id: 'user-1', username: 'Wren', flags: 0 } as never, connected: true }] });
 });
 
 describe('UnifiedSidebar', () => {
@@ -245,4 +253,31 @@ describe('UnifiedSidebar', () => {
     renderSidebar();
     expect(screen.getByTestId('anchor-attention-dot')).toBeInTheDocument();
   });
+});
+
+
+it('separates collapsed selection and attention for colliding guild IDs', () => {
+  useUIStore.setState({ sidebarCollapsed: true });
+  useServerListStore.setState(state => ({ servers: [...state.servers, {
+    ...state.servers[0], id: 'other', url: 'https://other.example', name: 'Other',
+  }] }));
+  const otherScope = { serverId: 'other', userId: 'user-1' };
+  mockedHook.mockReturnValue(conversations({
+    needsYou: [entry({ key: 'other:1', scope: otherScope, serverId: 'other', guildId: 'same', mentionCount: 2 })],
+    recent: [], pinned: [],
+    spaces: [
+      { scope: { serverId: 'srv', userId: 'user-1' }, key: JSON.stringify(['srv', 'user-1', 'same']), id: 'same', name: 'Active space', icon: null, serverId: 'srv' },
+      { scope: otherScope, key: JSON.stringify(['other', 'user-1', 'same']), id: 'same', name: 'Background space', icon: null, serverId: 'other' },
+    ],
+  }));
+  renderSidebar('/app/guilds/same');
+  const active = screen.getByRole('option', { name: 'Active space' });
+  const background = screen.getByRole('option', { name: 'Background space' });
+  expect(active).toHaveAttribute('aria-selected', 'true');
+  expect(background).toHaveAttribute('aria-selected', 'false');
+  expect(screen.getAllByTestId('space-attention-dot')).toHaveLength(1);
+  expect(background).toContainElement(screen.getByTestId('space-attention-dot'));
+  fireEvent.click(background);
+  expect(useServerListStore.getState().activeServerId).toBe('other');
+  expect(background).toHaveAttribute('aria-selected', 'true');
 });

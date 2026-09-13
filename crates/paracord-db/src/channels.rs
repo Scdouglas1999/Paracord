@@ -1,11 +1,29 @@
 use crate::{
     active_database_engine, bool_from_any_row, datetime_from_db_text, datetime_to_db_text,
-    DatabaseEngine, DbError, DbPool,
+    DatabaseEngine, DbConnection, DbError, DbPool,
 };
 use chrono::{DateTime, Utc};
 use paracord_models::id::{ChannelId, GuildId, MessageId, UserId};
 use sqlx::Row;
 use std::collections::BTreeSet;
+
+/// Reconcile derived message tails during an offline import or restore.
+///
+/// Call after copying all messages, inside the transaction that also rotates the
+/// database history epoch. Writers must be stopped: this maintenance helper does
+/// not provide the per-channel locking or revision increments required by live
+/// message mutations. Read cursors and imported message revisions are preserved.
+pub async fn repair_message_tails_for_import(conn: &mut DbConnection) -> Result<u64, DbError> {
+    Ok(sqlx::query(
+        "UPDATE channels
+         SET last_message_id = (SELECT MAX(id) FROM messages WHERE channel_id = channels.id)
+         WHERE last_message_id IS DISTINCT FROM
+             (SELECT MAX(id) FROM messages WHERE channel_id = channels.id)",
+    )
+    .execute(conn)
+    .await?
+    .rows_affected())
+}
 
 #[derive(Debug, Clone)]
 pub struct ChannelRow {
@@ -21,6 +39,7 @@ pub struct ChannelRow {
     pub bitrate: Option<i32>,
     pub user_limit: Option<i32>,
     pub last_message_id: Option<i64>,
+    pub message_revision: i64,
     pub required_role_ids: String,
     pub thread_metadata: Option<String>,
     pub owner_id: Option<i64>,
@@ -57,6 +76,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for ChannelRow {
             bitrate: row.try_get("bitrate")?,
             user_limit: row.try_get("user_limit")?,
             last_message_id: row.try_get("last_message_id")?,
+            message_revision: row.try_get("message_revision")?,
             required_role_ids: row.try_get("required_role_ids")?,
             thread_metadata: row.try_get("thread_metadata")?,
             owner_id: row.try_get("owner_id")?,
@@ -127,7 +147,7 @@ pub async fn create_channel_typed(
     let row = sqlx::query_as::<_, ChannelRow>(
         "INSERT INTO channels (id, space_id, name, channel_type, position, parent_id, required_role_ids)
          VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, '[]'))
-         RETURNING id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at"
+         RETURNING id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, message_revision, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at"
     )
     .bind(id)
     .bind(space_id)
@@ -171,7 +191,7 @@ pub async fn get_channel_typed(
     id: ChannelId,
 ) -> Result<Option<ChannelRow>, DbError> {
     let row = sqlx::query_as::<_, ChannelRow>(
-        "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
+        "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, message_revision, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
          FROM channels WHERE id = $1"
     )
     .bind(id)
@@ -201,7 +221,7 @@ pub async fn get_space_channels_typed(
     space_id: GuildId,
 ) -> Result<Vec<ChannelRow>, DbError> {
     let rows = sqlx::query_as::<_, ChannelRow>(
-        "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
+        "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, message_revision, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
          FROM channels WHERE space_id = $1 ORDER BY position"
     )
     .bind(space_id)
@@ -242,7 +262,7 @@ pub async fn update_channel_typed(
              nsfw = {nsfw_expr},
              updated_at = $8
          WHERE id = $1
-         RETURNING id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at"
+         RETURNING id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, message_revision, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at"
     );
     let row = sqlx::query_as::<_, ChannelRow>(&query)
         .bind(id)
@@ -381,7 +401,7 @@ pub async fn update_channel_positions_typed(
     let mut changed = Vec::new();
     for &(channel_id, position, ref parent_id) in positions {
         let existing = sqlx::query_as::<_, ChannelRow>(
-            "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
+            "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, message_revision, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
              FROM channels WHERE id = $1 AND space_id = $2"
         )
         .bind(channel_id)
@@ -403,7 +423,7 @@ pub async fn update_channel_positions_typed(
         let row = sqlx::query_as::<_, ChannelRow>(
             "UPDATE channels SET position = $2, parent_id = $3, updated_at = $4
              WHERE id = $1
-             RETURNING id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at"
+             RETURNING id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, message_revision, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at"
         )
         .bind(channel_id)
         .bind(position)
@@ -468,7 +488,7 @@ pub async fn create_thread_typed(
     let row = sqlx::query_as::<_, ChannelRow>(
         "INSERT INTO channels (id, space_id, name, channel_type, position, parent_id, required_role_ids, thread_metadata, owner_id, message_count)
          VALUES ($1, $2, $3, 6, 0, $4, '[]', $5, $6, 0)
-         RETURNING id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at"
+         RETURNING id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, message_revision, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at"
     )
     .bind(id)
     .bind(space_id)
@@ -513,7 +533,7 @@ pub async fn get_channel_threads_typed(
     let rows = match crate::active_database_engine() {
         crate::DatabaseEngine::Postgres => {
             sqlx::query_as::<_, ChannelRow>(
-                "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
+                "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, message_revision, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
                  FROM channels
                  WHERE parent_id = $1
                    AND channel_type = 6
@@ -527,7 +547,7 @@ pub async fn get_channel_threads_typed(
         }
         crate::DatabaseEngine::Sqlite => {
             sqlx::query_as::<_, ChannelRow>(
-                "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
+                "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, message_revision, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
                  FROM channels
                  WHERE parent_id = $1
                    AND channel_type = 6
@@ -573,7 +593,7 @@ pub async fn get_archived_threads_typed(
         }
     };
 
-    const COLUMNS: &str = "id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at";
+    const COLUMNS: &str = "id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, message_revision, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at";
 
     let rows = if let Some(before_id) = before {
         let sql = format!(
@@ -637,7 +657,7 @@ pub async fn update_thread_typed(
     locked: Option<bool>,
 ) -> Result<ChannelRow, DbError> {
     let existing = sqlx::query_as::<_, ChannelRow>(
-        "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
+        "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, message_revision, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
          FROM channels
          WHERE id = $1 AND channel_type = 6",
     )
@@ -674,7 +694,7 @@ pub async fn update_thread_typed(
              thread_metadata = $3,
              updated_at = $4
          WHERE id = $1 AND channel_type = 6
-         RETURNING id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at",
+         RETURNING id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, message_revision, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at",
     )
     .bind(thread_id)
     .bind(name)
@@ -780,7 +800,7 @@ pub async fn create_forum_post_typed(
     let row = sqlx::query_as::<_, ChannelRow>(
         "INSERT INTO channels (id, space_id, name, channel_type, position, parent_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags)
          VALUES ($1, $2, $3, 6, 0, $4, '[]', $5, $6, 0, $7)
-         RETURNING id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at"
+         RETURNING id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, message_revision, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at"
     )
     .bind(id)
     .bind(space_id)
@@ -866,7 +886,7 @@ pub async fn get_forum_posts_page_typed(
     };
 
     let sql = format!(
-        "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
+        "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, message_revision, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
          FROM channels
          WHERE parent_id = $1 AND channel_type = 6{}
          ORDER BY {}
@@ -1092,6 +1112,68 @@ mod tests {
             .await
             .unwrap();
         100
+    }
+
+    #[tokio::test]
+    async fn offline_tail_repair_is_transactional_and_preserves_read_state_and_revisions() {
+        let pool = test_pool().await;
+        setup_guild(&pool).await;
+        sqlx::query(
+            "INSERT INTO channels (id, space_id, channel_type, last_message_id, message_revision)
+             VALUES (10, 100, 0, 99, 7), (11, 100, 0, 98, 8), (12, 100, 0, 23, 9)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO messages (id, channel_id, author_id, content)
+             VALUES (21, 10, 1, 'first'), (22, 10, 1, 'surviving'), (23, 12, 1, 'correct')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO read_states (user_id, channel_id, last_message_id, mention_count)
+             VALUES (1, 10, 20, 3), (1, 11, 98, 2)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        assert_eq!(repair_message_tails_for_import(&mut tx).await.unwrap(), 2);
+        tx.rollback().await.unwrap();
+        let original: Vec<(i64, Option<i64>, i64)> = sqlx::query_as(
+            "SELECT id, last_message_id, message_revision FROM channels ORDER BY id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            original,
+            vec![(10, Some(99), 7), (11, Some(98), 8), (12, Some(23), 9)]
+        );
+
+        let mut tx = pool.begin().await.unwrap();
+        assert_eq!(repair_message_tails_for_import(&mut tx).await.unwrap(), 2);
+        assert_eq!(repair_message_tails_for_import(&mut tx).await.unwrap(), 0);
+        tx.commit().await.unwrap();
+        let repaired: Vec<(i64, Option<i64>, i64)> = sqlx::query_as(
+            "SELECT id, last_message_id, message_revision FROM channels ORDER BY id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            repaired,
+            vec![(10, Some(22), 7), (11, None, 8), (12, Some(23), 9)]
+        );
+        let read_states: Vec<(i64, i64, i64)> = sqlx::query_as(
+            "SELECT channel_id, last_message_id, CAST(mention_count AS BIGINT) FROM read_states ORDER BY channel_id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(read_states, vec![(10, 20, 3), (11, 98, 2)]);
     }
 
     #[tokio::test]

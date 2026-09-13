@@ -59,7 +59,9 @@ function statusLabel(status: PresenceStatus | undefined, custom?: string | null)
 
 function mapForGateway(status: PresenceStatus): 'online' | 'idle' | 'dnd' | 'offline' {
   if (status === 'invisible') return 'offline';
-  return status;
+  // The server stores status as an opaque string; collapse unknown values.
+  if (status === 'idle' || status === 'dnd') return status;
+  return 'online';
 }
 
 export function UserPanel({

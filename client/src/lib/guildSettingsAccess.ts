@@ -1,6 +1,9 @@
+import { findScopedGuild } from './guildScope';
 import { hasPermission, Permissions } from '../types';
 import { getCachedRolePermissions } from '../hooks/usePermissions';
-import { useAuthStore } from '../stores/authStore';
+import { getServerAccountScope } from './serverIdentity';
+import { entityScopeKey, LOCAL_SERVER_ID, type AccountScope } from './serverScope';
+import { useServerListStore } from '../stores/serverListStore';
 import { useGuildStore } from '../stores/guildStore';
 import { useMemberStore } from '../stores/memberStore';
 
@@ -31,21 +34,22 @@ export function canAccessGuildSettings(permissions: bigint, isAdmin: boolean): b
  * Uses owner status plus the role-permission cache; if roles have not been
  * loaded yet for a non-owner, returns false (do not advertise settings).
  */
-export function canAccessGuildSettingsSync(guildId: string): boolean {
-  const userId = useAuthStore.getState().user?.id ?? null;
-  if (!userId) return false;
+export function canAccessGuildSettingsSync(guildId: string, requestedScope?: AccountScope): boolean {
+  const scope = requestedScope ?? getServerAccountScope(useServerListStore.getState().activeServerId ?? LOCAL_SERVER_ID);
+  if (!scope) return false;
+  const userId = scope.userId;
 
-  const guild = useGuildStore.getState().guilds.find((g) => g.id === guildId);
+  const guild = findScopedGuild(useGuildStore.getState().guilds, scope, guildId);
   if (!guild) return false;
 
   if (String(guild.owner_id) === String(userId)) {
     return canAccessGuildSettings(ALL_PERMISSIONS, true);
   }
 
-  const rolePermissions = getCachedRolePermissions(guildId);
+  const rolePermissions = getCachedRolePermissions(guildId, scope);
   if (!rolePermissions) return false;
 
-  const members = useMemberStore.getState().members.get(guildId);
+  const members = useMemberStore.getState().members.get(entityScopeKey(scope, guildId));
   const me = members?.find((member) => String(member.user.id) === String(userId));
   if (!me) return false;
 

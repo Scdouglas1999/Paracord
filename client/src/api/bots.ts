@@ -61,26 +61,26 @@ interface UpdateBotRequest {
 }
 
 export const botApi = {
-  list: () => getApi().get<BotApplication[]>('/bots/applications'),
-  create: (data: CreateBotRequest) =>
+  list: async () => getApi().get<BotApplication[]>('/bots/applications'),
+  create: async (data: CreateBotRequest) =>
     getApi().post<BotApplication>('/bots/applications', data),
-  get: (appId: string) =>
+  get: async (appId: string) =>
     getApi().get<BotApplication>(`/bots/applications/${appId}`),
-  getPublic: (appId: string) =>
+  getPublic: async (appId: string) =>
     getApi().get<PublicBotApplication>(`/bots/applications/${appId}/public`),
-  update: (appId: string, data: UpdateBotRequest) =>
+  update: async (appId: string, data: UpdateBotRequest) =>
     getApi().patch<BotApplication>(`/bots/applications/${appId}`, data),
-  delete: (appId: string) =>
+  delete: async (appId: string) =>
     getApi().delete(`/bots/applications/${appId}`),
-  regenerateToken: (appId: string) =>
+  regenerateToken: async (appId: string) =>
     getApi().post<BotApplication>(`/bots/applications/${appId}/token`),
-  listInstalls: (appId: string) =>
+  listInstalls: async (appId: string) =>
     getApi().get<BotGuildInstall[]>(`/bots/applications/${appId}/installs`),
 
   // Guild bot management
-  listGuildBots: (guildId: string) =>
+  listGuildBots: async (guildId: string) =>
     getApi().get<GuildBotEntry[]>(`/guilds/${guildId}/bots`),
-  addBotToGuild: (
+  addBotToGuild: async (
     guildId: string,
     data: {
       application_id: string;
@@ -96,6 +96,6 @@ export const botApi = {
       redirect_uri: data.redirect_uri,
       state: data.state,
     }),
-  removeBotFromGuild: (guildId: string, botAppId: string) =>
+  removeBotFromGuild: async (guildId: string, botAppId: string) =>
     getApi().delete(`/guilds/${guildId}/bots/${botAppId}`),
 };

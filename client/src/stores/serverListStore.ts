@@ -2,9 +2,13 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { secureDelete, secureGet, secureSet } from '../lib/secureStorage';
 import { isTauri } from '../lib/tauriEnv';
+import type { User } from '../types';
+import { registerSessionReset } from './sessionReset';
+
+let tokenHydrationGeneration = 0;
 
 export interface ServerEntry {
-  id: string;           // unique ID (derived from URL hash or random)
+  id: string;           // stable unique ID; new entries use a UUID
   url: string;          // base URL e.g. "http://192.168.1.5:8090"
   name: string;         // server display name
   iconUrl?: string;     // server icon
@@ -12,6 +16,7 @@ export interface ServerEntry {
   refreshToken?: string | null; // Rotating refresh token for cross-origin refresh
   connected: boolean;   // WebSocket connected
   apiReachable?: boolean; // Last known HTTP/API reachability
+  user?: User;         // authenticated profile for this server only; never persisted
   userId?: string;      // user ID on this server (different per server since it's a snowflake)
 }
 
@@ -28,10 +33,13 @@ interface ServerListState {
   updateToken: (id: string, token: string) => void;
   updateRefreshToken: (id: string, refreshToken: string | null) => void;
   updateServerInfo: (id: string, data: Partial<ServerEntry>) => void;
+  setAuthenticatedUser: (id: string, user: User) => void;
+  mergeUserProjection: (id: string, user: Partial<User> & Pick<User, 'id'>) => void;
   setConnected: (id: string, connected: boolean) => void;
   setApiReachable: (id: string, apiReachable: boolean) => void;
   markHydrated: () => void;
   hydrateTokens: () => Promise<void>;
+  clearSessions: () => Promise<void>;
   getServer: (id: string) => ServerEntry | undefined;
   getActiveServer: () => ServerEntry | undefined;
   getServerByUrl: (url: string) => ServerEntry | undefined;
@@ -72,15 +80,9 @@ export function resolveDefaultServerTarget(): string {
   return `${window.location.protocol}//${window.location.host}`;
 }
 
-function generateServerId(url: string): string {
-  // Simple hash-based ID from URL for deterministic IDs
-  let hash = 0;
-  for (let i = 0; i < url.length; i++) {
-    const char = url.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash |= 0;
-  }
-  return 's_' + Math.abs(hash).toString(36);
+function generateServerId(): string {
+  // URL equality handles deduplication. A 32-bit hash can alias unrelated hosts.
+  return `s_${crypto.randomUUID()}`;
 }
 
 function tokenStorageKey(serverId: string): string {
@@ -127,14 +129,14 @@ export const useServerListStore = create<ServerListState>()(
           set((state) => ({
             servers: state.servers.map((s) =>
               s.id === existing.id
-                ? { ...s, name, url: normalizedUrl, apiReachable: true, ...(token ? { token } : {}) }
+                ? { ...s, name, url: normalizedUrl, apiReachable: true, ...(token && token !== s.token ? { token, user: undefined, userId: undefined } : {}) }
                 : s
             ),
             activeServerId: existing.id,
           }));
           return existing.id;
         }
-        const id = generateServerId(normalizedUrl);
+        const id = generateServerId();
         const entry: ServerEntry = {
           id,
           url: normalizedUrl,
@@ -167,15 +169,17 @@ export const useServerListStore = create<ServerListState>()(
       setActive: (id) => set({ activeServerId: id }),
 
       updateToken: (id, token) => {
+        if (!get().getServer(id)) return;
         void saveServerToken(id, token);
         set((state) => ({
           servers: state.servers.map((s) =>
-            s.id === id ? { ...s, token } : s
+            s.id === id ? { ...s, token, ...(!token ? { user: undefined, userId: undefined, connected: false } : {}) } : s
           ),
         }));
       },
 
       updateRefreshToken: (id, refreshToken) => {
+        if (!get().getServer(id)) return;
         void saveServerRefreshToken(id, refreshToken);
         set((state) => ({
           servers: state.servers.map((s) =>
@@ -190,6 +194,21 @@ export const useServerListStore = create<ServerListState>()(
             s.id === id ? { ...s, ...data } : s
           ),
         })),
+
+      setAuthenticatedUser: (id, user) => set((state) => ({
+        servers: state.servers.map((server) => server.id === id
+          ? { ...server, userId: user.id, user }
+          : server),
+      })),
+
+      mergeUserProjection: (id, user) => set((state) => ({
+        servers: state.servers.map((server) => {
+          // Gateway projections may omit private fields. They may update only
+          // the account verified by this server's REST authentication response.
+          if (server.id !== id || server.user?.id !== user.id) return server;
+          return { ...server, user: { ...server.user, ...user } };
+        }),
+      })),
 
       setConnected: (id, connected) =>
         set((state) => ({
@@ -208,6 +227,7 @@ export const useServerListStore = create<ServerListState>()(
       markHydrated: () => set({ hydrated: true }),
 
       hydrateTokens: async () => {
+        const generation = ++tokenHydrationGeneration;
         set({ tokensHydrated: false });
         try {
           const servers = get().servers;
@@ -218,20 +238,31 @@ export const useServerListStore = create<ServerListState>()(
               refreshToken: await secureGet(refreshTokenStorageKey(server.id)),
             }))
           );
+          if (generation !== tokenHydrationGeneration) return;
           const tokenById = new Map(loaded.map((entry) => [entry.id, entry.token]));
           const refreshTokenById = new Map(
             loaded.map((entry) => [entry.id, entry.refreshToken]),
           );
           set((state) => ({
-            servers: state.servers.map((server) => ({
-              ...server,
-              token: tokenById.get(server.id) ?? null,
-              refreshToken: refreshTokenById.get(server.id) ?? null,
-            })),
+            servers: state.servers.map((server) => {
+              const original = servers.find((entry) => entry.id === server.id);
+              if (!original || server.token !== original.token || server.refreshToken !== original.refreshToken) return server;
+              return { ...server, token: tokenById.get(server.id) ?? null, refreshToken: refreshTokenById.get(server.id) ?? null };
+            }),
           }));
         } finally {
-          set({ tokensHydrated: true });
+          if (generation === tokenHydrationGeneration) set({ tokensHydrated: true });
         }
+      },
+
+      clearSessions: async () => {
+        tokenHydrationGeneration += 1;
+        const servers = get().servers;
+        set({
+          servers: servers.map((server) => ({ ...server, token: null, refreshToken: null, user: undefined, userId: undefined, connected: false })),
+          tokensHydrated: true,
+        });
+        await Promise.all(servers.flatMap((server) => [saveServerToken(server.id, null), saveServerRefreshToken(server.id, null)]));
       },
 
       getServer: (id) => get().servers.find((s) => s.id === id),
@@ -252,6 +283,7 @@ export const useServerListStore = create<ServerListState>()(
       partialize: (state) => ({
         servers: state.servers.map((s) => ({
           ...s,
+          user: undefined,
           token: null,
           refreshToken: null,
           connected: false,
@@ -262,3 +294,5 @@ export const useServerListStore = create<ServerListState>()(
     }
   )
 );
+
+registerSessionReset('server-sessions', () => useServerListStore.getState().clearSessions());

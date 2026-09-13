@@ -1,3 +1,4 @@
+import { LOCAL_SERVER_ID } from './serverScope';
 import { useEffect, type ReactNode } from 'react';
 import { useGateway } from '../hooks/useGateway';
 import { useTheme } from '../hooks/useTheme';
@@ -5,7 +6,7 @@ import { useVoiceKeybinds } from '../hooks/useVoiceKeybinds';
 import { useActivityPresence } from '../hooks/useActivityPresence';
 import { useAuthStore } from '../stores/authStore';
 import { useGuildStore } from '../stores/guildStore';
-import { useMessageStore } from '../stores/messageStore';
+import { startAccountMessagingLifecycle, reconcileAccountMessaging } from './messages/accountMessagingRuntime';
 import { useVoiceStore } from '../stores/voiceStore';
 import { useUIStore } from '../stores/uiStore';
 import { useServerListStore } from '../stores/serverListStore';
@@ -42,6 +43,7 @@ function AppInitializer({ children }: { children: ReactNode }) {
   // Detect foreground desktop app and publish "Playing ..." presence.
   useActivityPresence();
   const token = useAuthStore((s) => s.token);
+  const homeUserId = useAuthStore(s => s.user?.id);
   const activeServerId = useServerListStore((s) => s.activeServerId);
   const initializeSession = useAuthStore((s) => s.initializeSession);
   const hydrateServerTokens = useServerListStore((s) => s.hydrateTokens);
@@ -53,7 +55,9 @@ function AppInitializer({ children }: { children: ReactNode }) {
   const applyAudioInputDevice = useVoiceStore((s) => s.applyAudioInputDevice);
   const applyAudioOutputDevice = useVoiceStore((s) => s.applyAudioOutputDevice);
   const connectionStatus = useUIStore((s) => s.connectionStatus);
-  const flushOfflineQueue = useMessageStore((s) => s.flushOfflineQueue);
+  const flushOfflineQueue = reconcileAccountMessaging;
+
+  useEffect(() => startAccountMessagingLifecycle(), []);
 
   useEffect(() => {
     void hydrateServerTokens();
@@ -73,9 +77,13 @@ function AppInitializer({ children }: { children: ReactNode }) {
     if (token) {
       void fetchUser();
       void fetchSettings();
-      void fetchGuilds();
+
     }
   }, [token, fetchUser, fetchSettings, fetchGuilds]);
+
+  useEffect(() => {
+    if (token && homeUserId) void fetchGuilds({ serverId: LOCAL_SERVER_ID, userId: homeUserId });
+  }, [token, homeUserId, fetchGuilds]);
 
   useEffect(() => {
     if (!voiceConnected || !settings) return;

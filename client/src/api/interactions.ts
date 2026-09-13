@@ -17,14 +17,14 @@ export interface InvokeCommandRequest {
 }
 
 export const interactionApi = {
-  invokeCommand: (data: InvokeCommandRequest) =>
+  invokeCommand: async (data: InvokeCommandRequest) =>
     getApi().post<Interaction>('/interactions', data),
-  respondToInteraction: (interactionId: string, token: string, response: InteractionResponse) =>
+  respondToInteraction: async (interactionId: string, token: string, response: InteractionResponse) =>
     getApi().post(`/interactions/${interactionId}/${token}/callback`, response),
-  editOriginalResponse: (appId: string, token: string, data: Partial<InteractionCallbackData>) =>
+  editOriginalResponse: async (appId: string, token: string, data: Partial<InteractionCallbackData>) =>
     getApi().patch(`/interactions/${appId}/${token}/messages/@original`, data),
-  deleteOriginalResponse: (appId: string, token: string) =>
+  deleteOriginalResponse: async (appId: string, token: string) =>
     getApi().delete(`/interactions/${appId}/${token}/messages/@original`),
-  createFollowup: (appId: string, token: string, data: InteractionCallbackData) =>
+  createFollowup: async (appId: string, token: string, data: InteractionCallbackData) =>
     getApi().post(`/interactions/${appId}/${token}/followup`, data),
 };

@@ -52,7 +52,7 @@ describe('MemberList context menu', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useAuthStore.setState({ user: { id: 'user-1', username: 'Owner' } as never, token: 'token' });
-    useGuildStore.setState({ selectedGuildId: null });
+    useGuildStore.setState({ selectedGuild: null });
     useToastStore.setState({ toasts: [] });
     vi.mocked(writeClipboardText).mockResolvedValue(undefined);
   });

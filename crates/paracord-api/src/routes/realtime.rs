@@ -71,6 +71,7 @@ pub struct RealtimeCommandRequest {
 
 #[derive(Deserialize)]
 struct VoiceStateCommandPayload {
+    session_id: Option<String>,
     guild_id: Option<String>,
     channel_id: Option<String>,
     self_mute: Option<bool>,
@@ -81,10 +82,6 @@ struct VoiceStateCommandPayload {
 #[derive(Deserialize)]
 struct TypingStartCommandPayload {
     channel_id: String,
-}
-
-fn parse_i64_id(raw: Option<&str>) -> Option<i64> {
-    raw.and_then(|v| v.parse::<i64>().ok())
 }
 
 // ── Presence normalization (mirrors `paracord_ws::handler`) ────────────────
@@ -559,6 +556,8 @@ struct SessionChannel {
     event_bus: paracord_core::events::EventBus,
     /// Monotonic sequence generator for this session's dispatched events.
     next_sequence: AtomicU64,
+    /// Last event-bus loss boundary; replay across it requires durable recovery.
+    replay_gap_sequence: AtomicU64,
     /// Ordered ring buffer of recent rendered frames for replay.
     buffer: Mutex<VecDeque<BufferedSseEvent>>,
     /// Live fan-out to any currently attached SSE connection(s).
@@ -621,6 +620,15 @@ impl SessionChannel {
     }
 
     /// The current (latest assigned) sequence.
+    fn requires_resync(&self, cursor: u64) -> bool {
+        cursor > self.current_sequence()
+            || cursor < self.replay_gap_sequence.load(Ordering::SeqCst)
+            || self
+                .oldest_sequence()
+                .is_some_and(|oldest| oldest > cursor.saturating_add(1))
+            || (self.oldest_sequence().is_none() && self.current_sequence() > cursor)
+    }
+
     fn current_sequence(&self) -> u64 {
         self.next_sequence.load(Ordering::SeqCst)
     }
@@ -807,6 +815,7 @@ fn get_or_create_channel(
                 active_connections: AtomicUsize::new(0),
                 event_bus: state.event_bus.clone(),
                 next_sequence: AtomicU64::new(0),
+                replay_gap_sequence: AtomicU64::new(0),
                 buffer: Mutex::new(VecDeque::new()),
                 live_tx,
                 last_active: Mutex::new(Instant::now()),
@@ -936,6 +945,9 @@ async fn session_pump(
                 // longer guarantee a gapless buffer. Record a reconnect frame
                 // so any attached/future connection learns replay is broken.
                 let sequence = channel.next_sequence.fetch_add(1, Ordering::SeqCst) + 1;
+                channel
+                    .replay_gap_sequence
+                    .store(sequence, Ordering::SeqCst);
                 let data = json!({
                     "event_id": sequence,
                     "op": 7,
@@ -1068,12 +1080,13 @@ async fn build_ready_payload(
     user_id: i64,
     session_id: &str,
     ready_seq: u64,
-) -> Value {
+    replay_gap: bool,
+) -> Result<Value, ApiError> {
     let user = paracord_db::users::get_user_by_id(&state.db, user_id)
-        .await
-        .ok()
-        .flatten();
-    let user_json = if let Some(u) = user {
+        .await?
+        .ok_or(ApiError::Unauthorized)?;
+    let user_json = {
+        let u = user;
         json!({
             "id": u.id.to_string(),
             "username": u.username,
@@ -1081,23 +1094,19 @@ async fn build_ready_payload(
             "avatar_hash": u.avatar_hash,
             "display_name": u.display_name,
         })
-    } else {
-        json!({
-            "id": user_id.to_string(),
-        })
     };
 
-    let guild_rows = paracord_db::guilds::get_user_guilds(&state.db, user_id.into())
-        .await
-        .unwrap_or_default();
+    let guild_rows = paracord_db::guilds::get_user_guilds(&state.db, user_id.into()).await?;
+    let guild_ids: Vec<i64> = guild_rows.iter().map(|guild| guild.id).collect();
+    let member_counts =
+        paracord_db::members::get_member_counts_for_guilds(&state.db, &guild_ids).await?;
     let mut guilds_json = Vec::with_capacity(guild_rows.len());
     for guild in guild_rows {
-        let member_count = paracord_db::members::get_member_count(&state.db, guild.id)
-            .await
-            .unwrap_or(0);
-        let voice_states = paracord_db::voice_states::get_guild_voice_states(&state.db, guild.id)
-            .await
-            .unwrap_or_default();
+        // An absent group after a successful grouped count means zero rows.
+        // Query failure must reject READY, never invent an empty membership.
+        let member_count = member_counts.get(&guild.id).copied().unwrap_or_default();
+        let voice_states =
+            paracord_db::voice_states::get_guild_voice_states(&state.db, guild.id).await?;
 
         // Only expose the voice roster of channels this user can view. The live
         // voice event path gates on VIEW_CHANNEL via can_receive_channel_event;
@@ -1117,9 +1126,8 @@ async fn build_ready_payload(
                     guild.owner_id,
                     user_id,
                 )
-                .await
-                .map(|perms| perms.contains(Permissions::VIEW_CHANNEL))
-                .unwrap_or(false);
+                .await?
+                .contains(Permissions::VIEW_CHANNEL);
                 e.insert(visible);
             }
         }
@@ -1156,38 +1164,38 @@ async fn build_ready_payload(
         // presence only from events that arrive after it connects, so everybody
         // already online renders as offline until they happen to change status.
         // Only online members are looked up, mirroring the gateway's READY.
-        let presences_json: Vec<Value> =
-            match paracord_db::members::get_guild_member_user_ids(&state.db, guild.id).await {
-                Ok(member_ids) => member_ids
-                    .iter()
-                    .filter(|uid| state.online_users.contains(uid))
-                    .map(|uid| {
-                        state
-                            .user_presences
-                            .get(uid)
-                            .map(|entry| entry.value().clone())
-                            .unwrap_or_else(|| {
-                                build_presence_payload(*uid, Some("online"), None, None)
-                            })
-                    })
-                    .collect(),
-                Err(_) => Vec::new(),
-            };
+        let member_ids =
+            paracord_db::members::get_guild_member_user_ids(&state.db, guild.id).await?;
+        let presences_json: Vec<Value> = member_ids
+            .iter()
+            .filter(|uid| state.online_users.contains(uid))
+            .map(|uid| {
+                state
+                    .user_presences
+                    .get(uid)
+                    .map(|entry| entry.value().clone())
+                    .unwrap_or_else(|| build_presence_payload(*uid, Some("online"), None, None))
+            })
+            .collect();
 
-        guilds_json.push(json!({
-            "id": guild.id.to_string(),
-            "name": guild.name,
-            "owner_id": guild.owner_id.to_string(),
-            "icon_hash": guild.icon_hash,
-            "member_count": member_count,
-            "channels": [],
-            "voice_states": voice_states_json,
-            "presences": presences_json,
-            "lazy": true,
-        }));
+        let mut guild_json = json!(paracord_contracts::guild::ReadyGuildCore {
+            id: guild.id.to_string(),
+            name: guild.name,
+            owner_id: guild.owner_id.to_string(),
+            icon_hash: guild.icon_hash,
+            member_count: u32::try_from(member_count).map_err(|_| {
+                ApiError::Internal(anyhow::anyhow!("invalid guild member count"))
+            })?,
+            created_at: guild.created_at.to_rfc3339(),
+        });
+        guild_json["channels"] = json!([]);
+        guild_json["voice_states"] = json!(voice_states_json);
+        guild_json["presences"] = json!(presences_json);
+        guild_json["lazy"] = json!(true);
+        guilds_json.push(guild_json);
     }
 
-    json!({
+    Ok(json!({
         // Carry the connection's resume point so the client's cursor tracks the
         // sequence it is actually caught up to. Hardcoding 1 here would drive the
         // client cursor backwards on every reconnect and, combined with the op-9
@@ -1200,8 +1208,11 @@ async fn build_ready_payload(
             "user": user_json,
             "guilds": guilds_json,
             "session_id": session_id,
+            "database_history_epoch": &state.database_history_epoch,
+            "recovery_required": true,
+            "replay_gap": replay_gap,
         }
-    })
+    }))
 }
 
 /// Per-connection stream state. Owns only a live subscription to the persistent
@@ -1367,9 +1378,7 @@ pub async fn create_session(
         .clone()
         .unwrap_or_else(|| Uuid::new_v4().to_string());
     let session_id = mint_session_id(&state, auth.user_id, &session_base);
-    let guild_rows = paracord_db::guilds::get_user_guilds(&state.db, auth.user_id.into())
-        .await
-        .unwrap_or_default();
+    let guild_rows = paracord_db::guilds::get_user_guilds(&state.db, auth.user_id.into()).await?;
     let guild_ids: Vec<i64> = guild_rows.iter().map(|g| g.id).collect();
     let guild_owner_ids: HashMap<i64, i64> =
         guild_rows.iter().map(|g| (g.id, g.owner_id)).collect();
@@ -1392,6 +1401,7 @@ pub async fn create_session(
         "user_id": auth.user_id.to_string(),
         "guild_ids": guild_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>(),
         "mode": "sse_http_v2",
+        "database_history_epoch": &state.database_history_epoch,
     })))
 }
 
@@ -1448,9 +1458,7 @@ pub async fn stream_events(
             mint_session_id(&state, user_id, &base)
         }
     };
-    let guild_rows = paracord_db::guilds::get_user_guilds(&state.db, user_id.into())
-        .await
-        .unwrap_or_default();
+    let guild_rows = paracord_db::guilds::get_user_guilds(&state.db, user_id.into()).await?;
     let guild_ids: Vec<i64> = guild_rows.iter().map(|g| g.id).collect();
     let guild_owner_ids: HashMap<i64, i64> =
         guild_rows.iter().map(|g| (g.id, g.owner_id)).collect();
@@ -1468,23 +1476,16 @@ pub async fn stream_events(
     // event can slip between the two without appearing in one of them.
     let live_rx = channel.live_tx.subscribe();
 
-    // Resolve the resume cursor. If the caller resumes from a cursor older than
-    // the oldest buffered event, the gap is unrecoverable: signal a full resync
-    // (op 9, already understood by the client as "invalid session") instead of
-    // silently dropping the missed events.
+    // A resumed cursor must be inside the retained, contiguous transport range.
+    // A durable recovery barrier on READY repairs history when it is not.
     let cursor = query.cursor.unwrap_or(0);
-    let mut resync_required = false;
-    if cursor > 0 {
-        if let Some(oldest) = channel.oldest_sequence() {
-            if oldest > cursor.saturating_add(1) {
-                resync_required = true;
-            }
-        } else if channel.current_sequence() > cursor {
-            // Events were dispatched past the cursor but nothing remains
-            // buffered (aged/evicted): cannot replay the gap.
-            resync_required = true;
-        }
-    }
+    let replay_snapshot = channel.replay_since(cursor);
+    // Check after taking the snapshot so concurrent eviction or a pump loss
+    // cannot turn a truncated range into a supposedly healthy replay.
+    let resync_required = channel.requires_resync(cursor)
+        || replay_snapshot
+            .first()
+            .is_some_and(|event| event.sequence > cursor.saturating_add(1));
 
     // Snapshot the frames to replay in order, and decide the sequence the client
     // should track after READY (`ready_seq`).
@@ -1503,15 +1504,15 @@ pub async fn stream_events(
             let current = channel.current_sequence();
             (VecDeque::new(), current, current)
         } else {
-            let queue: VecDeque<Arc<BufferedSseEvent>> =
-                channel.replay_since(cursor).into_iter().collect();
+            let queue: VecDeque<Arc<BufferedSseEvent>> = replay_snapshot.into_iter().collect();
             let last = queue.back().map(|e| e.sequence).unwrap_or(cursor);
             (queue, last, cursor)
         };
 
-    let ready_payload = build_ready_payload(&state, user_id, &session_id, ready_seq)
-        .await
-        .to_string();
+    let ready_payload =
+        build_ready_payload(&state, user_id, &session_id, ready_seq, resync_required)
+            .await?
+            .to_string();
 
     let stream_state = RealtimeStreamState {
         channel,
@@ -1528,20 +1529,9 @@ pub async fn stream_events(
         last_emitted,
     };
 
-    // Frames emitted ahead of the live tail: READY first, then an optional
-    // resync marker, then the replay snapshot.
-    let mut prelude: VecDeque<(String, String)> = VecDeque::new();
-    if resync_required {
-        // op 9 = invalid session / full resync required (matches WS + client).
-        prelude.push_back((
-            "resync".to_string(),
-            json!({
-                "op": 9,
-                "d": { "reason": "replay_gap", "resumable": false },
-            })
-            .to_string(),
-        ));
-    }
+    // READY itself owns the durable recovery barrier. Sending op 9 immediately
+    // after it would cancel asynchronous persistence and cause a reconnect loop.
+    let prelude: VecDeque<(String, String)> = VecDeque::new();
 
     let stream_state = (stream_state, prelude);
 
@@ -1560,6 +1550,7 @@ pub async fn stream_events(
 
         // 3. Replay buffered gap events (seq > cursor), in order.
         if let Some(buffered) = st.replay_queue.pop_front() {
+            st.last_emitted = st.last_emitted.max(buffered.sequence);
             let event = Event::default()
                 .event("gateway")
                 .id(buffered.sequence.to_string())
@@ -1595,12 +1586,25 @@ pub async fn stream_events(
                     return Some((Ok(event), (st, prelude)));
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => {
-                    // This connection's live tail overflowed. The pump already
-                    // records an op-7 reconnect frame into the ring buffer on
-                    // its own lag, so just resync from the buffer here.
-                    for buffered in st.channel.replay_since(st.last_emitted) {
-                        st.replay_queue.push_back(buffered);
+                    // A slow connection may have lost more than the retained
+                    // buffer. Never jump across that gap as if it were replay.
+                    if st.channel.requires_resync(st.last_emitted) {
+                        let event = Event::default()
+                            .event("gateway")
+                            .data(json!({"op": 7, "d": {"reason": "replay_gap"}}).to_string());
+                        return Some((Ok(event), (st, prelude)));
                     }
+                    let replay = st.channel.replay_since(st.last_emitted);
+                    if replay
+                        .first()
+                        .is_some_and(|event| event.sequence > st.last_emitted.saturating_add(1))
+                    {
+                        let event = Event::default()
+                            .event("gateway")
+                            .data(json!({"op": 7, "d": {"reason": "replay_gap"}}).to_string());
+                        return Some((Ok(event), (st, prelude)));
+                    }
+                    st.replay_queue.extend(replay);
                     if let Some(buffered) = st.replay_queue.pop_front() {
                         st.last_emitted = buffered.sequence;
                         let event = Event::default()
@@ -1671,8 +1675,39 @@ pub async fn post_command(
                 .map_err(|e| {
                     ApiError::BadRequest(format!("invalid voice_state_update payload: {e}"))
                 })?;
-            let requested_guild_id = parse_i64_id(payload.guild_id.as_deref());
-            let channel_id = parse_i64_id(payload.channel_id.as_deref());
+            let requested_guild_id = payload
+                .guild_id
+                .as_deref()
+                .map(str::parse::<i64>)
+                .transpose()
+                .map_err(|_| ApiError::BadRequest("invalid guild_id".into()))?;
+            let channel_id = payload
+                .channel_id
+                .as_deref()
+                .map(str::parse::<i64>)
+                .transpose()
+                .map_err(|_| ApiError::BadRequest("invalid channel_id".into()))?;
+            let _membership = state.voice.lock_membership(auth.user_id).await;
+            // A receipt scopes a status/leave command to the call that issued it.
+            // Missing receipts retain the explicit legacy join/update path.
+            if let Some(expected) = payload.session_id.as_deref() {
+                if expected.is_empty() {
+                    return Err(ApiError::BadRequest("session_id must not be empty".into()));
+                }
+                let current = paracord_db::voice_states::get_user_voice_state(
+                    &state.db,
+                    auth.user_id,
+                    requested_guild_id,
+                )
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+                if !current.as_ref().is_some_and(|current| {
+                    current.session_id == expected
+                        && channel_id.is_none_or(|channel_id| current.channel_id == channel_id)
+                }) {
+                    return Err(ApiError::Conflict("Voice session changed".into()));
+                }
+            }
             let self_mute = payload.self_mute.unwrap_or(false);
             let self_deaf = payload.self_deaf.unwrap_or(false);
             let self_video = payload.self_video.unwrap_or(false);
@@ -1717,8 +1752,7 @@ pub async fn post_command(
                     Some(guild_id),
                 )
                 .await
-                .ok()
-                .flatten();
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
                 let same_channel = existing_voice_state
                     .as_ref()
                     .is_some_and(|voice_state| voice_state.channel_id == channel_id);
@@ -1735,18 +1769,23 @@ pub async fn post_command(
                     false
                 };
 
-                let session_id = auth
-                    .session_id
-                    .clone()
+                let session_id = existing_voice_state
+                    .as_ref()
+                    .filter(|existing| existing.channel_id == channel_id)
+                    .map(|existing| existing.session_id.clone())
+                    .or_else(|| auth.session_id.clone())
                     .unwrap_or_else(|| Uuid::new_v4().to_string());
-                let _ = paracord_db::voice_states::upsert_voice_state(
-                    &state.db,
-                    auth.user_id,
-                    Some(guild_id),
-                    channel_id,
-                    &session_id,
-                )
-                .await;
+                if payload.session_id.is_none() {
+                    paracord_db::voice_states::upsert_voice_state(
+                        &state.db,
+                        auth.user_id,
+                        Some(guild_id),
+                        channel_id,
+                        &session_id,
+                    )
+                    .await
+                    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+                }
                 if !same_channel {
                     let _ = paracord_db::voice_states::update_suppress(
                         &state.db,
@@ -1806,19 +1845,35 @@ pub async fn post_command(
                     requested_guild_id,
                 )
                 .await
-                .ok()
-                .flatten();
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
                 if let Some(existing_state) = existing {
-                    let _ = paracord_db::voice_states::remove_voice_state(
+                    let removed = paracord_db::voice_states::remove_voice_state_if_session(
                         &state.db,
                         auth.user_id,
                         existing_state.guild_id(),
+                        &existing_state.session_id,
                     )
-                    .await;
+                    .await
+                    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+                    if !removed {
+                        return Err(ApiError::Conflict("Voice session changed".into()));
+                    }
                     let _ = state
                         .voice
-                        .leave_room(existing_state.channel_id, auth.user_id)
+                        .leave_room_if_session(
+                            existing_state.channel_id,
+                            auth.user_id,
+                            Some(&existing_state.session_id),
+                        )
                         .await;
+                    if let Some(native) = state.native_media.as_ref() {
+                        native.rooms.leave_room_if_session(
+                            existing_state.guild_id().unwrap_or(0),
+                            existing_state.channel_id,
+                            auth.user_id,
+                            Some(&existing_state.session_id),
+                        );
+                    }
                     let user = paracord_db::users::get_user_by_id(&state.db, auth.user_id)
                         .await
                         .ok()

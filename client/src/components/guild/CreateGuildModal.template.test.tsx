@@ -1,8 +1,9 @@
+vi.mock('../../lib/guildNavigation', () => ({ guildLandingPath: vi.fn() }));
+import { guildLandingPath } from '../../lib/guildNavigation';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { apiClient } from '../../api/client';
-import { inviteApi } from '../../api/invites';
 import { useChannelStore } from '../../stores/channelStore';
 import { useGuildStore } from '../../stores/guildStore';
 import { CreateGuildModal } from './CreateGuildModal';
@@ -10,6 +11,9 @@ import { CreateGuildModal } from './CreateGuildModal';
 const navigate = vi.fn();
 const createGuild = vi.fn();
 const addGuild = vi.fn();
+const acceptInvite = vi.fn();
+const applyTemplate = vi.fn();
+const scope = { serverId: '__local__', userId: 'user-1' };
 const fetchChannels = vi.fn();
 const selectGuild = vi.fn();
 const selectChannel = vi.fn();
@@ -88,14 +92,18 @@ describe('CreateGuildModal template tab', () => {
     vi.clearAllMocks();
     vi.mocked(apiClient.get).mockResolvedValue({ data: [template] } as never);
     vi.mocked(apiClient.post).mockResolvedValue({ data: { id: 'guild-new', name: 'Launch HQ' } } as never);
-    vi.mocked(inviteApi.accept).mockResolvedValue({ data: { guild: { id: 'guild-joined', name: 'Joined Guild' } } } as never);
-    createGuild.mockResolvedValue({ id: 'guild-created', name: 'Ada HQ' });
+    acceptInvite.mockResolvedValue({ id: 'guild-joined', name: 'Joined Guild', scope });
+    applyTemplate.mockResolvedValue({ id: 'guild-new', name: 'Launch HQ', scope });
+    vi.mocked(guildLandingPath).mockImplementation(async guild => `/app/guilds/${guild.id}/channels/${guild.id === 'guild-created' ? 'channel-created' : guild.id === 'guild-joined' ? 'channel-joined' : 'channel-1'}`);
+    createGuild.mockResolvedValue({ id: 'guild-created', name: 'Ada HQ', scope });
     addGuild.mockReturnValue(undefined);
     fetchChannels.mockResolvedValue(undefined);
     selectGuild.mockReturnValue(undefined);
     selectChannel.mockReturnValue(undefined);
     vi.mocked(useGuildStore.getState).mockReturnValue({
       createGuild,
+      acceptInvite,
+      applyTemplate,
       addGuild,
     } as never);
     vi.mocked(useChannelStore.getState).mockReturnValue({
@@ -127,11 +135,9 @@ describe('CreateGuildModal template tab', () => {
     await user.click(screen.getAllByRole('button', { name: 'Create' }).at(-1)!);
 
     await waitFor(() => {
-      expect(createGuild).toHaveBeenCalledWith('Ada HQ', undefined);
+      expect(createGuild).toHaveBeenCalledWith('Ada HQ', scope, undefined);
     });
-    expect(fetchChannels).toHaveBeenCalledWith('guild-created');
-    expect(selectGuild).toHaveBeenCalledWith('guild-created');
-    expect(selectChannel).toHaveBeenCalledWith('channel-created');
+    expect(guildLandingPath).toHaveBeenCalledWith(expect.objectContaining({ id: 'guild-created', scope }));
     expect(navigate).toHaveBeenCalledWith('/app/guilds/guild-created/channels/channel-created');
     expect(onClose).toHaveBeenCalled();
   });
@@ -147,12 +153,8 @@ describe('CreateGuildModal template tab', () => {
     await user.click(screen.getByRole('button', { name: 'Join space' }));
 
     await waitFor(() => {
-      expect(inviteApi.accept).toHaveBeenCalledWith('launch');
+      expect(acceptInvite).toHaveBeenCalledWith('launch', scope);
     });
-    expect(addGuild).toHaveBeenCalledWith({ id: 'guild-joined', name: 'Joined Guild' });
-    expect(fetchChannels).toHaveBeenCalledWith('guild-joined');
-    expect(selectGuild).toHaveBeenCalledWith('guild-joined');
-    expect(selectChannel).toHaveBeenCalledWith('channel-joined');
     expect(navigate).toHaveBeenCalledWith('/app/guilds/guild-joined/channels/channel-joined');
     expect(onClose).toHaveBeenCalled();
   });
@@ -166,7 +168,7 @@ describe('CreateGuildModal template tab', () => {
     await user.click(screen.getByRole('button', { name: 'Template' }));
 
     expect(await screen.findByRole('button', { name: 'Use template Ops Template' })).toBeInTheDocument();
-    expect(apiClient.get).toHaveBeenCalledWith('/templates');
+    expect(apiClient.get).toHaveBeenCalledWith('/templates', { signal: expect.any(AbortSignal) });
 
     await user.click(screen.getByRole('button', { name: 'Use template Ops Template' }));
 
@@ -180,12 +182,8 @@ describe('CreateGuildModal template tab', () => {
     await user.click(screen.getByRole('button', { name: 'Create from Template' }));
 
     await waitFor(() => {
-      expect(apiClient.post).toHaveBeenCalledWith('/templates/tpl-1/apply', { name: 'Launch HQ' });
+      expect(applyTemplate).toHaveBeenCalledWith('tpl-1', 'Launch HQ', scope);
     });
-    expect(useGuildStore.getState().addGuild).toHaveBeenCalledWith({ id: 'guild-new', name: 'Launch HQ' });
-    expect(useChannelStore.getState().fetchChannels).toHaveBeenCalledWith('guild-new');
-    expect(useChannelStore.getState().selectGuild).toHaveBeenCalledWith('guild-new');
-    expect(useChannelStore.getState().selectChannel).toHaveBeenCalledWith('channel-1');
     expect(navigate).toHaveBeenCalledWith('/app/guilds/guild-new/channels/channel-1');
     expect(onClose).toHaveBeenCalled();
   });
@@ -204,4 +202,27 @@ describe('CreateGuildModal template tab', () => {
       'Failed to load templates: Template service is offline.',
     );
   });
+
+  it('aborts template loading when the picker closes', async () => {
+    vi.mocked(apiClient.get).mockReturnValue(new Promise(() => {}));
+    const user = userEvent.setup();
+    const { unmount } = render(<CreateGuildModal onClose={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: 'Template' }));
+    const signal = vi.mocked(apiClient.get).mock.calls[0][1]?.signal;
+    expect(signal?.aborted).toBe(false);
+    unmount();
+    expect(signal?.aborted).toBe(true);
+  });
+});
+
+vi.mock('../../hooks/useChannels', async () => {
+  const actual = await vi.importActual<typeof import('../../hooks/useChannels')>('../../hooks/useChannels');
+  const { useChannelStore } = await import('../../stores/channelStore');
+  return {
+    ...actual,
+    useCurrentChannelStore: useChannelStore,
+    useChannelActions: () => useChannelStore.getState(),
+    getAccountChannelView: () => useChannelStore.getState(),
+    useGuildChannels: (id: string) => useChannelStore(state => state.channelsByGuild[id] ?? []),
+  };
 });

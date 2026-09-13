@@ -51,9 +51,15 @@ export default tseslint.config(
       'react-hooks': reactHooks,
       'jsx-a11y': jsxA11y,
     },
+    settings: {
+      // These primitives forward their props to the corresponding native control.
+      'jsx-a11y': { components: { Input: 'input', Textarea: 'textarea', Select: 'select' } },
+    },
     rules: {
       ...reactHooks.configs.recommended.rules,
       ...jsxA11y.flatConfigs.recommended.rules,
+      // Settings labels contain layout wrappers around their visible text.
+      'jsx-a11y/label-has-associated-control': ['error', { depth: 4 }],
 
       // The whole point of adding ESLint here. Do not downgrade to "warn".
       'react-hooks/exhaustive-deps': 'error',

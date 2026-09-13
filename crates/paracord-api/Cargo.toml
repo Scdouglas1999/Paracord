@@ -6,6 +6,7 @@ rust-version.workspace = true
 license-file.workspace = true
 
 [dependencies]
+paracord-contracts = { workspace = true }
 paracord-core = { workspace = true }
 paracord-models = { workspace = true }
 paracord-media = { workspace = true }

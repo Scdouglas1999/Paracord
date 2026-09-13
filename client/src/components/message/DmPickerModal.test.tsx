@@ -41,6 +41,8 @@ vi.mock('../../api/dms', () => ({
 const mockChannelState = vi.hoisted(() => ({
   channelsByGuild: {} as Record<string, unknown[]>,
   setDmChannels: vi.fn(),
+  createDm: vi.fn(),
+  createGroupDm: vi.fn(),
   selectChannel: vi.fn(),
 }));
 
@@ -50,8 +52,7 @@ const mockRelationshipState = vi.hoisted(() => ({
 }));
 
 vi.mock('../../stores/channelStore', () => ({
-  useChannelStore: (selector: (state: typeof mockChannelState) => unknown) =>
-    selector(mockChannelState),
+  useChannelStore: Object.assign((selector: (state: typeof mockChannelState) => unknown) => selector(mockChannelState), { getState: () => mockChannelState }),
 }));
 
 vi.mock('../../stores/relationshipStore', () => ({
@@ -82,6 +83,10 @@ function renderPicker(props?: Partial<React.ComponentProps<typeof DmPickerModal>
 describe('DmPickerModal', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockChannelState.createDm.mockImplementation(async (id, scope) => {
+      const { data } = await dmApi.create(id);
+      return { ...data, scope, key: JSON.stringify([scope.serverId, scope.userId, data.id]) };
+    });
     mockChannelState.channelsByGuild = {};
     mockRelationshipState.relationships = [];
     mockRelationshipState.fetchRelationships.mockResolvedValue(undefined);
@@ -145,9 +150,9 @@ describe('DmPickerModal', () => {
     await user.click(screen.getByText('Ada'));
 
     await waitFor(() => expect(dmApi.create).toHaveBeenCalledWith('u1'));
-    expect(mockChannelState.setDmChannels).toHaveBeenCalledWith([created]);
+    expect(mockChannelState.createDm).toHaveBeenCalledWith('u1', { serverId: '__local__', userId: 'me' });
     expect(mockChannelState.selectChannel).toHaveBeenCalledWith('dm-99');
-    expect(onCreated).toHaveBeenCalledWith(created);
+    expect(onCreated).toHaveBeenCalledWith(expect.objectContaining(created));
     expect(onClose).toHaveBeenCalled();
   });
 
@@ -171,3 +176,19 @@ describe('DmPickerModal', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 });
+
+vi.mock('../../hooks/useChannels', async () => {
+  const actual = await vi.importActual<typeof import('../../hooks/useChannels')>('../../hooks/useChannels');
+  const { useChannelStore } = await import('../../stores/channelStore');
+  return {
+    ...actual,
+    useCurrentChannelStore: useChannelStore,
+    useChannelActions: () => useChannelStore.getState(),
+    getAccountChannelView: () => useChannelStore.getState(),
+    useGuildChannels: (id: string) => useChannelStore(state => state.channelsByGuild[id] ?? []),
+  };
+});
+
+vi.mock('../../lib/channelNavigation', () => ({ activateChannel: (channel: { id: string }) => mockChannelState.selectChannel(channel.id) }));
+
+vi.mock('../../hooks/useCurrentUser', () => ({ useCurrentAccountScope: () => ({ serverId: '__local__', userId: 'me' }) }));

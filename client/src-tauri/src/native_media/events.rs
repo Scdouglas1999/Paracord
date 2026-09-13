@@ -64,12 +64,12 @@ impl SpeakerHysteresis {
 }
 
 /// Spawn a task that periodically checks audio levels and emits speaking change events.
-pub fn spawn_speaking_detector(session: &mut NativeMediaSession, app: tauri::AppHandle) {
+pub fn spawn_speaking_detector(session: &mut NativeMediaSession, app: super::CallEventSink) {
     let shutdown = session.shutdown.clone();
     let remote_audio = session.remote_audio.clone();
 
     let handle = tokio::spawn(async move {
-        use tauri::Emitter;
+
 
         let mut tick = interval(Duration::from_millis(100));
         let mut hysteresis: HashMap<u32, SpeakerHysteresis> = HashMap::new();
@@ -119,13 +119,13 @@ pub fn spawn_speaking_detector(session: &mut NativeMediaSession, app: tauri::App
 
 /// Emit a participant join event.
 #[allow(dead_code)]
-pub fn emit_participant_join(app: &tauri::AppHandle, user_id: &str) {
-    use tauri::Emitter;
+pub fn emit_participant_join(app: &super::CallEventSink, user_id: &str) {
+
     let _ = app.emit("media_participant_join", user_id);
 }
 
-pub fn emit_participant_join_details(app: &tauri::AppHandle, participant: &SessionParticipant) {
-    use tauri::Emitter;
+pub fn emit_participant_join_details(app: &super::CallEventSink, participant: &SessionParticipant) {
+
     let _ = app.emit(
         "media_participant_join_details",
         serde_json::json!({
@@ -138,15 +138,15 @@ pub fn emit_participant_join_details(app: &tauri::AppHandle, participant: &Sessi
 
 /// Emit a participant leave event.
 #[allow(dead_code)]
-pub fn emit_participant_leave(app: &tauri::AppHandle, user_id: &str) {
-    use tauri::Emitter;
-    let _ = app.emit("media_participant_leave", user_id);
+pub fn emit_participant_leave(app: &super::CallEventSink, user_id: &str, session_id: Option<&str>) {
+
+    let _ = app.emit("media_participant_leave", serde_json::json!({ "userId": user_id, "sessionId": session_id }));
 }
 
 /// Emit a session error event.
 #[allow(dead_code)]
-pub fn emit_session_error(app: &tauri::AppHandle, error: &str) {
-    use tauri::Emitter;
+pub fn emit_session_error(app: &super::CallEventSink, error: &str) {
+
     let _ = app.emit("media_session_error", error);
 }
 
@@ -156,12 +156,12 @@ pub fn emit_session_error(app: &tauri::AppHandle, error: &str) {
 /// cannot decode a remote track and needs the sender to produce a fresh intra
 /// frame. The frontend forwards this upstream.
 pub fn emit_media_request_keyframe(
-    app: &tauri::AppHandle,
+    app: &super::CallEventSink,
     stream_id: &str,
     track_id: &str,
     layer_id: Option<u8>,
 ) {
-    use tauri::Emitter;
+
     let _ = app.emit(
         "media_request_keyframe",
         serde_json::json!({
@@ -178,12 +178,12 @@ pub fn emit_media_request_keyframe(
 /// can surface the error — there is NO fallback to raw IPC (that path no longer
 /// exists) and the surface is never silently blanked.
 pub fn emit_media_native_render_failed(
-    app: &tauri::AppHandle,
+    app: &super::CallEventSink,
     stream_id: &str,
     track_id: &str,
     reason: &str,
 ) {
-    use tauri::Emitter;
+
     let _ = app.emit(
         "media_native_render_failed",
         serde_json::json!({
@@ -199,11 +199,11 @@ pub fn emit_media_native_render_failed(
 /// only "the stream is live" edge — the media engine maps it to the
 /// subscription's onFrame callback (poster teardown, active-track state).
 pub fn emit_media_native_render_first_frame(
-    app: &tauri::AppHandle,
+    app: &super::CallEventSink,
     stream_id: &str,
     track_id: &str,
 ) {
-    use tauri::Emitter;
+
     let _ = app.emit(
         "media_native_render_first_frame",
         serde_json::json!({
@@ -256,7 +256,7 @@ const MAX_TRACK_LAYERS: usize = 8;
 /// decrypt attempt (both audio and the video datagram path that reuses the same
 /// decryptor) for this diagnostic to fire.
 #[allow(dead_code)]
-pub fn note_decrypt_result(app: &tauri::AppHandle, ssrc: u32, success: bool) {
+pub fn note_decrypt_result(app: &super::CallEventSink, ssrc: u32, success: bool) {
     let mut counters = decrypt_failure_counters()
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -276,7 +276,7 @@ pub fn note_decrypt_result(app: &tauri::AppHandle, ssrc: u32, success: bool) {
     // Emit exactly once at the threshold crossing so a persistently-failing SSRC
     // does not spam an event every datagram.
     if *count == DECRYPT_FAILURE_ALERT_THRESHOLD {
-        use tauri::Emitter;
+
         let _ = app.emit(
             "media_decrypt_failing",
             serde_json::json!({
@@ -288,7 +288,7 @@ pub fn note_decrypt_result(app: &tauri::AppHandle, ssrc: u32, success: bool) {
 }
 
 /// Spawn a task that watches the QUIC connection and notifies the UI on loss.
-pub fn spawn_connection_monitor(session: &mut NativeMediaSession, app: tauri::AppHandle) {
+pub fn spawn_connection_monitor(session: &mut NativeMediaSession, app: super::CallEventSink) {
     let shutdown = session.shutdown.clone();
     let conn = session.connection.inner().clone();
 
@@ -296,7 +296,7 @@ pub fn spawn_connection_monitor(session: &mut NativeMediaSession, app: tauri::Ap
         tokio::select! {
             _ = shutdown.notified() => {}
             reason = conn.closed() => {
-                use tauri::Emitter;
+
                 let message = format!("Native voice connection lost: {reason}");
                 let _ = app.emit("media_transport_lost", message);
             }
@@ -308,7 +308,7 @@ pub fn spawn_connection_monitor(session: &mut NativeMediaSession, app: tauri::Ap
 
 /// Spawn a task that receives stream-control messages on QUIC bidi streams and
 /// folds them into the local session stream registry.
-pub fn spawn_control_recv_task(session: &mut NativeMediaSession, app: tauri::AppHandle) {
+pub fn spawn_control_recv_task(session: &mut NativeMediaSession, app: super::CallEventSink) {
     let shutdown = session.shutdown.clone();
     let conn = session.connection.inner().clone();
     let stream_registry = session.stream_registry.clone();
@@ -408,7 +408,7 @@ async fn handle_control_message(
     video_force_keyframe: &std::sync::Arc<std::sync::atomic::AtomicBool>,
     screen_force_keyframe: &std::sync::Arc<std::sync::atomic::AtomicBool>,
     screen_bitrate_feedback_kbps: &std::sync::Arc<std::sync::atomic::AtomicU32>,
-    app: &tauri::AppHandle,
+    app: &super::CallEventSink,
 ) {
     match message {
         ControlMessage::SessionState { participants } => {
@@ -449,7 +449,7 @@ async fn handle_control_message(
         ControlMessage::SessionParticipantJoin { participant } => {
             if participant.user_id != local_user_id {
                 let mut known = session_participants.lock().await;
-                let inserted = !known.contains_key(&participant.user_id);
+                let inserted = known.get(&participant.user_id).is_none_or(|existing| existing.session_id != participant.session_id || existing.video_capabilities != participant.video_capabilities);
                 known.insert(
                     participant.user_id,
                     super::session::RemoteSessionParticipant {
@@ -487,11 +487,14 @@ async fn handle_control_message(
                 });
             }
         }
-        ControlMessage::SessionParticipantLeave { user_id } => {
+        ControlMessage::SessionParticipantLeave { user_id, session_id } => {
             if user_id != local_user_id {
                 let mut known = session_participants.lock().await;
-                if known.remove(&user_id).is_some() {
-                    emit_participant_leave(app, &user_id.to_string());
+                if session_id.as_deref().is_some_and(|expected| known.get(&user_id).is_none_or(|participant| participant.session_id != expected)) {
+                    return;
+                }
+                if let Some(previous) = known.remove(&user_id) {
+                    emit_participant_leave(app, &user_id.to_string(), Some(&previous.session_id));
                 }
                 drop(known);
                 // Tear down subscriptions and native decoders for the departed
@@ -553,7 +556,7 @@ async fn handle_control_message(
                 &track.track_id,
             )
             .await;
-            use tauri::Emitter;
+
             let _ = app.emit("media_track_publish", track);
         }
         ControlMessage::TrackUnpublish {
@@ -563,7 +566,7 @@ async fn handle_control_message(
             let mut registry = stream_registry.lock().await;
             registry.unpublish_track(&stream_id, &track_id);
             super::video_pipeline::unbind_remote_video_track(&stream_id.0, &track_id.0);
-            use tauri::Emitter;
+
             let _ = app.emit(
                 "media_track_unpublish",
                 serde_json::json!({
@@ -604,7 +607,7 @@ async fn handle_control_message(
                 );
                 apply_delivered_track_key(stream_registry, frame_decryptor, &stream_id, &track_id)
                     .await;
-                use tauri::Emitter;
+
                 let _ = app.emit("media_track_publish", track);
             }
         }
@@ -665,7 +668,7 @@ async fn handle_control_message(
                     "unsubscribe confirmed by relay; dropped local decoder"
                 );
             }
-            use tauri::Emitter;
+
             let _ = app.emit(
                 "media_subscription_ack",
                 serde_json::json!({
@@ -702,7 +705,7 @@ async fn handle_control_message(
             epoch,
             ..
         } => {
-            use tauri::Emitter;
+
             let _ = app.emit(
                 "media_stream_key_announce",
                 serde_json::json!({
@@ -735,7 +738,7 @@ async fn handle_control_message(
                     "ignoring malformed stream key delivery"
                 );
             }
-            use tauri::Emitter;
+
             let _ = app.emit(
                 "media_stream_key_deliver",
                 serde_json::json!({
@@ -759,7 +762,7 @@ async fn handle_control_message(
                     decryptor.set_peer_key(sender_audio_ssrc, epoch, &key);
                 }
             }
-            use tauri::Emitter;
+
             let _ = app.emit(
                 "media_key_deliver",
                 serde_json::json!({
@@ -774,7 +777,7 @@ async fn handle_control_message(
             track_id,
             recipient_user_id,
         } => {
-            use tauri::Emitter;
+
             let _ = app.emit(
                 "media_request_stream_key",
                 serde_json::json!({
@@ -807,7 +810,7 @@ async fn handle_control_message(
             // simulcast layer selection.
             screen_bitrate_feedback_kbps
                 .store(available_kbps, std::sync::atomic::Ordering::Relaxed);
-            use tauri::Emitter;
+
             let _ = app.emit(
                 "media_bandwidth_feedback",
                 serde_json::json!({ "availableKbps": available_kbps }),
@@ -840,7 +843,7 @@ struct SessionStateUpdate {
 }
 
 async fn apply_session_state(
-    app: &tauri::AppHandle,
+    app: &super::CallEventSink,
     local_user_id: i64,
     session_participants: &std::sync::Arc<
         tokio::sync::Mutex<
@@ -897,7 +900,7 @@ async fn apply_session_state(
         .copied()
         .collect::<Vec<_>>();
     for user_id in &departed {
-        emit_participant_leave(app, &user_id.to_string());
+        emit_participant_leave(app, &user_id.to_string(), known.get(user_id).map(|participant| participant.session_id.as_str()));
     }
     *known = desired;
     SessionStateUpdate {

@@ -98,7 +98,8 @@ describe('TopBar context-panel toggles', () => {
   it('drives the shell ContextPanel mode from each right-cluster toggle', () => {
     renderChannelTopBar();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Pinned Messages' }));
+    fireEvent.click(screen.getByRole('button', { name: 'More channel actions' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Pinned messages/ }));
     expect(mockUIState.toggleContextPanelMode).toHaveBeenCalledWith('pins');
 
     fireEvent.click(screen.getByRole('button', { name: 'Search Messages' }));
@@ -107,10 +108,12 @@ describe('TopBar context-panel toggles', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Member List' }));
     expect(mockUIState.toggleContextPanelMode).toHaveBeenCalledWith('members');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Guild Leaderboard' }));
+    fireEvent.click(screen.getByRole('button', { name: 'More channel actions' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Space leaderboard/ }));
     expect(mockUIState.toggleContextPanelMode).toHaveBeenCalledWith('economy');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Threads' }));
+    fireEvent.click(screen.getByRole('button', { name: 'More channel actions' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Threads/ }));
     expect(mockUIState.toggleContextPanelMode).toHaveBeenCalledWith('threads');
   });
 
@@ -118,8 +121,8 @@ describe('TopBar context-panel toggles', () => {
     mockUIState.contextPanelMode = 'pins';
     renderChannelTopBar();
 
-    expect(screen.getByRole('button', { name: 'Pinned Messages' })).toHaveAttribute(
-      'aria-pressed',
+    expect(screen.getByRole('button', { name: 'Close Pinned messages' })).toHaveAttribute(
+      'aria-expanded',
       'true',
     );
     expect(screen.getByRole('button', { name: 'Member List' })).toHaveAttribute(
@@ -132,21 +135,22 @@ describe('TopBar context-panel toggles', () => {
     renderChannelTopBar();
 
     fireEvent.click(screen.getByRole('button', { name: 'More channel actions' }));
-    const menu = screen.getByRole('menu', { name: 'More channel actions' });
+    const menu = screen.getByRole('menu', { name: 'Channel actions' });
     expect(menu).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: 'Catch up summary' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: 'Space leaderboard' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('menuitem', { name: 'Pinned messages' }));
     expect(mockUIState.toggleContextPanelMode).toHaveBeenCalledWith('pins');
-    expect(screen.queryByRole('menu', { name: 'More channel actions' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menu', { name: 'Channel actions' })).not.toBeInTheDocument();
   });
 
   it('no longer renders the pinned-messages surface inside the TopBar', async () => {
     const user = userEvent.setup();
     renderChannelTopBar();
 
-    await user.click(screen.getByRole('button', { name: 'Pinned Messages' }));
+    await user.click(screen.getByRole('button', { name: 'More channel actions' }));
+    await user.click(screen.getByRole('menuitem', { name: /^Pinned messages/ }));
 
     expect(screen.queryByText('No pinned messages yet')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Unpin this message' })).not.toBeInTheDocument();
@@ -165,14 +169,35 @@ describe('TopBar context-panel toggles', () => {
     mockPermissions.isAdmin = false;
     mockPermissions.permissions = 0n;
     renderChannelTopBar();
-    expect(screen.queryByRole('button', { name: 'Space settings' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'More channel actions' }));
+    expect(screen.queryByRole('menuitem', { name: 'Space settings' })).not.toBeInTheDocument();
   });
 
   it('shows Space settings for guild admins and opens the overlay', () => {
     mockPermissions.isAdmin = true;
     renderChannelTopBar();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Space settings' }));
+    fireEvent.click(screen.getByRole('button', { name: 'More channel actions' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Space settings/ }));
     expect(mockUIState.setGuildSettingsId).toHaveBeenCalledWith('guild-1');
   });
 });
+
+vi.mock('../../hooks/useChannels', async () => {
+  const actual = await vi.importActual<typeof import('../../hooks/useChannels')>('../../hooks/useChannels');
+  const { useChannelStore } = await import('../../stores/channelStore');
+  return {
+    ...actual,
+    useCurrentChannelStore: useChannelStore,
+    useChannelActions: () => useChannelStore.getState(),
+    getAccountChannelView: () => useChannelStore.getState(),
+    useGuildChannels: (id: string) => useChannelStore(state => state.channelsByGuild[id] ?? []),
+  };
+});
+
+vi.mock('../../hooks/useConversationActions', () => ({
+  useConversationActions: () => ({
+    actions: Object.fromEntries(['send', 'poll', 'schedule', 'attach', 'summary', 'voice', 'video', 'screen_share'].map(action => [action, { supported: true, allowed: true, reason: null }])),
+    error: null, loading: false, refresh: vi.fn(),
+  }),
+}));

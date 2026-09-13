@@ -370,3 +370,20 @@ describe('MessageComponents interaction feedback', () => {
     expect(mocks.toastError).toHaveBeenCalledWith('Blocked unsafe link button URL.');
   });
 });
+
+vi.mock('../../hooks/useChannels', async () => {
+  const actual = await vi.importActual<typeof import('../../hooks/useChannels')>('../../hooks/useChannels');
+  const { useChannelStore } = await import('../../stores/channelStore');
+  return {
+    ...actual,
+    useCurrentChannelStore: useChannelStore,
+    useChannelActions: () => useChannelStore.getState(),
+    getAccountChannelView: () => useChannelStore.getState(),
+    useGuildChannels: (id: string) => useChannelStore(state => state.channelsByGuild[id] ?? []),
+  };
+});
+
+vi.mock('../../lib/channelView', async () => {
+  const { useChannelStore } = await import('../../stores/channelStore');
+  return { getAccountChannelView: () => useChannelStore.getState() };
+});

@@ -1,9 +1,9 @@
+import { useCurrentUser } from '../../hooks/useCurrentUser';
 import { useEffect, useMemo, useState } from 'react';
 import { Crown, Flame, Medal, TrendingUp } from 'lucide-react';
 
 import { economyApi, type EconomyLeaderboardEntry, type EconomyProgressResponse } from '../../api/economy';
 import { extractApiError } from '../../api/client';
-import { useAuthStore } from '../../stores/authStore';
 import { cn } from '../../lib/utils';
 import { displayName } from '../../lib/displayName';
 
@@ -12,7 +12,7 @@ interface GuildEconomyPanelProps {
 }
 
 export function GuildEconomyPanel({ guildId }: GuildEconomyPanelProps) {
-  const currentUserId = useAuthStore((state) => state.user?.id ?? null);
+  const currentUserId = useCurrentUser()?.id ?? null;
   const [entries, setEntries] = useState<EconomyLeaderboardEntry[]>([]);
   const [progress, setProgress] = useState<EconomyProgressResponse | null>(null);
   const [loading, setLoading] = useState(true);

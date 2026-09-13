@@ -5,7 +5,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
 use serde::Serialize;
-use tauri::Emitter;
+
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 use super::session::NativeMediaSession;
@@ -205,10 +205,12 @@ pub fn list_devices() -> Result<Vec<CameraDevice>, String> {
 
 pub async fn start_capture(
     state: &MediaState,
-    app: tauri::AppHandle,
+    app: super::CallEventSink,
     request: StartCameraRequest,
+    stop_flag: Arc<AtomicBool>,
 ) -> Result<(), String> {
     ensure_camera_consent(&app).await?;
+    state.calls.check_action(app.owner_id(), &stop_flag)?;
     stop_capture_internal(state, false).await?;
 
     let session_arc = state.session.clone();
@@ -218,7 +220,6 @@ pub async fn start_capture(
     }
     let runtime_handle = tokio::runtime::Handle::current();
 
-    let stop_flag = Arc::new(AtomicBool::new(false));
     let worker_stop = stop_flag.clone();
     let worker_app = app.clone();
     let (startup_tx, startup_rx) = mpsc::channel::<Result<(), String>>();
@@ -254,6 +255,11 @@ pub async fn start_capture(
 
     match startup_rx.recv_timeout(Duration::from_secs(5)) {
         Ok(Ok(())) => {
+            if let Err(error) = state.calls.check_action(app.owner_id(), &stop_flag) {
+                stop_flag.store(true, Ordering::SeqCst);
+                let _ = worker.join();
+                return Err(error);
+            }
             let mut guard = state.camera_capture.lock().map_err(|e| e.to_string())?;
             *guard = Some(ActiveCameraCapture::new(stop_flag, worker));
             Ok(())
@@ -318,7 +324,7 @@ async fn teardown_camera_publish(state: &MediaState) {
 fn run_capture_loop(
     session_arc: Arc<tokio::sync::Mutex<Option<NativeMediaSession>>>,
     runtime_handle: tokio::runtime::Handle,
-    app: tauri::AppHandle,
+    app: super::CallEventSink,
     stop_flag: Arc<AtomicBool>,
     request: StartCameraRequest,
     startup_tx: mpsc::Sender<Result<(), String>>,
@@ -599,7 +605,7 @@ fn run_capture_loop(
 fn run_capture_loop(
     _session_arc: Arc<tokio::sync::Mutex<Option<NativeMediaSession>>>,
     _runtime_handle: tokio::runtime::Handle,
-    _app: tauri::AppHandle,
+    _app: super::CallEventSink,
     _stop_flag: Arc<AtomicBool>,
     _request: StartCameraRequest,
     _startup_tx: mpsc::Sender<Result<(), String>>,

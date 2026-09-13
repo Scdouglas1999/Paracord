@@ -1,7 +1,9 @@
+import { useAuthStore } from '../../stores/authStore';
+import { useServerListStore } from '../../stores/serverListStore';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { useGuildStore } from '../../stores/guildStore';
+import { useGuildStore, scopeGuild } from '../../stores/guildStore';
 import { useUIStore } from '../../stores/uiStore';
 import { MobileBottomNav } from './MobileBottomNav';
 
@@ -19,12 +21,14 @@ function renderNav() {
 }
 
 beforeEach(() => {
+  useAuthStore.setState({ user: { id: 'user-1' } as never, token: 'token' });
+  useServerListStore.setState({ activeServerId: null, servers: [] });
   useGuildStore.setState({
     guilds: [
-      { id: 'g1', name: 'Emerald HQ' },
-      { id: 'g2', name: 'Weekend Crew' },
+      scopeGuild({ id: 'g1', name: 'Emerald HQ' } as never, { serverId: '__local__', userId: 'user-1' }),
+      scopeGuild({ id: 'g2', name: 'Weekend Crew' } as never, { serverId: '__local__', userId: 'user-1' }),
     ] as never,
-    selectedGuildId: null,
+    selectedGuild: null,
   });
   useUIStore.setState({ userSettingsOpen: false });
 });
@@ -36,11 +40,11 @@ describe('MobileBottomNav', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Space$/ }));
 
     expect(screen.getByTestId('pathname')).toHaveTextContent('/app/guilds/g1');
-    expect(useGuildStore.getState().selectedGuildId).toBe('g1');
+    expect(useGuildStore.getState().selectedGuild?.id).toBe('g1');
   });
 
   it('always returns to Rooms for the selected space, not an arbitrary last channel', () => {
-    useGuildStore.setState({ selectedGuildId: 'g2' });
+    useGuildStore.setState({ selectedGuild: { id: 'g2', scope: { serverId: '__local__', userId: 'user-1' } } });
     renderNav();
 
     fireEvent.click(screen.getByRole('button', { name: /^Space$/ }));

@@ -23,24 +23,24 @@ interface EditWebhookMessageRequest {
 }
 
 export const webhookApi = {
-  create: (guildId: string, data: CreateWebhookRequest) =>
+  create: async (guildId: string, data: CreateWebhookRequest) =>
     getApi().post<Webhook>(`/guilds/${guildId}/webhooks`, data),
-  listGuild: (guildId: string) => getApi().get<Webhook[]>(`/guilds/${guildId}/webhooks`),
-  listChannel: (channelId: string) => getApi().get<Webhook[]>(`/channels/${channelId}/webhooks`),
-  get: (webhookId: string) => getApi().get<Webhook>(`/webhooks/${webhookId}`),
-  update: (webhookId: string, data: UpdateWebhookRequest) =>
+  listGuild: async (guildId: string) => getApi().get<Webhook[]>(`/guilds/${guildId}/webhooks`),
+  listChannel: async (channelId: string) => getApi().get<Webhook[]>(`/channels/${channelId}/webhooks`),
+  get: async (webhookId: string) => getApi().get<Webhook>(`/webhooks/${webhookId}`),
+  update: async (webhookId: string, data: UpdateWebhookRequest) =>
     getApi().patch<Webhook>(`/webhooks/${webhookId}`, data),
-  delete: (webhookId: string) => getApi().delete(`/webhooks/${webhookId}`),
-  execute: (webhookId: string, token: string, data: ExecuteWebhookRequest) =>
+  delete: async (webhookId: string) => getApi().delete(`/webhooks/${webhookId}`),
+  execute: async (webhookId: string, token: string, data: ExecuteWebhookRequest) =>
     getApi().post(`/webhooks/${webhookId}/${token}`, data),
-  executeNoWait: (webhookId: string, token: string, data: ExecuteWebhookRequest) =>
+  executeNoWait: async (webhookId: string, token: string, data: ExecuteWebhookRequest) =>
     getApi().post(`/webhooks/${webhookId}/${token}?wait=false`, data),
-  editMessage: (
+  editMessage: async (
     webhookId: string,
     token: string,
     messageId: string,
     data: EditWebhookMessageRequest,
   ) => getApi().patch(`/webhooks/${webhookId}/${token}/messages/${messageId}`, data),
-  deleteMessage: (webhookId: string, token: string, messageId: string) =>
+  deleteMessage: async (webhookId: string, token: string, messageId: string) =>
     getApi().delete(`/webhooks/${webhookId}/${token}/messages/${messageId}`),
 };

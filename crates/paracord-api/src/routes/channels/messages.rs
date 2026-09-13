@@ -1,4 +1,6 @@
 use super::*;
+use axum::response::{IntoResponse, Response};
+use serde::Serialize;
 
 /// Markup screen for **message content** specifically.
 ///
@@ -80,6 +82,7 @@ pub struct SendMessageRequest {
 pub struct EditMessageRequest {
     pub content: String,
     pub e2ee: Option<DmE2eePayloadRequest>,
+    pub edit_nonce: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -172,6 +175,173 @@ pub async fn get_messages(
     let result = messages_to_json(&state, &messages, auth.user_id).await;
 
     Ok(Json(json!(result)))
+}
+
+/// Revisions are exact decimal strings on the wire. `through` is immutable for
+/// one catch-up, while current row projections have their own coherent head.
+#[derive(Deserialize)]
+pub struct MessageRecoveryQuery {
+    pub after: String,
+    pub through: Option<String>,
+    pub limit: Option<i64>,
+    pub known_ids: Option<String>,
+}
+
+fn recovery_number(raw: &str) -> Result<i64, ApiError> {
+    if raw.is_empty()
+        || (raw.len() > 1 && raw.starts_with('0'))
+        || !raw.bytes().all(|value| value.is_ascii_digit())
+    {
+        return Err(ApiError::BadRequest(
+            "Invalid message recovery revision or identifier".into(),
+        ));
+    }
+    raw.parse()
+        .map_err(|_| ApiError::BadRequest("Message recovery number is out of range".into()))
+}
+
+pub async fn recover_messages(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(channel_id): Path<i64>,
+    Query(query): Query<MessageRecoveryQuery>,
+) -> Result<Response, ApiError> {
+    let after = recovery_number(&query.after)?;
+    let through = query.through.as_deref().map(recovery_number).transpose()?;
+    let limit = query.limit.unwrap_or(100);
+    if !(1..=100).contains(&limit) || through.is_some_and(|value| value < after) {
+        return Err(ApiError::BadRequest(
+            "Invalid message recovery range".into(),
+        ));
+    }
+    let known_ids = query
+        .known_ids
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            value
+                .split(',')
+                .map(recovery_number)
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
+    if known_ids.len() > 100 || known_ids.iter().any(|id| *id <= 0) {
+        return Err(ApiError::BadRequest(
+            "Message recovery accepts at most 100 positive known IDs".into(),
+        ));
+    }
+    let channel = paracord_db::channels::get_channel(&state.db, channel_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    ensure_channel_permissions(
+        &state,
+        &channel,
+        auth.user_id,
+        &[Permissions::VIEW_CHANNEL, Permissions::READ_MESSAGE_HISTORY],
+    )
+    .await?;
+    let result = paracord_db::message_recovery::get_page(
+        &state.db, channel_id, after, through, limit, &known_ids,
+    )
+    .await?;
+    match result {
+        paracord_db::message_recovery::RecoveryResult::Gap { floor, head, before_migration } => {
+            Ok((StatusCode::CONFLICT, Json(json!({
+                "code": "MESSAGE_RECOVERY_GAP", "message": "The requested message mutation range is no longer provable. Review encrypted history before continuing.",
+                "database_history_epoch": state.database_history_epoch, "channel_id": channel_id.to_string(),
+                "after": after.to_string(), "floor": floor.to_string(), "head": head.to_string(),
+                "reason": if before_migration { "before_migration" } else { "retention" },
+                "retained_mutations": paracord_db::message_recovery::RETAINED_MESSAGE_MUTATIONS,
+            }))).into_response())
+        }
+        paracord_db::message_recovery::RecoveryResult::Page(page) => {
+            let mut changes = Vec::with_capacity(page.changes.len());
+            for change in page.changes {
+                let archived_message = change.encrypted_message.map(|value| serde_json::from_str::<Value>(&value)).transpose()
+                    .map_err(|error| ApiError::Internal(anyhow::anyhow!("Invalid encrypted recovery record: {error}")))?;
+                changes.push(json!({ "revision": change.revision.to_string(), "kind": change.kind,
+                    "message_id": change.message_id.to_string(), "archived_message": archived_message }));
+            }
+            let present: Vec<_> = page.states.iter().filter_map(|(_, message)| message.clone()).collect();
+            let serialized = messages_to_json(&state, &present, auth.user_id).await;
+            let mut messages: HashMap<_, _> = present.iter().zip(serialized).map(|(row, message)| (row.id, message)).collect();
+            let states: Vec<_> = page.states.into_iter().map(|(id, row)| match row {
+                Some(row) => json!({ "message_id": id.to_string(), "state": "present",
+                    "revision": row.recovery_revision.to_string(), "message": messages.remove(&id) }),
+                None => json!({ "message_id": id.to_string(), "state": "deleted", "revision": page.projection_head.to_string() }),
+            }).collect();
+            Ok(Json(json!({ "database_history_epoch": state.database_history_epoch,
+                "channel_id": channel_id.to_string(), "after": page.after.to_string(),
+                "through": page.through.to_string(), "floor": page.floor.to_string(),
+                "next": page.next.to_string(), "complete": page.next == page.through,
+                "projection_head": page.projection_head.to_string(), "changes": changes, "states": states,
+            })).into_response())
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum AttentionKind {
+    Mention,
+    Unread,
+}
+
+#[derive(Deserialize)]
+pub struct AttentionQuery {
+    pub kind: AttentionKind,
+    /// A device may have a newer local read cursor while its acknowledgement is
+    /// in flight. It can move this read-only search forward, never backwards.
+    pub after: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub struct AttentionResponse {
+    pub channel_id: String,
+    pub user_id: String,
+    pub kind: AttentionKind,
+    pub message: Option<Value>,
+}
+
+pub async fn get_attention_target(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(channel_id): Path<i64>,
+    Query(query): Query<AttentionQuery>,
+) -> Result<Json<AttentionResponse>, ApiError> {
+    let after = query.after.unwrap_or(0);
+    if after < 0 {
+        return Err(ApiError::BadRequest("Invalid attention cursor".into()));
+    }
+    let channel = paracord_db::channels::get_channel(&state.db, channel_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    ensure_channel_permissions(
+        &state,
+        &channel,
+        auth.user_id,
+        &[Permissions::VIEW_CHANNEL, Permissions::READ_MESSAGE_HISTORY],
+    )
+    .await?;
+    let target = paracord_db::messages::get_attention_target(
+        &state.db,
+        channel_id,
+        auth.user_id,
+        after,
+        matches!(query.kind, AttentionKind::Mention),
+    )
+    .await?;
+    let message = match target {
+        Some(target) => Some(message_to_json(&state, &target, auth.user_id).await),
+        None => None,
+    };
+    Ok(Json(AttentionResponse {
+        channel_id: channel_id.to_string(),
+        user_id: auth.user_id.to_string(),
+        kind: query.kind,
+        message,
+    }))
 }
 
 pub async fn search_messages(
@@ -269,6 +439,8 @@ pub async fn summarize_channel(
         &[Permissions::VIEW_CHANNEL, Permissions::READ_MESSAGE_HISTORY],
     )
     .await?;
+
+    require_supported_action(channel.channel_type, "summary")?;
 
     let limit = params.limit.unwrap_or(150).clamp(20, 500);
     let messages =
@@ -375,15 +547,22 @@ pub async fn bulk_delete_messages(
                 .map_err(|_| ApiError::BadRequest("Invalid message ID".into()))?,
         );
     }
-    let deleted = paracord_db::messages::bulk_delete_messages(&state.db, channel_id, &ids)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let typed_ids: Vec<paracord_models::id::MessageId> = ids.into_iter().map(Into::into).collect();
+    let revisions = paracord_db::messages::bulk_delete_messages_with_revisions(
+        &state.db,
+        channel_id.into(),
+        &typed_ids,
+    )
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let deleted = revisions.len() as u64;
     let guild_id = channel.guild_id();
     let bulk_payload = json!({
         "channel_id": channel_id.to_string(),
-        "ids": body.message_ids,
+        "ids": revisions.iter().map(|(id, _)| id.to_string()).collect::<Vec<_>>(),
+        "message_revisions": revisions.iter().map(|(id, revision)| (id.to_string(), revision.to_string())).collect::<std::collections::BTreeMap<_, _>>(),
     });
-    dispatch_channel_event(&state, &channel, "MESSAGE_DELETE_BULK", bulk_payload).await;
+    dispatch_channel_event(&state, &channel, "MESSAGE_DELETE_BULK", bulk_payload).await?;
     if let Some(gid) = guild_id {
         audit::log_action(
             &state,
@@ -650,7 +829,7 @@ pub async fn send_message(
             header: payload.header,
         });
 
-    let msg = paracord_core::message::create_message_with_options(
+    let (msg, mentioned_users) = paracord_core::message::create_message_with_attention(
         &state.db,
         msg_id,
         channel_id,
@@ -753,7 +932,7 @@ pub async fn send_message(
     let msg_json = message_to_json(&state, &msg, auth.user_id).await;
 
     if created_new {
-        dispatch_channel_event(&state, &channel, "MESSAGE_CREATE", msg_json.clone()).await;
+        dispatch_channel_event(&state, &channel, "MESSAGE_CREATE", msg_json.clone()).await?;
 
         if !automod.alerts.is_empty() {
             if let Some(gid) = guild_id {
@@ -764,54 +943,6 @@ pub async fn send_message(
         // message posts as configured; the timeout starts from the next send.
         if !automod.timeouts.is_empty() {
             paracord_core::automod_enforce::apply_timeouts(&state.db, &automod.timeouts).await;
-        }
-
-        // Mention count increment for @user, @everyone, @here
-        if !body.content.is_empty() {
-            let mentioned_user_ids = parse_mentions(&body.content);
-            let mut all_mentioned: Vec<i64> = mentioned_user_ids
-                .into_iter()
-                .filter(|&uid| uid != auth.user_id)
-                .collect();
-            if contains_mass_mention(&body.content) {
-                if let Some(gid) = guild_id {
-                    // Only fan out @everyone/@here to the whole guild when the author
-                    // actually holds MENTION_EVERYONE in this channel. Otherwise the
-                    // text is still delivered unchanged, but the mass-mention side
-                    // effect (incrementing every member's mention count) is skipped.
-                    let can_mention_everyone = match paracord_db::guilds::get_guild(&state.db, gid)
-                        .await
-                    {
-                        Ok(Some(guild)) => paracord_core::permissions::compute_channel_permissions(
-                            &state.db,
-                            gid,
-                            channel_id,
-                            guild.owner_id,
-                            auth.user_id,
-                        )
-                        .await
-                        .map(|perms| perms.contains(Permissions::MENTION_EVERYONE))
-                        .unwrap_or(false),
-                        _ => false,
-                    };
-                    if can_mention_everyone {
-                        if let Ok(member_ids) =
-                            paracord_db::members::get_guild_member_user_ids(&state.db, gid).await
-                        {
-                            for mid in member_ids {
-                                if mid != auth.user_id && !all_mentioned.contains(&mid) {
-                                    all_mentioned.push(mid);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            for uid in all_mentioned {
-                let _ =
-                    paracord_db::read_states::increment_mention_count(&state.db, uid, channel_id)
-                        .await;
-            }
         }
 
         // OpenGraph link preview fetching (non-blocking background task)
@@ -854,6 +985,7 @@ pub async fn send_message(
             let crosspost_content = body.content.clone();
             let crosspost_author = auth.user_id;
             let crosspost_ref_id = msg.id;
+            let crosspost_mentions = mentioned_users;
             tokio::spawn(async move {
                 if let Ok(follows) = paracord_db::channel_follows::get_follows_for_channel(
                     &crosspost_state.db,
@@ -862,26 +994,51 @@ pub async fn send_message(
                 .await
                 {
                     for follow in follows {
+                        let mentioned_users =
+                            match paracord_core::message_attention::explicit_mentions(
+                                &crosspost_state.db,
+                                follow.target_guild_id,
+                                follow.target_channel_id,
+                                crosspost_author,
+                                &crosspost_mentions,
+                            )
+                            .await
+                            {
+                                Ok(recipients) => recipients,
+                                Err(error) => {
+                                    tracing::warn!(channel_id = follow.target_channel_id, %error, "cannot resolve crosspost audience");
+                                    continue;
+                                }
+                            };
                         let cross_id = paracord_util::snowflake::generate(1);
-                        let cross_msg = paracord_db::messages::create_message(
-                            &crosspost_state.db,
-                            cross_id,
-                            follow.target_channel_id,
-                            crosspost_author,
-                            &crosspost_content,
-                            0,
-                            Some(crosspost_ref_id),
-                        )
-                        .await;
+                        let cross_msg =
+                            paracord_db::messages::create_message_with_payload_mentions(
+                                &crosspost_state.db,
+                                cross_id,
+                                follow.target_channel_id,
+                                crosspost_author,
+                                &crosspost_content,
+                                0,
+                                Some(crosspost_ref_id),
+                                0,
+                                None,
+                                None,
+                                &mentioned_users,
+                            )
+                            .await;
                         if let Ok(cross_msg) = cross_msg {
                             let cross_json =
                                 message_to_json(&crosspost_state, &cross_msg, crosspost_author)
                                     .await;
-                            crosspost_state.event_bus.dispatch(
-                                "MESSAGE_CREATE",
-                                cross_json,
-                                Some(follow.target_guild_id),
-                            );
+                            crosspost_state
+                                .event_bus
+                                .dispatch_message(
+                                    &crosspost_state.db,
+                                    "MESSAGE_CREATE",
+                                    cross_json,
+                                    Some(follow.target_guild_id),
+                                )
+                                .await;
                         }
                     }
                 }
@@ -905,6 +1062,13 @@ pub async fn edit_message(
     Path((channel_id, message_id)): Path<(i64, i64)>,
     Json(body): Json<EditMessageRequest>,
 ) -> Result<Json<Value>, ApiError> {
+    if let Some(nonce) = body.edit_nonce.as_deref() {
+        if nonce.is_empty() || nonce.len() > 64 || nonce.trim() != nonce {
+            return Err(ApiError::BadRequest(
+                "Edit nonce must be 1-64 bytes without surrounding whitespace.".into(),
+            ));
+        }
+    }
     if body.e2ee.is_none() {
         paracord_util::validation::validate_message_content(&body.content).map_err(|_| {
             ApiError::BadRequest("Message content must be 1-2000 characters".into())
@@ -923,49 +1087,7 @@ pub async fn edit_message(
             ciphertext: payload.ciphertext,
             header: payload.header,
         });
-    // Authorize BEFORE evaluating AutoMod.
-    //
-    // `run_automod` is not a pure predicate — it records hit rows and can post
-    // moderator alerts. Running it ahead of the edit's own authorization let a
-    // user who was not even a member of the space drive those side effects:
-    // PATCHing a nonexistent message id in a private channel returned 403, but
-    // only *after* AutoMod had already written an alert containing
-    // attacker-chosen text into that channel. `edit_message_with_options` does
-    // the real authorization, but it runs too late to gate the side effects.
-    let edit_channel = paracord_db::channels::get_channel(&state.db, channel_id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
-        .ok_or(ApiError::NotFound)?;
-    let edit_guild_id = edit_channel.guild_id();
-    if edit_guild_id.is_some() {
-        ensure_channel_permissions(
-            &state,
-            &edit_channel,
-            auth.user_id,
-            &[Permissions::VIEW_CHANNEL],
-        )
-        .await?;
-        // The target must be a real message in this channel; a bogus id must not
-        // reach the evaluator.
-        let existing = paracord_db::messages::get_message(&state.db, message_id)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
-            .ok_or(ApiError::NotFound)?;
-        if existing.channel_id != channel_id {
-            return Err(ApiError::NotFound);
-        }
-    }
-
-    // AutoMod must run on edits too. Filtering only `send_message` left a
-    // trivial bypass: post innocuous text, then edit it to the banned content —
-    // permanently, with no hit recorded.
-    let edit_automod = if let Some(gid) = edit_guild_id {
-        run_automod(&state, gid, channel_id, auth.user_id, &body.content).await?
-    } else {
-        paracord_core::automod_enforce::AutomodVerdict::default()
-    };
-
-    let updated = paracord_core::message::edit_message_with_options(
+    let prepared = paracord_core::message::prepare_message_edit(
         &state.db,
         channel_id,
         message_id,
@@ -974,6 +1096,47 @@ pub async fn edit_message(
         dm_e2ee,
     )
     .await?;
+    let edit_guild_id = prepared.channel.guild_id();
+    // An acknowledged operation is not evaluated again under newer moderation
+    // rules and must never overwrite a subsequent edit.
+    if let Some(nonce) = body.edit_nonce.as_deref() {
+        if let Some(current) = prepared.replayed_message(&state.db, nonce).await? {
+            return Ok(Json(edit_acknowledgement(
+                message_to_json(&state, &current, auth.user_id).await,
+                Some(nonce),
+                true,
+            )));
+        }
+    }
+    // A new operation must have full authority before moderation can write.
+    paracord_core::message::authorize_message_edit(&state.db, channel_id, message_id, auth.user_id)
+        .await?;
+    let mut moderation = if let Some(gid) = edit_guild_id {
+        prepare_automod(&state, gid, channel_id, auth.user_id, &body.content).await?
+    } else {
+        paracord_core::automod_enforce::PreparedAutomod::default()
+    };
+    if let Some(reason) = moderation.verdict.blocked_reason.take() {
+        moderation.persist_hits(&state.db).await?;
+        paracord_core::automod_enforce::apply_timeouts(&state.db, &moderation.verdict.timeouts)
+            .await;
+        if let Some(gid) = edit_guild_id {
+            dispatch_automod_alerts(&state, gid, moderation.verdict.alerts).await;
+        }
+        return Err(ApiError::AutomodBlocked(reason));
+    }
+    let applied = prepared
+        .apply(&state.db, body.edit_nonce.as_deref(), &moderation.hits)
+        .await?;
+    let updated = applied.message;
+    if applied.replayed {
+        return Ok(Json(edit_acknowledgement(
+            message_to_json(&state, &updated, auth.user_id).await,
+            body.edit_nonce.as_deref(),
+            true,
+        )));
+    }
+    let edit_automod = moderation.verdict;
 
     if let Some(gid) = edit_guild_id {
         if !edit_automod.alerts.is_empty() {
@@ -993,7 +1156,7 @@ pub async fn edit_message(
     let msg_json = message_to_json(&state, &updated, auth.user_id).await;
 
     if let Some(channel) = channel.as_ref() {
-        dispatch_channel_event(&state, channel, "MESSAGE_UPDATE", msg_json.clone()).await;
+        dispatch_channel_event(&state, channel, "MESSAGE_UPDATE", msg_json.clone()).await?;
     }
 
     if let Some(gid) = guild_id {
@@ -1050,7 +1213,19 @@ pub async fn edit_message(
         }
     }
 
-    Ok(Json(msg_json))
+    Ok(Json(edit_acknowledgement(
+        msg_json,
+        body.edit_nonce.as_deref(),
+        false,
+    )))
+}
+
+fn edit_acknowledgement(mut message: Value, nonce: Option<&str>, replayed: bool) -> Value {
+    if let Some(nonce) = nonce {
+        message["edit_nonce"] = json!(nonce);
+        message["edit_replayed"] = json!(replayed);
+    }
+    message
 }
 
 pub async fn get_edit_history(
@@ -1097,24 +1272,246 @@ pub async fn get_edit_history(
     Ok(Json(json!(result)))
 }
 
+#[derive(serde::Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum DeliveryResolutionOutcome {
+    Cancelled,
+    Delivered { message_id: String },
+    Deleted { message_id: String },
+}
+
+#[derive(serde::Serialize)]
+pub struct DeliveryResolutionResponse {
+    channel_id: String,
+    author_id: String,
+    nonce: String,
+    #[serde(flatten)]
+    outcome: DeliveryResolutionOutcome,
+}
+
+/// Resolving an uncertain send seals its nonce if creation has not committed.
+/// Existing messages are reported, never edited/deleted through this endpoint.
+pub async fn resolve_message_delivery(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((channel_id, nonce)): Path<(i64, String)>,
+) -> Result<Json<DeliveryResolutionResponse>, ApiError> {
+    if nonce.is_empty() || nonce.len() > 64 || nonce.trim() != nonce {
+        return Err(ApiError::BadRequest("Invalid message nonce".into()));
+    }
+    let channel = paracord_db::channels::get_channel(&state.db, channel_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    ensure_channel_permissions(&state, &channel, auth.user_id, &[Permissions::VIEW_CHANNEL])
+        .await?;
+    let result = paracord_db::messages::resolve_message_delivery(
+        &state.db,
+        channel_id,
+        auth.user_id,
+        &nonce,
+        paracord_util::snowflake::generate(1),
+    )
+    .await?;
+    use paracord_db::messages::DeliveryResolution;
+    let outcome = match result {
+        DeliveryResolution::Cancelled => DeliveryResolutionOutcome::Cancelled,
+        DeliveryResolution::Delivered(id) => DeliveryResolutionOutcome::Delivered {
+            message_id: id.to_string(),
+        },
+        DeliveryResolution::Deleted(id) => DeliveryResolutionOutcome::Deleted {
+            message_id: id.to_string(),
+        },
+    };
+    Ok(Json(DeliveryResolutionResponse {
+        channel_id: channel_id.to_string(),
+        author_id: auth.user_id.to_string(),
+        nonce,
+        outcome,
+    }))
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EditResolutionState {
+    Cancelled,
+    Applied,
+    Deleted,
+}
+
+#[derive(serde::Serialize)]
+pub struct EditResolutionResponse {
+    channel_id: String,
+    actor_id: String,
+    message_id: String,
+    edit_nonce: String,
+    state: EditResolutionState,
+}
+
+/// Resolve only this actor's operation identity. This does not authorize an edit
+/// or erase a committed one, and remains available after timeout or deletion.
+pub async fn resolve_message_edit(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((channel_id, message_id, edit_nonce)): Path<(i64, i64, String)>,
+) -> Result<Json<EditResolutionResponse>, ApiError> {
+    if message_id <= 0
+        || edit_nonce.is_empty()
+        || edit_nonce.len() > 64
+        || edit_nonce.trim() != edit_nonce
+    {
+        return Err(ApiError::BadRequest("Invalid message edit identity".into()));
+    }
+    let channel = paracord_db::channels::get_channel(&state.db, channel_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    ensure_channel_permissions(&state, &channel, auth.user_id, &[Permissions::VIEW_CHANNEL])
+        .await?;
+    let result = paracord_db::messages::resolve_message_edit(
+        &state.db,
+        channel_id,
+        message_id,
+        auth.user_id,
+        &edit_nonce,
+    )
+    .await?;
+    use paracord_db::messages::MessageEditResolution;
+    let resolved = match result {
+        MessageEditResolution::Cancelled => EditResolutionState::Cancelled,
+        MessageEditResolution::Applied => EditResolutionState::Applied,
+        MessageEditResolution::Deleted => EditResolutionState::Deleted,
+    };
+    Ok(Json(EditResolutionResponse {
+        channel_id: channel_id.to_string(),
+        actor_id: auth.user_id.to_string(),
+        message_id: message_id.to_string(),
+        edit_nonce,
+        state: resolved,
+    }))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeleteMessageRequest {
+    pub delete_nonce: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeletionState {
+    Deleted,
+    Pending,
+}
+
+#[derive(Serialize)]
+pub struct DeletionResponse {
+    channel_id: String,
+    message_id: String,
+    actor_id: String,
+    delete_nonce: String,
+    state: DeletionState,
+    delete_replayed: bool,
+}
+
+fn validate_deletion_identity(
+    channel_id: i64,
+    message_id: i64,
+    nonce: &str,
+) -> Result<(), ApiError> {
+    if channel_id <= 0
+        || message_id <= 0
+        || uuid::Uuid::parse_str(nonce)
+            .map(|id| id.is_nil() || id.to_string() != nonce)
+            .unwrap_or(true)
+    {
+        return Err(ApiError::BadRequest(
+            "Invalid message deletion identity".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// A pending result does not reserve or cancel the nonce. Only the actor's
+/// committed receipt proves a deletion after its original HTTP response is lost.
+pub async fn resolve_message_deletion(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((channel_id, message_id, delete_nonce)): Path<(i64, i64, String)>,
+) -> Result<Json<DeletionResponse>, ApiError> {
+    validate_deletion_identity(channel_id, message_id, &delete_nonce)?;
+    let (_, result) = paracord_core::message::delete_message_with_receipt(
+        &state.db,
+        message_id,
+        channel_id,
+        auth.user_id,
+        Some(&delete_nonce),
+        true,
+    )
+    .await?;
+    let deleted = matches!(
+        result,
+        paracord_db::messages::MessageDeletionResult::Deleted { .. }
+    );
+    Ok(Json(DeletionResponse {
+        channel_id: channel_id.to_string(),
+        message_id: message_id.to_string(),
+        actor_id: auth.user_id.to_string(),
+        delete_nonce,
+        state: if deleted {
+            DeletionState::Deleted
+        } else {
+            DeletionState::Pending
+        },
+        delete_replayed: deleted,
+    }))
+}
+
 pub async fn delete_message(
     State(state): State<AppState>,
     auth: AuthUser,
     Path((channel_id, message_id)): Path<(i64, i64)>,
-) -> Result<StatusCode, ApiError> {
-    paracord_core::message::delete_message(&state.db, message_id, channel_id, auth.user_id).await?;
-
-    let channel = paracord_db::channels::get_channel(&state.db, channel_id)
-        .await
-        .ok()
-        .flatten();
-    let guild_id = channel.as_ref().and_then(|c| c.guild_id());
+    body: axum::body::Bytes,
+) -> Result<Response, ApiError> {
+    // Any nonempty body must be a valid durable request. In particular a missing
+    // Content-Type must not silently convert a malformed request to legacy DELETE.
+    let request = if body.is_empty() {
+        None
+    } else {
+        let request: DeleteMessageRequest = serde_json::from_slice(&body)
+            .map_err(|_| ApiError::BadRequest("Invalid message deletion request".into()))?;
+        validate_deletion_identity(channel_id, message_id, &request.delete_nonce)?;
+        Some(request)
+    };
+    let (channel, result) = paracord_core::message::delete_message_with_receipt(
+        &state.db,
+        message_id,
+        channel_id,
+        auth.user_id,
+        request
+            .as_ref()
+            .map(|request| request.delete_nonce.as_str()),
+        false,
+    )
+    .await?;
+    let replayed = matches!(
+        result,
+        paracord_db::messages::MessageDeletionResult::Deleted { replayed: true }
+    );
+    let response = request.map(|request| DeletionResponse {
+        channel_id: channel_id.to_string(),
+        message_id: message_id.to_string(),
+        actor_id: auth.user_id.to_string(),
+        delete_nonce: request.delete_nonce,
+        state: DeletionState::Deleted,
+        delete_replayed: replayed,
+    });
+    if replayed {
+        return Ok(Json(response.expect("a deletion replay requires a nonce")).into_response());
+    }
+    let guild_id = channel.guild_id();
 
     let delete_payload =
         json!({"id": message_id.to_string(), "channel_id": channel_id.to_string()});
-    if let Some(channel) = channel.as_ref() {
-        dispatch_channel_event(&state, channel, "MESSAGE_DELETE", delete_payload).await;
-    }
+    dispatch_channel_event(&state, &channel, "MESSAGE_DELETE", delete_payload).await?;
 
     if let Some(gid) = guild_id {
         audit::log_action(
@@ -1153,7 +1550,10 @@ pub async fn delete_message(
         }
     }
 
-    Ok(StatusCode::NO_CONTENT)
+    Ok(match response {
+        Some(response) => Json(response).into_response(),
+        None => StatusCode::NO_CONTENT.into_response(),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1165,6 +1565,33 @@ pub async fn delete_message(
 /// Returns the alerts to post once the message is stored. A blocking rule is
 /// surfaced as `ApiError::AutomodBlocked`, which the client renders as the
 /// operator's own reason text.
+async fn prepare_automod(
+    state: &AppState,
+    guild_id: i64,
+    channel_id: i64,
+    author_id: i64,
+    content: &str,
+) -> Result<paracord_core::automod_enforce::PreparedAutomod, ApiError> {
+    if content.trim().is_empty() {
+        return Ok(paracord_core::automod_enforce::PreparedAutomod::default());
+    }
+    let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    let perms = paracord_core::permissions::compute_channel_permissions(
+        &state.db,
+        guild_id,
+        channel_id,
+        guild.owner_id,
+        author_id,
+    )
+    .await?;
+    Ok(paracord_core::automod_enforce::prepare_message_evaluation(
+        &state.db, guild_id, channel_id, author_id, content, perms,
+    )
+    .await?)
+}
+
 async fn run_automod(
     state: &AppState,
     guild_id: i64,
@@ -1172,34 +1599,9 @@ async fn run_automod(
     author_id: i64,
     content: &str,
 ) -> Result<paracord_core::automod_enforce::AutomodVerdict, ApiError> {
-    use paracord_core::automod_enforce::AutomodVerdict;
-    if content.trim().is_empty() {
-        return Ok(AutomodVerdict::default());
-    }
-
-    // Permissions were already computed for the send check; recompute here so
-    // the helper stays self-contained (the result is cached by paracord-core).
-    let guild = match paracord_db::guilds::get_guild(&state.db, guild_id).await {
-        Ok(Some(guild)) => guild,
-        _ => return Ok(AutomodVerdict::default()),
-    };
-    let perms = match paracord_core::permissions::compute_channel_permissions(
-        &state.db,
-        guild_id,
-        channel_id,
-        guild.owner_id,
-        author_id,
-    )
-    .await
-    {
-        Ok(perms) => perms,
-        Err(_) => return Ok(AutomodVerdict::default()),
-    };
-
-    let mut verdict = paracord_core::automod_enforce::evaluate_message(
-        &state.db, guild_id, channel_id, author_id, content, perms,
-    )
-    .await;
+    let prepared = prepare_automod(state, guild_id, channel_id, author_id, content).await?;
+    prepared.persist_hits(&state.db).await?;
+    let mut verdict = prepared.verdict;
 
     if let Some(reason) = verdict.blocked_reason.take() {
         // The message is rejected, so nothing downstream runs the side effects —
@@ -1269,7 +1671,8 @@ pub(crate) async fn dispatch_automod_alerts(
         let body = paracord_core::automod_enforce::alert_message(&alert, &username);
 
         let alert_id = paracord_util::snowflake::generate(1);
-        match paracord_db::messages::create_message(
+        // Evidence and rule names are quoted context, never a system ping.
+        match paracord_db::messages::create_message_with_payload_mentions(
             &state.db,
             alert_id,
             alert.channel_id,
@@ -1277,13 +1680,21 @@ pub(crate) async fn dispatch_automod_alerts(
             &body,
             0,
             None,
+            0,
+            None,
+            None,
+            &[],
         )
         .await
         {
             Ok(row) => {
                 let payload =
                     message_to_json(state, &row, crate::routes::mod_log::MOD_LOG_BOT_ID).await;
-                dispatch_channel_event(state, &alert_channel, "MESSAGE_CREATE", payload).await;
+                if let Err(error) =
+                    dispatch_channel_event(state, &alert_channel, "MESSAGE_CREATE", payload).await
+                {
+                    tracing::warn!(channel_id = alert_channel.id, %error, "failed to publish automod message activity");
+                }
             }
             Err(err) => {
                 tracing::warn!(error = %err, "automod: failed to post alert");

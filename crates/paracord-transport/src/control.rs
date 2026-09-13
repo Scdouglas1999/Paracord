@@ -80,7 +80,11 @@ pub enum ControlMessage {
     SessionParticipantJoin { participant: SessionParticipant },
 
     /// One participant left the active media session.
-    SessionParticipantLeave { user_id: i64 },
+    SessionParticipantLeave {
+        user_id: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+    },
 
     /// Publisher announces a track and its currently available layers.
     TrackPublish { track: PublishedTrack },
@@ -734,7 +738,10 @@ mod tests {
 
     #[test]
     fn session_participant_leave_round_trip() {
-        let msg = ControlMessage::SessionParticipantLeave { user_id: 77 };
+        let msg = ControlMessage::SessionParticipantLeave {
+            user_id: 77,
+            session_id: Some("sess-77".to_string()),
+        };
         let encoded = msg.encode().unwrap();
         let (decoded, _) = ControlMessage::decode(&encoded).unwrap().unwrap();
         assert_eq!(msg, decoded);

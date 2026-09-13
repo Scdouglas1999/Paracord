@@ -1,3 +1,4 @@
+import { useCurrentAccountScope } from '../hooks/useCurrentUser';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Users, MessageSquare, X, Search, Check, UserPlus, UserRoundPlus, Inbox, Ban, ArrowUpRight } from 'lucide-react';
@@ -6,7 +7,7 @@ import { useRelationshipStore } from '../stores/relationshipStore';
 import { usePresenceStore } from '../stores/presenceStore';
 import { useServerListStore } from '../stores/serverListStore';
 import type { Relationship } from '../api/relationships';
-import { dmApi } from '../api/dms';
+import { activateChannel } from '../lib/channelNavigation';
 import { extractApiError } from '../api/client';
 import { useChannelStore } from '../stores/channelStore';
 import { EmptyState } from '../components/ui/Feedback';
@@ -120,6 +121,7 @@ function PersonRow({
 
 export function FriendsPage() {
   const navigate = useNavigate();
+  const channelScope = useCurrentAccountScope();
   const [activeTab, setActiveTab] = useState<FriendsTab>('online');
   const [showAddFriend, setShowAddFriend] = useState(false);
   const [addFriendInput, setAddFriendInput] = useState('');
@@ -259,12 +261,9 @@ export function FriendsPage() {
     setRelationshipError(null);
     startAction(actionKey);
     try {
-      const { data } = await dmApi.create(userId);
-      const dmChannels = useChannelStore.getState().channelsByGuild[''] || [];
-      const existing = dmChannels.find((c) => c.id === data.id);
-      const nextDms = existing ? dmChannels : [...dmChannels, data];
-      useChannelStore.getState().setDmChannels(nextDms);
-      useChannelStore.getState().selectChannel(data.id);
+      if (!channelScope) throw new Error('Sign in to this server before messaging.');
+      const data = await useChannelStore.getState().createDm(userId, channelScope);
+      activateChannel(data);
       navigate(`/app/dms/${data.id}`);
     } catch (err: unknown) {
       setRelationshipError(extractApiError(err) || 'Failed to open direct message');

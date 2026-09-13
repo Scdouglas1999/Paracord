@@ -1,3 +1,10 @@
+vi.mock('../lib/operationContext', () => ({
+  captureScopedOperation: (scope: { serverId: string; userId: string }) => {
+    const controller = new AbortController();
+    return { scope, signal: controller.signal, api: {}, assertCurrent() { controller.signal.throwIfAborted(); }, dispose() { controller.abort(); } };
+  },
+}));
+import { useChannelStore } from './channelStore';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 /**
@@ -47,18 +54,20 @@ vi.mock('../lib/accountSession', () => ({
   withUnlockedPrivateKey: vi.fn(),
 }));
 vi.mock('./authStore', () => ({
-  useAuthStore: { getState: () => ({ user: { id: 'u1' } }) },
+  useAuthStore: { subscribe: () => () => {}, getState: () => ({ user: { id: 'u1' } }) },
 }));
 vi.mock('./serverListStore', () => ({
-  useServerListStore: { getState: () => ({ getActiveServer: () => undefined }) },
+  useServerListStore: { subscribe: () => () => {}, getState: () => ({ getActiveServer: () => undefined }) },
 }));
-vi.mock('../api/channels', () => ({ channelApi: {} }));
+vi.mock('../api/channels', () => ({ channelApi: {}, createChannelApi: () => ({}) }));
 vi.mock('../api/client', () => ({
   extractApiError: vi.fn((err: unknown) => (err instanceof Error ? err.message : 'error')),
 }));
 vi.mock('../lib/constants', () => ({ DEFAULT_MESSAGE_FETCH_LIMIT: 50 }));
 
-import { useMessageStore, normalizeIncomingMessage } from './messageStore';
+import { getMessageStore, normalizeIncomingMessage } from './messageStore';
+const useMessageStore = getMessageStore({ serverId: '__local__', userId: 'u1' });
+
 import { shouldGroup } from '../components/message/MessageList';
 
 function resetStore() {
@@ -186,3 +195,7 @@ describe('shouldGroup resilience', () => {
     expect(shouldGroup(a, b)).toBe(false);
   });
 });
+
+vi.mock('../lib/channelView', () => ({
+  getAccountChannelView: () => useChannelStore.getState(),
+}));

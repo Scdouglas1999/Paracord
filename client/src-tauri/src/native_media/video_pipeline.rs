@@ -1,7 +1,7 @@
+use super::CallEventSink as AppHandle;
 use super::session::NativeMediaSession;
 use paracord_transport::protocol::MediaHeader;
 use paracord_transport::stream::PublishedTrack;
-use tauri::AppHandle;
 
 #[cfg(feature = "vpx")]
 use bytes::{BufMut, Bytes, BytesMut};
@@ -1528,7 +1528,7 @@ fn warn_codec_negotiation(app: Option<&AppHandle>, codec: VideoCodec, excluded: 
         ),
     );
     if let Some(app) = app {
-        use tauri::Emitter;
+
         let _ = app.emit(
             "media_codec_negotiation_warning",
             serde_json::json!({
@@ -3589,7 +3589,7 @@ fn screen_encoder_input_format(
 pub fn handle_video_datagram(
     header: &MediaHeader,
     decrypted_payload: &[u8],
-    app: &tauri::AppHandle,
+    app: &super::CallEventSink,
     conn: &quinn::Connection,
 ) {
     #[cfg(feature = "vpx")]
@@ -3679,7 +3679,7 @@ pub fn handle_video_datagram(
 pub fn handle_video_stream_frame(
     body: &[u8],
     frame_decryptor: &std::sync::Arc<std::sync::Mutex<paracord_codec::crypto::FrameDecryptor>>,
-    app: &tauri::AppHandle,
+    app: &super::CallEventSink,
     conn: &quinn::Connection,
 ) {
     #[cfg(feature = "vpx")]
@@ -4319,7 +4319,7 @@ pub async fn publish_camera_track_for_current_config(
         .await?;
     session.published_video_track = Some(track.clone());
     if let Some(app) = app {
-        use tauri::Emitter;
+
         let _ = app.emit("media_track_publish", track);
     }
     Ok(())
@@ -4456,7 +4456,7 @@ pub async fn publish_screen_track_for_current_config(
         .await?;
     session.published_screen_track = Some(track.clone());
     if let Some(app) = app {
-        use tauri::Emitter;
+
         let _ = app.emit("media_track_publish", track);
     }
     Ok(())

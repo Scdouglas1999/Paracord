@@ -1,20 +1,23 @@
+import type { ChannelReference } from '../lib/channelScope';
+import { entityScopeKey } from '../lib/serverScope';
+
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
 /**
  * Pinned-conversation persistence (layout-spec §3.4).
  *
- * Keys are the composite `${serverId}:${channelId}` (see conversationModel)
+ * Keys are JSON tuples of server, account and channel (see conversationModel)
  * so pins survive across servers and reconnects. `PinnedRail` renders entries
  * in `pinnedKeys` order.
  */
 interface PinnedState {
   pinnedKeys: string[];
 
-  pin: (key: string) => void;
-  unpin: (key: string) => void;
-  reorder: (keys: string[]) => void;
-  isPinned: (key: string) => boolean;
+  pin: (channel: ChannelReference) => void;
+  unpin: (channel: ChannelReference) => void;
+  reorder: (channels: ChannelReference[]) => void;
+  isPinned: (channel: ChannelReference) => boolean;
 }
 
 export const usePinnedStore = create<PinnedState>()(
@@ -22,26 +25,31 @@ export const usePinnedStore = create<PinnedState>()(
     (set, get) => ({
       pinnedKeys: [],
 
-      pin: (key) =>
+      pin: (channel) => {
+        const key = entityScopeKey(channel.scope, channel.id);
         set((state) =>
           state.pinnedKeys.includes(key)
             ? state
             : { pinnedKeys: [...state.pinnedKeys, key] }
-        ),
+        );
+      },
 
-      unpin: (key) =>
+      unpin: (channel) => {
+        const key = entityScopeKey(channel.scope, channel.id);
         set((state) => ({
           pinnedKeys: state.pinnedKeys.filter((k) => k !== key),
-        })),
+        }));
+      },
 
-      reorder: (keys) =>
+      reorder: (channels) =>
         set((state) => {
           // Keep only currently-pinned keys, in the supplied order; append any
           // pinned key the caller omitted so nothing is silently dropped.
           const pinned = new Set(state.pinnedKeys);
           const seen = new Set<string>();
           const next: string[] = [];
-          for (const k of keys) {
+          for (const channel of channels) {
+            const k = entityScopeKey(channel.scope, channel.id);
             if (pinned.has(k) && !seen.has(k)) {
               next.push(k);
               seen.add(k);
@@ -53,10 +61,13 @@ export const usePinnedStore = create<PinnedState>()(
           return { pinnedKeys: next };
         }),
 
-      isPinned: (key) => get().pinnedKeys.includes(key),
+      isPinned: (channel) => get().pinnedKeys.includes(entityScopeKey(channel.scope, channel.id)),
     }),
     {
-      name: 'paracord:pinned-conversations',
+      // Legacy keys have no account owner and must not be assigned to a new login.
+      name: 'paracord:pinned-conversations-by-account',
+      version: 1,
+      partialize: state => ({ pinnedKeys: state.pinnedKeys }),
     }
   )
 );

@@ -1,3 +1,4 @@
+import type { AxiosRequestConfig, AxiosResponse } from 'axios';
 import { getApi } from './activeClient';
 import { getAccessToken, getCsrfToken } from '../lib/authToken';
 import type { Attachment } from '../types';
@@ -14,6 +15,7 @@ import { isTauri } from '../lib/tauriEnv';
 import { resolveApiOrigin, resolveResourceUrl } from '../lib/config/apiBaseUrl';
 import { ensureDownloadTicket, getDownloadTicket } from '../lib/downloadTicket';
 import { useServerListStore } from '../stores/serverListStore';
+import { toArrayBuffer } from '../lib/crypto/util';
 
 /**
  * Encode raw bytes as a base64 string. Chunked to stay well under the argument
@@ -311,6 +313,47 @@ async function httpUpload(
   return resp.data;
 }
 
+/**
+ * Upload one opaque attachment body for an end-to-end encrypted conversation.
+ *
+ * Everything identifying about the file stays on the sender's device: the
+ * multipart part carries a random `.bin` name, `application/octet-stream`, and
+ * ciphertext. No other form field is sent, so the request body holds no
+ * plaintext metadata for the server to keep.
+ *
+ * The caller supplies its account's captured request function, so the upload
+ * lands on the same server and account that authorized the message rather than
+ * on whichever server happens to be selected.
+ */
+export async function uploadOpaqueCiphertext(
+  request: <T>(config: AxiosRequestConfig) => Promise<AxiosResponse<T>>,
+  channelId: string,
+  objectName: string,
+  ciphertext: Uint8Array,
+): Promise<string> {
+  if (!/^[0-9a-f]{32}\.bin$/.test(objectName)) {
+    throw new Error('An encrypted attachment must be stored under an opaque generated name.');
+  }
+  const form = new FormData();
+  form.append('file', new Blob([toArrayBuffer(ciphertext)], { type: 'application/octet-stream' }), objectName);
+  const response = await request<{ id?: string; filename?: string; content_type?: string }>({
+    method: 'POST', url: `/channels/${encodeURIComponent(channelId)}/attachments`, data: form, timeout: 120_000,
+    // The shared client defaults to `application/json`, and axios turns a
+    // FormData body into JSON when that is the declared type — which silently
+    // sent the ciphertext as a JSON object. Declaring multipart makes axios
+    // hand the body to the browser, which supplies the boundary.
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  const id = response.data?.id;
+  if ((response.status !== 200 && response.status !== 201) || typeof id !== 'string' || !/^[1-9][0-9]{0,18}$/.test(id)) {
+    throw new Error('The server did not accept this encrypted attachment.');
+  }
+  if (response.data.filename !== objectName || response.data.content_type !== 'application/octet-stream') {
+    throw new Error('The server stored this encrypted attachment under different metadata than it was given.');
+  }
+  return id;
+}
+
 export const fileApi = {
   /**
    * Upload a file to a channel. Uses QUIC when available, falls back to HTTP.
@@ -419,5 +462,5 @@ export const fileApi = {
   },
 
   /** Delete an attachment. */
-  delete: (id: string) => getApi().delete(`/attachments/${id}`),
+  delete: async (id: string) => getApi().delete(`/attachments/${id}`),
 };

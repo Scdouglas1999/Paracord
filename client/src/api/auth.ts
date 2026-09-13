@@ -1,37 +1,18 @@
-import { getApi } from './activeClient';
-import { signServerChallengeWithUnlockedKey } from '../lib/accountSession';
-import { getCurrentOriginServerUrl, getStoredServerUrl } from '../lib/config/apiBaseUrl';
-import type { LoginRequest, LoginResponse, RegisterRequest, ReadState, User, UserSettings } from '../types';
+import { getServerApi } from './activeClient';
+import { LOCAL_SERVER_ID } from '../lib/serverScope';
 
-interface AuthChallenge {
-  nonce: string;
-  timestamp: number;
-  server_origin: string;
-}
-
-async function requestAuthChallenge(): Promise<AuthChallenge> {
-  const { data: challenge } = await getApi().post<AuthChallenge>('/auth/challenge');
-
-  const nowMs = Date.now();
-  const challengeMs = challenge.timestamp * 1000;
-  if (!Number.isFinite(challengeMs) || Math.abs(nowMs - challengeMs) > 120_000) {
-    throw new Error('Server challenge timestamp is invalid or stale');
-  }
-
-  const serverUrl = getCurrentOriginServerUrl() ?? getStoredServerUrl();
-  if (serverUrl) {
-    try {
-      const expectedOrigin = new URL(serverUrl).origin;
-      if (new URL(challenge.server_origin).origin !== expectedOrigin) {
-        throw new Error('Server challenge origin mismatch');
-      }
-    } catch {
-      throw new Error('Server challenge origin mismatch');
-    }
-  }
-
-  return challenge;
-}
+// authStore owns the home session. Selecting a remote server must never change
+// where login, profile editing, passwords or account recovery are sent.
+const getApi = () => getServerApi(LOCAL_SERVER_ID);
+import { responseContract } from './responseContracts';
+import {
+  isCurrentUser,
+  isUpdatedCurrentUser,
+  isUserSettingsResponse,
+} from './generated/validators';
+import type { UpdateMeRequest } from './generated/UpdateMeRequest';
+import type { UpdateSettingsRequest } from './generated/UpdateSettingsRequest';
+import type { LoginRequest, LoginResponse, RegisterRequest } from '../types';
 
 export interface AuthSession {
   id: string;
@@ -50,43 +31,17 @@ export interface AuthOptions {
 }
 
 export const authApi = {
-  options: () => getApi().get<AuthOptions>('/auth/options'),
-  login: (data: LoginRequest) => getApi().post<LoginResponse>('/auth/login', data),
-  register: (data: RegisterRequest) => getApi().post<LoginResponse>('/auth/register', data),
-  refresh: (refreshToken?: string) =>
+  options: async () => getApi().get<AuthOptions>('/auth/options'),
+  login: async (data: LoginRequest) => getApi().post<LoginResponse>('/auth/login', data),
+  register: async (data: RegisterRequest) => getApi().post<LoginResponse>('/auth/register', data),
+  refresh: async (refreshToken?: string) =>
     getApi().post<{ token: string; refresh_token?: string }>(
       '/auth/refresh',
       refreshToken ? { refresh_token: refreshToken } : undefined,
     ),
-  logout: () => getApi().post('/auth/logout'),
-  listSessions: () => getApi().get<AuthSession[]>('/auth/sessions'),
-  revokeSession: (sessionId: string) => getApi().delete(`/auth/sessions/${sessionId}`),
-  /**
-   * Attach an Ed25519 public key to the signed-in account.
-   *
-   * The account password (and a second factor when MFA is on) is REQUIRED: an
-   * attached key authenticates the account on its own, indefinitely, and used to
-   * survive a password change, a password reset, and "sign out everywhere". A
-   * session alone must not be able to install a credential that outlives the
-   * recovery flow, so the server re-authenticates before accepting one.
-   */
-  attachPublicKey: async (publicKey: string, password: string, mfaCode?: string) => {
-    const challenge = await requestAuthChallenge();
-    const signature = await signServerChallengeWithUnlockedKey(
-      challenge.nonce,
-      challenge.timestamp,
-      challenge.server_origin,
-    );
-    return getApi().post<LoginResponse>('/auth/attach-public-key', {
-      public_key: publicKey,
-      nonce: challenge.nonce,
-      timestamp: challenge.timestamp,
-      signature,
-      password,
-      ...(mfaCode ? { mfa_code: mfaCode } : {}),
-    });
-  },
-
+  logout: async () => getApi().post('/auth/logout'),
+  listSessions: async () => getApi().get<AuthSession[]>('/auth/sessions'),
+  revokeSession: async (sessionId: string) => getApi().delete(`/auth/sessions/${sessionId}`),
   /** Remove the attached key, revoking every session in the process. */
   detachPublicKey: async (password: string, mfaCode?: string) =>
     getApi().post('/auth/attach-public-key', {
@@ -94,43 +49,54 @@ export const authApi = {
       password,
       ...(mfaCode ? { mfa_code: mfaCode } : {}),
     }),
-  getMe: () => getApi().get<User>('/users/@me'),
-  updateMe: (data: Partial<User>) => getApi().patch<User>('/users/@me', data),
-  uploadAvatar: (file: File) => {
+  getMe: async () =>
+    responseContract(getApi().get('/users/@me'), isCurrentUser, 'CurrentUser'),
+  updateMe: async (data: UpdateMeRequest) =>
+    responseContract(getApi().patch('/users/@me', data), isUpdatedCurrentUser, 'UpdatedCurrentUser'),
+  uploadAvatar: async (file: File) => {
     const form = new FormData();
     form.append('avatar', file);
-    return getApi().post<User>('/users/@me/avatar', form, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
+    return responseContract(
+      getApi().post('/users/@me/avatar', form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      }),
+      isUpdatedCurrentUser,
+      'UpdatedCurrentUser',
+    );
   },
-  getSettings: () => getApi().get<UserSettings>('/users/@me/settings'),
-  updateSettings: (data: Partial<UserSettings>) => getApi().patch<UserSettings>('/users/@me/settings', data),
-  getReadStates: () => getApi().get<ReadState[]>('/users/@me/read-states'),
-  changePassword: (currentPassword: string, newPassword: string) =>
+  getSettings: async () =>
+    responseContract(getApi().get('/users/@me/settings'), isUserSettingsResponse, 'UserSettingsResponse'),
+  updateSettings: async (data: UpdateSettingsRequest) =>
+    responseContract(
+      getApi().patch('/users/@me/settings', data),
+      isUserSettingsResponse,
+      'UserSettingsResponse',
+    ),
+  changePassword: async (currentPassword: string, newPassword: string) =>
     getApi().put('/users/@me/password', {
       current_password: currentPassword,
       new_password: newPassword,
     }),
-  changeEmail: (currentPassword: string, newEmail: string) =>
+  changeEmail: async (currentPassword: string, newEmail: string) =>
     getApi().put('/users/@me/email', {
       current_password: currentPassword,
       new_email: newEmail,
     }),
-  exportMyData: () => getApi().get<Record<string, unknown>>('/users/@me/data-export'),
-  forgotPassword: (identifier: string) =>
+  exportMyData: async () => getApi().get<Record<string, unknown>>('/users/@me/data-export'),
+  forgotPassword: async (identifier: string) =>
     getApi().post<{ message: string }>('/auth/forgot-password', { identifier }),
-  resetPassword: (token: string, newPassword: string) =>
+  resetPassword: async (token: string, newPassword: string) =>
     getApi().post<{ message: string }>('/auth/reset-password', { token, new_password: newPassword }),
-  verifyEmail: (token: string) =>
+  verifyEmail: async (token: string) =>
     getApi().post<{ message: string }>('/auth/verify-email', { token }),
-  mfaStatus: () =>
+  mfaStatus: async () =>
     getApi().get<{ mfa_enabled: boolean; backup_codes_remaining: number }>('/auth/mfa/status'),
-  mfaSetup: () =>
+  mfaSetup: async () =>
     getApi().post<{ secret: string; otpauth_url: string; qr_code: string }>('/auth/mfa/setup'),
-  mfaVerify: (code: string) =>
+  mfaVerify: async (code: string) =>
     getApi().post<{ mfa_enabled: boolean; backup_codes: string[]; message: string }>('/auth/mfa/verify', { code }),
-  mfaDisable: (code: string) =>
+  mfaDisable: async (code: string) =>
     getApi().post<{ mfa_enabled: boolean; message: string }>('/auth/mfa/disable', { code }),
-  mfaLogin: (ticket: string, code: string) =>
+  mfaLogin: async (ticket: string, code: string) =>
     getApi().post<LoginResponse>('/auth/mfa/login', { ticket, code }),
 };

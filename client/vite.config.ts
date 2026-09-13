@@ -55,6 +55,9 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 1420,
       strictPort: true,
+      // End-to-end runs opt out of hot replacement: a concurrent source edit
+      // must not remount the application in the middle of a user journey.
+      hmr: env.VITE_DEV_HMR === "false" ? false : undefined,
       proxy: {
         "/health": {
           target: proxyTarget,

@@ -1,119 +1,50 @@
-import { useCallback, useEffect, useState } from 'react';
-import { getVersionedJson, setVersionedJson } from '../lib/versionedStorage';
-import { notificationSettingsApi } from '../api/notificationSettings';
+import { useCallback, useEffect, useMemo } from 'react';
+import { useAvailableAccountScopes } from './useAvailableAccountScopes';
+import { useNotificationPreferenceStore } from '../stores/notificationPreferenceStore';
+import { accountScopeKey, entityScopeKey } from '../lib/serverScope';
+import type { GuildReference } from '../lib/guildScope';
+import { toast } from '../stores/toastStore';
+import { extractApiError } from '../api/client';
 
-/**
- * Muted-space set — the single producer/consumer for the `muted-guilds`
- * preference (layout-spec §3.2). The old Discord guild rail owned this
- * read/write; when it was deleted the readers survived (`TextChannelList`,
- * `TopBar`) but the WRITER was orphaned, so a user could no longer mute a space
- * anywhere and the muted set feeding attention ranking was permanently empty.
- *
- * The set is now **server-backed**. It used to live only in localStorage, so a
- * mute did not follow you to another device, did not survive clearing site
- * data, and was invisible to the server — which meant nothing else could ever
- * respect it. `/users/@me/notification-settings` is now the source of truth.
- *
- * localStorage is kept as a synchronous cache so the first paint has the set
- * before the fetch resolves, and so the existing readers keep their contract:
- * `mutedGuildIds` stays live across tabs (`storage`) and in-tab writers (the
- * `paracord-muted-guilds-updated` event they already listen for). Writes are
- * optimistic and roll back if the server rejects them.
- */
-
-const STORAGE_BASE = 'muted-guilds';
-const UPDATE_EVENT = 'paracord-muted-guilds-updated';
-
-export function readMutedGuildIds(): string[] {
-  try {
-    return getVersionedJson<string[]>(STORAGE_BASE, [], [STORAGE_BASE]);
-  } catch {
-    return [];
-  }
-}
-
-/** Persist the muted set locally and notify every in-tab reader. */
-export function writeMutedGuildIds(ids: string[]): void {
-  setVersionedJson(STORAGE_BASE, ids);
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(new Event(UPDATE_EVENT));
-  }
-}
-
-/**
- * Pull the authoritative set from the server and reconcile the local cache.
- *
- * A space muted on another device appears here; one unmuted elsewhere
- * disappears. `muted_now` is used rather than `muted` so a lapsed timed mute
- * stops counting without needing a sweep.
- */
-export async function syncMutedGuildsFromServer(): Promise<string[]> {
-  const { spaces } = await notificationSettingsApi.list();
-  const ids = spaces.filter((s) => s.muted_now).map((s) => s.space_id);
-  writeMutedGuildIds(ids);
-  return ids;
-}
-
-/**
- * Toggle a space's muted state, writing through to the server.
- *
- * Optimistic: the local set updates immediately so the UI responds, and rolls
- * back if the request fails. Returns the intended new state.
- */
-export async function toggleGuildMuted(guildId: string): Promise<boolean> {
-  const previous = readMutedGuildIds();
-  const wasMuted = previous.includes(guildId);
-  const next = wasMuted ? previous.filter((id) => id !== guildId) : [...previous, guildId];
-  writeMutedGuildIds(next);
-
-  try {
-    if (wasMuted) {
-      // Clearing the override returns the space to the default rather than
-      // storing an explicit "not muted" row.
-      await notificationSettingsApi.clearSpace(guildId);
-    } else {
-      await notificationSettingsApi.setSpace(guildId, { muted: true });
-    }
-  } catch (err) {
-    writeMutedGuildIds(previous);
-    throw err;
-  }
-  return !wasMuted;
-}
-
-export interface UseMutedGuilds {
-  mutedGuildIds: string[];
-  isMuted: (guildId: string) => boolean;
-  toggleMute: (guildId: string) => void;
-}
-
-export function useMutedGuilds(): UseMutedGuilds {
-  const [mutedGuildIds, setIds] = useState<string[]>(readMutedGuildIds);
-
+/** Every mute key retains the account that owns the server-side preference. */
+export function useMutedGuilds() {
+  const scopes = useAvailableAccountScopes();
+  const scopeKey = JSON.stringify(scopes);
+  const byAccount = useNotificationPreferenceStore(state => state.byAccount);
+  const saving = useNotificationPreferenceStore(state => state.saving);
   useEffect(() => {
-    const sync = () => setIds(readMutedGuildIds());
-    sync();
-    window.addEventListener('storage', sync);
-    window.addEventListener(UPDATE_EVENT, sync as EventListener);
-
-    // Reconcile against the server once on mount. A failure here is not worth
-    // surfacing: the cached set is still serviceable and the next toggle
-    // reports its own error.
-    void syncMutedGuildsFromServer().catch(() => undefined);
-
-    return () => {
-      window.removeEventListener('storage', sync);
-      window.removeEventListener(UPDATE_EVENT, sync as EventListener);
-    };
-  }, []);
-
-  const isMuted = useCallback(
-    (guildId: string) => mutedGuildIds.includes(guildId),
-    [mutedGuildIds],
-  );
-  const toggleMute = useCallback((guildId: string) => {
-    void toggleGuildMuted(guildId);
-  }, []);
-
-  return { mutedGuildIds, isMuted, toggleMute };
+    const accounts = JSON.parse(scopeKey) as typeof scopes;
+    const refresh = () => { for (const scope of accounts) void useNotificationPreferenceStore.getState().refresh(scope).catch(() => { /* The account error is retained for retry. */ }); };
+    refresh();
+    window.addEventListener('focus', refresh);
+    const storage = (event: StorageEvent) => { if (event.key === 'paracord:notification-preferences-by-account') refresh(); };
+    window.addEventListener('storage', storage);
+    return () => { window.removeEventListener('focus', refresh); window.removeEventListener('storage', storage); };
+  }, [scopeKey]);
+  useEffect(() => {
+    const accounts = JSON.parse(scopeKey) as typeof scopes;
+    const deadlines = accounts.flatMap(scope => Object.values(byAccount[accountScopeKey(scope)] ?? {}))
+      .filter(setting => setting.muted_now && setting.muted_until)
+      .map(setting => Date.parse(setting.muted_until!)).filter(Number.isFinite);
+    if (!deadlines.length) return;
+    // Recheck server truth at expiry. A clock ahead of the server retries at most
+    // twice a minute; long mutes avoid the browser's 32-bit timer overflow.
+    const remaining = Math.min(...deadlines) - Date.now();
+    const delay = Math.min(86_400_000, remaining > 0 ? remaining : 30_000);
+    const timer = setTimeout(() => { for (const scope of accounts) void useNotificationPreferenceStore.getState().refresh(scope).catch(() => {}); }, delay);
+    return () => clearTimeout(timer);
+  }, [scopeKey, byAccount]);
+  const mutedGuildKeys = useMemo(() => {
+    const keys: string[] = [];
+    for (const scope of scopes) for (const setting of Object.values(byAccount[accountScopeKey(scope)] ?? {})) {
+      if (setting.muted_now) keys.push(entityScopeKey(scope, setting.space_id));
+    }
+    return keys;
+  }, [scopes, byAccount]);
+  const isMuted = useCallback((guild: GuildReference) => mutedGuildKeys.includes(entityScopeKey(guild.scope, guild.id)), [mutedGuildKeys]);
+  const toggleMute = useCallback(async (guild: GuildReference) => {
+    try { await useNotificationPreferenceStore.getState().setMuted(guild, !isMuted(guild)); }
+    catch (err) { toast.error(`Failed to update space notifications: ${extractApiError(err)}`); }
+  }, [isMuted]);
+  return { mutedGuildKeys, isMuted, toggleMute, saving };
 }

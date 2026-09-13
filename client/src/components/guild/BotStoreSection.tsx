@@ -1,4 +1,6 @@
-import { useCallback, useState, useMemo, useEffect, type ReactNode } from 'react';
+import { useCurrentChannelStore } from '../../hooks/useChannels';
+import { useGuild } from '../../hooks/useGuilds';
+import { useId, useCallback, useState, useMemo, useEffect, type ReactNode } from 'react';
 import {
   Bot,
   Check,
@@ -18,7 +20,6 @@ import {
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useGuildStore } from '../../stores/guildStore';
-import { useChannelStore } from '../../stores/channelStore';
 import { Button } from '../ui/Button';
 import type { Channel, GuildBotConfig } from '../../types';
 import { botStoreApi, type StoreBot } from '../../api/botStore';
@@ -243,6 +244,7 @@ export function BotStoreSection({
   onOpenSettings,
   onOpenChannel,
 }: BotStoreSectionProps) {
+  const formId = useId();
   const [activeTab, setActiveTab] = useState<'built-in' | 'public'>('built-in');
   const [searchQuery, setSearchQuery] = useState('');
   const [installingId, setInstallingId] = useState<string | null>(null);
@@ -255,10 +257,10 @@ export function BotStoreSection({
   const [publicBotsError, setPublicBotsError] = useState('');
   const [addingPublicBotId, setAddingPublicBotId] = useState<string | null>(null);
 
-  const guild = useGuildStore((state) => state.guilds.find((g) => g.id === guildId));
-  const guildChannels = useChannelStore((state) => state.channelsByGuild[guildId] ?? EMPTY_GUILD_CHANNELS);
+  const guild = useGuild(guildId);
+  const guildChannels = useCurrentChannelStore((state) => state.channelsByGuild[guildId] ?? EMPTY_GUILD_CHANNELS);
   const updateGuild = useGuildStore((state) => state.updateGuild);
-  const botSettings = useMemo<Record<string, GuildBotConfig>>(() => guild?.bot_settings || {}, [guild?.bot_settings]);
+  const botSettings = useMemo<Record<string, GuildBotConfig | undefined>>(() => guild?.bot_settings || {}, [guild?.bot_settings]);
 
   useEffect(() => {
     if (configuringId && botSettings[configuringId]) {
@@ -300,7 +302,7 @@ export function BotStoreSection({
   }, [activeTab, loadPublicBots]);
 
   const handleAddPublicBot = async (bot: StoreBot) => {
-    if (!canManage) return;
+    if (!canManage || !guild) return;
     setAddingPublicBotId(bot.id);
     try {
       await botApi.addBotToGuild(guildId, { application_id: bot.id });
@@ -318,7 +320,7 @@ export function BotStoreSection({
   const setAutoModConfig = (next: AutoModConfig) => setConfigState(next);
 
   const handleInstall = async (botId: string) => {
-    if (!canManage) return;
+    if (!canManage || !guild) return;
     setInstallingId(botId);
     let initialConfig: GuildBotConfig = { enabled: true };
     if (botId === 'welcome_bot') {
@@ -332,7 +334,7 @@ export function BotStoreSection({
     }
     const newSettings = { ...botSettings, [botId]: initialConfig };
     try {
-      await updateGuild(guildId, { bot_settings: newSettings });
+      await updateGuild(guildId, { bot_settings: newSettings }, guild.scope);
       setConfiguringId(botId);
       await Promise.resolve(onBotSettingsChanged?.());
     } catch (err: unknown) {
@@ -343,11 +345,11 @@ export function BotStoreSection({
   };
 
   const handleUninstall = async (botId: string) => {
-    if (!canManage) return;
+    if (!canManage || !guild) return;
     const newSettings = { ...botSettings };
     if (newSettings[botId]) newSettings[botId].enabled = false;
     try {
-      await updateGuild(guildId, { bot_settings: newSettings });
+      await updateGuild(guildId, { bot_settings: newSettings }, guild.scope);
       setConfiguringId(null);
       await Promise.resolve(onBotSettingsChanged?.());
     } catch (err: unknown) {
@@ -356,11 +358,11 @@ export function BotStoreSection({
   };
 
   const saveConfig = async () => {
-    if (!canManage || !configuringId) return;
+    if (!canManage || !guild || !configuringId) return;
     const normalized = configuringId === 'auto_mod' ? serializeAutoMod(normalizeAutoMod(configState)) : { ...configState };
     const newSettings = { ...botSettings, [configuringId]: { ...normalized, enabled: true } };
     try {
-      await updateGuild(guildId, { bot_settings: newSettings });
+      await updateGuild(guildId, { bot_settings: newSettings }, guild.scope);
       setConfiguringId(null);
       await Promise.resolve(onBotSettingsChanged?.());
     } catch (err: unknown) {
@@ -471,9 +473,9 @@ export function BotStoreSection({
             {configuringId === 'welcome_bot' && (
               <>
                 <div>
-                  <label className="settings-label">Welcome Channel</label>
+                  <label htmlFor={`${formId}-welcome-channel`} className="settings-label">Welcome Channel</label>
                   <select
-                    aria-label="Welcome Channel"
+                    id={`${formId}-welcome-channel`} aria-label="Welcome Channel"
                     value={String(configState.channel_id || '')}
                     onChange={(e) => setConfigState({ ...configState, channel_id: e.target.value })}
                     className="select-field"
@@ -484,9 +486,9 @@ export function BotStoreSection({
                   </select>
                 </div>
                 <div>
-                  <label className="settings-label">Message Template</label>
+                  <label htmlFor={`${formId}-message-template`} className="settings-label">Message Template</label>
                   <textarea
-                    aria-label="Message Template"
+                    id={`${formId}-message-template`} aria-label="Message Template"
                     value={String(configState.message_template || '')}
                     onChange={(e) => setConfigState({ ...configState, message_template: e.target.value })}
                     className="w-full h-24 p-3 rounded-lg border border-border-subtle bg-bg-secondary text-sm text-text-primary outline-none transition-colors focus:border-interactive-normal resize-none"
@@ -500,15 +502,15 @@ export function BotStoreSection({
               <>
                 <div className="grid gap-3 md:grid-cols-2">
                   <div>
-                    <label className="settings-label">Mod Log Channel</label>
-                    <select aria-label="Mod Log Channel" className="select-field" value={autoModConfig.mod_log_channel_id || ''} onChange={(e) => setAutoModConfig({ ...autoModConfig, mod_log_channel_id: e.target.value || undefined })}>
+                    <label htmlFor={`${formId}-mod-log-channel`} className="settings-label">Mod Log Channel</label>
+                    <select id={`${formId}-mod-log-channel`} aria-label="Mod Log Channel" className="select-field" value={autoModConfig.mod_log_channel_id || ''} onChange={(e) => setAutoModConfig({ ...autoModConfig, mod_log_channel_id: e.target.value || undefined })}>
                       <option value="">Disabled</option>
                       {textLikeChannels.map((channel) => (<option key={channel.id} value={channel.id}>#{channel.name || channel.id}</option>))}
                     </select>
                   </div>
                   <div>
-                    <label className="settings-label">Quarantine Channel</label>
-                    <select aria-label="Quarantine Channel" className="select-field" value={autoModConfig.quarantine_channel_id || ''} onChange={(e) => setAutoModConfig({ ...autoModConfig, quarantine_channel_id: e.target.value || undefined })}>
+                    <label htmlFor={`${formId}-quarantine-channel`} className="settings-label">Quarantine Channel</label>
+                    <select id={`${formId}-quarantine-channel`} aria-label="Quarantine Channel" className="select-field" value={autoModConfig.quarantine_channel_id || ''} onChange={(e) => setAutoModConfig({ ...autoModConfig, quarantine_channel_id: e.target.value || undefined })}>
                       <option value="">Disabled</option>
                       {textLikeChannels.map((channel) => (<option key={channel.id} value={channel.id}>#{channel.name || channel.id}</option>))}
                     </select>

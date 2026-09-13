@@ -261,7 +261,7 @@ export function SearchOverlay({
     return (
       <aside
         ref={panelRef}
-        role="complementary"
+
         aria-label="Search messages"
         tabIndex={-1}
         data-testid="context-panel"

@@ -1,7 +1,7 @@
+import { useCurrentUser } from '../hooks/useCurrentUser';
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
 import { ArrowLeft, Users, Server, Settings, BarChart3, Shield, HardDrive, Globe2, type LucideIcon } from 'lucide-react';
-import { useAuthStore } from '../stores/authStore';
 import { isAdmin } from '../types';
 import { Button } from '../components/ui/Button';
 import { cn } from '../lib/utils';
@@ -27,7 +27,7 @@ const NAV: Array<{ id: Tab; label: string; icon: LucideIcon }> = [
 
 export function AdminPage() {
   const navigate = useNavigate();
-  const currentUser = useAuthStore((s) => s.user);
+  const currentUser = useCurrentUser();
   const [activeTab, setActiveTab] = useState<Tab>('overview');
 
   if (!currentUser) {

@@ -1,17 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { useAuthStore } from '../stores/authStore';
-import { useAccountStore } from '../stores/accountStore';
-import { useServerListStore } from '../stores/serverListStore';
 import {
   getStoredServerUrl,
   getCurrentOriginServerUrl,
-  setStoredServerUrl,
   clearStoredServerUrl,
 } from '../lib/config/apiBaseUrl';
-import { hasAccount } from '../lib/account';
 import { authApi } from '../api/auth';
-import { getRefreshToken, setAccessToken, setRefreshToken } from '../lib/authToken';
+import { instanceApi } from '../api/instance';
+import { setAccessToken, setRefreshToken } from '../lib/authToken';
 import { MIN_PASSWORD_LENGTH } from '../lib/constants';
 import { ErrorBanner } from '../components/ui/Feedback';
 import { Button } from '../components/ui/Button';
@@ -125,52 +122,30 @@ export function LoginPage() {
     };
   }, []);
 
+  // A server nobody has claimed yet has no accounts at all, so "Welcome back"
+  // is a dead end: send the operator to the claim flow instead.
+  useEffect(() => {
+    let cancelled = false;
+    instanceApi
+      .getSetupStatus()
+      .then(({ data }) => {
+        if (!cancelled && data.setup_required) navigate('/setup-server', { replace: true });
+      })
+      .catch(() => {
+        // An unreachable server is reported by the sign-in attempt itself;
+        // never assume setup state from a failed request.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [navigate]);
+
   const handleChangeServer = () => {
     clearStoredServerUrl();
     navigate('/connect');
   };
 
   const completeLoginFlow = async () => {
-    // If the user already has a local keypair, attach it to this server account.
-    if (hasAccount()) {
-      const account = useAccountStore.getState();
-      if (account.isUnlocked && account.publicKey) {
-        try {
-          // Password required — see authApi.attachPublicKey.
-          const { data } = await authApi.attachPublicKey(account.publicKey, password);
-          if (data.token && data.user) {
-            setAccessToken(data.token);
-            if (data.refresh_token) setRefreshToken(data.refresh_token);
-            useAuthStore.setState({ token: data.token, user: data.user as import('../types').User });
-          }
-        } catch {
-          // Non-fatal: pubkey may already be attached or server may not support it yet
-        }
-      }
-    }
-
-    // Add to server list if not already there
-    if (serverUrl) {
-      setStoredServerUrl(serverUrl);
-      const serverStore = useServerListStore.getState();
-      const existingServer = serverStore.getServerByUrl(serverUrl);
-      const token = useAuthStore.getState().token;
-      const refreshToken = getRefreshToken();
-      if (!existingServer) {
-        let serverName = serverUrl;
-        try {
-          serverName = new URL(serverUrl).host;
-        } catch {
-          // Keep raw URL as name if parsing fails.
-        }
-        const serverId = serverStore.addServer(serverUrl, serverName, token || undefined);
-        serverStore.updateRefreshToken(serverId, refreshToken);
-      } else if (token) {
-        serverStore.updateToken(existingServer.id, token);
-        serverStore.updateRefreshToken(existingServer.id, refreshToken);
-      }
-    }
-
     let pendingInvite: string | null = null;
     try {
       pendingInvite = sessionStorage.getItem('paracord:pending-invite');
@@ -209,7 +184,7 @@ export function LoginPage() {
       // Normal login — set auth state
       if (data.token && data.user) {
         setAccessToken(data.token);
-        if (data.refresh_token) setRefreshToken(data.refresh_token);
+        setRefreshToken(data.refresh_token ?? null);
         useAuthStore.setState({ token: data.token, user: data.user as import('../types').User });
         await useAuthStore.getState().fetchUser();
       }
@@ -244,7 +219,7 @@ export function LoginPage() {
       const data = response.data;
       if (data.token && data.user) {
         setAccessToken(data.token);
-        if (data.refresh_token) setRefreshToken(data.refresh_token);
+        setRefreshToken(data.refresh_token ?? null);
         useAuthStore.setState({ token: data.token, user: data.user as import('../types').User });
         await useAuthStore.getState().fetchUser();
       }

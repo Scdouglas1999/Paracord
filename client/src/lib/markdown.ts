@@ -265,7 +265,7 @@ function renderInline(text: string, guildId?: string, mentionMap?: Map<string, s
           },
           token.content,
         );
-      case 'link':
+      case 'link': {
         const safeHref = token.href ? safeExternalUrl(token.href) : null;
         if (!safeHref) {
           return token.content;
@@ -281,6 +281,7 @@ function renderInline(text: string, guildId?: string, mentionMap?: Map<string, s
           },
           token.content,
         );
+      }
       case 'customemoji':
         if (!guildId || !token.emojiId || !token.emojiName) {
           return token.content;
@@ -539,7 +540,7 @@ export function stripMarkdown(text: string): string {
     .replace(/__(.+?)__/g, '$1')
     .replace(/~~(.+?)~~/g, '$1')
     .replace(/\|\|(.+?)\|\|/g, '$1')
-    .replace(/\*([^\*\n]+)\*/g, '$1')
+    .replace(/\*([^*\n]+)\*/g, '$1')
     .replace(/_([^_\n]+)_/g, '$1')
     .replace(/^>\s?/gm, '')
     .replace(/^\s*[-*]\s+/gm, '')

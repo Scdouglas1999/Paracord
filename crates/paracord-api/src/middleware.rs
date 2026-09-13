@@ -455,3 +455,50 @@ mod tests {
         assert!(!allows_query_download_ticket(&parts));
     }
 }
+
+pub const HISTORY_EPOCH_HEADER: &str = "x-paracord-history-epoch";
+
+/// Refuse requests anchored in another database history before any handler can
+/// mutate data, including endpoints authenticated by tokens other than AuthUser.
+/// Metadata on error responses lets the client recognize a restored database
+/// without mistaking invalidated credentials for an ordinary token refresh.
+/// Clients adopt epochs only through an authenticated bootstrap/handshake.
+pub async fn database_history_middleware(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let mut values = request.headers().get_all(HISTORY_EPOCH_HEADER).iter();
+    let result = match values.next() {
+        None => Ok(()),
+        Some(value) => {
+            let epoch = value.to_str().ok();
+            if values.next().is_some()
+                || epoch.and_then(|epoch| {
+                    uuid::Uuid::parse_str(epoch)
+                        .ok()
+                        .map(|parsed| !parsed.is_nil() && parsed.to_string() == epoch)
+                }) != Some(true)
+            {
+                Err(ApiError::BadRequest(
+                    "Invalid database history epoch".into(),
+                ))
+            } else if epoch != Some(state.database_history_epoch.as_str()) {
+                Err(ApiError::HistoryChanged)
+            } else {
+                Ok(())
+            }
+        }
+    };
+    let mut response = match result {
+        Ok(()) => next.run(request).await,
+        Err(error) => error.into_response(),
+    };
+    response.headers_mut().insert(
+        HISTORY_EPOCH_HEADER,
+        axum::http::HeaderValue::from_str(&state.database_history_epoch)
+            .expect("AppState contains a validated database history UUID"),
+    );
+    response
+}

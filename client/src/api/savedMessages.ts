@@ -17,10 +17,10 @@ export interface SavedMessagesResponse {
 }
 
 export const savedMessagesApi = {
-  list: (limit = 50) =>
+  list: async (limit = 50) =>
     getApi().get<SavedMessagesResponse>('/users/@me/saved-messages', { params: { limit } }),
-  save: (messageId: string) =>
+  save: async (messageId: string) =>
     getApi().put<{ message_id: string; saved_at: string }>(`/users/@me/saved-messages/${messageId}`),
-  remove: (messageId: string) =>
+  remove: async (messageId: string) =>
     getApi().delete(`/users/@me/saved-messages/${messageId}`),
 };

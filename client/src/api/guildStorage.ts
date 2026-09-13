@@ -24,15 +24,15 @@ export interface GuildFile {
 }
 
 export const guildStorageApi = {
-  getUsage: (guildId: string) =>
+  getUsage: async (guildId: string) =>
     getApi().get<GuildStorageInfo>(`/guilds/${guildId}/storage`),
 
-  updatePolicy: (guildId: string, policy: Partial<GuildStoragePolicy>) =>
+  updatePolicy: async (guildId: string, policy: Partial<GuildStoragePolicy>) =>
     getApi().patch(`/guilds/${guildId}/storage`, policy),
 
-  listFiles: (guildId: string, params?: { before?: string; limit?: number }) =>
+  listFiles: async (guildId: string, params?: { before?: string; limit?: number }) =>
     getApi().get<GuildFile[]>(`/guilds/${guildId}/files`, { params }),
 
-  deleteFiles: (guildId: string, ids: string[]) =>
+  deleteFiles: async (guildId: string, ids: string[]) =>
     getApi().delete(`/guilds/${guildId}/files`, { data: { attachment_ids: ids } }),
 };

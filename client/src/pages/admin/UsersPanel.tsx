@@ -1,9 +1,9 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useCurrentUser } from '../../hooks/useCurrentUser';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Shield, ShieldOff, Trash2, Search, ArrowUp, ArrowDown, SearchX } from 'lucide-react';
 import { adminApi } from '../../api/admin';
 import { extractApiError } from '../../api/client';
 import { toast } from '../../stores/toastStore';
-import { useAuthStore } from '../../stores/authStore';
 import { isAdmin, UserFlags } from '../../types';
 import { confirm } from '../../stores/confirmStore';
 import { Input } from '../../components/ui/Input';
@@ -28,7 +28,7 @@ function initials(name: string): string {
 }
 
 export function UsersPanel() {
-  const currentUser = useAuthStore((s) => s.user);
+  const currentUser = useCurrentUser();
   const [users, setUsers] = useState<UserRow[]>([]);
   const [total, setTotal] = useState(0);
   const [cursor, setCursor] = useState<number | null>(null);
@@ -39,7 +39,7 @@ export function UsersPanel() {
   const [sortAsc, setSortAsc] = useState(true);
   const limit = 25;
 
-  const fetchUsers = () => {
+  const fetchUsers = useCallback(() => {
     adminApi
       .getUsers({ cursor: cursor ?? undefined, limit })
       .then(({ data }) => {
@@ -50,11 +50,11 @@ export function UsersPanel() {
       .catch((err) => {
         toast.error(`Failed to load users: ${extractApiError(err)}`);
       });
-  };
+  }, [cursor]);
 
   useEffect(() => {
     fetchUsers();
-  }, [cursor]);
+  }, [fetchUsers]);
 
   const toggleAdmin = async (userId: string, currentFlags: number) => {
     const newFlags = isAdmin(currentFlags)

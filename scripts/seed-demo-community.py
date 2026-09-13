@@ -10,8 +10,10 @@ Usage:
     python3 scripts/seed-demo-community.py
     PARACORD_BASE=https://127.0.0.1:8443 python3 scripts/seed-demo-community.py
 
-Requires: requests, pillow. Point it at a *throwaway* instance — the first
-account it registers becomes the server owner.
+Requires: requests, pillow. Point it at a *throwaway* instance started with
+PARACORD_SETUP_REQUIRE_CLAIM=false, so the first account this script registers
+becomes the server owner. Without that the instance waits to be claimed at
+/setup-server and refuses every registration, including this one.
 """
 import io
 import json

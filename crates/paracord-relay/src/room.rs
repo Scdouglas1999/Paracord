@@ -13,13 +13,30 @@ use paracord_transport::stream::{
 /// Maximum number of participants per room.
 const MAX_PARTICIPANTS: usize = 50;
 
-/// Count of whole-room deep clones taken via [`MediaRoomManager::get_room`].
-///
-/// Test-only instrumentation: the control plane must never deep-clone a room, so
-/// the availability regression tests drive control messages and assert this
-/// counter does not move.
+// Count of whole-room deep clones taken via `MediaRoomManager::get_room` on the
+// *current thread*.
+//
+// Test-only instrumentation: the control plane must never deep-clone a room, so
+// the availability regression tests drive control messages and assert this
+// counter does not move. It is deliberately thread-local — a process-wide
+// counter is moved by every other test running in parallel, which makes the
+// assertion measure test scheduling rather than the control plane.
 #[cfg(test)]
-pub(crate) static GET_ROOM_CLONES: AtomicU64 = AtomicU64::new(0);
+thread_local! {
+    static GET_ROOM_CLONES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Zero this thread's deep-clone counter before driving a control path.
+#[cfg(test)]
+pub(crate) fn reset_get_room_clones() {
+    GET_ROOM_CLONES.with(|clones| clones.set(0));
+}
+
+/// Whole-room deep clones taken on this thread since the last reset.
+#[cfg(test)]
+pub(crate) fn get_room_clones() -> u64 {
+    GET_ROOM_CLONES.with(std::cell::Cell::get)
+}
 
 /// A media room containing participants who can exchange audio/video.
 #[derive(Debug, Clone)]
@@ -88,6 +105,7 @@ pub struct MediaRoomManager {
     /// before this change, a deep clone of the entire room) for every media
     /// packet server-wide.
     room_generations: DashMap<String, Arc<AtomicU64>>,
+    membership_gates: std::sync::Mutex<HashMap<i64, std::sync::Weak<std::sync::Mutex<()>>>>,
 }
 
 impl MediaRoomManager {
@@ -99,7 +117,80 @@ impl MediaRoomManager {
         Self {
             rooms: DashMap::new(),
             room_generations: DashMap::new(),
+            membership_gates: std::sync::Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Per-account membership gate.
+    ///
+    /// Every mutation that can change *which* session owns a user's membership
+    /// (join, leave, restore) takes this gate, and so does every relay mutation
+    /// performed on behalf of one connection ([`Self::with_participant_session`]).
+    /// A late cleanup from a superseded session therefore cannot interleave with
+    /// its replacement's join.
+    ///
+    /// The map holds `Weak` handles and is swept on every miss, so it cannot grow
+    /// past the set of accounts that currently hold a gate. Callers that take the
+    /// gate repeatedly (the relay's per-datagram fence) must cache the returned
+    /// `Arc` rather than re-resolving it: resolving takes a process-wide lock.
+    pub(crate) fn membership_gate(&self, user_id: i64) -> Arc<std::sync::Mutex<()>> {
+        let mut gates = self
+            .membership_gates
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(gate) = gates.get(&user_id).and_then(std::sync::Weak::upgrade) {
+            return gate;
+        }
+        gates.retain(|_, gate| gate.strong_count() > 0);
+        let gate = Arc::new(std::sync::Mutex::new(()));
+        gates.insert(user_id, Arc::downgrade(&gate));
+        gate
+    }
+
+    /// Lock-free check that `expected` is still the session that owns `user_id`'s
+    /// membership of `room_id`.
+    ///
+    /// This is the read-only half of [`Self::with_participant_session`], for hot
+    /// paths that only need to stop (not to mutate) once a connection has been
+    /// superseded.
+    pub fn participant_session_matches(&self, room_id: &str, user_id: i64, expected: &str) -> bool {
+        self.rooms.get(room_id).is_some_and(|room| {
+            room.participants
+                .get(&user_id)
+                .is_some_and(|participant| participant.session_id == expected)
+        })
+    }
+
+    /// Runs synchronous relay mutations only while the authenticated membership
+    /// receipt still owns this participant. The closure must not join/leave
+    /// (the gate is not reentrant) and must not block.
+    pub fn with_participant_session<R>(
+        &self,
+        room_id: &str,
+        user_id: i64,
+        expected: &str,
+        run: impl FnOnce() -> R,
+    ) -> Option<R> {
+        let gate = self.membership_gate(user_id);
+        self.with_held_membership_gate(&gate, room_id, user_id, expected, run)
+    }
+
+    /// [`Self::with_participant_session`] against an already-resolved gate.
+    ///
+    /// `gate` **must** be the gate [`Self::membership_gate`] returns for
+    /// `user_id`; callers cache it so the hot path never takes the process-wide
+    /// gate-registry lock.
+    pub(crate) fn with_held_membership_gate<R>(
+        &self,
+        gate: &std::sync::Mutex<()>,
+        room_id: &str,
+        user_id: i64,
+        expected: &str,
+        run: impl FnOnce() -> R,
+    ) -> Option<R> {
+        let _membership = gate.lock().unwrap_or_else(|error| error.into_inner());
+        self.participant_session_matches(room_id, user_id, expected)
+            .then(run)
     }
 
     /// Current routing generation for one room. Changes whenever that room's
@@ -150,6 +241,8 @@ impl MediaRoomManager {
         channel_id: i64,
         participant: MediaParticipant,
     ) -> Result<Vec<MediaParticipant>, RoomError> {
+        let gate = self.membership_gate(participant.user_id);
+        let _membership = gate.lock().unwrap_or_else(|error| error.into_inner());
         let room_id = self.get_or_create_room(guild_id, channel_id);
         let user_id = participant.user_id;
 
@@ -158,7 +251,7 @@ impl MediaRoomManager {
             .get_mut(&room_id)
             .ok_or_else(|| RoomError::NotFound(room_id.clone()))?;
 
-        if room.is_full() {
+        if room.is_full() && !room.participants.contains_key(&user_id) {
             return Err(RoomError::RoomFull(room.max_participants));
         }
 
@@ -188,6 +281,35 @@ impl MediaRoomManager {
         Ok(participants)
     }
 
+    /// Undo an uncommitted replacement without touching a later receipt.
+    pub fn restore_participant_if_session(
+        &self,
+        guild_id: i64,
+        channel_id: i64,
+        user_id: i64,
+        expected: &str,
+        previous: Option<MediaParticipant>,
+    ) {
+        if let Some(previous) = previous {
+            let gate = self.membership_gate(user_id);
+            let _membership = gate.lock().unwrap_or_else(|error| error.into_inner());
+            let room_id = Self::make_room_id(guild_id, channel_id);
+            if let Some(mut room) = self.rooms.get_mut(&room_id) {
+                if room
+                    .participants
+                    .get(&user_id)
+                    .is_some_and(|participant| participant.session_id == expected)
+                {
+                    room.participants.insert(user_id, previous);
+                    drop(room);
+                    self.bump_generation(&room_id);
+                }
+            }
+        } else {
+            self.leave_room_if_session(guild_id, channel_id, user_id, Some(expected));
+        }
+    }
+
     /// Remove a participant from a room.
     /// Returns the remaining participants, or None if the room was destroyed.
     pub fn leave_room(
@@ -196,36 +318,49 @@ impl MediaRoomManager {
         channel_id: i64,
         user_id: i64,
     ) -> Option<Vec<MediaParticipant>> {
+        self.leave_room_if_session(guild_id, channel_id, user_id, None)
+    }
+
+    /// Preserve a replacement participant when an earlier connection/REST leave arrives late.
+    pub fn leave_room_if_session(
+        &self,
+        guild_id: i64,
+        channel_id: i64,
+        user_id: i64,
+        expected: Option<&str>,
+    ) -> Option<Vec<MediaParticipant>> {
+        use dashmap::mapref::entry::Entry;
+        let gate = self.membership_gate(user_id);
+        let _membership = gate.lock().unwrap_or_else(|error| error.into_inner());
         let room_id = Self::make_room_id(guild_id, channel_id);
-
-        let result = {
-            let mut room = self.rooms.get_mut(&room_id)?;
-            room.participants.remove(&user_id);
-
-            // Remove subscriptions to the leaving user.
-            for (_, p) in room.participants.iter_mut() {
-                p.unsubscribe(user_id);
-            }
-
-            if room.is_empty() {
-                None
-            } else {
-                Some(room.participants.values().cloned().collect())
-            }
+        let Entry::Occupied(mut entry) = self.rooms.entry(room_id.clone()) else {
+            return None;
         };
-
-        // If the room is empty, remove it from the map. Drop its generation
-        // counter with it so the per-room map cannot grow without bound across
-        // the lifetime of the process.
-        if result.is_none() {
-            self.rooms.remove(&room_id);
-            self.room_generations.remove(&room_id);
-            tracing::info!(room_id = %room_id, "room destroyed (last participant left)");
-        } else {
-            self.bump_generation(&room_id);
+        if expected.is_some_and(|id| {
+            !entry
+                .get()
+                .participants
+                .get(&user_id)
+                .is_some_and(|participant| participant.session_id == id)
+        }) {
+            return None;
         }
-
-        result
+        let room = entry.get_mut();
+        room.participants.remove(&user_id);
+        for participant in room.participants.values_mut() {
+            participant.unsubscribe(user_id);
+        }
+        if room.is_empty() {
+            // Keep removal atomic with the emptiness check. A new join cannot
+            // be inserted between that check and removal of the map entry.
+            self.room_generations.remove(&room_id);
+            entry.remove();
+            None
+        } else {
+            let remaining = room.participants.values().cloned().collect();
+            self.bump_generation(&room_id);
+            Some(remaining)
+        }
     }
 
     /// Get a snapshot of a room.
@@ -237,7 +372,7 @@ impl MediaRoomManager {
     /// regression tests assert that.
     pub fn get_room(&self, room_id: &str) -> Option<MediaRoom> {
         #[cfg(test)]
-        GET_ROOM_CLONES.fetch_add(1, Ordering::Relaxed);
+        GET_ROOM_CLONES.with(|clones| clones.set(clones.get() + 1));
         self.rooms.get(room_id).map(|r| r.clone())
     }
 
@@ -985,5 +1120,107 @@ mod tests {
         assert_eq!(participant.video_capabilities.len(), 1);
         assert_eq!(participant.video_capabilities[0].codec, VideoCodec::H264);
         assert!(participant.video_capabilities[0].encode_hardware);
+    }
+
+    // ── Receipt-scoped membership ───────────────────────────────────────────
+    //
+    // A user's membership is owned by exactly one call receipt. A leave or a
+    // rollback that names an older receipt is a message from a call that no
+    // longer exists, and must not touch the call that replaced it.
+
+    #[test]
+    fn leave_room_if_session_preserves_a_replacement_receipt() {
+        let mgr = MediaRoomManager::new();
+        mgr.join_room(1, 100, MediaParticipant::new(7, "call-1".into()))
+            .unwrap();
+        mgr.join_room(1, 100, MediaParticipant::new(8, "other".into()))
+            .unwrap();
+        // The user rejoins: a new receipt takes over the same membership.
+        mgr.join_room(1, 100, MediaParticipant::new(7, "call-2".into()))
+            .unwrap();
+
+        // The first call's delayed leave names its own receipt and is ignored.
+        assert!(mgr
+            .leave_room_if_session(1, 100, 7, Some("call-1"))
+            .is_none());
+        assert!(mgr.participant_session_matches("1:100", 7, "call-2"));
+
+        // The receipt that owns the membership can still end it.
+        let remaining = mgr
+            .leave_room_if_session(1, 100, 7, Some("call-2"))
+            .expect("the owning receipt ends the membership");
+        assert_eq!(remaining.len(), 1);
+        assert!(!mgr.participant_session_matches("1:100", 7, "call-2"));
+    }
+
+    #[test]
+    fn an_unreceipted_leave_still_removes_whoever_is_current() {
+        // The legacy path (an old client that sends no receipt, and every
+        // account-scoped eviction) must keep working.
+        let mgr = MediaRoomManager::new();
+        mgr.join_room(1, 100, MediaParticipant::new(7, "call-1".into()))
+            .unwrap();
+        assert!(mgr.leave_room(1, 100, 7).is_none());
+        assert!(mgr.get_room("1:100").is_none());
+    }
+
+    #[test]
+    fn restore_participant_if_session_never_clobbers_a_newer_receipt() {
+        let mgr = MediaRoomManager::new();
+        let previous = MediaParticipant::new(7, "call-1".into());
+        mgr.join_room(1, 100, previous.clone()).unwrap();
+
+        // An admission that has not committed replaces the participant...
+        mgr.join_room(1, 100, MediaParticipant::new(7, "call-2".into()))
+            .unwrap();
+        // ...and then loses its durable write, so it rolls itself back.
+        mgr.restore_participant_if_session(1, 100, 7, "call-2", Some(previous.clone()));
+        assert!(
+            mgr.participant_session_matches("1:100", 7, "call-1"),
+            "a rolled-back admission restores the receipt it displaced"
+        );
+
+        // A third call arrives before the rollback runs: the rollback must not
+        // resurrect the receipt that call replaced.
+        mgr.join_room(1, 100, MediaParticipant::new(7, "call-3".into()))
+            .unwrap();
+        mgr.restore_participant_if_session(1, 100, 7, "call-2", Some(previous));
+        assert!(
+            mgr.participant_session_matches("1:100", 7, "call-3"),
+            "a late rollback must not displace a newer receipt"
+        );
+    }
+
+    #[test]
+    fn restoring_no_previous_membership_removes_only_the_uncommitted_receipt() {
+        let mgr = MediaRoomManager::new();
+        // A first-time join that fails to commit leaves nothing behind.
+        mgr.join_room(1, 100, MediaParticipant::new(7, "call-1".into()))
+            .unwrap();
+        mgr.restore_participant_if_session(1, 100, 7, "call-1", None);
+        assert!(mgr.get_room("1:100").is_none());
+
+        // The same rollback arriving after a newer join leaves it alone.
+        mgr.join_room(1, 100, MediaParticipant::new(7, "call-2".into()))
+            .unwrap();
+        mgr.restore_participant_if_session(1, 100, 7, "call-1", None);
+        assert!(mgr.participant_session_matches("1:100", 7, "call-2"));
+    }
+
+    #[test]
+    fn rejoining_a_full_room_with_a_new_receipt_is_not_rejected_as_full() {
+        let mgr = MediaRoomManager::new();
+        for user_id in 1..=MAX_PARTICIPANTS as i64 {
+            mgr.join_room(1, 100, make_participant(user_id)).unwrap();
+        }
+        // A participant already in the room re-admits under a new receipt.
+        mgr.join_room(1, 100, MediaParticipant::new(1, "call-2".into()))
+            .unwrap();
+        assert!(mgr.participant_session_matches("1:100", 1, "call-2"));
+        // A genuinely new participant is still refused.
+        assert!(matches!(
+            mgr.join_room(1, 100, make_participant(9_999)),
+            Err(RoomError::RoomFull(_))
+        ));
     }
 }

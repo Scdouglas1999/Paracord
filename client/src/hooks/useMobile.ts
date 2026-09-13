@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 
+// Tailwind md starts at 768px; the mobile overlays must stop below it.
 export const DEFAULT_MOBILE_MAX_WIDTH = 768;
 
 function buildMediaQuery(maxWidthPx: number): string {
-  return `(max-width: ${maxWidthPx}px)`;
+  return `(width < ${maxWidthPx}px)`;
 }
 
 export function useMobile(maxWidthPx: number = DEFAULT_MOBILE_MAX_WIDTH): boolean {

@@ -56,6 +56,8 @@ export interface MessageHeader {
   ek?: string;
   /** ID of consumed one-time prekey — only in first message. */
   opk_id?: number;
+  /** Recipient signed-prekey ID used for X3DH, retained across key rotations. */
+  spk_id?: number;
 }
 
 /** Prekey bundle fetched from the server for a peer. */
@@ -92,6 +94,8 @@ export interface LocalPrekeyStore {
     privateKey: Uint8Array;
   } | null;
   nextOPKId: number;
+  /** Previous signed keys retained for initial messages sent before rotation. */
+  signedPrekeyArchive?: Array<LocalPrekeyStore['signedPrekey']>;
 }
 
 /** Serialized form of LocalPrekeyStore for persistence. */
@@ -113,6 +117,7 @@ export interface SerializedLocalPrekeyStore {
     privateKey: string;
   } | null;
   nextOPKId: number;
+  signedPrekeyArchive?: Array<SerializedLocalPrekeyStore['signedPrekey']>;
 }
 
 // Protocol constants

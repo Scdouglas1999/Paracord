@@ -65,6 +65,7 @@ import { resolveUserAvatarUrl } from '../../lib/userAvatar';
 import { displayName as resolveDisplayName } from '../../lib/displayName';
 import { formatShortcut } from '../../lib/keyboardShortcuts';
 import { CustomCSS } from '../customization/CustomCSS';
+import { VoiceConnectionCheckButton } from '../voice/VoiceConnectionCheckButton';
 import { ThemeSelector } from '../customization/ThemeSelector';
 
 interface UserSettingsProps {
@@ -266,15 +267,16 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
   useEffect(() => {
     void fetchSettings();
-  }, []);
+  }, [fetchSettings]);
 
+  const { id: profile_id, display_name: profile_display_name, bio: profile_bio, pronouns: profile_pronouns, linked_accounts: profile_linked_accounts, email: profile_email, avatar_hash: profile_avatar_hash, avatar: profile_avatar } = user ?? {};
   useEffect(() => {
-    if (user) {
-      setDisplayName(user.display_name || '');
-      setBio(user.bio || '');
-      setPronouns(user.pronouns || '');
-      const linked = Array.isArray(user.linked_accounts)
-        ? user.linked_accounts
+    if (profile_id) {
+      setDisplayName(profile_display_name || '');
+      setBio(profile_bio || '');
+      setPronouns(profile_pronouns || '');
+      const linked = Array.isArray(profile_linked_accounts)
+        ? profile_linked_accounts
             .filter(
               (entry): entry is { label: string; url: string } =>
                 Boolean(
@@ -289,11 +291,11 @@ export function UserSettings({ onClose }: UserSettingsProps) {
             .join('\n')
         : '';
       setLinkedAccountsInput(linked);
-      setAccountNewEmail(user.email || '');
+      setAccountNewEmail(profile_email || '');
       setAvatarFile(null);
-      setAvatarPreview(resolveUserAvatarUrl(user.avatar_hash || user.avatar));
+      setAvatarPreview(resolveUserAvatarUrl(profile_avatar_hash || profile_avatar));
     }
-  }, [user?.id, user?.display_name, user?.bio, user?.pronouns, user?.linked_accounts, user?.email, user?.avatar_hash, user?.avatar]);
+  }, [profile_id, profile_display_name, profile_bio, profile_pronouns, profile_linked_accounts, profile_email, profile_avatar_hash, profile_avatar]);
 
   useEffect(() => {
     if (settings) {
@@ -309,7 +311,13 @@ export function UserSettings({ onClose }: UserSettingsProps) {
         normalizeDetectedAppId
       );
 
-      setTheme(settings.theme);
+      // The server stores theme as an opaque string; collapse unknown values.
+      const serverTheme = settings.theme;
+      setTheme(
+        serverTheme === 'light' || serverTheme === 'amoled' || serverTheme === 'high-contrast'
+          ? serverTheme
+          : 'dark',
+      );
       setLocale(settings.locale || 'en-US');
       setMessageCompact(settings.message_display_compact || false);
       setKnownActivityApps(known);
@@ -1762,6 +1770,25 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                       description="Levels your mic volume. Can add hiss on some setups."
                       on={Boolean(mergedNotifications['autoGainControl'] ?? false)}
                       onToggle={() => setNotifications((prev) => ({ ...prev, autoGainControl: !(prev['autoGainControl'] ?? false) }))}
+                    />
+                  </div>
+                </section>
+
+                <section className="mt-9 border-t border-border-subtle pt-8">
+                  <h3 className="text-section uppercase text-text-muted">Trouble with calls</h3>
+                  <p className="mt-2 max-w-xl text-sm text-text-secondary">
+                    Calls travel over a different network path than chat, so they can fail on their
+                    own. The connection check tests your microphone, speaker, this device&rsquo;s
+                    codec support and the route to the server one step at a time, and explains
+                    whatever it finds. It never joins a call.
+                  </p>
+                  <div className="mt-3">
+                    <VoiceConnectionCheckButton
+                      selection={{
+                        inputDeviceId: selectedAudioInput,
+                        outputDeviceId: selectedAudioOutput,
+                        cameraDeviceId: selectedVideoInput,
+                      }}
                     />
                   </div>
                 </section>

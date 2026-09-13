@@ -39,12 +39,12 @@ describe('snowflakeToMs', () => {
 });
 
 describe('conversationKey', () => {
-  it('composes serverId:channelId', () => {
-    expect(conversationKey('srv1', '12345')).toBe('srv1:12345');
+  it('composes server, account and channel', () => {
+    expect(conversationKey({ serverId: 'srv1', userId: 'viewer' }, '12345')).toBe(JSON.stringify(['srv1', 'viewer', '12345']));
   });
 
   it('disambiguates the same channelId across servers', () => {
-    expect(conversationKey('a', '99')).not.toBe(conversationKey('b', '99'));
+    expect(conversationKey({ serverId: 'a', userId: 'viewer' }, '99')).not.toBe(conversationKey({ serverId: 'b', userId: 'viewer' }, '99'));
   });
 });
 
@@ -60,8 +60,9 @@ describe('ConversationEntry type surface', () => {
     ];
     for (const kind of kinds) {
       const entry: ConversationEntry = {
-        key: conversationKey('s', 'c'),
+        key: conversationKey({ serverId: 's', userId: 'viewer' }, 'c'),
         serverId: 's',
+        scope: { serverId: 's', userId: 'viewer' },
         channelId: 'c',
         guildId: kind === 'dm' || kind === 'group_dm' ? null : 'g',
         kind,
@@ -76,7 +77,14 @@ describe('ConversationEntry type surface', () => {
         pinned: false,
       };
       expect(entry.kind).toBe(kind);
-      expect(entry.key).toBe('s:c');
+      expect(entry.key).toBe(JSON.stringify(['s', 'viewer', 'c']));
     }
   });
+});
+
+it('separates accounts and delimiter-containing identifiers', () => {
+  expect(conversationKey({ serverId: 'a', userId: 'first' }, '100'))
+    .not.toBe(conversationKey({ serverId: 'a', userId: 'second' }, '100'));
+  expect(conversationKey({ serverId: 'a:b', userId: 'c' }, 'd'))
+    .not.toBe(conversationKey({ serverId: 'a', userId: 'b:c' }, 'd'));
 });

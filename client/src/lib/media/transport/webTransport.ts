@@ -12,6 +12,13 @@ export interface StreamControlMessage {
 
 export class WebTransportManager {
   private transport: WebTransport | null = null;
+  private generation = 0;
+  private disposed = false;
+  private readers = new Set<{ cancel(reason?: unknown): Promise<void> }>();
+
+  private current(generation: number, transport = this.transport): boolean {
+    return !this.disposed && this.generation === generation && this.transport === transport;
+  }
   /** Reused for the connection lifetime — avoid getWriter()/releaseLock() per datagram. */
   private datagramWriter: WritableStreamDefaultWriter<Uint8Array> | null = null;
 
@@ -36,6 +43,7 @@ export class WebTransportManager {
   }
 
   async connect(url: string, token: string, certHash?: string): Promise<void> {
+    if (this.disposed) throw new DOMException('Transport was disposed.', 'AbortError');
     this.lastUrl = url;
     this.lastToken = token;
     this.lastCertHash = certHash;
@@ -46,6 +54,20 @@ export class WebTransportManager {
   }
 
   private async establishConnection(url: string, token: string, certHash?: string): Promise<void> {
+    if (this.disposed || !this.shouldReconnect) return;
+    const generation = ++this.generation;
+    const previous = this.transport;
+    this.releaseDatagramWriter();
+    for (const reader of this.readers) void reader.cancel().catch(() => {});
+    this.readers.clear();
+    try { previous?.close(); } catch { /* old connection already closed */ }
+    let transport: WebTransport | null = null;
+    const assertCurrent = () => {
+      if (!this.current(generation, transport)) {
+        transport?.close();
+        throw new DOMException('Transport was superseded.', 'AbortError');
+      }
+    };
     try {
       // When a cert hash is provided (self-signed cert), pass it to the
       // WebTransport constructor so the browser trusts the server.
@@ -60,14 +82,18 @@ export class WebTransportManager {
           }
         : undefined;
 
-      this.transport = new WebTransport(url, options);
-      await this.transport.ready;
-      this.datagramWriter = this.transport.datagrams.writable.getWriter();
+      transport = new WebTransport(url, options);
+      this.transport = transport;
+      await transport.ready;
+      assertCurrent();
+      this.datagramWriter = transport.datagrams.writable.getWriter();
 
       // Send auth on first bidirectional stream
-      const controlStream = await this.transport.createBidirectionalStream();
+      const controlStream = await transport.createBidirectionalStream();
+      assertCurrent();
       const writer = controlStream.writable.getWriter();
       const reader = controlStream.readable.getReader();
+      this.readers.add(reader);
       try {
         const payload = new TextEncoder().encode(JSON.stringify({ type: 'auth', token }));
         const frame = new Uint8Array(4 + payload.byteLength);
@@ -76,11 +102,13 @@ export class WebTransportManager {
         await writer.write(frame);
 
         const { value } = await reader.read();
+        assertCurrent();
         if (!value || value.byteLength < 4) {
           throw new Error('Missing auth acknowledgement');
         }
       } finally {
         writer.releaseLock();
+        this.readers.delete(reader);
         reader.releaseLock();
       }
 
@@ -96,19 +124,21 @@ export class WebTransportManager {
       }
 
       // Start reading datagrams, control messages, and keyframe uni streams
-      this.readDatagrams();
-      this.readIncomingStreamControls();
-      this.readIncomingUniStreams();
+      void this.readDatagrams(generation);
+      void this.readIncomingStreamControls(generation);
+      void this.readIncomingUniStreams(generation);
 
       // Handle connection close
-      this.transport.closed
+      transport.closed
         .then(() => {
-          this.handleClose('Connection closed gracefully');
+          this.handleClose('Connection closed gracefully', generation);
         })
         .catch((err: Error) => {
-          this.handleClose(err.message || 'Connection lost');
+          this.handleClose(err.message || 'Connection lost', generation);
         });
     } catch (err) {
+      try { transport?.close(); } catch { /* already closed */ }
+      if (!this.current(generation, transport)) throw err;
       this.releaseDatagramWriter();
       this.transport = null;
       const msg = err instanceof Error ? err.message : 'Unknown connection error';
@@ -122,7 +152,11 @@ export class WebTransportManager {
   }
 
   async disconnect(): Promise<void> {
+    this.disposed = true;
+    this.generation++;
     this.shouldReconnect = false;
+    for (const reader of this.readers) void reader.cancel().catch(() => {});
+    this.readers.clear();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -164,9 +198,16 @@ export class WebTransportManager {
 
   async sendStreamControl(msg: StreamControlMessage): Promise<void> {
     if (!this.transport) return;
-    const stream = await this.transport.createBidirectionalStream();
+    const transport = this.transport;
+    const generation = this.generation;
+    const stream = await transport.createBidirectionalStream();
     const writer = stream.writable.getWriter();
     try {
+      if (!this.current(generation, transport)) {
+        void stream.readable.cancel().catch(() => {});
+        await writer.abort();
+        return;
+      }
       const json = new TextEncoder().encode(JSON.stringify(msg));
       const frame = new Uint8Array(4 + json.byteLength);
       new DataView(frame.buffer).setUint32(0, json.byteLength, false);
@@ -194,9 +235,12 @@ export class WebTransportManager {
    */
   async sendUniStream(data: Uint8Array): Promise<void> {
     if (!this.transport) return;
-    const stream = await this.transport.createUnidirectionalStream();
+    const transport = this.transport;
+    const generation = this.generation;
+    const stream = await transport.createUnidirectionalStream();
     const writer = stream.getWriter();
     try {
+      if (!this.current(generation, transport)) { await writer.abort(); return; }
       await writer.write(data);
       await writer.close();
     } finally {
@@ -216,13 +260,14 @@ export class WebTransportManager {
     this.restoredCallbacks.push(cb);
   }
 
-  private async readDatagrams(): Promise<void> {
+  private async readDatagrams(generation = this.generation): Promise<void> {
     if (!this.transport) return;
     const reader = this.transport.datagrams.readable.getReader();
+    this.readers.add(reader);
     try {
       while (true) {
         const { value, done } = await reader.read();
-        if (done) break;
+        if (done || !this.current(generation)) break;
         if (value) {
           for (const cb of this.datagramCallbacks) {
             cb(value);
@@ -232,40 +277,44 @@ export class WebTransportManager {
     } catch {
       // Stream closed
     } finally {
+      this.readers.delete(reader);
       reader.releaseLock();
     }
   }
 
-  private async readIncomingStreamControls(): Promise<void> {
+  private async readIncomingStreamControls(generation = this.generation): Promise<void> {
     if (!this.transport?.incomingBidirectionalStreams) return;
     const reader = this.transport.incomingBidirectionalStreams.getReader();
+    this.readers.add(reader);
     try {
       while (true) {
         const { value, done } = await reader.read();
-        if (done) break;
+        if (done || !this.current(generation)) break;
         if (!value) continue;
-        void this.handleIncomingControlStream(value);
+        void this.handleIncomingControlStream(value, generation);
       }
     } catch {
       // Stream closed
     } finally {
+      this.readers.delete(reader);
       reader.releaseLock();
     }
   }
 
-  private async handleIncomingControlStream(stream: WebTransportBidirectionalStream): Promise<void> {
+  private async handleIncomingControlStream(stream: WebTransportBidirectionalStream, generation = this.generation): Promise<void> {
     const reader = stream.readable.getReader();
+    this.readers.add(reader);
     const chunks: Uint8Array[] = [];
     let total = 0;
     try {
       while (true) {
         const { value, done } = await reader.read();
-        if (done) break;
+        if (done || !this.current(generation)) break;
         if (!value) continue;
         chunks.push(value);
         total += value.byteLength;
       }
-      if (total < 4) return;
+      if (!this.current(generation) || total < 4) return;
       const combined = new Uint8Array(total);
       let offset = 0;
       for (const chunk of chunks) {
@@ -282,40 +331,44 @@ export class WebTransportManager {
     } catch {
       // Ignore malformed/closed control streams
     } finally {
+      this.readers.delete(reader);
       reader.releaseLock();
     }
   }
 
-  private async readIncomingUniStreams(): Promise<void> {
+  private async readIncomingUniStreams(generation = this.generation): Promise<void> {
     if (!this.transport?.incomingUnidirectionalStreams) return;
     const reader = this.transport.incomingUnidirectionalStreams.getReader();
+    this.readers.add(reader);
     try {
       while (true) {
         const { value, done } = await reader.read();
-        if (done) break;
+        if (done || !this.current(generation)) break;
         if (!value) continue;
-        void this.handleIncomingUniStream(value);
+        void this.handleIncomingUniStream(value, generation);
       }
     } catch {
       // Stream closed
     } finally {
+      this.readers.delete(reader);
       reader.releaseLock();
     }
   }
 
-  private async handleIncomingUniStream(stream: ReadableStream<Uint8Array>): Promise<void> {
+  private async handleIncomingUniStream(stream: ReadableStream<Uint8Array>, generation = this.generation): Promise<void> {
     const reader = stream.getReader();
+    this.readers.add(reader);
     const chunks: Uint8Array[] = [];
     let total = 0;
     try {
       while (true) {
         const { value, done } = await reader.read();
-        if (done) break;
+        if (done || !this.current(generation)) break;
         if (!value) continue;
         chunks.push(value);
         total += value.byteLength;
       }
-      if (total === 0) return;
+      if (!this.current(generation) || total === 0) return;
       const combined = new Uint8Array(total);
       let offset = 0;
       for (const chunk of chunks) {
@@ -328,11 +381,13 @@ export class WebTransportManager {
     } catch {
       // Ignore truncated/aborted uni streams (a stale keyframe the relay reset).
     } finally {
+      this.readers.delete(reader);
       reader.releaseLock();
     }
   }
 
-  private handleClose(reason: string): void {
+  private handleClose(reason: string, generation = this.generation): void {
+    if (!this.current(generation)) return;
     this.releaseDatagramWriter();
     this.transport = null;
 
@@ -346,10 +401,14 @@ export class WebTransportManager {
   }
 
   private scheduleReconnect(): void {
+    if (this.disposed || !this.shouldReconnect || this.reconnectTimer) return;
+    const generation = this.generation;
     this.reconnectAttempts++;
     // Exponential backoff: 500ms, 1s, 2s, 4s... capped at 30s
     const delayMs = Math.min(500 * Math.pow(2, this.reconnectAttempts - 1), 30_000);
     this.reconnectTimer = setTimeout(async () => {
+      this.reconnectTimer = null;
+      if (this.disposed || !this.shouldReconnect || generation !== this.generation) return;
       try {
         await this.establishConnection(this.lastUrl, this.lastToken, this.lastCertHash);
       } catch {

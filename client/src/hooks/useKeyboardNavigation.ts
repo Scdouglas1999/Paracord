@@ -1,7 +1,9 @@
+import { getAccountChannelView } from '../lib/channelView';
+import { useAvailableGuilds, useSelectedGuildId } from './useGuilds';
+import { useCurrentAccountScope } from './useCurrentUser';
+import { activateGuild } from '../lib/guildNavigation';
 import { useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { useChannelStore } from '../stores/channelStore';
-import { useGuildStore } from '../stores/guildStore';
 import { useUIStore } from '../stores/uiStore';
 import { isTauri } from '../lib/tauriEnv';
 
@@ -21,6 +23,9 @@ import { isTauri } from '../lib/tauriEnv';
 export function useKeyboardNavigation() {
   const navigate = useNavigate();
   const { guildId } = useParams();
+  const guilds = useAvailableGuilds();
+  const selectedGuildId = useSelectedGuildId();
+  const scope = useCurrentAccountScope();
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -69,7 +74,7 @@ export function useKeyboardNavigation() {
         }
         if (
           typeof window !== 'undefined'
-          && window.matchMedia('(max-width: 768px)').matches
+          && window.matchMedia('(width < 768px)').matches
           && !ui.sidebarCollapsed
         ) {
           ui.setSidebarCollapsed(true);
@@ -84,7 +89,7 @@ export function useKeyboardNavigation() {
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f') {
         if (!isEditing) {
           e.preventDefault();
-          const channelId = useChannelStore.getState().selectedChannelId;
+          const channelId = getAccountChannelView(scope).selectedChannelId;
           if (channelId) {
             useUIStore.getState().setContextPanelMode('search');
           }
@@ -108,7 +113,7 @@ export function useKeyboardNavigation() {
 
       // -- Ctrl+Shift+, : open current guild settings --
       if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && e.key === ',') {
-        const currentGuildId = guildId || useGuildStore.getState().selectedGuildId;
+        const currentGuildId = guildId || selectedGuildId;
         if (currentGuildId) {
           e.preventDefault();
           useUIStore.getState().setGuildSettingsId(currentGuildId);
@@ -156,11 +161,10 @@ export function useKeyboardNavigation() {
       // -- Ctrl+Alt+Up / Ctrl+Alt+Down: guild navigation --
       if (e.ctrlKey && e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
         e.preventDefault();
-        const guilds = useGuildStore.getState().guilds;
         if (guilds.length === 0) return;
 
-        const currentGuildId = guildId || useGuildStore.getState().selectedGuildId;
-        const currentIndex = guilds.findIndex((guild) => guild.id === currentGuildId);
+        const currentGuildId = guildId || selectedGuildId;
+        const currentIndex = guilds.findIndex((guild) => guild.id === currentGuildId && guild.scope.serverId === scope?.serverId && guild.scope.userId === scope.userId);
         const startIndex = currentIndex >= 0 ? currentIndex : 0;
         const nextIndex =
           e.key === 'ArrowUp'
@@ -169,8 +173,7 @@ export function useKeyboardNavigation() {
 
         const nextGuild = guilds[nextIndex];
         if (!nextGuild) return;
-        useGuildStore.getState().selectGuild(nextGuild.id);
-        useChannelStore.getState().selectGuild(nextGuild.id);
+        activateGuild(nextGuild);
         navigate(`/app/guilds/${nextGuild.id}`);
         return;
       }
@@ -179,10 +182,10 @@ export function useKeyboardNavigation() {
       if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
         e.preventDefault();
 
-        const currentGuildId = guildId || useGuildStore.getState().selectedGuildId;
+        const currentGuildId = guildId || selectedGuildId;
         if (!currentGuildId) return;
 
-        const channelState = useChannelStore.getState();
+        const channelState = getAccountChannelView(scope);
         const guildChannels = (channelState.channelsByGuild[currentGuildId] || [])
           .filter((c) => c.type !== 4) // exclude categories
           .sort((a, b) => a.position - b.position);
@@ -213,7 +216,7 @@ export function useKeyboardNavigation() {
 
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [navigate, guildId]);
+  }, [navigate, guildId, guilds, selectedGuildId, scope]);
 }
 
 

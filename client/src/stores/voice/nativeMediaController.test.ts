@@ -13,6 +13,7 @@ vi.mock('../../lib/tauriEnv', () => ({
 import { listNativeOutputDevices, switchNativeOutputDevice } from './nativeMediaController';
 
 describe('switchNativeOutputDevice', () => {
+  const owner = { id: 'call-owner', assertCurrent: vi.fn() };
   beforeEach(() => {
     invokeMock.mockReset();
   });
@@ -31,9 +32,9 @@ describe('switchNativeOutputDevice', () => {
       return Promise.resolve(undefined);
     });
 
-    await switchNativeOutputDevice('USB Headset');
+    await switchNativeOutputDevice('USB Headset', owner);
 
-    expect(invokeMock).toHaveBeenCalledWith('voice_switch_output_device', { deviceId: '1' });
+    expect(invokeMock).toHaveBeenCalledWith('voice_switch_output_device', { deviceId: '1', ownerId: 'call-owner' });
   });
 
   it('falls back to index 0 and never throws when the list command is unavailable', async () => {
@@ -44,8 +45,8 @@ describe('switchNativeOutputDevice', () => {
       return Promise.resolve(undefined);
     });
 
-    await expect(switchNativeOutputDevice('Some Device')).resolves.toBeUndefined();
-    expect(invokeMock).toHaveBeenCalledWith('voice_switch_output_device', { deviceId: '0' });
+    await expect(switchNativeOutputDevice('Some Device', owner)).resolves.toBeUndefined();
+    expect(invokeMock).toHaveBeenCalledWith('voice_switch_output_device', { deviceId: '0', ownerId: 'call-owner' });
   });
 
   it('returns an empty list rather than throwing on enumeration failure', async () => {

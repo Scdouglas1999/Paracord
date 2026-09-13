@@ -179,6 +179,11 @@ async fn build_env() -> TestEnv {
     });
 
     let state = AppState {
+        database_history_epoch: paracord_db::server_settings::get_or_create_database_history_epoch(
+            &db,
+        )
+        .await
+        .unwrap(),
         db: db.clone(),
         event_bus,
         config: AppConfig {
@@ -465,7 +470,16 @@ async fn a_socket_closed_for_revocation_cannot_resume_back_in() {
     let (handle, client_tx, mut server_rx) = spawn_session(session, env.state.clone());
     tokio::time::sleep(Duration::from_millis(100)).await;
     bus.dispatch_to_users("MESSAGE_CREATE", json!({ "content": "one" }), vec![user_id]);
-    assert!(next_text(&mut server_rx, 1_000).await.is_some());
+    // Resume from the checkpoint this socket actually acknowledged: a sequence
+    // the session never reached is a future checkpoint, and the gateway
+    // deliberately requires a fresh IDENTIFY for those.
+    let delivered = next_text(&mut server_rx, 1_000)
+        .await
+        .expect("the first session receives its event");
+    let checkpoint = delivered
+        .get("s")
+        .and_then(Value::as_u64)
+        .expect("a dispatched frame carries its sequence");
     drop(client_tx);
     timeout(Duration::from_secs(2), handle)
         .await
@@ -474,7 +488,7 @@ async fn a_socket_closed_for_revocation_cannot_resume_back_in() {
 
     // 2. RESUME works while the credential is good.
     let (mut client, tx, _srv, _srv_rx) = duplex();
-    tx.send(resume_frame(&token, &gateway_session_id, 1_000))
+    tx.send(resume_frame(&token, &gateway_session_id, checkpoint))
         .unwrap();
     let (resumed_session, resumed, _) = wait_for_identify_or_resume(&mut client, &env.state)
         .await
@@ -506,7 +520,7 @@ async fn a_socket_closed_for_revocation_cannot_resume_back_in() {
     //    dropped, so the client is forced through a fresh IDENTIFY.
     let (_new_login_session_id, new_token) = add_login_session(&env, user_id).await;
     let (mut client, tx, _srv, _srv_rx) = duplex();
-    tx.send(resume_frame(&new_token, &gateway_session_id, 1_000))
+    tx.send(resume_frame(&new_token, &gateway_session_id, checkpoint))
         .unwrap();
     let (fresh, resumed, _) = wait_for_identify_or_resume(&mut client, &env.state)
         .await

@@ -13,7 +13,8 @@ pub async fn get_user_read_states(
     user_id: i64,
 ) -> Result<Vec<ReadStateRow>, DbError> {
     let rows = sqlx::query_as::<_, ReadStateRow>(
-        "SELECT user_id, channel_id, last_message_id, mention_count
+        "SELECT user_id, channel_id, last_message_id,
+         CAST(mention_count + (SELECT COUNT(*) FROM message_mentions mm WHERE mm.user_id = read_states.user_id AND mm.channel_id = read_states.channel_id AND mm.message_id > read_states.last_message_id) AS INTEGER) AS mention_count
          FROM read_states
          WHERE user_id = $1",
     )
@@ -29,7 +30,8 @@ pub async fn get_read_state(
     channel_id: i64,
 ) -> Result<Option<ReadStateRow>, DbError> {
     let row = sqlx::query_as::<_, ReadStateRow>(
-        "SELECT user_id, channel_id, last_message_id, mention_count
+        "SELECT user_id, channel_id, last_message_id,
+         CAST(mention_count + (SELECT COUNT(*) FROM message_mentions mm WHERE mm.user_id = read_states.user_id AND mm.channel_id = read_states.channel_id AND mm.message_id > read_states.last_message_id) AS INTEGER) AS mention_count
          FROM read_states WHERE user_id = $1 AND channel_id = $2",
     )
     .bind(user_id)
@@ -45,7 +47,7 @@ pub async fn update_read_state(
     channel_id: i64,
     last_message_id: i64,
 ) -> Result<ReadStateRow, DbError> {
-    let row = sqlx::query_as::<_, ReadStateRow>(
+    let _row = sqlx::query_as::<_, ReadStateRow>(
         "INSERT INTO read_states (user_id, channel_id, last_message_id, mention_count)
          VALUES ($1, $2, $3, 0)
          ON CONFLICT (user_id, channel_id) DO UPDATE SET
@@ -62,7 +64,9 @@ pub async fn update_read_state(
     .bind(last_message_id)
     .fetch_one(pool)
     .await?;
-    Ok(row)
+    get_read_state(pool, user_id, channel_id)
+        .await?
+        .ok_or_else(|| sqlx::Error::RowNotFound.into())
 }
 
 /// Increment the mention count for a user in a given channel.
@@ -102,6 +106,8 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query("CREATE TABLE message_mentions (message_id BIGINT NOT NULL, user_id BIGINT NOT NULL, channel_id BIGINT NOT NULL)")
+            .execute(&pool).await.unwrap();
         pool
     }
 

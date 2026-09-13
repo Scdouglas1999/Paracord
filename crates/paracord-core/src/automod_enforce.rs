@@ -48,19 +48,43 @@ pub struct AutomodAlert {
     pub matched_excerpt: String,
 }
 
-fn parse_id_list(raw: &str) -> Vec<i64> {
-    serde_json::from_str::<Vec<String>>(raw)
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|value| value.parse::<i64>().ok())
+#[derive(Debug, Default)]
+pub struct PreparedAutomod {
+    pub verdict: AutomodVerdict,
+    pub hits: Vec<paracord_db::automod::AutomodHitRow>,
+}
+
+impl PreparedAutomod {
+    pub async fn persist_hits(&self, pool: &DbPool) -> Result<(), CoreError> {
+        if self.hits.is_empty() {
+            return Ok(());
+        }
+        let mut transaction = pool.begin().await.map_err(paracord_db::DbError::from)?;
+        for hit in &self.hits {
+            paracord_db::automod::record_hit_in_connection(&mut transaction, hit).await?;
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(paracord_db::DbError::from)?;
+        Ok(())
+    }
+}
+
+fn parse_id_list(raw: &str) -> Result<Vec<i64>, CoreError> {
+    let ids: Vec<String> = serde_json::from_str(raw)
+        .map_err(|e| CoreError::Internal(format!("Invalid stored AutoMod exemptions: {e}")))?;
+    ids.into_iter()
+        .map(|value| {
+            value.parse::<i64>().map_err(|e| {
+                CoreError::Internal(format!("Invalid stored AutoMod exemption ID: {e}"))
+            })
+        })
         .collect()
 }
 
-/// Run every enabled rule for `guild_id` against a pending message.
-///
-/// Fails open: any internal error returns an empty verdict so a broken filter
-/// cannot take chat down. The caller applies `blocked_reason` before persisting
-/// the message and dispatches `alerts` afterwards.
+/// Evaluate rules and durably record their hits. Evaluation/persistence errors
+/// must reach the caller rather than silently allowing unfiltered content.
 pub async fn evaluate_message(
     pool: &DbPool,
     guild_id: i64,
@@ -68,52 +92,47 @@ pub async fn evaluate_message(
     author_id: i64,
     content: &str,
     author_perms: Permissions,
-) -> AutomodVerdict {
-    match evaluate_inner(pool, guild_id, channel_id, author_id, content, author_perms).await {
-        Ok(verdict) => verdict,
-        Err(err) => {
-            tracing::warn!(
-                guild_id,
-                channel_id,
-                error = %err,
-                "automod: evaluation failed, allowing message"
-            );
-            AutomodVerdict::default()
-        }
-    }
+) -> Result<AutomodVerdict, CoreError> {
+    let prepared =
+        prepare_message_evaluation(pool, guild_id, channel_id, author_id, content, author_perms)
+            .await?;
+    prepared.persist_hits(pool).await?;
+    Ok(prepared.verdict)
 }
 
-async fn evaluate_inner(
+/// Read-only evaluation. A message edit commits these hits only if it applies.
+pub async fn prepare_message_evaluation(
     pool: &DbPool,
     guild_id: i64,
     channel_id: i64,
     author_id: i64,
     content: &str,
     author_perms: Permissions,
-) -> Result<AutomodVerdict, CoreError> {
+) -> Result<PreparedAutomod, CoreError> {
     // Members who can manage the space are never filtered by its own rules.
     if author_perms.contains(Permissions::ADMINISTRATOR)
         || author_perms.contains(Permissions::MANAGE_GUILD)
     {
-        return Ok(AutomodVerdict::default());
+        return Ok(PreparedAutomod::default());
     }
 
     let rules = paracord_db::automod::list_enabled_rules(pool, guild_id).await?;
     if rules.is_empty() {
-        return Ok(AutomodVerdict::default());
+        return Ok(PreparedAutomod::default());
     }
 
     // Member roles are only needed if some rule declares role exemptions.
     let mut member_role_ids: Option<Vec<i64>> = None;
 
-    let mut verdict = AutomodVerdict::default();
+    let mut prepared = PreparedAutomod::default();
+    let verdict = &mut prepared.verdict;
 
     for row in rules {
-        if parse_id_list(&row.exempt_channel_ids).contains(&channel_id) {
+        if parse_id_list(&row.exempt_channel_ids)?.contains(&channel_id) {
             continue;
         }
 
-        let exempt_roles = parse_id_list(&row.exempt_role_ids);
+        let exempt_roles = parse_id_list(&row.exempt_role_ids)?;
         if !exempt_roles.is_empty() {
             if member_role_ids.is_none() {
                 let roles = paracord_db::roles::get_member_roles(pool, author_id, guild_id).await?;
@@ -127,23 +146,21 @@ async fn evaluate_inner(
             }
         }
 
-        // A stored rule that no longer parses is skipped, not fatal.
-        let config = match RuleConfig::parse(row.trigger_type, &row.trigger_metadata, &row.actions)
-        {
-            Ok(config) => config,
-            Err(err) => {
-                tracing::warn!(rule_id = row.id, error = %err, "automod: skipping unparsable rule");
-                continue;
-            }
-        };
+        let config = RuleConfig::parse(row.trigger_type, &row.trigger_metadata, &row.actions)
+            .map_err(|e| {
+                CoreError::Internal(format!("Invalid stored AutoMod rule {}: {e}", row.id))
+            })?;
 
         // Spam triggers need the author's recent message count in this channel.
         let recent_count = match needs_recent_count(&config.trigger) {
             Some(window_seconds) => {
                 let since = Utc::now() - chrono::Duration::seconds(i64::from(window_seconds));
-                paracord_db::messages::count_user_messages_since(pool, channel_id, author_id, since)
-                    .await
-                    .ok()
+                Some(
+                    paracord_db::messages::count_user_messages_since(
+                        pool, channel_id, author_id, since,
+                    )
+                    .await?,
+                )
             }
             None => None,
         };
@@ -187,24 +204,20 @@ async fn evaluate_inner(
             }
         }
 
-        let actions_json = serde_json::to_string(&actions_taken).unwrap_or_else(|_| "[]".into());
-        if let Err(err) = paracord_db::automod::record_hit(
-            pool,
-            paracord_util::snowflake::generate(1),
+        prepared.hits.push(paracord_db::automod::AutomodHitRow {
+            id: paracord_util::snowflake::generate(1),
             guild_id,
-            row.id,
-            &row.name,
-            author_id,
+            rule_id: row.id,
+            rule_name: row.name.clone(),
+            user_id: author_id,
             channel_id,
-            row.trigger_type,
-            &actions_json,
-            Some(&hit.excerpt),
-            Some(&content_excerpt(content)),
-        )
-        .await
-        {
-            tracing::warn!(rule_id = row.id, error = %err, "automod: failed to record hit");
-        }
+            trigger_type: row.trigger_type,
+            actions_taken: serde_json::to_string(&actions_taken)
+                .map_err(|e| CoreError::Internal(e.to_string()))?,
+            matched_excerpt: Some(hit.excerpt.clone()),
+            content_excerpt: Some(content_excerpt(content)),
+            created_at: Utc::now(),
+        });
 
         tracing::info!(
             guild_id,
@@ -218,7 +231,7 @@ async fn evaluate_inner(
         );
     }
 
-    Ok(verdict)
+    Ok(prepared)
 }
 
 /// Apply queued timeouts. Best effort: a failure is logged, never fatal to the

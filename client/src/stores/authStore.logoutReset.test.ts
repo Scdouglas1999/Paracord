@@ -45,12 +45,14 @@ import { useAuthStore } from './authStore';
 import { useChannelStore } from './channelStore';
 import { useGuildStore } from './guildStore';
 import { useMemberStore } from './memberStore';
-import { useMessageStore } from './messageStore';
+import { getMessageStore } from './messageStore';
 import { usePresenceStore } from './presenceStore';
 import { useVoiceStore } from './voiceStore';
 import { useTypingStore } from './typingStore';
 import { useReadStateStore } from './readStateStore';
 import { useSavedMessageStore } from './savedMessageStore';
+
+let useMessageStore: ReturnType<typeof getMessageStore>;
 
 const otherUsersMessage = {
   id: 'm1',
@@ -68,6 +70,7 @@ const otherUsersMessage = {
 /** Populate every store the way a signed-in session would. */
 function seedSignedInSession() {
   useAuthStore.setState({ token: 'tok', user: { id: 'first-user' } as never });
+  useMessageStore = getMessageStore({ serverId: '__local__', userId: 'first-user' });
 
   useMessageStore.setState({
     messages: { ch1: [otherUsersMessage as never] },
@@ -75,24 +78,18 @@ function seedSignedInSession() {
     hasMore: { ch1: true },
   });
 
-  useChannelStore.setState({
-    channelsByGuild: { g1: [{ id: 'ch1', guild_id: 'g1' } as never] },
-    channelsById: { ch1: { id: 'ch1', guild_id: 'g1' } as never },
-    channels: [{ id: 'ch1', guild_id: 'g1' } as never],
-    dmChannelsByServer: { s1: [{ id: 'dm1' } as never] },
-    guildChannelsLoaded: { g1: true },
-    selectedChannelId: 'ch1',
-    selectedGuildId: 'g1',
-  });
+  useChannelStore.getState().addChannel({ id: 'ch1', guild_id: 'g1' } as never, { serverId: '__local__', userId: 'first-user' });
+  useChannelStore.getState().addChannel({ id: 'dm1' } as never, { serverId: 's1', userId: 'first-user' });
+  useChannelStore.getState().selectChannel({ id: 'ch1', scope: { serverId: '__local__', userId: 'first-user' } });
 
   useGuildStore.setState({
     guilds: [{ id: 'g1', name: "First user's space" } as never],
-    selectedGuildId: 'g1',
+    selectedGuild: { id: 'g1', scope: { serverId: '__local__', userId: 'user-1' } },
   });
 
   useMemberStore.setState({
-    members: new Map([['g1', [{ user: { id: 'other-user' } } as never]]]),
-    membersLoaded: { g1: true },
+    members: new Map([[JSON.stringify(['__local__', 'user-a', 'g1']), [{ user: { id: 'other-user' } } as never]]]),
+    membersLoaded: { [JSON.stringify(['__local__', 'user-a', 'g1'])]: true },
   });
 
   usePresenceStore.getState().updatePresence({ user_id: 'other-user', status: 'online' } as never);
@@ -129,13 +126,10 @@ describe('logout clears every store holding account data', () => {
 
     expect(useChannelStore.getState().channelsByGuild).toEqual({});
     expect(useChannelStore.getState().channelsById).toEqual({});
-    expect(useChannelStore.getState().channels).toEqual([]);
-    expect(useChannelStore.getState().dmChannelsByServer).toEqual({});
-    expect(useChannelStore.getState().selectedChannelId).toBeNull();
-    expect(useChannelStore.getState().selectedGuildId).toBeNull();
+    expect(useChannelStore.getState().selectedChannel).toBeNull();
 
     expect(useGuildStore.getState().guilds).toEqual([]);
-    expect(useGuildStore.getState().selectedGuildId).toBeNull();
+    expect(useGuildStore.getState().selectedGuild).toBeNull();
 
     expect(useMemberStore.getState().members.size).toBe(0);
     expect(useMemberStore.getState().membersLoaded).toEqual({});

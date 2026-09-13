@@ -1,3 +1,4 @@
+import { createRef } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from './ContextMenu';
@@ -141,6 +142,33 @@ describe('ContextMenu', () => {
     );
     fireEvent.click(screen.getByRole('menuitem', { name: /disabled/i }));
     expect(items[0].action).not.toHaveBeenCalled();
+  });
+
+  it('keeps the menu open for its own scrolling but closes on surrounding scroll', () => {
+    render(<ContextMenu items={defaultItems} position={{ x: 100, y: 100 }} onClose={onClose} />);
+    fireEvent.scroll(screen.getByRole('menu'));
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.scroll(document);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps an anchored header menu open when the timeline scrolls', () => {
+    const anchor = createRef<HTMLButtonElement>();
+    render(<><button ref={anchor}>Actions</button><ContextMenu anchorRef={anchor} items={defaultItems} position={{ x: 100, y: 100 }} onClose={onClose} /></>);
+    fireEvent.scroll(document);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+  });
+
+  it('supports Home and End across disabled items and exits on Tab', () => {
+    render(<ContextMenu items={[...defaultItems, { label: 'Unavailable', disabled: true, action: vi.fn() }]} position={{ x: 100, y: 100 }} onClose={onClose} />);
+    const menu = screen.getByRole('menu');
+    fireEvent.keyDown(menu, { key: 'End' });
+    expect(menu).toHaveAttribute('aria-activedescendant', 'context-menu-item-3');
+    fireEvent.keyDown(menu, { key: 'Home' });
+    expect(menu).toHaveAttribute('aria-activedescendant', 'context-menu-item-0');
+    fireEvent.keyDown(menu, { key: 'Tab' });
+    expect(onClose).toHaveBeenCalledOnce();
   });
 
   it('renders icon when provided', () => {

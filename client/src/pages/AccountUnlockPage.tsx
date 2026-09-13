@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
 import { useAccountStore } from '../stores/accountStore';
 import { useServerListStore } from '../stores/serverListStore';
 import { useAuthStore } from '../stores/authStore';
@@ -17,6 +17,9 @@ export function AccountUnlockPage() {
   const [failedAttempts, setFailedAttempts] = useState(0);
   const [cooldownUntil, setCooldownUntil] = useState(0);
   const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const returnTo = params.get('returnTo');
+  const destination = returnTo?.startsWith('/app/') && !returnTo.includes('\\') ? returnTo : '/app';
   const unlock = useAccountStore((s) => s.unlock);
   const publicKey = useAccountStore((s) => s.publicKey);
   const username = useAccountStore((s) => s.username);
@@ -71,7 +74,7 @@ export function AccountUnlockPage() {
         }
       }
 
-      navigate('/app');
+      navigate(destination);
     } catch {
       const nextFailures = failedAttempts + 1;
       setFailedAttempts(nextFailures);

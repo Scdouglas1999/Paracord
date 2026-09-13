@@ -174,7 +174,24 @@ async fn approve_quarantine_report(
 
     let author_id = target_user_id.unwrap_or(AUTO_MOD_ID);
     let approved_message_id = paracord_util::snowflake::generate(1);
-    let approved_message = paracord_db::messages::create_message(
+    let original_recipients = changes
+        .get("original_mention_user_ids")
+        .and_then(Value::as_array)
+        .map(|ids| {
+            ids.iter()
+                .filter_map(|id| parse_i64_from_value(Some(id)))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let mentioned_users = paracord_core::message_attention::explicit_mentions(
+        &state.db,
+        guild_id,
+        original_channel_id,
+        author_id,
+        &original_recipients,
+    )
+    .await?;
+    let approved_message = paracord_db::messages::create_message_with_payload_mentions(
         &state.db,
         approved_message_id,
         original_channel_id,
@@ -182,6 +199,10 @@ async fn approve_quarantine_report(
         &approved_content,
         0,
         None,
+        0,
+        None,
+        None,
+        &mentioned_users,
     )
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
@@ -202,7 +223,8 @@ async fn approve_quarantine_report(
     });
     state
         .event_bus
-        .dispatch("MESSAGE_CREATE", message_json, Some(guild_id));
+        .dispatch_message(&state.db, "MESSAGE_CREATE", message_json, Some(guild_id))
+        .await;
 
     changes["approved_message_id"] = Value::String(approved_message.id.to_string());
     changes["approved_channel_id"] = Value::String(original_channel_id.to_string());

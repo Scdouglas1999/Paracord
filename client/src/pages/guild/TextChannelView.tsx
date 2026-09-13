@@ -1,3 +1,5 @@
+import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
+import { entityScopeKey } from '../../lib/serverScope';
 import { useEffect, useState } from 'react';
 import { MessageList } from '../../components/message/MessageList';
 import { MessageInput } from '../../components/message/MessageInput';
@@ -25,7 +27,12 @@ interface TextChannelViewProps {
  * (layout-spec §2: `ThreadPanel` → ContextPanel) and shows the parent channel as
  * read context in the main pane.
  */
-export function TextChannelView({
+export function TextChannelView(props: TextChannelViewProps) {
+  const scope = useCurrentAccountScope();
+  return <OwnedTextChannelView key={scope ? entityScopeKey(scope, props.channelId) : `unavailable:${props.channelId}`} {...props} />;
+}
+
+function OwnedTextChannelView({
   guildId,
   channelId,
   channelName,

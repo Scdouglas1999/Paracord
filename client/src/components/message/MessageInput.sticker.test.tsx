@@ -1,15 +1,28 @@
+vi.mock('../../lib/channelView', () => ({ getAccountChannelView: (_scope: unknown, state: unknown) => state }));
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { guildApi } from '../../api/guilds';
 import { MessageInput } from './MessageInput';
 
+const mockMessaging = vi.hoisted(() => ({
+  runtimes: new Map<string, import('../../test/messageInputRuntimeMock').FakeMessagingRuntime>(),
+}));
+vi.mock('../../lib/messages/accountMessagingRuntime', async () => {
+  const { fakeAccountMessagingRuntime } = await import('../../test/messageInputRuntimeMock');
+  return {
+    getAccountMessagingRuntime: (scope: { serverId: string; userId: string }) =>
+      fakeAccountMessagingRuntime(mockMessaging.runtimes, scope),
+  };
+});
+
 const mockSendMessage = vi.fn();
 
-vi.mock('../../stores/messageStore', () => ({
-  useMessageStore: Object.assign(
+vi.mock('../../hooks/useMessageStore', () => ({
+  useCurrentMessageStoreApi: () => Object.assign(
     () => ({}),
     {
+      scope: { serverId: '__local__', userId: 'u1' },
       getState: () => ({
         sendMessage: mockSendMessage,
         addMessage: vi.fn(),
@@ -118,6 +131,7 @@ const stickerResponse = (data: Awaited<ReturnType<typeof guildApi.listStickers>>
 
 describe('MessageInput sticker flow', () => {
   beforeEach(() => {
+    mockMessaging.runtimes.clear();
     vi.clearAllMocks();
     mockSendMessage.mockResolvedValue(undefined);
     listStickers.mockResolvedValue(
@@ -179,3 +193,22 @@ describe('MessageInput sticker flow', () => {
     );
   });
 });
+
+vi.mock('../../hooks/useChannels', async () => {
+  const actual = await vi.importActual<typeof import('../../hooks/useChannels')>('../../hooks/useChannels');
+  const { useChannelStore } = await import('../../stores/channelStore');
+  return {
+    ...actual,
+    useCurrentChannelStore: useChannelStore,
+    useChannelActions: () => useChannelStore.getState(),
+    getAccountChannelView: () => useChannelStore.getState(),
+    useGuildChannels: (id: string) => useChannelStore(state => state.channelsByGuild[id] ?? []),
+  };
+});
+
+vi.mock('../../hooks/useConversationActions', () => ({
+  useConversationActions: () => ({
+    actions: Object.fromEntries(['send', 'poll', 'schedule', 'attach', 'summary', 'voice', 'video', 'screen_share'].map(action => [action, { supported: true, allowed: true, reason: null }])),
+    error: null, loading: false, refresh: vi.fn(),
+  }),
+}));

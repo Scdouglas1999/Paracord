@@ -3,7 +3,7 @@ import type { RefObject } from 'react';
 import { Pin, PinOff, X } from 'lucide-react';
 import { extractApiError } from '../../../api/client';
 import { channelApi } from '../../../api/channels';
-import { useMessageStore } from '../../../stores/messageStore';
+import { useCurrentMessageStore } from '../../../hooks/useMessageStore';
 import type { Message } from '../../../types';
 import { useFocusTrap } from '../../../hooks/useFocusTrap';
 import { safeStoredImageDataUrl } from '../../../lib/security';
@@ -34,7 +34,7 @@ export function PinnedMessagesOverlay({
   panelRef,
 }: PinnedMessagesOverlayProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
-  const unpinMessage = useMessageStore((s) => s.unpinMessage);
+  const unpinMessage = useCurrentMessageStore((s) => s.unpinMessage);
 
   useFocusTrap(dialogRef as RefObject<HTMLDivElement | null>, open && presentation === 'overlay', onClose);
 
@@ -129,7 +129,7 @@ export function PinnedMessagesOverlay({
     return (
       <aside
         ref={panelRef}
-        role="complementary"
+
         aria-label="Pinned messages"
         tabIndex={-1}
         data-testid="context-panel"

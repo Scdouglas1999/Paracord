@@ -1,6 +1,8 @@
+import { activateGuild } from '../../lib/guildNavigation';
+import { useSelectedGuildId } from '../../hooks/useGuilds';
+import { useCurrentGuilds } from '../../hooks/useGuilds';
 import { useLocation, useNavigate } from 'react-router';
 import { Home, MessageSquare, Hash, Users, Settings } from 'lucide-react';
-import { useGuildStore } from '../../stores/guildStore';
 import { useUIStore } from '../../stores/uiStore';
 
 interface Tab {
@@ -20,8 +22,8 @@ const TABS: Tab[] = [
 export function MobileBottomNav() {
   const navigate = useNavigate();
   const location = useLocation();
-  const selectedGuildId = useGuildStore((s) => s.selectedGuildId);
-  const guilds = useGuildStore((s) => s.guilds);
+  const selectedGuildId = useSelectedGuildId();
+  const guilds = useCurrentGuilds();
   const userSettingsOpen = useUIStore((s) => s.userSettingsOpen);
 
   const activeTab = (() => {
@@ -51,7 +53,9 @@ export function MobileBottomNav() {
             ? selectedGuildId
             : guilds[0]?.id;
           if (targetGuildId) {
-            useGuildStore.getState().selectGuild(targetGuildId);
+            const target = guilds.find(guild => guild.id === targetGuildId);
+            if (!target) return;
+            activateGuild(target);
             navigate(`/app/guilds/${targetGuildId}`);
           } else {
             navigate('/app');

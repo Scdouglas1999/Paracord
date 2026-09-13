@@ -1,8 +1,10 @@
+import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
+import { entityScopeKey as memberScopeKey } from '../../lib/serverScope';
 import { useMemo } from 'react';
 import { Users } from 'lucide-react';
 import { useMemberStore } from '../../stores/memberStore';
 import { usePresenceStore } from '../../stores/presenceStore';
-import { useGuildStore } from '../../stores/guildStore';
+import { useGuild } from '../../hooks/useGuilds';
 import { useServerListStore } from '../../stores/serverListStore';
 import { useUIStore } from '../../stores/uiStore';
 import { Tooltip } from '../ui/Tooltip';
@@ -34,15 +36,14 @@ function memberName(m: Member): string {
  * membership never bleeds across connections.
  */
 export function AroundNowStrip({ guildId }: AroundNowStripProps) {
-  const members = useMemberStore((s) => s.members.get(guildId));
+  const memberScope = useCurrentAccountScope();
+  const members = useMemberStore((s) => (memberScope ? s.members.get(memberScopeKey(memberScope, guildId)) : undefined));
   const presences = usePresenceStore((s) => s.presences);
   const getPresence = usePresenceStore((s) => s.getPresence);
   const setContextPanelMode = useUIStore((s) => s.setContextPanelMode);
 
   // Resolve the guild's originating server so presence reads the right scope.
-  const guildServerUrl = useGuildStore(
-    (s) => s.guilds.find((g) => g.id === guildId)?.server_url,
-  );
+  const guildServerUrl = useGuild(guildId)?.server_url;
   const activeServerId = useServerListStore((s) => s.activeServerId);
   const getServerByUrl = useServerListStore((s) => s.getServerByUrl);
   const scope = useMemo(() => {

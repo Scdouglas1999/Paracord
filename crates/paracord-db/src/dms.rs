@@ -5,6 +5,7 @@ pub struct DmChannelWithRecipientRow {
     pub id: i64,
     pub channel_type: i16,
     pub last_message_id: Option<i64>,
+    pub message_revision: i64,
     pub recipient_id: i64,
     pub recipient_username: String,
     pub recipient_display_name: Option<String>,
@@ -21,7 +22,7 @@ pub async fn find_dm_channel_between(
     let row = sqlx::query_as::<_, ChannelRow>(
         "SELECT c.id, c.space_id, c.name, c.topic, c.channel_type, c.position, c.parent_id,
                 CASE WHEN c.nsfw THEN 1 ELSE 0 END AS nsfw,
-                c.rate_limit_per_user, c.bitrate, c.user_limit, c.last_message_id,
+                c.rate_limit_per_user, c.bitrate, c.user_limit, c.last_message_id, c.message_revision,
                 c.required_role_ids, c.thread_metadata, c.owner_id, c.message_count,
                 c.applied_tags, c.default_sort_order, c.created_at
          FROM channels c
@@ -68,7 +69,7 @@ pub async fn create_dm_channel(
     let row = sqlx::query_as::<_, ChannelRow>(
         "SELECT id, space_id, name, topic, channel_type, position, parent_id,
                 CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw,
-                rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids,
+                rate_limit_per_user, bitrate, user_limit, last_message_id, message_revision, required_role_ids,
                 thread_metadata, owner_id, message_count, applied_tags, default_sort_order,
                 created_at
          FROM channels
@@ -86,7 +87,7 @@ pub async fn list_user_dm_channels(
     user_id: i64,
 ) -> Result<Vec<DmChannelWithRecipientRow>, DbError> {
     let rows = sqlx::query_as::<_, DmChannelWithRecipientRow>(
-        "SELECT c.id, c.channel_type, c.last_message_id,
+        "SELECT c.id, c.channel_type, c.last_message_id, c.message_revision,
                 u.id AS recipient_id,
                 u.username AS recipient_username,
                 u.display_name AS recipient_display_name,
@@ -179,7 +180,7 @@ pub async fn create_group_dm_channel(
     let row = sqlx::query_as::<_, ChannelRow>(
         "SELECT id, space_id, name, topic, channel_type, position, parent_id,
                 CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw,
-                rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids,
+                rate_limit_per_user, bitrate, user_limit, last_message_id, message_revision, required_role_ids,
                 thread_metadata, owner_id, message_count, applied_tags, default_sort_order,
                 created_at
          FROM channels WHERE id = $1",
@@ -311,7 +312,7 @@ pub async fn list_user_group_dm_channels(
     let rows = sqlx::query_as::<_, ChannelRow>(
         "SELECT c.id, c.space_id, c.name, c.topic, c.channel_type, c.position, c.parent_id,
                 CASE WHEN c.nsfw THEN 1 ELSE 0 END AS nsfw,
-                c.rate_limit_per_user, c.bitrate, c.user_limit, c.last_message_id,
+                c.rate_limit_per_user, c.bitrate, c.user_limit, c.last_message_id, c.message_revision,
                 c.required_role_ids, c.thread_metadata, c.owner_id, c.message_count,
                 c.applied_tags, c.default_sort_order, c.created_at
          FROM channels c

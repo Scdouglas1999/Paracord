@@ -480,7 +480,7 @@ pub async fn join_public_guild(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(guild_id): Path<i64>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<paracord_contracts::guild::GuildDetail>, ApiError> {
     let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
@@ -495,17 +495,16 @@ pub async fn join_public_guild(
 
     if paracord_db::members::get_member(&state.db, auth.user_id, guild_id)
         .await
-        .ok()
-        .flatten()
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .is_some()
     {
         let member_count = paracord_db::members::get_member_count(&state.db, guild_id)
             .await
-            .unwrap_or(0);
-        return Ok(Json(crate::routes::guilds::guild_json(
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        return Ok(Json(crate::routes::guilds::guild_detail(
             &guild,
-            Some(member_count),
-        )));
+            member_count,
+        )?));
     }
 
     // Block users currently banned from this guild from silently rejoining. A
@@ -550,41 +549,49 @@ pub async fn join_public_guild(
         }
     }
 
-    paracord_db::members::add_member(&state.db, auth.user_id, guild_id)
+    // Insert and count in one transaction: a concurrent join can pass the
+    // membership check above and insert first, so the post-join count is read
+    // from the database, never inferred. A count failure rolls the membership
+    // insert back rather than reporting success it cannot describe.
+    let joined = paracord_db::members::add_member_and_count(&state.db, auth.user_id, guild_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    let _ = paracord_db::roles::add_member_role(&state.db, auth.user_id, guild_id, guild_id).await;
 
-    state.member_index.add_member(guild_id, auth.user_id);
+    // `inserted` is false only when a racing join already wrote the row —
+    // the member exists either way, but role-grant/index/event side effects
+    // must not replay for a membership this request did not create.
+    if joined.inserted {
+        let _ =
+            paracord_db::roles::add_member_role(&state.db, auth.user_id, guild_id, guild_id).await;
 
-    let user = paracord_db::users::get_user_by_id(&state.db, auth.user_id)
-        .await
-        .ok()
-        .flatten();
-    if let Some(user) = user {
-        state.event_bus.dispatch(
-            "GUILD_MEMBER_ADD",
-            json!({
-                "guild_id": guild_id.to_string(),
-                "user": {
-                    "id": user.id.to_string(),
-                    "username": user.username,
-                    "display_name": user.display_name,
-                    "discriminator": user.discriminator,
-                    "avatar_hash": user.avatar_hash,
-                }
-            }),
-            Some(guild_id),
-        );
+        state.member_index.add_member(guild_id, auth.user_id);
+
+        let user = paracord_db::users::get_user_by_id(&state.db, auth.user_id)
+            .await
+            .ok()
+            .flatten();
+        if let Some(user) = user {
+            state.event_bus.dispatch(
+                "GUILD_MEMBER_ADD",
+                json!({
+                    "guild_id": guild_id.to_string(),
+                    "user": {
+                        "id": user.id.to_string(),
+                        "username": user.username,
+                        "display_name": user.display_name,
+                        "discriminator": user.discriminator,
+                        "avatar_hash": user.avatar_hash,
+                    }
+                }),
+                Some(guild_id),
+            );
+        }
     }
 
-    let member_count = paracord_db::members::get_member_count(&state.db, guild_id)
-        .await
-        .unwrap_or(0);
-    Ok(Json(crate::routes::guilds::guild_json(
+    Ok(Json(crate::routes::guilds::guild_detail(
         &guild,
-        Some(member_count),
-    )))
+        joined.member_count,
+    )?))
 }
 
 pub(crate) async fn federation_forward_member_event(

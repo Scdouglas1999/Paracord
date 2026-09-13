@@ -651,6 +651,7 @@ fn webhook_message_to_json(
         .unwrap_or_else(|| json!([]));
     json!({
         "id": msg.id.to_string(),
+                "message_revision": msg.recovery_revision.to_string(),
         "channel_id": msg.channel_id.to_string(),
         "author": {
             "id": webhook_id.to_string(),
@@ -1005,7 +1006,7 @@ pub async fn execute_webhook(
             &content,
             creator_perms,
         )
-        .await;
+        .await?;
         // Apply the whole verdict, not just the block. Recording
         // `alert_channel`/`timeout_member` in the hit row while silently
         // dropping them made the audit trail claim actions that never happened —
@@ -1029,23 +1030,29 @@ pub async fn execute_webhook(
     // Create the message using the webhook creator as the author
     let msg_id = paracord_util::snowflake::generate(1);
 
-    let msg = paracord_db::messages::create_message(
+    let mentioned_users = paracord_core::message_attention::member_mentions(
+        &state.db,
+        webhook.channel_id,
+        author_id,
+        &content,
+    )
+    .await?;
+    let msg = paracord_db::messages::create_message_with_payload_mentions(
         &state.db,
         msg_id,
         webhook.channel_id,
         author_id,
         &content,
-        0, // message_type: 0 = default
+        0,
         None,
+        0,
+        None,
+        embeds_json.as_deref(),
+        &mentioned_users,
     )
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
-    if let Some(embeds_json) = embeds_json.as_deref() {
-        paracord_db::messages::update_message_embeds(&state.db, msg.id, embeds_json)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    }
     paracord_db::webhooks::link_webhook_message(&state.db, webhook.id, msg.id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
@@ -1065,7 +1072,8 @@ pub async fn execute_webhook(
 
     state
         .event_bus
-        .dispatch("MESSAGE_CREATE", msg_json.clone(), guild_id);
+        .dispatch_message(&state.db, "MESSAGE_CREATE", msg_json.clone(), guild_id)
+        .await;
 
     if query.wait.unwrap_or(true) {
         Ok((StatusCode::CREATED, Json(msg_json)))
@@ -1155,7 +1163,8 @@ pub async fn edit_webhook_message(
 
     state
         .event_bus
-        .dispatch("MESSAGE_UPDATE", msg_json.clone(), guild_id);
+        .dispatch_message(&state.db, "MESSAGE_UPDATE", msg_json.clone(), guild_id)
+        .await;
 
     Ok(Json(msg_json))
 }
@@ -1205,7 +1214,8 @@ pub async fn delete_webhook_message(
     });
     state
         .event_bus
-        .dispatch("MESSAGE_DELETE", delete_payload, guild_id);
+        .dispatch_message(&state.db, "MESSAGE_DELETE", delete_payload, guild_id)
+        .await;
 
     Ok(StatusCode::NO_CONTENT)
 }

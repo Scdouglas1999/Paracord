@@ -84,3 +84,18 @@ export function ChannelNotFoundScreen({ guildId }: { guildId: string | undefined
     </div>
   );
 }
+
+export function ChannelLoadErrorScreen({ error, onRetry }: { error: string; onRetry: () => void }) {
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <TopBar channelName="Channels unavailable" />
+      <div className="flex flex-1 items-center bg-bg-primary px-6 sm:px-10">
+        <div className="w-full max-w-md">
+          <h2 className="font-display text-heading text-text-primary">Couldn't load channels</h2>
+          <p role="alert" className="mt-2 break-words text-body text-text-secondary">{error}</p>
+          <Button className="mt-6" onClick={onRetry}>Try again</Button>
+        </div>
+      </div>
+    </div>
+  );
+}

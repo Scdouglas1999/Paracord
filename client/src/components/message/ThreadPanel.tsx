@@ -1,3 +1,5 @@
+import { useCurrentChannelStore, useChannelActions } from '../../hooks/useChannels';
+import { useCurrentUser } from '../../hooks/useCurrentUser';
 import { useEffect, useState } from 'react';
 import { Hash, MessageSquare, X } from 'lucide-react';
 import { useNavigate } from 'react-router';
@@ -5,12 +7,10 @@ import { MessageList } from './MessageList';
 import { MessageInput } from './MessageInput';
 import type { Message } from '../../types';
 import { displayName } from '../../lib/displayName';
-import { useChannelStore } from '../../stores/channelStore';
 import { channelApi } from '../../api/channels';
 import { extractApiError } from '../../api/client';
 import { toast } from '../../stores/toastStore';
 import { confirm } from '../../stores/confirmStore';
-import { useAuthStore } from '../../stores/authStore';
 import { usePermissions } from '../../hooks/usePermissions';
 import { hasPermission, Permissions } from '../../types';
 import { ErrorBoundary } from '../ErrorBoundary';
@@ -41,9 +41,10 @@ export function ThreadPanel({
   const [replyingTo, setReplyingTo] = useState<{ id: string; author: string; content: string } | null>(null);
   const [restoring, setRestoring] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const threadChannel = useChannelStore((s) => s.channelsById[threadChannelId]);
+  const channelActions = useChannelActions();
+  const threadChannel = useCurrentChannelStore((s) => s.channelsById[threadChannelId]);
   const isArchived = Boolean(threadChannel?.thread_metadata?.archived);
-  const currentUserId = useAuthStore((state) => state.user?.id);
+  const currentUserId = useCurrentUser()?.id;
   const { permissions, isAdmin } = usePermissions(guildId);
   const canManageThread = isAdmin || hasPermission(permissions, Permissions.MANAGE_CHANNELS);
   const isThreadOwner = Boolean(currentUserId && threadChannel?.owner_id === currentUserId);
@@ -57,7 +58,7 @@ export function ThreadPanel({
   const openParentChannel = () => {
     const parentId = threadChannel?.parent_id;
     if (!parentId) return;
-    useChannelStore.getState().selectChannel(parentId);
+    channelActions.selectChannel(parentId);
     onClose();
     navigate(`/app/guilds/${guildId}/channels/${parentId}`);
   };
@@ -67,7 +68,7 @@ export function ThreadPanel({
     setRestoring(true);
     try {
       const { data: updated } = await channelApi.updateThread(threadChannel.parent_id, threadChannelId, { archived: false });
-      useChannelStore.getState().updateChannel(updated);
+      channelActions.updateChannel(updated);
     } catch (err: unknown) {
       toast.error(threadPanelError('Failed to restore thread', err));
     } finally {
@@ -82,7 +83,7 @@ export function ThreadPanel({
     try {
       await channelApi.deleteThread(threadChannel.parent_id, threadChannelId);
       if (guildId) {
-        useChannelStore.getState().removeChannel(guildId, threadChannelId);
+        channelActions.removeChannel(guildId, threadChannelId);
       }
       onClose();
     } catch (err: unknown) {

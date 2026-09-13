@@ -1,12 +1,15 @@
+import { useAvailableChannels } from './useChannels';
+import { accountScopeKey, entityScopeKey } from '../lib/serverScope';
+import type { AccountScope } from '../lib/serverScope';
+import { useAvailableGuilds } from '../hooks/useGuilds';
 import { useEffect, useMemo } from 'react';
 import { useChannelStore } from '../stores/channelStore';
-import { useGuildStore } from '../stores/guildStore';
 import { useReadStateStore } from '../stores/readStateStore';
+import { useAvailableAccountScopes } from './useAvailableAccountScopes';
 import { useServerListStore } from '../stores/serverListStore';
 import { useVoiceStore } from '../stores/voiceStore';
 import { usePinnedStore } from '../stores/pinnedStore';
 import { useRelationshipStore } from '../stores/relationshipStore';
-import { LOCAL_SERVER_ID } from '../lib/connectionManager';
 import { computeGuildUnread } from './useUnreadCounts';
 import { scoreEntry } from '../lib/attention/scoreConversation';
 import {
@@ -15,8 +18,7 @@ import {
   type ConversationEntry,
   type ConversationKind,
 } from '../lib/attention/conversationModel';
-import { buildServerUrlMap, resolveServerIdForGuild } from '../lib/attention/serverResolve';
-import { ChannelType, type Channel, type Guild, type ReadState, type VoiceState } from '../types';
+import { ChannelType, type Channel, type ReadState, type VoiceState } from '../types';
 import { displayName } from '../lib/displayName';
 
 /**
@@ -30,9 +32,9 @@ import { displayName } from '../lib/displayName';
  * then partition — pinned pulled out first, needs-you scored + capped, the rest by
  * recency.
  *
- * Invalidation = the memo deps only (§3.2). No polling and no new gateway events:
- * `MESSAGE_CREATE` already bumps `last_message_id` + `mention_count`,
- * `VOICE_STATE_UPDATE` already updates `channelParticipants`. On mount we
+ * Invalidation = the memo deps only (§3.2). Ordered message activity updates the
+ * channel tail; recipient-targeted mention events refresh authoritative counts.
+ * `VOICE_STATE_UPDATE` updates `channelParticipants`. On mount we
  * fire-and-forget the DM + read-state fan-out; the active-server-first seam means
  * the list is correct and green whether only the active server or every server has
  * reported yet.
@@ -45,6 +47,8 @@ import { displayName } from '../lib/displayName';
  */
 
 export interface GuildSummary {
+  key: string;
+  scope: AccountScope;
   id: string;
   name: string;
   icon: string | null;
@@ -156,30 +160,21 @@ function hasVoiceOccupancy(
 }
 
 /**
- * @param mutedGuildIds guilds the user muted — their channels still render in
+ * @param mutedGuildKeys guilds the user muted — their channels still render in
  *   Recent but carry no attention signals, so they never enter Needs-you.
  */
-export function useUnifiedConversations(mutedGuildIds: string[] = []): UnifiedConversations {
-  const channelsByGuild = useChannelStore((s) => s.channelsByGuild);
-  const dmChannelsByServer = useChannelStore((s) => s.dmChannelsByServer);
-  const byServer = useReadStateStore((s) => s.byServer);
+export function useUnifiedConversations(mutedGuildKeys: string[] = []): UnifiedConversations {
+  const availableChannels = useAvailableChannels();
+  const byAccount = useReadStateStore((s) => s.byAccount);
   const channelParticipants = useVoiceStore((s) => s.channelParticipants);
-  const servers = useServerListStore((s) => s.servers);
-  const activeServerId = useServerListStore((s) => s.activeServerId);
-  const guilds = useGuildStore((s) => s.guilds);
+  const availableScopes = useAvailableAccountScopes();
+  const connectedServersKey = useServerListStore(state => JSON.stringify(state.servers.filter(server => server.connected).map(server => server.id).sort()));
+  const guilds = useAvailableGuilds();
   const pinnedKeys = usePinnedStore((s) => s.pinnedKeys);
   const relationships = useRelationshipStore((s) => s.relationships);
 
-  // Stable key of the connected-server set. Re-runs the DM + read-state fan-out
-  // whenever a server connects/disconnects — the sidebar stays mounted across
-  // route/server switches, so a background server that connects AFTER first mount
-  // would otherwise never have its /users/@me/dms fetched and its DMs would be
-  // silently absent from the merge until a full remount.
-  const connectedKey = servers
-    .filter((s) => s.connected)
-    .map((s) => s.id)
-    .sort()
-    .join(',');
+  // Verified account changes must refetch even if the server ID stays the same.
+  const connectedKey = JSON.stringify([availableScopes.map(accountScopeKey).sort(), connectedServersKey]);
 
   // Pull each connected server's DMs + read-state. Fire-and-forget: the
   // active-server-first seam keeps the list valid whether only the active server
@@ -187,13 +182,12 @@ export function useUnifiedConversations(mutedGuildIds: string[] = []): UnifiedCo
   // late-connecting servers fold into Needs-you / Recent without a remount.
   useEffect(() => {
     void useChannelStore.getState().loadAllDmChannels();
-    void useReadStateStore.getState().refresh();
+    void useReadStateStore.getState().refreshAll();
   }, [connectedKey]);
 
-  const activeId = activeServerId ?? LOCAL_SERVER_ID;
 
   // A new array identity every render would bust the memo; derive a stable key.
-  const mutedKey = mutedGuildIds.join(',');
+  const mutedKey = JSON.stringify(mutedGuildKeys);
 
   // Incoming friend requests live in their OWN memo, keyed only on `relationships`.
   // Isolating them keeps a friend-request event from re-running the O(channels)
@@ -214,44 +208,44 @@ export function useUnifiedConversations(mutedGuildIds: string[] = []): UnifiedCo
   }, [relationships]);
 
   const conversations = useMemo(() => {
-    const urlMap = buildServerUrlMap(servers);
-    const guildById = new Map<string, Guild>(guilds.map((g) => [g.id, g]));
+    const guildById = new Map(guilds.map(g => [g.key, g]));
     const pinnedSet = new Set(pinnedKeys);
-    const mutedSet = new Set(mutedKey ? mutedKey.split(',') : []);
+    const mutedSet = new Set<string>(JSON.parse(mutedKey));
 
     // Convert each server's read-state Record → Map once, on demand, so
     // `computeGuildUnread` (which wants a Map) is reused without re-allocating.
     const readMapCache = new Map<string, Map<string, ReadState>>();
-    const readMapFor = (serverId: string): Map<string, ReadState> => {
-      let map = readMapCache.get(serverId);
+    const readMapFor = (scope: AccountScope): Map<string, ReadState> => {
+      const key = accountScopeKey(scope);
+      let map = readMapCache.get(key);
       if (!map) {
-        map = new Map(Object.entries(byServer[serverId] ?? {}));
-        readMapCache.set(serverId, map);
+        map = new Map(Object.entries(byAccount[key] ?? {}));
+        readMapCache.set(key, map);
       }
       return map;
     };
 
     const entries: ConversationEntry[] = [];
 
-    // --- Guild channels (merged across all connected servers) --------------
-    for (const [guildId, channels] of Object.entries(channelsByGuild)) {
-      if (!guildId) continue; // '' = active-server DM mirror, handled below.
-      const guild = guildById.get(guildId);
-      const serverId = guild ? resolveServerIdForGuild(guild, urlMap, activeId) : activeId;
-      const readMap = readMapFor(serverId);
-      const muted = mutedSet.has(guildId);
-      const contextLabel = guild?.name ?? null;
-
-      for (const ch of channels) {
+    for (const ch of availableChannels) {
+      const guildId = ch.guild_id;
+      if (!guildId) continue;
+      const guild = guildById.get(entityScopeKey(ch.scope, guildId));
+      if (!guild) continue;
+      const serverId = ch.scope.serverId;
+      const readMap = readMapFor(ch.scope);
+      const muted = mutedSet.has(guild.key);
+      const contextLabel = guild.name;
         const kind = guildChannelKind(ch.type);
         if (!kind) continue; // category
         // Reuse computeGuildUnread's per-channel logic on a single-channel slice.
         const info = muted ? null : computeGuildUnread([ch], readMap);
         const channelUnread = (info?.unreadCount ?? 0) > 0;
         const isThread = kind === 'thread';
-        const key = conversationKey(serverId, ch.id);
+        const key = conversationKey(ch.scope, ch.id);
         entries.push({
           key,
+          scope: ch.scope,
           serverId,
           channelId: ch.id,
           guildId,
@@ -268,22 +262,18 @@ export function useUnifiedConversations(mutedGuildIds: string[] = []): UnifiedCo
           hasVoiceActivity: !muted && hasVoiceOccupancy(channelParticipants, ch.id, guildId),
           pinned: pinnedSet.has(key),
         });
-      }
     }
 
-    // --- DMs (per-server index; active server falls back to the '' mirror) --
-    const dmByServer: Record<string, Channel[]> = { ...dmChannelsByServer };
-    if (!(activeId in dmByServer) && (channelsByGuild[''] ?? []).length > 0) {
-      dmByServer[activeId] = channelsByGuild[''];
-    }
-    for (const [serverId, dms] of Object.entries(dmByServer)) {
-      const readMap = readMapFor(serverId);
-      for (const ch of dms) {
+    for (const ch of availableChannels) {
+      if (ch.guild_id) continue;
+      const serverId = ch.scope.serverId;
+      const readMap = readMapFor(ch.scope);
         const kind: ConversationKind = ch.type === ChannelType.GroupDM ? 'group_dm' : 'dm';
         const info = computeGuildUnread([ch], readMap);
-        const key = conversationKey(serverId, ch.id);
+        const key = conversationKey(ch.scope, ch.id);
         entries.push({
           key,
+          scope: ch.scope,
           serverId,
           channelId: ch.id,
           guildId: null,
@@ -300,7 +290,6 @@ export function useUnifiedConversations(mutedGuildIds: string[] = []): UnifiedCo
           hasVoiceActivity: hasVoiceOccupancy(channelParticipants, ch.id, null),
           pinned: pinnedSet.has(key),
         });
-      }
     }
 
     // --- Partition: pinned out first, then needs-you, then recent ----------
@@ -328,21 +317,20 @@ export function useUnifiedConversations(mutedGuildIds: string[] = []): UnifiedCo
       .sort((a, b) => lastActivityMs(b) - lastActivityMs(a));
 
     const spaces: GuildSummary[] = guilds.map((g) => ({
+      key: g.key,
+      scope: g.scope,
       id: g.id,
       name: g.name,
       // Prefer icon_hash (API field); fall back to legacy `icon` if present.
       icon: g.icon_hash ?? g.icon ?? null,
-      serverId: resolveServerIdForGuild(g, urlMap, activeId),
+      serverId: g.scope.serverId,
     }));
 
     return { needsYou, needsYouOverflowCount, recent, pinned, spaces };
   }, [
-    channelsByGuild,
-    dmChannelsByServer,
-    byServer,
+    availableChannels,
+    byAccount,
     channelParticipants,
-    servers,
-    activeId,
     guilds,
     pinnedKeys,
     mutedKey,

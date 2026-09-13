@@ -1,6 +1,8 @@
+import { useCurrentChannelStore } from '../../hooks/useChannels';
+import { useGuild } from '../../hooks/useGuilds';
+import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
+import { entityScopeKey as memberScopeKey } from '../../lib/serverScope';
 import { useEffect, useMemo } from 'react';
-import { useGuildStore } from '../../stores/guildStore';
-import { useChannelStore } from '../../stores/channelStore';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { useMemberStore } from '../../stores/memberStore';
 import { usePresenceStore } from '../../stores/presenceStore';
@@ -40,11 +42,12 @@ function isTextChannel(channel: Channel): boolean {
  * stay focused on their own surface.
  */
 export function RoomsView({ guildId }: RoomsViewProps) {
-  const guild = useGuildStore((s) => s.guilds.find((g) => g.id === guildId));
-  const channels = useChannelStore((s) => s.channelsByGuild[guildId] ?? EMPTY_CHANNELS);
-  const fetchChannels = useChannelStore((s) => s.fetchChannels);
+  const guild = useGuild(guildId);
+  const channels = useCurrentChannelStore((s) => s.channelsByGuild[guildId] ?? EMPTY_CHANNELS);
+  const fetchChannels = useCurrentChannelStore((s) => s.fetchChannels);
   const channelParticipants = useVoiceStore((s) => s.channelParticipants);
-  const members = useMemberStore((s) => s.members.get(guildId));
+  const memberScope = useCurrentAccountScope();
+  const members = useMemberStore((s) => (memberScope ? s.members.get(memberScopeKey(memberScope, guildId)) : undefined));
   const fetchMembers = useMemberStore((s) => s.fetchMembers);
   const presences = usePresenceStore((s) => s.presences);
   const getPresence = usePresenceStore((s) => s.getPresence);
@@ -64,10 +67,10 @@ export function RoomsView({ guildId }: RoomsViewProps) {
   }, [guildId, channels.length, fetchChannels]);
 
   useEffect(() => {
-    if (guildId && !members) {
-      void fetchMembers(guildId);
+    if (guildId && memberScope && !members) {
+      void fetchMembers(guildId, memberScope);
     }
-  }, [guildId, members, fetchMembers]);
+  }, [guildId, members, fetchMembers, memberScope]);
 
   const liveRoomCount = useMemo(
     () =>

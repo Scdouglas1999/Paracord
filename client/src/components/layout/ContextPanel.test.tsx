@@ -1,3 +1,4 @@
+import { useAuthStore } from '../../stores/authStore';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ContextPanel } from './ContextPanel';
@@ -95,16 +96,8 @@ describe('ContextPanel', () => {
   beforeEach(() => {
     setMode(null);
     navigateMock.mockReset();
-    useChannelStore.setState({
-      channelsByGuild: {},
-      dmChannelsByServer: {},
-      channelsById: {},
-      channels: [],
-      guildChannelsLoaded: {},
-      selectedChannelId: null,
-      selectedGuildId: null,
-      isLoading: false,
-    });
+    useChannelStore.getState().reset();
+    useAuthStore.setState({ token: 'token', user: { id: 'me' } as never });
   });
 
   afterEach(() => {
@@ -156,7 +149,7 @@ describe('ContextPanel', () => {
 
   it('renders an empty thread list for a text channel without threads', async () => {
     setMode('threads');
-    useChannelStore.getState().addChannel(makeChannel());
+    useChannelStore.getState().addChannel(makeChannel(), { serverId: '__local__', userId: 'me' });
     render(<ContextPanel {...baseProps} activeThread={null} />);
     expect(await screen.findByText('No threads yet')).toBeInTheDocument();
     expect(screen.getByRole('complementary', { name: 'Threads' })).toBeInTheDocument();
@@ -164,7 +157,7 @@ describe('ContextPanel', () => {
 
   it('opens a listed thread from a text channel', async () => {
     setMode('threads');
-    useChannelStore.getState().addChannel(makeChannel());
+    useChannelStore.getState().addChannel(makeChannel(), { serverId: '__local__', userId: 'me' });
     useChannelStore.getState().addChannel(
       makeChannel({
         id: 'thread-1',
@@ -178,11 +171,12 @@ describe('ContextPanel', () => {
           locked: false,
         },
       }),
+      { serverId: '__local__', userId: 'me' },
     );
     render(<ContextPanel {...baseProps} activeThread={null} />);
     await act(async () => {});
     fireEvent.click(screen.getByRole('button', { name: /Release plan/ }));
-    expect(useChannelStore.getState().selectedChannelId).toBe('thread-1');
+    expect(useChannelStore.getState().selectedChannel?.id).toBe('thread-1');
     expect(navigateMock).toHaveBeenCalledWith('/app/guilds/guild-1/channels/thread-1');
   });
 

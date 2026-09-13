@@ -1,3 +1,13 @@
+import { activateConversation } from '../lib/attention/conversationNavigation';
+import { useAvailableAccountScopes } from '../hooks/useAvailableAccountScopes';
+import { useReadStateStore } from '../stores/readStateStore';
+import { accountScopeKey, entityScopeKey } from '../lib/serverScope';
+import type { ScopedChannel } from '../lib/channelScope';
+import { useCurrentAccountScope } from '../hooks/useCurrentUser';
+import { activateGuild } from '../lib/guildNavigation';
+import { useSelectedGuildId } from '../hooks/useGuilds';
+import { useAvailableGuilds } from '../hooks/useGuilds';
+import { useCurrentUser } from '../hooks/useCurrentUser';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import {
@@ -9,8 +19,6 @@ import {
   PhoneCall,
 } from 'lucide-react';
 
-import { useAuthStore } from '../stores/authStore';
-import { useGuildStore } from '../stores/guildStore';
 import { useRelationshipStore } from '../stores/relationshipStore';
 import { usePresenceStore } from '../stores/presenceStore';
 import { useChannelStore } from '../stores/channelStore';
@@ -20,13 +28,14 @@ import { useUIStore } from '../stores/uiStore';
 import { useMutedGuilds } from '../hooks/useMutedGuilds';
 import { useUnifiedConversations } from '../hooks/useUnifiedConversations';
 import { useVoice } from '../hooks/useVoice';
-import { dmApi } from '../api/dms';
+import { activateChannel } from '../lib/channelNavigation';
 import { extractApiError } from '../api/client';
 import { CreateGuildModal } from '../components/guild/CreateGuildModal';
 import { DmPickerModal } from '../components/message/DmPickerModal';
 import { RoomCard } from '../components/rooms/RoomCard';
 import { HomeAroundStrip, activityLineFrom, type AroundFriend } from '../components/home/HomeAroundStrip';
 import { HomeJumpInRow } from '../components/home/HomeJumpInRow';
+import { HomeNeedsYou, homeAttention } from '../components/home/HomeNeedsYou';
 import { HomePickUpRow } from '../components/home/HomePickUpRow';
 import { HomeResumeHero } from '../components/home/HomeResumeHero';
 import { HomeServersRail, type HomeServerAttention } from '../components/home/HomeServersRail';
@@ -40,7 +49,6 @@ import type { GuildSummary } from '../hooks/useUnifiedConversations';
 
 import { ChannelType, type Channel, type VoiceState } from '../types';
 
-const EMPTY_CHANNELS: Channel[] = [];
 const EMPTY_PARTICIPANTS: VoiceState[] = [];
 /** Denser continue list — Home canvas can carry more than the sidebar glance. */
 const PICK_UP_CAP = 10;
@@ -70,7 +78,7 @@ function isRoomChannel(channel: Channel): boolean {
 
 interface LiveRoomItem {
   key: string;
-  channel: Channel;
+  channel: ScopedChannel;
   participants: VoiceState[];
   guildId: string;
   contextLabel: string | null;
@@ -86,10 +94,24 @@ interface LiveRoomItem {
  */
 export function HomePage() {
   const navigate = useNavigate();
-  const user = useAuthStore((s) => s.user);
-  const guilds = useGuildStore((s) => s.guilds);
-  const selectGuild = useGuildStore((s) => s.selectGuild);
-  const selectedGuildId = useGuildStore((s) => s.selectedGuildId);
+  const channelScope = useCurrentAccountScope();
+  const availableScopes = useAvailableAccountScopes();
+  const readActivityStatus = useReadStateStore(state => {
+    const keys = availableScopes.map(accountScopeKey);
+    if (keys.some(key => state.errors[key])) return 'error';
+    if (keys.some(key => state.loading[key] || !Object.prototype.hasOwnProperty.call(state.byAccount, key))) return 'loading';
+    return 'ready';
+  });
+  const user = useCurrentUser();
+  const guilds = useAvailableGuilds();
+  const channelActivityStatus = useChannelStore(state => {
+    if (guilds.some(guild => state.errors[guild.key])) return 'error';
+    if (guilds.some(guild => state.loading[guild.key] || !state.guildChannelsLoaded[guild.key])) return 'loading';
+    return 'ready';
+  });
+  const activityStatus = readActivityStatus === 'error' || channelActivityStatus === 'error' ? 'error'
+    : readActivityStatus === 'loading' || channelActivityStatus === 'loading' ? 'loading' : 'ready';
+  const selectedGuildId = useSelectedGuildId();
   const relationships = useRelationshipStore((s) => s.relationships);
   const fetchRelationships = useRelationshipStore((s) => s.fetchRelationships);
   const pendingRequestCount = useMemo(
@@ -103,10 +125,10 @@ export function HomePage() {
   const channelParticipants = useVoiceStore((s) => s.channelParticipants);
   const speakingUsers = useVoiceStore((s) => s.speakingUsers);
   const activeServerId = useServerListStore((s) => s.activeServerId);
-  const { mutedGuildIds } = useMutedGuilds();
+  const { mutedGuildKeys } = useMutedGuilds();
   // Presence is intentionally NOT read inside useUnifiedConversations — Home
   // keeps presence on the Around strip / Pick-up DM rows only.
-  const { recent, spaces, needsYou } = useUnifiedConversations(mutedGuildIds);
+  const { recent, spaces, needsYou, pinned } = useUnifiedConversations(mutedGuildKeys);
   const { joinChannel } = useVoice();
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showDmPicker, setShowDmPicker] = useState(false);
@@ -120,9 +142,9 @@ export function HomePage() {
     // Fetch each guild's channels once; a new `guilds` array reference (e.g. a
     // presence-driven store update) must not trigger a refetch of every guild.
     guilds.forEach((g) => {
-      if (loadedGuildsRef.current.has(g.id)) return;
-      loadedGuildsRef.current.add(g.id);
-      void fetchChannels(g.id);
+      if (loadedGuildsRef.current.has(g.key)) return;
+      loadedGuildsRef.current.add(g.key);
+      void fetchChannels(g.id, g.scope);
     });
   }, [guilds, fetchChannels]);
 
@@ -171,7 +193,7 @@ export function HomePage() {
   const liveRooms = useMemo<LiveRoomItem[]>(() => {
     const items: LiveRoomItem[] = [];
 
-    const dmChannels = channelsByGuild[''] ?? EMPTY_CHANNELS;
+    const dmChannels = channelScope ? channelsByGuild[entityScopeKey(channelScope, '')] ?? [] : [];
     for (const c of dmChannels) {
       if (c.type !== ChannelType.DM && c.type !== ChannelType.GroupDM) continue;
       const participants = (channelParticipants.get(c.id) || EMPTY_PARTICIPANTS).filter(
@@ -188,7 +210,7 @@ export function HomePage() {
     }
 
     for (const guild of guilds) {
-      const channels = channelsByGuild[guild.id] ?? EMPTY_CHANNELS;
+      const channels = channelsByGuild[entityScopeKey(guild.scope, guild.id)] ?? [];
       for (const c of channels) {
         if (!isRoomChannel(c)) continue;
         const participants = (channelParticipants.get(c.id) || EMPTY_PARTICIPANTS).filter(
@@ -196,7 +218,7 @@ export function HomePage() {
         );
         if (participants.length === 0) continue;
         items.push({
-          key: `guild:${guild.id}:${c.id}`,
+          key: entityScopeKey(guild.scope, c.id),
           channel: c,
           participants,
           guildId: guild.id,
@@ -206,15 +228,16 @@ export function HomePage() {
     }
 
     return items;
-  }, [channelsByGuild, channelParticipants, guilds]);
+  }, [channelsByGuild, channelParticipants, guilds, channelScope]);
 
-  const pickUp = useMemo(
-    () => recent.filter((e) => e.lastActivityId).slice(0, PICK_UP_CAP),
-    [recent],
-  );
+  const attention = useMemo(() => homeAttention([...needsYou, ...pinned, ...recent]), [needsYou, pinned, recent]);
+  const pickUp = useMemo(() => {
+    const attentionKeys = new Set(attention.map(entry => entry.key));
+    return recent.filter(entry => entry.lastActivityId && !attentionKeys.has(entry.key)).slice(0, PICK_UP_CAP);
+  }, [recent, attention]);
 
   const guildById = useMemo(() => {
-    const map = new Map(guilds.map((g) => [g.id, g]));
+    const map = new Map(guilds.map((g) => [g.key, g]));
     return map;
   }, [guilds]);
 
@@ -225,24 +248,24 @@ export function HomePage() {
    */
   const primarySpace = useMemo<GuildSummary | null>(() => {
     if (spaces.length === 0) return null;
-    if (selectedGuildId) {
-      const selected = spaces.find((s) => s.id === selectedGuildId);
+    if (selectedGuildId && channelScope) {
+      const selected = spaces.find((s) => s.key === entityScopeKey(channelScope, selectedGuildId));
       if (selected) return selected;
     }
     const fromRecent = pickUp.find((e) => e.guildId);
     if (fromRecent?.guildId) {
-      const match = spaces.find((s) => s.id === fromRecent.guildId);
+      const match = spaces.find((s) => s.key === entityScopeKey(fromRecent.scope, fromRecent.guildId!));
       if (match) return match;
     }
     return spaces[0] ?? null;
-  }, [spaces, selectedGuildId, pickUp]);
+  }, [spaces, selectedGuildId, channelScope, pickUp]);
 
   const primaryLastChannel = useMemo(() => {
     if (!primarySpace) return null;
     return (
       pickUp.find(
         (e) =>
-          e.guildId === primarySpace.id &&
+          e.guildId && entityScopeKey(e.scope, e.guildId) === primarySpace.key &&
           (e.kind === 'guild_text' || e.kind === 'thread' || e.kind === 'voice'),
       ) ?? null
     );
@@ -251,39 +274,33 @@ export function HomePage() {
   const serverAttention = useMemo(() => {
     const map = new Map<string, HomeServerAttention>();
     for (const space of spaces) {
-      const guild = guildById.get(space.id);
-      map.set(space.id, {
+      const guild = guildById.get(space.key);
+      map.set(space.key, {
         unread: false,
         live: false,
         memberCount: guild?.member_count,
       });
     }
-    for (const e of needsYou) {
-      if (!e.guildId) continue;
-      const cur = map.get(e.guildId) ?? { unread: false, live: false };
-      cur.unread = true;
-      map.set(e.guildId, cur);
-    }
-    // Pick-up / recent can still carry unread guild rows that lost the Needs-you
-    // cap race — keep space cards + resume hero in sync with those rows.
-    for (const e of pickUp) {
-      if (!e.guildId) continue;
-      if (!(e.unread || e.mentionCount > 0 || e.isThreadReply)) continue;
-      const cur = map.get(e.guildId) ?? { unread: false, live: false };
-      cur.unread = true;
-      map.set(e.guildId, cur);
+    for (const entry of attention) {
+      if (!entry.guildId) continue;
+      const key = entityScopeKey(entry.scope, entry.guildId);
+      const current = map.get(key);
+      if (current) {
+        current.unread ||= entry.unread || entry.mentionCount > 0 || entry.isThreadReply;
+        current.live ||= entry.hasVoiceActivity;
+      }
     }
     for (const room of liveRooms) {
       if (!room.guildId) continue;
-      const cur = map.get(room.guildId) ?? { unread: false, live: false };
-      cur.live = true;
-      map.set(room.guildId, cur);
+      const key = entityScopeKey(room.channel.scope, room.guildId);
+      const cur = map.get(key);
+      if (cur) cur.live = true;
     }
     return map;
-  }, [spaces, needsYou, pickUp, liveRooms, guildById]);
+  }, [spaces, attention, liveRooms, guildById]);
 
-  /** Quiet = no live rooms and no online friends — still compose a full canvas. */
-  const isQuiet = liveRooms.length === 0 && aroundFriends.length === 0;
+  /** Quiet means no known actionable conversations, requests, or live activity. */
+  const isQuiet = activityStatus === 'ready' && attention.length === 0 && pendingRequestCount === 0 && liveRooms.length === 0 && aroundFriends.length === 0;
 
   // Onboarding progress, derived live from store state rather than a stored
   // flag — a step un-checks itself if the underlying thing goes away, and the
@@ -329,49 +346,35 @@ export function HomePage() {
   const handleMessageFriend = useCallback(
     async (userId: string) => {
       try {
-        const { data } = await dmApi.create(userId);
-        const current = useChannelStore.getState().channelsByGuild[''] || [];
-        const existing = current.find((c) => c.id === data.id);
-        const nextDms = existing ? current : [...current, data];
-        useChannelStore.getState().setDmChannels(nextDms);
-        useChannelStore.getState().selectChannel(data.id);
+        if (!channelScope) throw new Error('Sign in to this server before messaging.');
+      const data = await useChannelStore.getState().createDm(userId, channelScope);
+      activateChannel(data);
         navigate(`/app/dms/${data.id}`);
       } catch (err) {
         toast.error(`Failed to open direct message: ${extractApiError(err)}`);
       }
     },
-    [navigate],
+    [navigate, channelScope],
   );
 
   const openConversation = useCallback(
-    (entry: ConversationEntry) => {
-      if (useServerListStore.getState().activeServerId !== entry.serverId) {
-        useServerListStore.getState().setActive(entry.serverId);
-      }
-      if (entry.kind === 'guild_home' && entry.guildId) {
-        navigate(`/app/guilds/${entry.guildId}`);
-      } else if (entry.guildId) {
-        navigate(`/app/guilds/${entry.guildId}/channels/${entry.channelId}`);
-      } else {
-        navigate(`/app/dms/${entry.channelId}`);
-      }
+    (entry: ConversationEntry, messageId?: string) => {
+      try { navigate(activateConversation(entry) + (messageId ? `?message=${encodeURIComponent(messageId)}` : '')); }
+      catch (error) { toast.error(`Failed to open conversation: ${extractApiError(error)}`); }
     },
     [navigate],
   );
 
   const openSpace = useCallback(
     async (space: GuildSummary) => {
-      if (useServerListStore.getState().activeServerId !== space.serverId) {
-        useServerListStore.getState().setActive(space.serverId);
-      }
-      selectGuild(space.id);
-      await useChannelStore.getState().selectGuild(space.id);
+      activateGuild(space);
       navigate(`/app/guilds/${space.id}`);
     },
-    [navigate, selectGuild],
+    [navigate],
   );
 
   const statusLine = useMemo(() => {
+    if (attention.length > 0) return `${attention.length} conversation${attention.length === 1 ? '' : 's'} need${attention.length === 1 ? 's' : ''} your attention`;
     if (liveRooms.length > 0) {
       const n = liveRooms.length;
       return `${n} live room${n === 1 ? '' : 's'} you can jump into`;
@@ -384,6 +387,8 @@ export function HomePage() {
       const n = pendingRequestCount;
       return `${n} friend request${n === 1 ? '' : 's'} waiting`;
     }
+    if (activityStatus === 'error') return 'Some activity could not be checked — refresh to see what needs you';
+    if (activityStatus === 'loading') return 'Checking conversations for unread activity…';
     if (primarySpace) {
       return `${primarySpace.name} is quiet — jump back in or start something`;
     }
@@ -392,6 +397,8 @@ export function HomePage() {
     }
     return 'A quiet moment — reach out, explore, or start a space';
   }, [
+    attention.length,
+    activityStatus,
     liveRooms.length,
     aroundFriends.length,
     pendingRequestCount,
@@ -430,24 +437,25 @@ export function HomePage() {
     [navigate, spaces.length],
   );
 
-  const primaryAttn = primarySpace ? serverAttention.get(primarySpace.id) : undefined;
+  const primaryAttn = primarySpace ? serverAttention.get(primarySpace.key) : undefined;
 
   return (
     <div className="flex h-full flex-col overflow-y-auto bg-bg-primary scrollbar-thin">
       {/* Solid raised header — Fraunces greeting + meaningful status (kill-list #1). */}
       <header className="shrink-0 border-b border-border-subtle bg-bg-secondary shadow-sm">
-        <div className="flex items-center gap-4 px-6 py-5 sm:px-8 sm:py-6">
+        <div className="flex flex-wrap items-center gap-4 px-6 py-5 sm:flex-nowrap sm:px-8 sm:py-6">
           <div
             className="hidden h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-md bg-accent-tint text-xl font-bold text-accent-primary shadow-sm sm:flex"
             aria-hidden
           >
             P
           </div>
-          <div className="min-w-0 flex-1">
-            <h1 className="font-display text-title text-text-primary sm:text-display">
+          <div className="min-w-0 basis-full sm:basis-auto sm:flex-1">
+            <h1 className="break-words font-display text-title text-text-primary sm:text-display">
               {greetingFor(new Date().getHours())}, {displayName(user)}
             </h1>
             <p className="mt-1.5 text-body text-text-secondary">{statusLine}</p>
+            {activityStatus === 'error' && <button type="button" onClick={() => void Promise.allSettled([useReadStateStore.getState().refreshAll(), ...guilds.map(guild => fetchChannels(guild.id, guild.scope))])} className="mt-2 min-h-11 rounded-sm px-2 text-label font-semibold text-accent-primary outline-none focus-visible:ring-2 focus-visible:ring-accent-primary">Refresh activity</button>}
             {pendingRequestCount > 0 && (
               <button
                 type="button"
@@ -469,6 +477,8 @@ export function HomePage() {
 
       {/* Single stacked column — fills vertical space; no xl two-column dead half. */}
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-8 px-6 py-6 sm:px-8 sm:py-8">
+        <HomeNeedsYou entries={attention} onOpen={openConversation} />
+
         {/* (1) Happening now — omit entirely when empty. */}
         {liveRooms.length > 0 && (
           <section aria-label="Happening now">
@@ -491,9 +501,10 @@ export function HomePage() {
                     speakingUsers={speakingUsers}
                     guildId={item.guildId}
                     onJoin={() => {
+                      activateChannel(item.channel);
                       if (!item.guildId) {
                         void joinChannel(item.channel.id, 'dm');
-                        useChannelStore.getState().selectChannel(item.channel.id);
+                        activateChannel(item.channel);
                         navigate(`/app/dms/${item.channel.id}`);
                       } else {
                         void joinChannel(item.channel.id, item.guildId);
@@ -503,9 +514,10 @@ export function HomePage() {
                       }
                     }}
                     onWatch={(streamerId) => {
+                      activateChannel(item.channel);
                       useVoiceStore.getState().setWatchedStreamer(streamerId);
                       if (!item.guildId) {
-                        useChannelStore.getState().selectChannel(item.channel.id);
+                        activateChannel(item.channel);
                         navigate(`/app/dms/${item.channel.id}`);
                       } else {
                         navigate(
@@ -534,6 +546,7 @@ export function HomePage() {
             memberCount={primaryAttn?.memberCount}
             live={primaryAttn?.live}
             unread={primaryAttn?.unread}
+            activityKnown={activityStatus === 'ready'}
             onOpenHome={() => void openSpace(primarySpace)}
             onOpenChannel={openConversation}
           />
@@ -561,9 +574,9 @@ export function HomePage() {
 
         {/* (5) Your spaces — larger cards with member/live/unread context. */}
         <HomeServersRail
-          spaces={spaces}
+          spaces={attention.length > 0 ? spaces.filter(space => space.key !== primarySpace?.key) : spaces}
           attention={serverAttention}
-          primaryId={primarySpace?.id}
+          primaryKey={primarySpace?.key}
           onOpen={(space) => void openSpace(space)}
         />
 

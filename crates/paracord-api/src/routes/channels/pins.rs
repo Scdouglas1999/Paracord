@@ -53,7 +53,7 @@ pub async fn pin_message(
     }
 
     let pins_payload = json!({ "channel_id": channel_id.to_string() });
-    dispatch_channel_event(&state, &channel, "CHANNEL_PINS_UPDATE", pins_payload).await;
+    dispatch_channel_event(&state, &channel, "CHANNEL_PINS_UPDATE", pins_payload).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -83,7 +83,7 @@ pub async fn unpin_message(
     }
 
     let pins_payload = json!({ "channel_id": channel_id.to_string() });
-    dispatch_channel_event(&state, &channel, "CHANNEL_PINS_UPDATE", pins_payload).await;
+    dispatch_channel_event(&state, &channel, "CHANNEL_PINS_UPDATE", pins_payload).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }

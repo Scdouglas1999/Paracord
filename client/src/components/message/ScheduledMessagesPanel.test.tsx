@@ -13,8 +13,8 @@ vi.mock('../../api/channels', () => ({
   },
 }));
 
-vi.mock('../../stores/messageStore', () => ({
-  useMessageStore: { getState: vi.fn(() => ({ editScheduledMessage })) },
+vi.mock('../../hooks/useMessageStore', () => ({
+  useCurrentMessageStoreApi: () => ({ getState: vi.fn(() => ({ editScheduledMessage })) }),
 }));
 
 vi.mock('../../stores/toastStore', () => ({

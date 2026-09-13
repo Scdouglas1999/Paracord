@@ -147,6 +147,7 @@ pub fn native_media_endpoints(headers: &HeaderMap, media_port: u16) -> (String, 
 /// Best-effort and idempotent: safe when native media is disabled or the user
 /// is not currently in any call.
 pub async fn evict_user_from_guild_media(state: &AppState, guild_id: i64, user_id: i64) {
+    let _membership = state.voice.lock_membership(user_id).await;
     // Snapshot the channels the user currently occupies in this guild *before*
     // deleting their voice state, so we can evict them from the matching media
     // rooms and refresh other clients' UIs.
@@ -301,6 +302,7 @@ fn verify_livekit_webhook_auth(
 #[derive(Deserialize, Default)]
 pub struct VoiceJoinQuery {
     pub fallback: Option<String>,
+    pub session_id: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -329,6 +331,84 @@ pub struct LiveKitRoom {
 #[derive(Deserialize)]
 pub struct LiveKitParticipant {
     pub identity: String,
+    pub metadata: Option<String>,
+}
+
+/// Commit durable native membership before discarding a previous room. On a
+/// failed room admission/DB commit the old DB row and participant survive.
+pub(crate) async fn commit_native_membership(
+    state: &AppState,
+    user_id: i64,
+    guild_id: Option<i64>,
+    channel_id: i64,
+    session_id: &str,
+    suppress: bool,
+    can_publish: bool,
+) -> Result<(), ApiError> {
+    let transaction = paracord_db::voice_states::begin_voice_state_transition(
+        &state.db, user_id, guild_id, channel_id, session_id, suppress,
+    )
+    .await
+    .map_err(|error| ApiError::Internal(error.into()))?;
+    let native = state.native_media.as_ref();
+    let previous = native
+        .and_then(|native| {
+            native
+                .rooms
+                .get_room_by_channel(guild_id.unwrap_or(0), channel_id)
+        })
+        .and_then(|room| room.participants.get(&user_id).cloned());
+    if let Some(native) = native {
+        native
+            .rooms
+            .join_room(
+                guild_id.unwrap_or(0),
+                channel_id,
+                MediaParticipant::new(user_id, session_id.to_owned()).with_can_publish(can_publish),
+            )
+            .map_err(|error| match error {
+                paracord_relay::room::RoomError::RoomFull(_) => {
+                    ApiError::BadRequest("Voice channel is full".into())
+                }
+                other => ApiError::Internal(other.into()),
+            })?;
+    }
+    if let Err(error) = transaction.commit().await {
+        if let Some(native) = native {
+            native.rooms.restore_participant_if_session(
+                guild_id.unwrap_or(0),
+                channel_id,
+                user_id,
+                session_id,
+                previous,
+            );
+        }
+        return Err(ApiError::Internal(error.into()));
+    }
+    Ok(())
+}
+
+pub(crate) async fn release_previous_memberships(
+    state: &AppState,
+    user_id: i64,
+    previous: &[paracord_db::voice_states::VoiceStateRow],
+) {
+    for membership in previous {
+        state
+            .voice
+            .leave_room_if_session(membership.channel_id, user_id, Some(&membership.session_id))
+            .await;
+        if let Some(native) = state.native_media.as_ref() {
+            native.rooms.leave_room_if_session(
+                membership.guild_id().unwrap_or(0),
+                membership.channel_id,
+                user_id,
+                Some(&membership.session_id),
+            );
+        }
+    }
+    // LiveKit empty_timeout owns empty-room removal. A delayed DeleteRoom can
+    // otherwise remove a new call that reused this room name.
 }
 
 pub async fn join_voice(
@@ -338,6 +418,7 @@ pub async fn join_voice(
     Path(channel_id): Path<i64>,
     Query(query): Query<VoiceJoinQuery>,
 ) -> Result<Json<Value>, ApiError> {
+    let _membership = state.voice.lock_membership(auth.user_id).await;
     if !state.config.livekit_available
         && !state.config.native_media_enabled
         && !paracord_federation::is_enabled()
@@ -414,47 +495,10 @@ pub async fn join_voice(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
-    // If the user was tracked in any other voice room, remove that stale
-    // in-memory membership before joining the new channel.
-    // Room cleanup (LiveKit DeleteRoom API) is spawned in the background so
-    // it does not block the join response — the API call can take up to 10s
-    // and stacking multiple cleanup calls easily exceeds the client timeout.
-    if let Ok(existing_states) =
-        paracord_db::voice_states::get_all_user_voice_states(&state.db, auth.user_id).await
-    {
-        let mut empty_channels = Vec::new();
-        for existing in existing_states {
-            if existing.channel_id == channel_id {
-                continue;
-            }
-            if let Some(current) = state
-                .voice
-                .leave_room(existing.channel_id, auth.user_id)
-                .await
-            {
-                if current.is_empty() {
-                    empty_channels.push(existing.channel_id);
-                }
-            }
-            if let (Some(native_media), Some(existing_guild_id)) =
-                (state.native_media.as_ref(), existing.guild_id())
-            {
-                let _ = native_media.rooms.leave_room(
-                    existing_guild_id,
-                    existing.channel_id,
-                    auth.user_id,
-                );
-            }
-        }
-        if !empty_channels.is_empty() {
-            let voice = state.voice.clone();
-            tokio::spawn(async move {
-                for ch_id in empty_channels {
-                    let _ = voice.cleanup_room(ch_id).await;
-                }
-            });
-        }
-    }
+    let previous_memberships =
+        paracord_db::voice_states::get_all_user_voice_states(&state.db, auth.user_id)
+            .await
+            .map_err(|error| ApiError::Internal(error.into()))?;
 
     let federation_service = crate::routes::federation::build_federation_service();
     if federation_service.is_enabled() {
@@ -490,21 +534,21 @@ pub async fn join_voice(
                     .await
                 {
                     Ok(remote) => {
-                        let _ = paracord_db::voice_states::upsert_voice_state(
+                        paracord_db::voice_states::begin_voice_state_transition(
                             &state.db,
                             auth.user_id,
                             channel.guild_id(),
                             channel_id,
                             &remote.session_id,
-                        )
-                        .await;
-                        let _ = paracord_db::voice_states::update_suppress(
-                            &state.db,
-                            auth.user_id,
-                            channel.guild_id(),
                             suppress,
                         )
-                        .await;
+                        .await
+                        .map_err(|error| ApiError::Internal(error.into()))?
+                        .commit()
+                        .await
+                        .map_err(|error| ApiError::Internal(error.into()))?;
+                        release_previous_memberships(&state, auth.user_id, &previous_memberships)
+                            .await;
                         state.event_bus.dispatch(
                             "VOICE_STATE_UPDATE",
                             json!({
@@ -576,46 +620,17 @@ pub async fn join_voice(
     let requesting_livekit_fallback = query.fallback.as_deref() == Some("livekit");
     if state.config.native_media_enabled && !requesting_livekit_fallback {
         let session_id = uuid::Uuid::new_v4().to_string();
-        paracord_db::voice_states::upsert_voice_state(
-            &state.db,
+        commit_native_membership(
+            &state,
             auth.user_id,
             channel.guild_id(),
             channel_id,
             &session_id,
-        )
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-        paracord_db::voice_states::update_suppress(
-            &state.db,
-            auth.user_id,
-            channel.guild_id(),
             suppress,
+            can_publish,
         )
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-
-        if let Some(native_media) = state.native_media.as_ref() {
-            if let Err(err) = native_media.rooms.join_room(
-                guild_id,
-                channel_id,
-                MediaParticipant::new(auth.user_id, session_id.clone())
-                    .with_can_publish(can_publish),
-            ) {
-                let _ = paracord_db::voice_states::remove_voice_state_if_session(
-                    &state.db,
-                    auth.user_id,
-                    channel.guild_id(),
-                    &session_id,
-                )
-                .await;
-                return Err(match err {
-                    paracord_relay::room::RoomError::RoomFull(_) => {
-                        ApiError::BadRequest("Voice channel is full".into())
-                    }
-                    other => ApiError::Internal(anyhow::anyhow!(other.to_string())),
-                });
-            }
-        }
+        .await?;
+        release_previous_memberships(&state, auth.user_id, &previous_memberships).await;
 
         state.event_bus.dispatch(
             "VOICE_STATE_UPDATE",
@@ -696,7 +711,7 @@ pub async fn join_voice(
 
     let join_resp = state
         .voice
-        .join_channel(
+        .prepare_channel_join(
             channel_id,
             guild_id,
             auth.user_id,
@@ -708,21 +723,27 @@ pub async fn join_voice(
         .await
         .map_err(ApiError::Internal)?;
 
-    let _ = paracord_db::voice_states::upsert_voice_state(
+    paracord_db::voice_states::begin_voice_state_transition(
         &state.db,
         auth.user_id,
         channel.guild_id(),
         channel_id,
         &session_id,
-    )
-    .await;
-    let _ = paracord_db::voice_states::update_suppress(
-        &state.db,
-        auth.user_id,
-        channel.guild_id(),
         suppress,
     )
-    .await;
+    .await
+    .map_err(|error| ApiError::Internal(error.into()))?
+    .commit()
+    .await
+    .map_err(|error| ApiError::Internal(error.into()))?;
+    state.voice.install_channel_participant(
+        channel_id,
+        guild_id,
+        auth.user_id,
+        &session_id,
+        paracord_media::AudioBitrate::default(),
+    );
+    release_previous_memberships(&state, auth.user_id, &previous_memberships).await;
 
     state.event_bus.dispatch(
         "VOICE_STATE_UPDATE",
@@ -766,6 +787,29 @@ pub async fn join_voice(
     })))
 }
 
+async fn require_stream_receipt(
+    state: &AppState,
+    user_id: i64,
+    guild_id: Option<i64>,
+    channel_id: i64,
+    expected: Option<&str>,
+) -> Result<(), ApiError> {
+    if let Some(expected) = expected {
+        let current =
+            paracord_db::voice_states::get_user_voice_session(&state.db, user_id, guild_id)
+                .await
+                .map_err(|error| ApiError::Internal(error.into()))?;
+        if !current.is_some_and(|membership| {
+            membership.channel_id == channel_id && membership.session_id == expected
+        }) {
+            return Err(ApiError::Conflict(
+                "The voice session for this stream has ended".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub async fn start_stream(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -774,6 +818,7 @@ pub async fn start_stream(
     Query(query): Query<VoiceJoinQuery>,
     body: Option<Json<StartStreamRequest>>,
 ) -> Result<Json<Value>, ApiError> {
+    let _membership = state.voice.lock_membership(auth.user_id).await;
     if !state.config.livekit_available
         && !state.config.native_media_enabled
         && !paracord_federation::is_enabled()
@@ -795,6 +840,14 @@ pub async fn start_stream(
     let guild_id = channel.guild_id().ok_or(ApiError::BadRequest(
         "Streaming is only supported in guild channels".into(),
     ))?;
+    require_stream_receipt(
+        &state,
+        auth.user_id,
+        Some(guild_id),
+        channel_id,
+        query.session_id.as_deref(),
+    )
+    .await?;
     paracord_core::permissions::ensure_guild_member(&state.db, guild_id, auth.user_id).await?;
     let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
         .await
@@ -1062,7 +1115,9 @@ pub async fn stop_stream(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(channel_id): Path<i64>,
+    Query(query): Query<VoiceLeaveQuery>,
 ) -> Result<StatusCode, ApiError> {
+    let _membership = state.voice.lock_membership(auth.user_id).await;
     let channel = paracord_db::channels::get_channel(&state.db, channel_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
@@ -1073,6 +1128,14 @@ pub async fn stop_stream(
     }
 
     let guild_id = channel.guild_id();
+    require_stream_receipt(
+        &state,
+        auth.user_id,
+        guild_id,
+        channel_id,
+        query.session_id.as_deref(),
+    )
+    .await?;
 
     // Stopping a stream ends with a guild-wide VOICE_STATE_UPDATE naming the
     // caller in this channel. With only the channel-type check above, any
@@ -1194,6 +1257,7 @@ pub async fn leave_voice(
     Path(channel_id): Path<i64>,
     Query(query): Query<VoiceLeaveQuery>,
 ) -> Result<StatusCode, ApiError> {
+    let _membership = state.voice.lock_membership(auth.user_id).await;
     let channel = paracord_db::channels::get_channel(&state.db, channel_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
@@ -1203,35 +1267,66 @@ pub async fn leave_voice(
     }
 
     let guild_id = channel.guild_id();
-    let removed = if let Some(expected_session_id) = query.session_id.as_deref() {
-        paracord_db::voice_states::remove_voice_state_if_session(
-            &state.db,
-            auth.user_id,
-            guild_id,
-            expected_session_id,
-        )
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
-    } else {
-        paracord_db::voice_states::remove_voice_state(&state.db, auth.user_id, guild_id)
+    let current =
+        paracord_db::voice_states::get_user_voice_session(&state.db, auth.user_id, guild_id)
             .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-        true
-    };
-    if !removed {
+            .map_err(|error| ApiError::Internal(error.into()))?;
+    // A receipt names a call, not a channel. Without this, a leave holding the
+    // *right* receipt but naming a channel the caller has since moved on from
+    // would tear down the call they are actually in.
+    if current
+        .as_ref()
+        .is_some_and(|membership| membership.channel_id != channel_id)
+    {
         tracing::info!(
-            "Ignoring stale leave_voice request for user={} channel={} session_id={:?}",
+            "Ignoring leave_voice for a channel the caller no longer occupies (user={} channel={} session_id={:?})",
             auth.user_id,
             channel_id,
             query.session_id
         );
         return Ok(StatusCode::NO_CONTENT);
     }
-    let _participants = state.voice.leave_room(channel_id, auth.user_id).await;
-    if let (Some(native_media), Some(guild_id)) = (state.native_media.as_ref(), guild_id) {
-        let _ = native_media
-            .rooms
-            .leave_room(guild_id, channel_id, auth.user_id);
+    // `current == None` is a leave with nothing to unwind (the caller was never
+    // admitted, or a previous leave already landed). Skip the state changes but
+    // still announce it below, so a client whose local state drifted is
+    // corrected rather than left showing a call it is not in.
+    if current.is_some() {
+        let removed = if let Some(expected_session_id) = query.session_id.as_deref() {
+            paracord_db::voice_states::remove_voice_state_if_session(
+                &state.db,
+                auth.user_id,
+                guild_id,
+                expected_session_id,
+            )
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        } else {
+            paracord_db::voice_states::remove_voice_state(&state.db, auth.user_id, guild_id)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+            true
+        };
+        if !removed {
+            tracing::info!(
+                "Ignoring stale leave_voice request for user={} channel={} session_id={:?}",
+                auth.user_id,
+                channel_id,
+                query.session_id
+            );
+            return Ok(StatusCode::NO_CONTENT);
+        }
+        let _participants = state
+            .voice
+            .leave_room_if_session(channel_id, auth.user_id, query.session_id.as_deref())
+            .await;
+        if let (Some(native_media), Some(guild_id)) = (state.native_media.as_ref(), guild_id) {
+            let _ = native_media.rooms.leave_room_if_session(
+                guild_id,
+                channel_id,
+                auth.user_id,
+                query.session_id.as_deref(),
+            );
+        }
     }
     // Don't eagerly delete the LiveKit room when the last participant leaves.
     // Rapid leave→rejoin cycles cause a race between the delete_room API call
@@ -1292,6 +1387,21 @@ pub async fn livekit_webhook(
     } else {
         return Ok(StatusCode::NO_CONTENT);
     };
+    let expected_session = payload
+        .participant
+        .as_ref()
+        .and_then(|participant| participant.metadata.as_deref())
+        .and_then(|metadata| serde_json::from_str::<Value>(metadata).ok())
+        .and_then(|metadata| {
+            metadata
+                .get("voice_session_id")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        });
+    // Older unsigned-to-session metadata cannot identify a replacement safely.
+    let Some(expected_session) = expected_session else {
+        return Ok(StatusCode::NO_CONTENT);
+    };
     let user_id = if let Some(participant) = payload.participant {
         participant.identity.parse::<i64>().ok()
     } else {
@@ -1323,6 +1433,7 @@ pub async fn livekit_webhook(
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
+        let _membership = state_clone.voice.lock_membership(user_id).await;
         // Check if the participant actually reconnected to the LiveKit room.
         // Query LiveKit directly — this is the ground truth for connection status.
         match state_clone
@@ -1353,14 +1464,21 @@ pub async fn livekit_webhook(
             channel_id
         );
 
-        let _ =
-            paracord_db::voice_states::remove_voice_state(&state_clone.db, user_id, guild_id).await;
-        let participants = state_clone.voice.leave_room(channel_id, user_id).await;
-        if let Some(current) = participants {
-            if current.is_empty() {
-                let _ = state_clone.voice.cleanup_room(channel_id).await;
-            }
+        let guild_id = guild_id.filter(|id| *id != 0);
+        let removed = paracord_db::voice_states::remove_voice_state_if_session(
+            &state_clone.db,
+            user_id,
+            guild_id,
+            &expected_session,
+        )
+        .await;
+        if !matches!(removed, Ok(true)) {
+            return;
         }
+        let _ = state_clone
+            .voice
+            .leave_room_if_session(channel_id, user_id, Some(&expected_session))
+            .await;
 
         let user = paracord_db::users::get_user_by_id(&state_clone.db, user_id)
             .await

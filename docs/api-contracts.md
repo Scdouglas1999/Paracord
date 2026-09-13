@@ -59,6 +59,11 @@ Keep this document focused on stable resource shapes and higher-level contracts;
 - `POST /api/v1/auth/challenge`
 - `POST /api/v1/auth/verify`
 - `POST /api/v1/auth/attach-public-key`
+  - Requires a live tracked session and current password, plus MFA when enabled.
+  - Attach body: `{ public_key, nonce, timestamp, signature, password, mfa_code?, expected_public_key? }`.
+  - Omitted or null `expected_public_key` requests first enrollment. Replacing an existing key requires its exact previous value (hex case is ignored); stale expectations return `409`. Reattaching the current key preserves existing sessions.
+  - Successful changes return the replacement authentication response and cookies. Key ownership, old-session revocation, and replacement-session creation commit together; storage failures roll back all three.
+  - Detach body: `{ detach: true, password, mfa_code? }`. Key removal and session revocation commit together.
 - `GET /api/v1/auth/sessions`
 - `DELETE /api/v1/auth/sessions/{session_id}`
 - `POST /api/v1/auth/forgot-password`
@@ -69,6 +74,14 @@ Keep this document focused on stable resource shapes and higher-level contracts;
 - `POST /api/v1/auth/mfa/disable`
 - `GET /api/v1/auth/mfa/status`
 - `POST /api/v1/auth/mfa/login`
+
+Identity key ownership is case insensitive. Migration
+`20260909000004_identity_key_case_uniqueness` adds a unique index over
+`lower(public_key)` on both database engines and preserves existing key spelling.
+If older data contains multiple owners for the same key, the migration stops
+without selecting or deleting an owner. An administrator must resolve those
+conflicting account identities before retrying the upgrade; changing hex case
+cannot resolve a cryptographic ownership conflict.
 
 ### Users
 
@@ -89,7 +102,15 @@ Keep this document focused on stable resource shapes and higher-level contracts;
 - `GET /api/v1/users/@me/relationships`
 - `POST /api/v1/users/@me/relationships`
 - `DELETE /api/v1/users/@me/relationships/{user_id}`
-- `PUT /api/v1/users/@me/keys`
+- `GET /api/v1/users/@me/keys` — authenticated public-key snapshot; does not consume prekeys. Returns `identity_key`, nullable `signed_prekey`, remaining `one_time_prekeys`, and nullable `last_resort_prekey`.
+- `PUT /api/v1/users/@me/keys` — validates the complete request before atomically publishing its keys. Signed-prekey and one-time-prekey IDs belong to each account.
+  Replay-safe publications include `request_id` (UUID) and `expected_identity_key`
+  (the enrolled identity as lowercase hex). The response echoes `request_id`.
+  Reusing an ID with different key material, or publishing after the enrolled
+  identity changes, returns 409. An exact retry returns its original receipt
+  without restoring consumed keys or replacing newer keys. Older requests that
+  omit both fields retain their previous API contract; the new enrollment client
+  requires an acknowledged publication ID.
 - `GET /api/v1/users/@me/keys/count`
 - `GET /api/v1/users/{user_id}/keys`
 
@@ -163,10 +184,28 @@ Keep this document focused on stable resource shapes and higher-level contracts;
 - `DELETE /api/v1/channels/{channel_id}`
 - `GET /api/v1/channels/{channel_id}/messages`
 - `POST /api/v1/channels/{channel_id}/messages`
+- `POST /api/v1/channels/{channel_id}/message-deliveries/{nonce}/resolve`
+  - Authenticated, with channel visibility or DM membership. Sending permission is not required. No request body.
+  - This operation permanently seals a missing delivery nonce against future creation; it is not a read-only lookup. The nonce must be nonempty, at most 64 bytes, and have no surrounding whitespace.
+  - Response: `{ channel_id, author_id, nonce, state: "cancelled" }` if resolution wins before creation. A delayed POST with that nonce receives `410` with code `DELIVERY_CANCELLED`.
+  - If creation committed first: `{ channel_id, author_id, nonce, state: "delivered", message_id }`. If that message has since been deleted, `state` is `"deleted"` and the same `message_id` remains. IDs are decimal strings.
+  - Scope is the authenticated author plus channel and nonce. Repeated requests return the current durable outcome. Existing messages are never changed; ordinary message edit/delete authorization still applies.
+  - Clients must retain uncertain prepared requests until the resolution and any affected encryption generation are reconciled atomically in local storage. A cancelled initial X3DH request cannot simply be removed while later messages reuse its unestablished generation.
 - `POST /api/v1/channels/{channel_id}/messages/bulk-delete`
 - `GET /api/v1/channels/{channel_id}/messages/search`
 - `GET /api/v1/channels/{channel_id}/summary`
+- `POST /api/v1/channels/{channel_id}/messages/{message_id}/edits/{edit_nonce}/resolve`
+  - Resolves the authenticated actor's edit nonce under current channel visibility. The response identifies `channel_id`, `actor_id`, `message_id`, `edit_nonce`, and `state` (`cancelled`, `applied`, or `deleted`).
+  - An absent operation is atomically sealed as cancelled. A delayed PATCH using that nonce cannot change the target; a live target returns `410 EDIT_CANCELLED`. A successful receipt stays applied, even if newer edits exist. If its target was deleted, resolution returns deleted. No content, history, or moderation verdict is changed by resolution.
+  - Nonces are scoped to actor and channel, have the same 1-64-byte bounds as PATCH, and bind one target. A different target conflicts. Resolution remains available during a timeout, but loss of channel visibility denies access. Its actor-owned cancellation does not authorize a future edit.
+  - Before replacing an uncertain PATCH, clients must persist the replacement intent and resolve the preceding edit. This seals a missing operation so that its delayed first attempt cannot overwrite the replacement. A storage or HTTP failure is not a cancellation acknowledgement.
 - `PATCH /api/v1/channels/{channel_id}/messages/{message_id}`
+  - Accepts `content`, optional `e2ee`, and optional `edit_nonce`. A replayable edit must provide a nonempty nonce of at most 64 bytes without surrounding whitespace, and retain its original request on retry.
+  - Successful nonce-bearing responses include `edit_nonce` and boolean `edit_replayed`. Receipts are scoped to channel, authenticated actor and nonce, and bind the target message plus the complete content/encryption payload. Reusing one for a different mutation returns `409 CONFLICT`.
+  - Matching retries return `200` with the current message and `edit_replayed: true`. That message may contain a subsequent edit; the earlier request is acknowledged without overwriting it, changing its edit timestamp, adding history, or repeating successful moderation effects/events.
+  - New mutations require current edit authority. Replays require channel visibility or DM membership and the same actor's matching receipt, so a timeout does not prevent acknowledgement of an already committed edit. A deleted target returns `404`; receipts survive deletion and do not recreate the message.
+  - Accepted edits commit the body/encryption metadata, preceding-content snapshot, moderation hits and receipt atomically. A persistence failure rolls them all back. Rejected operations are not recorded as successful edits.
+  - AutoMod evaluation and hit-persistence failures now reject edits, sends and webhook execution instead of silently allowing unfiltered content. Moderator alerts, timeouts and gateway/federation fan-out retain their existing post-commit delivery behavior; this protocol does not add a durable event dispatcher.
 - `DELETE /api/v1/channels/{channel_id}/messages/{message_id}`
 - `GET /api/v1/channels/{channel_id}/features`
 - `PATCH /api/v1/channels/{channel_id}/features`
@@ -290,13 +329,14 @@ Pending uploads are stored with `message_id = NULL` until linked during message 
 - `POST /api/v1/admin/restart-update`
 - `POST /api/v1/admin/backup`
 - `GET /api/v1/admin/backups`
-- `POST /api/v1/admin/restore`
+- `POST /api/v1/admin/restore` — returns `offline_restore_required` with CLI preparation instructions; does not replace live data
 - `GET /api/v1/admin/backups/{name}`
 - `DELETE /api/v1/admin/backups/{name}`
 
 ## Invite Accept Contract
 
-`POST /api/v1/invites/{code}` returns a guild object directly (not nested), plus:
+`POST /api/v1/invites/{code}` returns `{ "guild": {…} }` — the guild card nested
+under `guild`, including:
 
 - `default_channel_id`: first usable channel for post-join navigation.
 
@@ -335,3 +375,189 @@ Pending uploads are stored with `message_id = NULL` until linked during message 
 - `GUILD_ROLE_CREATE` / `GUILD_ROLE_UPDATE` / `GUILD_ROLE_DELETE`
 - `GUILD_BAN_ADD` / `GUILD_BAN_REMOVE`
 - `INVITE_CREATE` / `INVITE_DELETE`
+
+
+## Conversation action discovery
+
+`GET /api/v1/channels/{channel_id}/capabilities` requires authentication and
+channel visibility. Version 1 returns `channel_id` and the authenticated
+`user_id` as strings, `encrypted`, `own_identity_enrolled`, `peers_ready`, and
+an `actions` object with these keys: `send`, `poll`, `schedule`, `attach`,
+`summary`, `voice`, `video`, and `screen_share`.
+
+Each action contains `supported`, `allowed`, and `reason`. An allowed action
+must be supported and have a null reason. A denied action has a nonempty
+explanation. `supported: false` represents a channel type or server configuration
+that cannot provide the feature; `supported: true, allowed: false` represents
+current permissions or moderation restrictions. Encrypted DMs do not support
+server-readable polls or summaries. Summary availability validates provider
+configuration without contacting that provider or returning credentials.
+
+These decisions are advisory snapshots. Endpoints still enforce their own
+permissions when called. Clients must verify the returned channel and account,
+discard responses after account revocation, and refresh after permission or
+relationship changes. The client also applies local encryption, device, and
+feature availability. Server permission alone does not mean that a particular
+client can produce a valid encrypted attachment or scheduled message.
+
+Encryption readiness reports server-side enrollment and peer key inventory;
+it does not prove possession of the local private key, cryptographic validity
+of a peer bundle, or readiness of an existing local ratchet. The sending
+implementation must verify those independently. Capability discovery does not
+consume peer one-time prekeys.
+
+### Message attention targets
+
+`GET /api/v1/channels/{channel_id}/messages/attention?kind=mention|unread&after={message_id}`
+requires channel visibility and message-history permission. The optional `after`
+is a decimal snowflake (zero is allowed); the effective lower bound is the larger
+of that device cursor and the server's stored read cursor. The request never
+acknowledges or marks messages read. It returns the earliest matching unread
+message, using the same message serializer as history:
+
+```json
+{"channel_id":"200","user_id":"42","kind":"mention","message":null}
+```
+
+`message` is a normal message object when a target exists, otherwise `null`.
+The client validates the response's account, channel, kind, and target cursor
+before presenting it or appending `?message=` to an owned conversation route.
+Thread rows use the first unread message in that thread; mention rows use the
+first message recorded as notifying the authenticated recipient. They do not
+substitute the most recent unrelated message when no target exists.
+
+Mention recipients commit with the message and delivery receipt. Direct mentions,
+permitted mentionable roles, and authorized mass mentions are deduplicated; the
+author and people unable to view the channel are excluded. Editing the text or
+changing a role later does not rewrite the original notification audience.
+Deleting the message cascades its mention records. New unread counts derive from
+records above the read cursor, so replay and stale/partial acknowledgements do not
+inflate counts or clear newer mentions.
+
+After a new message commits, `MESSAGE_MENTION` is dispatched only to its recorded
+recipients, with `channel_id` and `message_id` strings. It contains no text or
+recipient roster. Clients coalesce these events into an account-owned read-state
+refresh, performing a subsequent refresh when an event arrives during an older
+snapshot. Replayed events never increment a client-side guessed count.
+
+Before this migration, read state stored only an aggregate mention count. Those
+legacy counts are retained until acknowledged; their originating message IDs
+cannot be reconstructed reliably, especially for historical role or mass mentions.
+They are not invented during migration. A legacy-only mention row explicitly
+reports that no unread mention target is available and leaves the conversation
+accessible. New mention records supply exact targets and counts immediately.
+
+Webhook and interaction messages use the same committed audience rules. Scheduled
+messages use a stable delivery identity so replay cannot notify recipients twice.
+Crossposts retain only source recipients who can view the destination; copied text
+does not acquire a new audience. Quarantine approval uses the audience captured at
+quarantine, with no invented pings for older records. Built-in bot/moderation log
+messages use explicitly intended recipients. Federation reads structured
+`m.mentions` identities and resolves local or mapped accounts rather than treating
+arbitrary remote numeric IDs as local users. The shared publisher sends targeted
+`MESSAGE_MENTION` events after `MESSAGE_CREATE` for these producers too.
+
+## Ordered channel message activity
+
+Channel list/detail/DM responses include `message_revision` as a canonical decimal
+string. Migration 20260909000010 initializes existing channels at zero. A committed
+message creation advances the revision in the same transaction as the channel tail;
+deletions advance it with tail repair. Replays, denied deletion and missing-message
+deletion do not advance it. Values are bounded by signed 64-bit integers; exhausting
+the revision rejects and rolls back the mutation rather than storing an imprecise value.
+
+`MESSAGE_CREATE`, `MESSAGE_DELETE` and `MESSAGE_DELETE_BULK` carry:
+
+```json
+{
+  "channel_activity": {
+    "channel_id": "123",
+    "guild_id": "456",
+    "last_message_id": null,
+    "revision": "42"
+  }
+}
+```
+
+`guild_id` is null for direct/group direct conversations. `last_message_id` is the
+highest surviving message ID or null for an empty channel. The activity snapshot is
+read after commit and may include subsequent mutations; it must not be inferred from
+the message body's ID or event publication order. The shared event publisher retains
+the producer's original guild/user audience and never emits guessed activity if its
+snapshot query fails. Such failures are logged; durable publication recovery remains
+part of the realtime lifecycle work.
+
+Clients key activity by authenticated server/account/channel, compare revisions as
+integers without floating-point conversion, and retain the greatest known revision
+across events, in-flight collection journals and full snapshots. Equal revisions do
+not replace an established tail with conflicting content. Ordinary channel metadata
+updates preserve known activity. Malformed, out-of-range or mismatched activity
+envelopes cannot mutate it. Revision ordering applies within one database history,
+identified by the epoch below. Activity received before channel metadata is bounded
+per account and retained across older snapshots; an authoritative visibility list
+prunes older activity for channels outside that list. Overflow cancels the owning
+snapshot and requires a fresh load.
+
+## Database history identity
+
+`server_settings.database_history_epoch` is a canonical UUIDv4 shared by instances
+using the same database. Ordinary migrations and server restarts preserve it.
+SQLite-to-PostgreSQL import and isolated archive recovery rotate it after repairing
+derived channel tails. Operators must stop every instance using the old database
+before activating a recovery generation; see [Backup recovery](backup-recovery.md).
+
+Authenticated WebSocket and SSE `READY`/`RESUMED` frames and
+`POST /api/v2/rt/session` publish `database_history_epoch`. HTTP responses publish
+`X-Paracord-History-Epoch`; CORS permits and exposes that header. A request carrying
+a different epoch receives HTTP 409 with code `HISTORY_CHANGED` before handler
+execution. Invalid or duplicate epoch headers receive 400. Omission is supported
+for bootstrap and legacy clients; it provides no protection against stale requests.
+
+The client accepts an epoch only from its currently owned, authenticated gateway
+handshake. It persists this public metadata by server/account. A changed handshake
+expires captured operations before clearing that account's channel, guild, member,
+message, read-state and permission projections. Other accounts remain intact and
+lower channel revisions can then populate the replacement history. Same-epoch
+resumes retain caches. A changed `RESUMED` requires a fresh `READY` before replay.
+
+Realtime replay counters are process-local and may restart independently of the
+database epoch. SSE treats a cursor beyond its current head as a full resync,
+advertising the current head in READY before accepting subsequent live events.
+Otherwise an old counter could suppress updates after a restart or restore.
+WebSocket RESUMED advertises the client's completed sequence, then emits the
+missed dispatches in order; it does not acknowledge the server's replay head in
+advance. A WebSocket resume beyond the cached head requires fresh identification.
+
+Captured HTTP operations pin their accepted epoch, including token refresh, and
+validate response ownership before changing state or credentials. An unexpected
+response epoch requests a fresh handshake; it never authorizes automatic adoption
+or resending into the replacement history. Corrupt local metadata prevents owned
+requests until a valid handshake repairs it. Migration of remaining unowned API
+workflows and persisted legacy queues is still in progress; this protocol does not
+make legacy queues safe to resend after restore.
+
+## Durable message deletion
+
+`DELETE /api/v1/channels/{channel_id}/messages/{message_id}` accepts an optional
+JSON body containing only `delete_nonce`, a canonical nonnil UUID. An empty body
+retains the legacy 204 response. Every nonempty body is validated, including when
+Content-Type is omitted; malformed bodies cannot become legacy deletions.
+
+A durable deletion returns 200:
+
+```json
+{"channel_id":"200","message_id":"300","actor_id":"42","delete_nonce":"7257b8f7-610e-4a8b-a20c-5a94a7b98428","state":"deleted","delete_replayed":false}
+```
+
+Deletion, audience cleanup, channel-tail repair/revision advancement and the owned
+receipt commit together. Retrying the same actor/channel/nonce/message returns the
+receipt with `delete_replayed:true`, without duplicate events. Retargeting that
+nonce to another message is a conflict. Current visibility is required even to read
+a receipt; new deletions additionally require authorship or management permission.
+The receipt survives deletion of the target message.
+
+`POST /api/v1/channels/{channel_id}/messages/{message_id}/deletions/{delete_nonce}/resolve`
+returns the same identities with `state:"deleted"` when a receipt exists, or
+`state:"pending"` when the authorized target still exists. Resolution does not
+reserve, cancel or delete anything. A missing target without a matching receipt is
+404 and cannot prove that this particular deletion committed.

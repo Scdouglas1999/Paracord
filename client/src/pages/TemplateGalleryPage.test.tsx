@@ -1,3 +1,5 @@
+import { guildLandingPath } from '../lib/guildNavigation';
+vi.mock('../lib/guildNavigation', () => ({ guildLandingPath: vi.fn(async (guild: { id: string }) => `/app/guilds/${guild.id}`) }));
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
@@ -5,18 +7,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { templateApi, type GuildTemplate } from '../api/templates';
 import { useAuthStore } from '../stores/authStore';
 import { useChannelStore } from '../stores/channelStore';
-import { useGuildStore } from '../stores/guildStore';
+import { useGuildStore, scopeGuild } from '../stores/guildStore';
 import { confirm } from '../stores/confirmStore';
 import { TemplateGalleryPage } from './TemplateGalleryPage';
 
-vi.mock('../api/templates', () => ({
-  templateApi: {
+vi.mock('../api/templates', () => {
+  const templateApi = {
     list: vi.fn(),
     apply: vi.fn(),
     remove: vi.fn(),
     createFromGuild: vi.fn(),
-  },
-}));
+  };
+  return { templateApi, createTemplateApi: () => templateApi };
+});
 
 vi.mock('../stores/confirmStore', () => ({
   confirm: vi.fn(),
@@ -108,15 +111,9 @@ describe('TemplateGalleryPage', () => {
     vi.mocked(templateApi.createFromGuild).mockResolvedValue({ data: template } as never);
     vi.mocked(templateApi.remove).mockResolvedValue({ data: {} } as never);
     vi.mocked(confirm).mockResolvedValue(true);
-    useAuthStore.setState({ user: currentUser });
-    useGuildStore.setState({ guilds: [ownedGuild, otherGuild] });
-    useChannelStore.setState({
-      channelsByGuild: {},
-      channelsById: {},
-      channels: [],
-      guildChannelsLoaded: {},
-      fetchChannels: vi.fn().mockResolvedValue(undefined),
-    });
+    useAuthStore.setState({ user: currentUser, token: 'token' });
+    useGuildStore.setState({ guilds: [ownedGuild, otherGuild].map(guild => scopeGuild(guild, { serverId: '__local__', userId: currentUser.id })) });
+    useChannelStore.getState().reset();
   });
 
   it('renders template details and creates a server from the selected template', async () => {
@@ -141,7 +138,7 @@ describe('TemplateGalleryPage', () => {
     await waitFor(() => {
       expect(templateApi.apply).toHaveBeenCalledWith('tpl-1', 'Launch HQ');
     });
-    expect(useChannelStore.getState().fetchChannels).toHaveBeenCalledWith('guild-new');
+    expect(guildLandingPath).toHaveBeenCalledWith(expect.objectContaining({ id: 'guild-new', scope: { serverId: '__local__', userId: currentUser.id } }));
     expect(await screen.findByText('Created server route')).toBeInTheDocument();
     expect(useGuildStore.getState().guilds.some((guild) => guild.id === 'guild-new')).toBe(true);
   });

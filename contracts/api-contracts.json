@@ -1,0 +1,1787 @@
+{
+  "schema_version": 1,
+  "schemas": {
+    "AcceptInviteRequest": {
+      "$id": "urn:paracord:contract:AcceptInviteRequest",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`POST /invites/{code}` accepts an optional JSON body.",
+      "properties": {
+        "verification_ack": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "verification_answers": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "title": "AcceptInviteRequest",
+      "type": "object"
+    },
+    "ChangeEmailRequest": {
+      "$id": "urn:paracord:contract:ChangeEmailRequest",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "current_password": {
+          "type": "string"
+        },
+        "new_email": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "current_password",
+        "new_email"
+      ],
+      "title": "ChangeEmailRequest",
+      "type": "object"
+    },
+    "ChangePasswordRequest": {
+      "$id": "urn:paracord:contract:ChangePasswordRequest",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "current_password": {
+          "type": "string"
+        },
+        "new_password": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "current_password",
+        "new_password"
+      ],
+      "title": "ChangePasswordRequest",
+      "type": "object"
+    },
+    "CreateGuildRequest": {
+      "$id": "urn:paracord:contract:CreateGuildRequest",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "icon": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "CreateGuildRequest",
+      "type": "object"
+    },
+    "CreateInviteRequest": {
+      "$id": "urn:paracord:contract:CreateInviteRequest",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "max_age": {
+          "default": 86400,
+          "description": "Seconds until expiry; 0 means never, at most 604800 (7 days).",
+          "format": "int32",
+          "type": "integer"
+        },
+        "max_uses": {
+          "default": 0,
+          "description": "0 means unlimited uses; at most 100 otherwise.",
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "title": "CreateInviteRequest",
+      "type": "object"
+    },
+    "CreateRelationshipRequest": {
+      "$id": "urn:paracord:contract:CreateRelationshipRequest",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "type": {
+          "description": "Only 1 (friend request) and 2 (block) are accepted.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "user_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "username": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "title": "CreateRelationshipRequest",
+      "type": "object"
+    },
+    "CurrentUser": {
+      "$defs": {
+        "LinkedAccount": {
+          "description": "A linked account published on a user's public profile.",
+          "properties": {
+            "label": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "label",
+            "url"
+          ],
+          "type": "object"
+        }
+      },
+      "$id": "urn:paracord:contract:CurrentUser",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`GET /users/@me`: the authenticated account, including credential metadata.",
+      "properties": {
+        "avatar_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "banner_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bio": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bot": {
+          "type": "boolean"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "discriminator": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "display_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "email": {
+          "type": "string"
+        },
+        "email_verified": {
+          "type": "boolean"
+        },
+        "flags": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "has_public_key": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "linked_accounts": {
+          "items": {
+            "$ref": "#/$defs/LinkedAccount"
+          },
+          "type": "array"
+        },
+        "pronouns": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "public_key": {
+          "description": "An attached Ed25519 key can authenticate this account on its own, so the\nowner must be able to see that one exists and which one it is.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "system": {
+          "type": "boolean"
+        },
+        "username": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "username",
+        "discriminator",
+        "display_name",
+        "avatar_hash",
+        "banner_hash",
+        "bio",
+        "flags",
+        "bot",
+        "system",
+        "created_at",
+        "pronouns",
+        "linked_accounts",
+        "email",
+        "email_verified",
+        "public_key",
+        "has_public_key"
+      ],
+      "title": "CurrentUser",
+      "type": "object"
+    },
+    "GuildDetail": {
+      "$defs": {
+        "GuildBotConfig": {
+          "additionalProperties": true,
+          "properties": {
+            "enabled": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "GuildVisibility": {
+          "enum": [
+            "private",
+            "public",
+            "roles"
+          ],
+          "type": "string"
+        },
+        "HubSettings": {
+          "additionalProperties": true,
+          "properties": {
+            "banner_hash": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pinned_channels": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "welcome_text": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        }
+      },
+      "$id": "urn:paracord:contract:GuildDetail",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "Full settings returned by the space detail and mutation endpoints.",
+      "properties": {
+        "allowed_roles": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "banner_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bot_settings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/GuildBotConfig"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "discovery_tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "feature_flags": {
+          "description": "The persisted feature bitset; it is not an array of feature names.",
+          "format": "int32",
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer"
+        },
+        "hub_settings": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HubSettings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "icon_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "member_count": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "owner_id": {
+          "type": "string"
+        },
+        "system_channel_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vanity_url_code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "visibility": {
+          "$ref": "#/$defs/GuildVisibility"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "description",
+        "icon_hash",
+        "owner_id",
+        "member_count",
+        "created_at",
+        "visibility",
+        "allowed_roles",
+        "discovery_tags",
+        "hub_settings",
+        "bot_settings",
+        "banner_hash",
+        "system_channel_id",
+        "vanity_url_code",
+        "feature_flags"
+      ],
+      "title": "GuildDetail",
+      "type": "object"
+    },
+    "GuildEmoji": {
+      "$id": "urn:paracord:contract:GuildEmoji",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "A custom guild emoji. `creator_id` is null for emoji whose creator record\nis gone; the field is always present.",
+      "properties": {
+        "animated": {
+          "type": "boolean"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "creator_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "guild_id": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "guild_id",
+        "name",
+        "animated",
+        "creator_id",
+        "created_at"
+      ],
+      "title": "GuildEmoji",
+      "type": "object"
+    },
+    "GuildEmojiList": {
+      "$defs": {
+        "GuildEmoji": {
+          "description": "A custom guild emoji. `creator_id` is null for emoji whose creator record\nis gone; the field is always present.",
+          "properties": {
+            "animated": {
+              "type": "boolean"
+            },
+            "created_at": {
+              "type": "string"
+            },
+            "creator_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "guild_id": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "guild_id",
+            "name",
+            "animated",
+            "creator_id",
+            "created_at"
+          ],
+          "type": "object"
+        }
+      },
+      "$id": "urn:paracord:contract:GuildEmojiList",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "items": {
+        "$ref": "#/$defs/GuildEmoji"
+      },
+      "title": "GuildEmojiList",
+      "type": "array"
+    },
+    "GuildInvite": {
+      "$id": "urn:paracord:contract:GuildInvite",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "A guild invite as returned by create and guild-scoped list endpoints.\nNullable fields are present in responses, including when their value is null.\n`max_uses`/`max_age` of 0 mean unlimited/never expire.",
+      "properties": {
+        "channel_id": {
+          "type": "string"
+        },
+        "code": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "guild_id": {
+          "type": "string"
+        },
+        "inviter_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_age": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_uses": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "uses": {
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "code",
+        "guild_id",
+        "channel_id",
+        "inviter_id",
+        "max_uses",
+        "uses",
+        "max_age",
+        "created_at"
+      ],
+      "title": "GuildInvite",
+      "type": "object"
+    },
+    "GuildInviteList": {
+      "$defs": {
+        "GuildInvite": {
+          "description": "A guild invite as returned by create and guild-scoped list endpoints.\nNullable fields are present in responses, including when their value is null.\n`max_uses`/`max_age` of 0 mean unlimited/never expire.",
+          "properties": {
+            "channel_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string"
+            },
+            "guild_id": {
+              "type": "string"
+            },
+            "inviter_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "max_age": {
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "max_uses": {
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "uses": {
+              "format": "int32",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "code",
+            "guild_id",
+            "channel_id",
+            "inviter_id",
+            "max_uses",
+            "uses",
+            "max_age",
+            "created_at"
+          ],
+          "type": "object"
+        }
+      },
+      "$id": "urn:paracord:contract:GuildInviteList",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "items": {
+        "$ref": "#/$defs/GuildInvite"
+      },
+      "title": "GuildInviteList",
+      "type": "array"
+    },
+    "GuildSummary": {
+      "$defs": {
+        "GuildBotConfig": {
+          "additionalProperties": true,
+          "properties": {
+            "enabled": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "GuildVisibility": {
+          "enum": [
+            "private",
+            "public",
+            "roles"
+          ],
+          "type": "string"
+        },
+        "HubSettings": {
+          "additionalProperties": true,
+          "properties": {
+            "banner_hash": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pinned_channels": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "welcome_text": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        }
+      },
+      "$id": "urn:paracord:contract:GuildSummary",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "Space metadata used by the authenticated space list and navigation.\nNullable fields are present in responses, including when their value is null.",
+      "properties": {
+        "allowed_roles": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "bot_settings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/GuildBotConfig"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "discovery_tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "hub_settings": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HubSettings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "icon_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "member_count": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "owner_id": {
+          "type": "string"
+        },
+        "visibility": {
+          "$ref": "#/$defs/GuildVisibility"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "description",
+        "icon_hash",
+        "owner_id",
+        "member_count",
+        "created_at",
+        "visibility",
+        "allowed_roles",
+        "discovery_tags",
+        "hub_settings",
+        "bot_settings"
+      ],
+      "title": "GuildSummary",
+      "type": "object"
+    },
+    "GuildSummaryList": {
+      "$defs": {
+        "GuildBotConfig": {
+          "additionalProperties": true,
+          "properties": {
+            "enabled": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "GuildSummary": {
+          "description": "Space metadata used by the authenticated space list and navigation.\nNullable fields are present in responses, including when their value is null.",
+          "properties": {
+            "allowed_roles": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "bot_settings": {
+              "additionalProperties": {
+                "$ref": "#/$defs/GuildBotConfig"
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "created_at": {
+              "type": "string"
+            },
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "discovery_tags": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "hub_settings": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/HubSettings"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "icon_hash": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "member_count": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "name": {
+              "type": "string"
+            },
+            "owner_id": {
+              "type": "string"
+            },
+            "visibility": {
+              "$ref": "#/$defs/GuildVisibility"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "description",
+            "icon_hash",
+            "owner_id",
+            "member_count",
+            "created_at",
+            "visibility",
+            "allowed_roles",
+            "discovery_tags",
+            "hub_settings",
+            "bot_settings"
+          ],
+          "type": "object"
+        },
+        "GuildVisibility": {
+          "enum": [
+            "private",
+            "public",
+            "roles"
+          ],
+          "type": "string"
+        },
+        "HubSettings": {
+          "additionalProperties": true,
+          "properties": {
+            "banner_hash": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pinned_channels": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "welcome_text": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        }
+      },
+      "$id": "urn:paracord:contract:GuildSummaryList",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "items": {
+        "$ref": "#/$defs/GuildSummary"
+      },
+      "title": "GuildSummaryList",
+      "type": "array"
+    },
+    "InviteAcceptResponse": {
+      "$defs": {
+        "InviteAcceptGuild": {
+          "description": "The guild card returned after successfully accepting an invite.",
+          "properties": {
+            "created_at": {
+              "type": "string"
+            },
+            "default_channel_id": {
+              "description": "First usable channel for post-join navigation.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "icon_hash": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "member_count": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "name": {
+              "type": "string"
+            },
+            "owner_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "description",
+            "icon_hash",
+            "owner_id",
+            "created_at",
+            "default_channel_id",
+            "member_count"
+          ],
+          "type": "object"
+        }
+      },
+      "$id": "urn:paracord:contract:InviteAcceptResponse",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`POST /invites/{code}` response.",
+      "properties": {
+        "guild": {
+          "$ref": "#/$defs/InviteAcceptGuild"
+        }
+      },
+      "required": [
+        "guild"
+      ],
+      "title": "InviteAcceptResponse",
+      "type": "object"
+    },
+    "InvitePreview": {
+      "$defs": {
+        "InviteGuildPreview": {
+          "description": "The guild card embedded in `GET /invites/{code}`.",
+          "properties": {
+            "icon_hash": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "member_count": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "icon_hash",
+            "member_count"
+          ],
+          "type": "object"
+        }
+      },
+      "$id": "urn:paracord:contract:InvitePreview",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`GET /invites/{code}`: public invite resolution. `guild` is null when the\ninvite's channel no longer resolves to a guild.",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "guild": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InviteGuildPreview"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "guild"
+      ],
+      "title": "InvitePreview",
+      "type": "object"
+    },
+    "OwnershipTransferResponse": {
+      "$id": "urn:paracord:contract:OwnershipTransferResponse",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "owner_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "owner_id"
+      ],
+      "title": "OwnershipTransferResponse",
+      "type": "object"
+    },
+    "PublicUserProfile": {
+      "$defs": {
+        "LinkedAccount": {
+          "description": "A linked account published on a user's public profile.",
+          "properties": {
+            "label": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "label",
+            "url"
+          ],
+          "type": "object"
+        },
+        "MutualFriend": {
+          "description": "A friend shared by the viewer and the profile subject.",
+          "properties": {
+            "avatar_hash": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "discriminator": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "id": {
+              "type": "string"
+            },
+            "username": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "username",
+            "discriminator",
+            "avatar_hash"
+          ],
+          "type": "object"
+        },
+        "MutualGuild": {
+          "description": "A guild shared by the viewer and the profile subject. `icon_url` is the\npersisted icon hash; the wire name predates the `icon_hash` convention.",
+          "properties": {
+            "icon_url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "icon_url"
+          ],
+          "type": "object"
+        },
+        "ProfileRole": {
+          "description": "A guild role embedded in the public profile response. `permissions` is the\nbitset as a decimal string, preserving values beyond JavaScript's safe\ninteger range.",
+          "properties": {
+            "color": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "created_at": {
+              "type": "string"
+            },
+            "guild_id": {
+              "type": "string"
+            },
+            "hoist": {
+              "type": "boolean"
+            },
+            "id": {
+              "type": "string"
+            },
+            "mentionable": {
+              "type": "boolean"
+            },
+            "name": {
+              "type": "string"
+            },
+            "permissions": {
+              "type": "string"
+            },
+            "position": {
+              "format": "int32",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "guild_id",
+            "name",
+            "color",
+            "hoist",
+            "position",
+            "permissions",
+            "mentionable",
+            "created_at"
+          ],
+          "type": "object"
+        },
+        "PublicUser": {
+          "description": "The user object embedded in the public profile response.",
+          "properties": {
+            "avatar_hash": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "banner_hash": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "bio": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "bot": {
+              "type": "boolean"
+            },
+            "created_at": {
+              "type": "string"
+            },
+            "discriminator": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "display_name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "flags": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "id": {
+              "type": "string"
+            },
+            "linked_accounts": {
+              "items": {
+                "$ref": "#/$defs/LinkedAccount"
+              },
+              "type": "array"
+            },
+            "pronouns": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "system": {
+              "type": "boolean"
+            },
+            "username": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "username",
+            "discriminator",
+            "display_name",
+            "avatar_hash",
+            "banner_hash",
+            "bio",
+            "flags",
+            "bot",
+            "system",
+            "created_at",
+            "pronouns",
+            "linked_accounts"
+          ],
+          "type": "object"
+        }
+      },
+      "$id": "urn:paracord:contract:PublicUserProfile",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`GET /users/{user_id}/profile`: the public profile card. When the subject\nhas blocked the viewer the server returns the same shape with profile\nextras nulled out and empty relationship lists.",
+      "properties": {
+        "created_at": {
+          "type": "string"
+        },
+        "mutual_friends": {
+          "items": {
+            "$ref": "#/$defs/MutualFriend"
+          },
+          "type": "array"
+        },
+        "mutual_guilds": {
+          "items": {
+            "$ref": "#/$defs/MutualGuild"
+          },
+          "type": "array"
+        },
+        "roles": {
+          "items": {
+            "$ref": "#/$defs/ProfileRole"
+          },
+          "type": "array"
+        },
+        "user": {
+          "$ref": "#/$defs/PublicUser"
+        }
+      },
+      "required": [
+        "user",
+        "roles",
+        "mutual_guilds",
+        "mutual_friends",
+        "created_at"
+      ],
+      "title": "PublicUserProfile",
+      "type": "object"
+    },
+    "ReadyGuildCore": {
+      "$id": "urn:paracord:contract:ReadyGuildCore",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "Persisted space metadata carried by the gateway READY payload.\nDistinct from `GuildSummary`: READY sends only durable fields, never the\nREST settings surface. Nullable fields are present, including when null.",
+      "properties": {
+        "created_at": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "icon_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "minLength": 1,
+          "pattern": "\\S",
+          "type": "string"
+        },
+        "member_count": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "minLength": 1,
+          "pattern": "\\S",
+          "type": "string"
+        },
+        "owner_id": {
+          "minLength": 1,
+          "pattern": "\\S",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "owner_id",
+        "name",
+        "icon_hash",
+        "created_at",
+        "member_count"
+      ],
+      "title": "ReadyGuildCore",
+      "type": "object"
+    },
+    "RelationshipList": {
+      "$defs": {
+        "Relationship": {
+          "description": "`GET /users/@me/relationships` entry. `type` and `rel_type` carry the same\nrelationship kind (1 = friend, 2 = blocked, 3 = pending incoming,\n4 = pending outgoing); both names are sent for compatibility.",
+          "properties": {
+            "created_at": {
+              "type": "string"
+            },
+            "id": {
+              "description": "`\"<user_id>:<target_id>\"`, not a snowflake.",
+              "type": "string"
+            },
+            "rel_type": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "target_id": {
+              "type": "string"
+            },
+            "type": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "user": {
+              "$ref": "#/$defs/RelationshipUser"
+            },
+            "user_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "user_id",
+            "target_id",
+            "type",
+            "rel_type",
+            "created_at",
+            "user"
+          ],
+          "type": "object"
+        },
+        "RelationshipUser": {
+          "description": "The other party's identity embedded in a relationship entry.\nNullable fields are present in responses, including when their value is null.",
+          "properties": {
+            "avatar_hash": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "discriminator": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "display_name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "username": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "username",
+            "display_name",
+            "discriminator",
+            "avatar_hash"
+          ],
+          "type": "object"
+        }
+      },
+      "$id": "urn:paracord:contract:RelationshipList",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "items": {
+        "$ref": "#/$defs/Relationship"
+      },
+      "title": "RelationshipList",
+      "type": "array"
+    },
+    "TransferOwnershipRequest": {
+      "$id": "urn:paracord:contract:TransferOwnershipRequest",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "new_owner_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "new_owner_id"
+      ],
+      "title": "TransferOwnershipRequest",
+      "type": "object"
+    },
+    "UpdateEmojiRequest": {
+      "$id": "urn:paracord:contract:UpdateEmojiRequest",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "name": {
+          "description": "1-32 characters.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "UpdateEmojiRequest",
+      "type": "object"
+    },
+    "UpdateGuildRequest": {
+      "$defs": {
+        "GuildBotConfig": {
+          "additionalProperties": true,
+          "properties": {
+            "enabled": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "HubSettings": {
+          "additionalProperties": true,
+          "properties": {
+            "banner_hash": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pinned_channels": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "welcome_text": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        }
+      },
+      "$id": "urn:paracord:contract:UpdateGuildRequest",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "allowed_roles": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "bot_settings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/GuildBotConfig"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "discovery_tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "hub_settings": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HubSettings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "icon": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "visibility": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "title": "UpdateGuildRequest",
+      "type": "object"
+    },
+    "UpdateMeRequest": {
+      "$id": "urn:paracord:contract:UpdateMeRequest",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "avatar_hash": {
+          "description": "Legacy data-URL avatars are still accepted for backward compatibility,\nbut clients should prefer `POST /users/@me/avatar`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bio": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "display_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "title": "UpdateMeRequest",
+      "type": "object"
+    },
+    "UpdateSettingsRequest": {
+      "$id": "urn:paracord:contract:UpdateSettingsRequest",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "crypto_auth_enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "custom_css": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "custom_status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "keybinds": true,
+        "locale": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message_display_compact": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "notifications": true,
+        "status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "theme": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "title": "UpdateSettingsRequest",
+      "type": "object"
+    },
+    "UpdatedCurrentUser": {
+      "$id": "urn:paracord:contract:UpdatedCurrentUser",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`PATCH /users/@me` and `POST /users/@me/avatar`: the updated account fields.\nSettings-derived extras (pronouns, linked accounts) and key metadata are\nonly returned by `GET /users/@me`.",
+      "properties": {
+        "avatar_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "banner_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bio": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bot": {
+          "type": "boolean"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "discriminator": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "display_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "email": {
+          "type": "string"
+        },
+        "flags": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "id": {
+          "type": "string"
+        },
+        "system": {
+          "type": "boolean"
+        },
+        "username": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "username",
+        "discriminator",
+        "display_name",
+        "avatar_hash",
+        "banner_hash",
+        "bio",
+        "flags",
+        "bot",
+        "system",
+        "created_at",
+        "email"
+      ],
+      "title": "UpdatedCurrentUser",
+      "type": "object"
+    },
+    "UserSettingsResponse": {
+      "$id": "urn:paracord:contract:UserSettingsResponse",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`GET`/`PATCH /users/@me/settings`. The server stores `theme`, `locale`, and\n`status` as opaque strings (bounded by length only), and `notifications` and\n`keybinds` as free-form JSON objects; they are echoed verbatim.",
+      "properties": {
+        "crypto_auth_enabled": {
+          "type": "boolean"
+        },
+        "custom_css": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "custom_status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "keybinds": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "locale": {
+          "type": "string"
+        },
+        "message_display_compact": {
+          "type": "boolean"
+        },
+        "notifications": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "status": {
+          "type": "string"
+        },
+        "theme": {
+          "type": "string"
+        },
+        "user_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "user_id",
+        "theme",
+        "locale",
+        "message_display_compact",
+        "custom_css",
+        "status",
+        "custom_status",
+        "crypto_auth_enabled",
+        "notifications",
+        "keybinds"
+      ],
+      "title": "UserSettingsResponse",
+      "type": "object"
+    }
+  }
+}

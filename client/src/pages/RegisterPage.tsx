@@ -1,19 +1,20 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useAuthStore } from '../stores/authStore';
-import { useAccountStore } from '../stores/accountStore';
-import { useServerListStore } from '../stores/serverListStore';
-import { getStoredServerUrl, getCurrentOriginServerUrl, setStoredServerUrl } from '../lib/config/apiBaseUrl';
-import { hasAccount } from '../lib/account';
 import { authApi } from '../api/auth';
+import { instanceApi } from '../api/instance';
 import { extractApiError } from '../api/client';
-import { getRefreshToken } from '../lib/authToken';
-import { MIN_PASSWORD_LENGTH } from '../lib/constants';
+import {
+  PASSWORD_REQUIREMENTS_HINT,
+  registrationPasswordError,
+} from '../lib/registrationPassword';
 import { ErrorBanner } from '../components/ui/Feedback';
 import { Button } from '../components/ui/Button';
 import { AuthCanvas, AuthCard, AuthHeading, AppMark, BrandAside, Field } from './authScaffold';
 
 export function RegisterPage() {
+  const passwordHintId = useId();
+  const confirmErrorId = useId();
   const [email, setEmail] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [username, setUsername] = useState('');
@@ -42,6 +43,25 @@ export function RegisterPage() {
     };
   }, []);
 
+  // Registration is closed until the server has an owner, and the server would
+  // reject this form anyway. Send the operator to the claim flow rather than
+  // letting them fill in a page that cannot succeed.
+  useEffect(() => {
+    let cancelled = false;
+    instanceApi
+      .getSetupStatus()
+      .then(({ data }) => {
+        if (!cancelled && data.setup_required) navigate('/setup-server', { replace: true });
+      })
+      .catch(() => {
+        // Never infer setup state from a failed request; submitting reports the
+        // real error.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [navigate]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmedEmail = email.trim();
@@ -51,8 +71,9 @@ export function RegisterPage() {
       setError('Username is required.');
       return;
     }
-    if (password.length < MIN_PASSWORD_LENGTH) {
-      setError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
+    const passwordError = registrationPasswordError(password);
+    if (passwordError) {
+      setError(passwordError);
       return;
     }
     if (password !== confirmPassword) {
@@ -67,42 +88,6 @@ export function RegisterPage() {
     setLoading(true);
     try {
       await register(trimmedEmail, trimmedUsername, password, trimmedDisplayName);
-
-      // If the user already has a local keypair, attach it to this server account.
-      if (hasAccount()) {
-        const account = useAccountStore.getState();
-        if (account.isUnlocked && account.publicKey) {
-          try {
-            // Password required — see authApi.attachPublicKey.
-            await authApi.attachPublicKey(account.publicKey, password);
-          } catch {
-            // Non-fatal
-          }
-        }
-      }
-
-      // Add to server list if not already there
-      const serverUrl = getStoredServerUrl() || getCurrentOriginServerUrl();
-      if (serverUrl) {
-        setStoredServerUrl(serverUrl);
-        const serverStore = useServerListStore.getState();
-        const existingServer = serverStore.getServerByUrl(serverUrl);
-        const token = useAuthStore.getState().token;
-        const refreshToken = getRefreshToken();
-        if (!existingServer) {
-          let serverName = serverUrl;
-          try {
-            serverName = new URL(serverUrl).host;
-          } catch {
-            // Keep raw URL as name if parsing fails.
-          }
-          const serverId = serverStore.addServer(serverUrl, serverName, token || undefined);
-          serverStore.updateRefreshToken(serverId, refreshToken);
-        } else if (token) {
-          serverStore.updateToken(existingServer.id, token);
-          serverStore.updateRefreshToken(existingServer.id, refreshToken);
-        }
-      }
 
       // Go straight to the app — legacy token auth works without a local
       // keypair. Users can set up a local crypto identity later in Settings.
@@ -181,29 +166,30 @@ export function RegisterPage() {
                 />
               </Field>
 
-              <Field label="Password" required hint={`At least ${MIN_PASSWORD_LENGTH} characters.`}>
+              <Field label="Password" required hint={PASSWORD_REQUIREMENTS_HINT} descriptionId={passwordHintId}>
                 <input
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
-                  minLength={MIN_PASSWORD_LENGTH}
                   className="input-field"
                   placeholder="Choose a strong password"
                   autoComplete="new-password"
+                  aria-describedby={passwordHintId}
                 />
               </Field>
 
-              <Field label="Confirm Password" required error={confirmError}>
+              <Field label="Confirm Password" required error={confirmError} descriptionId={confirmErrorId}>
                 <input
                   type="password"
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   required
-                  minLength={MIN_PASSWORD_LENGTH}
                   className="input-field"
                   placeholder="Re-enter your password"
                   autoComplete="new-password"
+                  aria-describedby={confirmError ? confirmErrorId : undefined}
+                  aria-invalid={Boolean(confirmError) || undefined}
                 />
               </Field>
             </div>

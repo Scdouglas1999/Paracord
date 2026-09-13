@@ -21,9 +21,11 @@ pub mod group_e2ee;
 pub mod guild_storage_policies;
 pub mod guild_templates;
 pub mod guilds;
+pub mod instance_setup;
 pub mod interaction_tokens;
 pub mod invites;
 pub mod members;
+pub mod message_recovery;
 pub mod messages;
 pub mod mfa;
 pub mod migrate_export;
@@ -69,6 +71,7 @@ use thiserror::Error;
 const POOL_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub type DbPool = sqlx::AnyPool;
+pub type DbConnection = sqlx::AnyConnection;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DatabaseEngine {
@@ -93,6 +96,14 @@ pub enum DbError {
     Sqlx(#[from] sqlx::Error),
     #[error("not found")]
     NotFound,
+    #[error("conflict: {0}")]
+    Conflict(String),
+    #[error("This message was already delivered and has since been deleted.")]
+    DeliveryAlreadyDeleted,
+    #[error("This message delivery was cancelled before it was created.")]
+    DeliveryCancelled,
+    #[error("This message edit was cancelled before it committed.")]
+    EditCancelled,
     /// A per-resource limit was reached (e.g. the maximum number of pinned
     /// messages in a channel). The API layer maps this to HTTP 409 Conflict.
     #[error("limit reached: {0}")]

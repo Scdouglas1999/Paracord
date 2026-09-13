@@ -1,3 +1,4 @@
+import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
 import { useEffect, useMemo, useState } from 'react';
 import { ShieldCheck, UserRoundCheck, Check, X } from 'lucide-react';
 import { guildApi } from '../../api/guilds';
@@ -71,6 +72,7 @@ function normalizeOnboardingPayload(raw: unknown): OnboardingPayload {
 }
 
 export function GuildOnboardingGate({ guildId }: GuildOnboardingGateProps) {
+  const scope = useCurrentAccountScope();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dismissed, setDismissed] = useState(false);
@@ -147,7 +149,7 @@ export function GuildOnboardingGate({ guildId }: GuildOnboardingGateProps) {
           : prev,
       );
       // Progressive channel unlocks depend on completed_at — refresh the list.
-      void useChannelStore.getState().fetchChannels(guildId);
+      if (scope) void useChannelStore.getState().fetchChannels(guildId, scope);
     } catch (err: unknown) {
       setError(extractApiError(err));
     } finally {

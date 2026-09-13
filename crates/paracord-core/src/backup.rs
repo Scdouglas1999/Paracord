@@ -1,6 +1,9 @@
 use crate::error::CoreError;
+use base64::Engine;
 use chrono::Utc;
+use paracord_util::at_rest::FileCryptor;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 /// Metadata stored inside every backup archive.
@@ -11,7 +14,21 @@ pub struct BackupManifest {
     pub server_version: String,
     pub includes_media: bool,
     pub db_filename: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<RecoveryMetadata>,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RecoveryMetadata {
+    pub sqlite_encrypted: bool,
+    pub files_encrypted: bool,
+    pub storage_type: String,
+    /// Authenticated canary verifies the separately retained at-rest key.
+    pub key_check: Option<String>,
+}
+
+const RECOVERY_CANARY: &[u8] = b"Paracord backup recovery key v1";
+const RECOVERY_AAD: &[u8] = b"paracord:backup:key-check";
 
 /// Summary of a backup on disk (returned by list_backups).
 #[derive(Debug, Serialize)]
@@ -104,6 +121,7 @@ pub async fn create_backup_with_sqlite_key(
         server_version: env!("CARGO_PKG_VERSION").to_string(),
         includes_media: include_media,
         db_filename: db_filename.to_string(),
+        recovery: None,
     };
 
     let backup_path_clone = backup_path.clone();
@@ -168,170 +186,708 @@ pub async fn list_backups(backup_dir: &str) -> Result<Vec<BackupInfo>, CoreError
     Ok(entries)
 }
 
-/// Restore from a backup archive. Replaces the live database and optionally
-/// extracts media files.
-///
-/// IMPORTANT: The caller should ensure the server is in a safe state (e.g.,
-/// draining connections) before calling this. The database pool should be
-/// dropped / recreated after this completes.
-pub async fn restore_backup(
-    backup_name: &str,
-    backup_dir: &str,
+/// Snapshot the already-open runtime pool, including SQLCipher's active key.
+/// S3 objects require a separate export; never label local directories as an S3 backup.
+pub async fn create_backup_from_pool(
+    pool: &paracord_db::DbPool,
     db_url: &str,
+    backup_dir: &str,
     storage_path: &str,
     media_storage_path: &str,
-) -> Result<(), CoreError> {
-    restore_backup_with_sqlite_key(
-        backup_name,
-        backup_dir,
-        db_url,
-        storage_path,
-        media_storage_path,
-        None,
-    )
+    include_media: bool,
+    local_storage: bool,
+    file_cryptor: Option<&FileCryptor>,
+    secret_cryptor: Option<&FileCryptor>,
+) -> Result<String, CoreError> {
+    if include_media && !local_storage {
+        return Err(CoreError::BadRequest("S3 media is not included by this archive format. Export object storage separately; use database-only backup only with that recovery plan.".into()));
+    }
+    tokio::fs::create_dir_all(backup_dir)
+        .await
+        .map_err(|e| CoreError::Internal(e.to_string()))?;
+    let temp = tempfile::tempdir().map_err(|e| CoreError::Internal(e.to_string()))?;
+    let postgres = is_postgres_url(db_url);
+    let db_filename = if postgres {
+        "paracord.pgdump"
+    } else {
+        "paracord.db"
+    };
+    let snapshot = temp.path().join(db_filename);
+    if postgres {
+        let url = db_url.to_owned();
+        let path = snapshot.to_string_lossy().into_owned();
+        tokio::task::spawn_blocking(move || pg_dump_into(&url, &path))
+            .await
+            .map_err(|e| CoreError::Internal(e.to_string()))?
+            .map_err(CoreError::Internal)?;
+    } else {
+        sqlx::query("VACUUM INTO $1")
+            .bind(snapshot.to_string_lossy().as_ref())
+            .execute(pool)
+            .await
+            .map_err(|e| CoreError::Internal(format!("Snapshot failed: {e}")))?;
+    }
+    let sqlite_encrypted = !postgres
+        && !sqlite_plaintext_header(&snapshot).map_err(|e| CoreError::Internal(e.to_string()))?;
+    let key_check = secret_cryptor
+        .map(|cryptor| {
+            cryptor
+                .encrypt_with_aad(RECOVERY_CANARY, RECOVERY_AAD)
+                .map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes))
+                .map_err(|e| CoreError::Internal(e.to_string()))
+        })
+        .transpose()?;
+    let filename = format!(
+        "paracord_backup_{}_{:016x}.tar.gz",
+        Utc::now().format("%Y%m%d_%H%M%S"),
+        rand::random::<u64>()
+    );
+    let manifest = BackupManifest {
+        version: 2,
+        created_at: Utc::now().to_rfc3339(),
+        server_version: env!("CARGO_PKG_VERSION").into(),
+        includes_media: include_media,
+        db_filename: db_filename.into(),
+        recovery: Some(RecoveryMetadata {
+            sqlite_encrypted,
+            files_encrypted: file_cryptor.is_some(),
+            storage_type: if local_storage { "local" } else { "s3" }.into(),
+            key_check,
+        }),
+    };
+    let destination = Path::new(backup_dir).join(&filename);
+    let uploads = storage_path.to_owned();
+    let files = media_storage_path.to_owned();
+    tokio::task::spawn_blocking(move || {
+        build_tar_gz(
+            &destination,
+            &snapshot,
+            &manifest,
+            include_media,
+            &uploads,
+            &files,
+        )
+    })
     .await
+    .map_err(|e| CoreError::Internal(e.to_string()))?
+    .map_err(CoreError::Internal)?;
+    Ok(filename)
 }
 
-/// [`restore_backup`], but able to take the pre-restore safety snapshot of a
-/// SQLCipher-encrypted SQLite database.
+/// Live database replacement is deliberately unavailable. Use the offline
+/// `restore-backup` command to prepare a verified, isolated recovery generation.
+pub async fn restore_backup(
+    _backup_name: &str,
+    _backup_dir: &str,
+    _db_url: &str,
+    _storage_path: &str,
+    _media_storage_path: &str,
+) -> Result<(), CoreError> {
+    Err(CoreError::BadRequest("Live restore is unavailable. Use paracord-server restore-backup to prepare an isolated recovery generation.".into()))
+}
+
 pub async fn restore_backup_with_sqlite_key(
     backup_name: &str,
     backup_dir: &str,
     db_url: &str,
     storage_path: &str,
     media_storage_path: &str,
-    sqlite_key_hex: Option<String>,
+    _sqlite_key_hex: Option<String>,
 ) -> Result<(), CoreError> {
-    let backup_path = Path::new(backup_dir).join(backup_name);
-    if !backup_path.exists() {
-        return Err(CoreError::NotFound);
+    restore_backup(
+        backup_name,
+        backup_dir,
+        db_url,
+        storage_path,
+        media_storage_path,
+    )
+    .await
+}
+
+/// Recovery inputs are retained outside the archive. Keys are never written to
+/// the report; the generated activation config refers to the existing key env.
+pub struct RestoreOptions<'a> {
+    pub archive: &'a Path,
+    pub output_dir: &'a Path,
+    pub engine: paracord_db::DatabaseEngine,
+    pub postgres_target_url: Option<&'a str>,
+    pub external_media: Option<&'a Path>,
+    pub sqlite_key_hex: Option<String>,
+    pub file_cryptor: Option<FileCryptor>,
+    pub secret_cryptor: Option<FileCryptor>,
+    pub max_unpacked_bytes: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RestoreReport {
+    pub database_engine: String,
+    pub database_history_epoch: String,
+    pub repaired_channel_tails: u64,
+    pub verified_attachments: u64,
+    pub verified_encrypted_secrets: u64,
+    pub media_files: u64,
+    pub table_rows: std::collections::BTreeMap<String, i64>,
+    pub source_archive_sha256: String,
+    pub sqlite_encrypted: bool,
+}
+
+/// Prepare a new database/media generation. This never opens or replaces the
+/// configured live database. The caller publishes an activation config only after
+/// this succeeds and after separately validating TLS/config recovery material.
+pub async fn prepare_restore(options: RestoreOptions<'_>) -> anyhow::Result<RestoreReport> {
+    use anyhow::Context;
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
     }
-
-    // Extract to a temporary directory first to validate
-    let temp_dir = tempfile::tempdir()
-        .map_err(|e| CoreError::Internal(format!("Failed to create temp dir: {e}")))?;
-    let temp_path = temp_dir.path().to_path_buf();
-
-    let backup_path_clone = backup_path.clone();
-    let temp_path_clone = temp_path.clone();
-    tokio::task::spawn_blocking(move || extract_tar_gz(&backup_path_clone, &temp_path_clone))
-        .await
-        .map_err(|e| CoreError::Internal(format!("Extract task failed: {e}")))?
-        .map_err(|e| CoreError::Internal(format!("Extraction failed: {e}")))?;
-
-    // Validate manifest
-    let manifest_path = temp_path.join("manifest.json");
-    let manifest_data = tokio::fs::read_to_string(&manifest_path)
-        .await
-        .map_err(|e| CoreError::Internal(format!("Failed to read manifest: {e}")))?;
-    let manifest: BackupManifest = serde_json::from_str(&manifest_data)
-        .map_err(|e| CoreError::Internal(format!("Invalid manifest: {e}")))?;
-
-    if manifest.version != 1 {
-        return Err(CoreError::BadRequest(format!(
-            "Unsupported backup version: {}",
-            manifest.version
-        )));
+    builder
+        .create(options.output_dir)
+        .context("output directory must be new, with an existing parent")?;
+    let result = prepare_restore_inner(&options).await;
+    if result.is_err() {
+        let _ = write_private_file(&options.output_dir.join("RESTORE_FAILED.txt"),
+            b"Verification failed. No activation config was published. The source archive and configured server data were not replaced. Discard this isolated recovery directory and, for PostgreSQL, its dedicated target database before retrying.\n");
     }
+    if let Ok(report) = &result {
+        let body = serde_json::to_vec_pretty(report)?;
+        write_private_file(&options.output_dir.join("verification.json"), &body)?;
+    }
+    result
+}
 
-    // Replace/restore the database payload
-    let extracted_db = temp_path.join(&manifest.db_filename);
-    if !extracted_db.exists() {
-        return Err(CoreError::Internal(
-            "Backup archive missing database file".into(),
+async fn prepare_restore_inner(options: &RestoreOptions<'_>) -> anyhow::Result<RestoreReport> {
+    use anyhow::{bail, Context};
+    let root = options.output_dir.canonicalize()?;
+    let archive = options.archive.canonicalize()?;
+    let archive_digest = file_sha256(&archive)?;
+    let extracted = root.join("archive");
+    std::fs::create_dir(&extracted)?;
+    extract_verified_archive(&archive, &extracted, options.max_unpacked_bytes)?;
+    let manifest: BackupManifest =
+        serde_json::from_slice(&std::fs::read(extracted.join("manifest.json"))?)?;
+    if !matches!(manifest.version, 1 | 2) {
+        bail!("unsupported archive manifest version {}", manifest.version);
+    }
+    if manifest.version == 2 && manifest.recovery.is_none() {
+        bail!("version 2 archive is missing recovery metadata");
+    }
+    let postgres = options.engine == paracord_db::DatabaseEngine::Postgres;
+    let expected_payload = if postgres {
+        "paracord.pgdump"
+    } else {
+        "paracord.db"
+    };
+    if manifest.db_filename != expected_payload {
+        bail!("archive database payload does not match the configured engine");
+    }
+    let source_db = extracted.join(expected_payload);
+    if !source_db.is_file() {
+        bail!("archive database payload is missing");
+    }
+    if let Some(recovery) = &manifest.recovery {
+        if recovery.files_encrypted && options.file_cryptor.is_none() {
+            bail!("archive requires its file encryption key and configuration");
+        }
+        if recovery.storage_type != "local" && options.external_media.is_none() {
+            bail!("object-storage backup requires an explicit exported --media-dir");
+        }
+        if let Some(check) = &recovery.key_check {
+            let cryptor = options
+                .secret_cryptor
+                .as_ref()
+                .context("archive requires its original at-rest master key")?;
+            let payload = base64::engine::general_purpose::STANDARD
+                .decode(check)
+                .context("invalid recovery key check")?;
+            let plaintext = cryptor
+                .decrypt_with_aad(&payload, RECOVERY_AAD)
+                .context("recovery key does not authenticate this archive")?;
+            if plaintext != RECOVERY_CANARY {
+                bail!("invalid recovery key check plaintext");
+            }
+        }
+    }
+    let media_source = if let Some(path) = options.external_media {
+        path.canonicalize()
+            .context("external media export does not exist")?
+    } else {
+        if !manifest.includes_media {
+            bail!("database-only archive requires --media-dir containing matching uploads/ and files/ directories");
+        }
+        extracted.join("media")
+    };
+    for name in ["uploads", "files"] {
+        if !media_source.join(name).is_dir() {
+            bail!("media export is missing its {name}/ directory");
+        }
+    }
+    let media = root.join("media");
+    let media_files = copy_regular_tree(&media_source, &media, options.max_unpacked_bytes)?;
+    let db_url;
+    let sqlite_encrypted;
+    if postgres {
+        db_url = options
+            .postgres_target_url
+            .context("PostgreSQL restore requires an isolated target URL environment variable")?
+            .to_owned();
+        let target =
+            paracord_db::create_pool_full(&db_url, 1, Some(options.engine), None, None).await?;
+        let preflight: anyhow::Result<()> = async {
+            let objects: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_toast%' AND c.relkind IN ('r','p','v','m','S','f')")
+                .fetch_one(&target).await?;
+            if objects != 0 { bail!("PostgreSQL recovery target is not empty; existing data will not be replaced"); }
+            let sessions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()")
+                .fetch_one(&target).await?;
+            if sessions != 0 { bail!("PostgreSQL recovery target has other connections; isolate it before restoring"); }
+            Ok(())
+        }.await;
+        target.close().await;
+        preflight?;
+        let target_url = db_url.clone();
+        let dump = source_db.to_string_lossy().into_owned();
+        tokio::task::spawn_blocking(move || pg_restore_into_empty(&target_url, &dump))
+            .await?
+            .map_err(anyhow::Error::msg)?;
+        sqlite_encrypted = false;
+    } else {
+        if options.postgres_target_url.is_some() {
+            bail!("PostgreSQL target was supplied for a SQLite archive");
+        }
+        sqlite_encrypted = !sqlite_plaintext_header(&source_db)?;
+        if let Some(metadata) = &manifest.recovery {
+            if metadata.sqlite_encrypted != sqlite_encrypted {
+                bail!("SQLite payload does not match archive encryption metadata");
+            }
+        }
+        if sqlite_encrypted != options.sqlite_key_hex.is_some() {
+            bail!("SQLite archive encryption does not match [at_rest].encrypt_sqlite; supply the original archive configuration and key");
+        }
+        let staged = root.join("paracord.db");
+        std::fs::copy(&source_db, &staged)?;
+        db_url = recovery_sqlite_url(&staged)?;
+    }
+    let pool = paracord_db::create_pool_full(
+        &db_url,
+        1,
+        Some(options.engine),
+        options.sqlite_key_hex.clone(),
+        None,
+    )
+    .await
+    .context("cannot open staged database with the supplied configuration/key")?;
+    let verification = async {
+        if !postgres {
+            verify_sqlite_integrity(&pool).await?;
+        }
+        // Check application tables before migrations so a random database cannot
+        // be mistaken for an empty restored server, and destructive upgrades fail.
+        let mut before = std::collections::BTreeMap::new();
+        for table in ["users", "messages", "attachments", "read_states"] {
+            let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
+                .fetch_one(&pool)
+                .await
+                .context("archive is not a supported Paracord database")?;
+            before.insert(table, count);
+        }
+        paracord_db::run_migrations_for_engine(&pool, options.engine)
+            .await
+            .context("staged database upgrade failed")?;
+        if postgres {
+            let unvalidated: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace WHERE n.nspname = 'public' AND c.contype IN ('f', 'c') AND NOT c.convalidated")
+                .fetch_one(&pool).await?;
+            if unvalidated != 0 { bail!("restored PostgreSQL schema contains unvalidated integrity constraints"); }
+        }
+        for (table, count) in before {
+            let after: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
+                .fetch_one(&pool)
+                .await?;
+            if after != count {
+                bail!("upgrade changed the number of {table} rows; recovery was not activated");
+            }
+        }
+        let verified_attachments = verify_attachment_recovery(
+            &pool,
+            &media.join("uploads"),
+            options.file_cryptor.as_ref(),
+        )
+        .await?;
+        let verified_encrypted_secrets =
+            verify_secret_recovery(&pool, options.secret_cryptor.as_ref()).await?;
+        let mut tx = pool.begin().await?;
+        let repaired_channel_tails =
+            paracord_db::channels::repair_message_tails_for_import(&mut tx).await?;
+        let database_history_epoch =
+            paracord_db::server_settings::rotate_database_history_epoch(&mut tx).await?;
+        tx.commit().await?;
+        if !postgres {
+            verify_sqlite_integrity(&pool).await?;
+        }
+        let mut table_rows = std::collections::BTreeMap::new();
+        for table in paracord_db::migrate_export::MIGRATION_TABLE_ORDER {
+            let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
+                .fetch_one(&pool)
+                .await?;
+            table_rows.insert((*table).to_owned(), count);
+        }
+        if !postgres {
+            sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+                .execute(&pool)
+                .await?;
+        }
+        Ok(RestoreReport {
+            database_engine: options.engine.as_str().into(),
+            database_history_epoch,
+            repaired_channel_tails,
+            verified_attachments,
+            verified_encrypted_secrets,
+            media_files,
+            table_rows,
+            source_archive_sha256: archive_digest,
+            sqlite_encrypted,
+        })
+    }
+    .await;
+    pool.close().await;
+    verification
+}
+
+async fn verify_sqlite_integrity(pool: &paracord_db::DbPool) -> anyhow::Result<()> {
+    let rows: Vec<(String,)> = sqlx::query_as("PRAGMA integrity_check")
+        .fetch_all(pool)
+        .await?;
+    anyhow::ensure!(
+        rows == vec![("ok".into(),)],
+        "SQLite integrity check failed"
+    );
+    let violations = sqlx::query("PRAGMA foreign_key_check")
+        .fetch_all(pool)
+        .await?;
+    anyhow::ensure!(violations.is_empty(), "SQLite foreign key check failed");
+    Ok(())
+}
+
+async fn verify_attachment_recovery(
+    pool: &paracord_db::DbPool,
+    uploads: &Path,
+    cryptor: Option<&FileCryptor>,
+) -> anyhow::Result<u64> {
+    use anyhow::{bail, Context};
+    let rows: Vec<(i64, String, i64, Option<String>)> = sqlx::query_as(
+        "SELECT id, filename, CAST(size AS BIGINT), content_hash FROM attachments ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await?;
+    for (id, filename, size, hash) in &rows {
+        let extension = Path::new(filename)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("bin");
+        let relative = format!("attachments/{id}.{extension}");
+        safe_relative_path(Path::new(&relative))?;
+        let path = uploads.join(relative);
+        let metadata = std::fs::metadata(&path)
+            .with_context(|| format!("attachment {id} is missing from media export"))?;
+        if !metadata.is_file() || metadata.len() > 1024 * 1024 * 1024 {
+            bail!("attachment {id} is not a supported regular file (maximum verification size is 1 GiB)");
+        }
+        let payload = std::fs::read(&path)?;
+        // Runtime reads migrate legacy plaintext even when plaintext fallback
+        // is disabled. Do that only in copied staging media, after validating
+        // the plaintext size/hash, so activation never depends on an unchecked
+        // legacy file or modifies the retained source media.
+        let legacy_cryptor = cryptor.filter(|cryptor| {
+            !cryptor.allow_plaintext_reads() && !FileCryptor::payload_is_encrypted(&payload)
+        });
+        let plaintext = if legacy_cryptor.is_some() {
+            payload
+        } else if let Some(cryptor) = cryptor {
+            cryptor
+                .decrypt_with_aad(&payload, format!("attachment:{id}").as_bytes())
+                .with_context(|| format!("attachment {id} failed authenticated decryption"))?
+        } else if FileCryptor::payload_is_encrypted(&payload) {
+            bail!("encrypted attachments require the original at-rest key and file encryption configuration");
+        } else {
+            payload
+        };
+        if *size < 0 || plaintext.len() as i64 != *size {
+            bail!("attachment {id} size does not match its database record");
+        }
+        if let Some(expected) = hash.as_deref().filter(|value| !value.is_empty()) {
+            if format!("{:x}", Sha256::digest(&plaintext)) != expected {
+                bail!("attachment {id} content hash does not match its database record");
+            }
+        }
+        if let Some(cryptor) = legacy_cryptor {
+            let encrypted =
+                cryptor.encrypt_with_aad(&plaintext, format!("attachment:{id}").as_bytes())?;
+            std::fs::write(&path, encrypted)
+                .with_context(|| format!("cannot encrypt staged attachment {id}"))?;
+        }
+    }
+    Ok(rows.len() as u64)
+}
+
+async fn verify_secret_recovery(
+    pool: &paracord_db::DbPool,
+    cryptor: Option<&FileCryptor>,
+) -> anyhow::Result<u64> {
+    use anyhow::Context;
+    let totp: Vec<(String,)> = sqlx::query_as("SELECT totp_secret FROM mfa_configs")
+        .fetch_all(pool)
+        .await?;
+    let github: Vec<(String,)> =
+        sqlx::query_as("SELECT github_secret FROM webhooks WHERE github_secret IS NOT NULL")
+            .fetch_all(pool)
+            .await?;
+    let mut verified = 0;
+    let decoded = totp
+        .into_iter()
+        .filter_map(|(value,)| base64::engine::general_purpose::STANDARD.decode(value).ok())
+        .chain(
+            github
+                .into_iter()
+                .filter_map(|(value,)| decode_hex_bytes(&value)),
+        );
+    for payload in decoded {
+        if !FileCryptor::payload_is_encrypted(&payload) {
+            continue;
+        }
+        let plaintext = cryptor
+            .context("encrypted MFA/webhook secrets require the original at-rest master key")?
+            .decrypt(&payload)
+            .context("restored secret failed authenticated decryption")?;
+        std::str::from_utf8(&plaintext).context("restored secret is not valid UTF-8")?;
+        verified += 1;
+    }
+    Ok(verified)
+}
+
+fn decode_hex_bytes(value: &str) -> Option<Vec<u8>> {
+    if value.len() % 2 != 0 || !value.is_ascii() {
+        return None;
+    }
+    (0..value.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&value[i..i + 2], 16).ok())
+        .collect()
+}
+
+fn sqlite_plaintext_header(path: &Path) -> anyhow::Result<bool> {
+    use std::io::Read;
+    let mut header = [0; 16];
+    std::fs::File::open(path)?.read_exact(&mut header)?;
+    Ok(&header == b"SQLite format 3\0")
+}
+
+fn file_sha256(path: &Path) -> anyhow::Result<String> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)?;
+    let mut hash = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        hash.update(&buffer[..n]);
+    }
+    Ok(format!("{:x}", hash.finalize()))
+}
+
+/// Build a URL for an existing staged SQLite file without interpreting path
+/// bytes as query options or percent escapes. Missing files must fail to open,
+/// including during activation; recovery must never generate an empty database.
+pub fn recovery_sqlite_url(path: &Path) -> anyhow::Result<String> {
+    use anyhow::Context;
+    anyhow::ensure!(
+        path.is_absolute(),
+        "recovery database path must be absolute"
+    );
+    let text = path
+        .to_str()
+        .context("recovery database path is not valid UTF-8")?;
+    #[cfg(windows)]
+    let text = {
+        // canonicalize() yields verbatim Windows paths. Normalize their device
+        // prefix before URL encoding; UNC paths retain their leading slashes.
+        let text = text.strip_prefix(r"\\?\").unwrap_or(text);
+        if let Some(unc) = text.strip_prefix(r"UNC\") {
+            format!("//{}", unc.replace('\\', "/"))
+        } else {
+            text.replace('\\', "/")
+        }
+    };
+    let mut encoded = String::new();
+    for byte in text.as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(*byte, b'/' | b':' | b'-' | b'.' | b'_' | b'~')
+        {
+            encoded.push(*byte as char);
+        } else {
+            use std::fmt::Write;
+            write!(encoded, "%{byte:02X}")?;
+        }
+    }
+    Ok(format!("sqlite://{encoded}?mode=rw"))
+}
+
+pub fn write_private_file(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    use std::io::Write;
+    // NamedTempFile is private (0600 on Unix). Publish only complete, synced
+    // bytes, without replacing an existing destination. In particular, a failed
+    // config write must never leave a partial file that looks ready to activate.
+    let mut file = tempfile::NamedTempFile::new_in(path.parent().unwrap_or(Path::new(".")))?;
+    file.write_all(bytes)?;
+    file.as_file().sync_all()?;
+    file.persist_noclobber(path)?;
+    Ok(())
+}
+
+fn safe_relative_path(path: &Path) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !path.as_os_str().is_empty()
+            && path
+                .components()
+                .all(|part| matches!(part, std::path::Component::Normal(_))),
+        "archive/media path is not a safe relative path"
+    );
+    Ok(())
+}
+
+fn extract_verified_archive(
+    archive_path: &Path,
+    destination: &Path,
+    limit: u64,
+) -> anyhow::Result<()> {
+    use anyhow::{bail, Context};
+    use std::io::Read;
+    if limit < 1024 {
+        bail!("archive exceeds the configured unpacked byte limit");
+    }
+    // Bound actual decompression, including headers and trailing members, so
+    // metadata or padding cannot bypass the sum of declared entry sizes.
+    let decoder = flate2::read::MultiGzDecoder::new(std::fs::File::open(archive_path)?);
+    let mut archive = tar::Archive::new(decoder.take(limit.saturating_add(1)));
+    let mut seen = std::collections::BTreeSet::new();
+    let mut total = 0u64;
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?.into_owned();
+        safe_relative_path(&path)?;
+        let allowed = matches!(
+            path.to_str(),
+            Some("manifest.json" | "paracord.db" | "paracord.pgdump")
+        ) || path.starts_with("media");
+        if !allowed {
+            bail!("unexpected archive entry: {}", path.display());
+        }
+        if !seen.insert(path.clone()) {
+            bail!("duplicate archive entry: {}", path.display());
+        }
+        if path == Path::new("manifest.json") && entry.size() > 1024 * 1024 {
+            bail!("archive manifest exceeds the 1 MiB limit");
+        }
+        total = total
+            .checked_add(entry.size())
+            .context("archive size overflow")?;
+        if total > limit {
+            bail!("archive exceeds the configured unpacked byte limit");
+        }
+        if !(entry.header().entry_type().is_file() || entry.header().entry_type().is_dir()) {
+            bail!("archive links and special files are unsupported");
+        }
+        if !entry.unpack_in(destination)? {
+            bail!("archive entry escaped recovery directory");
+        }
+    }
+    // tar EOF precedes the gzip trailer. Read through it to reject truncated or
+    // corrupted compression streams before accepting the extracted database.
+    let mut stream = archive.into_inner();
+    std::io::copy(&mut stream, &mut std::io::sink())
+        .context("archive compression stream is incomplete or corrupt")?;
+    if stream.limit() == 0 {
+        bail!("archive exceeds the configured unpacked byte limit");
+    }
+    Ok(())
+}
+
+fn copy_regular_tree(source: &Path, destination: &Path, limit: u64) -> anyhow::Result<u64> {
+    use anyhow::Context;
+    // Resolve aliases on both existing sides before creating the destination.
+    // Copying a media export into one of its descendants would consume its own
+    // staging files and can recurse indefinitely even when file bytes are capped.
+    let resolved_source = source.canonicalize()?;
+    let resolved_destination = destination
+        .parent()
+        .context("media destination has no parent")?
+        .canonicalize()?
+        .join(
+            destination
+                .file_name()
+                .context("media destination has no name")?,
+        );
+    anyhow::ensure!(
+        !resolved_destination.starts_with(&resolved_source),
+        "recovery media destination must be outside the source media export"
+    );
+    fn copy(
+        source: &Path,
+        destination: &Path,
+        remaining: &mut u64,
+        count: &mut u64,
+    ) -> anyhow::Result<()> {
+        let metadata = std::fs::symlink_metadata(source)?;
+        anyhow::ensure!(
+            metadata.is_dir() && !metadata.file_type().is_symlink(),
+            "media directories cannot be symlinks"
+        );
+        std::fs::create_dir(destination)?;
+        for entry in std::fs::read_dir(source)? {
+            let entry = entry?;
+            let target = destination.join(entry.file_name());
+            let metadata = entry.file_type()?;
+            if metadata.is_dir() {
+                copy(&entry.path(), &target, remaining, count)?;
+            } else if metadata.is_file() {
+                let len = entry.metadata()?.len();
+                *remaining = remaining.checked_sub(len).ok_or_else(|| {
+                    anyhow::anyhow!("media export exceeds the configured byte limit")
+                })?;
+                std::fs::copy(entry.path(), target)?;
+                *count += 1;
+            } else {
+                anyhow::bail!("media export contains a symlink or special file");
+            }
+        }
+        Ok(())
+    }
+    let mut remaining = limit;
+    let mut count = 0;
+    copy(source, destination, &mut remaining, &mut count)?;
+    Ok(count)
+}
+
+fn pg_restore_into_empty(db_url: &str, dump_path: &str) -> Result<(), String> {
+    let (mut command, sanitized_url) = pg_command("pg_restore", db_url);
+    let result = command
+        .args([
+            "--no-owner",
+            "--no-privileges",
+            "--single-transaction",
+            "--exit-on-error",
+            "--dbname",
+            &sanitized_url,
+            dump_path,
+        ])
+        .output()
+        .map_err(|e| format!("Failed to run pg_restore: {e}"))?;
+    if !result.status.success() {
+        return Err(format!(
+            "pg_restore failed: {}",
+            String::from_utf8_lossy(&result.stderr)
         ));
     }
-
-    if is_postgres_url(db_url) {
-        let db_url_owned = db_url.to_string();
-        let extracted_db_clone = extracted_db.clone();
-        tokio::task::spawn_blocking(move || {
-            let dump_path = extracted_db_clone
-                .to_str()
-                .ok_or_else(|| "Invalid extracted dump path".to_string())?;
-            pg_restore_from_dump(&db_url_owned, dump_path)
-        })
-        .await
-        .map_err(|e| CoreError::Internal(format!("pg_restore task failed: {e}")))?
-        .map_err(CoreError::Internal)?;
-    } else {
-        let db_path = parse_sqlite_path(db_url)?;
-
-        // The safety copy must be a snapshot, not a file copy. The live
-        // database runs in WAL mode, so `std::fs::copy` of the main file alone
-        // captures a torn state: everything still sitting in `-wal` is missing,
-        // and the result is typically unopenable. `VACUUM INTO` writes a
-        // self-consistent database, and goes through the keyed pool so it also
-        // works when the database is SQLCipher-encrypted.
-        let pre_restore = format!("{db_path}.pre-restore");
-        if Path::new(&db_path).exists() {
-            // VACUUM INTO refuses to overwrite an existing file.
-            match std::fs::remove_file(&pre_restore) {
-                Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => {
-                    return Err(CoreError::Internal(format!(
-                        "Failed to clear previous pre-restore snapshot: {e}"
-                    )))
-                }
-            }
-            sqlite_snapshot(db_url, &pre_restore, sqlite_key_hex.clone())
-                .await
-                .map_err(|e| CoreError::Internal(format!("Pre-restore snapshot failed: {e}")))?;
-        }
-
-        let db_path_clone = db_path.clone();
-        let extracted_db_clone = extracted_db.clone();
-        tokio::task::spawn_blocking(move || {
-            // Stage next to the target so a failed copy cannot leave a
-            // half-written file where the database is supposed to be, then move
-            // it into place in one step.
-            let staging = format!("{db_path_clone}.restore-incoming");
-            std::fs::copy(&extracted_db_clone, &staging)
-                .map_err(|e| format!("Failed to stage restored database: {e}"))?;
-            if let Err(e) = std::fs::rename(&staging, &db_path_clone) {
-                let _ = std::fs::remove_file(&staging);
-                return Err(format!("Failed to replace database: {e}"));
-            }
-
-            // The sidecars belong to the database we just replaced. Left in
-            // place, SQLite would replay the old `-wal` against the restored
-            // file on the next open and corrupt or silently un-restore it.
-            remove_sqlite_sidecars(&db_path_clone)?;
-            Ok::<(), String>(())
-        })
-        .await
-        .map_err(|e| CoreError::Internal(format!("DB replace task failed: {e}")))?
-        .map_err(CoreError::Internal)?;
-    }
-
-    // Restore media files if included
-    if manifest.includes_media {
-        let media_src = temp_path.join("media");
-        if media_src.exists() {
-            let uploads_src = media_src.join("uploads");
-            let files_src = media_src.join("files");
-            let storage_dest = storage_path.to_string();
-            let media_dest = media_storage_path.to_string();
-
-            tokio::task::spawn_blocking(move || {
-                if uploads_src.is_dir() {
-                    copy_dir_recursive(&uploads_src, Path::new(&storage_dest))
-                        .map_err(|e| format!("Failed to restore uploads: {e}"))?;
-                }
-                if files_src.is_dir() {
-                    copy_dir_recursive(&files_src, Path::new(&media_dest))
-                        .map_err(|e| format!("Failed to restore media files: {e}"))?;
-                }
-                Ok::<(), String>(())
-            })
-            .await
-            .map_err(|e| CoreError::Internal(format!("Media restore task failed: {e}")))?
-            .map_err(CoreError::Internal)?;
-        }
-    }
-
-    tracing::info!("Backup restored: {}", backup_name);
     Ok(())
 }
 
@@ -342,37 +898,9 @@ pub fn backup_file_path(backup_dir: &str, name: &str) -> PathBuf {
 
 // ── Internal helpers ──────────────────────────────────────────────────────
 
-fn parse_sqlite_path(url: &str) -> Result<String, CoreError> {
-    let path = url
-        .strip_prefix("sqlite://")
-        .or_else(|| url.strip_prefix("sqlite:"))
-        .unwrap_or(url);
-    // Remove query parameters
-    let path = path.split('?').next().unwrap_or(path);
-    if path.is_empty() {
-        return Err(CoreError::Internal(
-            "Cannot determine database file path".into(),
-        ));
-    }
-    Ok(path.to_string())
-}
-
 fn is_postgres_url(url: &str) -> bool {
     let normalized = url.trim().to_ascii_lowercase();
     normalized.starts_with("postgres://") || normalized.starts_with("postgresql://")
-}
-
-/// Delete the `-wal` / `-shm` sidecars belonging to `db_path`.
-fn remove_sqlite_sidecars(db_path: &str) -> Result<(), String> {
-    for suffix in ["-wal", "-shm"] {
-        let sidecar = format!("{db_path}{suffix}");
-        match std::fs::remove_file(&sidecar) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(format!("Failed to remove stale {sidecar}: {e}")),
-        }
-    }
-    Ok(())
 }
 
 /// Snapshot a SQLite database to `dest_path` with `VACUUM INTO`.
@@ -468,27 +996,6 @@ fn pg_dump_into(db_url: &str, dest_path: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn pg_restore_from_dump(db_url: &str, dump_path: &str) -> Result<(), String> {
-    let (mut cmd, sanitized_url) = pg_command("pg_restore", db_url);
-    let status = cmd
-        .args([
-            "--clean",
-            "--if-exists",
-            "--no-owner",
-            "--no-privileges",
-            "--single-transaction",
-            "--dbname",
-            &sanitized_url,
-            dump_path,
-        ])
-        .status()
-        .map_err(|e| format!("Failed to run pg_restore: {e}"))?;
-    if !status.success() {
-        return Err(format!("pg_restore exited with status {status}"));
-    }
-    Ok(())
-}
-
 fn build_tar_gz(
     archive_path: &Path,
     db_snapshot: &Path,
@@ -497,9 +1004,19 @@ fn build_tar_gz(
     storage_path: &str,
     media_storage_path: &str,
 ) -> Result<(), String> {
-    let file = std::fs::File::create(archive_path)
-        .map_err(|e| format!("Failed to create archive: {e}"))?;
-    let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+    if include_media {
+        for path in [storage_path, media_storage_path] {
+            if !Path::new(path).is_dir() {
+                return Err(format!("Media directory is missing: {path}"));
+            }
+            ensure_regular_tree(Path::new(path)).map_err(|e| e.to_string())?;
+        }
+    }
+    let mut temporary =
+        tempfile::NamedTempFile::new_in(archive_path.parent().unwrap_or(Path::new(".")))
+            .map_err(|e| format!("Failed to stage archive: {e}"))?;
+    let encoder =
+        flate2::write::GzEncoder::new(temporary.as_file_mut(), flate2::Compression::default());
     let mut tar = tar::Builder::new(encoder);
 
     // Add manifest.json
@@ -531,37 +1048,31 @@ fn build_tar_gz(
         }
     }
 
-    tar.finish()
-        .map_err(|e| format!("Failed to finalize archive: {e}"))?;
+    let encoder = tar
+        .into_inner()
+        .map_err(|e| format!("Failed to finalize tar: {e}"))?;
+    encoder
+        .finish()
+        .map_err(|e| format!("Failed to finalize gzip: {e}"))?
+        .sync_all()
+        .map_err(|e| format!("Failed to sync archive: {e}"))?;
+    temporary
+        .persist_noclobber(archive_path)
+        .map_err(|e| format!("Failed to publish archive: {e}"))?;
     Ok(())
 }
 
-fn extract_tar_gz(archive_path: &Path, dest_dir: &Path) -> Result<(), String> {
-    let file =
-        std::fs::File::open(archive_path).map_err(|e| format!("Failed to open archive: {e}"))?;
-    let decoder = flate2::read::GzDecoder::new(file);
-    let mut archive = tar::Archive::new(decoder);
-    archive
-        .unpack(dest_dir)
-        .map_err(|e| format!("Failed to extract archive: {e}"))?;
-    Ok(())
-}
-
-fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
-    if !dst.exists() {
-        std::fs::create_dir_all(dst).map_err(|e| format!("mkdir {}: {e}", dst.display()))?;
-    }
-    for entry in std::fs::read_dir(src).map_err(|e| format!("readdir {}: {e}", src.display()))? {
-        let entry = entry.map_err(|e| format!("readdir entry: {e}"))?;
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-        if src_path.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path)?;
-        } else {
-            std::fs::copy(&src_path, &dst_path).map_err(|e| {
-                format!("copy {} -> {}: {e}", src_path.display(), dst_path.display())
-            })?;
+fn ensure_regular_tree(path: &Path) -> anyhow::Result<()> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.is_dir() {
+        for entry in std::fs::read_dir(path)? {
+            ensure_regular_tree(&entry?.path())?;
         }
+    } else {
+        anyhow::ensure!(
+            metadata.is_file(),
+            "backup media contains a link or special file"
+        );
     }
     Ok(())
 }
@@ -570,8 +1081,8 @@ fn parse_backup_timestamp(name: &str) -> Option<String> {
     // Expected format: paracord_backup_YYYYMMDD_HHMMSS.tar.gz
     let stem = name.strip_suffix(".tar.gz")?;
     let ts = stem.strip_prefix("paracord_backup_")?;
-    let parts: Vec<&str> = ts.splitn(2, '_').collect();
-    if parts.len() != 2 {
+    let parts: Vec<&str> = ts.split('_').collect();
+    if parts.len() < 2 {
         return None;
     }
     let date = parts[0];
@@ -594,149 +1105,355 @@ fn parse_backup_timestamp(name: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    type TestResult = Result<(), Box<dyn std::error::Error>>;
+    type TestResult = anyhow::Result<()>;
+
+    async fn fixture(
+        temp: &Path,
+        encrypted_files: bool,
+    ) -> anyhow::Result<(
+        paracord_db::DbPool,
+        String,
+        PathBuf,
+        PathBuf,
+        Option<FileCryptor>,
+        Option<FileCryptor>,
+    )> {
+        let uploads = temp.join("uploads");
+        let media = temp.join("files");
+        std::fs::create_dir_all(uploads.join("attachments"))?;
+        std::fs::create_dir_all(&media)?;
+        let url = format!("sqlite://{}?mode=rwc", temp.join("live.db").display());
+        let pool = paracord_db::create_pool_full(
+            &url,
+            1,
+            Some(paracord_db::DatabaseEngine::Sqlite),
+            None,
+            None,
+        )
+        .await?;
+        paracord_db::run_migrations_for_engine(&pool, paracord_db::DatabaseEngine::Sqlite).await?;
+        sqlx::query("INSERT INTO users(id, username, discriminator, email, password_hash) VALUES(1, 'owner', 1, 'owner@example.test', 'hash')").execute(&pool).await?;
+        sqlx::query("INSERT INTO channels(id, channel_type, last_message_id, message_revision) VALUES(10, 1, 99, 8), (11, 1, 98, 9)").execute(&pool).await?;
+        sqlx::query("INSERT INTO messages(id, channel_id, author_id, content) VALUES(20, 10, 1, 'archived')").execute(&pool).await?;
+        sqlx::query("INSERT INTO read_states(user_id, channel_id, last_message_id, mention_count) VALUES(1, 10, 19, 3)").execute(&pool).await?;
+        let file_cryptor = encrypted_files.then(|| FileCryptor::from_master_key(&[7; 32], false));
+        let secret_cryptor = encrypted_files
+            .then(|| FileCryptor::from_master_key_with_context(&[7; 32], b"totp", true));
+        let plaintext = b"recovered attachment";
+        let payload = if let Some(c) = &file_cryptor {
+            c.encrypt_with_aad(plaintext, b"attachment:30")?
+        } else {
+            plaintext.to_vec()
+        };
+        std::fs::write(uploads.join("attachments/30.bin"), payload)?;
+        sqlx::query("INSERT INTO attachments(id, message_id, filename, size, url, content_hash) VALUES(30, 20, 'file.bin', $1, '/api/v1/attachments/30', $2)")
+            .bind(plaintext.len() as i64).bind(format!("{:x}", Sha256::digest(plaintext))).execute(&pool).await?;
+        if let Some(c) = &secret_cryptor {
+            let secret =
+                base64::engine::general_purpose::STANDARD.encode(c.encrypt(b"JBSWY3DPEHPK3PXP")?);
+            sqlx::query(
+                "INSERT INTO mfa_configs(user_id, totp_secret, enabled) VALUES(1, $1, TRUE)",
+            )
+            .bind(secret)
+            .execute(&pool)
+            .await?;
+        }
+        Ok((pool, url, uploads, media, file_cryptor, secret_cryptor))
+    }
+
+    fn restore_options<'a>(
+        archive: &'a Path,
+        output: &'a Path,
+        file: Option<FileCryptor>,
+        secret: Option<FileCryptor>,
+    ) -> RestoreOptions<'a> {
+        RestoreOptions {
+            archive,
+            output_dir: output,
+            engine: paracord_db::DatabaseEngine::Sqlite,
+            postgres_target_url: None,
+            external_media: None,
+            sqlite_key_hex: None,
+            file_cryptor: file,
+            secret_cryptor: secret,
+            max_unpacked_bytes: 64 * 1024 * 1024,
+        }
+    }
 
     #[tokio::test]
-    async fn sqlite_backup_restore_round_trip_includes_media() -> TestResult {
+    async fn sqlite_recovery_verifies_encrypted_media_and_preserves_live_source() -> TestResult {
         let temp = tempfile::tempdir()?;
-        let db_path = temp.path().join("paracord.db");
+        let (pool, url, uploads, media, file, secret) = fixture(temp.path(), true).await?;
+        let old_epoch =
+            paracord_db::server_settings::get_or_create_database_history_epoch(&pool).await?;
         let backups = temp.path().join("backups");
-        let uploads = temp.path().join("uploads");
-        let media = temp.path().join("files");
-
-        std::fs::create_dir_all(uploads.join("avatars"))?;
-        std::fs::create_dir_all(media.join("clips"))?;
-        std::fs::write(uploads.join("avatars").join("avatar.txt"), b"avatar-before")?;
-        std::fs::write(media.join("clips").join("clip.txt"), b"clip-before")?;
-
-        {
-            let conn = rusqlite::Connection::open(&db_path)?;
-            conn.execute_batch(
-                "CREATE TABLE marker (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
-                 INSERT INTO marker (id, value) VALUES (1, 'before');",
-            )?;
-        }
-
-        let db_url = format!("sqlite://{}", db_path.display());
-        let backup_name = create_backup(
-            &db_url,
+        let name = create_backup_from_pool(
+            &pool,
+            &url,
             backups.to_str().unwrap(),
             uploads.to_str().unwrap(),
             media.to_str().unwrap(),
             true,
+            true,
+            file.as_ref(),
+            secret.as_ref(),
         )
         .await?;
-
-        let listed = list_backups(backups.to_str().unwrap()).await?;
-        assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].name, backup_name);
-        assert!(listed[0].size_bytes > 0);
-
-        {
-            let conn = rusqlite::Connection::open(&db_path)?;
-            conn.execute("UPDATE marker SET value = 'after' WHERE id = 1", [])?;
-        }
-        std::fs::remove_dir_all(&uploads)?;
-        std::fs::remove_dir_all(&media)?;
-
-        restore_backup(
-            &backup_name,
-            backups.to_str().unwrap(),
-            &db_url,
-            uploads.to_str().unwrap(),
-            media.to_str().unwrap(),
+        sqlx::query("UPDATE messages SET content = 'live after archive' WHERE id = 20")
+            .execute(&pool)
+            .await?;
+        // A literal URI escape in a directory name must not retarget SQLx to
+        // another directory while verifying or activating the recovered file.
+        let output = temp.path().join("recovery%2Foutside");
+        let report =
+            prepare_restore(restore_options(&backups.join(name), &output, file, secret)).await?;
+        assert_eq!(report.repaired_channel_tails, 2);
+        assert_eq!(report.verified_attachments, 1);
+        assert_eq!(report.verified_encrypted_secrets, 1);
+        assert_ne!(report.database_history_epoch, old_epoch);
+        let live: String = sqlx::query_scalar("SELECT content FROM messages WHERE id = 20")
+            .fetch_one(&pool)
+            .await?;
+        assert_eq!(live, "live after archive");
+        assert_eq!(
+            paracord_db::server_settings::get_database_history_epoch(&pool).await?,
+            Some(old_epoch)
+        );
+        let staged = paracord_db::create_pool_full(
+            &recovery_sqlite_url(&output.join("paracord.db"))?,
+            1,
+            Some(paracord_db::DatabaseEngine::Sqlite),
+            None,
+            None,
         )
         .await?;
-
-        {
-            let conn = rusqlite::Connection::open(&db_path)?;
-            let value: String =
-                conn.query_row("SELECT value FROM marker WHERE id = 1", [], |row| {
-                    row.get(0)
-                })?;
-            assert_eq!(value, "before");
-        }
-
-        let restored_upload = std::fs::read(uploads.join("avatars").join("avatar.txt"))?;
-        let restored_media = std::fs::read(media.join("clips").join("clip.txt"))?;
-        assert_eq!(restored_upload, b"avatar-before");
-        assert_eq!(restored_media, b"clip-before");
-        assert!(Path::new(&format!("{}.pre-restore", db_path.display())).exists());
-
+        let channels: Vec<(i64, Option<i64>, i64)> = sqlx::query_as(
+            "SELECT id, last_message_id, message_revision FROM channels ORDER BY id",
+        )
+        .fetch_all(&staged)
+        .await?;
+        assert_eq!(channels, vec![(10, Some(20), 8), (11, None, 9)]);
+        let read: (i64, i64) = sqlx::query_as(
+            "SELECT last_message_id, CAST(mention_count AS BIGINT) FROM read_states",
+        )
+        .fetch_one(&staged)
+        .await?;
+        assert_eq!(read, (19, 3));
+        assert!(output.join("verification.json").is_file());
+        assert!(!output.join("RESTORE_FAILED.txt").exists());
+        staged.close().await;
+        pool.close().await;
         Ok(())
     }
 
     #[tokio::test]
-    async fn restore_snapshots_wal_state_and_clears_stale_sidecars() -> TestResult {
+    async fn recovery_rejects_wrong_keys_missing_media_and_existing_destination() -> TestResult {
         let temp = tempfile::tempdir()?;
-        let db_path = temp.path().join("paracord.db");
+        let (pool, url, uploads, media, file, secret) = fixture(temp.path(), true).await?;
         let backups = temp.path().join("backups");
-        let uploads = temp.path().join("uploads");
-        let media = temp.path().join("files");
-        std::fs::create_dir_all(&uploads)?;
-        std::fs::create_dir_all(&media)?;
-
-        {
-            let conn = rusqlite::Connection::open(&db_path)?;
-            conn.execute_batch(
-                "PRAGMA journal_mode = WAL;
-                 CREATE TABLE marker (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
-                 INSERT INTO marker (id, value) VALUES (1, 'archived');",
-            )?;
-        }
-
-        let db_url = format!("sqlite://{}", db_path.display());
-        let backup_name = create_backup(
-            &db_url,
+        let name = create_backup_from_pool(
+            &pool,
+            &url,
             backups.to_str().unwrap(),
             uploads.to_str().unwrap(),
             media.to_str().unwrap(),
-            false,
+            true,
+            true,
+            file.as_ref(),
+            secret.as_ref(),
         )
         .await?;
-
-        {
-            let conn = rusqlite::Connection::open(&db_path)?;
-            conn.execute("UPDATE marker SET value = 'live' WHERE id = 1", [])?;
-        }
-
-        // A `-wal` left over from the database being replaced would be replayed
-        // against the restored file on the next open.
-        let wal = format!("{}-wal", db_path.display());
-        let shm = format!("{}-shm", db_path.display());
-        std::fs::write(&wal, b"stale-wal")?;
-        std::fs::write(&shm, b"stale-shm")?;
-
-        restore_backup(
-            &backup_name,
+        let archive = backups.join(name);
+        let output = temp.path().join("wrong-key");
+        let wrong = FileCryptor::from_master_key_with_context(&[8; 32], b"totp", true);
+        assert!(prepare_restore(restore_options(
+            &archive,
+            &output,
+            file.clone(),
+            Some(wrong)
+        ))
+        .await
+        .is_err());
+        assert!(output.join("RESTORE_FAILED.txt").is_file());
+        assert!(!output.join("verification.json").exists());
+        assert!(prepare_restore(restore_options(
+            &archive,
+            &output,
+            file.clone(),
+            secret.clone()
+        ))
+        .await
+        .is_err());
+        std::fs::remove_file(uploads.join("attachments/30.bin"))?;
+        let name = create_backup_from_pool(
+            &pool,
+            &url,
             backups.to_str().unwrap(),
-            &db_url,
             uploads.to_str().unwrap(),
             media.to_str().unwrap(),
+            true,
+            true,
+            file.as_ref(),
+            secret.as_ref(),
         )
         .await?;
+        let missing = temp.path().join("missing-file");
+        assert!(
+            prepare_restore(restore_options(&backups.join(name), &missing, file, secret))
+                .await
+                .is_err()
+        );
+        assert!(!missing.join("verification.json").exists());
+        pool.close().await;
+        Ok(())
+    }
 
-        assert!(!Path::new(&wal).exists(), "stale -wal survived the restore");
-        assert!(!Path::new(&shm).exists(), "stale -shm survived the restore");
+    #[tokio::test]
+    async fn recovery_migrates_verified_plaintext_only_in_staged_media() -> TestResult {
+        let temp = tempfile::tempdir()?;
+        let (pool, url, uploads, media, _, _) = fixture(temp.path(), false).await?;
+        let original = std::fs::read(uploads.join("attachments/30.bin"))?;
+        let backups = temp.path().join("backups");
+        let name = create_backup_from_pool(
+            &pool,
+            &url,
+            backups.to_str().unwrap(),
+            uploads.to_str().unwrap(),
+            media.to_str().unwrap(),
+            true,
+            true,
+            None,
+            None,
+        )
+        .await?;
+        let archive = backups.join(name);
+        let before = file_sha256(&archive)?;
+        let strict = FileCryptor::from_master_key(&[7; 32], false);
+        let output = temp.path().join("recovery");
+        let report = prepare_restore(restore_options(
+            &archive,
+            &output,
+            Some(strict.clone()),
+            None,
+        ))
+        .await?;
+        assert_eq!(report.verified_attachments, 1);
+        let staged = std::fs::read(output.join("media/uploads/attachments/30.bin"))?;
+        assert!(FileCryptor::payload_is_encrypted(&staged));
+        assert_eq!(
+            strict.decrypt_with_aad(&staged, b"attachment:30")?,
+            original
+        );
+        assert_eq!(std::fs::read(uploads.join("attachments/30.bin"))?, original);
+        assert_eq!(file_sha256(&archive)?, before);
 
-        // The safety copy must be a real, openable database holding the state
-        // that was live at restore time. A plain file copy of a WAL database
-        // produces a torn file instead.
-        let pre_restore = format!("{}.pre-restore", db_path.display());
-        let snapshot = rusqlite::Connection::open(&pre_restore)?;
-        let preserved: String =
-            snapshot.query_row("SELECT value FROM marker WHERE id = 1", [], |row| {
-                row.get(0)
-            })?;
-        assert_eq!(preserved, "live");
+        // Corrupt bytes must fail the stored plaintext hash before conversion.
+        let invalid = temp.path().join("invalid-uploads");
+        copy_regular_tree(&uploads, &invalid, 4096)?;
+        let invalid_path = invalid.join("attachments/30.bin");
+        let corrupt = vec![b'x'; original.len()];
+        std::fs::write(&invalid_path, &corrupt)?;
+        assert!(verify_attachment_recovery(&pool, &invalid, Some(&strict))
+            .await
+            .is_err());
+        assert_eq!(std::fs::read(&invalid_path)?, corrupt);
+        pool.close().await;
+        Ok(())
+    }
 
-        let restored = rusqlite::Connection::open(&db_path)?;
-        let value: String =
-            restored.query_row("SELECT value FROM marker WHERE id = 1", [], |row| {
-                row.get(0)
-            })?;
-        assert_eq!(value, "archived");
+    #[tokio::test]
+    async fn live_restore_entry_points_refuse_database_replacement() -> TestResult {
+        let temp = tempfile::tempdir()?;
+        let database = temp.path().join("live.db");
+        std::fs::write(&database, b"unchanged")?;
+        assert!(restore_backup(
+            "anything.tar.gz",
+            temp.path().to_str().unwrap(),
+            database.to_str().unwrap(),
+            "uploads",
+            "files"
+        )
+        .await
+        .is_err());
+        assert_eq!(std::fs::read(database)?, b"unchanged");
+        Ok(())
+    }
 
+    #[test]
+    fn archive_validation_rejects_links_and_unbounded_extraction() -> TestResult {
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join("link.tar.gz");
+        let mut tar = tar::Builder::new(flate2::write::GzEncoder::new(
+            std::fs::File::create(&path)?,
+            flate2::Compression::default(),
+        ));
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Symlink);
+        header.set_size(0);
+        header.set_mode(0o777);
+        header.set_link_name("/tmp/outside")?;
+        header.set_cksum();
+        tar.append_data(&mut header, "media/uploads/link", &[][..])?;
+        tar.into_inner()?.finish()?;
+        let output = temp.path().join("out");
+        std::fs::create_dir(&output)?;
+        assert!(extract_verified_archive(&path, &output, 1024).is_err());
+        assert!(safe_relative_path(Path::new("../outside")).is_err());
+        assert!(safe_relative_path(Path::new("/outside")).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn media_copy_rejects_descendant_destinations_and_canonical_aliases() -> TestResult {
+        let temp = tempfile::tempdir()?;
+        let source = temp.path().join("source");
+        std::fs::create_dir(&source)?;
+        std::fs::write(source.join("payload"), b"retained")?;
+        let child = source.join("recovery");
+        assert!(copy_regular_tree(&source, &child, 4096).is_err());
+        assert!(!child.exists());
+        #[cfg(unix)]
+        {
+            let alias = temp.path().join("source-alias");
+            std::os::unix::fs::symlink(&source, &alias)?;
+            assert!(copy_regular_tree(&alias, &child, 4096).is_err());
+            assert!(copy_regular_tree(&source, &alias.join("recovery"), 4096).is_err());
+            assert!(!child.exists());
+        }
+        let valid = temp.path().join("separate");
+        assert_eq!(copy_regular_tree(&source, &valid, 4096)?, 1);
+        assert_eq!(std::fs::read(valid.join("payload"))?, b"retained");
+        assert_eq!(std::fs::read(source.join("payload"))?, b"retained");
+        Ok(())
+    }
+
+    #[test]
+    fn archive_validation_checks_compression_trailer_and_stream_limit() -> TestResult {
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join("archive.tar.gz");
+        let mut tar = tar::Builder::new(flate2::write::GzEncoder::new(
+            std::fs::File::create(&path)?,
+            flate2::Compression::default(),
+        ));
+        let mut header = tar::Header::new_gnu();
+        header.set_size(2);
+        header.set_mode(0o600);
+        header.set_cksum();
+        tar.append_data(&mut header, "manifest.json", &b"{}"[..])?;
+        tar.into_inner()?.finish()?;
+        let output = temp.path().join("output");
+        std::fs::create_dir(&output)?;
+        extract_verified_archive(&path, &output, 4096)?;
+        let limited = temp.path().join("limited");
+        std::fs::create_dir(&limited)?;
+        assert!(extract_verified_archive(&path, &limited, 64).is_err());
+        let mut corrupt = std::fs::read(&path)?;
+        let trailer = corrupt.len() - 8;
+        corrupt[trailer] ^= 1;
+        std::fs::write(&path, corrupt)?;
+        let rejected = temp.path().join("rejected");
+        std::fs::create_dir(&rejected)?;
+        assert!(extract_verified_archive(&path, &rejected, 4096).is_err());
         Ok(())
     }
 

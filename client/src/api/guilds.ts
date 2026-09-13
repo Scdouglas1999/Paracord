@@ -1,18 +1,20 @@
+import type { RestClient } from './restClient';
 import type { AxiosRequestConfig } from 'axios';
-import { getApi } from './activeClient';
+import { getApi as getActiveApi } from './activeClient';
+import { responseContract } from './responseContracts';
+import { isGuildDetail, isGuildInvite, isGuildInviteList, isGuildSummaryList, isOwnershipTransferResponse } from './generated/validators';
+import type { UpdateGuildRequest } from './generated/UpdateGuildRequest';
+import type { CreateInviteRequest } from './generated/CreateInviteRequest';
 import type {
-  Guild,
   Channel,
   Member,
   Role,
-  Invite,
   Ban,
   AuditLogEntry,
   ModerationReport,
   CreateGuildRequest,
   CreateChannelRequest,
   CreateRoleRequest,
-  CreateInviteRequest,
   UpdateMemberRequest,
   CreateReportRequest,
   ResolveReportRequest,
@@ -56,97 +58,117 @@ export interface Sticker {
   created_at: string;
 }
 
-export const guildApi = {
-  getAll: () => getApi().get<Guild[]>('/users/@me/guilds'),
-  create: (data: CreateGuildRequest) => getApi().post<Guild>('/guilds', data),
-  get: (id: string) => getApi().get<Guild>(`/guilds/${id}`),
-  update: (id: string, data: Partial<Guild>) => getApi().patch<Guild>(`/guilds/${id}`, data),
-  delete: (id: string) => getApi().delete(`/guilds/${id}`),
-  transferOwnership: (id: string, newOwnerId: string) =>
-    getApi().post(`/guilds/${id}/owner`, { new_owner_id: newOwnerId }),
+export function createGuildApi(getApi: () => RestClient) {
+  return {
+    joinPublic: async (id: string) => responseContract(
+      getApi().put(`/guilds/${id}/members/@me`), isGuildDetail, 'GuildDetail'),
+    getAll: async () => responseContract(
+      getApi().get('/users/@me/guilds'), isGuildSummaryList, 'GuildSummaryList'),
+    create: async (data: CreateGuildRequest) => responseContract(
+      getApi().post('/guilds', data), isGuildDetail, 'GuildDetail'),
+    get: async (id: string) => responseContract(
+      getApi().get(`/guilds/${id}`), isGuildDetail, 'GuildDetail'),
+    update: async (id: string, data: UpdateGuildRequest) => responseContract(
+      getApi().patch(`/guilds/${id}`, data), isGuildDetail, 'GuildDetail'),
+    delete: async (id: string) => getApi().delete(`/guilds/${id}`),
+    transferOwnership: async (id: string, newOwnerId: string) =>
+      responseContract(getApi().post(`/guilds/${id}/owner`, { new_owner_id: newOwnerId }),
+        isOwnershipTransferResponse, 'OwnershipTransferResponse'),
 
-  getChannels: (id: string, config?: AxiosRequestConfig) =>
-    getApi().get<Channel[]>(`/guilds/${id}/channels`, config),
-  createChannel: (id: string, data: CreateChannelRequest) =>
-    getApi().post<Channel>(`/guilds/${id}/channels`, data),
+    getChannels: async (id: string, config?: AxiosRequestConfig) =>
+      getApi().get<Channel[]>(`/guilds/${id}/channels`, config),
+    createChannel: async (id: string, data: CreateChannelRequest) =>
+      getApi().post<Channel>(`/guilds/${id}/channels`, data),
 
-  getMembers: (id: string) => getApi().get<Member[]>(`/guilds/${id}/members`),
-  updateMember: (guildId: string, userId: string, data: UpdateMemberRequest) =>
-    getApi().patch<Member>(`/guilds/${guildId}/members/${userId}`, data),
-  kickMember: (guildId: string, userId: string) =>
-    getApi().delete(`/guilds/${guildId}/members/${userId}`),
-  leaveGuild: (id: string) => getApi().delete(`/guilds/${id}/members/@me`),
+    getMembers: async (id: string) => getApi().get<Member[]>(`/guilds/${id}/members`),
+    updateMember: async (guildId: string, userId: string, data: UpdateMemberRequest) =>
+      getApi().patch<Member>(`/guilds/${guildId}/members/${userId}`, data),
+    kickMember: async (guildId: string, userId: string) =>
+      getApi().delete(`/guilds/${guildId}/members/${userId}`),
+    leaveGuild: async (id: string) => getApi().delete(`/guilds/${id}/members/@me`),
 
-  getRoles: (id: string) => getApi().get<Role[]>(`/guilds/${id}/roles`),
-  createRole: (id: string, data: CreateRoleRequest) =>
-    getApi().post<Role>(`/guilds/${id}/roles`, data),
-  updateRole: (guildId: string, roleId: string, data: Partial<Role>) =>
-    getApi().patch<Role>(`/guilds/${guildId}/roles/${roleId}`, data),
-  deleteRole: (guildId: string, roleId: string) =>
-    getApi().delete(`/guilds/${guildId}/roles/${roleId}`),
+    getRoles: async (id: string) => getApi().get<Role[]>(`/guilds/${id}/roles`),
+    createRole: async (id: string, data: CreateRoleRequest) =>
+      getApi().post<Role>(`/guilds/${id}/roles`, data),
+    updateRole: async (guildId: string, roleId: string, data: Partial<Role>) =>
+      getApi().patch<Role>(`/guilds/${guildId}/roles/${roleId}`, data),
+    deleteRole: async (guildId: string, roleId: string) =>
+      getApi().delete(`/guilds/${guildId}/roles/${roleId}`),
 
-  getBans: (id: string) => getApi().get<Ban[]>(`/guilds/${id}/bans`),
-  banMember: (guildId: string, userId: string, reason?: string) =>
-    getApi().put(`/guilds/${guildId}/bans/${userId}`, { reason }),
-  unbanMember: (guildId: string, userId: string) =>
-    getApi().delete(`/guilds/${guildId}/bans/${userId}`),
+    getBans: async (id: string) => getApi().get<Ban[]>(`/guilds/${id}/bans`),
+    banMember: async (guildId: string, userId: string, reason?: string) =>
+      getApi().put(`/guilds/${guildId}/bans/${userId}`, { reason }),
+    unbanMember: async (guildId: string, userId: string) =>
+      getApi().delete(`/guilds/${guildId}/bans/${userId}`),
 
-  getInvites: (id: string) => getApi().get<Invite[]>(`/guilds/${id}/invites`),
-  createInvite: (channelId: string, data?: CreateInviteRequest) =>
-    getApi().post<Invite>(`/channels/${channelId}/invites`, data),
+    getInvites: async (id: string) =>
+      responseContract(
+        getApi().get(`/guilds/${id}/invites`),
+        isGuildInviteList,
+        'GuildInviteList',
+      ),
+    createInvite: async (channelId: string, data?: CreateInviteRequest) =>
+      responseContract(
+        getApi().post(`/channels/${channelId}/invites`, data),
+        isGuildInvite,
+        'GuildInvite',
+      ),
 
-  getAuditLog: (id: string, params?: Record<string, string>) =>
-    getApi().get<{ audit_log_entries: AuditLogEntry[] }>(`/guilds/${id}/audit-logs`, { params }),
-  createReport: (guildId: string, data: CreateReportRequest) =>
-    getApi().post<ModerationReport>(`/guilds/${guildId}/reports`, data),
-  getReports: (guildId: string, params?: { status?: string }) =>
-    getApi().get<{ reports: ModerationReport[] }>(`/guilds/${guildId}/reports`, { params }),
-  resolveReport: (guildId: string, reportId: string, data: ResolveReportRequest) =>
-    getApi().patch<ModerationReport>(`/guilds/${guildId}/reports/${reportId}`, data),
+    getAuditLog: async (id: string, params?: Record<string, string>) =>
+      getApi().get<{ audit_log_entries: AuditLogEntry[] }>(`/guilds/${id}/audit-logs`, { params }),
+    createReport: async (guildId: string, data: CreateReportRequest) =>
+      getApi().post<ModerationReport>(`/guilds/${guildId}/reports`, data),
+    getReports: async (guildId: string, params?: { status?: string }) =>
+      getApi().get<{ reports: ModerationReport[] }>(`/guilds/${guildId}/reports`, { params }),
+    resolveReport: async (guildId: string, reportId: string, data: ResolveReportRequest) =>
+      getApi().patch<ModerationReport>(`/guilds/${guildId}/reports/${reportId}`, data),
 
-  getVanityUrl: (id: string) =>
-    getApi().get<{ vanity_url_code: string | null }>(`/guilds/${id}/vanity-url`),
-  updateVanityUrl: (id: string, code: string | null) =>
-    getApi().patch<{ vanity_url_code: string | null }>(`/guilds/${id}/vanity-url`, { code }),
+    getVanityUrl: async (id: string) =>
+      getApi().get<{ vanity_url_code: string | null }>(`/guilds/${id}/vanity-url`),
+    updateVanityUrl: async (id: string, code: string | null) =>
+      getApi().patch<{ vanity_url_code: string | null }>(`/guilds/${id}/vanity-url`, { code }),
 
-  getOnboarding: (guildId: string) =>
-    getApi().get<GuildOnboardingSettings>(`/guilds/${guildId}/onboarding`),
-  updateOnboarding: (
-    guildId: string,
-    payload: Omit<Partial<GuildOnboardingSettings>, 'role_options'> & {
-      role_options?: Array<{
-        role_id: string;
-        label?: string | null;
-        description?: string | null;
-        position?: number;
-      }>;
+    getOnboarding: async (guildId: string) =>
+      getApi().get<GuildOnboardingSettings>(`/guilds/${guildId}/onboarding`),
+    updateOnboarding: async (
+      guildId: string,
+      payload: Omit<Partial<GuildOnboardingSettings>, 'role_options'> & {
+        role_options?: Array<{
+          role_id: string;
+          label?: string | null;
+          description?: string | null;
+          position?: number;
+        }>;
+      },
+    ) => getApi().patch<GuildOnboardingSettings>(`/guilds/${guildId}/onboarding`, payload),
+    getMyOnboardingState: async (guildId: string) =>
+      getApi().get<{ settings: GuildOnboardingSettings; member_state: GuildOnboardingMemberState }>(
+        `/guilds/${guildId}/onboarding/me`,
+      ),
+    updateMyOnboardingState: async (
+      guildId: string,
+      payload: {
+        accepted_rules: boolean;
+        selected_role_ids: string[];
+        completed?: boolean;
+      },
+    ) =>
+      getApi().put<GuildOnboardingMemberState>(`/guilds/${guildId}/onboarding/me`, payload),
+
+    listStickers: async (guildId: string) => getApi().get<Sticker[]>(`/guilds/${guildId}/stickers`),
+    createSticker: async (
+      guildId: string,
+      payload: { name: string; description?: string; file: File },
+    ) => {
+      const formData = new FormData();
+      formData.append('name', payload.name);
+      if (payload.description) formData.append('description', payload.description);
+      formData.append('image', payload.file);
+      return getApi().post<Sticker>(`/guilds/${guildId}/stickers`, formData);
     },
-  ) => getApi().patch<GuildOnboardingSettings>(`/guilds/${guildId}/onboarding`, payload),
-  getMyOnboardingState: (guildId: string) =>
-    getApi().get<{ settings: GuildOnboardingSettings; member_state: GuildOnboardingMemberState }>(
-      `/guilds/${guildId}/onboarding/me`,
-    ),
-  updateMyOnboardingState: (
-    guildId: string,
-    payload: {
-      accepted_rules: boolean;
-      selected_role_ids: string[];
-      completed?: boolean;
-    },
-  ) =>
-    getApi().put<GuildOnboardingMemberState>(`/guilds/${guildId}/onboarding/me`, payload),
+    deleteSticker: async (guildId: string, stickerId: string) =>
+      getApi().delete(`/guilds/${guildId}/stickers/${stickerId}`),
+  };
+}
 
-  listStickers: (guildId: string) => getApi().get<Sticker[]>(`/guilds/${guildId}/stickers`),
-  createSticker: (
-    guildId: string,
-    payload: { name: string; description?: string; file: File },
-  ) => {
-    const formData = new FormData();
-    formData.append('name', payload.name);
-    if (payload.description) formData.append('description', payload.description);
-    formData.append('image', payload.file);
-    return getApi().post<Sticker>(`/guilds/${guildId}/stickers`, formData);
-  },
-  deleteSticker: (guildId: string, stickerId: string) =>
-    getApi().delete(`/guilds/${guildId}/stickers/${stickerId}`),
-};
+export const guildApi = createGuildApi(getActiveApi);

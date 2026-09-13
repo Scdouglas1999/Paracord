@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -12,7 +12,7 @@ import type { Channel } from '../types';
 import { DMPage } from './DMPage';
 
 vi.mock('../components/layout/TopBar', () => ({
-  TopBar: () => <div data-testid="topbar" />,
+  TopBar: ({ dmChannelId, recipientName }: { dmChannelId?: string; recipientName?: string }) => <div data-testid="topbar" data-channel-id={dmChannelId}>{recipientName}</div>,
 }));
 
 vi.mock('../components/message/MessageList', () => ({
@@ -85,27 +85,12 @@ function directDm(): Channel {
 }
 
 function seedChannel(channel: Channel) {
-  useChannelStore.setState({
-    channelsByGuild: { '': [channel] },
-    dmChannelsByServer: {},
-    channelsById: { [channel.id]: channel },
-    channels: [channel],
-    selectedChannelId: channel.id,
-    selectedGuildId: null,
-  });
+  seedDmList([channel]);
+  useChannelStore.getState().selectChannel({ id: channel.id, scope: { serverId: '__local__', userId: 'me' } });
 }
-
 function seedDmList(channels: Channel[]) {
-  const byId: Record<string, Channel> = {};
-  for (const c of channels) byId[c.id] = c;
-  useChannelStore.setState({
-    channelsByGuild: { '': channels },
-    dmChannelsByServer: {},
-    channelsById: byId,
-    channels,
-    selectedChannelId: null,
-    selectedGuildId: null,
-  });
+  useChannelStore.getState().reset();
+  useChannelStore.getState().setChannels('', channels, { serverId: '__local__', userId: 'me' });
 }
 
 function renderDmPage(path: string) {
@@ -122,7 +107,7 @@ function renderDmPage(path: string) {
 
 describe('DMPage — conversation view (ContextPanel-driven member surface)', () => {
   beforeEach(() => {
-    useAuthStore.setState({ user: currentUser });
+    useAuthStore.setState({ token: 'token', user: currentUser });
     useUIStore.setState({ contextPanelMode: null });
     useServerListStore.setState({ activeServerId: null, servers: [] });
   });
@@ -138,21 +123,11 @@ describe('DMPage — conversation view (ContextPanel-driven member surface)', ()
     expect(screen.queryByText('Bob')).not.toBeInTheDocument();
   });
 
-  it('toggles the shared members surface via contextPanelMode for a group DM', async () => {
-    const user = userEvent.setup();
+  it('uses the shared conversation header without a duplicate members toolbar', () => {
     seedChannel(groupDm());
-
     renderDmPage('/app/dms/dm-1');
-
-    const membersButton = screen.getByRole('button', { name: 'Members' });
-    expect(useUIStore.getState().contextPanelMode).toBeNull();
-
-    await user.click(membersButton);
-    expect(useUIStore.getState().contextPanelMode).toBe('members');
-    expect(membersButton).toHaveAttribute('aria-pressed', 'true');
-
-    await user.click(membersButton);
-    expect(useUIStore.getState().contextPanelMode).toBeNull();
+    expect(screen.getByTestId('topbar')).toHaveAttribute('data-channel-id', 'dm-1');
+    expect(screen.queryByRole('button', { name: 'Members' })).not.toBeInTheDocument();
   });
 
   it('does not render the group-DM members toggle for a 1:1 DM', () => {
@@ -163,33 +138,22 @@ describe('DMPage — conversation view (ContextPanel-driven member surface)', ()
     expect(screen.queryByRole('button', { name: 'Members' })).not.toBeInTheDocument();
   });
 
-  it('resolves DM metadata from the cross-server DM cache on deep links', async () => {
-    useServerListStore.setState({ activeServerId: 'srv-a' });
-    const channel = groupDm();
-    useChannelStore.setState({
-      channelsByGuild: { '': [] },
-      dmChannelsByServer: { 'srv-b': [channel] },
-      channelsById: { [channel.id]: channel },
-      channels: [],
-      selectedChannelId: null,
-      selectedGuildId: null,
-    });
-
+  it('does not resolve a deep-link ID against another server account', () => {
+    useServerListStore.setState({ activeServerId: 'srv-a', servers: ['srv-a', 'srv-b'].map(id => ({ id, url: `https://${id}.test`, name: id, token: 'token', userId: 'me', user: currentUser, connected: true })) });
+    useChannelStore.getState().reset();
+    useChannelStore.getState().setChannels('', [groupDm()], { serverId: 'srv-b', userId: 'me' });
     renderDmPage('/app/dms/dm-1');
-
-    expect(screen.getByRole('button', { name: 'Members' })).toBeInTheDocument();
-    await waitFor(() => {
-      expect(useServerListStore.getState().activeServerId).toBe('srv-b');
-    });
+    expect(screen.queryByRole('button', { name: 'Members' })).not.toBeInTheDocument();
+    expect(useServerListStore.getState().activeServerId).toBe('srv-a');
   });
 });
 
 describe('DMPage — all-conversations index (/app/dms)', () => {
   beforeEach(() => {
-    useAuthStore.setState({ user: currentUser });
+    useAuthStore.setState({ token: 'token', user: currentUser });
     useUIStore.setState({ contextPanelMode: null });
     useServerListStore.setState({ activeServerId: null, servers: [] });
-    useReadStateStore.setState({ byServer: {}, readStates: {} });
+    useReadStateStore.getState().reset();
     usePresenceStore.setState({ presences: new Map(), presenceOrder: new Map() });
   });
 
@@ -255,7 +219,7 @@ describe('DMPage — all-conversations index (/app/dms)', () => {
 
     await user.click(rows[0]);
     expect(screen.getByTestId('message-list')).toBeInTheDocument();
-    expect(useChannelStore.getState().selectedChannelId).toBe('dm-fresh');
+    expect(useChannelStore.getState().selectedChannel?.id).toBe('dm-fresh');
   });
 
   it('filters conversations by name and offers a clear recovery action', async () => {

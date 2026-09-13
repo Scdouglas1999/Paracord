@@ -54,7 +54,7 @@ pub async fn add_reaction(
         "emoji": emoji,
     });
 
-    dispatch_channel_event(&state, &channel, "MESSAGE_REACTION_ADD", reaction_payload).await;
+    dispatch_channel_event(&state, &channel, "MESSAGE_REACTION_ADD", reaction_payload).await?;
 
     if let Some(gid) = guild_id {
         if paracord_federation::is_enabled() {
@@ -130,7 +130,7 @@ pub async fn remove_reaction(
         "MESSAGE_REACTION_REMOVE",
         reaction_payload,
     )
-    .await;
+    .await?;
 
     if let Some(gid) = guild_id {
         if paracord_federation::is_enabled() {

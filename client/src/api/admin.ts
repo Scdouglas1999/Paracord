@@ -88,23 +88,23 @@ export interface HealthReport {
 }
 
 export const adminApi = {
-  getHealth: () => getApi().get<HealthReport>('/admin/health'),
-  getStats: () => getApi().get<{
+  getHealth: async () => getApi().get<HealthReport>('/admin/health'),
+  getStats: async () => getApi().get<{
     total_users: number;
     total_guilds: number;
     total_messages: number;
     total_channels: number;
   }>('/admin/stats'),
 
-  listSecurityEvents: (params?: { before?: string; limit?: number; action?: string }) =>
+  listSecurityEvents: async (params?: { before?: string; limit?: number; action?: string }) =>
     getApi().get<SecurityEvent[]>('/admin/security-events', { params }),
 
-  getSettings: () => getApi().get<Record<string, string>>('/admin/settings'),
+  getSettings: async () => getApi().get<Record<string, string>>('/admin/settings'),
 
-  updateSettings: (data: Record<string, string>) =>
+  updateSettings: async (data: Record<string, string>) =>
     getApi().patch<Record<string, string>>('/admin/settings', data),
 
-  getUsers: (params?: { cursor?: number; offset?: number; limit?: number }) =>
+  getUsers: async (params?: { cursor?: number; offset?: number; limit?: number }) =>
     getApi().get<{
       users: Array<{
         id: string;
@@ -123,13 +123,13 @@ export const adminApi = {
       limit: number;
     }>('/admin/users', { params }),
 
-  updateUser: (userId: string, data: { flags: number }) =>
+  updateUser: async (userId: string, data: { flags: number }) =>
     getApi().patch(`/admin/users/${userId}`, data),
 
-  deleteUser: (userId: string) =>
+  deleteUser: async (userId: string) =>
     getApi().delete(`/admin/users/${userId}`),
 
-  getGuilds: () =>
+  getGuilds: async () =>
     getApi().get<{
       guilds: Array<{
         id: string;
@@ -141,7 +141,7 @@ export const adminApi = {
       }>;
     }>('/admin/guilds'),
 
-  updateGuild: (
+  updateGuild: async (
     guildId: string,
     data: { name?: string; description?: string; icon?: string }
   ) =>
@@ -154,25 +154,25 @@ export const adminApi = {
       created_at: string;
     }>(`/admin/guilds/${guildId}`, data),
 
-  deleteGuild: (guildId: string) =>
+  deleteGuild: async (guildId: string) =>
     getApi().delete(`/admin/guilds/${guildId}`),
 
-  restartUpdate: () =>
+  restartUpdate: async () =>
     getApi().post<{ status: string }>('/admin/restart-update'),
 
   // ── Backups ──────────────────────────────────────────────────────────
 
-  createBackup: (includeMedia?: boolean) =>
+  createBackup: async (includeMedia?: boolean) =>
     getApi().post<{ filename: string }>('/admin/backup', {
       include_media: includeMedia ?? true,
     }),
 
-  restoreBackup: (name: string) =>
-    getApi().post<{ message: string; filename: string }>('/admin/restore', {
+  prepareRestore: async (name: string) =>
+    getApi().post<{ status: 'offline_restore_required'; message: string; filename: string; command: string; postgres_argument: string; steps: string[] }>('/admin/restore', {
       name,
     }),
 
-  listBackups: () =>
+  listBackups: async () =>
     getApi().get<{
       backups: Array<{
         name: string;
@@ -181,22 +181,22 @@ export const adminApi = {
       }>;
     }>('/admin/backups'),
 
-  downloadBackup: (name: string) =>
+  downloadBackup: async (name: string) =>
     getApi().get(`/admin/backups/${encodeURIComponent(name)}`, {
       responseType: 'blob',
       timeout: 300_000, // 5 min timeout for large backups
     }),
 
-  deleteBackup: (name: string) =>
+  deleteBackup: async (name: string) =>
     getApi().delete(`/admin/backups/${encodeURIComponent(name)}`),
 
   // Federation server management (admin only)
-  listFederatedServers: () =>
+  listFederatedServers: async () =>
     getApi().get<{ servers: FederatedServer[] }>(
       resolveServerRootUrl('/_paracord/federation/v1/servers')
     ),
 
-  addFederatedServer: (data: {
+  addFederatedServer: async (data: {
     server_name: string;
     domain: string;
     federation_endpoint: string;
@@ -207,22 +207,22 @@ export const adminApi = {
   }) =>
     getApi().post(resolveServerRootUrl('/_paracord/federation/v1/servers'), data),
 
-  getFederatedServer: (serverName: string) =>
+  getFederatedServer: async (serverName: string) =>
     getApi().get<FederatedServer>(
       resolveServerRootUrl(`/_paracord/federation/v1/servers/${encodeURIComponent(serverName)}`)
     ),
 
-  deleteFederatedServer: (serverName: string) =>
+  deleteFederatedServer: async (serverName: string) =>
     getApi().delete(
       resolveServerRootUrl(`/_paracord/federation/v1/servers/${encodeURIComponent(serverName)}`)
     ),
 
-  listModerationState: () =>
+  listModerationState: async () =>
     getApi().get<{ states: FederationPeerTrustState[] }>(
       resolveServerRootUrl('/_paracord/federation/v1/moderation/state')
     ),
 
-  applyModerationList: (data: {
+  applyModerationList: async (data: {
     source: string;
     entries: Array<{
       server_name: string;
@@ -236,12 +236,12 @@ export const adminApi = {
       data
     ),
 
-  listModerationSubscriptions: () =>
+  listModerationSubscriptions: async () =>
     getApi().get<{ subscriptions: FederationModerationSubscription[] }>(
       resolveServerRootUrl('/_paracord/federation/v1/moderation/subscriptions')
     ),
 
-  upsertModerationSubscription: (data: {
+  upsertModerationSubscription: async (data: {
     source_url: string;
     source_server?: string;
     enabled?: boolean;
@@ -251,7 +251,7 @@ export const adminApi = {
       data
     ),
 
-  deleteModerationSubscription: (subscriptionId: string) =>
+  deleteModerationSubscription: async (subscriptionId: string) =>
     getApi().delete(
       resolveServerRootUrl(
         `/_paracord/federation/v1/moderation/subscriptions/${encodeURIComponent(subscriptionId)}`

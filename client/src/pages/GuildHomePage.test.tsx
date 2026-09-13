@@ -36,7 +36,7 @@ const mockState = vi.hoisted(() => ({
 vi.mock('../stores/guildStore', () => ({
   useGuildStore: Object.assign(
     (selector: (s: { guilds: typeof mockState.guilds }) => unknown) =>
-      selector({ guilds: mockState.guilds }),
+      selector({ guilds: mockState.guilds.map(guild => ({ ...guild, scope: { serverId: 'srv-1', userId: 'viewer' }, key: JSON.stringify(['srv-1', 'viewer', guild.id]) })) }),
     { getState: () => ({ guilds: mockState.guilds }) },
   ),
 }));
@@ -97,9 +97,10 @@ vi.mock('../stores/serverListStore', () => ({
   useServerListStore: (
     selector: (s: {
       activeServerId: string | null;
+      servers: Array<{ id: string; token: string; userId: string; user: { id: string } }>;
       getServerByUrl: () => undefined;
     }) => unknown,
-  ) => selector({ activeServerId: 'srv-1', getServerByUrl: () => undefined }),
+  ) => selector({ activeServerId: 'srv-1', servers: [{ id: 'srv-1', token: 'token', userId: 'viewer', user: { id: 'viewer' } }], getServerByUrl: () => undefined }),
 }));
 
 vi.mock('../stores/uiStore', () => ({
@@ -260,7 +261,7 @@ describe('GuildHomePage (Rooms view)', () => {
 
   it('shows online members in the around-now strip and opens the member panel via View all', () => {
     mockState.channelsByGuild = { 'guild-1': [] };
-    mockState.members = new Map([['guild-1', [member('u1', 'Alice'), member('u2', 'Bob')]]]);
+    mockState.members = new Map([[JSON.stringify(['srv-1', 'viewer', 'guild-1']), [member('u1', 'Alice'), member('u2', 'Bob')]]]);
     mockState.presence = new Map([
       ['u1', 'online'],
       ['u2', 'offline'],
@@ -360,4 +361,16 @@ describe('GuildHomePage (Rooms view)', () => {
     fireEvent.click(gear);
     expect(mockState.guildSettingsId).toBe('guild-1');
   });
+});
+
+vi.mock('../hooks/useChannels', async () => {
+  const actual = await vi.importActual<typeof import('../hooks/useChannels')>('../hooks/useChannels');
+  const { useChannelStore } = await import('../stores/channelStore');
+  return {
+    ...actual,
+    useCurrentChannelStore: useChannelStore,
+    useChannelActions: () => useChannelStore.getState(),
+    getAccountChannelView: () => useChannelStore.getState(),
+    useGuildChannels: (id: string) => useChannelStore(state => state.channelsByGuild[id] ?? []),
+  };
 });

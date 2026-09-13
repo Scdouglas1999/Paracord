@@ -1,3 +1,4 @@
+import type { CallSession } from './callSession';
 import { isTauri } from '../../lib/tauriEnv';
 
 /**
@@ -102,12 +103,13 @@ export function resolveNativeDeviceIndex(
   return '0';
 }
 
-export async function switchNativeInputDevice(selected: string | null | undefined): Promise<void> {
+export async function switchNativeInputDevice(selected: string | null | undefined, owner: Pick<CallSession, 'id' | 'assertCurrent'>): Promise<void> {
   if (!isTauri()) return;
   const devices = await listNativeInputDevices();
+  owner.assertCurrent();
   const index = resolveNativeDeviceIndex(devices, selected);
   try {
-    await tauriInvoke('voice_switch_input_device', { deviceId: index });
+    await tauriInvoke('voice_switch_input_device', { deviceId: index, ownerId: owner.id });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     void clientLog(`[voice] native voice_switch_input_device failed (index=${index}): ${message}`);
@@ -123,12 +125,13 @@ export async function switchNativeInputDevice(selected: string | null | undefine
  * (command unavailable on older builds, no active native session, cpal error)
  * is logged and swallowed — output routing must never break the call.
  */
-export async function switchNativeOutputDevice(selected: string | null | undefined): Promise<void> {
+export async function switchNativeOutputDevice(selected: string | null | undefined, owner: Pick<CallSession, 'id' | 'assertCurrent'>): Promise<void> {
   if (!isTauri()) return;
   const devices = await listNativeOutputDevices();
+  owner.assertCurrent();
   const index = resolveNativeDeviceIndex(devices, selected);
   try {
-    await tauriInvoke('voice_switch_output_device', { deviceId: index });
+    await tauriInvoke('voice_switch_output_device', { deviceId: index, ownerId: owner.id });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     void clientLog(`[voice] native voice_switch_output_device failed (index=${index}): ${message}`);

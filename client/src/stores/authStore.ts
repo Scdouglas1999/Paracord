@@ -102,7 +102,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
         password,
       });
       setAccessToken(data.token);
-      if (data.refresh_token) setRefreshToken(data.refresh_token);
+      setRefreshToken(data.refresh_token ?? null);
       set({ token: data.token, user: data.user, isLoading: false });
       startDownloadTicketLifecycle();
     } catch (err: unknown) {
@@ -121,7 +121,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
         display_name: displayName || undefined,
       });
       setAccessToken(data.token);
-      if (data.refresh_token) setRefreshToken(data.refresh_token);
+      setRefreshToken(data.refresh_token ?? null);
       set({ token: data.token, user: data.user, isLoading: false });
       startDownloadTicketLifecycle();
     } catch (err: unknown) {

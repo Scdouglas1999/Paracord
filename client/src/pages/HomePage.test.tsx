@@ -1,3 +1,4 @@
+vi.mock('../lib/guildNavigation', () => ({ activateGuild: (guild: { id: string }) => mockGuildState.selectGuild(guild.id) }));
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
@@ -6,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dmApi } from '../api/dms';
 import { toast } from '../stores/toastStore';
 import { HomePage } from './HomePage';
+import { useReadStateStore } from '../stores/readStateStore';
 import type { ConversationEntry } from '../lib/attention/conversationModel';
 import type { GuildSummary } from '../hooks/useUnifiedConversations';
 
@@ -32,6 +34,7 @@ const testData = vi.hoisted(() => ({
 
 const mockAuthState = vi.hoisted(() => ({
   user: testData.currentUser,
+  token: 'token',
 }));
 
 const mockGuildState = vi.hoisted(() => ({
@@ -56,15 +59,21 @@ const mockPresenceState = vi.hoisted(() => ({
 
 const mockChannelState = vi.hoisted(() => ({
   channelsByGuild: {
-    '': [],
+    [JSON.stringify(['__local__', testData.currentUser.id, ''])]: [],
   } as Record<string, Array<Record<string, unknown>>>,
+  errors: {} as Record<string, string>,
+  loading: {} as Record<string, boolean>,
+  guildChannelsLoaded: new Proxy({} as Record<string, boolean>, { get: () => true }),
   fetchChannels: vi.fn(),
   setDmChannels: vi.fn(),
+  createDm: vi.fn(),
+  createGroupDm: vi.fn(),
   selectChannel: vi.fn(),
   selectGuild: vi.fn(),
 }));
 
 const mockServerListState = vi.hoisted(() => ({
+  servers: [] as Array<{ id: string; name: string }>,
   activeServerId: null as string | null,
   setActive: vi.fn(),
 }));
@@ -74,6 +83,9 @@ const mockVoiceState = vi.hoisted(() => ({
   speakingUsers: new Set<string>(),
   setWatchedStreamer: vi.fn(),
 }));
+
+const activityScopes = vi.hoisted(() => ({ value: [] as Array<{ serverId: string; userId: string }> }));
+vi.mock('../hooks/useAvailableAccountScopes', () => ({ useAvailableAccountScopes: () => activityScopes.value }));
 
 const mockUnified = vi.hoisted(() => ({
   needsYou: [] as ConversationEntry[],
@@ -106,8 +118,8 @@ vi.mock('../stores/authStore', () => ({
 }));
 
 vi.mock('../stores/guildStore', () => ({
-  useGuildStore: (selector: (state: typeof mockGuildState) => unknown) =>
-    selector(mockGuildState),
+  useGuildStore: (selector: (state: typeof mockGuildState & { selectedGuild?: { id: string; scope: { serverId: string; userId: string } } | null }) => unknown) =>
+    selector({ ...mockGuildState, selectedGuild: mockGuildState.selectedGuildId ? { id: mockGuildState.selectedGuildId, scope: { serverId: '__local__', userId: mockAuthState.user.id } } : null, guilds: mockGuildState.guilds.map(guild => ({ ...guild, scope: { serverId: '__local__', userId: mockAuthState.user!.id }, key: JSON.stringify(['__local__', mockAuthState.user!.id, guild.id]) })) }),
 }));
 
 vi.mock('../stores/relationshipStore', () => ({
@@ -154,7 +166,7 @@ vi.mock('../hooks/useVoice', () => ({
 }));
 
 vi.mock('../hooks/useMutedGuilds', () => ({
-  useMutedGuilds: () => ({ mutedGuildIds: [] as string[] }),
+  useMutedGuilds: () => ({ mutedGuildKeys: [] as string[] }),
 }));
 
 vi.mock('../hooks/useUnifiedConversations', () => ({
@@ -187,7 +199,8 @@ function makeRecentEntry(
 ): ConversationEntry {
   return {
     key: 'local:dm-1',
-    serverId: 'local',
+    serverId: '__local__',
+    scope: { serverId: '__local__', userId: 'user-1' },
     channelId: 'dm-1',
     guildId: null,
     userId: 'friend-1',
@@ -227,6 +240,12 @@ function renderHomePage() {
 describe('HomePage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    activityScopes.value = [];
+    useReadStateStore.setState({ byAccount: {}, loading: {}, errors: {} });
+    mockChannelState.createDm.mockImplementation(async (id, scope) => {
+      const { data } = await dmApi.create(id);
+      return { ...data, scope, key: JSON.stringify([scope.serverId, scope.userId, data.id]) };
+    });
     mockGuildState.guilds = [];
     mockGuildState.selectedGuildId = null;
     mockRelationshipState.relationships = [{ id: 'rel-1', type: 1, user: testData.friend }];
@@ -235,7 +254,9 @@ describe('HomePage', () => {
       status: 'online',
       activities: [],
     });
-    mockChannelState.channelsByGuild = { '': [] };
+    mockChannelState.channelsByGuild = { [JSON.stringify(['__local__', testData.currentUser.id, ''])]: [] };
+    mockChannelState.errors = {};
+    mockChannelState.loading = {};
     mockChannelState.fetchChannels.mockResolvedValue(undefined);
     mockChannelState.selectGuild.mockResolvedValue(undefined);
     mockRelationshipState.fetchRelationships.mockResolvedValue(undefined);
@@ -250,7 +271,7 @@ describe('HomePage', () => {
 
   it('renders live DM calls in Happening now when a call is active', () => {
     mockChannelState.channelsByGuild = {
-      '': [
+      [JSON.stringify(['__local__', testData.currentUser.id, ''])]: [
         {
           id: 'dm-1',
           type: 1,
@@ -280,10 +301,11 @@ describe('HomePage', () => {
   it('includes occupied guild voice rooms in Happening now', () => {
     mockGuildState.guilds = [{ id: 'guild-1', name: 'Emerald HQ' }];
     mockChannelState.channelsByGuild = {
-      '': [],
-      'guild-1': [
+      [JSON.stringify(['__local__', testData.currentUser.id, ''])]: [],
+      [JSON.stringify(['__local__', testData.currentUser.id, 'guild-1'])]: [
         {
           id: 'voice-1',
+          scope: { serverId: '__local__', userId: 'user-1' },
           type: 2,
           name: 'Lounge',
           position: 0,
@@ -318,7 +340,7 @@ describe('HomePage', () => {
     mockGuildState.guilds = [{ id: 'guild-1', name: 'Emerald HQ', member_count: 4 }];
     mockGuildState.selectedGuildId = 'guild-1';
     mockUnified.spaces = [
-      { id: 'guild-1', name: 'Emerald HQ', icon: null, serverId: 'local' },
+      { scope: { serverId: '__local__', userId: 'user-1' }, key: JSON.stringify(['__local__', 'user-1', 'guild-1']), id: 'guild-1', name: 'Emerald HQ', icon: null, serverId: '__local__' },
     ];
 
     renderHomePage();
@@ -349,7 +371,7 @@ describe('HomePage', () => {
     mockRelationshipState.relationships = [];
     mockGuildState.guilds = [{ id: 'guild-1', name: 'Fuel', member_count: 4 }];
     mockGuildState.selectedGuildId = 'guild-1';
-    mockUnified.spaces = [{ id: 'guild-1', name: 'Fuel', icon: null, serverId: 'local' }];
+    mockUnified.spaces = [{ scope: { serverId: '__local__', userId: 'user-1' }, key: JSON.stringify(['__local__', 'user-1', 'guild-1']), id: 'guild-1', name: 'Fuel', icon: null, serverId: '__local__' }];
     mockUnified.recent = [
       makeRecentEntry({
         key: 'local:ch-general',
@@ -405,7 +427,7 @@ describe('HomePage', () => {
     });
     mockRelationshipState.relationships = [];
     mockGuildState.guilds = [{ id: 'guild-1', name: 'Fuel', member_count: 2 }];
-    mockUnified.spaces = [{ id: 'guild-1', name: 'Fuel', icon: null, serverId: 'local' }];
+    mockUnified.spaces = [{ scope: { serverId: '__local__', userId: 'user-1' }, key: JSON.stringify(['__local__', 'user-1', 'guild-1']), id: 'guild-1', name: 'Fuel', icon: null, serverId: '__local__' }];
 
     renderHomePage();
 
@@ -458,6 +480,45 @@ describe('HomePage', () => {
     expect(screen.getByRole('button', { name: /1 friend request waiting/ })).toBeInTheDocument();
   });
 
+  it('prioritizes pinned and overflow work on the canvas without duplicating the resume space', () => {
+    mockRelationshipState.relationships = [];
+    mockGuildState.guilds = [{ id: 'guild-1', name: 'Fuel' }, { id: 'guild-2', name: 'Design' }];
+    mockUnified.spaces = mockGuildState.guilds.map(guild => ({ ...guild, scope: { serverId: '__local__', userId: 'user-1' }, key: JSON.stringify(['__local__', 'user-1', guild.id]), serverId: '__local__', icon: null }));
+    mockUnified.pinned = [makeRecentEntry({ key: 'pinned', title: 'pinned-mention', guildId: 'guild-1', mentionCount: 2, pinned: true })];
+    mockUnified.recent = [makeRecentEntry({ key: 'overflow', title: 'overflow-unread', guildId: 'guild-2', unread: true })];
+    renderHomePage();
+    expect(screen.getByText('2 conversations need your attention')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Needs you' })).toHaveTextContent('pinned-mention');
+    expect(screen.getByRole('region', { name: 'Needs you' })).toHaveTextContent('overflow-unread');
+    expect(screen.queryByText(/is quiet/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Pick up' })).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Your spaces' })).not.toHaveTextContent('Fuel');
+    expect(screen.getByRole('region', { name: 'Continue in Fuel' })).toHaveTextContent('Unread waiting');
+  });
+
+  it('does not announce quiet before read state is known or after a fetch failure', () => {
+    mockRelationshipState.relationships = [];
+    activityScopes.value = [{ serverId: '__local__', userId: 'user-1' }];
+    const { unmount } = render(<MemoryRouter><HomePage /></MemoryRouter>);
+    expect(screen.getByText('Checking conversations for unread activity…')).toBeInTheDocument();
+    expect(screen.queryByText(/quiet/i)).not.toBeInTheDocument();
+    unmount();
+    useReadStateStore.setState({ errors: { [JSON.stringify(['__local__', 'user-1'])]: 'offline' } });
+    renderHomePage();
+    expect(screen.getByRole('button', { name: 'Refresh activity' })).toBeInTheDocument();
+    expect(screen.queryByText(/is quiet/i)).not.toBeInTheDocument();
+  });
+
+  it('does not call a space quiet when its channels failed to load', () => {
+    mockRelationshipState.relationships = [];
+    mockGuildState.guilds = [{ id: 'guild-1', name: 'Fuel' }];
+    mockChannelState.errors = { [JSON.stringify(['__local__', 'user-1', 'guild-1'])]: 'offline' };
+    renderHomePage();
+    expect(screen.getByText(/Some activity could not be checked/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Refresh activity' })).toBeInTheDocument();
+    expect(screen.queryByText(/is quiet/i)).not.toBeInTheDocument();
+  });
+
   it('opens the DM picker from the "New message" affordance', async () => {
     const user = userEvent.setup();
     renderHomePage();
@@ -487,7 +548,7 @@ describe('HomePage', () => {
     await waitFor(() => {
       expect(dmApi.create).toHaveBeenCalledWith('friend-1');
     });
-    expect(mockChannelState.setDmChannels).toHaveBeenCalledWith([dmChannel]);
+    expect(mockChannelState.createDm).toHaveBeenCalledWith('friend-1', { serverId: '__local__', userId: testData.currentUser.id });
     expect(mockChannelState.selectChannel).toHaveBeenCalledWith('dm-1');
     expect(await screen.findByText('DM route')).toBeInTheDocument();
   });
@@ -511,13 +572,14 @@ describe('HomePage', () => {
   it('shows Your spaces with attention dots for live guild rooms', () => {
     mockGuildState.guilds = [{ id: 'guild-1', name: 'Emerald HQ', member_count: 12 }];
     mockUnified.spaces = [
-      { id: 'guild-1', name: 'Emerald HQ', icon: null, serverId: 'local' },
+      { scope: { serverId: '__local__', userId: 'user-1' }, key: JSON.stringify(['__local__', 'user-1', 'guild-1']), id: 'guild-1', name: 'Emerald HQ', icon: null, serverId: '__local__' },
     ];
     mockChannelState.channelsByGuild = {
-      '': [],
-      'guild-1': [
+      [JSON.stringify(['__local__', testData.currentUser.id, ''])]: [],
+      [JSON.stringify(['__local__', testData.currentUser.id, 'guild-1'])]: [
         {
           id: 'voice-1',
+          scope: { serverId: '__local__', userId: 'user-1' },
           type: 2,
           name: 'Lounge',
           position: 0,
@@ -547,3 +609,17 @@ describe('HomePage', () => {
     expect(screen.getByTestId('home-server-attention')).toBeInTheDocument();
   });
 });
+
+vi.mock('../hooks/useChannels', async () => {
+  const actual = await vi.importActual<typeof import('../hooks/useChannels')>('../hooks/useChannels');
+  const { useChannelStore } = await import('../stores/channelStore');
+  return {
+    ...actual,
+    useCurrentChannelStore: useChannelStore,
+    useChannelActions: () => useChannelStore.getState(),
+    getAccountChannelView: () => useChannelStore.getState(),
+    useGuildChannels: (id: string) => useChannelStore(state => state.channelsByGuild[id] ?? []),
+  };
+});
+
+vi.mock('../lib/channelNavigation', () => ({ activateChannel: (channel: { id: string }) => mockChannelState.selectChannel(channel.id) }));

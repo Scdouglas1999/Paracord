@@ -33,7 +33,7 @@ pub fn hex_decode(value: &str) -> Option<Vec<u8>> {
         return None;
     }
     let mut out = Vec::with_capacity(bytes.len() / 2);
-    for chunk in bytes.chunks_exact(2) {
+    for chunk in bytes.as_chunks::<2>().0 {
         let hi = decode_nibble(chunk[0])?;
         let lo = decode_nibble(chunk[1])?;
         out.push((hi << 4) | lo);

@@ -1,5 +1,7 @@
 ﻿import { type AxiosInstance } from 'axios';
 import { createApiClient } from '../api/client';
+import { responseContract } from '../api/responseContracts';
+import { isCurrentUser } from '../api/generated/validators';
 import { useServerListStore, type ServerEntry } from '../stores/serverListStore';
 import { useAccountStore } from '../stores/accountStore';
 import { useUIStore } from '../stores/uiStore';
@@ -16,8 +18,14 @@ import type { Activity, GatewayPayload } from '../types';
 import { GatewayEvents } from '../gateway/events';
 import { dispatchGatewayEvent } from '../gateway/dispatch';
 import { logVoiceDiagnostic } from './desktopDiagnostics';
+import { LOCAL_SERVER_ID } from './serverScope';
+import { getServerAccountScope } from './serverIdentity';
+import { acceptDatabaseHistoryEpoch, getDatabaseHistoryEpoch, registerHistoryReconciler } from './databaseHistory';
+import { toast } from '../stores/toastStore';
+import { notifyServerDisconnected } from './serverDisconnect';
+import { pauseAccountMessagingForRecovery } from './messages/accountMessagingRuntime';
 
-export const LOCAL_SERVER_ID = '__local__';
+export { LOCAL_SERVER_ID } from './serverScope';
 
 /**
  * Rate-limited diagnostic for frames we couldn't parse. We deliberately log
@@ -72,13 +80,7 @@ class NativeSseConnection implements RealtimeEventSource {
   private unlisten: (() => void) | null = null;
   private readonly listeners = new Map<string, Set<(evt: MessageEvent<string>) => void>>();
 
-  private constructor(private readonly url: string) {}
-
-  static async open(url: string): Promise<NativeSseConnection> {
-    const conn = new NativeSseConnection(url);
-    await conn.start();
-    return conn;
-  }
+  constructor(private readonly url: string) {}
 
   addEventListener(type: string, listener: (evt: MessageEvent<string>) => void): void {
     const set = this.listeners.get(type) ?? new Set();
@@ -97,13 +99,14 @@ class NativeSseConnection implements RealtimeEventSource {
       .catch(() => undefined);
   }
 
-  private async start(): Promise<void> {
+  async start(): Promise<void> {
     const [{ invoke }, { listen }] = await Promise.all([
       import('@tauri-apps/api/core'),
       import('@tauri-apps/api/event'),
     ]);
 
-    this.unlisten = await listen<NativeSsePayload>('native_sse_event', (evt) => {
+    if (this.closed) return;
+    const unlisten = await listen<NativeSsePayload>('native_sse_event', (evt) => {
       if (this.closed || evt.payload?.streamId !== this.streamId) return;
       if (evt.payload.kind === 'open') {
         this.readyState = 1;
@@ -128,9 +131,15 @@ class NativeSseConnection implements RealtimeEventSource {
       }
     });
 
+    if (this.closed) { unlisten(); return; }
+    this.unlisten = unlisten;
     try {
       await invoke('start_native_sse_stream', { streamId: this.streamId, url: this.url });
+      // A close may race native startup. Stop again after startup completes so
+      // a stream created after the earlier stop cannot outlive its generation.
+      if (this.closed) await invoke('stop_native_sse_stream', { streamId: this.streamId });
     } catch {
+      if (this.closed) return;
       this.readyState = 2;
       this.onerror?.(new Event('error'));
     }
@@ -139,13 +148,20 @@ class NativeSseConnection implements RealtimeEventSource {
 
 async function openRealtimeEventSource(url: string): Promise<RealtimeEventSource> {
   if (isTauri()) {
-    return NativeSseConnection.open(url);
+    return new NativeSseConnection(url);
   }
   return new EventSource(url, { withCredentials: true });
 }
 
 export interface ServerConnection {
   serverId: string;
+  /** Bound after an authenticated handshake, before any events are applied. */
+  accountId?: string;
+  /** The access token this transport was established with. A replacement
+   *  session (identity attach, password change) revokes the old one, so a
+   *  stream opened with it can never deliver this account's events again. */
+  sessionToken?: string | null;
+  historyEpoch?: string;
   serverUrl: string;
   apiClient: AxiosInstance;
   ws: WebSocket | null;
@@ -171,10 +187,26 @@ export interface ServerConnection {
   pendingMessages: unknown[];
 }
 
+type DispatchPayload = GatewayPayload & { event_id?: number };
+type DispatchResult = void | false | Promise<void | false>;
+type DispatchEntry = { payload: DispatchPayload; bytes: number };
+type DispatchLane = {
+  accountId: string | undefined;
+  queue: DispatchEntry[];
+  bytes: number;
+  draining: boolean;
+};
+
 class ConnectionManager {
   private connections = new Map<string, ServerConnection>();
   private connecting = new Map<string, Promise<void>>();
   private static readonly MAX_PENDING_MESSAGES = 200;
+  private static readonly MAX_DISPATCH_EVENTS = 1000;
+  private static readonly MAX_DISPATCH_BYTES = 8 * 1024 * 1024;
+  /** A new lane also fences asynchronous transport setup and old completions. */
+  private readonly dispatchLanes = new WeakMap<ServerConnection, DispatchLane>();
+  private readonly durableFailures = new WeakMap<ServerConnection, number>();
+  private readonly accountHydrationWaits = new WeakMap<ServerConnection, () => void>();
   /** Consecutive missed liveness checks (heartbeat acks / SSE frames) before a
    *  connection is considered stale and torn down. Shared by WS and SSE. */
   private static readonly MAX_MISSED_ACKS = 3;
@@ -189,6 +221,10 @@ class ConnectionManager {
   private recoveryAttempts = 0;
 
   constructor() {
+    registerHistoryReconciler(scope => {
+      const conn = this.connections.get(scope.serverId);
+      if (conn && getServerAccountScope(scope.serverId)?.userId === scope.userId) this.reconcileHistory(conn);
+    });
     if (typeof window !== 'undefined') {
       window.addEventListener('online', () => {
         this.offline = false;
@@ -213,7 +249,191 @@ class ConnectionManager {
     return this.connections.get(conn.serverId) === conn;
   }
 
+  /** A reload can restore its token before /users/@me establishes its owner. */
+  private waitForVerifiedAccount(conn: ServerConnection, resume: () => void): boolean {
+    if (getServerAccountScope(conn.serverId)) return false;
+    if (this.accountHydrationWaits.has(conn)) return true;
+    const token = this.tokenForConnection(conn);
+    if (!token) return true;
+    conn.connecting = false;
+    conn.connected = false;
+    let unsubscribe = () => {};
+    const stop = () => {
+      unsubscribe();
+      if (this.accountHydrationWaits.get(conn) === stop) this.accountHydrationWaits.delete(conn);
+    };
+    const hydrated = () => {
+      if (!this.isCurrentConnection(conn) || !conn.allowReconnect
+        || this.tokenForConnection(conn) !== token) { stop(); return; }
+      if (!getServerAccountScope(conn.serverId)) return;
+      stop();
+      resume();
+    };
+    this.accountHydrationWaits.set(conn, stop);
+    unsubscribe = conn.serverId === LOCAL_SERVER_ID
+      ? useAuthStore.subscribe(hydrated) : useServerListStore.subscribe(hydrated);
+    this.syncUiConnectionStatus();
+    return true;
+  }
+
+  private beginTransport(conn: ServerConnection): DispatchLane {
+    this.invalidateDispatchLane(conn);
+    const lane: DispatchLane = {
+      accountId: getServerAccountScope(conn.serverId)?.userId,
+      queue: [], bytes: 0, draining: false,
+    };
+    this.dispatchLanes.set(conn, lane);
+    this.pauseMessagingRecovery(conn);
+    return lane;
+  }
+
+  private pauseMessagingRecovery(conn: ServerConnection): void {
+    if (!this.isCurrentConnection(conn)) return;
+    const scope = getServerAccountScope(conn.serverId);
+    const owner = this.dispatchLanes.get(conn)?.accountId ?? conn.accountId;
+    if (scope && scope.userId === owner && (!conn.accountId || conn.accountId === owner)) {
+      pauseAccountMessagingForRecovery(scope);
+    }
+  }
+
+  private ownsTransport(conn: ServerConnection, lane: DispatchLane): boolean {
+    return this.isCurrentConnection(conn) && conn.allowReconnect
+      && this.dispatchLanes.get(conn) === lane
+      && getServerAccountScope(conn.serverId)?.userId === lane.accountId
+      && (!conn.accountId || conn.accountId === lane.accountId);
+  }
+
+  private invalidateDispatchLane(conn: ServerConnection): void {
+    const lane = this.dispatchLanes.get(conn);
+    if (lane) { lane.queue.length = 0; lane.bytes = 0; }
+    this.dispatchLanes.delete(conn);
+  }
+
+  /** Conservative retained JSON heap estimate, bounded even for deeply nested frames. */
+  private dispatchBytes(payload: DispatchPayload): number {
+    const pending: unknown[] = [payload];
+    let bytes = 0;
+    while (pending.length && bytes <= ConnectionManager.MAX_DISPATCH_BYTES) {
+      const value = pending.pop();
+      if (typeof value === 'string') bytes += 32 + value.length * 2;
+      else if (value && typeof value === 'object') {
+        bytes += 64;
+        if (Array.isArray(value)) {
+          bytes += value.length * 16;
+          if (bytes > ConnectionManager.MAX_DISPATCH_BYTES) break;
+          for (const item of value) pending.push(item);
+        } else {
+          for (const key of Object.keys(value)) {
+            bytes += 32 + key.length * 2;
+            if (bytes > ConnectionManager.MAX_DISPATCH_BYTES) break;
+            pending.push((value as Record<string, unknown>)[key]);
+          }
+        }
+      } else bytes += 16;
+    }
+    return bytes;
+  }
+
+  private enqueueDispatch(conn: ServerConnection, lane: DispatchLane, payload: DispatchPayload): void {
+    if (!this.ownsTransport(conn, lane)) return;
+    if (typeof payload.t !== 'string'
+      || [payload.s, payload.event_id].some(value => value != null && (!Number.isSafeInteger(value) || value < 0))) {
+      this.failDispatch(conn, lane, 'invalid dispatch checkpoint', payload.t);
+      return;
+    }
+    const bytes = this.dispatchBytes(payload);
+    if (lane.queue.length >= ConnectionManager.MAX_DISPATCH_EVENTS
+      || lane.bytes + bytes > ConnectionManager.MAX_DISPATCH_BYTES) {
+      this.failDispatch(conn, lane, 'queue capacity exceeded', payload.t);
+      return;
+    }
+    lane.queue.push({ payload, bytes });
+    lane.bytes += bytes;
+    if (!lane.draining) this.drainDispatch(conn, lane);
+  }
+
+  /** Keep the synchronous path synchronous; only a durable promise creates a barrier. */
+  private drainDispatch(conn: ServerConnection, lane: DispatchLane): void {
+    lane.draining = true;
+    while (this.ownsTransport(conn, lane) && lane.queue.length) {
+      const entry = lane.queue[0];
+      let result: DispatchResult;
+      try { result = this.handleDispatch(conn, entry.payload.t!, entry.payload.d, lane); }
+      catch { this.failDispatch(conn, lane, 'durable event storage failed', entry.payload.t); return; }
+      if (result !== undefined && result !== false) {
+        void result.then(accepted => {
+          if (!this.completeDispatch(conn, lane, entry, accepted)) return;
+          // READY alone cannot erase backoff for a repeatedly failing replay.
+          if (entry.payload.t !== GatewayEvents.READY && entry.payload.t !== GatewayEvents.RESUMED) {
+            this.durableFailures.delete(conn);
+            conn.reconnectAttempts = 0;
+          }
+          this.drainDispatch(conn, lane);
+        }, () => this.failDispatch(conn, lane, 'durable event storage failed', entry.payload.t));
+        return;
+      }
+      if (!this.completeDispatch(conn, lane, entry, result)) return;
+    }
+    lane.draining = false;
+  }
+
+  private completeDispatch(conn: ServerConnection, lane: DispatchLane, entry: DispatchEntry, accepted: void | false): boolean {
+    if (!this.ownsTransport(conn, lane)) return false;
+    if (accepted === false) {
+      this.failDispatch(conn, lane, 'event rejected by account or history boundary', entry.payload.t);
+      return false;
+    }
+    try {
+      const scope = getServerAccountScope(conn.serverId);
+      if (!scope || getDatabaseHistoryEpoch(scope) !== (conn.historyEpoch ?? null)) {
+        this.failDispatch(conn, lane, 'database history changed during event storage', entry.payload.t);
+        return false;
+      }
+    } catch {
+      this.failDispatch(conn, lane, 'database history metadata unavailable', entry.payload.t);
+      return false;
+    }
+    // Older WS servers advertise the replay head in RESUMED, before replaying
+    // it. A handshake cannot acknowledge those still-undelivered events.
+    if (entry.payload.t !== GatewayEvents.RESUMED && entry.payload.s != null) conn.sequence = entry.payload.s;
+    if (typeof entry.payload.event_id === 'number') conn.realtimeCursor = entry.payload.event_id;
+    lane.queue.shift();
+    lane.bytes -= entry.bytes;
+    return true;
+  }
+
+  private failDispatch(conn: ServerConnection, lane: DispatchLane, reason: string, event?: string): void {
+    if (!this.ownsTransport(conn, lane)) return;
+    const failures = (this.durableFailures.get(conn) ?? 0) + 1;
+    this.durableFailures.set(conn, failures);
+    conn.reconnectAttempts = Math.max(conn.reconnectAttempts, failures);
+    // Payloads, storage exception messages, tokens, and URLs must never enter diagnostics.
+    console.error('[gateway] Cannot complete gateway delivery; reconnecting from the last completed checkpoint.', {
+      reason, event: event && /^[A-Z_]{1,64}$/.test(event) ? event : 'unknown',
+    });
+    const ws = conn.ws; const es = conn.eventSource;
+    conn.ws = null; conn.eventSource = null;
+    conn.connected = false; conn.connecting = false;
+    this.cleanupConnection(conn);
+    ws?.close(); es?.close();
+    if (conn.serverId !== LOCAL_SERVER_ID) useServerListStore.getState().setConnected(conn.serverId, false);
+    this.reconnectGateway(conn);
+  }
+
   /** True when a connection already has a live transport (or is mid-connect). */
+  /**
+   * A replacement session cannot inherit the revoked session's stream. Its
+   * resume checkpoint belongs to the old session too, so a fresh authenticated
+   * READY must re-establish the account's state.
+   */
+  private sessionReplaced(conn: ServerConnection): boolean {
+    if (conn.sessionToken === undefined) return false;
+    const token = this.tokenForConnection(conn);
+    if (!token || token === conn.sessionToken) return false;
+    conn.sessionId = null; conn.sequence = null; conn.realtimeCursor = null; conn.pendingMessages = [];
+    return true;
+  }
+
   private isConnectionHealthy(conn: ServerConnection): boolean {
     if (conn.connecting || conn.reconnectTimer !== null) return true;
     if (!conn.connected) return false;
@@ -500,13 +720,17 @@ class ConnectionManager {
     );
 
     try {
-      const { data } = await probeClient.get<{ id?: string }>('/users/@me', { timeout: 10_000 });
+      const { data } = await responseContract(
+        probeClient.get('/users/@me', { timeout: 10_000 }),
+        isCurrentUser,
+        'CurrentUser',
+      );
       useServerListStore.getState().updateToken(serverId, verifiedToken);
       if (verifiedRefreshToken) {
         useServerListStore.getState().updateRefreshToken(serverId, verifiedRefreshToken);
       }
       if (data?.id) {
-        useServerListStore.getState().updateServerInfo(serverId, { userId: data.id });
+        useServerListStore.getState().setAuthenticatedUser(serverId, data);
       }
       this.promoteLocalAuthSession(verifiedToken, verifiedRefreshToken);
       logVoiceDiagnostic('[gateway] verified local auth token for saved server', { server: serverId });
@@ -532,8 +756,12 @@ class ConnectionManager {
     if (existing) {
       existing.allowReconnect = true;
       // Do not tear down a healthy SSE/WS on redundant connectAll() calls
-      // (e.g. tab focus). Only reconnect when the transport is missing/stale.
-      if (!this.isConnectionHealthy(existing)) {
+      // (e.g. tab focus). Only reconnect when the transport is missing/stale,
+      // or when this account's session was replaced under it.
+      // Evaluate the credential first: a replaced session must forget its
+      // resume point even when the transport was already unhealthy.
+      const replaced = this.sessionReplaced(existing);
+      if (!this.isConnectionHealthy(existing) || replaced) {
         this.connectRealtime(existing);
       }
       return;
@@ -548,6 +776,10 @@ class ConnectionManager {
         setAccessToken(nextToken);
         useAuthStore.setState({ token: nextToken });
         if (nextRefreshToken) setRefreshToken(nextRefreshToken);
+        // An ordinary refresh keeps the same realtime session; only an external
+        // replacement must drop the transport.
+        const current = this.connections.get(LOCAL_SERVER_ID);
+        if (current && current.sessionToken !== undefined) current.sessionToken = nextToken;
       },
       () => {
         setAccessToken(null);
@@ -591,8 +823,12 @@ class ConnectionManager {
     if (existing) {
       existing.allowReconnect = true;
       // Do not tear down a healthy SSE/WS on redundant connectAll() calls
-      // (e.g. tab focus). Only reconnect when the transport is missing/stale.
-      if (!this.isConnectionHealthy(existing)) {
+      // (e.g. tab focus). Only reconnect when the transport is missing/stale,
+      // or when this account's session was replaced under it.
+      // Evaluate the credential first: a replaced session must forget its
+      // resume point even when the transport was already unhealthy.
+      const replaced = this.sessionReplaced(existing);
+      if (!this.isConnectionHealthy(existing) || replaced) {
         this.connectRealtime(existing);
       }
       return;
@@ -643,6 +879,8 @@ class ConnectionManager {
           useAuthStore.setState({ token });
           if (refreshToken) setRefreshToken(refreshToken);
         }
+        const current = this.connections.get(serverId);
+        if (current && current.sessionToken !== undefined) current.sessionToken = token;
       },
       () => {
         // Auth failed; clear token and disconnect.
@@ -705,6 +943,16 @@ class ConnectionManager {
       useServerListStore.getState().updateToken(serverId, token);
       serverToken = token;
     }
+
+    // Always verify the current account and fetch its full private profile.
+    // READY contains only public fields and must never inherit another account's
+    // flags, email or encryption identity from the home server.
+    const { data: authenticatedUser } = await responseContract(
+      client.get('/users/@me', { timeout: 10_000 }),
+      isCurrentUser,
+      'CurrentUser',
+    );
+    useServerListStore.getState().setAuthenticatedUser(serverId, authenticatedUser);
 
     const conn: ServerConnection = {
       serverId,
@@ -811,6 +1059,7 @@ class ConnectionManager {
   }
 
   private connectRealtime(conn: ServerConnection): void {
+    conn.sessionToken = this.tokenForConnection(conn);
     if (this.useRealtimeV2) {
       if (conn.ws) {
         conn.ws.close();
@@ -872,6 +1121,8 @@ class ConnectionManager {
       }
     }
 
+    if (this.waitForVerifiedAccount(conn, () => this.connectRealtimeSse(conn))) return;
+
     if (conn.reconnectTimer) {
       clearTimeout(conn.reconnectTimer);
       conn.reconnectTimer = null;
@@ -881,6 +1132,7 @@ class ConnectionManager {
     }
     conn.connecting = true;
     conn.allowReconnect = true;
+    const lane = this.beginTransport(conn);
     this.syncUiConnectionStatus();
     void (async () => {
       try {
@@ -891,14 +1143,12 @@ class ConnectionManager {
         }>(`${conn.serverUrl.replace(/\/+$/, '')}/api/v2/rt/session`, undefined, {
           timeout: 10_000,
         });
-        if (!this.isCurrentConnection(conn) || !conn.allowReconnect) return;
+        if (!this.ownsTransport(conn, lane)) return;
         logVoiceDiagnostic('[gateway] SSE session POST ok', { session_id: sessionResp.data?.session_id });
-        if (sessionResp.data?.session_id) {
-          conn.sessionId = sessionResp.data.session_id;
-        }
-        if (typeof sessionResp.data?.cursor === 'number' && conn.realtimeCursor == null) {
-          conn.realtimeCursor = sessionResp.data.cursor;
-        }
+        // Bootstrap values select a stream; only its authenticated READY may
+        // acknowledge them. A failed setup must retain the completed resume point.
+        const sessionId = sessionResp.data?.session_id ?? conn.sessionId;
+        const cursor = conn.realtimeCursor ?? sessionResp.data?.cursor;
 
         const base = conn.serverUrl.replace(/\/+$/, '');
 
@@ -911,14 +1161,14 @@ class ConnectionManager {
           undefined,
           { timeout: 10_000 },
         );
-        if (!this.isCurrentConnection(conn) || !conn.allowReconnect) return;
+        if (!this.ownsTransport(conn, lane)) return;
         const ticket = ticketResp.data?.ticket;
         if (!ticket) throw new Error('stream ticket missing');
 
         const params = new URLSearchParams();
         params.set('ticket', ticket);
-        if (conn.sessionId) params.set('session_id', conn.sessionId);
-        if (conn.realtimeCursor != null) params.set('cursor', String(conn.realtimeCursor));
+        if (sessionId) params.set('session_id', sessionId);
+        if (cursor != null) params.set('cursor', String(cursor));
         const streamUrl = `${base}/api/v2/rt/events?${params.toString()}`;
         conn.streamUrl = streamUrl;
 
@@ -931,14 +1181,14 @@ class ConnectionManager {
         // superseded or torn down while it was in flight. Assigning
         // `conn.eventSource` unconditionally re-armed a dead connection with a
         // live stream that nothing would ever close.
-        if (!this.isCurrentConnection(conn) || !conn.allowReconnect) {
+        if (!this.ownsTransport(conn, lane)) {
           es.close();
           return;
         }
         conn.eventSource = es;
 
         es.onopen = () => {
-          if (!this.isCurrentConnection(conn) || conn.eventSource !== es) {
+          if (!this.ownsTransport(conn, lane) || conn.eventSource !== es) {
             logVoiceDiagnostic('[gateway] SSE onopen but stale connection, closing');
             es.close();
             return;
@@ -946,7 +1196,6 @@ class ConnectionManager {
           logVoiceDiagnostic('[gateway] SSE connected', { server: conn.serverId });
           conn.connecting = false;
           conn.connected = true;
-          conn.reconnectAttempts = 0;
           conn.missedAcks = 0;
           if (conn.serverId !== LOCAL_SERVER_ID) {
             useServerListStore.getState().setConnected(conn.serverId, true);
@@ -958,20 +1207,15 @@ class ConnectionManager {
         };
 
         const handleRealtimeEvent = (rawData: string) => {
-          if (!this.isCurrentConnection(conn) || conn.eventSource !== es) return;
+          if (!this.ownsTransport(conn, lane) || conn.eventSource !== es) return;
           // Any frame (even one we can't parse) proves the stream is alive, so
           // reset the watchdog before attempting to decode it.
           conn.lastFrameTs = Date.now();
           conn.missedAcks = 0;
-          try {
-            const payload: GatewayPayload & { event_id?: number } = JSON.parse(rawData);
-            if (typeof payload.event_id === 'number') {
-              conn.realtimeCursor = payload.event_id;
-            }
-            this.handlePayload(conn, payload);
-          } catch {
-            warnMalformedFrame('sse', rawData);
-          }
+          let payload: DispatchPayload;
+          try { payload = JSON.parse(rawData); }
+          catch { warnMalformedFrame('sse', rawData); return; }
+          this.handlePayload(conn, payload, lane);
         };
         es.onmessage = (evt) => {
           handleRealtimeEvent(evt.data);
@@ -982,7 +1226,7 @@ class ConnectionManager {
         });
 
         es.onerror = (errEvt) => {
-          if (!this.isCurrentConnection(conn) || conn.eventSource !== es) return;
+          if (!this.ownsTransport(conn, lane) || conn.eventSource !== es) return;
           logVoiceDiagnostic('[gateway] SSE error', {
             server: conn.serverId,
             readyState: es.readyState,
@@ -1003,9 +1247,17 @@ class ConnectionManager {
             this.syncUiConnectionStatus();
           }
         };
+        if (es instanceof NativeSseConnection) {
+          await es.start();
+          if (!this.ownsTransport(conn, lane) || conn.eventSource !== es) es.close();
+        }
       } catch (err) {
-        logVoiceDiagnostic('[gateway] SSE setup failed', { server: conn.serverId, error: err });
-        if (!this.isCurrentConnection(conn)) return;
+        if (!this.ownsTransport(conn, lane)) return;
+        logVoiceDiagnostic('[gateway] SSE setup failed', { server: conn.serverId, error: err instanceof Error ? err.name : 'unknown' });
+        const events = conn.eventSource;
+        conn.eventSource = null;
+        this.cleanupConnection(conn);
+        events?.close();
         conn.connecting = false;
         conn.connected = false;
         if (conn.allowReconnect) {
@@ -1022,6 +1274,7 @@ class ConnectionManager {
     if (!this.isCurrentConnection(conn)) return;
     const token = this.tokenForConnection(conn);
     if (!token) return;
+    if (this.waitForVerifiedAccount(conn, () => this.connectGateway(conn))) return;
 
     if (conn.reconnectTimer) {
       clearTimeout(conn.reconnectTimer);
@@ -1038,6 +1291,7 @@ class ConnectionManager {
     const wsUrl = `${wsBase}/gateway?compress=zlib-stream`;
 
     conn.connecting = true;
+    const lane = this.beginTransport(conn);
     conn.ws = new WebSocket(wsUrl);
     conn.ws.binaryType = 'arraybuffer';
     this.syncUiConnectionStatus();
@@ -1045,7 +1299,7 @@ class ConnectionManager {
     const activeWs = conn.ws;
 
     activeWs.onopen = () => {
-      if (!this.isCurrentConnection(conn) || conn.ws !== activeWs) {
+      if (!this.ownsTransport(conn, lane) || conn.ws !== activeWs) {
         activeWs.close();
         return;
       }
@@ -1062,8 +1316,9 @@ class ConnectionManager {
     };
 
     activeWs.onmessage = (event) => {
-      if (!this.isCurrentConnection(conn) || conn.ws !== activeWs) return;
+      if (!this.ownsTransport(conn, lane) || conn.ws !== activeWs) return;
       let text: string | null = null;
+      let payload: DispatchPayload;
       try {
         if (event.data instanceof ArrayBuffer) {
           // Compressed binary frame — strip Z_SYNC_FLUSH suffix and inflate
@@ -1082,15 +1337,16 @@ class ConnectionManager {
           // Uncompressed text frame (fallback)
           text = event.data as string;
         }
-        const payload: GatewayPayload = JSON.parse(text);
-        this.handlePayload(conn, payload);
+        payload = JSON.parse(text);
       } catch {
         warnMalformedFrame('ws', text ?? '<binary frame>');
+        return;
       }
+      this.handlePayload(conn, payload, lane);
     };
 
     activeWs.onclose = () => {
-      if (!this.isCurrentConnection(conn) || conn.ws !== activeWs) return;
+      if (!this.ownsTransport(conn, lane) || conn.ws !== activeWs) return;
       conn.ws = null;
       conn.connecting = false;
       conn.connected = false;
@@ -1106,14 +1362,18 @@ class ConnectionManager {
     };
 
     activeWs.onerror = () => {
-      if (!this.isCurrentConnection(conn) || conn.ws !== activeWs) return;
+      if (!this.ownsTransport(conn, lane) || conn.ws !== activeWs) return;
       conn.connecting = false;
       activeWs.close();
     };
   }
 
-  private handlePayload(conn: ServerConnection, payload: GatewayPayload): void {
-    if (payload.s !== undefined && payload.s !== null) conn.sequence = payload.s;
+  private handlePayload(conn: ServerConnection, payload: DispatchPayload, lane = this.dispatchLanes.get(conn) ?? this.beginTransport(conn)): void {
+    if (!this.ownsTransport(conn, lane)) return;
+    if (!payload || typeof payload !== 'object' || !Number.isInteger(payload.op)) {
+      this.failDispatch(conn, lane, 'invalid gateway frame');
+      return;
+    }
 
     switch (payload.op) {
       case 10: { // HELLO
@@ -1134,33 +1394,21 @@ class ConnectionManager {
         conn.missedAcks = 0;
         break;
       case 0: // DISPATCH
-        this.handleDispatch(conn, payload.t!, payload.d);
+        this.enqueueDispatch(conn, lane, payload);
         break;
       case 7: // RECONNECT
-        if (this.useRealtimeV2) {
-          this.clearSseWatchdog(conn);
-          conn.eventSource?.close();
-          conn.eventSource = null;
-          conn.connected = false;
-          conn.connecting = false;
-          this.reconnectGateway(conn);
-        } else {
-          conn.ws?.close();
-        }
+      case 9: { // INVALID_SESSION
+        if (payload.op === 9) conn.sessionId = null;
+        const ws = conn.ws; const es = conn.eventSource;
+        conn.ws = null; conn.eventSource = null;
+        // Controls bypass the queue, but cannot leave its pending promise
+        // authorized to acknowledge the closing transport.
+        this.cleanupConnection(conn);
+        conn.connected = false; conn.connecting = false;
+        ws?.close(); es?.close();
+        this.reconnectGateway(conn);
         break;
-      case 9: // INVALID_SESSION
-        conn.sessionId = null;
-        if (this.useRealtimeV2) {
-          this.clearSseWatchdog(conn);
-          conn.eventSource?.close();
-          conn.eventSource = null;
-          conn.connected = false;
-          conn.connecting = false;
-          this.reconnectGateway(conn);
-        } else {
-          setTimeout(() => this.identify(conn), 1000 + Math.random() * 4000);
-        }
-        break;
+      }
     }
   }
 
@@ -1238,19 +1486,80 @@ class ConnectionManager {
     }
   }
 
-  private handleDispatch(conn: ServerConnection, event: string, data: unknown): void {
+  private handleDispatch(conn: ServerConnection, event: string, data: unknown, lane?: DispatchLane): DispatchResult {
+    if (!this.isCurrentConnection(conn) || !conn.allowReconnect) return false;
+    const scope = getServerAccountScope(conn.serverId);
+    if (!scope || (conn.accountId && conn.accountId !== scope.userId)) return false;
     if (event === GatewayEvents.READY || event === GatewayEvents.RESUMED) {
-      const lifecycle = data as { session_id?: string };
-      if (event === GatewayEvents.READY) {
-        conn.sessionId = lifecycle.session_id ?? null;
-      } else if (lifecycle.session_id) {
-        conn.sessionId = lifecycle.session_id;
+      const lifecycle = data as { session_id?: string; database_history_epoch?: unknown; user?: { id?: string } };
+      if (event === GatewayEvents.READY && lifecycle.user?.id !== scope.userId) return false;
+      if (lifecycle.database_history_epoch !== undefined) {
+        let changed: boolean;
+        try { changed = acceptDatabaseHistoryEpoch(scope, lifecycle.database_history_epoch); }
+        catch (error) {
+          this.rejectHistory(conn, error);
+          return false;
+        }
+        conn.accountId = scope.userId;
+        conn.historyEpoch = lifecycle.database_history_epoch as string;
+        if (changed) {
+          conn.pendingMessages = [];
+          conn.sessionId = null; conn.sequence = null; conn.realtimeCursor = null;
+          // RESUMED has no authoritative guild/channel projection. Re-identify
+          // after cancelling the old history before allowing replayed events.
+          if (event === GatewayEvents.RESUMED) { this.reconcileHistory(conn); return false; }
+        }
+      } else {
+        try {
+          if (getDatabaseHistoryEpoch(scope)) {
+            this.disconnectServer(conn.serverId);
+            toast.error('This server did not confirm its database history. Reconnect after updating the server.');
+            return false;
+          }
+        } catch (error) { this.rejectHistory(conn, error); return false; }
       }
-      conn.reconnectAttempts = 0;
-      this.flushPendingMessages(conn);
-      this.syncUiConnectionStatus();
+    } else {
+      try {
+        if (getDatabaseHistoryEpoch(scope) !== (conn.historyEpoch ?? null)) return false;
+      } catch (error) { this.rejectHistory(conn, error); return false; }
     }
-    dispatchGatewayEvent(conn.serverId, event, (data ?? {}) as Record<string, unknown>);
+    const historyEpoch = conn.historyEpoch;
+    const complete = (): void | false => {
+      if (!this.isCurrentConnection(conn) || !conn.allowReconnect
+        || getServerAccountScope(conn.serverId)?.userId !== scope.userId
+        || conn.historyEpoch !== historyEpoch
+        || (lane && !this.ownsTransport(conn, lane))) return false;
+      if (getDatabaseHistoryEpoch(scope) !== (historyEpoch ?? null)) return false;
+      if (event === GatewayEvents.READY || event === GatewayEvents.RESUMED) {
+        const lifecycle = data as { session_id?: string };
+        if (event === GatewayEvents.READY) conn.sessionId = lifecycle.session_id ?? null;
+        else if (lifecycle.session_id) conn.sessionId = lifecycle.session_id;
+        if (!this.durableFailures.has(conn)) conn.reconnectAttempts = 0;
+        this.flushPendingMessages(conn);
+        this.syncUiConnectionStatus();
+      }
+    };
+    const result = dispatchGatewayEvent(conn.serverId, event, (data ?? {}) as Record<string, unknown>);
+    return result && typeof result.then === 'function' ? result.then(complete) : complete();
+  }
+
+  private rejectHistory(conn: ServerConnection, error: unknown): void {
+    this.disconnectServer(conn.serverId);
+    toast.error(`Cannot reconcile this server's history. ${error instanceof Error ? error.message : 'Reconnect to try again.'}`);
+  }
+
+  /** Drop the old transport and its queued commands before a fresh handshake. */
+  private reconcileHistory(conn: ServerConnection): void {
+    if (!this.isCurrentConnection(conn) || !conn.allowReconnect) return;
+    const ws = conn.ws;
+    const events = conn.eventSource;
+    conn.ws = null; conn.eventSource = null;
+    conn.sessionId = null; conn.sequence = null; conn.realtimeCursor = null;
+    conn.historyEpoch = undefined; conn.pendingMessages = [];
+    conn.connected = false; conn.connecting = false;
+    this.cleanupConnection(conn);
+    ws?.close(); events?.close();
+    this.reconnectGateway(conn);
   }
 
   private send(conn: ServerConnection, data: unknown): void {
@@ -1327,11 +1636,15 @@ class ConnectionManager {
     selfMute: boolean,
     selfDeaf: boolean,
     selfVideo: boolean = false,
+    sessionId?: string | null,
   ): void {
     const conn = this.connections.get(serverId);
     if (!conn) return;
+    // Older clients omit the receipt; the call owner always supplies its join receipt.
+    const receipt = sessionId ? { session_id: sessionId } : {};
     if (this.useRealtimeV2) {
       void this.postRealtimeCommand(conn, 'voice_state_update', {
+        ...receipt,
         guild_id: guildId,
         channel_id: channelId,
         self_mute: selfMute,
@@ -1342,7 +1655,7 @@ class ConnectionManager {
     }
     this.send(conn, {
       op: 4,
-      d: { guild_id: guildId, channel_id: channelId, self_mute: selfMute, self_deaf: selfDeaf, self_video: selfVideo },
+      d: { ...receipt, guild_id: guildId, channel_id: channelId, self_mute: selfMute, self_deaf: selfDeaf, self_video: selfVideo },
     });
   }
 
@@ -1402,6 +1715,9 @@ class ConnectionManager {
   }
 
   private cleanupConnection(conn: ServerConnection): void {
+    this.pauseMessagingRecovery(conn);
+    this.accountHydrationWaits.get(conn)?.();
+    this.invalidateDispatchLane(conn);
     if (conn.heartbeatTimer) {
       clearInterval(conn.heartbeatTimer);
       conn.heartbeatTimer = null;
@@ -1412,6 +1728,7 @@ class ConnectionManager {
 
   /** Disconnect a specific server */
   disconnectServer(serverId: string): void {
+    notifyServerDisconnected(serverId);
     const conn = this.connections.get(serverId);
     if (!conn) return;
     conn.allowReconnect = false;

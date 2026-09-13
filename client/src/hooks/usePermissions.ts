@@ -1,13 +1,19 @@
+import { useCurrentAccountScope } from '../hooks/useCurrentUser';
+import { entityScopeKey as memberScopeKey } from '../lib/serverScope';
 import { useEffect, useMemo, useState } from 'react';
-import { useAuthStore } from '../stores/authStore';
-import { useGuildStore } from '../stores/guildStore';
+import { useCurrentUser } from './useCurrentUser';
+import { useServerListStore } from '../stores/serverListStore';
+import { entityScopeKey, LOCAL_SERVER_ID } from '../lib/serverScope';
+import { getServerUser } from '../lib/serverIdentity';
+import { useGuild } from './useGuilds';
 import { useMemberStore } from '../stores/memberStore';
-import { guildApi } from '../api/guilds';
+import { fetchGuildRoles } from '../lib/permissionDataCache';
 import { hasPermission, Permissions, type ChannelOverwrite } from '../types';
 import { OverwriteTargetType } from '../types/channel.types';
 
 const ALL_PERMISSIONS = BigInt('0x7FFFFFFFFFFFFFFF');
-const rolePermissionCache = new Map<string, Map<string, bigint>>();
+const rolePermissionCache = new Map<string, { guildId: string; roles: Map<string, bigint> }>();
+let cacheRevision = 0;
 
 export interface UsePermissionsOptions {
   /** When set with `channelOverwrites`, effective bits include channel overwrites. */
@@ -70,33 +76,22 @@ export function applyChannelOverwrites(
 
 export function invalidateGuildPermissionCache(guildId?: string) {
   if (guildId) {
-    rolePermissionCache.delete(guildId);
+    for (const [key, entry] of rolePermissionCache) {
+      if (entry.guildId === guildId) rolePermissionCache.delete(key);
+    }
     return;
   }
+  cacheRevision += 1;
   rolePermissionCache.clear();
 }
 
 /** Read-only snapshot of cached role → permission bits for a guild, if loaded. */
-export function getCachedRolePermissions(guildId: string): Map<string, bigint> | null {
-  const cached = rolePermissionCache.get(guildId);
-  return cached ? new Map(cached) : null;
-}
-
-function getUserIdFromToken(token: string | null): string | null {
-  if (!token) return null;
-  const parts = token.split('.');
-  if (parts.length < 2) return null;
-  try {
-    const payload = parts[1]
-      .replace(/-/g, '+')
-      .replace(/_/g, '/')
-      .padEnd(Math.ceil(parts[1].length / 4) * 4, '=');
-    const decoded = JSON.parse(atob(payload)) as { sub?: string | number };
-    if (decoded.sub == null) return null;
-    return String(decoded.sub);
-  } catch {
-    return null;
-  }
+export function getCachedRolePermissions(guildId: string, scope?: import('../lib/serverScope').AccountScope): Map<string, bigint> | null {
+  const serverId = scope?.serverId ?? useServerListStore.getState().activeServerId ?? LOCAL_SERVER_ID;
+  const user = getServerUser(serverId);
+  if (!user || (scope && scope.userId !== user.id)) return null;
+  const cached = rolePermissionCache.get(entityScopeKey({ serverId, userId: user.id }, guildId));
+  return cached ? new Map(cached.roles) : null;
 }
 
 export function toPermissionBits(value: string | number | undefined): bigint {
@@ -117,24 +112,23 @@ export function usePermissions(
   guildId: string | null,
   options?: UsePermissionsOptions,
 ) {
-  const user = useAuthStore((s) => s.user);
-  const token = useAuthStore((s) => s.token);
-  const guild = useGuildStore((s) =>
-    guildId ? s.guilds.find((g) => g.id === guildId) : null
-  );
+  const user = useCurrentUser();
+  const serverId = useServerListStore((state) => state.activeServerId ?? LOCAL_SERVER_ID);
+  const guild = useGuild(guildId);
+  const memberScope = useCurrentAccountScope();
   const members = useMemberStore((s) =>
-    guildId ? s.members.get(guildId) : null
+    guildId ? (memberScope ? s.members.get(memberScopeKey(memberScope, guildId)) : undefined) : null
   );
-  const [rolePermissions, setRolePermissions] = useState<Map<string, bigint>>(
-    new Map()
-  );
+  const [roleSnapshot, setRoleSnapshot] = useState<{ key: string | null; roles: Map<string, bigint> }>({ key: null, roles: new Map() });
   const [isLoading, setIsLoading] = useState(false);
   /**
    * Bumped whenever the gateway reports a role change for this guild, to force
    * the fetch effect below to re-run after the cache has been invalidated.
    */
   const [rolesRevision, setRolesRevision] = useState(0);
-  const currentUserId = user?.id ?? getUserIdFromToken(token);
+  const currentUserId = user?.id;
+  const scopeKey = guildId && currentUserId ? entityScopeKey({ serverId, userId: currentUserId }, guildId) : null;
+  const rolePermissions = useMemo(() => roleSnapshot.key === scopeKey ? roleSnapshot.roles : new Map<string, bigint>(), [roleSnapshot, scopeKey]);
 
   // `rolePermissionCache` is module-level with no TTL, and the only thing that
   // ever invalidated it was GuildSettings — a screen a demoted moderator has no
@@ -159,34 +153,35 @@ export function usePermissions(
 
   useEffect(() => {
     if (!guildId || !currentUserId) {
-      setRolePermissions(new Map());
+      setRoleSnapshot({ key: scopeKey, roles: new Map() });
       setIsLoading(false);
       return;
     }
 
-    const cached = rolePermissionCache.get(guildId);
+    const key = entityScopeKey({ serverId, userId: currentUserId }, guildId);
+    const revision = cacheRevision;
+    const cached = rolePermissionCache.get(key);
     if (cached) {
-      setRolePermissions(new Map(cached));
+      setRoleSnapshot({ key, roles: new Map(cached.roles) });
       setIsLoading(false);
       return;
     }
 
     let cancelled = false;
     setIsLoading(true);
-    guildApi
-      .getRoles(guildId)
-      .then(({ data }) => {
-        if (cancelled) return;
+    fetchGuildRoles(guildId)
+      .then((data) => {
+        if (cancelled || revision !== cacheRevision) return;
         const next = new Map<string, bigint>();
         for (const role of data) {
           next.set(role.id, toPermissionBits(role.permissions));
         }
-        rolePermissionCache.set(guildId, new Map(next));
-        setRolePermissions(next);
+        rolePermissionCache.set(key, { guildId, roles: new Map(next) });
+        setRoleSnapshot({ key, roles: next });
       })
       .catch(() => {
         if (!cancelled) {
-          setRolePermissions(new Map());
+          setRoleSnapshot({ key: scopeKey, roles: new Map() });
         }
       })
       .finally(() => {
@@ -198,7 +193,7 @@ export function usePermissions(
     return () => {
       cancelled = true;
     };
-  }, [guildId, currentUserId, rolesRevision]);
+  }, [guildId, currentUserId, serverId, rolesRevision, scopeKey]);
 
   return useMemo(() => {
     const channelOverwrites = options?.channelOverwrites;

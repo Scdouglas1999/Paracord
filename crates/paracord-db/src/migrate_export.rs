@@ -2,9 +2,12 @@
 //!
 //! Copies every application table from a source SQLite database into a freshly
 //! migrated PostgreSQL database inside a single target transaction. Either the
-//! whole copy commits or nothing is written: after streaming each table the
+//! whole copy commits or none of its source rows are written: after each table the
 //! source `COUNT(*)` is compared against the number of rows inserted, and any
-//! mismatch rolls the entire transaction back.
+//! mismatch rolls the entire copy transaction back. Target schema migrations and
+//! their seed rows run beforehand and remain applied if copying fails.
+//! Derived channel tails are repaired and a new database history epoch is minted
+//! after copying all rows, inside the same transaction.
 //!
 //! The table list ([`MIGRATION_TABLE_ORDER`]) is FK-safe (parents precede
 //! children) so inserts satisfy PostgreSQL's immediate foreign-key checks, and
@@ -13,7 +16,7 @@
 //! .reference_id`) are always inserted after their parent — snowflake IDs are
 //! monotonic with creation time, so a parent's id is always smaller.
 
-use crate::{datetime_to_db_text, DatabaseEngine, DbError, DbPool};
+use crate::{DatabaseEngine, DbError, DbPool};
 use sqlx::Row;
 
 /// Every application table, ordered so that a table only appears after all of
@@ -41,6 +44,9 @@ pub const MIGRATION_TABLE_ORDER: &[&str] = &[
     "federation_server_keys",
     "federation_transport_replay_cache",
     "guild_templates",
+    // No FK into `users`: the claimed-owner id is recorded, not enforced, so
+    // deleting the owner can never reopen setup by cascading this row away.
+    "instance_setup",
     "rate_limit_counters",
     "server_keypair",
     "server_settings",
@@ -56,6 +62,7 @@ pub const MIGRATION_TABLE_ORDER: &[&str] = &[
     "mfa_backup_codes",
     "mfa_configs",
     "one_time_prekeys",
+    "prekey_publication_receipts",
     "password_reset_tokens",
     "relationships",
     "security_events",
@@ -88,6 +95,11 @@ pub const MIGRATION_TABLE_ORDER: &[&str] = &[
     "member_onboarding_state",
     "members",
     "messages",
+    "message_delivery_receipts",
+    "message_edit_receipts",
+    "message_delete_receipts",
+    "message_recovery",
+    "message_mentions",
     "moderation_action_templates",
     "polls",
     "reactions",
@@ -146,6 +158,10 @@ pub struct TableMigrationReport {
 pub struct MigrationReport {
     pub dry_run: bool,
     pub tables: Vec<TableMigrationReport>,
+    /// Channels whose imported tail differed from their surviving messages.
+    pub repaired_channel_tails: u64,
+    /// New history identity committed with the copy; absent on a dry run.
+    pub database_history_epoch: Option<String>,
 }
 
 impl MigrationReport {
@@ -183,19 +199,22 @@ impl TargetKind {
 }
 
 /// Map a PostgreSQL `information_schema.columns.data_type` to a [`TargetKind`].
-fn target_kind_for(data_type: &str) -> TargetKind {
-    match data_type {
+fn target_kind_for(data_type: &str) -> Option<TargetKind> {
+    Some(match data_type {
         "boolean" => TargetKind::Bool,
         "smallint" | "integer" | "bigint" => TargetKind::Int,
-        "real" | "double precision" | "numeric" => TargetKind::Real,
+        "real" | "double precision" => TargetKind::Real,
         "bytea" => TargetKind::Blob,
         "timestamp with time zone" => TargetKind::Temporal("timestamptz"),
         "timestamp without time zone" => TargetKind::Temporal("timestamp"),
         "date" => TargetKind::Temporal("date"),
-        other if other.starts_with("time") => TargetKind::Temporal("time"),
-        // text, character varying, character, uuid, ... — copied verbatim.
-        _ => TargetKind::Text,
-    }
+        "time with time zone" => TargetKind::Temporal("timetz"),
+        "time without time zone" => TargetKind::Temporal("time"),
+        "text" | "character varying" | "character" => TargetKind::Text,
+        // Unknown/custom types must get an explicit preservation strategy.
+        // In particular, arbitrary-precision numeric cannot round through f64.
+        _ => return None,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -301,6 +320,7 @@ fn build_select_sql(table: &str, columns: &[ColumnPlan], keyset_pk: Option<&str>
 
 /// A single column value extracted from the source, already coerced to the
 /// target column's category so the bind type matches PostgreSQL's expectation.
+#[derive(Debug, PartialEq)]
 enum BoundValue {
     Bool(Option<bool>),
     Int(Option<i64>),
@@ -310,17 +330,17 @@ enum BoundValue {
 }
 
 fn normalize_temporal_text(raw: &str) -> String {
-    // Canonicalise to `YYYY-MM-DD HH:MM:SS` (UTC) so the `::timestamp*` cast is
+    // Canonicalise to UTC, retaining fractional seconds, so the `::timestamp*` cast is
     // unambiguous; PostgreSQL connections are pinned to UTC. If the value isn't
     // a recognised datetime, pass it through untouched and let PostgreSQL judge.
     match crate::datetime_from_db_text(raw) {
-        Ok(dt) => datetime_to_db_text(dt),
+        Ok(dt) => dt.format("%Y-%m-%d %H:%M:%S%.f").to_string(),
         Err(_) => raw.to_string(),
     }
 }
 
 fn extract_value(
-    row: &sqlx::any::AnyRow,
+    row: &sqlx::sqlite::SqliteRow,
     column: &str,
     kind: &TargetKind,
 ) -> Result<BoundValue, DbError> {
@@ -335,12 +355,21 @@ fn extract_value(
         }
         TargetKind::Int => Ok(BoundValue::Int(row.try_get::<Option<i64>, _>(column)?)),
         TargetKind::Real => {
-            if let Ok(v) = row.try_get::<Option<f64>, _>(column) {
-                Ok(BoundValue::Real(v))
+            // Read integer storage first. Letting SQLite decode an integer as
+            // f64 can round it before we can verify that its value survived.
+            if let Ok(v) = row.try_get::<Option<i64>, _>(column) {
+                let real = v.map(|integer| {
+                    let float = integer as f64;
+                    // Compare in i128: f64(i64::MAX) is 2^63, and an i64 cast
+                    // would saturate back to MAX and incorrectly appear exact.
+                    if float as i128 != i128::from(integer) {
+                        return Err(protocol_err("source integer is not exactly representable in a floating-point target"));
+                    }
+                    Ok(float)
+                }).transpose()?;
+                Ok(BoundValue::Real(real))
             } else {
-                Ok(BoundValue::Real(
-                    row.try_get::<Option<i64>, _>(column)?.map(|n| n as f64),
-                ))
+                Ok(BoundValue::Real(row.try_get::<Option<f64>, _>(column)?))
             }
         }
         TargetKind::Text => Ok(BoundValue::Text(row.try_get::<Option<String>, _>(column)?)),
@@ -353,7 +382,7 @@ fn extract_value(
                 let millis = row.try_get::<Option<i64>, _>(column)?;
                 let text = millis.map(|ms| {
                     chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms)
-                        .map(datetime_to_db_text)
+                        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S%.f").to_string())
                         .unwrap_or_else(|| ms.to_string())
                 });
                 Ok(BoundValue::Text(text))
@@ -381,7 +410,10 @@ struct SourceColumn {
     pk: i64,
 }
 
-async fn fetch_source_columns(pool: &DbPool, table: &str) -> Result<Vec<SourceColumn>, DbError> {
+async fn fetch_source_columns(
+    pool: &sqlx::SqlitePool,
+    table: &str,
+) -> Result<Vec<SourceColumn>, DbError> {
     // PRAGMA table_info returns rows in column-definition (cid) order.
     let rows = sqlx::query(&format!("PRAGMA table_info({})", quote_ident(table)))
         .fetch_all(pool)
@@ -399,9 +431,12 @@ async fn fetch_source_columns(pool: &DbPool, table: &str) -> Result<Vec<SourceCo
 async fn fetch_target_columns(
     pool: &DbPool,
     table: &str,
-) -> Result<std::collections::HashMap<String, TargetKind>, DbError> {
+) -> Result<std::collections::HashMap<String, String>, DbError> {
     let rows = sqlx::query(
-        "SELECT column_name, data_type FROM information_schema.columns \
+        // information_schema identifiers have PostgreSQL NAME/domain types;
+        // sqlx::Any supports ordinary TEXT, so normalize both metadata values.
+        "SELECT CAST(column_name AS TEXT) AS column_name, \
+         CAST(data_type AS TEXT) AS data_type FROM information_schema.columns \
          WHERE table_schema = 'public' AND table_name = $1",
     )
     .bind(table)
@@ -411,7 +446,7 @@ async fn fetch_target_columns(
     for row in rows {
         let name: String = row.try_get("column_name")?;
         let data_type: String = row.try_get("data_type")?;
-        map.insert(name, target_kind_for(&data_type));
+        map.insert(name, data_type);
     }
     Ok(map)
 }
@@ -423,7 +458,7 @@ fn protocol_err(msg: impl Into<String>) -> DbError {
 /// Resolve the copy plan for one table: intersect the source columns with the
 /// target schema and decide how each column is bound.
 async fn plan_table(
-    source: &DbPool,
+    source: &sqlx::SqlitePool,
     target: &DbPool,
     table: &str,
 ) -> Result<(Vec<ColumnPlan>, Option<String>), DbError> {
@@ -442,7 +477,7 @@ async fn plan_table(
 
     let mut plan = Vec::with_capacity(source_cols.len());
     for col in &source_cols {
-        let Some(kind) = target_cols.get(&col.name) else {
+        let Some(data_type) = target_cols.get(&col.name) else {
             // Refuse to silently drop data: a source column absent from the
             // target means the schemas have drifted.
             return Err(protocol_err(format!(
@@ -450,9 +485,17 @@ async fn plan_table(
                 table, col.name
             )));
         };
+        // Validate only columns copied from SQLite. PostgreSQL-only derived
+        // columns (such as a tsvector maintained by a trigger) are not inputs.
+        let kind = target_kind_for(data_type).ok_or_else(|| {
+            protocol_err(format!(
+                "unsupported PostgreSQL target type '{data_type}' for '{table}.{}'",
+                col.name
+            ))
+        })?;
         plan.push(ColumnPlan {
             name: col.name.clone(),
-            kind: kind.clone(),
+            kind,
             pk: col.pk,
         });
     }
@@ -462,14 +505,21 @@ async fn plan_table(
     // self-referential foreign keys.
     let pk_cols: Vec<&SourceColumn> = source_cols.iter().filter(|c| c.pk > 0).collect();
     let keyset_pk = match pk_cols.as_slice() {
-        [only] if target_cols.get(&only.name) == Some(&TargetKind::Int) => Some(only.name.clone()),
+        [only]
+            if target_cols
+                .get(&only.name)
+                .and_then(|data_type| target_kind_for(data_type))
+                == Some(TargetKind::Int) =>
+        {
+            Some(only.name.clone())
+        }
         _ => None,
     };
 
     Ok((plan, keyset_pk))
 }
 
-async fn count_rows(pool: &DbPool, table: &str) -> Result<i64, DbError> {
+async fn count_rows(pool: &sqlx::SqlitePool, table: &str) -> Result<i64, DbError> {
     let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {}", quote_ident(table)))
         .fetch_one(pool)
         .await?;
@@ -479,7 +529,7 @@ async fn count_rows(pool: &DbPool, table: &str) -> Result<i64, DbError> {
 /// Copy one table from `source` into the open target transaction. Returns the
 /// number of rows inserted.
 async fn copy_table(
-    source: &DbPool,
+    source: &sqlx::SqlitePool,
     tx: &mut sqlx::Transaction<'_, sqlx::Any>,
     table: &str,
     plan: &[ColumnPlan],
@@ -516,7 +566,12 @@ async fn copy_table(
         for row in &rows {
             let mut query = sqlx::query(&insert_sql);
             for col in plan {
-                let value = extract_value(row, &col.name, &col.kind)?;
+                let value = extract_value(row, &col.name, &col.kind).map_err(|error| {
+                    protocol_err(format!(
+                        "unsupported source value in '{}.{}': {error}",
+                        table, col.name
+                    ))
+                })?;
                 query = bind_value(query, value);
             }
             query.execute(&mut **tx).await?;
@@ -544,8 +599,11 @@ async fn copy_table(
 /// The target's migrations are applied first, then all data is copied inside a
 /// single transaction. Each table's inserted-row count is checked against the
 /// source `COUNT(*)`; any mismatch aborts and rolls the whole transaction back,
-/// leaving the target untouched. On `dry_run` the target schema is migrated and
-/// column mappings are validated, but no rows are written.
+/// preserving the target's state after schema migration. Schema migrations and
+/// seeded settings are not rolled back. On `dry_run` the target schema is migrated
+/// and column mappings are validated, but no source rows are copied and an
+/// existing history epoch is not rotated. Keep both source and target offline;
+/// source reads do not share a transaction snapshot.
 pub async fn migrate_sqlite_to_postgres(
     source_url: &str,
     target_url: &str,
@@ -566,8 +624,19 @@ pub async fn migrate_sqlite_to_postgres(
     }
     let batch_size = batch_size.max(1);
 
-    let source =
-        crate::create_pool_full(source_url, 4, Some(DatabaseEngine::Sqlite), None, None).await?;
+    // Read with SQLite's typed driver: Any rejects declared BOOLEAN/DATE types
+    // before extract_value can inspect them. Avoid SQL CAST workarounds, which
+    // would turn malformed source strings into zero or otherwise lose bytes.
+    // The source remains read-only and each value retains its storage class.
+    let source = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(4)
+        .connect_with(
+            source_url
+                .parse::<sqlx::sqlite::SqliteConnectOptions>()?
+                .read_only(true)
+                .create_if_missing(false),
+        )
+        .await?;
     let target =
         crate::create_pool_full(target_url, 4, Some(DatabaseEngine::Postgres), None, None).await?;
 
@@ -591,10 +660,13 @@ pub async fn migrate_sqlite_to_postgres(
         return Ok(MigrationReport {
             dry_run: true,
             tables,
+            repaired_channel_tails: 0,
+            database_history_epoch: None,
         });
     }
 
-    // Plan every table up front so a schema mismatch fails before any writes.
+    // Plan every table so a schema mismatch fails before any source row copies.
+    // Target schema migrations and their seed rows have already committed.
     let mut plans = Vec::with_capacity(MIGRATION_TABLE_ORDER.len());
     for &table in MIGRATION_TABLE_ORDER {
         let (plan, keyset) = plan_table(&source, &target, table).await?;
@@ -612,7 +684,7 @@ pub async fn migrate_sqlite_to_postgres(
             drop(tx);
             return Err(protocol_err(format!(
                 "row-count mismatch on '{table}': source has {source_rows}, copied {copied}; \
-                 rolled back with no changes"
+                 rolled back copied rows (target schema migrations remain applied)"
             )));
         }
         tables.push(TableMigrationReport {
@@ -623,11 +695,19 @@ pub async fn migrate_sqlite_to_postgres(
         });
     }
 
+    // Migrations ran before copying channels, so their one-time tail repair
+    // cannot correct imported legacy pointers. Repair only after messages have
+    // arrived, and never retain the history identity copied from source settings.
+    let repaired_channel_tails = crate::channels::repair_message_tails_for_import(&mut tx).await?;
+    let database_history_epoch =
+        crate::server_settings::rotate_database_history_epoch(&mut tx).await?;
     tx.commit().await?;
 
     Ok(MigrationReport {
         dry_run: false,
         tables,
+        repaired_channel_tails,
+        database_history_epoch: Some(database_history_epoch),
     })
 }
 
@@ -635,6 +715,101 @@ pub async fn migrate_sqlite_to_postgres(
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    #[tokio::test]
+    async fn typed_source_preserves_null_boolean_temporal_blob_and_rejects_bad_values() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE values_fixture(id INTEGER PRIMARY KEY, enabled BOOLEAN, nullable BOOLEAN, stamp DATETIME, moment TIMESTAMP, day DATE, clock TIME, payload BLOB, name TEXT, score REAL)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO values_fixture VALUES(1,1,NULL,'2026-09-12 12:34:56','2026-09-12T12:34:56Z','2026-09-12','12:34:56',X'00FF','literal',1.25), (2,0,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL), (3,'invalid',NULL,'invalid',NULL,NULL,NULL,X'FE',NULL,NULL)")
+            .execute(&pool).await.unwrap();
+        let rows = sqlx::query("SELECT * FROM values_fixture ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            extract_value(&rows[0], "enabled", &TargetKind::Bool).unwrap(),
+            BoundValue::Bool(Some(true))
+        );
+        assert_eq!(
+            extract_value(&rows[1], "enabled", &TargetKind::Bool).unwrap(),
+            BoundValue::Bool(Some(false))
+        );
+        assert_eq!(
+            extract_value(&rows[0], "nullable", &TargetKind::Bool).unwrap(),
+            BoundValue::Bool(None)
+        );
+        assert_eq!(
+            extract_value(&rows[0], "stamp", &TargetKind::Temporal("timestamp")).unwrap(),
+            BoundValue::Text(Some("2026-09-12 12:34:56".into()))
+        );
+        assert_eq!(
+            extract_value(&rows[0], "moment", &TargetKind::Temporal("timestamptz")).unwrap(),
+            BoundValue::Text(Some("2026-09-12 12:34:56".into()))
+        );
+        assert_eq!(
+            extract_value(&rows[0], "day", &TargetKind::Temporal("date")).unwrap(),
+            BoundValue::Text(Some("2026-09-12".into()))
+        );
+        assert_eq!(
+            extract_value(&rows[0], "clock", &TargetKind::Temporal("time")).unwrap(),
+            BoundValue::Text(Some("12:34:56".into()))
+        );
+        assert_eq!(
+            extract_value(&rows[0], "payload", &TargetKind::Blob).unwrap(),
+            BoundValue::Blob(Some(vec![0, 255]))
+        );
+        assert_eq!(
+            extract_value(&rows[1], "payload", &TargetKind::Blob).unwrap(),
+            BoundValue::Blob(None)
+        );
+        assert_eq!(
+            extract_value(&rows[0], "name", &TargetKind::Text).unwrap(),
+            BoundValue::Text(Some("literal".into()))
+        );
+        assert_eq!(
+            extract_value(&rows[0], "score", &TargetKind::Real).unwrap(),
+            BoundValue::Real(Some(1.25))
+        );
+        assert!(extract_value(&rows[2], "enabled", &TargetKind::Bool).is_err());
+        assert!(extract_value(&rows[2], "payload", &TargetKind::Text).is_err());
+        // Unrecognized temporal strings are preserved for PostgreSQL's cast to
+        // reject, never silently normalized to a different time.
+        assert_eq!(
+            extract_value(&rows[2], "stamp", &TargetKind::Temporal("timestamp")).unwrap(),
+            BoundValue::Text(Some("invalid".into()))
+        );
+        for integer in [9_007_199_254_740_993_i64, i64::MAX] {
+            let row = sqlx::query("SELECT $1 AS value")
+                .bind(integer)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert!(extract_value(&row, "value", &TargetKind::Real).is_err());
+        }
+        for integer in [1_i64 << 54, i64::MIN] {
+            let row = sqlx::query("SELECT $1 AS value")
+                .bind(integer)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(
+                extract_value(&row, "value", &TargetKind::Real).unwrap(),
+                BoundValue::Real(Some(integer as f64))
+            );
+        }
+        assert!(target_kind_for("numeric").is_none());
+        assert!(target_kind_for("USER-DEFINED").is_none());
+        assert_eq!(
+            normalize_temporal_text("2026-09-12T12:34:56.125+02:00"),
+            "2026-09-12 10:34:56.125"
+        );
+        pool.close().await;
+    }
 
     #[test]
     fn build_insert_sql_casts_temporal_columns_and_upserts_on_the_primary_key() {
@@ -731,18 +906,21 @@ mod tests {
 
     #[test]
     fn target_kind_mapping() {
-        assert_eq!(target_kind_for("boolean"), TargetKind::Bool);
-        assert_eq!(target_kind_for("bigint"), TargetKind::Int);
-        assert_eq!(target_kind_for("smallint"), TargetKind::Int);
-        assert_eq!(target_kind_for("bytea"), TargetKind::Blob);
-        assert_eq!(target_kind_for("text"), TargetKind::Text);
-        assert_eq!(target_kind_for("character varying"), TargetKind::Text);
+        assert_eq!(target_kind_for("boolean").unwrap(), TargetKind::Bool);
+        assert_eq!(target_kind_for("bigint").unwrap(), TargetKind::Int);
+        assert_eq!(target_kind_for("smallint").unwrap(), TargetKind::Int);
+        assert_eq!(target_kind_for("bytea").unwrap(), TargetKind::Blob);
+        assert_eq!(target_kind_for("text").unwrap(), TargetKind::Text);
         assert_eq!(
-            target_kind_for("timestamp with time zone"),
+            target_kind_for("character varying").unwrap(),
+            TargetKind::Text
+        );
+        assert_eq!(
+            target_kind_for("timestamp with time zone").unwrap(),
             TargetKind::Temporal("timestamptz")
         );
         assert_eq!(
-            target_kind_for("timestamp without time zone"),
+            target_kind_for("timestamp without time zone").unwrap(),
             TargetKind::Temporal("timestamp")
         );
     }

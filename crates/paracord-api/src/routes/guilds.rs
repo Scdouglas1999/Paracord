@@ -3,6 +3,12 @@ use axum::{
     http::{HeaderMap, StatusCode},
     Json,
 };
+pub use paracord_contracts::guild::{
+    CreateGuildRequest, TransferOwnershipRequest, UpdateGuildRequest,
+};
+use paracord_contracts::guild::{
+    GuildDetail, GuildSummary, GuildVisibility, OwnershipTransferResponse,
+};
 use paracord_core::AppState;
 use paracord_models::permissions::Permissions;
 use serde::Deserialize;
@@ -52,10 +58,6 @@ fn channel_route_slow_ms() -> u64 {
 }
 
 use paracord_util::validation::contains_dangerous_markup;
-
-fn parse_discovery_tags(raw: &str) -> Vec<String> {
-    serde_json::from_str::<Vec<String>>(raw).unwrap_or_default()
-}
 
 fn normalize_discovery_tags(tags: &[String]) -> Result<String, ApiError> {
     if tags.len() > MAX_DISCOVERY_TAGS {
@@ -137,55 +139,63 @@ async fn normalize_allowed_roles(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))
 }
 
-pub(crate) fn guild_json(
+pub(crate) fn guild_summary(
     guild: &paracord_db::guilds::GuildRow,
-    member_count: Option<i64>,
-) -> Value {
-    let allowed_roles: Vec<String> =
-        paracord_db::guilds::parse_allowed_role_ids(&guild.allowed_roles)
+    member_count: i64,
+) -> Result<GuildSummary, ApiError> {
+    let visibility = match guild.visibility.as_str() {
+        "private" => GuildVisibility::Private,
+        "public" => GuildVisibility::Public,
+        "roles" => GuildVisibility::Roles,
+        _ => {
+            return Err(ApiError::Internal(anyhow::anyhow!(
+                "Invalid stored space visibility"
+            )))
+        }
+    };
+    Ok(GuildSummary {
+        id: guild.id.to_string(),
+        name: guild.name.clone(),
+        description: guild.description.clone(),
+        icon_hash: guild.icon_hash.clone(),
+        owner_id: guild.owner_id.to_string(),
+        member_count: u32::try_from(member_count)
+            .map_err(|_| ApiError::Internal(anyhow::anyhow!("Invalid space member count")))?,
+        created_at: guild.created_at.to_rfc3339(),
+        visibility,
+        allowed_roles: paracord_db::guilds::parse_allowed_role_ids(&guild.allowed_roles)
             .into_iter()
             .map(|id| id.to_string())
-            .collect();
-    let mut value = json!({
-        "id": guild.id.to_string(),
-        "name": guild.name,
-        "description": guild.description,
-        "icon_hash": guild.icon_hash,
-        "owner_id": guild.owner_id.to_string(),
-        "created_at": guild.created_at.to_rfc3339(),
-        "visibility": guild.visibility,
-        "allowed_roles": allowed_roles,
-        "discovery_tags": parse_discovery_tags(&guild.discovery_tags),
-        "hub_settings": guild.hub_settings.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()),
-        "bot_settings": guild.bot_settings.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()),
-    });
-    if let Some(count) = member_count {
-        value["member_count"] = json!(count);
-    }
-    value
+            .collect(),
+        discovery_tags: serde_json::from_str(&guild.discovery_tags).map_err(|e| {
+            ApiError::Internal(anyhow::anyhow!("Invalid stored discovery tags: {e}"))
+        })?,
+        hub_settings: guild
+            .hub_settings
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("Invalid stored hub settings: {e}")))?,
+        bot_settings: guild
+            .bot_settings
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("Invalid stored bot settings: {e}")))?,
+    })
 }
 
-#[derive(Deserialize)]
-pub struct CreateGuildRequest {
-    pub name: String,
-    pub icon: Option<String>,
-}
-
-#[derive(Deserialize)]
-pub struct UpdateGuildRequest {
-    pub name: Option<String>,
-    pub description: Option<String>,
-    pub icon: Option<String>,
-    pub hub_settings: Option<Value>,
-    pub bot_settings: Option<Value>,
-    pub visibility: Option<String>,
-    pub discovery_tags: Option<Vec<String>>,
-    pub allowed_roles: Option<Vec<String>>,
-}
-
-#[derive(Deserialize)]
-pub struct TransferOwnershipRequest {
-    pub new_owner_id: String,
+pub(crate) fn guild_detail(
+    guild: &paracord_db::guilds::GuildRow,
+    member_count: i64,
+) -> Result<GuildDetail, ApiError> {
+    Ok(GuildDetail {
+        summary: guild_summary(guild, member_count)?,
+        banner_hash: guild.banner_hash.clone(),
+        system_channel_id: guild.system_channel_id.map(|id| id.to_string()),
+        vanity_url_code: guild.vanity_url_code.clone(),
+        feature_flags: guild.features,
+    })
 }
 
 /// Enforce the admin-configurable `max_guilds_per_user` quota.
@@ -219,7 +229,7 @@ pub async fn create_guild(
     State(state): State<AppState>,
     auth: AuthUser,
     Json(body): Json<CreateGuildRequest>,
-) -> Result<(StatusCode, Json<Value>), ApiError> {
+) -> Result<(StatusCode, Json<GuildDetail>), ApiError> {
     if body.name.len() < 2 || body.name.len() > MAX_GUILD_NAME_LEN {
         return Err(ApiError::BadRequest(
             "Guild name must be between 2 and 100 characters".into(),
@@ -239,34 +249,54 @@ pub async fn create_guild(
     )
     .await?;
 
-    let guild_json = guild_json(&guild, Some(1));
+    // A fresh guild has exactly the owner member row seeded by
+    // `create_guild_full`; reading COUNT(*) here could only fail after the
+    // guild already committed.
+    let response = guild_detail(&guild, 1)?;
 
     state.member_index.add_member(guild_id, auth.user_id);
-    state
-        .event_bus
-        .dispatch("GUILD_CREATE", guild_json.clone(), Some(guild_id));
+    state.event_bus.dispatch(
+        "GUILD_CREATE",
+        serde_json::to_value(&response).map_err(|e| ApiError::Internal(e.into()))?,
+        Some(guild_id),
+    );
 
-    Ok((StatusCode::CREATED, Json(guild_json)))
+    Ok((StatusCode::CREATED, Json(response)))
 }
 
 pub async fn list_guilds(
     State(state): State<AppState>,
     auth: AuthUser,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<Vec<GuildSummary>>, ApiError> {
     let guilds = paracord_db::guilds::get_user_guilds(&state.db, auth.user_id.into())
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
-    let result: Vec<Value> = guilds.iter().map(|g| guild_json(g, None)).collect();
+    // One grouped count query over the guilds the caller can actually see —
+    // not a COUNT(*) per guild, and never the in-memory member index.
+    let guild_ids: Vec<i64> = guilds.iter().map(|g| g.id).collect();
+    let member_counts = paracord_db::members::get_member_counts_for_guilds(&state.db, &guild_ids)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
-    Ok(Json(json!(result)))
+    let result = guilds
+        .iter()
+        .map(|guild| {
+            guild_summary(
+                guild,
+                member_counts.get(&guild.id).copied().unwrap_or_default(),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(Json(result))
 }
 
 pub async fn get_guild(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(guild_id): Path<i64>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<GuildDetail>, ApiError> {
     paracord_core::permissions::ensure_guild_member(&state.db, guild_id, auth.user_id).await?;
 
     let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
@@ -276,9 +306,9 @@ pub async fn get_guild(
 
     let member_count = paracord_db::members::get_member_count(&state.db, guild_id)
         .await
-        .unwrap_or(0);
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
-    Ok(Json(guild_json(&guild, Some(member_count))))
+    Ok(Json(guild_detail(&guild, member_count)?))
 }
 
 pub async fn update_guild(
@@ -286,7 +316,7 @@ pub async fn update_guild(
     auth: AuthUser,
     Path(guild_id): Path<i64>,
     Json(body): Json<UpdateGuildRequest>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<GuildDetail>, ApiError> {
     // `create_guild` bounds the name but `update_guild` never did, and the
     // column is length-limited: a rename past the limit stored fine on SQLite
     // and 500ed on PostgreSQL.
@@ -350,6 +380,13 @@ pub async fn update_guild(
         .as_ref()
         .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "{}".to_string()));
 
+    // Membership cannot change as part of this update, so the count is read
+    // before the write: a lookup failure then aborts the request outright
+    // instead of surfacing as an error after the guild was already mutated.
+    let member_count = paracord_db::members::get_member_count(&state.db, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
     let updated = paracord_core::guild::update_guild(
         &state.db,
         guild_id,
@@ -365,11 +402,13 @@ pub async fn update_guild(
     )
     .await?;
 
-    let guild_json = guild_json(&updated, None);
+    let response = guild_detail(&updated, member_count)?;
 
-    state
-        .event_bus
-        .dispatch("GUILD_UPDATE", guild_json.clone(), Some(guild_id));
+    state.event_bus.dispatch(
+        "GUILD_UPDATE",
+        serde_json::to_value(&response).map_err(|e| ApiError::Internal(e.into()))?,
+        Some(guild_id),
+    );
     audit::log_action(
         &state,
         guild_id,
@@ -384,7 +423,7 @@ pub async fn update_guild(
     )
     .await;
 
-    Ok(Json(guild_json))
+    Ok(Json(response))
 }
 
 pub async fn delete_guild(
@@ -419,7 +458,7 @@ pub async fn transfer_ownership(
     auth: AuthUser,
     Path(guild_id): Path<i64>,
     Json(body): Json<TransferOwnershipRequest>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<OwnershipTransferResponse>, ApiError> {
     let new_owner_id = body
         .new_owner_id
         .parse::<i64>()
@@ -444,13 +483,15 @@ pub async fn transfer_ownership(
         paracord_db::guilds::transfer_ownership(&state.db, guild_id.into(), new_owner_id.into())
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    let payload = json!({
-        "id": updated.id.to_string(),
-        "owner_id": updated.owner_id.to_string(),
-    });
-    state
-        .event_bus
-        .dispatch("GUILD_UPDATE", payload.clone(), Some(guild_id));
+    let payload = OwnershipTransferResponse {
+        id: updated.id.to_string(),
+        owner_id: updated.owner_id.to_string(),
+    };
+    state.event_bus.dispatch(
+        "GUILD_UPDATE",
+        serde_json::to_value(&payload).map_err(|e| ApiError::Internal(e.into()))?,
+        Some(guild_id),
+    );
     audit::log_action(
         &state,
         guild_id,
@@ -700,6 +741,7 @@ pub async fn get_channels(
             "nsfw": c.nsfw,
             "rate_limit_per_user": c.rate_limit_per_user,
             "last_message_id": c.last_message_id.map(|id| id.to_string()),
+            "message_revision": c.message_revision.to_string(),
             "required_role_ids": required_role_ids,
         }));
     }

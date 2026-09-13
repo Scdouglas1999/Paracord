@@ -89,6 +89,46 @@ pub async fn upsert_voice_state(
     Ok(())
 }
 
+/// Stage both membership and stage-suppression state. The caller publishes
+/// the matching media membership only after this transaction succeeds.
+pub async fn begin_voice_state_transition<'a>(
+    pool: &'a DbPool,
+    user_id: i64,
+    space_id: Option<i64>,
+    channel_id: i64,
+    session_id: &str,
+    suppress: bool,
+) -> Result<sqlx::Transaction<'a, sqlx::Any>, DbError> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query(
+        "INSERT INTO voice_states (user_id, space_id, channel_id, session_id)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (user_id) DO UPDATE SET
+             space_id = $2,
+             channel_id = $3,
+             session_id = $4,
+             request_to_speak_at = CASE
+                 WHEN voice_states.channel_id = $3
+                  AND COALESCE(voice_states.space_id, 0) = COALESCE($2, 0)
+                 THEN voice_states.request_to_speak_at
+                 ELSE NULL
+             END",
+    )
+    .bind(user_id)
+    .bind(space_id)
+    .bind(channel_id)
+    .bind(session_id)
+    .execute(&mut *transaction)
+    .await?;
+    sqlx::query("UPDATE voice_states SET suppress = $1 WHERE user_id = $2 AND session_id = $3")
+        .bind(suppress)
+        .bind(user_id)
+        .bind(session_id)
+        .execute(&mut *transaction)
+        .await?;
+    Ok(transaction)
+}
+
 pub async fn get_channel_voice_states(
     pool: &DbPool,
     channel_id: i64,

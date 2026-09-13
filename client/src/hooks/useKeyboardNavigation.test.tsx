@@ -1,3 +1,4 @@
+import { useAuthStore } from '../stores/authStore';
 import { render, cleanup, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -45,6 +46,7 @@ function rows(): HTMLButtonElement[] {
 }
 
 beforeEach(() => {
+  useAuthStore.setState({ token: 'token', user: { id: 'me' } as never });
   useUIStore.setState({
     commandPaletteOpen: false,
     contextPanelMode: null,
@@ -110,7 +112,7 @@ describe('useKeyboardNavigation — roving-tabindex sidebar movement', () => {
 
 describe('useKeyboardNavigation — Mod+F search', () => {
   it('opens the search context panel when a channel is selected', () => {
-    useChannelStore.setState({ selectedChannelId: 'ch1' });
+    useChannelStore.getState().selectChannel({ id: 'ch1', scope: { serverId: '__local__', userId: 'me' } });
     useUIStore.setState({ contextPanelMode: null });
     renderHarness();
 
@@ -120,7 +122,7 @@ describe('useKeyboardNavigation — Mod+F search', () => {
   });
 
   it('does nothing when no channel is selected', () => {
-    useChannelStore.setState({ selectedChannelId: null });
+    useChannelStore.getState().selectChannel(null);
     useUIStore.setState({ contextPanelMode: null });
     renderHarness();
 
@@ -204,7 +206,7 @@ describe('useKeyboardNavigation — Escape precedence (§5)', () => {
 describe('useKeyboardNavigation — Mod+F search', () => {
   it('opens contextPanelMode search when a channel is selected', async () => {
     const { useChannelStore } = await import('../stores/channelStore');
-    useChannelStore.setState({ selectedChannelId: 'ch-1' });
+    useChannelStore.getState().selectChannel({ id: 'ch-1', scope: { serverId: '__local__', userId: 'me' } });
     useUIStore.setState({ contextPanelMode: null });
     renderHarness();
 

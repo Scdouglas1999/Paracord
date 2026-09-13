@@ -1,3 +1,12 @@
+vi.mock('../lib/messages/accountMessagingRuntime', async () => (await import('../test/messagingRuntimeMock')).messagingRuntimeMock);
+import { getTestMessagingRuntime } from '../test/messagingRuntimeMock';
+vi.mock('../lib/operationContext', () => ({
+  captureScopedOperation: (scope: { serverId: string; userId: string }) => {
+    const controller = new AbortController();
+    return { scope, signal: controller.signal, api: {}, assertCurrent() { controller.signal.throwIfAborted(); }, dispose() { controller.abort(); } };
+  },
+}));
+import { useChannelStore } from './channelStore';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 /**
@@ -27,7 +36,7 @@ vi.mock('./pollStore', () => ({
 vi.mock('./channelStore', () => ({
   refreshGuildChannelVisibility: vi.fn(),
   useChannelStore: {
-    getState: () => ({ channelsByGuild: {}, channelsById: {}, selectedChannelId: 'ch1' }),
+    getState: () => ({ channelsByGuild: {}, channelsById: { ch1: { id: 'ch1', guild_id: 'g1', type: 0, channel_type: 0 } }, selectedChannelId: 'ch1' }),
   },
 }));
 vi.mock('../lib/dmE2ee', () => ({ encryptDmMessageV2: vi.fn() }));
@@ -41,18 +50,20 @@ vi.mock('../lib/accountSession', () => ({
   withUnlockedPrivateKey: vi.fn(),
 }));
 vi.mock('./authStore', () => ({
-  useAuthStore: { getState: () => ({ user: { id: 'u1' } }) },
+  useAuthStore: { subscribe: () => () => {}, getState: () => ({ user: { id: 'u1' } }) },
 }));
 vi.mock('./serverListStore', () => ({
-  useServerListStore: { getState: () => ({ getActiveServer: () => undefined }) },
+  useServerListStore: { subscribe: () => () => {}, getState: () => ({ getActiveServer: () => undefined }) },
 }));
-vi.mock('../api/channels', () => ({ channelApi: mockChannelApi }));
+vi.mock('../api/channels', () => ({ channelApi: mockChannelApi, createChannelApi: () => mockChannelApi }));
 vi.mock('../api/client', () => ({
   extractApiError: vi.fn((err: unknown) => (err instanceof Error ? err.message : 'error')),
 }));
 vi.mock('../lib/constants', () => ({ DEFAULT_MESSAGE_FETCH_LIMIT: 50 }));
 
-import { useMessageStore } from './messageStore';
+import { getMessageStore } from './messageStore';
+const useMessageStore = getMessageStore({ serverId: '__local__', userId: 'u1' });
+
 
 const EPHEMERAL = 64;
 
@@ -120,7 +131,7 @@ describe('flags survive a refetch that omits them', () => {
 
   it('preserves flags on pinned copies too', async () => {
     useMessageStore.getState().addMessage('ch1', makeMessage({ flags: EPHEMERAL }) as never);
-    mockChannelApi.getPins.mockResolvedValue({ data: [makeMessage()] });
+    mockChannelApi.getPins.mockResolvedValue({ data: [makeMessage({ pinned: true })] });
 
     await useMessageStore.getState().fetchPins('ch1');
 
@@ -129,14 +140,16 @@ describe('flags survive a refetch that omits them', () => {
 
   it('preserves flags across an edit response', async () => {
     useMessageStore.getState().addMessage('ch1', makeMessage({ flags: EPHEMERAL }) as never);
-    mockChannelApi.editMessage.mockResolvedValue({
-      data: makeMessage({ content: 'edited' }),
-    });
+    const editedReceipt = makeMessage({ content: 'edited', edited_timestamp: '2026-01-01T00:00:01Z' });
 
-    await useMessageStore.getState().editMessage('ch1', 'm1', 'edited');
+    getTestMessagingRuntime({ serverId: '__local__', userId: 'u1' }).emit({ kind: 'edit', message: editedReceipt as never });
 
     const edited = useMessageStore.getState().messages.ch1[0];
     expect(edited.content).toBe('edited');
     expect((edited.flags ?? 0) & EPHEMERAL).toBe(EPHEMERAL);
   });
 });
+
+vi.mock('../lib/channelView', () => ({
+  getAccountChannelView: () => useChannelStore.getState(),
+}));

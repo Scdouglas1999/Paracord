@@ -16,7 +16,6 @@ const guild: Guild = {
   name: 'Test Guild',
   owner_id: OWNER_ID,
   member_count: 2,
-  features: [],
   created_at: '2026-01-01T00:00:00.000Z',
 };
 
@@ -28,7 +27,7 @@ const makeMember = (id: string, username: string): Member => ({
   mute: false,
 });
 
-const removeGuild = vi.fn();
+const deleteGuild = vi.fn();
 const leaveGuild = vi.fn();
 
 vi.mock('../../api/guilds', () => ({
@@ -62,7 +61,7 @@ vi.mock('../../stores/toastStore', () => ({
 
 vi.mock('../../stores/guildStore', () => ({
   useGuildStore: (selector: (s: Record<string, unknown>) => unknown) =>
-    selector({ leaveGuild, removeGuild }),
+    selector({ leaveGuild, deleteGuild }),
 }));
 
 vi.mock('../../stores/authStore', () => ({
@@ -108,7 +107,7 @@ describe('GuildSettings destructive flows', () => {
     vi.mocked(guildApi.getInvites).mockResolvedValue({ data: [] } as never);
     vi.mocked(guildApi.getBans).mockResolvedValue({ data: [] } as never);
     vi.mocked(guildApi.getAuditLog).mockResolvedValue({ data: { audit_log_entries: [] } } as never);
-    vi.mocked(guildApi.delete).mockResolvedValue({ data: {} } as never);
+    deleteGuild.mockResolvedValue(undefined);
     vi.mocked(guildApi.transferOwnership).mockResolvedValue({ data: {} } as never);
   });
 
@@ -148,7 +147,7 @@ describe('GuildSettings destructive flows', () => {
     // Wrong name keeps the confirm button disabled and blocks the API.
     await user.type(input, 'Wrong');
     expect(confirmBtn).toBeDisabled();
-    expect(guildApi.delete).not.toHaveBeenCalled();
+    expect(deleteGuild).not.toHaveBeenCalled();
 
     // Exact match unlocks deletion.
     await user.clear(input);
@@ -156,8 +155,7 @@ describe('GuildSettings destructive flows', () => {
     expect(confirmBtn).toBeEnabled();
     await user.click(confirmBtn);
 
-    await waitFor(() => expect(guildApi.delete).toHaveBeenCalledWith(GUILD_ID));
-    expect(removeGuild).toHaveBeenCalledWith(GUILD_ID);
+    await waitFor(() => expect(deleteGuild).toHaveBeenCalledWith(GUILD_ID, { serverId: '__local__', userId: OWNER_ID }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
@@ -171,6 +169,6 @@ describe('GuildSettings destructive flows', () => {
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
 
     expect(screen.queryByPlaceholderText('Test Guild')).not.toBeInTheDocument();
-    expect(guildApi.delete).not.toHaveBeenCalled();
+    expect(deleteGuild).not.toHaveBeenCalled();
   });
 });

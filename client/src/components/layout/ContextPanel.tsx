@@ -1,3 +1,4 @@
+import { useCurrentChannelStore, useChannelActions } from '../../hooks/useChannels';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { AlertCircle, Archive, Coins, Loader2, MessageSquare, Users, X } from 'lucide-react';
@@ -5,7 +6,6 @@ import type { LucideIcon } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import type { Channel, Message } from '../../types';
 import { useUIStore } from '../../stores/uiStore';
-import { useChannelStore } from '../../stores/channelStore';
 import { channelApi } from '../../api/channels';
 import { extractApiError } from '../../api/client';
 import { MemberList } from './MemberList';
@@ -136,7 +136,8 @@ export function ContextPanel({
 }: ContextPanelProps) {
   const mode = useUIStore((s) => s.contextPanelMode);
   const setContextPanelMode = useUIStore((s) => s.setContextPanelMode);
-  const channelsById = useChannelStore((s) => s.channelsById);
+  const channelActions = useChannelActions();
+  const channelsById = useCurrentChannelStore((s) => s.channelsById);
   const navigate = useNavigate();
   const asideRef = useRef<HTMLElement>(null);
 
@@ -203,7 +204,7 @@ export function ContextPanel({
     let cancelled = false;
     setThreadsLoading(true);
     setThreadsError(null);
-    const upsert = useChannelStore.getState();
+    const upsert = channelActions;
     Promise.all([
       channelApi.getThreads(threadListParentId),
       channelApi.getArchivedThreads(threadListParentId),
@@ -227,7 +228,7 @@ export function ContextPanel({
     return () => {
       cancelled = true;
     };
-  }, [threadListParentId]);
+  }, [threadListParentId, channelActions]);
 
   const close = useCallback(() => setContextPanelMode(null), [setContextPanelMode]);
 
@@ -309,14 +310,14 @@ export function ContextPanel({
     const threadGuildId = guildId ?? (channelId ? channelsById[channelId]?.guild_id ?? null : null);
     if (!thread && threadListParentId && threadGuildId) {
       const openThread = (threadId: string) => {
-        useChannelStore.getState().selectChannel(threadId);
+        channelActions.selectChannel(threadId);
         navigate(`/app/guilds/${threadGuildId}/channels/${threadId}`);
       };
       const hasFetchedThreads = fetchedThreadParentIds.has(threadListParentId);
       return (
         <aside
           ref={asideRef}
-          role="complementary"
+
           aria-label="Threads"
           tabIndex={-1}
           onKeyDown={onAsideKeyDown}
@@ -419,7 +420,7 @@ export function ContextPanel({
   return (
     <aside
       ref={asideRef}
-      role="complementary"
+
       aria-label={header.title}
       tabIndex={-1}
       onKeyDown={onAsideKeyDown}

@@ -7,6 +7,14 @@ interface ErrorBannerProps {
   className?: string;
   onRetry?: () => void;
   retryLabel?: string;
+  /**
+   * Wrap the message across lines instead of ellipsizing it to one.
+   *
+   * The default single line suits short inline failures. Opt in when the
+   * message is an explanation the reader has to act on — an ellipsis there
+   * hides the instructions and leaves a dead end.
+   */
+  multiline?: boolean;
 }
 
 export function ErrorBanner({
@@ -14,18 +22,20 @@ export function ErrorBanner({
   className,
   onRetry,
   retryLabel = 'Retry',
+  multiline = false,
 }: ErrorBannerProps) {
   return (
     <div
       role="alert"
       className={cn(
-        'flex items-center justify-between gap-3 rounded-md border border-accent-danger/35 bg-danger-tint px-4 py-3 text-label text-accent-danger',
+        'flex justify-between gap-3 rounded-md border border-accent-danger/35 bg-danger-tint px-4 py-3 text-label text-accent-danger',
+        multiline ? 'items-start' : 'items-center',
         className,
       )}
     >
-      <span className="flex min-w-0 items-center gap-2">
-        <AlertCircle size={16} className="shrink-0" />
-        <span className="truncate">{message}</span>
+      <span className={cn('flex min-w-0 gap-2', multiline ? 'items-start' : 'items-center')}>
+        <AlertCircle size={16} className={cn('shrink-0', multiline && 'mt-0.5')} />
+        <span className={multiline ? 'leading-relaxed' : 'truncate'}>{message}</span>
       </span>
       {onRetry && (
         <button

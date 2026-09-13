@@ -1,10 +1,11 @@
+import { useCurrentChannelStore } from '../../hooks/useChannels';
+import { useCurrentUser } from '../../hooks/useCurrentUser';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { LogOut, UserMinus, UserPlus, Users, X } from 'lucide-react';
 import { useChannelStore } from '../../stores/channelStore';
-import { useAuthStore } from '../../stores/authStore';
 import { useRelationshipStore } from '../../stores/relationshipStore';
-import { dmApi } from '../../api/dms';
+import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
 import { extractApiError } from '../../api/client';
 import { displayName } from '../../lib/displayName';
 import { confirm } from '../../stores/confirmStore';
@@ -23,10 +24,10 @@ interface GroupDmMembersPanelProps {
  */
 export function GroupDmMembersPanel({ channelId, onClose }: GroupDmMembersPanelProps) {
   const navigate = useNavigate();
-  const dmChannels = useChannelStore((s) => s.channelsByGuild['']);
-  const setDmChannels = useChannelStore((s) => s.setDmChannels);
+  const dmChannels = useCurrentChannelStore((s) => s.channelsByGuild['']);
+  const scope = useCurrentAccountScope();
   const dmChannel = (dmChannels ?? []).find((c) => c.id === channelId);
-  const currentUser = useAuthStore((s) => s.user);
+  const currentUser = useCurrentUser();
   const relationships = useRelationshipStore((s) => s.relationships);
   const fetchRelationships = useRelationshipStore((s) => s.fetchRelationships);
   const [addingMember, setAddingMember] = useState(false);
@@ -46,12 +47,8 @@ export function GroupDmMembersPanel({ channelId, onClose }: GroupDmMembersPanelP
   const handleAddMember = async (userId: string) => {
     setMemberActionError(null);
     try {
-      await dmApi.addRecipient(channelId, userId);
-      const { data: recipients } = await dmApi.listRecipients(channelId);
-      const updated = (dmChannels ?? []).map((c) =>
-        c.id === channelId ? { ...c, recipients } : c,
-      );
-      setDmChannels(updated);
+      if (!scope) throw new Error('Sign in to this server before continuing.');
+      await useChannelStore.getState().changeDmRecipient(channelId, userId, true, scope);
       setAddingMember(false);
     } catch (err) {
       setMemberActionError(extractApiError(err) || 'Failed to add member to this group DM.');
@@ -61,12 +58,8 @@ export function GroupDmMembersPanel({ channelId, onClose }: GroupDmMembersPanelP
   const handleRemoveMember = async (userId: string) => {
     setMemberActionError(null);
     try {
-      await dmApi.removeRecipient(channelId, userId);
-      const { data: recipients } = await dmApi.listRecipients(channelId);
-      const updated = (dmChannels ?? []).map((c) =>
-        c.id === channelId ? { ...c, recipients } : c,
-      );
-      setDmChannels(updated);
+      if (!scope) throw new Error('Sign in to this server before continuing.');
+      await useChannelStore.getState().changeDmRecipient(channelId, userId, false, scope);
     } catch (err) {
       setMemberActionError(extractApiError(err) || 'Failed to remove member from this group DM.');
     }
@@ -83,9 +76,8 @@ export function GroupDmMembersPanel({ channelId, onClose }: GroupDmMembersPanelP
     if (!ok) return;
     setMemberActionError(null);
     try {
-      await dmApi.removeRecipient(channelId, currentUser.id);
-      const remaining = (dmChannels ?? []).filter((c) => c.id !== channelId);
-      setDmChannels(remaining);
+      if (!scope) throw new Error('Sign in to this server before continuing.');
+      await useChannelStore.getState().changeDmRecipient(channelId, currentUser.id, false, scope);
       onClose();
       toast.success('Left the group DM.');
       navigate('/app/dms');
@@ -103,7 +95,7 @@ export function GroupDmMembersPanel({ channelId, onClose }: GroupDmMembersPanelP
 
   return (
     <aside
-      role="complementary"
+
       aria-label="Members"
       className="flex h-full shrink-0 flex-col overflow-hidden border-l border-border-subtle bg-bg-secondary shadow-sm"
       style={{ width: 'var(--member-list-width)' }}

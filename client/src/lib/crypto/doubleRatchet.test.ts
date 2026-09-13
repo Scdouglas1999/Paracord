@@ -303,30 +303,27 @@ describe('crypto/doubleRatchet', () => {
 
   describe('unicode and empty messages', () => {
     it('handles unicode content', async () => {
-      let { aliceState, bobState } = setupAliceBobSessions();
+      const { aliceState, bobState } = setupAliceBobSessions();
 
       const msg = '🔐 Hello 你好 مرحبا';
       const enc = await ratchetEncrypt(aliceState, msg);
-      aliceState = enc.state;
       const dec = await ratchetDecrypt(bobState, enc.header, enc.nonce, enc.ciphertext);
       expect(dec.plaintext).toBe(msg);
     });
 
     it('handles empty string', async () => {
-      let { aliceState, bobState } = setupAliceBobSessions();
+      const { aliceState, bobState } = setupAliceBobSessions();
 
       const enc = await ratchetEncrypt(aliceState, '');
-      aliceState = enc.state;
       const dec = await ratchetDecrypt(bobState, enc.header, enc.nonce, enc.ciphertext);
       expect(dec.plaintext).toBe('');
     });
 
     it('handles long message (10KB)', async () => {
-      let { aliceState, bobState } = setupAliceBobSessions();
+      const { aliceState, bobState } = setupAliceBobSessions();
 
       const msg = 'x'.repeat(10240);
       const enc = await ratchetEncrypt(aliceState, msg);
-      aliceState = enc.state;
       const dec = await ratchetDecrypt(bobState, enc.header, enc.nonce, enc.ciphertext);
       expect(dec.plaintext).toBe(msg);
     });

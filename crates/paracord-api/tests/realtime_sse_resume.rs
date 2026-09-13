@@ -126,6 +126,100 @@ async fn create_session_body(app: &Router, token: &str) -> Value {
 }
 
 #[tokio::test]
+async fn sse_future_cursor_resets_to_the_current_head_and_receives_subsequent_events() {
+    let app_ctx = build_test_app(TestAppOptions::default()).await.unwrap();
+    let token = create_authenticated_user_token(
+        &app_ctx.db,
+        &app_ctx.jwt_secret,
+        "futurecursor",
+        "hunter2hunter2",
+    )
+    .await
+    .unwrap();
+    let session = create_session_body(&app_ctx.app, &token).await;
+    let session_id = session["session_id"].as_str().unwrap();
+    let user_id = session["user_id"].as_str().unwrap().parse().unwrap();
+    let head = session["cursor"].as_u64().unwrap();
+    let reset = collect_gateway_frames(&app_ctx.app, &token, session_id, head + 1000, 1).await;
+    assert_eq!(
+        reset.len(),
+        1,
+        "a future cursor requires an explicit resync"
+    );
+    assert_eq!(frame_event_name(&reset[0]), Some("READY"));
+    assert_eq!(frame_seq(&reset[0]), Some(head));
+    assert_eq!(frame_event_id(&reset[0]), Some(head));
+    assert_eq!(reset[0]["d"]["recovery_required"], true);
+    assert_eq!(reset[0]["d"]["replay_gap"], true);
+
+    app_ctx.event_bus.dispatch_to_users(
+        "MESSAGE_UPDATE",
+        json!({"id":"after-reset"}),
+        vec![user_id],
+    );
+    let resumed = collect_gateway_frames(&app_ctx.app, &token, session_id, head, 2).await;
+    assert_eq!(resumed.len(), 2);
+    assert_eq!(frame_event_name(&resumed[1]), Some("MESSAGE_UPDATE"));
+    assert_eq!(resumed[1]["d"]["id"], "after-reset");
+    assert_eq!(frame_seq(&resumed[1]), Some(head + 1));
+}
+
+#[tokio::test]
+async fn sse_evicted_replay_uses_a_single_authoritative_recovery_barrier() {
+    let app_ctx = build_test_app(TestAppOptions::default()).await.unwrap();
+    let token = create_authenticated_user_token(
+        &app_ctx.db,
+        &app_ctx.jwt_secret,
+        "evicted-recovery",
+        "hunter2hunter2",
+    )
+    .await
+    .unwrap();
+    let session = create_session_body(&app_ctx.app, &token).await;
+    let session_id = session["session_id"].as_str().unwrap();
+    let user_id = session["user_id"].as_str().unwrap().parse().unwrap();
+    for id in 0..600 {
+        app_ctx.event_bus.dispatch_to_users(
+            "MESSAGE_UPDATE",
+            json!({"id":id.to_string()}),
+            vec![user_id],
+        );
+        if id % 20 == 0 {
+            tokio::task::yield_now().await;
+        }
+    }
+    // Wait for the background pump to finish assigning the test events before
+    // asserting the exact replay boundary. The bootstrap reports its head.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let current = create_session_body(&app_ctx.app, &token).await;
+        assert_eq!(current["session_id"], session_id);
+        if current["cursor"].as_u64().unwrap() >= 600 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "pump failed to reach the test fence"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let frames = collect_gateway_frames(&app_ctx.app, &token, session_id, 1, 1).await;
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0]["d"]["recovery_required"], true);
+    assert_eq!(frames[0]["d"]["replay_gap"], true);
+    let head = frame_event_id(&frames[0]).unwrap();
+    assert!(head > 512);
+    app_ctx.event_bus.dispatch_to_users(
+        "MESSAGE_UPDATE",
+        json!({"id":"after-recovery"}),
+        vec![user_id],
+    );
+    let resumed = collect_gateway_frames(&app_ctx.app, &token, session_id, head, 2).await;
+    assert_eq!(resumed[0]["d"]["replay_gap"], false);
+    assert_eq!(resumed[1]["d"]["id"], "after-recovery");
+}
+
+#[tokio::test]
 async fn sse_resume_replays_gap_events_in_order() {
     let app_ctx = build_test_app(TestAppOptions {
         jwt_secret: "sse-resume-secret".to_string(),
@@ -155,6 +249,10 @@ async fn sse_resume_replays_gap_events_in_order() {
         .await
         .expect("create session");
     assert!(status.is_success(), "create_session failed: {status}");
+    assert_eq!(
+        body["database_history_epoch"],
+        app_ctx.state.database_history_epoch
+    );
 
     let session_id = body
         .get("session_id")
@@ -196,6 +294,10 @@ async fn sse_resume_replays_gap_events_in_order() {
     //    READY frame followed by the three gap events replayed in order.
     let frames = collect_gateway_frames(&app_ctx.app, &token, &session_id, cursor, 4).await;
 
+    assert_eq!(
+        frames[0]["d"]["database_history_epoch"],
+        app_ctx.state.database_history_epoch
+    );
     let names: Vec<&str> = frames.iter().filter_map(frame_event_name).collect();
     assert!(
         names.first() == Some(&"READY"),
@@ -559,4 +661,132 @@ async fn http_presence_update_normalizes_status_and_caps_activities() {
         256,
         "activity text must be truncated to the gateway's limit"
     );
+}
+
+#[tokio::test]
+async fn sse_ready_uses_persisted_member_count_and_creation_time_after_join() {
+    let env = build_test_app(TestAppOptions::default()).await.unwrap();
+    let token =
+        create_authenticated_user_token(&env.db, &env.jwt_secret, "readyowner", "OwnerPass123!")
+            .await
+            .unwrap();
+    let peer_token =
+        create_authenticated_user_token(&env.db, &env.jwt_secret, "readypeer", "PeerPass123!")
+            .await
+            .unwrap();
+    let owner = paracord_core::auth::validate_token(&token, &env.jwt_secret)
+        .unwrap()
+        .sub;
+    let peer = paracord_core::auth::validate_token(&peer_token, &env.jwt_secret)
+        .unwrap()
+        .sub;
+    let guild = paracord_db::guilds::create_guild(&env.db, 7101, "Persisted Space", owner, None)
+        .await
+        .unwrap();
+    paracord_db::members::add_member(&env.db, owner, guild.id)
+        .await
+        .unwrap();
+    let session = create_session_body(&env.app, &token).await;
+    // No gateway event/cache update accompanies this committed membership change.
+    paracord_db::members::add_member(&env.db, peer, guild.id)
+        .await
+        .unwrap();
+    let ready = collect_gateway_frames(
+        &env.app,
+        &token,
+        session["session_id"].as_str().unwrap(),
+        session["cursor"].as_u64().unwrap(),
+        1,
+    )
+    .await;
+    assert_eq!(ready[0]["t"], "READY");
+    let guilds = ready[0]["d"]["guilds"].as_array().unwrap();
+    assert_eq!(guilds.len(), 1);
+    assert_eq!(guilds[0]["member_count"], 2);
+    assert_eq!(guilds[0]["created_at"], guild.created_at.to_rfc3339());
+    assert_eq!(guilds[0]["name"], "Persisted Space");
+}
+
+#[tokio::test]
+async fn sse_failed_membership_lookup_cannot_create_an_empty_session() {
+    let env = build_test_app(TestAppOptions::default()).await.unwrap();
+    let token =
+        create_authenticated_user_token(&env.db, &env.jwt_secret, "readyfailure", "OwnerPass123!")
+            .await
+            .unwrap();
+    sqlx::query("ALTER TABLE members RENAME TO unavailable_members")
+        .execute(&env.db)
+        .await
+        .unwrap();
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/api/v2/rt/session")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, body) = common::dispatch_json(&env.app, request).await.unwrap();
+    assert_eq!(status, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        body.get("guild_ids").is_none(),
+        "failed lookup must not produce a snapshot: {body}"
+    );
+}
+
+#[tokio::test]
+async fn sse_snapshot_query_failure_returns_error_without_authoritative_empty_data() {
+    let env = build_test_app(TestAppOptions::default()).await.unwrap();
+    let token =
+        create_authenticated_user_token(&env.db, &env.jwt_secret, "snapfailure", "OwnerPass123!")
+            .await
+            .unwrap();
+    let owner = paracord_core::auth::validate_token(&token, &env.jwt_secret)
+        .unwrap()
+        .sub;
+    let guild = paracord_db::guilds::create_guild(&env.db, 7102, "Snapshot Space", owner, None)
+        .await
+        .unwrap();
+    paracord_db::members::add_member(&env.db, owner, guild.id)
+        .await
+        .unwrap();
+    let session = create_session_body(&env.app, &token).await;
+    for table in ["members", "voice_states"] {
+        let ticket = mint_stream_ticket(&env.app, &token).await;
+        sqlx::query(&format!(
+            "ALTER TABLE {table} RENAME TO unavailable_snapshot_table"
+        ))
+        .execute(&env.db)
+        .await
+        .unwrap();
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri(format!(
+                "/api/v2/rt/events?ticket={ticket}&session_id={}",
+                session["session_id"].as_str().unwrap()
+            ))
+            .body(Body::empty())
+            .unwrap();
+        let (status, body) = common::dispatch_json(&env.app, request).await.unwrap();
+        assert_eq!(
+            status,
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "{table}: {body}"
+        );
+        assert!(body.get("guilds").is_none() && body.get("d").is_none());
+        sqlx::query(&format!(
+            "ALTER TABLE unavailable_snapshot_table RENAME TO {table}"
+        ))
+        .execute(&env.db)
+        .await
+        .unwrap();
+    }
+    // Failure released attachment slots and did not poison the reusable session.
+    let ready = collect_gateway_frames(
+        &env.app,
+        &token,
+        session["session_id"].as_str().unwrap(),
+        session["cursor"].as_u64().unwrap(),
+        1,
+    )
+    .await;
+    assert_eq!(ready[0]["d"]["guilds"][0]["member_count"], 1);
 }

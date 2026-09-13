@@ -19,9 +19,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Install cargo-audit
         run: cargo install cargo-audit --version 0.22.2 --locked
+      - name: Enforce audit exception review dates
+        run: python3 scripts/check_audit_exceptions.py
       - name: Cargo audit (workspace)
         run: cargo audit
 
+  npm-dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "22"

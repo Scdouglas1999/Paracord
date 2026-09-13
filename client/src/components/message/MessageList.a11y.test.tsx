@@ -31,8 +31,8 @@ const mocks = vi.hoisted(() => ({
   },
   readStateStoreState: {
     markRead: vi.fn(),
+    saveReadPosition: vi.fn().mockResolvedValue(undefined),
   },
-  updateReadStateForServer: vi.fn().mockResolvedValue({ data: {} }),
   scrollToIndex: vi.fn(),
   savedMessageStoreState: {
     serverId: 'srv-a',
@@ -92,8 +92,8 @@ vi.mock('../../hooks/usePermissions', () => ({
   }),
 }));
 
-vi.mock('../../stores/messageStore', () => ({
-  useMessageStore: (selector: (s: typeof mocks.messageStoreState) => unknown) =>
+vi.mock('../../hooks/useMessageStore', () => ({
+  useCurrentMessageStore: (selector: (s: typeof mocks.messageStoreState) => unknown) =>
     selector(mocks.messageStoreState),
 }));
 
@@ -142,13 +142,13 @@ vi.mock('../../stores/readStateStore', () => ({
   ),
 }));
 
-vi.mock('../../stores/serverListStore', () => ({
-  useServerListStore: Object.assign(
-    (selector: (s: { activeServerId: string }) => unknown) =>
-      selector({ activeServerId: 'srv-a' }),
-    { getState: () => ({ activeServerId: 'srv-a' }) },
-  ),
-}));
+vi.mock('../../stores/serverListStore', () => {
+  const state = { activeServerId: 'srv-a', servers: [{ id: 'srv-a', token: 'token', userId: 'viewer', user: { id: 'viewer' } }] };
+  return { useServerListStore: Object.assign(
+    (selector: (value: typeof state) => unknown) => selector(state),
+    { getState: () => state },
+  ) };
+});
 
 vi.mock('../../stores/savedMessageStore', () => ({
   useSavedMessageStore: Object.assign(
@@ -187,7 +187,6 @@ vi.mock('../../stores/toastStore', () => ({
 vi.mock('../../api/channels', () => ({
   channelApi: {
     updateReadState: vi.fn().mockResolvedValue({ data: {} }),
-    updateReadStateForServer: mocks.updateReadStateForServer,
     getThreads: vi.fn().mockResolvedValue({ data: [] }),
     getArchivedThreads: vi.fn().mockResolvedValue({ data: [] }),
     getEditHistory: vi.fn().mockResolvedValue({ data: [] }),
@@ -247,7 +246,7 @@ describe('MessageList keyboard accessibility and error state', () => {
     mocks.useMessagesReturn.error = null;
     mocks.useMessagesReturn.isLoading = false;
     mocks.readStateStoreState.markRead.mockReset();
-    mocks.updateReadStateForServer.mockClear();
+    mocks.readStateStoreState.saveReadPosition.mockClear();
     mocks.scrollToIndex.mockClear();
     Object.defineProperty(window, 'matchMedia', {
       writable: true,
@@ -346,7 +345,7 @@ describe('MessageList keyboard accessibility and error state', () => {
     );
 
     await waitFor(() => {
-      expect(mocks.readStateStoreState.markRead).toHaveBeenCalledWith('srv-a', 'ch1', 'msg-1');
+      expect(mocks.readStateStoreState.markRead).toHaveBeenCalledWith({ serverId: 'srv-a', userId: 'viewer' }, 'ch1', 'msg-1');
     });
     mocks.readStateStoreState.markRead.mockClear();
 
@@ -360,7 +359,19 @@ describe('MessageList keyboard accessibility and error state', () => {
     );
 
     await waitFor(() => {
-      expect(mocks.readStateStoreState.markRead).toHaveBeenCalledWith('srv-a', 'ch2', 'msg-2');
+      expect(mocks.readStateStoreState.markRead).toHaveBeenCalledWith({ serverId: 'srv-a', userId: 'viewer' }, 'ch2', 'msg-2');
     });
   });
+});
+
+vi.mock('../../hooks/useChannels', async () => {
+  const actual = await vi.importActual<typeof import('../../hooks/useChannels')>('../../hooks/useChannels');
+  const { useChannelStore } = await import('../../stores/channelStore');
+  return {
+    ...actual,
+    useCurrentChannelStore: useChannelStore,
+    useChannelActions: () => useChannelStore.getState(),
+    getAccountChannelView: () => useChannelStore.getState(),
+    useGuildChannels: (id: string) => useChannelStore(state => state.channelsByGuild[id] ?? []),
+  };
 });

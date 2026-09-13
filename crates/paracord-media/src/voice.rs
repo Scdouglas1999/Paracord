@@ -33,6 +33,8 @@ pub struct VoiceRoom {
 pub struct VoiceManager {
     livekit: Arc<super::livekit::LiveKitConfig>,
     rooms: DashMap<i64, VoiceRoom>,
+    /// Keep DB membership receipts and relay/LiveKit projections ordered per account.
+    membership_gates: std::sync::Mutex<HashMap<i64, std::sync::Weak<tokio::sync::Mutex<()>>>>,
     /// Maps channel_id -> LiveKit room name
     active_livekit_rooms: DashMap<i64, String>,
 }
@@ -56,13 +58,33 @@ impl VoiceManager {
         Self {
             livekit,
             rooms: DashMap::new(),
+            membership_gates: std::sync::Mutex::new(HashMap::new()),
             active_livekit_rooms: DashMap::new(),
         }
     }
 
+    pub async fn lock_membership(&self, user_id: i64) -> tokio::sync::OwnedMutexGuard<()> {
+        let gate = {
+            let mut gates = self
+                .membership_gates
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            gates.retain(|_, gate| gate.strong_count() > 0);
+            match gates.get(&user_id).and_then(std::sync::Weak::upgrade) {
+                Some(gate) => gate,
+                None => {
+                    let gate = Arc::new(tokio::sync::Mutex::new(()));
+                    gates.insert(user_id, Arc::downgrade(&gate));
+                    gate
+                }
+            }
+        };
+        gate.lock_owned().await
+    }
+
     /// Join a voice channel - creates LiveKit room if needed, returns token.
     #[allow(clippy::too_many_arguments)]
-    pub async fn join_channel(
+    pub async fn prepare_channel_join(
         &self,
         channel_id: i64,
         guild_id: i64,
@@ -82,6 +104,27 @@ impl VoiceManager {
                 .or_insert_with(|| room_name.clone());
         }
 
+        // Generate participant token
+        let token = self
+            .livekit
+            .generate_voice_token(&room_name, user_id, username, session_id, can_speak, true)?;
+
+        Ok(VoiceJoinResponse {
+            token,
+            url: self.livekit.url.clone(),
+            room_name,
+        })
+    }
+
+    /// Callers commit durable membership before publishing this local projection.
+    pub fn install_channel_participant(
+        &self,
+        channel_id: i64,
+        guild_id: i64,
+        user_id: i64,
+        session_id: &str,
+        bitrate: AudioBitrate,
+    ) {
         // Track participant locally
         {
             let mut room = self.rooms.entry(channel_id).or_insert_with(|| VoiceRoom {
@@ -106,17 +149,26 @@ impl VoiceManager {
                 },
             );
         }
+    }
 
-        // Generate participant token
-        let token = self
-            .livekit
-            .generate_voice_token(&room_name, user_id, username, can_speak, true)?;
-
-        Ok(VoiceJoinResponse {
-            token,
-            url: self.livekit.url.clone(),
-            room_name,
-        })
+    #[allow(clippy::too_many_arguments)]
+    pub async fn join_channel(
+        &self,
+        channel_id: i64,
+        guild_id: i64,
+        user_id: i64,
+        username: &str,
+        session_id: &str,
+        can_speak: bool,
+        bitrate: AudioBitrate,
+    ) -> Result<VoiceJoinResponse, anyhow::Error> {
+        let response = self
+            .prepare_channel_join(
+                channel_id, guild_id, user_id, username, session_id, can_speak, bitrate,
+            )
+            .await?;
+        self.install_channel_participant(channel_id, guild_id, user_id, session_id, bitrate);
+        Ok(response)
     }
 
     /// Start streaming in a voice channel.
@@ -202,23 +254,39 @@ impl VoiceManager {
     }
 
     pub async fn leave_room(&self, channel_id: i64, user_id: i64) -> Option<Vec<VoiceParticipant>> {
-        if let Some(mut room) = self.rooms.get_mut(&channel_id) {
-            room.participants.remove(&user_id);
-
-            // Clear active stream state if the leaver was streaming
-            room.active_streamers.remove(&user_id);
-
-            if room.participants.is_empty() {
-                drop(room);
-                self.rooms.remove(&channel_id);
-                return Some(vec![]);
-            }
-            return Some(room.participants.values().cloned().collect());
-        }
-        None
+        self.leave_room_if_session(channel_id, user_id, None).await
     }
 
-    /// Clean up LiveKit room when the voice channel is empty.
+    pub async fn leave_room_if_session(
+        &self,
+        channel_id: i64,
+        user_id: i64,
+        expected: Option<&str>,
+    ) -> Option<Vec<VoiceParticipant>> {
+        use dashmap::mapref::entry::Entry;
+        let Entry::Occupied(mut entry) = self.rooms.entry(channel_id) else {
+            return None;
+        };
+        if expected.is_some_and(|id| {
+            !entry
+                .get()
+                .participants
+                .get(&user_id)
+                .is_some_and(|participant| participant.session_id == id)
+        }) {
+            return None;
+        }
+        let room = entry.get_mut();
+        room.participants.remove(&user_id);
+        room.active_streamers.remove(&user_id);
+        if room.participants.is_empty() {
+            entry.remove();
+            Some(vec![])
+        } else {
+            Some(room.participants.values().cloned().collect())
+        }
+    }
+
     pub async fn cleanup_room(&self, channel_id: i64) -> Result<(), anyhow::Error> {
         if let Some((_, room_name)) = self.active_livekit_rooms.remove(&channel_id) {
             self.livekit.delete_room(&room_name).await?;

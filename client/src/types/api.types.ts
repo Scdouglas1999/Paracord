@@ -1,5 +1,4 @@
 import type { ChannelType } from './channel.types';
-import type { Guild } from './guild.types';
 import type { MessageE2eePayload } from './message.types';
 import type { User } from './user.types';
 
@@ -23,10 +22,8 @@ export interface RegisterRequest {
   display_name?: string;
 }
 
-export interface CreateGuildRequest {
-  name: string;
-  icon?: string;
-}
+export type { CreateGuildRequest } from '../api/generated/CreateGuildRequest';
+export type { UpdateGuildRequest } from '../api/generated/UpdateGuildRequest';
 
 export interface CreateChannelRequest {
   name: string;
@@ -52,12 +49,8 @@ export interface SendMessageRequest {
 export interface EditMessageRequest {
   content: string;
   e2ee?: MessageE2eePayload;
-}
-
-export interface CreateInviteRequest {
-  max_age?: number;
-  max_uses?: number;
-  temporary?: boolean;
+  /** Immutable identity for a replayable edit operation. */
+  edit_nonce?: string;
 }
 
 export interface CreateRoleRequest {
@@ -73,10 +66,6 @@ export interface UpdateMemberRequest {
   roles?: string[];
   mute?: boolean;
   deaf?: boolean;
-}
-
-export interface InviteAcceptResponse {
-  guild: Guild;
 }
 
 export interface PaginationParams {

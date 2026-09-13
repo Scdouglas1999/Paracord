@@ -1,50 +1,24 @@
-import type { Channel } from './channel.types';
 import type { User } from './user.types';
 
-export interface HubSettings {
-  description?: string;
-  banner_hash?: string;
-  pinned_channels?: string[];
-  welcome_text?: string;
-  [key: string]: unknown;
-}
+import type { GuildDetail } from '../api/generated/GuildDetail';
+export type { HubSettings, GuildBotConfig } from '../api/generated/GuildDetail';
 
-export interface GuildBotConfig {
-  enabled?: boolean;
-  [key: string]: unknown;
-}
+// JSON responses can add unknown fields for forward compatibility. Those index
+// signatures do not describe a named field in the app's partial projection.
+type KnownFields<T> = {
+  [K in keyof T as string extends K ? never : number extends K ? never : K]: T[K]
+};
+type DetailFields = KnownFields<GuildDetail>;
+type GuildIdentityFields = Pick<DetailFields, 'id' | 'name' | 'owner_id' | 'member_count'>;
 
-export interface Guild {
-  id: string;
-  name: string;
+/** A space projection can begin with the smaller authenticated READY payload. */
+export interface Guild extends GuildIdentityFields, Partial<Omit<DetailFields, keyof GuildIdentityFields>> {
+  /** Older gateway payloads used icon; full REST responses use icon_hash. */
   icon?: string;
-  icon_hash?: string | null;
-  banner?: string;
-  banner_hash?: string;
-  description?: string;
-  owner_id: string;
-  member_count: number;
-  features: string[];
-  system_channel_id?: string;
-  rules_channel_id?: string;
   default_channel_id?: string | null;
-  vanity_url_code?: string;
-  created_at: string;
-  visibility?: 'private' | 'public' | 'roles';
-  allowed_roles?: string[];
-  discovery_tags?: string[];
-  hub_settings?: HubSettings;
-  bot_settings?: Record<string, GuildBotConfig>;
   /** Base URL of the server this guild was fetched from (client-side tag). */
   server_url?: string;
-  /**
-   * Connection id of the server this guild actually originated from (client-side
-   * tag, stamped at gateway ingest). Unlike `server_url` — which `addGuild`
-   * defaults to the ACTIVE server's base url and so mis-attributes guilds that
-   * arrive over a background server's READY — this carries the true owning
-   * server, so the cross-server merge reads unread/mention from the right bucket
-   * (layout-spec §9 flag 3).
-   */
+  /** Connection that supplied this projection, independent of current selection. */
   originServerId?: string;
 }
 
@@ -71,19 +45,17 @@ export interface Role {
   created_at: string;
 }
 
+/** Matches the `GuildInvite` wire contract; the server never sent the nested
+ * guild/channel/inviter or `temporary` fields the old shape claimed. */
 export interface Invite {
   code: string;
   guild_id: string;
   channel_id: string;
-  inviter_id?: string;
+  inviter_id: string | null;
   uses: number;
-  max_uses?: number;
-  max_age?: number;
-  temporary: boolean;
+  max_uses: number | null;
+  max_age: number | null;
   created_at: string;
-  guild?: Guild;
-  channel?: Channel;
-  inviter?: User;
 }
 
 export interface Webhook {

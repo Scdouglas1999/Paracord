@@ -669,6 +669,20 @@ pub async fn get_remote_user_mapping(
     .await
 }
 
+/// Username-only federation identities cannot choose between discriminators.
+/// Resolve only an unambiguous existing local account, never the first match.
+pub async fn resolve_unique_local_username_id(
+    pool: &DbPool,
+    username: &str,
+) -> Result<Option<i64>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT id FROM users u WHERE u.username = $1 AND NOT EXISTS (SELECT 1 FROM users other WHERE other.username = u.username AND other.id <> u.id)",
+    )
+    .bind(username)
+    .fetch_optional(pool)
+    .await
+}
+
 pub async fn get_remote_user_mapping_by_local(
     pool: &DbPool,
     local_user_id: i64,

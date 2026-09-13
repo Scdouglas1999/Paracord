@@ -64,6 +64,8 @@ pub struct Config {
     pub ai: AiConfig,
     #[serde(default)]
     pub integrations: IntegrationsConfig,
+    #[serde(default)]
+    pub setup: SetupConfig,
     /// True when `Config::load` generated the config file fresh on this run
     /// (genuine first run). Not persisted; always deserializes to false.
     /// Consumed by the startup path (main.rs) to drive first-run onboarding.
@@ -523,6 +525,38 @@ pub struct IntegrationsConfig {
     pub tenor_api_key: Option<String>,
 }
 
+/// First-owner claim ("who owns this server") settings.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SetupConfig {
+    /// Whether an unclaimed instance must be claimed with a bootstrap token
+    /// before any account can exist.
+    ///
+    /// `true` (the default) is the safe behaviour: a freshly exposed server
+    /// cannot be taken over by whoever finds the URL first. Setting it to
+    /// `false` restores the legacy bootstrap in which the first registered
+    /// account becomes the owner — deterministic, which is why automated
+    /// harnesses and unattended container deployments use it, and loudly
+    /// logged at startup so it is never a silent choice.
+    #[serde(default = "default_true")]
+    pub require_claim: bool,
+    /// A fixed bootstrap claim token, instead of one minted at startup.
+    ///
+    /// Set this when the token has to be known in advance (a provisioning
+    /// system, an end-to-end harness). It is a credential: it must be at least
+    /// 32 characters and it is stored hashed, never in plaintext, in the
+    /// database.
+    pub claim_token: Option<String>,
+}
+
+impl Default for SetupConfig {
+    fn default() -> Self {
+        Self {
+            require_claim: true,
+            claim_token: None,
+        }
+    }
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 /// Generate a cryptographically random hex string of the given length.
@@ -746,6 +780,22 @@ allow_username_login = {allow_username_login}
 # Require email during password registration.
 require_email = {require_email}
 
+[setup]
+# Require the first-owner claim. While an instance is unclaimed nobody can
+# register: the operator finishes setup in the browser using the one-time claim
+# token this server prints on startup (and writes to first-owner-claim.txt next
+# to this file). That is what stops a stranger who finds a freshly exposed
+# server from becoming its administrator.
+#
+# Set to false ONLY for automated or unattended deployments where the first
+# account is created by a script you control: the first account registered then
+# owns the instance, exactly as older Paracord releases behaved.
+require_claim = {setup_require_claim}
+# Pin the bootstrap claim token instead of letting the server mint one. Useful
+# for provisioning systems and end-to-end harnesses. Minimum 32 characters; it
+# is stored hashed, never in plaintext.
+# claim_token = "replace-with-at-least-32-random-characters"
+
 [storage]
 # Upload storage backend: "local" (default) or optional S3-compatible object storage.
 # S3-compatible storage is disabled by default. To enable it, set storage_type = "s3",
@@ -916,6 +966,7 @@ timeout_seconds = {ai_timeout_seconds}
         jwt_secret = config.auth.jwt_secret,
         jwt_expiry = config.auth.jwt_expiry_seconds,
         registration_enabled = config.auth.registration_enabled,
+        setup_require_claim = config.setup.require_claim,
         allow_username_login = config.auth.allow_username_login,
         require_email = config.auth.require_email,
         storage_type = config.storage.storage_type,
@@ -1281,6 +1332,19 @@ impl Config {
                 .filter(|entry| !entry.is_empty())
                 .map(str::to_string)
                 .collect();
+        }
+        if let Ok(value) = std::env::var("PARACORD_SETUP_REQUIRE_CLAIM") {
+            if let Ok(parsed) = value.parse::<bool>() {
+                config.setup.require_claim = parsed;
+            }
+        }
+        if let Ok(value) = std::env::var("PARACORD_SETUP_CLAIM_TOKEN") {
+            let trimmed = value.trim();
+            config.setup.claim_token = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            };
         }
         if let Ok(value) = std::env::var("PARACORD_FEDERATION_ENABLED") {
             if let Ok(parsed) = value.parse::<bool>() {

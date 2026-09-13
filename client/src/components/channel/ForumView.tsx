@@ -1,3 +1,5 @@
+import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
+import { entityScopeKey as memberScopeKey } from '../../lib/serverScope';
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import {
@@ -71,8 +73,9 @@ function handleTagRovingFocus(event: KeyboardEvent<HTMLButtonElement>, scope: st
 export function ForumView({ channelId, channelName }: ForumViewProps) {
   const { guildId } = useParams();
   const navigate = useNavigate();
-  const members = useMemberStore((s) => (guildId ? s.members.get(guildId) ?? EMPTY_MEMBERS : EMPTY_MEMBERS));
-  const membersLoaded = useMemberStore((s) => (guildId ? s.membersLoaded[guildId] : false));
+  const memberScope = useCurrentAccountScope();
+  const members = useMemberStore((s) => (guildId ? (memberScope ? s.members.get(memberScopeKey(memberScope, guildId)) : undefined) ?? EMPTY_MEMBERS : EMPTY_MEMBERS));
+  const membersLoaded = useMemberStore((s) => (guildId ? (memberScope ? s.membersLoaded[memberScopeKey(memberScope, guildId)] : false) : false));
   const fetchMembers = useMemberStore((s) => s.fetchMembers);
   const { permissions, isAdmin } = usePermissions(guildId || null);
   const canManageTags = isAdmin || hasPermission(permissions, Permissions.MANAGE_CHANNELS);
@@ -132,9 +135,9 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
   }, [fetchPosts, fetchTags]);
 
   useEffect(() => {
-    if (!guildId || membersLoaded) return;
-    void fetchMembers(guildId);
-  }, [guildId, membersLoaded, fetchMembers]);
+    if (!guildId || !memberScope || membersLoaded) return;
+    void fetchMembers(guildId, memberScope);
+  }, [guildId, membersLoaded, fetchMembers, memberScope]);
 
   const filteredPosts =
     selectedTags.size === 0
@@ -844,9 +847,9 @@ function NewPostModal({
 
           {tags.length > 0 && (
             <div>
-              <label className="mb-1.5 block text-section uppercase text-text-muted">
+              <div className="mb-1.5 block text-section uppercase text-text-muted">
                 Tags
-              </label>
+              </div>
               <div className="flex flex-wrap gap-1.5" role="toolbar" aria-label="Post tag selection">
                 {tags.map((tag) => (
                   <button

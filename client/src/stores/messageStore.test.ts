@@ -1,3 +1,12 @@
+vi.mock('../lib/messages/accountMessagingRuntime', async () => (await import('../test/messagingRuntimeMock')).messagingRuntimeMock);
+import { getTestMessagingRuntime } from '../test/messagingRuntimeMock';
+vi.mock('../lib/operationContext', () => ({
+  captureScopedOperation: (scope: { serverId: string; userId: string }) => {
+    const controller = new AbortController();
+    return { scope, signal: controller.signal, api: {}, assertCurrent() { controller.signal.throwIfAborted(); }, dispose() { controller.abort(); } };
+  },
+}));
+import { useChannelStore } from './channelStore';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const mockToast = vi.hoisted(() => ({
@@ -83,12 +92,12 @@ vi.mock('../lib/dmE2ee', () => mockDmE2ee);
 vi.mock('../lib/accountSession', () => mockAccountSession);
 
 vi.mock('./authStore', () => ({
-  useAuthStore: {
+  useAuthStore: { subscribe: () => () => {},
     getState: () => ({ user: mockAuthUser.value }),
   },
 }));
 
-vi.mock('../api/channels', () => ({ channelApi: mockChannelApi }));
+vi.mock('../api/channels', () => ({ channelApi: mockChannelApi, createChannelApi: () => mockChannelApi }));
 
 vi.mock('../api/client', () => ({
   extractApiError: vi.fn((err: unknown) => {
@@ -101,7 +110,9 @@ vi.mock('../lib/constants', () => ({
   DEFAULT_MESSAGE_FETCH_LIMIT: 50,
 }));
 
-import { useMessageStore, MAX_MESSAGES_PER_CHANNEL, MAX_CACHED_CHANNELS } from './messageStore';
+import { getMessageStore, cancelMessageFetch, MAX_MESSAGES_PER_CHANNEL, MAX_CACHED_CHANNELS } from './messageStore';
+const useMessageStore = getMessageStore({ serverId: '__local__', userId: 'u1' });
+
 import { encryptDmMessageV2 } from '../lib/dmE2ee';
 import { hasUnlockedPrivateKey, withUnlockedPrivateKey } from '../lib/accountSession';
 
@@ -129,6 +140,7 @@ function makeMessage(overrides: Partial<{
 
 describe('messageStore', () => {
   beforeEach(() => {
+    useMessageStore.getState().reset();
     vi.clearAllMocks();
     mockChannelsByGuild.value = {
       g1: [
@@ -200,9 +212,13 @@ describe('messageStore', () => {
     });
 
     it('does not fetch while already loading', async () => {
-      useMessageStore.setState({ loading: { ch1: true } });
+      const response = deferred<{ data: ReturnType<typeof makeMessage>[] }>();
+      mockChannelApi.getMessages.mockReturnValueOnce(response.promise);
+      const first = useMessageStore.getState().fetchMessages('ch1');
       await useMessageStore.getState().fetchMessages('ch1');
-      expect(mockChannelApi.getMessages).not.toHaveBeenCalled();
+      expect(mockChannelApi.getMessages).toHaveBeenCalledTimes(1);
+      response.resolve({ data: [] });
+      await first;
     });
 
     it('shows toast on fetch failure', async () => {
@@ -232,115 +248,49 @@ describe('messageStore', () => {
     });
   });
 
-  describe('sendMessage', () => {
-    it('sends a message and adds it to the store', async () => {
-      const sentMsg = makeMessage({ id: 'new1', content: 'New message' });
-      mockChannelApi.sendMessage.mockResolvedValue({ data: sentMsg });
-
-      await useMessageStore.getState().sendMessage('ch1', 'New message');
-      const messages = useMessageStore.getState().messages['ch1'];
-      expect(messages).toHaveLength(1);
-      expect(messages[0].content).toBe('New message');
+  describe('durable message actions', () => {
+    const runtime = getTestMessagingRuntime({ serverId: '__local__', userId: 'u1' });
+    it('accepts a draft through the runtime and projects only its delivery receipt', async () => {
+      const draft = { revision: 'revision', content: 'New message' };
+      await useMessageStore.getState().sendMessage('ch1', draft.content, 'reply', ['file'], ['sticker'], draft);
+      expect(runtime.send).toHaveBeenCalledWith('ch1', draft.content, 'reply', ['file'], ['sticker'], draft, undefined);
+      expect(mockChannelApi.sendMessage).not.toHaveBeenCalled();
+      expect(useMessageStore.getState().messages.ch1).toBeUndefined();
+      const message = makeMessage({ id: 'new1', content: draft.content });
+      runtime.emit({ kind: 'create', message });
+      runtime.emit({ kind: 'create', message });
+      expect(useMessageStore.getState().messages.ch1).toEqual([message]);
     });
-
-    it('does not duplicate if message already exists', async () => {
-      const existingMsg = makeMessage({ id: 'new1', content: 'Existing' });
-      useMessageStore.setState({ messages: { ch1: [existingMsg] } });
-
-      mockChannelApi.sendMessage.mockResolvedValue({ data: existingMsg });
-
-      await useMessageStore.getState().sendMessage('ch1', 'Existing');
-      expect(useMessageStore.getState().messages['ch1']).toHaveLength(1);
+    it('propagates encrypted storage/identity rejection and leaves draft ownership with its caller', async () => {
+      runtime.send.mockRejectedValueOnce(new Error('Encrypted storage unavailable'));
+      await expect(useMessageStore.getState().sendMessage('ch1', 'Keep this text')).rejects.toThrow('Encrypted storage unavailable');
+      expect(mockChannelApi.sendMessage).not.toHaveBeenCalled();
+      expect(useMessageStore.getState().offlineQueue).toEqual([]);
     });
-
-    it('encrypts one-to-one DM content before sending to the API', async () => {
-      const e2ee = { version: 2, nonce: 'nonce', ciphertext: 'ciphertext', header: 'header' };
-      mockChannelsByGuild.value = {
-        '': [
-          {
-            id: 'dm1',
-            type: 1,
-            channel_type: 1,
-            guild_id: undefined,
-            name: 'Friend',
-            position: 0,
-            recipient: { id: 'peer-1', username: 'Friend', public_key: 'peer-public-key' },
-          },
-        ],
-      };
-      vi.mocked(hasUnlockedPrivateKey).mockReturnValue(true);
-      vi.mocked(withUnlockedPrivateKey).mockImplementation(async (callback) =>
-        callback(new Uint8Array([1, 2, 3]))
-      );
-      vi.mocked(encryptDmMessageV2).mockResolvedValue(e2ee);
-      mockChannelApi.sendMessage.mockResolvedValue({ data: makeMessage({ id: 'dm-msg', channel_id: 'dm1', content: '' }) });
-
+    it('routes DM text through the same durable boundary without using the legacy cipher', async () => {
       await useMessageStore.getState().sendMessage('dm1', 'secret hello');
-
-      expect(encryptDmMessageV2).toHaveBeenCalledWith(
-        'dm1',
-        'secret hello',
-        new Uint8Array([1, 2, 3]),
-        'peer-public-key',
-        'peer-1',
-      );
-      expect(mockChannelApi.sendMessage).toHaveBeenCalledWith('dm1', {
-        content: '',
-        referenced_message_id: undefined,
-        attachment_ids: undefined,
-        sticker_ids: undefined,
-        e2ee,
-        nonce: expect.any(String),
-      });
-    });
-
-    it('rejects one-to-one DM sends while the account key is locked', async () => {
-      mockChannelsByGuild.value = {
-        '': [
-          {
-            id: 'dm1',
-            type: 1,
-            channel_type: 1,
-            guild_id: undefined,
-            name: 'Friend',
-            position: 0,
-            recipient: { id: 'peer-1', username: 'Friend', public_key: 'peer-public-key' },
-          },
-        ],
-      };
-      vi.mocked(hasUnlockedPrivateKey).mockReturnValue(false);
-
-      await expect(useMessageStore.getState().sendMessage('dm1', 'secret hello')).rejects.toThrow(
-        'Unlock your account to send encrypted DMs',
-      );
+      expect(runtime.send).toHaveBeenCalledWith('dm1', 'secret hello', undefined, undefined, undefined, undefined, undefined);
+      expect(encryptDmMessageV2).not.toHaveBeenCalled();
       expect(mockChannelApi.sendMessage).not.toHaveBeenCalled();
     });
-  });
-
-  describe('editMessage', () => {
-    it('updates a message in the store', async () => {
-      const original = makeMessage({ id: 'm1', content: 'Original' });
+    it('projects an edit only after its authoritative receipt', async () => {
+      const original = makeMessage({ content: 'Original' });
       useMessageStore.setState({ messages: { ch1: [original] } });
-
-      const edited = makeMessage({ id: 'm1', content: 'Edited' });
-      mockChannelApi.editMessage.mockResolvedValue({ data: edited });
-
       await useMessageStore.getState().editMessage('ch1', 'm1', 'Edited');
-      expect(useMessageStore.getState().messages['ch1'][0].content).toBe('Edited');
+      expect(runtime.editMessage).toHaveBeenCalledWith(original, 'Edited');
+      expect(useMessageStore.getState().messages.ch1[0].content).toBe('Original');
+      runtime.emit({ kind: 'edit', message: { ...original, content: 'Edited', edited_timestamp: '2026-01-01T00:00:01Z' } });
+      expect(useMessageStore.getState().messages.ch1[0].content).toBe('Edited');
     });
-  });
-
-  describe('deleteMessage', () => {
-    it('removes a message from the store', async () => {
-      const msg1 = makeMessage({ id: 'm1' });
-      const msg2 = makeMessage({ id: 'm2' });
-      useMessageStore.setState({ messages: { ch1: [msg1, msg2] } });
-      mockChannelApi.deleteMessage.mockResolvedValue({});
-
+    it('projects a delete only after its durable receipt and never resurrects a deleted row from an edit receipt', async () => {
+      const original = makeMessage();
+      useMessageStore.setState({ messages: { ch1: [original] } });
       await useMessageStore.getState().deleteMessage('ch1', 'm1');
-      const messages = useMessageStore.getState().messages['ch1'];
-      expect(messages).toHaveLength(1);
-      expect(messages[0].id).toBe('m2');
+      expect(runtime.deleteMessage).toHaveBeenCalledWith(original);
+      expect(useMessageStore.getState().messages.ch1).toHaveLength(1);
+      runtime.emit({ kind: 'delete', channelId: 'ch1', messageId: 'm1' });
+      runtime.emit({ kind: 'edit', message: { ...original, content: 'Late', edited_timestamp: '2026-01-01T00:00:01Z' } });
+      expect(useMessageStore.getState().messages.ch1).toEqual([]);
     });
   });
 
@@ -633,3 +583,209 @@ describe('messageStore', () => {
     });
   });
 });
+
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+describe('asynchronous encrypted message hydration', () => {
+  const encrypted = (ciphertext: string) => ({ ...makeMessage(), e2ee: { version: 2, nonce: 'nonce', ciphertext } });
+
+  beforeEach(() => {
+    useMessageStore.getState().reset();
+    vi.clearAllMocks();
+    mockChannelsByGuild.value = { dm: [{ id: 'ch1', type: 1, recipient: { id: 'peer', public_key: 'peer-key' } }] };
+    mockAccountSession.hasUnlockedPrivateKey.mockReturnValue(true);
+  });
+
+  it('keeps the newer edit when old ciphertext finishes decrypting last', async () => {
+    const old = deferred<string>();
+    const newer = deferred<string>();
+    getTestMessagingRuntime({ serverId: '__local__', userId: 'u1' }).decrypt.mockReturnValueOnce(old.promise).mockReturnValueOnce(newer.promise);
+    useMessageStore.getState().addMessage('ch1', encrypted('old'));
+    useMessageStore.getState().updateMessage('ch1', encrypted('new'));
+    newer.resolve('new plaintext');
+    await vi.waitFor(() => expect(useMessageStore.getState().messages.ch1[0].content).toBe('new plaintext'));
+    old.resolve('stale plaintext');
+    await old.promise;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(useMessageStore.getState().messages.ch1[0].content).toBe('new plaintext');
+    expect(useMessageStore.getState().decryptingIds.size).toBe(0);
+  });
+
+  it('preserves pin and reaction metadata received during decryption', async () => {
+    const plaintext = deferred<string>();
+    getTestMessagingRuntime({ serverId: '__local__', userId: 'u1' }).decrypt.mockReturnValueOnce(plaintext.promise);
+    useMessageStore.getState().addMessage('ch1', encrypted('ciphertext'));
+    useMessageStore.getState().updateMessage('ch1', { id: 'm1', pinned: true, reactions: [{ emoji: '👍', count: 2, me: false }] });
+    plaintext.resolve('Hello privately');
+    await vi.waitFor(() => expect(useMessageStore.getState().messages.ch1[0].content).toBe('Hello privately'));
+    expect(useMessageStore.getState().messages.ch1[0]).toMatchObject({ pinned: true, reactions: [{ emoji: '👍', count: 2, me: false }] });
+  });
+
+  it('does not resurrect a deleted row after decryption', async () => {
+    const plaintext = deferred<string>();
+    getTestMessagingRuntime({ serverId: '__local__', userId: 'u1' }).decrypt.mockReturnValueOnce(plaintext.promise);
+    useMessageStore.getState().addMessage('ch1', encrypted('ciphertext'));
+    useMessageStore.getState().removeMessage('ch1', 'm1');
+    plaintext.resolve('deleted');
+    await plaintext.promise;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(useMessageStore.getState().messages.ch1).toEqual([]);
+    expect(useMessageStore.getState().decryptingIds.size).toBe(0);
+  });
+
+  it('does not restore a pin when deletion arrives while its ciphertext is decrypting', async () => {
+    const runtime = getTestMessagingRuntime({ serverId: '__local__', userId: 'u1' });
+    const plaintext = deferred<string>(); runtime.decrypt.mockReturnValueOnce(plaintext.promise);
+    mockChannelApi.getPins.mockResolvedValueOnce({ data: [encrypted('pin')] });
+    runtime.filterDeletedMessages.mockImplementationOnce(async rows => rows).mockResolvedValueOnce([]);
+    const pins = useMessageStore.getState().fetchPins('ch1');
+    await vi.waitFor(() => expect(runtime.decrypt).toHaveBeenCalledTimes(1));
+    runtime.emit({ kind: 'delete', channelId: 'ch1', messageId: 'm1' });
+    plaintext.resolve('Deleted pin plaintext'); await pins;
+    expect(useMessageStore.getState().pins.ch1).toEqual([]);
+  });
+
+  it('does not restore a pin when authority reports an unpin during decryption', async () => {
+    const runtime = getTestMessagingRuntime({ serverId: '__local__', userId: 'u1' });
+    const plaintext = deferred<string>(); runtime.decrypt.mockReturnValueOnce(plaintext.promise);
+    const pinned = { ...encrypted('pin'), pinned: true, message_revision: '1' };
+    mockChannelApi.getPins.mockResolvedValueOnce({ data: [pinned] });
+    runtime.filterDeletedMessages.mockImplementationOnce(async rows => rows)
+      .mockImplementationOnce(async rows => rows.map(message => ({ ...message, pinned: false, message_revision: '2' })));
+    const pins = useMessageStore.getState().fetchPins('ch1');
+    await vi.waitFor(() => expect(runtime.decrypt).toHaveBeenCalledTimes(1));
+    plaintext.resolve('Unpinned plaintext'); await pins;
+    expect(useMessageStore.getState().pins.ch1).toEqual([]);
+  });
+
+  it('removes an authoritatively unpinned row from pins while retaining its channel message', () => {
+    const runtime = getTestMessagingRuntime({ serverId: '__local__', userId: 'u1' });
+    const pinned = { ...makeMessage({ pinned: true }), message_revision: '1' };
+    useMessageStore.setState({ messages: { ch1: [pinned] }, pins: { ch1: [pinned] } });
+    runtime.emit({ kind: 'authoritative', channelId: 'ch1', hidden: [], present: [{ ...pinned, pinned: false, message_revision: '2' }] });
+    expect(useMessageStore.getState().pins.ch1).toEqual([]);
+    expect(useMessageStore.getState().messages.ch1).toEqual([{ ...pinned, pinned: false, message_revision: '2' }]);
+  });
+
+  it('cannot decrypt into another login even when the row and ciphertext IDs match', async () => {
+    const plaintext = deferred<string>();
+    getTestMessagingRuntime({ serverId: '__local__', userId: 'u1' }).decrypt.mockReturnValueOnce(plaintext.promise);
+    const message = encrypted('ciphertext');
+    useMessageStore.getState().addMessage('ch1', message);
+    useMessageStore.getState().reset();
+    useMessageStore.getState().setMessages('ch1', [{ ...message, content: 'other login' }]);
+    plaintext.resolve('previous login secret');
+    await plaintext.promise;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(useMessageStore.getState().messages.ch1[0].content).toBe('other login');
+  });
+});
+
+describe('history and realtime ordering', () => {
+  beforeEach(() => {
+    useMessageStore.getState().reset();
+    vi.clearAllMocks();
+    mockAccountSession.hasUnlockedPrivateKey.mockReturnValue(false);
+    mockChannelsByGuild.value = { g1: [{ id: 'ch1', type: 0, guild_id: 'g1' }] };
+  });
+
+  it('keeps a realtime create received after the HTTP snapshot', async () => {
+    const response = deferred<{ data: ReturnType<typeof makeMessage>[] }>();
+    mockChannelApi.getMessages.mockReturnValueOnce(response.promise);
+    const pending = useMessageStore.getState().fetchMessages('ch1');
+    useMessageStore.getState().addMessage('ch1', makeMessage({ id: 'm2', content: 'arrived live' }));
+    response.resolve({ data: [makeMessage({ id: 'm1' })] });
+    await pending;
+    expect(useMessageStore.getState().messages.ch1.map(m => m.id)).toEqual(['m1', 'm2']);
+  });
+
+  it('applies edits to messages not cached when the event arrived', async () => {
+    const response = deferred<{ data: ReturnType<typeof makeMessage>[] }>();
+    mockChannelApi.getMessages.mockReturnValueOnce(response.promise);
+    const pending = useMessageStore.getState().fetchMessages('ch1');
+    useMessageStore.getState().updateMessage('ch1', { id: 'm1', content: 'edited while loading' });
+    response.resolve({ data: [makeMessage({ id: 'm1', content: 'stale' })] });
+    await pending;
+    expect(useMessageStore.getState().messages.ch1[0].content).toBe('edited while loading');
+  });
+
+  it('does not resurrect deleted messages from history or a replayed create', async () => {
+    const response = deferred<{ data: ReturnType<typeof makeMessage>[] }>();
+    mockChannelApi.getMessages.mockReturnValueOnce(response.promise);
+    const pending = useMessageStore.getState().fetchMessages('ch1');
+    useMessageStore.getState().removeMessages('ch1', ['m1', 'm2']);
+    useMessageStore.getState().addMessage('ch1', makeMessage({ id: 'm1' }));
+    response.resolve({ data: [makeMessage({ id: 'm2' }), makeMessage({ id: 'm1' })] });
+    await pending;
+    expect(useMessageStore.getState().messages.ch1).toEqual([]);
+  });
+
+  it('deduplicates overlapping pages while keeping the current version', async () => {
+    useMessageStore.getState().setMessages('ch1', [makeMessage({ id: 'm2', content: 'current' })]);
+    mockChannelApi.getMessages.mockResolvedValueOnce({ data: [makeMessage({ id: 'm2', content: 'stale' }), makeMessage({ id: 'm1' })] });
+    await useMessageStore.getState().fetchMessages('ch1', { before: 'm3' });
+    expect(useMessageStore.getState().messages.ch1.map(m => [m.id, m.content])).toEqual([['m1', 'Hello'], ['m2', 'current']]);
+  });
+
+  it('keeps an around-anchor response a historical window', async () => {
+    const response = deferred<{ data: ReturnType<typeof makeMessage>[] }>();
+    mockChannelApi.getMessages.mockReturnValueOnce(response.promise);
+    const pending = useMessageStore.getState().fetchMessages('ch1', { around: 'm1' });
+    useMessageStore.getState().addMessage('ch1', makeMessage({ id: 'm9' }));
+    response.resolve({ data: [makeMessage({ id: 'm1' })] });
+    await pending;
+    expect(useMessageStore.getState().messages.ch1.map(m => m.id)).toEqual(['m1']);
+  });
+
+  it('does not let an aborted request clear a replacement request or its loading state', async () => {
+    const old = deferred<{ data: ReturnType<typeof makeMessage>[] }>();
+    const next = deferred<{ data: ReturnType<typeof makeMessage>[] }>();
+    mockChannelApi.getMessages.mockReturnValueOnce(old.promise).mockReturnValueOnce(next.promise);
+    const first = useMessageStore.getState().fetchMessages('ch1');
+    await vi.waitFor(() => expect(mockChannelApi.getMessages).toHaveBeenCalledTimes(1));
+    cancelMessageFetch({ serverId: '__local__', userId: 'u1' }, 'ch1');
+    const second = useMessageStore.getState().fetchMessages('ch1');
+    old.resolve({ data: [makeMessage({ id: 'old' })] });
+    await first;
+    expect(useMessageStore.getState().messages.ch1).toBeUndefined();
+    expect(useMessageStore.getState().loading.ch1).toBe(true);
+    next.resolve({ data: [makeMessage({ id: 'new' })] });
+    await second;
+    expect(useMessageStore.getState().messages.ch1.map(m => m.id)).toEqual(['new']);
+    expect(useMessageStore.getState().loading.ch1).toBe(false);
+  });
+
+  it('rejects late results and cleanup from a prior login generation', async () => {
+    const old = deferred<{ data: ReturnType<typeof makeMessage>[] }>();
+    mockChannelApi.getMessages.mockReturnValueOnce(old.promise);
+    const pending = useMessageStore.getState().fetchMessages('ch1');
+    await vi.waitFor(() => expect(mockChannelApi.getMessages).toHaveBeenCalledTimes(1));
+    useMessageStore.getState().reset();
+    old.resolve({ data: [makeMessage({ id: 'previous-account' })] });
+    await pending;
+    expect(useMessageStore.getState().messages).toEqual({});
+    expect(useMessageStore.getState().loading).toEqual({});
+  });
+
+  it('keeps a successful send that arrives before the gateway echo', async () => {
+    const history = deferred<{ data: ReturnType<typeof makeMessage>[] }>();
+    mockChannelApi.getMessages.mockReturnValueOnce(history.promise);
+
+    const pending = useMessageStore.getState().fetchMessages('ch1');
+    await useMessageStore.getState().sendMessage('ch1', 'Hello');
+    getTestMessagingRuntime({ serverId: '__local__', userId: 'u1' }).emit({ kind: 'create', message: makeMessage({ id: 'm2' }) });
+    history.resolve({ data: [makeMessage({ id: 'm1' })] });
+    await pending;
+    expect(useMessageStore.getState().messages.ch1.map(m => m.id)).toEqual(['m1', 'm2']);
+  });
+});
+
+vi.mock('../lib/channelView', () => ({
+  getAccountChannelView: () => useChannelStore.getState(),
+}));

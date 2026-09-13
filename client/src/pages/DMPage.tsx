@@ -1,6 +1,10 @@
+import { activateChannel } from '../lib/channelNavigation';
+import { accountScopeKey, type AccountScope } from '../lib/serverScope';
+import { useCurrentChannelStore, useAvailableChannels } from '../hooks/useChannels';
+import { useCurrentUser, useCurrentAccountScope } from '../hooks/useCurrentUser';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { MessagesSquare, Users, PenSquare, Hash, Search, X } from 'lucide-react';
+import { MessagesSquare, PenSquare, Hash, Search, X } from 'lucide-react';
 import { TopBar } from '../components/layout/TopBar';
 import { MessageList } from '../components/message/MessageList';
 import { MessageInput } from '../components/message/MessageInput';
@@ -10,11 +14,10 @@ import { StreamViewer } from '../components/voice/StreamViewer';
 import { useChannelStore } from '../stores/channelStore';
 import { useReadStateStore } from '../stores/readStateStore';
 import { usePresenceStore } from '../stores/presenceStore';
-import { useMessageStore } from '../stores/messageStore';
+import { useAccountMessageStore } from '../hooks/useMessageStore';
 import { useServerListStore } from '../stores/serverListStore';
 import { useUIStore } from '../stores/uiStore';
 import { useVoiceStore } from '../stores/voiceStore';
-import { useAuthStore } from '../stores/authStore';
 import { LOCAL_SERVER_ID } from '../lib/connectionManager';
 import { computeGuildUnread } from '../hooks/useUnreadCounts';
 import { snowflakeToMs } from '../lib/attention/conversationModel';
@@ -46,6 +49,8 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 interface DmRow {
+  key: string;
+  scope: AccountScope;
   channelId: string;
   serverId: string;
   title: string;
@@ -98,8 +103,7 @@ function formatDmActivity(id: string | null): { short: string; full: string } | 
  * `/app/dms` (no `:channelId`) is the destination view: a header with a primary
  * "New message" action (opens the shared `DmPickerModal`) over the full DM/group
  * list MERGED across every connected server. The merge reuses the sidebar's DM
- * source in `channelStore` — the per-server `dmChannelsByServer` index (plus the
- * active-server `channelsByGuild['']` mirror as a back-compat fallback) — and the
+ * account-qualified channel cache and the
  * existing `loadAllDmChannels()` fetch path; it invents no new endpoint. Rows sort
  * by last activity, carry presence dots + unread/mention badges, and open the
  * conversation via the standard DM-open flow.
@@ -109,14 +113,18 @@ function formatDmActivity(id: string | null): { short: string; full: string } | 
  * surface lives in the shell-owned `ContextPanel` `members` mode.
  */
 export function DMPage() {
+  const scope = useCurrentAccountScope();
+  const { channelId } = useParams();
+  return <OwnedDMPage key={JSON.stringify([scope?.serverId, scope?.userId, channelId])} />;
+}
+
+function OwnedDMPage() {
   const { channelId } = useParams();
   const navigate = useNavigate();
-  const dmChannels = useChannelStore((s) => s.channelsByGuild[''] ?? EMPTY_CHANNELS);
-  const dmChannelsByServer = useChannelStore((s) => s.dmChannelsByServer);
-  const byServer = useReadStateStore((s) => s.byServer);
+  const dmChannels = useCurrentChannelStore((s) => s.channelsByGuild[''] ?? EMPTY_CHANNELS);
+  const availableChannels = useAvailableChannels();
+  const byAccount = useReadStateStore((s) => s.byAccount);
   const activeServerId = useServerListStore((s) => s.activeServerId);
-  const contextPanelMode = useUIStore((s) => s.contextPanelMode);
-  const toggleContextPanelMode = useUIStore((s) => s.toggleContextPanelMode);
   const setContextPanelMode = useUIStore((s) => s.setContextPanelMode);
   const [replyingTo, setReplyingTo] = useState<{ id: string; author: string; content: string } | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -131,19 +139,15 @@ export function DMPage() {
   const selfStream = useVoiceStore((s) => s.selfStream);
   const stopStream = useVoiceStore((s) => s.stopStream);
   const participants = useVoiceStore((s) => s.participants);
-  const currentUserId = useAuthStore((s) => s.user?.id ?? null);
+  const currentUserId = useCurrentUser()?.id ?? null;
 
   const dmChannelInfo = useMemo(() => {
     if (!channelId) return null;
     const activeId = activeServerId ?? LOCAL_SERVER_ID;
     const activeChannel = dmChannels.find((c) => c.id === channelId);
     if (activeChannel) return { channel: activeChannel, serverId: activeId };
-    for (const [serverId, channels] of Object.entries(dmChannelsByServer)) {
-      const channel = channels.find((c) => c.id === channelId);
-      if (channel) return { channel, serverId };
-    }
     return null;
-  }, [activeServerId, channelId, dmChannels, dmChannelsByServer]);
+  }, [activeServerId, channelId, dmChannels]);
   const dmChannel = dmChannelInfo?.channel;
   const isGroupDM = dmChannel?.channel_type === 3 || dmChannel?.type === 3;
   const recipientName = isGroupDM
@@ -177,22 +181,16 @@ export function DMPage() {
   // Merge every server's DMs into one recency-sorted list. Reuses computeGuildUnread
   // for per-channel unread/mention against the right per-server read-state bucket.
   const rows = useMemo<DmRow[]>(() => {
-    const activeId = activeServerId ?? LOCAL_SERVER_ID;
-    const bucketByServer: Record<string, Channel[]> = { ...dmChannelsByServer };
-    if (!(activeId in bucketByServer) && dmChannels.length > 0) {
-      bucketByServer[activeId] = dmChannels;
-    }
-
-    const seen = new Set<string>();
     const out: DmRow[] = [];
-    for (const [serverId, list] of Object.entries(bucketByServer)) {
-      const readMap = new Map<string, ReadState>(Object.entries(byServer[serverId] ?? {}));
-      for (const ch of list) {
-        if (seen.has(ch.id)) continue;
-        seen.add(ch.id);
+    for (const ch of availableChannels) {
+      if (ch.guild_id) continue;
+      const serverId = ch.scope.serverId;
+      const readMap = new Map<string, ReadState>(Object.entries(byAccount[accountScopeKey(ch.scope)] ?? {}));
         const isGroup = ch.type === ChannelType.GroupDM || ch.channel_type === 3;
         const info = computeGuildUnread([ch], readMap);
         out.push({
+          key: ch.key,
+          scope: ch.scope,
           channelId: ch.id,
           serverId,
           title: dmTitle(ch),
@@ -203,20 +201,19 @@ export function DMPage() {
           mentionCount: info?.mentionCount ?? 0,
           lastActivityId: ch.last_message_id ?? null,
         });
-      }
     }
     out.sort((a, b) => activityMs(b.lastActivityId) - activityMs(a.lastActivityId));
     return out;
-  }, [dmChannelsByServer, dmChannels, byServer, activeServerId]);
+  }, [availableChannels, byAccount]);
   const filteredRows = useMemo(() => {
     const query = conversationQuery.trim().toLocaleLowerCase();
     if (!query) return rows;
     return rows.filter((row) => row.title.toLocaleLowerCase().includes(query));
   }, [conversationQuery, rows]);
 
-  const openConversation = (id: string) => {
-    useChannelStore.getState().selectChannel(id);
-    navigate(`/app/dms/${id}`);
+  const openConversation = (row: DmRow) => {
+    activateChannel({ id: row.channelId, scope: row.scope });
+    navigate(`/app/dms/${row.channelId}`);
   };
 
   const inThisDmCall =
@@ -308,7 +305,7 @@ export function DMPage() {
                 ) : (
                   <div className="divide-y divide-border-subtle overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
                     {filteredRows.map((row) => (
-                      <DmListRow key={row.channelId} row={row} onOpen={openConversation} />
+                      <DmListRow key={row.key} row={row} onOpen={openConversation} />
                     ))}
                   </div>
                 )}
@@ -327,20 +324,6 @@ export function DMPage() {
     <div className="flex h-full min-h-0 flex-col bg-bg-primary">
       <TopBar isDM recipientName={recipientName} dmChannelId={channelId} />
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-        {isGroupDM && (
-          <div className="flex justify-end border-b border-border-subtle px-3 py-2">
-            <button
-              type="button"
-              aria-pressed={contextPanelMode === 'members'}
-              className="inline-flex h-8 items-center gap-1.5 rounded-sm px-3 text-meta font-semibold text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)] aria-pressed:bg-accent-tint aria-pressed:text-accent-primary"
-              onClick={() => toggleContextPanelMode('members')}
-              title="Members"
-            >
-              <Users size={14} />
-              Members
-            </button>
-          </div>
-        )}
         {inThisDmCall && watchedStreamerId && (
           <div className="relative max-h-[40vh] min-h-[180px] shrink-0 border-b border-border-subtle bg-black">
             <ErrorBoundary variant="section" label="the stream">
@@ -388,11 +371,11 @@ export function DMPage() {
  * (own store selectors) so a presence tick or a new message re-renders only the
  * affected row — never the whole merged list (mirrors the sidebar ConversationRow).
  */
-function DmListRow({ row, onOpen }: { row: DmRow; onOpen: (id: string) => void }) {
+function DmListRow({ row, onOpen }: { row: DmRow; onOpen: (row: DmRow) => void }) {
   const status = usePresenceStore((s) =>
     row.recipientId ? s.getPresence(row.recipientId, row.serverId)?.status ?? 'offline' : 'offline',
   );
-  const lastMessage = useMessageStore((s) => {
+  const lastMessage = useAccountMessageStore(row.scope, (s) => {
     const msgs = s.messages[row.channelId];
     return msgs?.length ? msgs[msgs.length - 1] : undefined;
   });
@@ -414,7 +397,7 @@ function DmListRow({ row, onOpen }: { row: DmRow; onOpen: (id: string) => void }
   return (
     <button
       type="button"
-      onClick={() => onOpen(row.channelId)}
+      onClick={() => onOpen(row)}
       className="group flex w-full items-center gap-3 px-4 py-2.5 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
     >
       <div className="relative shrink-0">

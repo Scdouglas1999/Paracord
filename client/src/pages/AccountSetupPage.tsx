@@ -1,31 +1,70 @@
 import { useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router';
+import { Link, useNavigate, useSearchParams } from 'react-router';
 import { Check, Copy, KeyRound, ShieldAlert } from 'lucide-react';
-import { useAccountStore } from '../stores/accountStore';
 import { useAuthStore } from '../stores/authStore';
 import { useServerListStore } from '../stores/serverListStore';
-import { getStoredServerUrl, getCurrentOriginServerUrl, setStoredServerUrl } from '../lib/config/apiBaseUrl';
-import { authApi } from '../api/auth';
+import { useAccountStore } from '../stores/accountStore';
+import { attachAccountIdentity } from '../lib/crypto/attachAccountIdentity';
+import { captureScopedOperation } from '../lib/operationContext';
+import { getServerAccountScope, getServerUser } from '../lib/serverIdentity';
+import { LOCAL_SERVER_ID } from '../lib/serverScope';
+import { extractApiError } from '../api/client';
 import { MIN_PASSWORD_LENGTH } from '../lib/constants';
 import { ErrorBanner } from '../components/ui/Feedback';
 import { Button } from '../components/ui/Button';
 import { AuthCanvas, AuthCard, AuthHeading, Field } from './authScaffold';
 
 export function AccountSetupPage() {
+  const [params] = useSearchParams();
+  const serverId = params.get('server') ?? LOCAL_SERVER_ID;
+  const homeUser = useAuthStore(s => s.user);
+  const remoteUser = useServerListStore(s => {
+    const server = s.servers.find(entry => entry.id === serverId);
+    return server?.token && server.user?.id === server.userId ? server.user : null;
+  });
+  const user = serverId === LOCAL_SERVER_ID ? homeUser : remoteUser;
+  if (params.get('migrate') === '1') {
+    const expectedUser = params.get('user');
+    if (!user || (expectedUser && expectedUser !== user.id)) {
+      return <AuthCanvas><AuthCard className="max-w-md p-8">
+        <AuthHeading title={user ? 'Account changed' : 'Waiting for your server account'} subtitle="Sign in to the intended server account before setting up encryption." />
+        <p className="mt-4 text-label text-text-secondary">Setup continues when that account is available.</p>
+        <Link to="/app" className="mt-4 inline-block text-text-link underline">Return to Paracord</Link>
+      </AuthCard></AuthCanvas>;
+    }
+  }
+  return <OwnedAccountSetupPage key={`${serverId}:${user?.id ?? 'new'}`} />;
+}
+
+function OwnedAccountSetupPage() {
   const [searchParams] = useSearchParams();
   const isMigration = searchParams.get('migrate') === '1';
+  const [scope] = useState(() => {
+    const account = getServerAccountScope(searchParams.get('server') ?? LOCAL_SERVER_ID);
+    const expectedUser = searchParams.get('user');
+    return expectedUser && expectedUser !== account?.userId ? null : account;
+  });
+  const targetUser = scope ? getServerUser(scope.serverId) : null;
+  const serverName = useServerListStore(s => scope?.serverId === LOCAL_SERVER_ID ? 'current server' : s.servers.find(server => server.id === scope?.serverId)?.name ?? 'unavailable server');
+  const returnTo = searchParams.get('returnTo');
+  const destination = returnTo?.startsWith('/app/') && !returnTo.includes('\\') ? returnTo : '/app';
+  const existingIdentity = useAccountStore(s => s.publicKey);
+  const hasSavedIdentity = useAccountStore(s => s.hasAccount());
+  const identityUnlocked = useAccountStore(s => s.isUnlocked);
+  const [serverPassword, setServerPassword] = useState('');
+  const [mfaCode, setMfaCode] = useState('');
 
   const [step, setStep] = useState<'create' | 'recovery'>('create');
   const [username, setUsername] = useState(() => {
     // In migration mode, pre-fill username from the legacy auth store
     if (isMigration) {
-      return useAuthStore.getState().user?.username || '';
+      return targetUser?.username || '';
     }
     return '';
   });
   const [displayName, setDisplayName] = useState(() => {
     if (isMigration) {
-      return useAuthStore.getState().user?.display_name || '';
+      return targetUser?.display_name || '';
     }
     return '';
   });
@@ -59,64 +98,54 @@ export function AccountSetupPage() {
       setError('Username must be between 2 and 32 characters.');
       return;
     }
-    if (password.length < MIN_PASSWORD_LENGTH) {
+    if (!hasSavedIdentity && password.length < MIN_PASSWORD_LENGTH) {
       setError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
       return;
     }
-    if (password !== confirmPassword) {
+    if (!hasSavedIdentity && password !== confirmPassword) {
       setError('Passwords do not match.');
       return;
     }
 
+    if (isMigration && !scope) {
+      setError('Sign in to the intended server account before setting up encryption.');
+      return;
+    }
     setLoading(true);
+    let context: ReturnType<typeof captureScopedOperation> | undefined;
     try {
-      await createAccount(normalizedUsername, password, normalizedDisplayName || undefined);
-
-      // In migration mode: attach the new public key to the existing server account
-      if (isMigration) {
-        const publicKey = useAccountStore.getState().publicKey;
-        if (publicKey) {
-          try {
-            // The password is required: the server re-authenticates before
-            // accepting a key, because an attached key is a standalone
-            // credential that outlives a password change.
-            await authApi.attachPublicKey(publicKey, password);
-          } catch {
-            // Non-fatal — server may not support it yet
-          }
-        }
-
-        // Add current server to multi-server list
-        const serverUrl = getStoredServerUrl() || getCurrentOriginServerUrl();
-        if (serverUrl) {
-          setStoredServerUrl(serverUrl);
-          const token = useAuthStore.getState().token;
-          let serverName = serverUrl;
-          try {
-            serverName = new URL(serverUrl).host;
-          } catch {
-            // Keep raw URL as name if parsing fails.
-          }
-          useServerListStore.getState().addServer(serverUrl, serverName, token || undefined);
-        }
+      if (isMigration && scope) context = captureScopedOperation(scope);
+      const account = useAccountStore.getState();
+      if (context?.user.public_key && !account.hasAccount()) {
+        throw new Error('This server account already has an identity. Restore its recovery phrase instead of creating a replacement.');
       }
+      if (account.hasAccount()) {
+        // Reuse the saved identity after a failed attach or reload. Never replace
+        // a device's private key merely because server authentication failed.
+        if (!account.isUnlocked) await account.unlock(password);
+      } else {
+        await createAccount(normalizedUsername, password, normalizedDisplayName || undefined);
+      }
+      if (context) await attachAccountIdentity(context, serverPassword, mfaCode.trim() || undefined);
+      setPassword(''); setConfirmPassword(''); setServerPassword(''); setMfaCode('');
 
       const phrase = getRecoveryPhrase();
       if (phrase) {
         setRecoveryPhrase(phrase);
         setStep('recovery');
       } else {
-        navigate(isMigration ? '/app' : '/connect');
+        throw new Error('Unlock the saved identity to view and back up its recovery phrase.');
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create account');
+      setError(extractApiError(err));
     } finally {
+      context?.dispose();
       setLoading(false);
     }
   };
 
   const handleContinue = () => {
-    navigate(isMigration ? '/app' : '/connect');
+    navigate(isMigration ? destination : '/connect');
   };
 
   if (step === 'recovery') {
@@ -132,8 +161,8 @@ export function AccountSetupPage() {
                 title="Recovery Phrase"
                 subtitle={
                   <>
-                    These 24 words are the <strong className="font-semibold text-text-primary">only</strong> way to
-                    recover your account if you lose this device. Write them down and store them somewhere safe.
+                    These 24 words restore your identity key. They do not contain your encrypted messages or their session keys.
+                    Write them down and store them somewhere safe.
                   </>
                 }
               />
@@ -201,12 +230,14 @@ export function AccountSetupPage() {
               title={isMigration ? 'Secure your account' : 'Set up a local identity'}
               subtitle={
                 isMigration
-                  ? 'Create a cryptographic identity for your existing account so you can sign in to any server without a password.'
+                  ? 'Attach your device identity to this server account for encrypted messages and key-based sign-in.'
                   : 'Create a device-held identity for passwordless, challenge-response sign-in. Optional — you can skip it.'
               }
             />
           </div>
 
+          {isMigration && scope && <p className="text-label text-text-secondary">Server account: {targetUser?.username} ({serverName})</p>}
+          {existingIdentity && <p className="text-meta text-text-secondary">Using saved identity {existingIdentity.slice(0, 12)}…</p>}
           {error && <ErrorBanner message={error} />}
 
           <div className="flex flex-col gap-5">
@@ -235,12 +266,12 @@ export function AccountSetupPage() {
               />
             </Field>
 
-            <Field
-              label={isMigration ? 'New Encryption Password' : 'Password'}
+            {(!hasSavedIdentity || !identityUnlocked) && <Field
+              label={hasSavedIdentity ? 'Encryption Password' : isMigration ? 'New Encryption Password' : 'Password'}
               required
               hint={
-                isMigration
-                  ? 'Encrypts your new account key on this device — it can differ from your server password.'
+                hasSavedIdentity ? 'Unlocks the identity already saved on this device.' : isMigration
+                  ? 'Encrypts your new account key on this device. It can differ from your server password.'
                   : 'Encrypts your account key on this device. At least 10 characters.'
               }
             >
@@ -249,14 +280,14 @@ export function AccountSetupPage() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
-                minLength={MIN_PASSWORD_LENGTH}
+                minLength={hasSavedIdentity ? undefined : MIN_PASSWORD_LENGTH}
                 className="input-field"
                 placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
-                autoComplete="new-password"
+                autoComplete={hasSavedIdentity ? "current-password" : "new-password"}
               />
-            </Field>
+            </Field>}
 
-            <Field label="Confirm Password" required>
+            {!hasSavedIdentity && <Field label="Confirm Password" required>
               <input
                 type="password"
                 value={confirmPassword}
@@ -266,7 +297,16 @@ export function AccountSetupPage() {
                 placeholder="Type your password again"
                 autoComplete="new-password"
               />
-            </Field>
+            </Field>}
+
+            {isMigration && <>
+              <Field label="Current Server Password" required hint="Authenticates this change on the server. It can differ from your encryption password.">
+                <input type="password" value={serverPassword} onChange={e => setServerPassword(e.target.value)} required autoComplete="current-password" className="input-field" />
+              </Field>
+              <Field label="Two-factor or backup code" hint="Required if two-factor authentication is enabled on this server account.">
+                <input value={mfaCode} onChange={e => setMfaCode(e.target.value)} autoComplete="one-time-code" className="input-field" />
+              </Field>
+            </>}
           </div>
 
           <Button type="submit" loading={loading} disabled={loading} className="w-full">

@@ -1,6 +1,7 @@
 pub mod audio_actor;
 pub mod audio_pipeline;
 pub mod camera_capture;
+pub mod call_owner;
 pub mod capabilities;
 pub mod commands;
 pub mod events;
@@ -17,6 +18,7 @@ pub use session::NativeMediaSession;
 /// Holds the optional active media session behind a tokio Mutex
 /// so async command handlers can access it safely.
 pub struct MediaState {
+    pub calls: call_owner::CallOwnership,
     pub session: std::sync::Arc<tokio::sync::Mutex<Option<NativeMediaSession>>>,
     pub screen_capture: std::sync::Mutex<Option<screen_capture::ActiveScreenCapture>>,
     /// Active native camera capture worker (nokhwa), mirroring `screen_capture`.
@@ -26,6 +28,7 @@ pub struct MediaState {
 impl MediaState {
     pub fn new() -> Self {
         Self {
+            calls: call_owner::CallOwnership::default(),
             session: std::sync::Arc::new(tokio::sync::Mutex::new(None)),
             screen_capture: std::sync::Mutex::new(None),
             camera_capture: std::sync::Mutex::new(None),
@@ -64,4 +67,32 @@ pub fn shutdown_for_exit(app: &tauri::AppHandle) {
     session_guard.take(); // NativeMediaSession::drop aborts tasks + drops encoders.
     drop(session_guard);
     video_pipeline::shutdown_all_decode_state();
+}
+
+/// Native events retain the adapter that created their task or capture worker.
+/// Namespacing at emission also rejects already-queued events after a replacement.
+#[derive(Clone)]
+pub struct CallEventSink {
+    app: tauri::AppHandle,
+    owner_id: String,
+    canceled: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+}
+
+impl CallEventSink {
+    pub fn new(app: tauri::AppHandle, owner_id: String) -> Self { Self { app, owner_id, canceled: None } }
+    pub fn with_cancellation(mut self, canceled: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Self {
+        self.canceled = Some(canceled);
+        self
+    }
+    pub fn owner_id(&self) -> &str { &self.owner_id }
+    pub fn emit<S: serde::Serialize + Clone>(&self, event: &str, payload: S) -> tauri::Result<()> {
+        use tauri::Emitter;
+        if self.canceled.as_ref().is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst)) { return Ok(()); }
+        self.app.emit(&format!("{event}:{}", self.owner_id), payload)
+    }
+}
+
+impl std::ops::Deref for CallEventSink {
+    type Target = tauri::AppHandle;
+    fn deref(&self) -> &Self::Target { &self.app }
 }

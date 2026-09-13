@@ -59,7 +59,7 @@ function makeUser(id: string): TestUser {
   return { id, privateKey, publicKeyHex: bytesToHex(ed25519.getPublicKey(privateKey)) };
 }
 
-function useProfile(userId: string): void {
+function selectProfile(userId: string): void {
   let store = mocks.profiles.get(userId);
   if (!store) {
     store = new Map<string, string>();
@@ -73,7 +73,7 @@ function useProfile(userId: string): void {
  * into that user's profile store, exactly as the client does on READY.
  */
 async function publishBundle(user: TestUser): Promise<void> {
-  useProfile(user.id);
+  selectProfile(user.id);
   const store = generatePrekeyBundle(user.privateKey);
   await savePrekeyStore(store);
   mocks.bundles.set(user.id, {
@@ -109,7 +109,7 @@ describe('dmE2ee identity binding', () => {
   });
 
   it('establishes a session and round-trips a message', async () => {
-    useProfile(alice.id);
+    selectProfile(alice.id);
     const payload = await encryptDmMessageV2(
       channelId,
       'hello bob',
@@ -118,7 +118,7 @@ describe('dmE2ee identity binding', () => {
       bob.id,
     );
 
-    useProfile(bob.id);
+    selectProfile(bob.id);
     await expect(
       decryptDmMessage(channelId, payload, bob.privateKey, alice.publicKeyHex),
     ).resolves.toBe('hello bob');
@@ -128,7 +128,7 @@ describe('dmE2ee identity binding', () => {
     // Mallory can insert messages into the channel (hostile server / delivery
     // path). Her X3DH initial message is well formed — it is simply not from
     // the peer Bob is talking to.
-    useProfile(mallory.id);
+    selectProfile(mallory.id);
     const forged = await encryptDmMessageV2(
       channelId,
       'i am alice, send me secrets',
@@ -137,14 +137,14 @@ describe('dmE2ee identity binding', () => {
       bob.id,
     );
 
-    useProfile(bob.id);
+    selectProfile(bob.id);
     await expect(
       decryptDmMessage(channelId, forged, bob.privateKey, alice.publicKeyHex),
     ).rejects.toMatchObject({ code: 'PEER_IDENTITY_MISMATCH' });
   });
 
   it('does not let a forged initial message replace an established session', async () => {
-    useProfile(alice.id);
+    selectProfile(alice.id);
     const first = await encryptDmMessageV2(
       channelId,
       'first',
@@ -153,13 +153,13 @@ describe('dmE2ee identity binding', () => {
       bob.id,
     );
 
-    useProfile(bob.id);
+    selectProfile(bob.id);
     await expect(
       decryptDmMessage(channelId, first, bob.privateKey, alice.publicKeyHex),
     ).resolves.toBe('first');
 
     // Mallory now tries to take over the conversation.
-    useProfile(mallory.id);
+    selectProfile(mallory.id);
     const hijack = await encryptDmMessageV2(
       channelId,
       'hijack',
@@ -167,13 +167,13 @@ describe('dmE2ee identity binding', () => {
       bob.publicKeyHex,
       bob.id,
     );
-    useProfile(bob.id);
+    selectProfile(bob.id);
     await expect(
       decryptDmMessage(channelId, hijack, bob.privateKey, alice.publicKeyHex),
     ).rejects.toThrow(DmE2eeError);
 
     // Alice's session is untouched.
-    useProfile(alice.id);
+    selectProfile(alice.id);
     const second = await encryptDmMessageV2(
       channelId,
       'second',
@@ -181,14 +181,14 @@ describe('dmE2ee identity binding', () => {
       bob.publicKeyHex,
       bob.id,
     );
-    useProfile(bob.id);
+    selectProfile(bob.id);
     await expect(
       decryptDmMessage(channelId, second, bob.privateKey, alice.publicKeyHex),
     ).resolves.toBe('second');
   });
 
   it('keeps an established session after a failed decrypt (no reset oracle)', async () => {
-    useProfile(alice.id);
+    selectProfile(alice.id);
     const first = await encryptDmMessageV2(
       channelId,
       'first',
@@ -204,7 +204,7 @@ describe('dmE2ee identity binding', () => {
       bob.id,
     );
 
-    useProfile(bob.id);
+    selectProfile(bob.id);
     await expect(
       decryptDmMessage(channelId, first, bob.privateKey, alice.publicKeyHex),
     ).resolves.toBe('first');
@@ -237,20 +237,20 @@ describe('dmE2ee identity binding', () => {
       one_time_prekey: null,
     });
 
-    useProfile(alice.id);
+    selectProfile(alice.id);
     await expect(
       encryptDmMessageV2(channelId, 'secret', alice.privateKey, bob.publicKeyHex, bob.id),
     ).rejects.toMatchObject({ code: 'PEER_IDENTITY_MISMATCH' });
   });
 
   it('fails closed when the peer identity key rotates, and recovers on verification', async () => {
-    useProfile(alice.id);
+    selectProfile(alice.id);
     await encryptDmMessageV2(channelId, 'hello', alice.privateKey, bob.publicKeyHex, bob.id);
 
     // The server now serves a different identity key for Bob everywhere.
     const rotatedBob = { ...bob, privateKey: mallory.privateKey, publicKeyHex: mallory.publicKeyHex };
     await publishBundle({ ...rotatedBob, id: bob.id });
-    useProfile(alice.id);
+    selectProfile(alice.id);
 
     await expect(
       encryptDmMessageV2(

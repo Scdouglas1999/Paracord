@@ -36,16 +36,26 @@ export default defineConfig({
     ? [
         {
           name: 'real-server',
-          testMatch: /real-server\.smoke\.spec\.ts$/,
+          testMatch: /real-server(?:\.smoke|\.voice-check|-restore|-setup)\.spec\.ts$/,
           use: { ...devices['Desktop Chrome'] },
         },
       ]
     : [
         {
+          name: 'encrypted-storage',
+          testMatch: /(?:encrypted-storage|durable-dm|durable-delivery|delivered-mutations|messaging-runtime|prekey-enrollment|identity-setup)\.spec\.ts$/,
+          use: { ...devices['Desktop Chrome'] },
+        },
+        {
           name: 'chromium',
           // Anchor so this never picks up real-server.smoke.spec.ts.
           testMatch: /[\\/]smoke\.spec\.ts$/,
           use: { ...devices['Desktop Chrome'] },
+        },
+        {
+          name: 'chromium-touch',
+          testMatch: /[\\/]smoke\.spec\.ts$/,
+          use: { ...devices['Desktop Chrome'], hasTouch: true },
         },
       ],
   webServer: REAL_SERVER
@@ -61,13 +71,34 @@ export default defineConfig({
         gracefulShutdown: { signal: 'SIGTERM', timeout: 10_000 },
         stdout: 'pipe',
         stderr: 'pipe',
-        env: { PARACORD_E2E_PORT: REAL_SERVER_PORT },
+        env: {
+          PARACORD_E2E_PORT: REAL_SERVER_PORT,
+          // Forwarded so the voice connection-check spec can move the native
+          // media UDP listener off the product default (see the harness).
+          ...(process.env.PARACORD_E2E_MEDIA_PORT
+            ? { PARACORD_E2E_MEDIA_PORT: process.env.PARACORD_E2E_MEDIA_PORT }
+            : {}),
+        },
       }
-    : {
-        command: 'npm run dev -- --host 127.0.0.1 --port 4173 --strictPort',
-        url: 'http://127.0.0.1:4173',
-        reuseExistingServer: !process.env.CI,
-        stdout: 'ignore',
-        stderr: 'pipe',
-      },
+    : [
+        // A real, persistent SSE stream: an intercepted stream always ends with
+        // its fulfilled response, which would leave the client reconnecting and
+        // its message runtime permanently between authenticated handshakes.
+        {
+          command: 'node ./e2e/realtime-stub.mjs',
+          url: 'http://127.0.0.1:4175/health',
+          reuseExistingServer: false,
+          gracefulShutdown: { signal: 'SIGTERM', timeout: 5_000 },
+          stdout: 'ignore',
+          stderr: 'pipe',
+        },
+        {
+          command: 'npm run dev -- --host 127.0.0.1 --port 4173 --strictPort',
+          url: 'http://127.0.0.1:4173',
+          reuseExistingServer: !process.env.CI,
+          env: { VITE_DEV_PROXY_TARGET: 'http://127.0.0.1:4175', VITE_DEV_HMR: 'false' },
+          stdout: 'ignore',
+          stderr: 'pipe',
+        },
+      ],
 });

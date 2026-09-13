@@ -1451,8 +1451,6 @@ pub fn run() {
         start_native_sse_stream,
         stop_native_sse_stream,
         get_default_connect_target,
-        audio_capture::set_system_audio_capture_enabled,
-        audio_capture::stop_system_audio_capture,
         // Native QUIC media engine
         native_media::commands::quic_upload_file,
         native_media::commands::quic_download_file,

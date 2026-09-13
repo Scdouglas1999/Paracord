@@ -1,10 +1,10 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAuthStore } from '../stores/authStore';
 import { useChannelStore } from '../stores/channelStore';
-import { useGuildStore } from '../stores/guildStore';
+import { useGuildStore, scopeGuild } from '../stores/guildStore';
 import { useMemberStore } from '../stores/memberStore';
 import { useUIStore } from '../stores/uiStore';
 import { useVoiceStore } from '../stores/voiceStore';
@@ -47,6 +47,7 @@ vi.mock('../hooks/usePermissions', () => ({
 
 vi.mock('../api/channels', () => ({
   channelApi: { get: vi.fn().mockRejectedValue(new Error('offline')) },
+  createChannelApi: () => ({ get: vi.fn().mockRejectedValue(new Error('offline')) }),
 }));
 
 const GUILD_ID = 'guild-1';
@@ -65,15 +66,10 @@ function makeChannel(id: string, type: number): Channel {
 }
 
 function seedChannels(channels: Channel[], { isLoading = false }: { isLoading?: boolean } = {}) {
-  useChannelStore.setState({
-    channels,
-    channelsByGuild: { [GUILD_ID]: isLoading ? [] : channels },
-    channelsById: Object.fromEntries(channels.map((c) => [c.id, c])),
-    guildChannelsLoaded: { [GUILD_ID]: true },
-    isLoading,
-    selectedChannelId: null,
-    selectedGuildId: null,
-  });
+  const scope = { serverId: '__local__', userId: 'me' };
+  useChannelStore.getState().reset();
+  useChannelStore.getState().setChannels(GUILD_ID, isLoading ? [] : channels, scope);
+  useChannelStore.setState({ loading: { [JSON.stringify(['__local__', 'me', GUILD_ID])]: isLoading } });
 }
 
 function renderGuildPage(channelId: string) {
@@ -103,9 +99,9 @@ describe('GuildPage composition shell', () => {
         dispatchEvent: vi.fn(),
       })),
     });
-    useGuildStore.setState({ guilds: [{ id: GUILD_ID, name: 'Test Guild' }] as never });
-    useMemberStore.setState({ membersLoaded: { [GUILD_ID]: true } });
-    useAuthStore.setState({ user: { id: 'me', username: 'Me' } as never });
+    useGuildStore.setState({ guilds: [scopeGuild({ id: GUILD_ID, name: 'Test Guild' } as never, { serverId: '__local__', userId: 'me' })] });
+    useMemberStore.setState({ membersLoaded: { [JSON.stringify(['__local__', 'me', GUILD_ID])]: true } });
+    useAuthStore.setState({ token: 'token', user: { id: 'me', username: 'Me' } as never });
     useUIStore.setState({ contextPanelMode: null });
   });
 
@@ -116,6 +112,19 @@ describe('GuildPage composition shell', () => {
 
     expect(screen.getByTestId('topbar')).toHaveTextContent('Loading...');
     expect(screen.getByText('Loading channels...')).toBeInTheDocument();
+  });
+
+  it('distinguishes a failed channel request from a missing channel and retries its account', () => {
+    seedChannels([]);
+    const key = JSON.stringify(['__local__', 'me', GUILD_ID]);
+    useChannelStore.setState({ errors: { [key]: 'Visibility service unavailable' } });
+    const fetch = vi.spyOn(useChannelStore.getState(), 'fetchChannels').mockResolvedValue(undefined);
+    renderGuildPage('any');
+    expect(screen.getByRole('alert')).toHaveTextContent('Visibility service unavailable');
+    expect(screen.queryByText('Channel not found')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(fetch).toHaveBeenCalledWith(GUILD_ID, { serverId: '__local__', userId: 'me' });
+    fetch.mockRestore();
   });
 
   it('renders the not-found screen for an unknown channel', () => {

@@ -66,6 +66,8 @@ pub struct RemoteAudioState {
 /// Active native media session connected to the relay via QUIC.
 #[allow(dead_code)]
 pub struct NativeMediaSession {
+    /// Unique adapter-instance owner; independent of the relay membership session.
+    pub owner_id: String,
     // QUIC transport
     pub endpoint: MediaEndpoint,
     pub connection: MediaConnection,
@@ -395,6 +397,7 @@ impl NativeMediaSession {
         let frame_decryptor = FrameDecryptor::new();
 
         Ok(Self {
+            owner_id: String::new(),
             endpoint,
             connection,
             pcm_rx: Some(pcm_rx),

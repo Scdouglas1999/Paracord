@@ -64,8 +64,8 @@ vi.mock('../../api/guilds', () => ({
 }));
 
 vi.mock('../../stores/guildStore', () => ({
-  useGuildStore: (selector: (state: { selectedGuildId: string }) => unknown) =>
-    selector({ selectedGuildId: 'guild-1' }),
+  useGuildStore: (selector: (state: { selectedGuild: { id: string; scope: { serverId: string; userId: string } } }) => unknown) =>
+    selector({ selectedGuild: { id: 'guild-1', scope: { serverId: 'server-1', userId: 'self' } } }),
 }));
 
 const setDmChannels = vi.fn();
@@ -75,6 +75,7 @@ vi.mock('../../stores/channelStore', () => ({
   useChannelStore: {
     getState: () => ({
       channelsByGuild: { '': [] },
+      createDm: async (id: string) => (await dmApi.create(id)).data,
       setDmChannels,
       selectChannel,
     }),
@@ -87,8 +88,8 @@ vi.mock('../../stores/presenceStore', () => ({
 }));
 
 vi.mock('../../stores/serverListStore', () => {
-  const useServerListStore = (selector: (state: { activeServerId: string }) => unknown) =>
-    selector({ activeServerId: 'server-1' });
+  const useServerListStore = (selector: (state: { activeServerId: string; servers: unknown[] }) => unknown) =>
+    selector({ activeServerId: 'server-1', servers: [{ id: 'server-1', token: 'token', userId: 'self', user: { id: 'self' } }] });
   // getApi() -> connectionManager.getActiveApiClient() reads getState(); with no
   // registered connection it resolves to the LOCAL-fallback apiClient (mocked).
   (useServerListStore as unknown as { getState: () => { activeServerId: string | null } }).getState =
@@ -212,4 +213,16 @@ describe('UserProfilePopup action feedback', () => {
       'Failed to submit report: Moderation queue is offline.',
     );
   });
+});
+
+vi.mock('../../hooks/useChannels', async () => {
+  const actual = await vi.importActual<typeof import('../../hooks/useChannels')>('../../hooks/useChannels');
+  const { useChannelStore } = await import('../../stores/channelStore');
+  return {
+    ...actual,
+    useCurrentChannelStore: useChannelStore,
+    useChannelActions: () => useChannelStore.getState(),
+    getAccountChannelView: () => useChannelStore.getState(),
+    useGuildChannels: (id: string) => useChannelStore(state => state.channelsByGuild[id] ?? []),
+  };
 });

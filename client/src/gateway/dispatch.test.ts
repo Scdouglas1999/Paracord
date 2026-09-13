@@ -1,3 +1,4 @@
+vi.mock('../lib/messages/accountMessagingRuntime', async () => (await import('../test/messagingRuntimeMock')).messagingRuntimeMock);
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock leaf side-effect modules so dispatch stays unit-scoped.
@@ -12,11 +13,13 @@ vi.mock('../lib/signalPrekeys', () => ({
   ensurePrekeysUploaded: vi.fn(() => Promise.resolve()),
 }));
 
+import { getTestMessagingRuntime } from '../test/messagingRuntimeMock';
 import { dispatchGatewayEvent, resolveEmojiKey } from './dispatch';
+import { useReadStateStore } from '../stores/readStateStore';
 import { GatewayEvents } from './events';
 import { useGuildStore } from '../stores/guildStore';
 import { useChannelStore } from '../stores/channelStore';
-import { useMessageStore } from '../stores/messageStore';
+import { getMessageStore, type MessageState } from '../stores/messageStore';
 import { useAuthStore } from '../stores/authStore';
 import { useVoiceStore } from '../stores/voiceStore';
 import { useRelationshipStore } from '../stores/relationshipStore';
@@ -25,17 +28,15 @@ import { InteractionCallbackType, InteractionType } from '../types/interactions'
 import * as notifications from '../lib/features/notifications';
 import type { Message, User } from '../types';
 
-const SERVER = '__test_server__';
+const SERVER = '__local__';
+const useMessageStore = {
+  getState: () => getMessageStore({ serverId: SERVER, userId: useAuthStore.getState().user?.id ?? 'u1' }).getState(),
+  setState: (state: Partial<MessageState>) => getMessageStore({ serverId: SERVER, userId: useAuthStore.getState().user?.id ?? 'u1' }).setState(state),
+};
 
 function resetStores() {
-  useGuildStore.setState({ guilds: [], selectedGuildId: null });
-  useChannelStore.setState({
-    channels: [],
-    channelsByGuild: {},
-    channelsById: {},
-    guildChannelsLoaded: {},
-    selectedChannelId: null,
-  });
+  useGuildStore.setState({ guilds: [], selectedGuild: null });
+  useChannelStore.getState().reset();
   useAuthStore.setState({ user: null });
 }
 
@@ -66,9 +67,11 @@ describe('resolveEmojiKey', () => {
 });
 
 describe('dispatch READY normalization', () => {
+  const readyCore = { id: 'g1', owner_id: 'owner-1', name: 'Updated', member_count: 0, icon_hash: null, created_at: '2026-01-01T00:00:00Z' };
   it('adds a guild with a valid owner_id', () => {
+    useAuthStore.setState({ user: { id: 'viewer', username: 'viewer' } as User });
     dispatchGatewayEvent(SERVER, GatewayEvents.READY, {
-      guilds: [{ id: 'g1', owner_id: 'owner-1', name: 'Guild One', channels: [] }],
+      guilds: [{ id: 'g1', owner_id: 'owner-1', name: 'Guild One', member_count: 3, icon_hash: null, created_at: '2026-01-01T00:00:00Z', channels: [] }],
     });
     const guilds = useGuildStore.getState().guilds;
     expect(guilds).toHaveLength(1);
@@ -81,7 +84,7 @@ describe('dispatch READY normalization', () => {
       guilds: [{ id: 'g1', name: 'No Owner', channels: [] }],
     });
     expect(useGuildStore.getState().guilds).toHaveLength(0);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('owner_id'));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('guild core contract mismatch'));
     warn.mockRestore();
   });
 
@@ -96,6 +99,7 @@ describe('dispatch READY normalization', () => {
   });
 
   it('normalizes guild channels but skips channels missing id', () => {
+    useAuthStore.setState({ user: { id: 'viewer' } as User });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     dispatchGatewayEvent(SERVER, GatewayEvents.READY, {
       guilds: [
@@ -103,6 +107,7 @@ describe('dispatch READY normalization', () => {
           id: 'g1',
           owner_id: 'o1',
           name: 'G',
+          member_count: 3, icon_hash: null, created_at: '2026-01-01T00:00:00Z',
           channels: [
             { id: 'c1', name: 'general', type: 0 },
             { name: 'broken' } as never,
@@ -110,10 +115,38 @@ describe('dispatch READY normalization', () => {
         },
       ],
     });
-    const channels = useChannelStore.getState().channelsByGuild['g1'] ?? [];
+    const channels = useChannelStore.getState().channelsByGuild[JSON.stringify([SERVER, 'viewer', 'g1'])] ?? [];
     expect(channels.map((c) => c.id)).toEqual(['c1']);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('channel missing id'));
     warn.mockRestore();
+  });
+  it.each(['id', 'owner_id', 'name', 'member_count', 'icon_hash', 'created_at'] as const)('preserves confirmed guild metadata when READY omits %s', async field => {
+    useAuthStore.setState({ user: { id: 'viewer' } as User });
+    const scope = { serverId: SERVER, userId: 'viewer' };
+    useGuildStore.getState().addGuild({ ...readyCore, name: 'Confirmed', member_count: 9, default_channel_id: 'confirmed-channel', description: 'Confirmed detail' }, scope);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await dispatchGatewayEvent(SERVER, GatewayEvents.READY, { guilds: [{ ...readyCore, [field]: undefined }] });
+      expect(useGuildStore.getState().guilds).toHaveLength(1);
+      expect(useGuildStore.getState().guilds[0]).toMatchObject({ name: 'Confirmed', member_count: 9, default_channel_id: 'confirmed-channel', description: 'Confirmed detail' });
+      expect(warn).toHaveBeenCalled();
+    } finally { warn.mockRestore(); }
+  });
+  it('accepts a proven zero count while retaining confirmed detail settings and default channel', async () => {
+    useAuthStore.setState({ user: { id: 'viewer' } as User });
+    useGuildStore.getState().addGuild({ ...readyCore, member_count: 9, default_channel_id: 'confirmed-channel', description: 'Confirmed detail' }, { serverId: SERVER, userId: 'viewer' });
+    await dispatchGatewayEvent(SERVER, GatewayEvents.READY, { guilds: [{ ...readyCore, channels: [{ id: 'different-channel', type: 0 }], description: 'Unvalidated READY detail' }] });
+    expect(useGuildStore.getState().guilds[0]).toMatchObject({ member_count: 0, default_channel_id: 'confirmed-channel', description: 'Confirmed detail', created_at: readyCore.created_at });
+  });
+  it('preserves the confirmed projection when created_at passes the schema but is not a date', async () => {
+    useAuthStore.setState({ user: { id: 'viewer' } as User });
+    useGuildStore.getState().addGuild({ ...readyCore, name: 'Confirmed' }, { serverId: SERVER, userId: 'viewer' });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await dispatchGatewayEvent(SERVER, GatewayEvents.READY, { guilds: [{ ...readyCore, created_at: 'not-a-date' }] });
+      expect(useGuildStore.getState().guilds[0]).toMatchObject({ name: 'Confirmed', created_at: readyCore.created_at });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('guild invalid created_at'));
+    } finally { warn.mockRestore(); }
   });
 });
 
@@ -130,27 +163,28 @@ describe('dispatch MESSAGE_CREATE notification gating', () => {
     (notifications.isEnabled as ReturnType<typeof vi.fn>).mockReturnValue(true);
   });
 
-  it('notifies for a message from another user in an unfocused channel', () => {
-    dispatchGatewayEvent(SERVER, GatewayEvents.MESSAGE_CREATE, { ...baseMessage });
+  it('notifies for a message from another user in an unfocused channel', async () => {
+    await dispatchGatewayEvent(SERVER, GatewayEvents.MESSAGE_CREATE, { ...baseMessage });
     expect(notifications.sendNotification).toHaveBeenCalledTimes(1);
   });
 
-  it('does not notify for a message authored by the current user', () => {
-    dispatchGatewayEvent(SERVER, GatewayEvents.MESSAGE_CREATE, {
+  it('does not notify for a message authored by the current user', async () => {
+    await dispatchGatewayEvent(SERVER, GatewayEvents.MESSAGE_CREATE, {
       ...baseMessage,
       author: { id: 'me', username: 'Me', discriminator: '0000' },
     });
     expect(notifications.sendNotification).not.toHaveBeenCalled();
   });
 
-  it('does not notify when notifications are disabled', () => {
+  it('does not notify when notifications are disabled', async () => {
     (notifications.isEnabled as ReturnType<typeof vi.fn>).mockReturnValue(false);
-    dispatchGatewayEvent(SERVER, GatewayEvents.MESSAGE_CREATE, { ...baseMessage });
+    await dispatchGatewayEvent(SERVER, GatewayEvents.MESSAGE_CREATE, { ...baseMessage });
     expect(notifications.sendNotification).not.toHaveBeenCalled();
   });
 });
 
 describe('dispatch reaction emoji keying', () => {
+  beforeEach(() => useAuthStore.setState({ user: { id: 'u1' } as User }));
   it('forwards the custom emoji id for MESSAGE_REACTION_ADD', () => {
     const spy = vi.spyOn(useMessageStore.getState(), 'handleReactionAdd');
     dispatchGatewayEvent(SERVER, GatewayEvents.MESSAGE_REACTION_ADD, {
@@ -431,7 +465,7 @@ describe('READY user projection', () => {
     expect(user.display_name).toBe('Owner');
   });
 
-  it('accepts the READY user when nothing is stored yet', () => {
+  it('does not establish an authenticated profile from READY alone', () => {
     useAuthStore.setState({ user: null });
 
     dispatchGatewayEvent(SERVER, GatewayEvents.READY, {
@@ -440,6 +474,201 @@ describe('READY user projection', () => {
       session_id: 's2',
     } as never);
 
-    expect(useAuthStore.getState().user?.id).toBe('u2');
+    expect(useAuthStore.getState().user).toBeNull();
+  });
+});
+
+describe('server-authorized mention attention', () => {
+  it('refreshes only the event account and never guesses a mention count from message text', async () => {
+    useAuthStore.setState({ user: { id: 'u1', username: 'me' } as User, token: 'token' });
+    useReadStateStore.getState().reset();
+    const refresh = vi.spyOn(useReadStateStore.getState(), 'refreshAfterEvent').mockImplementation(() => {});
+    await dispatchGatewayEvent(SERVER, GatewayEvents.MESSAGE_CREATE, { id: '123', channel_id: 'room', content: '@everyone <@u1>', author: { id: 'u2', username: 'other', discriminator: '0001' }, attachments: [], reactions: [] });
+    expect(useReadStateStore.getState().getReadState({ serverId: SERVER, userId: 'u1' }, 'room')).toBeUndefined();
+    dispatchGatewayEvent(SERVER, GatewayEvents.MESSAGE_MENTION, { channel_id: 'room', message_id: '123' });
+    expect(refresh).toHaveBeenCalledWith({ serverId: SERVER, userId: 'u1' });
+    refresh.mockRestore();
+  });
+});
+
+
+describe('message mutation attention', () => {
+  it('invalidates previews on edits and refreshes authoritative counts on single and bulk deletion', async () => {
+    useAuthStore.setState({ user: { id: 'u1', username: 'me' } as User, token: 'token' });
+    useReadStateStore.getState().reset();
+    const scope = { serverId: SERVER, userId: 'u1' };
+    const refresh = vi.spyOn(useReadStateStore.getState(), 'refreshAfterEvent').mockImplementation(() => {});
+    const invalidate = vi.spyOn(useReadStateStore.getState(), 'invalidateAttention');
+    try {
+      // This update envelope carries no verifiable author; the runtime answers
+      // with the authoritative stored record the projection then applies.
+      getTestMessagingRuntime(scope).acceptGatewayMutation.mockResolvedValueOnce({
+        id: '123', channel_id: 'room', content: 'Revised',
+        author: { id: 'u2', username: 'other', discriminator: '0001' },
+        tts: false, mention_everyone: false, pinned: false, type: 0, attachments: [], reactions: [],
+      });
+      await dispatchGatewayEvent(SERVER, GatewayEvents.MESSAGE_UPDATE, { id: '123', channel_id: 'room', content: 'Revised' });
+      expect(invalidate).toHaveBeenLastCalledWith(scope, 'room');
+      expect(refresh).not.toHaveBeenCalled();
+      await dispatchGatewayEvent(SERVER, GatewayEvents.MESSAGE_DELETE, { id: '123', channel_id: 'room' });
+      await dispatchGatewayEvent(SERVER, GatewayEvents.MESSAGE_DELETE_BULK, { ids: ['124', '125'], channel_id: 'room' });
+      expect(invalidate).toHaveBeenCalledTimes(3);
+      expect(refresh).toHaveBeenCalledTimes(2);
+      expect(refresh).toHaveBeenLastCalledWith(scope);
+      expect(useReadStateStore.getState().attentionRevisions[JSON.stringify([SERVER, 'u1'])]?.room).toBe(3);
+      useReadStateStore.getState().reset();
+      expect(useReadStateStore.getState().attentionRevisions).toEqual({});
+    } finally { refresh.mockRestore(); invalidate.mockRestore(); }
+  });
+});
+
+it('applies ordered channel activity from create, delete and bulk-delete gateway envelopes', async () => {
+  useAuthStore.setState({ user: { id: 'u1', username: 'me' } as User, token: 'token' });
+  const scope = { serverId: SERVER, userId: 'u1' };
+  useChannelStore.getState().addChannel({ id: '1', guild_id: '100', type: 0, name: 'Room', position: 0, nsfw: false, created_at: '2026-01-01', last_message_id: null, message_revision: '0' }, scope);
+  const refresh = vi.spyOn(useReadStateStore.getState(), 'refreshAfterEvent').mockImplementation(() => {});
+  const activity = (revision: string, tail: string | null) => ({ channel_id: '1', guild_id: '100', revision, last_message_id: tail });
+  const current = () => useChannelStore.getState().channelsById[JSON.stringify([SERVER, 'u1', '1'])];
+  const message = { id: '999', channel_id: '1', guild_id: '100', content: 'Hello', author: { id: 'u2', username: 'other', discriminator: '0001' }, attachments: [], reactions: [], channel_activity: activity('1', '999') };
+  try {
+    await dispatchGatewayEvent(SERVER, GatewayEvents.MESSAGE_CREATE, message);
+    expect(current()).toMatchObject({ message_revision: '1', last_message_id: '999' });
+    await dispatchGatewayEvent(SERVER, GatewayEvents.MESSAGE_DELETE, { id: '999', channel_id: '1', channel_activity: activity('2', null) });
+    await dispatchGatewayEvent(SERVER, GatewayEvents.MESSAGE_CREATE, message);
+    expect(current()).toMatchObject({ message_revision: '2', last_message_id: null });
+    await dispatchGatewayEvent(SERVER, GatewayEvents.MESSAGE_DELETE_BULK, { ids: ['998'], channel_id: '1', channel_activity: activity('3', '997') });
+    expect(current()).toMatchObject({ message_revision: '3', last_message_id: '997' });
+  } finally { refresh.mockRestore(); }
+});
+
+describe('durable gateway dispatch acceptance', () => {
+  const owned = { serverId: SERVER, userId: 'durable-owner' };
+  const encryptedMessage = { id: '100', channel_id: 'durable-channel', author: { id: 'peer', username: 'Peer', discriminator: '0001' },
+    content: '', e2ee: { version: 2, nonce: 'nonce', ciphertext: 'ciphertext', header: 'header' } };
+  const stored = (overrides: Record<string, unknown> = {}) => ({
+    id: '200', channel_id: 'durable-channel',
+    author: { id: 'peer', username: 'Peer', discriminator: '0001' },
+    content: 'Plaintext body', tts: false, mention_everyone: false, pinned: false,
+    type: 0, attachments: [], reactions: [], ...overrides,
+  }) as Message;
+  beforeEach(() => { useAuthStore.setState({ user: { id: owned.userId, username: 'Owner' } as User }); });
+
+  it('holds create projection until the durable mutation accepts', async () => {
+    const runtime = getTestMessagingRuntime(owned);
+    let commit!: (message: Message | null) => void;
+    runtime.acceptGatewayMutation.mockReturnValueOnce(new Promise(resolve => { commit = resolve; }));
+    const result = dispatchGatewayEvent(SERVER, GatewayEvents.MESSAGE_CREATE, encryptedMessage);
+    expect(result).toBeInstanceOf(Promise);
+    let accepted = false; void result!.then(() => { accepted = true; });
+    await Promise.resolve();
+    expect(accepted).toBe(false);
+    expect(getMessageStore(owned).getState().messages['durable-channel'] ?? []).toEqual([]);
+    expect(runtime.acceptGatewayMutation).toHaveBeenCalledWith(expect.objectContaining({ kind: 'create', channelId: 'durable-channel', messageId: '100' }));
+    commit(stored({ id: '100', e2ee: encryptedMessage.e2ee, content: '' }));
+    await result;
+    expect(accepted).toBe(true);
+    expect(getMessageStore(owned).getState().messages['durable-channel'].map(message => message.id)).toEqual(['100']);
+  });
+
+  it('gates plain message creates on durable acceptance too', async () => {
+    const runtime = getTestMessagingRuntime(owned);
+    const result = dispatchGatewayEvent(SERVER, GatewayEvents.MESSAGE_CREATE, stored());
+    expect(result).toBeInstanceOf(Promise);
+    expect(runtime.acceptGatewayMutation).toHaveBeenCalledWith(expect.objectContaining({ kind: 'create', channelId: 'durable-channel', messageId: '200' }));
+    await result;
+    expect(getMessageStore(owned).getState().messages['durable-channel'].map(message => message.id)).toEqual(['200']);
+  });
+
+  it('drops a create the durable layer never makes authoritative', async () => {
+    const runtime = getTestMessagingRuntime(owned);
+    runtime.acceptGatewayMutation.mockResolvedValueOnce(null);
+    await dispatchGatewayEvent(SERVER, GatewayEvents.MESSAGE_CREATE, stored());
+    expect(getMessageStore(owned).getState().messages['durable-channel'] ?? []).toEqual([]);
+  });
+
+  it('rejects the dispatch and keeps the channel checkpoint when durable acceptance fails', async () => {
+    const runtime = getTestMessagingRuntime(owned);
+    useChannelStore.getState().addChannel({ id: '900', guild_id: '100', type: 0, name: 'Room', position: 0, nsfw: false, created_at: '2026-01-01', last_message_id: null, message_revision: '7' }, owned);
+    runtime.acceptGatewayMutation.mockRejectedValueOnce(new Error('Durable journal unavailable'));
+    await expect(dispatchGatewayEvent(SERVER, GatewayEvents.MESSAGE_CREATE, {
+      ...stored({ id: '901', channel_id: '900' }), guild_id: '100', message_revision: '9',
+      channel_activity: { channel_id: '900', guild_id: '100', revision: '9', last_message_id: '901' },
+    })).rejects.toThrow('Durable journal unavailable');
+    expect(runtime.acceptGatewayMutation).toHaveBeenCalledWith(expect.objectContaining({ kind: 'create', channelId: '900', messageId: '901', revision: '9' }));
+    expect(getMessageStore(owned).getState().messages['900'] ?? []).toEqual([]);
+    expect(useChannelStore.getState().channelsById[JSON.stringify([SERVER, owned.userId, '900'])]?.message_revision).toBe('7');
+  });
+
+  it('keeps visible rows until delete persistence accepts', async () => {
+    const runtime = getTestMessagingRuntime(owned);
+    getMessageStore(owned).getState().addMessage('durable-channel', stored({ id: '100', content: 'Visible' }));
+    let commit!: (message: Message | null) => void;
+    runtime.acceptGatewayMutation.mockReturnValueOnce(new Promise(resolve => { commit = resolve; }));
+    const result = dispatchGatewayEvent(SERVER, GatewayEvents.MESSAGE_DELETE, { id: '100', channel_id: 'durable-channel' });
+    expect(result).toBeInstanceOf(Promise);
+    expect(getMessageStore(owned).getState().messages['durable-channel']).toHaveLength(1);
+    commit(null);
+    await result;
+    expect(getMessageStore(owned).getState().messages['durable-channel']).toEqual([]);
+    expect(runtime.acceptGatewayMutation).toHaveBeenCalledWith(expect.objectContaining({ kind: 'delete', channelId: 'durable-channel', messageId: '100' }));
+  });
+
+  it('serializes bulk deletion in revision order and stops the batch at its first failure', async () => {
+    const runtime = getTestMessagingRuntime(owned);
+    getMessageStore(owned).getState().setMessages('durable-channel', [stored({ id: '100' }), stored({ id: '101' }), stored({ id: '102' })]);
+    runtime.acceptGatewayMutation.mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('Failed second tombstone'));
+    await expect(dispatchGatewayEvent(SERVER, GatewayEvents.MESSAGE_DELETE_BULK, {
+      ids: ['102', '100', '101'], channel_id: 'durable-channel',
+      message_revisions: { '100': '1', '101': '2', '102': '3' },
+    })).rejects.toThrow('second tombstone');
+    expect(runtime.acceptGatewayMutation.mock.calls).toEqual([
+      [expect.objectContaining({ kind: 'delete', channelId: 'durable-channel', messageId: '100', revision: '1' })],
+      [expect.objectContaining({ kind: 'delete', channelId: 'durable-channel', messageId: '101', revision: '2' })],
+    ]);
+    // The rejected batch never projected: every row remains cached.
+    expect(getMessageStore(owned).getState().messages['durable-channel']).toHaveLength(3);
+  });
+
+  it('awaits the runtime handshake for READY and RESUMED', async () => {
+    const runtime = getTestMessagingRuntime(owned);
+    for (const event of [GatewayEvents.READY, GatewayEvents.RESUMED] as const) {
+      let release!: () => void;
+      runtime.acceptHandshake.mockReturnValueOnce(new Promise<void>(resolve => { release = resolve; }));
+      const result = dispatchGatewayEvent(SERVER, event, { guilds: [] });
+      expect(result).toBeInstanceOf(Promise);
+      let settled = false; void result!.then(() => { settled = true; });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      release();
+      await result;
+      expect(settled).toBe(true);
+    }
+  });
+
+  it('keeps ordinary non-body dispatch synchronous', () => {
+    expect(dispatchGatewayEvent(SERVER, GatewayEvents.MESSAGE_REACTION_ADD, { channel_id: 'durable-channel', message_id: '100', user_id: 'peer', emoji: '👍' })).toBeUndefined();
+    expect(dispatchGatewayEvent(SERVER, GatewayEvents.MESSAGE_MENTION, { channel_id: 'durable-channel', message_id: '100' })).toBeUndefined();
+  });
+  it('rejects the projection continuation when its captured account is replaced after durable work', async () => {
+    const runtime = getTestMessagingRuntime(owned); const signal = new AbortController().signal;
+    runtime.captureGatewayLease.mockReturnValueOnce({ signal, assertCurrent: () => { if (useAuthStore.getState().user?.id !== owned.userId) throw new Error('Account replaced'); } });
+    let commit!: (message: Message | null) => void;
+    runtime.acceptGatewayMutation.mockReturnValueOnce(new Promise(resolve => { commit = resolve; }));
+    const pending = dispatchGatewayEvent(SERVER, GatewayEvents.MESSAGE_CREATE, stored());
+    const failure = expect(pending).rejects.toThrow('Account replaced');
+    useAuthStore.setState({ user: { id: 'replacement', username: 'Replacement' } as User });
+    commit(stored()); await failure;
+    expect(getMessageStore({ serverId: SERVER, userId: 'replacement' }).getState().messages['durable-channel'] ?? []).toEqual([]);
+  });
+  it('rejects a bulk projection continuation when the same account connection is paused', async () => {
+    const runtime = getTestMessagingRuntime(owned); const abort = new AbortController();
+    runtime.captureGatewayLease.mockReturnValueOnce({ signal: abort.signal, assertCurrent: () => abort.signal.throwIfAborted() });
+    getMessageStore(owned).getState().setMessages('durable-channel', [stored({ id: '100' })]);
+    let commit!: (message: Message | null) => void;
+    runtime.acceptGatewayMutation.mockReturnValueOnce(new Promise(resolve => { commit = resolve; }));
+    const pending = dispatchGatewayEvent(SERVER, GatewayEvents.MESSAGE_DELETE_BULK, { channel_id: 'durable-channel', ids: ['100'], message_revisions: { '100': '1' } });
+    const failure = expect(pending).rejects.toThrow('Transport replaced');
+    await Promise.resolve(); abort.abort(new Error('Transport replaced')); commit(null); await failure;
+    expect(getMessageStore(owned).getState().messages['durable-channel']).toHaveLength(1);
   });
 });

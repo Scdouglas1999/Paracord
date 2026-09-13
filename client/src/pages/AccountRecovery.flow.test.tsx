@@ -10,30 +10,33 @@ const mockAccountState = vi.hoisted(() => ({
   create: vi.fn(),
   recover: vi.fn(),
   getRecoveryPhrase: vi.fn(),
-  publicKey: 'public-key',
+  publicKey: null,
+  isUnlocked: false,
+  hasAccount: () => false,
 }));
 
 vi.mock('../stores/accountStore', () => ({
-  useAccountStore: (selector: (state: typeof mockAccountState) => unknown) =>
-    selector(mockAccountState),
+  useAccountStore: Object.assign((selector: (state: typeof mockAccountState) => unknown) =>
+    selector(mockAccountState), { getState: () => mockAccountState }),
 }));
 
 vi.mock('../stores/authStore', () => ({
-  useAuthStore: {
+  useAuthStore: Object.assign((selector: (state: { user: null; token: null }) => unknown) => selector({ user: null, token: null }), {
     getState: vi.fn(() => ({
       user: null,
       token: null,
     })),
-  },
+  }),
 }));
 
 vi.mock('../stores/serverListStore', () => ({
-  useServerListStore: {
-    getState: vi.fn(() => ({
-      addServer: vi.fn(),
-    })),
-  },
+  useServerListStore: Object.assign((selector: (state: { servers: never[] }) => unknown) => selector({ servers: [] }), {
+    getState: vi.fn(() => ({ addServer: vi.fn() })),
+  }),
 }));
+vi.mock('../lib/crypto/attachAccountIdentity', () => ({ attachAccountIdentity: vi.fn() }));
+vi.mock('../lib/operationContext', () => ({ captureScopedOperation: vi.fn() }));
+vi.mock('../api/client', () => ({ extractApiError: (error: Error) => error.message }));
 
 vi.mock('../api/auth', () => ({
   authApi: {

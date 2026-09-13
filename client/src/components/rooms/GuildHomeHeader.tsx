@@ -1,6 +1,6 @@
+import { useGuild } from '../../hooks/useGuilds';
 import { useState } from 'react';
 import { Coins, Radio, Settings, UserPlus, Users } from 'lucide-react';
-import { useGuildStore } from '../../stores/guildStore';
 import { useUIStore } from '../../stores/uiStore';
 import { usePermissions } from '../../hooks/usePermissions';
 import { canAccessGuildSettings } from '../../lib/guildSettingsAccess';
@@ -28,7 +28,7 @@ export function GuildHomeHeader({
   liveRoomCount,
   inviteChannelId,
 }: GuildHomeHeaderProps) {
-  const guild = useGuildStore((s) => s.guilds.find((g) => g.id === guildId));
+  const guild = useGuild(guildId);
   const setGuildSettingsId = useUIStore((s) => s.setGuildSettingsId);
   const setContextPanelMode = useUIStore((s) => s.setContextPanelMode);
   const { permissions, isAdmin } = usePermissions(guildId);

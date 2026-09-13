@@ -1,17 +1,20 @@
+import { activateConversation } from '../../../lib/attention/conversationNavigation';
+import { useCurrentAccountScope, useCurrentUser } from '../../../hooks/useCurrentUser';
 import { useCallback, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router';
 import { Search, Home, Users, MessageCircle, Plus } from 'lucide-react';
 
 import { useUIStore } from '../../../stores/uiStore';
-import { useAuthStore } from '../../../stores/authStore';
-import { useServerListStore } from '../../../stores/serverListStore';
+import { toast } from '../../../stores/toastStore';
+import { extractApiError } from '../../../api/client';
+import { activateGuild } from '../../../lib/guildNavigation';
+import { entityScopeKey } from '../../../lib/serverScope';
 import { useVoice } from '../../../hooks/useVoice';
 import { useMutedGuilds } from '../../../hooks/useMutedGuilds';
 import { useUnifiedConversations } from '../../../hooks/useUnifiedConversations';
 import { conversationKey } from '../../../lib/attention/conversationModel';
 import type { ConversationEntry } from '../../../lib/attention/conversationModel';
 import type { GuildSummary, FriendRequestEntry } from '../../../hooks/useUnifiedConversations';
-import { LOCAL_SERVER_ID } from '../../../lib/connectionManager';
 import { isAdmin as isGlobalAdmin } from '../../../types';
 import { cn } from '../../../lib/utils';
 import { displayName } from '../../../lib/displayName';
@@ -50,7 +53,7 @@ const RECENT_COLLAPSED_CAP = 5;
  */
 
 function useUserPanelWiring() {
-  const user = useAuthStore((s) => s.user);
+  const user = useCurrentUser();
   const { selfMute, selfDeaf, toggleMute, toggleDeaf } = useVoice();
   const showAdminDashboard = Boolean(user && isGlobalAdmin(user.flags ?? 0));
   return { user, selfMute, selfDeaf, toggleMute, toggleDeaf, showAdminDashboard };
@@ -99,14 +102,14 @@ function CollapsedIconButton({
 /** Collapsed 64px icon rail (§6). Anchors + space avatars + attention dots, mini call dock, user. */
 function CollapsedRail({
   spaces,
-  attentionGuildIds,
-  activeGuildId,
+  attentionGuildKeys,
+  activeGuildKey,
   friendRequestCount,
   onAddSpace,
 }: {
   spaces: GuildSummary[];
-  attentionGuildIds: Set<string>;
-  activeGuildId: string | null;
+  attentionGuildKeys: Set<string>;
+  activeGuildKey: string | null;
   friendRequestCount: number;
   onAddSpace: () => void;
 }) {
@@ -115,9 +118,7 @@ function CollapsedRail({
   const { user } = useUserPanelWiring();
 
   const openSpace = (space: GuildSummary) => {
-    if (useServerListStore.getState().activeServerId !== space.serverId) {
-      useServerListStore.getState().setActive(space.serverId);
-    }
+    activateGuild(space);
     navigate(`/app/guilds/${space.id}`);
   };
 
@@ -126,7 +127,7 @@ function CollapsedRail({
   // the shared [data-roving-container]/[data-nav-index] handler — so the collapsed
   // rail keeps the same single-tab-stop + arrow affordance as the expanded list
   // instead of making every space icon a Tab stop (layout-spec §5/§6).
-  const activeIdx = Math.max(0, spaces.findIndex((s) => s.id === activeGuildId));
+  const activeIdx = Math.max(0, spaces.findIndex((s) => s.key === activeGuildKey));
 
   return (
     <div className="flex h-full w-16 flex-col items-center gap-2 bg-bg-secondary py-3">
@@ -175,12 +176,12 @@ function CollapsedRail({
         className="flex flex-1 flex-col items-center gap-2 overflow-y-auto scrollbar-none"
       >
         {spaces.map((space, i) => {
-          const active = space.id === activeGuildId;
-          const hasAttention = attentionGuildIds.has(space.id);
+          const active = space.key === activeGuildKey;
+          const hasAttention = attentionGuildKeys.has(space.key);
           const iconSrc = resolveGuildIconUrl({ icon: space.icon });
           return (
             <button
-              key={space.id}
+              key={space.key}
               type="button"
               role="option"
               aria-selected={active}
@@ -245,13 +246,13 @@ export function UnifiedSidebar() {
   const location = useLocation();
   const sidebarCollapsed = useUIStore((s) => s.sidebarCollapsed);
   const sidebarWidth = useUIStore((s) => s.sidebarWidth);
-  const activeServerId = useServerListStore((s) => s.activeServerId);
+  const activeScope = useCurrentAccountScope();
 
   // The muted-guild set — read live from the shared producer/consumer so muted
   // guilds carry no attention signal in the merge (§3.2). SpacesList is the writer.
-  const { mutedGuildIds } = useMutedGuilds();
+  const { mutedGuildKeys } = useMutedGuilds();
   const { needsYou, needsYouOverflowCount, recent, pinned, spaces, requests } =
-    useUnifiedConversations(mutedGuildIds);
+    useUnifiedConversations(mutedGuildKeys);
   const userPanel = useUserPanelWiring();
 
   // The create/join-server flow reuses the existing CreateGuildModal (Create/Join/
@@ -261,10 +262,9 @@ export function UnifiedSidebar() {
   const [recentExpanded, setRecentExpanded] = useState(false);
   const openCreateGuild = useCallback(() => setShowCreateGuild(true), []);
 
-  const activeServer = activeServerId ?? LOCAL_SERVER_ID;
   const activeChannelId = params.channelId ?? null;
-  const activeGuildId = params.guildId ?? null;
-  const activeKey = activeChannelId ? conversationKey(activeServer, activeChannelId) : null;
+  const activeGuildKey = activeScope && params.guildId ? entityScopeKey(activeScope, params.guildId) : null;
+  const activeKey = activeChannelId && activeScope ? conversationKey(activeScope, activeChannelId) : null;
 
   // Recent is a movement aid, not an archive. Keep five rows visible by default
   // so Spaces cannot be buried; retain an active older row as a sixth exception.
@@ -279,7 +279,7 @@ export function UnifiedSidebar() {
   // Guilds with an attention signal → both collapsed and expanded Space dots.
   // Attention overflow beyond the Needs-you cap currently continues in Recent,
   // so inspect both partitions rather than silently dropping those guilds.
-  const attentionGuildIds = useMemo(() => {
+  const attentionGuildKeys = useMemo(() => {
     const set = new Set<string>();
     for (const e of [...needsYou, ...recent]) {
       if (
@@ -290,7 +290,7 @@ export function UnifiedSidebar() {
           e.unread ||
           e.hasVoiceActivity)
       ) {
-        set.add(e.guildId);
+        set.add(entityScopeKey(e.scope, e.guildId));
       }
     }
     return set;
@@ -300,16 +300,8 @@ export function UnifiedSidebar() {
   // pass (the per-message re-render storm fix depends on a stable onClick).
   const openConversation = useCallback(
     (entry: ConversationEntry) => {
-      if (useServerListStore.getState().activeServerId !== entry.serverId) {
-        useServerListStore.getState().setActive(entry.serverId);
-      }
-      if (entry.kind === 'guild_home' && entry.guildId) {
-        navigate(`/app/guilds/${entry.guildId}`);
-      } else if (entry.guildId) {
-        navigate(`/app/guilds/${entry.guildId}/channels/${entry.channelId}`);
-      } else {
-        navigate(`/app/dms/${entry.channelId}`);
-      }
+      try { navigate(activateConversation(entry)); }
+      catch (error) { toast.error(`Failed to open conversation: ${extractApiError(error)}`); }
     },
     [navigate],
   );
@@ -342,7 +334,7 @@ export function UnifiedSidebar() {
   const inNeeds = activeKey ? needsYou.findIndex((e) => e.key === activeKey) : -1;
   const inPinned = activeKey ? pinned.findIndex((e) => e.key === activeKey) : -1;
   const inRecent = activeKey ? visibleRecent.findIndex((e) => e.key === activeKey) : -1;
-  const inSpaces = activeGuildId ? spaces.findIndex((s) => s.id === activeGuildId) : -1;
+  const inSpaces = activeGuildKey ? spaces.findIndex((s) => s.key === activeGuildKey) : -1;
   if (inNeeds >= 0) activeNavIndex = needsYouConvStart + inNeeds;
   else if (inPinned >= 0) activeNavIndex = pinnedStart + inPinned;
   else if (inRecent >= 0) activeNavIndex = recentStart + inRecent;
@@ -357,8 +349,8 @@ export function UnifiedSidebar() {
         <aside aria-label="Navigation" data-collapsed="true" className="h-full shrink-0 border-r border-border-subtle">
           <CollapsedRail
             spaces={spaces}
-            attentionGuildIds={attentionGuildIds}
-            activeGuildId={activeGuildId}
+            attentionGuildKeys={attentionGuildKeys}
+            activeGuildKey={activeGuildKey}
             friendRequestCount={requests.length}
             onAddSpace={openCreateGuild}
           />
@@ -405,7 +397,7 @@ export function UnifiedSidebar() {
               navIndexStart={recentStart}
               activeNavIndex={activeNavIndex}
             />
-            <SpacesList spaces={spaces} attentionGuildIds={attentionGuildIds} activeGuildId={activeGuildId} onAddSpace={openCreateGuild} navIndexStart={spacesStart} activeNavIndex={activeNavIndex} />
+            <SpacesList spaces={spaces} attentionGuildKeys={attentionGuildKeys} activeGuildKey={activeGuildKey} onAddSpace={openCreateGuild} navIndexStart={spacesStart} activeNavIndex={activeNavIndex} />
           </div>
 
           <div className="shrink-0">

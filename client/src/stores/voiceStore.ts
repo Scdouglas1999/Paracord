@@ -1,6 +1,11 @@
 import { create } from 'zustand';
 import type { VoiceState } from '../types';
-import { voiceApi } from '../api/voice';
+import { createCallVoiceApi, type VoiceJoinResponse } from '../api/voice';
+import { captureOperationContext } from '../lib/operationContext';
+import { accountScopeKey, type AccountScope } from '../lib/serverScope';
+import { subscribeServerDisconnect } from '../lib/serverDisconnect';
+import { gateway } from '../gateway/manager';
+import { CallSession, type CallPhase } from './voice/callSession';
 import {
   Room,
   RoomEvent,
@@ -24,7 +29,6 @@ import {
 } from 'livekit-client';
 import { useAuthStore } from './authStore';
 import { playVoiceJoinSound, playVoiceLeaveSound } from '../lib/features/voiceSounds';
-import { startNativeSystemAudio, stopNativeSystemAudio } from '../lib/systemAudioCapture';
 import { isTauri } from '../lib/tauriEnv';
 import { NoiseGateProcessor } from '../lib/noiseGate';
 import {
@@ -42,17 +46,6 @@ import { logVoiceDiagnostic } from '../lib/desktopDiagnostics';
 import type { MediaEngine } from '../lib/media/mediaEngine';
 import { createMediaEngine } from '../lib/media/mediaEngine';
 import { registerSessionReset } from './sessionReset';
-/** Direct stderr logging that bypasses the async diagnostics buffer. */
-function voiceTimingLog(msg: string): void {
-  try {
-    const w = window as unknown as { __TAURI_INTERNALS__?: { invoke: (cmd: string, args?: unknown) => Promise<unknown> } };
-    const invoke = w.__TAURI_INTERNALS__?.invoke;
-    if (typeof invoke === 'function') {
-      invoke('append_client_log', { line: msg }).catch(() => { });
-    }
-  } catch { /* non-fatal */ }
-}
-
 const SYSTEM_AUDIO_PRIVACY_ACK_KEY = 'paracord:system-audio-privacy-ack';
 
 function hasAcknowledgedSystemAudioPrivacyWarning(): boolean {
@@ -89,21 +82,19 @@ let activeRoomListenerCleanup: (() => void) | null = null;
 // to prevent voice chat audio from being captured by the system audio loopback
 // and echoed back through the live stream.
 let voiceSuppressedForStream = false;
-let joinAttemptSeq = 0;
-let activeJoinAttempt = 0;
-// Tracks the Room object being constructed inside joinChannel() before it is
-// stored in Zustand state.  A subsequent join/leave can disconnect this room
-// to prevent two Room.connect() calls from racing against the same LiveKit
-// signaling endpoint.
-let inFlightJoinRoom: Room | null = null;
-// Tracks the in-flight Room.disconnect() promise so joinChannel can await it
-// before opening a new connection. Without this, the old WebSocket teardown
-// can block the new connection if they target the same host.
-let pendingDisconnect: Promise<void> | null = null;
-let pendingDisconnectStartedAt = 0;
-const DISCONNECT_WAIT_ON_JOIN_MS = 6_000;
-const DISCONNECT_WAIT_ON_LEAVE_MS = 600;
-const MIN_DISCONNECT_QUIET_PERIOD_MS = isTauri() ? 3_500 : 2_500;
+let currentCall: CallSession | null = null;
+const roomOwners = new WeakMap<Room, { owner: CallSession; active: boolean }>();
+const callReleasePromises = new WeakMap<CallSession, Promise<void>>();
+
+function isCurrentRoom(room: Room): boolean {
+  const lease = roomOwners.get(room);
+  return !!lease?.active && lease.owner.current;
+}
+function currentCallUser() { return currentCall?.context.user ?? null; }
+function callApi(owner = currentCall) {
+  if (!owner) throw new Error('Voice connection is not ready');
+  return createCallVoiceApi(owner.context, () => owner.membershipSessionId);
+}
 const TAURI_FAST_CONNECT = isTauri();
 const LIVEKIT_CONNECT_OPTIONS = TAURI_FAST_CONNECT
   ? ({
@@ -169,6 +160,7 @@ function ensureSafeLivekitPingTimeout(
 }
 
 function tuneLivekitSignalHeartbeat(room: Room): void {
+  if (!isCurrentRoom(room)) return;
   const engine = (room as unknown as { engine?: { client?: LivekitSignalClientInternals } }).engine;
   const signalClient = engine?.client;
   if (!signalClient) {
@@ -194,66 +186,27 @@ function configureLivekitLogging(): void {
   }
 }
 
-function startPendingDisconnect(disconnectPromise: Promise<void>): void {
-  pendingDisconnectStartedAt = Date.now();
-  let tracked: Promise<void>;
-  tracked = disconnectPromise
-    .catch((err) => {
-      console.warn('[voice] Room disconnect errored:', err);
-    })
-    .then(() => undefined)
-    .finally(() => {
-      if (pendingDisconnect === tracked) {
-        pendingDisconnect = null;
-        pendingDisconnectStartedAt = 0;
-      }
-    });
-  pendingDisconnect = tracked;
-}
-
-async function waitForPendingDisconnect(maxWaitMs: number): Promise<{ timedOut: boolean; ageMs: number }> {
-  const disconnectPromise = pendingDisconnect;
-  if (!disconnectPromise) {
-    return { timedOut: false, ageMs: 0 };
-  }
-  const startedAt = pendingDisconnectStartedAt || Date.now();
-  let timedOut = false;
-  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
-  const timeoutPromise = new Promise<void>((resolve) => {
-    timeoutHandle = setTimeout(() => {
-      timedOut = true;
-      resolve();
-    }, maxWaitMs);
-  });
-  await Promise.race([disconnectPromise, timeoutPromise]);
-  if (timeoutHandle) {
-    clearTimeout(timeoutHandle);
-  }
-  return {
-    timedOut,
-    ageMs: Date.now() - startedAt,
-  };
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function connectWithAttemptTimeout(room: Room, url: string, token: string): Promise<void> {
-  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
-  const connectPromise = room.connect(url, token, LIVEKIT_CONNECT_OPTIONS);
-  // Suppress late rejections when the timeout branch wins and the underlying
-  // connect promise eventually settles after we've moved on.
-  void connectPromise.catch(() => { });
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeoutHandle = setTimeout(() => {
-      reject(new Error(`LiveKit connect attempt timed out after ${LIVEKIT_CONNECT_ATTEMPT_TIMEOUT_MS}ms`));
-    }, LIVEKIT_CONNECT_ATTEMPT_TIMEOUT_MS);
+async function connectWithAttemptTimeout(room: Room, owner: CallSession, url: string, token: string): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const connect = room.connect(url, token, LIVEKIT_CONNECT_OPTIONS);
+  // LiveKit does not accept an AbortSignal. A late success must close this room again.
+  void connect.finally(() => {
+    if (!isCurrentRoom(room)) void room.disconnect().catch(() => {});
+  }).catch(() => {});
+  let cleanupAbort: () => void = () => {};
+  const abort = new Promise<never>((_, reject) => {
+    const onAbort = () => reject(owner.signal.reason);
+    owner.signal.addEventListener('abort', onAbort, { once: true });
+    cleanupAbort = () => owner.signal.removeEventListener('abort', onAbort);
   });
   try {
-    await Promise.race([connectPromise, timeoutPromise]);
+    await Promise.race([connect, abort, new Promise<never>((_, reject) => {
+      timeout = setTimeout(() => reject(new Error('LiveKit connect attempt timed out')), LIVEKIT_CONNECT_ATTEMPT_TIMEOUT_MS);
+    })]);
+    owner.assertCurrent();
   } finally {
-    if (timeoutHandle) clearTimeout(timeoutHandle);
+    clearTimeout(timeout);
+    cleanupAbort();
   }
 }
 
@@ -416,7 +369,7 @@ function stopLocalMicAnalyser(resetSpeaking = true): void {
     micInputLevel: 0,
   });
   if (resetSpeaking) {
-    const localUserId = useAuthStore.getState().user?.id;
+    const localUserId = currentCallUser()?.id;
     if (localUserId) {
       setSpeakingForIdentity(localUserId, false);
     }
@@ -449,6 +402,7 @@ function stopRemoteAudioReconcile(): void {
 }
 
 function startRemoteAudioReconcile(room: Room): void {
+  if (!isCurrentRoom(room)) return;
   stopRemoteAudioReconcile();
   remoteAudioReconcileRoom = room;
   remoteAudioReconcileInterval = setInterval(() => {
@@ -460,6 +414,7 @@ function startRemoteAudioReconcile(room: Room): void {
 }
 
 function startLocalAudioUplinkMonitor(room: Room): void {
+  if (!isCurrentRoom(room)) return;
   stopLocalAudioUplinkMonitor();
   localAudioUplinkMonitorRoom = room;
   localAudioUplinkMonitorInterval = setInterval(() => {
@@ -590,6 +545,7 @@ function shouldForceRedCompatibility(room: Room): boolean {
 }
 
 function refreshAudioCodecCompatibility(room: Room, reason = 'refresh'): void {
+  if (!isCurrentRoom(room)) return;
   const nextForceRed = shouldForceRedCompatibility(room);
   const modeChanged = nextForceRed !== forceRedForCompatibility;
   if (modeChanged) {
@@ -632,8 +588,9 @@ function refreshAudioCodecCompatibility(room: Room, reason = 'refresh'): void {
 }
 
 function startLocalMicAnalyser(room: Room): void {
+  if (!isCurrentRoom(room)) return;
   stopLocalMicAnalyser(false);
-  const localUserId = useAuthStore.getState().user?.id;
+  const localUserId = currentCallUser()?.id;
   if (!localUserId) return;
 
   const publication = room.localParticipant.getTrackPublication(Track.Source.Microphone);
@@ -741,6 +698,7 @@ function synthesizeVoiceStateFromParticipant(
 }
 
 function syncLivekitRoomPresence(room: Room): void {
+  if (!isCurrentRoom(room)) return;
   const current = useVoiceStore.getState();
   const channelId = current.channelId;
   if (!channelId) return;
@@ -780,7 +738,7 @@ function syncLivekitRoomPresence(room: Room): void {
 }
 
 function getSavedInputDeviceId(): string | undefined {
-  const notif = (useAuthStore.getState().settings?.notifications ?? {}) as Record<string, unknown>;
+  const notif = getNotificationSettings();
   const deviceId =
     typeof notif['audioInputDeviceId'] === 'string'
       ? (notif['audioInputDeviceId'] as string).trim()
@@ -862,7 +820,7 @@ async function resolveMicCaptureProfile(deviceId?: string): Promise<MicCapturePr
 }
 
 function getSavedOutputDeviceId(): string | undefined {
-  const notif = (useAuthStore.getState().settings?.notifications ?? {}) as Record<string, unknown>;
+  const notif = getNotificationSettings();
   const deviceId =
     typeof notif['audioOutputDeviceId'] === 'string'
       ? (notif['audioOutputDeviceId'] as string).trim()
@@ -889,7 +847,7 @@ function getBooleanSetting(
 }
 
 function getNotificationSettings(): Record<string, unknown> {
-  return (useAuthStore.getState().settings?.notifications ?? {}) as Record<string, unknown>;
+  return currentCall?.preferences ?? (useAuthStore.getState().settings?.notifications ?? {}) as Record<string, unknown>;
 }
 
 function hasSavedVoiceSetting(key: string): boolean {
@@ -1320,7 +1278,7 @@ function buildLocalVoiceState(
   suppress = false,
   requestToSpeakAt: string | null = null,
 ): VoiceState | null {
-  const authUser = useAuthStore.getState().user;
+  const authUser = currentCallUser();
   if (!authUser) return null;
   return {
     user_id: authUser.id,
@@ -1345,6 +1303,7 @@ async function setMicrophoneEnabledWithFallback(
   enabled: boolean,
   preferredDeviceId?: string
 ): Promise<boolean> {
+  if (!isCurrentRoom(room)) return false;
   // Guard: don't try to publish tracks if the room isn't connected.
   // Publishing in a reconnecting/disconnected state causes cascading
   // "engine not connected within timeout" errors.
@@ -1413,6 +1372,7 @@ async function setMicrophoneEnabledWithFallback(
   // echo cancellation, and voice isolation preferences so every mic
   // enable/republish path applies them consistently.
   const preferredProfile = await resolveMicCaptureProfile(preferredInputDeviceId);
+  if (!isCurrentRoom(room)) return false;
   const captureOptions = buildAudioCaptureOptions(preferredInputDeviceId, preferredProfile);
 
   // If a mic track is already published, just unmute it instead of tearing
@@ -1431,6 +1391,7 @@ async function setMicrophoneEnabledWithFallback(
     }
   }
 
+  if (!isCurrentRoom(room)) return false;
   if (preferredInputDeviceId) {
     try {
       await room.localParticipant.setMicrophoneEnabled(
@@ -1451,7 +1412,9 @@ async function setMicrophoneEnabledWithFallback(
   }
 
   try {
+    if (!isCurrentRoom(room)) return false;
     const defaultProfile = await resolveMicCaptureProfile();
+    if (!isCurrentRoom(room)) return false;
     const defaultCaptureOptions = buildAudioCaptureOptions(undefined, defaultProfile);
     await room.localParticipant.setMicrophoneEnabled(true, defaultCaptureOptions, microphonePublishOptions);
     await ensurePublishedTrackUnmuted();
@@ -1474,6 +1437,7 @@ async function setMicrophoneEnabledWithFallback(
 }
 
 function syncRemoteAudioTracks(room: Room, muted: boolean): void {
+  if (!isCurrentRoom(room)) return;
   for (const participant of room.remoteParticipants.values()) {
     for (const publication of participant.trackPublications.values()) {
       if (publication.source === Track.Source.ScreenShareAudio) {
@@ -1499,12 +1463,25 @@ function registerRoomListeners(
   room: Room,
   onDisconnected: (reason?: DisconnectReason) => void
 ): () => void {
+  const guardedCallbacks = new WeakMap<object, unknown>();
+  const guarded = <T extends (...args: never[]) => void>(callback: T): T => {
+    if (!guardedCallbacks.has(callback)) {
+      guardedCallbacks.set(callback, (...args: Parameters<T>) => { if (isCurrentRoom(room)) callback(...args); });
+    }
+    return guardedCallbacks.get(callback) as T;
+  };
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  const gestureCleanups = new Set<() => void>();
+  const schedule = (callback: () => void, delayMs: number) => {
+    const timer = setTimeout(() => { timers.delete(timer); if (isCurrentRoom(room)) callback(); }, delayMs);
+    timers.add(timer);
+  };
   const speakingHandlers = new Map<string, (speaking: boolean) => void>();
   const bindParticipantSpeaking = (participant: Participant) => {
     const identity = participant.identity;
     if (!identity || speakingHandlers.has(identity)) return;
     const handler = (speaking: boolean) => {
-      setSpeakingForIdentity(identity, speaking);
+      if (isCurrentRoom(room)) setSpeakingForIdentity(identity, speaking);
     };
     speakingHandlers.set(identity, handler);
     participant.on(ParticipantEvent.IsSpeakingChanged, handler);
@@ -1520,7 +1497,7 @@ function registerRoomListeners(
       participant.off(ParticipantEvent.IsSpeakingChanged, handler);
       speakingHandlers.delete(identity);
     }
-    setSpeakingForIdentity(identity, false);
+    if (isCurrentRoom(room)) setSpeakingForIdentity(identity, false);
   };
   bindParticipantSpeaking(room.localParticipant);
   for (const participant of room.remoteParticipants.values()) {
@@ -1532,7 +1509,7 @@ function registerRoomListeners(
 
   const onActiveSpeakersChanged = (speakers: Participant[]) => {
     const speakingIds = new Set(speakers.map((s) => s.identity));
-    const localUserId = useAuthStore.getState().user?.id;
+    const localUserId = currentCallUser()?.id;
     const serverDetectedLocalSpeaking = !!(localUserId && speakingIds.has(localUserId));
     useVoiceStore.setState({ micServerDetected: serverDetectedLocalSpeaking });
     // Fallback to local analyser for self speaking so the local ring still
@@ -1547,8 +1524,8 @@ function registerRoomListeners(
     bindParticipantSpeaking(participant);
     refreshAudioCodecCompatibility(room, `participant-connected:${participant.identity}`);
     // Re-check shortly after connect to catch late track metadata updates.
-    setTimeout(() => refreshAudioCodecCompatibility(room, 'participant-connected-delayed'), 300);
-    setTimeout(() => refreshAudioCodecCompatibility(room, 'participant-connected-late'), 1500);
+    schedule(() => refreshAudioCodecCompatibility(room, 'participant-connected-delayed'), 300);
+    schedule(() => refreshAudioCodecCompatibility(room, 'participant-connected-late'), 1500);
     for (const publication of participant.trackPublications.values()) {
       if (publication.source === Track.Source.ScreenShareAudio) {
         continue;
@@ -1584,7 +1561,7 @@ function registerRoomListeners(
       const state = useVoiceStore.getState();
       if (state.selfVideo) {
         console.info('[voice] Local camera track unpublished; clearing selfVideo');
-        const localUserId = useAuthStore.getState().user?.id;
+        const localUserId = currentCallUser()?.id;
         const participants = new Map(state.participants);
         if (localUserId) {
           const existing = participants.get(localUserId);
@@ -1599,14 +1576,13 @@ function registerRoomListeners(
     // "Stop sharing" in the OS chrome, or the shared window was closed),
     // clear selfStream so the stream viewer UI is removed.
     if (publication.source === Track.Source.ScreenShare) {
-      void stopNativeSystemAudio();
       suppressVoiceForStream(false);
       const state = useVoiceStore.getState();
       if (state.selfStream) {
         console.info('[voice] Local screen share track unpublished; clearing selfStream');
         // Notify server that stream ended
         if (state.channelId) {
-          voiceApi.stopStream(state.channelId).catch((err) => {
+          callApi().stopStream(state.channelId).catch((err) => {
             console.warn('[voice] Failed to stop stream after local unpublish:', err);
           });
         }
@@ -1616,7 +1592,7 @@ function registerRoomListeners(
         for (const el of voiceEls) {
           el.setSinkId?.(savedOutputId).catch(() => { });
         }
-        const localUserId = useAuthStore.getState().user?.id;
+        const localUserId = currentCallUser()?.id;
         const participants = new Map(state.participants);
         const channelParticipants = new Map(state.channelParticipants);
         if (localUserId) {
@@ -1676,7 +1652,7 @@ function registerRoomListeners(
       );
     } else {
       // Ensure we attempt attachment again shortly after publication.
-      setTimeout(() => {
+      schedule(() => {
         const latestTrack = publication.track;
         if (latestTrack && latestTrack.kind === Track.Kind.Audio) {
           attachRemoteAudioTrack(
@@ -1765,10 +1741,11 @@ function registerRoomListeners(
     if (!room.canPlaybackAudio) {
       console.warn('[voice] Audio playback blocked; will retry on next user gesture');
       const resume = () => {
-        room.startAudio().catch(() => { });
+        if (isCurrentRoom(room)) room.startAudio().catch(() => { });
         document.removeEventListener('click', resume);
         document.removeEventListener('keydown', resume);
       };
+      gestureCleanups.add(() => { document.removeEventListener('click', resume); document.removeEventListener('keydown', resume); });
       document.addEventListener('click', resume, { once: true });
       document.addEventListener('keydown', resume, { once: true });
     }
@@ -1797,11 +1774,15 @@ function registerRoomListeners(
   };
 
   const onReconnecting = () => {
+    const owner = roomOwners.get(room)?.owner;
+    if (owner?.current) { owner.phase = 'reconnecting'; useVoiceStore.setState({ callPhase: 'reconnecting' }); }
     console.warn('[voice] LiveKit reconnecting...');
     logVoiceDiagnostic('[voice] LiveKit reconnecting');
   };
 
   const onReconnected = () => {
+    const owner = roomOwners.get(room)?.owner;
+    if (owner?.current) { owner.phase = 'connected'; useVoiceStore.setState({ callPhase: 'connected' }); }
     console.info('[voice] LiveKit reconnected successfully');
     logVoiceDiagnostic('[voice] LiveKit reconnected');
     tuneLivekitSignalHeartbeat(room);
@@ -1841,46 +1822,50 @@ function registerRoomListeners(
     onDisconnected(reason);
   };
 
-  room.on(RoomEvent.ActiveSpeakersChanged, onActiveSpeakersChanged);
-  room.on(RoomEvent.ParticipantConnected, onParticipantConnected);
-  room.on(RoomEvent.ParticipantDisconnected, onParticipantDisconnected);
-  room.on(RoomEvent.LocalTrackPublished, onLocalTrackPublished);
-  room.on(RoomEvent.LocalTrackUnpublished, onLocalTrackUnpublished);
-  room.on(RoomEvent.TrackSubscribed, onTrackSubscribed);
-  room.on(RoomEvent.TrackPublished, onTrackPublished);
-  room.on(RoomEvent.TrackSubscriptionFailed, onTrackSubscriptionFailed);
-  room.on(RoomEvent.TrackSubscriptionStatusChanged, onTrackSubscriptionStatusChanged);
-  room.on(RoomEvent.TrackUnsubscribed, onTrackUnsubscribed);
-  room.on(RoomEvent.TrackMuted, onTrackMuted);
-  room.on(RoomEvent.TrackUnmuted, onTrackUnmuted);
-  room.on(RoomEvent.TrackUnpublished, onTrackUnpublished);
-  room.on(RoomEvent.AudioPlaybackStatusChanged, onAudioPlaybackStatusChanged);
-  room.on(RoomEvent.MediaDevicesError, onMediaDevicesError);
-  room.on(RoomEvent.LocalAudioSilenceDetected, onLocalAudioSilenceDetected);
-  room.on(RoomEvent.Reconnecting, onReconnecting);
-  room.on(RoomEvent.Reconnected, onReconnected);
-  room.on(RoomEvent.Disconnected, onDisconnectedEvent);
+  room.on(RoomEvent.ActiveSpeakersChanged, guarded(onActiveSpeakersChanged));
+  room.on(RoomEvent.ParticipantConnected, guarded(onParticipantConnected));
+  room.on(RoomEvent.ParticipantDisconnected, guarded(onParticipantDisconnected));
+  room.on(RoomEvent.LocalTrackPublished, guarded(onLocalTrackPublished));
+  room.on(RoomEvent.LocalTrackUnpublished, guarded(onLocalTrackUnpublished));
+  room.on(RoomEvent.TrackSubscribed, guarded(onTrackSubscribed));
+  room.on(RoomEvent.TrackPublished, guarded(onTrackPublished));
+  room.on(RoomEvent.TrackSubscriptionFailed, guarded(onTrackSubscriptionFailed));
+  room.on(RoomEvent.TrackSubscriptionStatusChanged, guarded(onTrackSubscriptionStatusChanged));
+  room.on(RoomEvent.TrackUnsubscribed, guarded(onTrackUnsubscribed));
+  room.on(RoomEvent.TrackMuted, guarded(onTrackMuted));
+  room.on(RoomEvent.TrackUnmuted, guarded(onTrackUnmuted));
+  room.on(RoomEvent.TrackUnpublished, guarded(onTrackUnpublished));
+  room.on(RoomEvent.AudioPlaybackStatusChanged, guarded(onAudioPlaybackStatusChanged));
+  room.on(RoomEvent.MediaDevicesError, guarded(onMediaDevicesError));
+  room.on(RoomEvent.LocalAudioSilenceDetected, guarded(onLocalAudioSilenceDetected));
+  room.on(RoomEvent.Reconnecting, guarded(onReconnecting));
+  room.on(RoomEvent.Reconnected, guarded(onReconnected));
+  room.on(RoomEvent.Disconnected, guarded(onDisconnectedEvent));
 
   return () => {
-    room.off(RoomEvent.ActiveSpeakersChanged, onActiveSpeakersChanged);
-    room.off(RoomEvent.ParticipantConnected, onParticipantConnected);
-    room.off(RoomEvent.ParticipantDisconnected, onParticipantDisconnected);
-    room.off(RoomEvent.LocalTrackPublished, onLocalTrackPublished);
-    room.off(RoomEvent.LocalTrackUnpublished, onLocalTrackUnpublished);
-    room.off(RoomEvent.TrackSubscribed, onTrackSubscribed);
-    room.off(RoomEvent.TrackPublished, onTrackPublished);
-    room.off(RoomEvent.TrackSubscriptionFailed, onTrackSubscriptionFailed);
-    room.off(RoomEvent.TrackSubscriptionStatusChanged, onTrackSubscriptionStatusChanged);
-    room.off(RoomEvent.TrackUnsubscribed, onTrackUnsubscribed);
-    room.off(RoomEvent.TrackMuted, onTrackMuted);
-    room.off(RoomEvent.TrackUnmuted, onTrackUnmuted);
-    room.off(RoomEvent.TrackUnpublished, onTrackUnpublished);
-    room.off(RoomEvent.AudioPlaybackStatusChanged, onAudioPlaybackStatusChanged);
-    room.off(RoomEvent.MediaDevicesError, onMediaDevicesError);
-    room.off(RoomEvent.LocalAudioSilenceDetected, onLocalAudioSilenceDetected);
-    room.off(RoomEvent.Reconnecting, onReconnecting);
-    room.off(RoomEvent.Reconnected, onReconnected);
-    room.off(RoomEvent.Disconnected, onDisconnectedEvent);
+    for (const timer of timers) clearTimeout(timer);
+    timers.clear();
+    for (const cleanup of gestureCleanups) cleanup();
+    gestureCleanups.clear();
+    room.off(RoomEvent.ActiveSpeakersChanged, guarded(onActiveSpeakersChanged));
+    room.off(RoomEvent.ParticipantConnected, guarded(onParticipantConnected));
+    room.off(RoomEvent.ParticipantDisconnected, guarded(onParticipantDisconnected));
+    room.off(RoomEvent.LocalTrackPublished, guarded(onLocalTrackPublished));
+    room.off(RoomEvent.LocalTrackUnpublished, guarded(onLocalTrackUnpublished));
+    room.off(RoomEvent.TrackSubscribed, guarded(onTrackSubscribed));
+    room.off(RoomEvent.TrackPublished, guarded(onTrackPublished));
+    room.off(RoomEvent.TrackSubscriptionFailed, guarded(onTrackSubscriptionFailed));
+    room.off(RoomEvent.TrackSubscriptionStatusChanged, guarded(onTrackSubscriptionStatusChanged));
+    room.off(RoomEvent.TrackUnsubscribed, guarded(onTrackUnsubscribed));
+    room.off(RoomEvent.TrackMuted, guarded(onTrackMuted));
+    room.off(RoomEvent.TrackUnmuted, guarded(onTrackUnmuted));
+    room.off(RoomEvent.TrackUnpublished, guarded(onTrackUnpublished));
+    room.off(RoomEvent.AudioPlaybackStatusChanged, guarded(onAudioPlaybackStatusChanged));
+    room.off(RoomEvent.MediaDevicesError, guarded(onMediaDevicesError));
+    room.off(RoomEvent.LocalAudioSilenceDetected, guarded(onLocalAudioSilenceDetected));
+    room.off(RoomEvent.Reconnecting, guarded(onReconnecting));
+    room.off(RoomEvent.Reconnected, guarded(onReconnected));
+    room.off(RoomEvent.Disconnected, guarded(onDisconnectedEvent));
     unbindParticipantSpeaking(room.localParticipant);
     for (const participant of room.remoteParticipants.values()) {
       unbindParticipantSpeaking(participant);
@@ -1889,6 +1874,10 @@ function registerRoomListeners(
 }
 
 interface VoiceStoreState {
+  callId: string | null;
+  callScope: AccountScope | null;
+  callPhase: CallPhase | 'idle';
+  publishVoiceState: () => void;
   connected: boolean;
   joining: boolean;
   joiningChannelId: string | null;
@@ -1959,9 +1948,9 @@ interface VoiceStoreState {
   setPttEngaged: (engaged: boolean) => void;
 
   // Gateway event handlers
-  handleVoiceStateUpdate: (state: VoiceState) => void;
+  handleVoiceStateUpdate: (state: VoiceState, scope?: AccountScope) => void;
   // Load initial voice states from READY payload
-  loadVoiceStates: (guildId: string, states: VoiceState[]) => void;
+  loadVoiceStates: (guildId: string, states: VoiceState[], scope?: AccountScope) => void;
   // Speaking state from LiveKit
   setSpeakingUsers: (userIds: string[]) => void;
   /**
@@ -1973,6 +1962,13 @@ interface VoiceStoreState {
 }
 
 export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
+  callId: null, callScope: null, callPhase: 'idle',
+  publishVoiceState: () => {
+    const owner = currentCall;
+    if (!owner?.current || owner.phase !== 'connected') return;
+    const state = get();
+    gateway.updateVoiceState(owner.target.scope.serverId, owner.target.guildId === 'dm' ? null : owner.target.guildId, owner.target.channelId, state.selfMute, state.selfDeaf, state.selfVideo, state.voiceSessionId);
+  },
   connected: false,
   joining: false,
   joiningChannelId: null,
@@ -2009,1025 +2005,41 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
   useNativeMedia: true,
   mediaEngine: null,
 
-  joinChannel: async (channelId, guildId, internalRetryAttempt = 0) => {
-    configureLivekitLogging();
-    const joinStartMs = Date.now();
-    const elapsed = () => `${Date.now() - joinStartMs}ms`;
-    voiceTimingLog(`[voice] +0ms joinChannel START channelId=${channelId}`);
-    logVoiceDiagnostic(`[voice] joinChannel START`, {
-      channelId,
-      guildId: guildId ?? null,
-      internalRetryAttempt,
-    });
-    const currentState = get();
-    if (
-      currentState.connected &&
-      currentState.channelId === channelId &&
-      (currentState.mediaEngine != null || (currentState.room && currentState.room.state !== ConnectionState.Disconnected))
-    ) {
-      // Idempotent join: avoid tearing down and recreating the same room
-      // connection when duplicate click handlers fire.
-      return;
+  joinChannel: (channelId, guildId) => {
+    const context = captureOperationContext();
+    const target = { scope: context.scope, channelId, guildId: guildId ?? null };
+    if (currentCall?.current && accountScopeKey(currentCall.target.scope) === context.key
+        && currentCall.target.channelId === channelId && currentCall.target.guildId === target.guildId) {
+      context.dispose();
+      return currentCall.joinPromise ?? Promise.resolve();
     }
-    if (currentState.joining && currentState.joiningChannelId === channelId) {
-      // Keep join single-flight for a channel; overlapping joins can race the
-      // signaling engine and produce spurious websocket close errors.
-      return;
-    }
-    const joinAttempt = ++joinAttemptSeq;
-    activeJoinAttempt = joinAttempt;
-    const previousSelfMute = get().selfMute;
-    const previousSelfDeaf = get().selfDeaf;
-    // In push-to-talk mode, always start muted
-    const isPttMode = (useAuthStore.getState().settings?.notifications as Record<string, unknown> | undefined)?.['voiceInputMode'] === 'push_to_talk';
-    const shouldMuteOnJoin = previousSelfMute || previousSelfDeaf || isPttMode;
-    // Disconnect any in-flight Room from a concurrent join that hasn't
-    // stored its room in state yet.  Without this, two Room.connect()
-    // calls can race against the same LiveKit signaling endpoint.
-    if (inFlightJoinRoom) {
-      const staleRoom = inFlightJoinRoom;
-      inFlightJoinRoom = null;
-      startPendingDisconnect(staleRoom.disconnect());
-    }
-    // Tear down any existing native media engine from a prior connection.
-    const existingEngine = get().mediaEngine;
-    if (existingEngine) {
-      existingEngine.disconnect().catch(() => { });
-      // Only drop the engine reference. Do NOT downgrade useNativeMedia here:
-      // the intended engine is decided per-join by the server's native_media
-      // flag plus a stable local preference, never by whether an engine object
-      // currently exists. Previously this reset to isTauri(), which silently
-      // flipped native OFF in the browser for the next join even though the
-      // browser has a real WebTransport engine (BrowserMediaEngine).
-      set({ mediaEngine: null });
-    }
-    const existingRoom = get().room;
-    if (existingRoom) {
-      clearActiveRoomListeners();
-      stopLocalMicAnalyser();
-      stopLocalAudioUplinkMonitor();
-      stopRemoteAudioReconcile();
-      startPendingDisconnect(existingRoom.disconnect());
-    }
-    // Wait for any in-flight Room.disconnect() (from leaveChannel or above)
-    // so the old WebSocket is fully closed before we open a new one.
-    // On Windows WebView2, rapidly opening a new socket to the same host can
-    // race with teardown of the previous socket and trigger long reconnect
-    // fallback paths. Prefer waiting for disconnect completion, then only add
-    // a small quiet period if teardown was very fast.
-    if (pendingDisconnect) {
-      const { timedOut, ageMs } = await waitForPendingDisconnect(DISCONNECT_WAIT_ON_JOIN_MS);
-      if (timedOut) {
-        console.warn(
-          `[voice] Disconnect still in-flight after ${DISCONNECT_WAIT_ON_JOIN_MS}ms; proceeding with join.`
-        );
-      } else {
-        console.info(`[voice] Disconnect completed before join (age=${ageMs}ms).`);
-      }
-      const quietPeriodRemainingMs = Math.max(0, MIN_DISCONNECT_QUIET_PERIOD_MS - ageMs);
-      if (quietPeriodRemainingMs > 0) {
-        console.info(
-          `[voice] Waiting ${quietPeriodRemainingMs}ms quiet period before LiveKit connect.`
-        );
-        await new Promise<void>((resolve) => setTimeout(resolve, quietPeriodRemainingMs));
-      }
-    }
-    forceRedForCompatibility = false;
-    detachAllAttachedRemoteAudio();
-    let room: Room | null = null;
-    let joinedServer = false;
-    let joinedSessionId: string | null = null;
-    // Bail early if this join was superseded during the quiet period.
-    if (activeJoinAttempt !== joinAttempt) {
-      return;
-    }
-    set({
-      joining: true,
-      joiningChannelId: channelId,
-      connectionError: null,
-      connectionErrorChannelId: null,
-      watchedStreamerId: null,
-      previewStreamerId: null,
-    });
-    try {
-      voiceTimingLog(`[voice] +${elapsed()} API call starting`);
-      logVoiceDiagnostic(`[voice] +${elapsed()} API call starting`);
-      const joinResponse = guildId === 'dm'
-        ? await voiceApi.joinDmChannel(channelId)
-        : await voiceApi.joinChannel(channelId);
-      // Defensively unwrap payloads wrapped as { data: {...} }.
-      const maybeWrapped = joinResponse.data as unknown;
-      const data =
-        maybeWrapped
-          && typeof maybeWrapped === 'object'
-          && 'data' in maybeWrapped
-          && (maybeWrapped as { data?: unknown }).data
-          && typeof (maybeWrapped as { data?: unknown }).data === 'object'
-          ? ((maybeWrapped as { data: typeof joinResponse.data }).data)
-          : joinResponse.data;
-      voiceTimingLog(`[voice] +${elapsed()} API call done url=${data?.url} candidates=${JSON.stringify(data?.url_candidates)}`);
-      logVoiceDiagnostic(`[voice] +${elapsed()} API call done`, {
-        channelId,
-        hasToken: typeof data?.token === 'string' && data.token.length > 0,
-        url: data?.url ?? null,
-        urlCandidates: Array.isArray(data?.url_candidates) ? data.url_candidates : [],
-      });
-      joinedSessionId =
-        typeof data?.session_id === 'string' && data.session_id.length > 0
-          ? data.session_id
-          : null;
-      // Bail if superseded during the API call — avoids creating a Room
-      // and starting a LiveKit connect that will just be torn down.
-      if (activeJoinAttempt !== joinAttempt) {
-        // Roll back the server join so the voice state stays clean.
-        voiceApi.leaveChannel(channelId, { sessionId: joinedSessionId ?? undefined }).catch(() => { });
-        set({ joining: false, joiningChannelId: null });
-        return;
-      }
-      joinedServer = true;
-
-      // ── Native media engine path ──────────────────────────────────────
-      // When the server indicates native media support (or the store has
-      // been configured to use it), we bypass the entire LiveKit code path
-      // and use the MediaEngine interface instead.
-      const serverNativeMedia = data.native_media === true;
-      const storeNativeMedia = get().useNativeMedia;
-      if (serverNativeMedia || storeNativeMedia) {
-        // Build candidate list: prefer server-provided candidates, fall back
-        // to the single media_endpoint field.
-        const mediaCandidates: string[] = (
-          Array.isArray(data.media_endpoint_candidates) && data.media_endpoint_candidates.length > 0
-            ? data.media_endpoint_candidates
-            : [data.media_endpoint, data.url]
-        ).filter((v): v is string => typeof v === 'string' && v.trim().length > 0);
-        const mediaToken =
-          typeof data.media_token === 'string' && data.media_token.trim().length > 0
-            ? data.media_token
-            : (typeof data.token === 'string' ? data.token : '');
-        const hasNativeConnectInfo = mediaCandidates.length > 0 && mediaToken.trim().length > 0;
-        if (!hasNativeConnectInfo) {
-          const missingNativePayloadMessage =
-            'Server did not return native media connect details. ' +
-            `(media_endpoint=${data.media_endpoint}, media_token=${Boolean(data.media_token)}, ` +
-            `url=${data.url}, token=${Boolean(data.token)}, ` +
-            `media_endpoint_candidates=${JSON.stringify(data.media_endpoint_candidates)})`;
-          if (serverNativeMedia) {
-            throw new Error(missingNativePayloadMessage);
-          }
-          // Native media is only a local preference here; if the server did
-          // not advertise native payload fields, continue on the LiveKit path.
-          console.warn(`[voice] ${missingNativePayloadMessage} Falling back to LiveKit path.`);
-          logVoiceDiagnostic('[voice] Native media preference skipped: missing native payload', {
-            channelId,
-            serverNativeMedia,
-            storeNativeMedia,
-            mediaEndpoint: data.media_endpoint ?? null,
-            mediaEndpointCandidates: Array.isArray(data.media_endpoint_candidates)
-              ? data.media_endpoint_candidates
-              : [],
-            hasMediaToken: typeof data.media_token === 'string' && data.media_token.length > 0,
-            hasLivekitUrl: typeof data.url === 'string' && data.url.length > 0,
-            hasLivekitToken: typeof data.token === 'string' && data.token.length > 0,
-          });
-        } else {
-          voiceTimingLog(`[voice] +${elapsed()} native media path, candidates=${JSON.stringify(mediaCandidates)}`);
-          logVoiceDiagnostic(`[voice] +${elapsed()} native media engine connect`, {
-            channelId,
-            endpointCandidates: mediaCandidates,
-            serverNativeMedia,
-            storeNativeMedia,
-          });
-
-          let engine: MediaEngine | null = null;
-          try {
-          engine = await createMediaEngine();
-
-          // Wire up participant callbacks before connecting so we don't
-          // miss early events.
-          engine.onParticipantJoin((userId) => {
-            playVoiceJoinSound();
-            const currentParticipants = new Map(get().participants);
-            const currentChannelParticipants = new Map(get().channelParticipants);
-            const voiceState: VoiceState = {
-              user_id: userId,
-              channel_id: channelId,
-              guild_id: guildId || undefined,
-              session_id: '',
-              deaf: false,
-              mute: false,
-              self_mute: false,
-              self_deaf: false,
-              self_stream: false,
-              self_video: false,
-              suppress: false,
-            };
-            currentParticipants.set(userId, voiceState);
-            const channelMembers = (currentChannelParticipants.get(channelId) || [])
-              .filter((p) => p.user_id !== userId);
-            channelMembers.push(voiceState);
-            currentChannelParticipants.set(channelId, channelMembers);
-            set({ participants: currentParticipants, channelParticipants: currentChannelParticipants });
-          });
-
-          engine.onParticipantLeave((userId) => {
-            playVoiceLeaveSound();
-            const currentParticipants = new Map(get().participants);
-            const currentChannelParticipants = new Map(get().channelParticipants);
-            currentParticipants.delete(userId);
-            const channelMembers = (currentChannelParticipants.get(channelId) || [])
-              .filter((p) => p.user_id !== userId);
-            if (channelMembers.length === 0) {
-              currentChannelParticipants.delete(channelId);
-            } else {
-              currentChannelParticipants.set(channelId, channelMembers);
-            }
-            set({ participants: currentParticipants, channelParticipants: currentChannelParticipants });
-          });
-
-          engine.onSpeakingChange((speakers) => {
-            get().setSpeakingUsers(Array.from(speakers.keys()));
-          });
-          engine.onTransportLost((reason) => {
-            void get().handleMediaTransportLost(reason);
-          });
-          engine.onCameraFailure?.((error) => {
-            const message = error instanceof Error ? error.message : 'Camera capture failed';
-            logVoiceDiagnostic('[voice] native camera failure', { error: message });
-            set({ selfVideo: false });
-            useToastStore.getState().addToast('error', `Camera stopped: ${message}`);
-          });
-
-          // Try each candidate endpoint in order (LAN first, then public).
-          let connected = false;
-          let lastErr: unknown;
-          for (const candidate of mediaCandidates) {
-            try {
-              voiceTimingLog(`[voice] +${elapsed()} native media trying candidate: ${candidate}`);
-              await engine.connect(candidate, mediaToken, data.cert_hash || undefined);
-              voiceTimingLog(`[voice] +${elapsed()} native media connected via ${candidate}`);
-              connected = true;
-              break;
-            } catch (err) {
-              console.warn(`[voice] Native media connect candidate failed: ${candidate}`, err);
-              logVoiceDiagnostic('[voice] Native media connect candidate failed', { candidate, error: err instanceof Error ? err.message : String(err) });
-              lastErr = err;
-              // Disconnect engine before trying next candidate so it can rebind
-              await engine.disconnect().catch(() => { });
-              engine = await createMediaEngine();
-              // Re-wire callbacks on fresh engine
-              engine.onParticipantJoin((userId) => {
-                playVoiceJoinSound();
-                const currentParticipants = new Map(get().participants);
-                const currentChannelParticipants = new Map(get().channelParticipants);
-                const voiceState: VoiceState = {
-                  user_id: userId,
-                  channel_id: channelId,
-                  guild_id: guildId || undefined,
-                  session_id: '',
-                  deaf: false, mute: false, self_mute: false, self_deaf: false,
-                  self_stream: false, self_video: false, suppress: false,
-                };
-                currentParticipants.set(userId, voiceState);
-                const channelMembers = (currentChannelParticipants.get(channelId) || [])
-                  .filter((p) => p.user_id !== userId);
-                channelMembers.push(voiceState);
-                currentChannelParticipants.set(channelId, channelMembers);
-                set({ participants: currentParticipants, channelParticipants: currentChannelParticipants });
-              });
-              engine.onParticipantLeave((userId) => {
-                playVoiceLeaveSound();
-                const currentParticipants = new Map(get().participants);
-                const currentChannelParticipants = new Map(get().channelParticipants);
-                currentParticipants.delete(userId);
-                const channelMembers = (currentChannelParticipants.get(channelId) || [])
-                  .filter((p) => p.user_id !== userId);
-                if (channelMembers.length === 0) {
-                  currentChannelParticipants.delete(channelId);
-                } else {
-                  currentChannelParticipants.set(channelId, channelMembers);
-                }
-                set({ participants: currentParticipants, channelParticipants: currentChannelParticipants });
-              });
-              engine.onSpeakingChange((speakers) => {
-                get().setSpeakingUsers(Array.from(speakers.keys()));
-              });
-              engine.onTransportLost((reason) => {
-                void get().handleMediaTransportLost(reason);
-              });
-              engine.onCameraFailure?.((error) => {
-                const message = error instanceof Error ? error.message : 'Camera capture failed';
-                logVoiceDiagnostic('[voice] native camera failure', { error: message });
-                set({ selfVideo: false });
-                useToastStore.getState().addToast('error', `Camera stopped: ${message}`);
-              });
-            }
-          }
-          if (!connected) {
-            throw lastErr ?? new Error('All native media candidates failed');
-          }
-
-          // Apply initial mute/deaf state
-          const stageListenOnly = data.suppress === true;
-          if (shouldMuteOnJoin || stageListenOnly) {
-            engine.setMute(true);
-          }
-          if (previousSelfDeaf) {
-            engine.setDeaf(true);
-          }
-
-          voiceTimingLog(`[voice] +${elapsed()} native media engine connected`);
-          logVoiceDiagnostic(`[voice] +${elapsed()} native media engine connected`);
-
-          if (activeJoinAttempt !== joinAttempt) {
-            await engine.disconnect();
-            return;
-          }
-
-          // Build local voice state for the sidebar
-          const localVoiceState = buildLocalVoiceState(
-            channelId,
-            guildId || null,
-            data.session_id ?? '',
-            shouldMuteOnJoin || stageListenOnly,
-            previousSelfDeaf,
-            false,
-            false,
-            stageListenOnly,
-          );
-          set((prev) => {
-            const channelParticipants = new Map(prev.channelParticipants);
-            const participants = new Map(prev.participants);
-            if (localVoiceState) {
-              const existing = (channelParticipants.get(channelId) || []).filter(
-                (p) => p.user_id !== localVoiceState.user_id,
-              );
-              existing.push(localVoiceState);
-              channelParticipants.set(channelId, existing);
-              participants.set(localVoiceState.user_id, localVoiceState);
-            }
-            return {
-              connected: true,
-              joining: false,
-              joiningChannelId: null,
-              channelId,
-              guildId: guildId || null,
-              livekitToken: null,
-              livekitUrl: null,
-              roomName: data.room_name,
-              voiceSessionId: joinedSessionId,
-              room: null,
-              participants,
-              channelParticipants,
-              selfMute: shouldMuteOnJoin,
-              selfDeaf: previousSelfDeaf,
-              useNativeMedia: true,
-              mediaEngine: engine,
-              watchedStreamerId: null,
-              previewStreamerId: null,
-            };
-          });
-          playVoiceJoinSound();
-          return;
-        } catch (nativeErr) {
-          const nativeMessage =
-            nativeErr instanceof Error ? nativeErr.message : 'Native media engine connect failed';
-          console.error('[voice] Native media engine failed:', nativeMessage);
-          logVoiceDiagnostic('[voice] Native media engine failed', { error: nativeMessage });
-          if (engine) {
-            await engine.disconnect().catch(() => { });
-          }
-
-          const hasLivekitJoinInfo =
-            typeof data?.url === 'string'
-            && data.url.trim().length > 0
-            && typeof data?.token === 'string'
-            && data.token.trim().length > 0;
-          if (!allowNativeToLivekitFallback()) {
-            console.error('[voice] Native media failed and LiveKit fallback is disabled.');
-            logVoiceDiagnostic('[voice] Native media failed; LiveKit fallback disabled', {
-              error: nativeMessage,
-              livekitAvailable: data.livekit_available === true,
-              hasLivekitJoinInfo,
-            });
-            throw nativeErr;
-          }
-          // Attempt LiveKit fallback only when explicitly enabled and the
-          // server has advertised a usable LiveKit path.
-          if (data.livekit_available === true || hasLivekitJoinInfo) {
-            console.warn('[voice] Attempting LiveKit fallback after native media failure');
-            logVoiceDiagnostic('[voice] Attempting LiveKit fallback', {
-              error: nativeMessage,
-            });
-            try {
-              // Leave the native-media session so the server clears state
-              await voiceApi.leaveChannel(channelId, { sessionId: joinedSessionId ?? undefined }).catch(() => { });
-              // Re-join with explicit LiveKit fallback request
-              const { data: lkData } = guildId === 'dm'
-                ? await voiceApi.joinDmChannel(channelId, { fallback: 'livekit' })
-                : await voiceApi.joinChannel(channelId, { fallback: 'livekit' });
-              // Overwrite `data` so the LiveKit path below uses the fallback response
-              Object.assign(data, lkData);
-              joinedSessionId =
-                typeof lkData?.session_id === 'string' && lkData.session_id.length > 0
-                  ? lkData.session_id
-                  : null;
-              // Fall through to the LiveKit path below
-            } catch (lkErr) {
-              console.error('[voice] LiveKit fallback also failed:', lkErr);
-              logVoiceDiagnostic('[voice] LiveKit fallback failed', {
-                error: lkErr instanceof Error ? lkErr.message : 'unknown',
-              });
-              throw lkErr; // Both paths failed
-            }
-          } else {
-            // No fallback available — rethrow so the existing catch handles it
-            throw nativeErr;
-          }
-        }
-      }
-      }
-
-      // ── LiveKit path (default) ────────────────────────────────────────
-      room = new Room({
-        // Audio capture defaults: read user's voice settings for noise
-        // suppression, echo cancellation, and voice isolation.
-        audioCaptureDefaults: buildAudioCaptureOptions() as AudioCaptureOptions,
-        // Publish defaults tuned for voice chat.
-        publishDefaults: {
-          audioPreset: AudioPresets.speech,
-          dtx: false,
-          // Prefer broad compatibility across browsers/WebViews and mixed
-          // client versions. Some peers fail to decode RED reliably, causing
-          // one-way audio (you can hear them, they can't hear you).
-          red: false,
-          forceStereo: false,
-          stopMicTrackOnMute: false,
-          // Default screen share encoding as a safety net. The startStream
-          // method passes preset-specific encoding on each publish, but this
-          // ensures any fallback screen-share path still gets decent quality.
-          screenShareEncoding: {
-            maxBitrate: 15_000_000,
-            maxFramerate: 60,
-            priority: 'high',
-          },
-          screenShareSimulcastLayers: [],
-        },
-        // Adaptive stream adjusts subscribed quality based on element size.
-        // Disabled because it causes screen share viewers to get low quality
-        // when the video element hasn't been resized to full size yet.
-        adaptiveStream: false,
-        // Pause video layers no subscriber is watching.
-        dynacast: true,
-        // livekit-client v2.17 defaults to single-PC mode. In this deployment
-        // we observe periodic signal disconnect loops with that mode enabled.
-        // Force dual-PC mode for stability unless/until upstream behavior changes.
-        singlePeerConnection: false,
-        // Let the LiveKit reconnect policy handle transient disconnects
-        // instead of proactively tearing down on page lifecycle events.
-        // With disconnectOnPageLeave enabled, HMR reloads, service worker
-        // updates, and browser power-saving pagehide events all cause
-        // spurious disconnects while the user is idle in a voice call.
-        // LiveKit's participant_left webhook handles server-side cleanup
-        // when the WebRTC peer connection truly goes away.
-        disconnectOnPageLeave: false,
-        // Be generous with reconnection so transient signal drops
-        // (e.g. hairpin NAT, brief proxy hiccups) don't kick the user.
-        reconnectPolicy: {
-          nextRetryDelayInMs: (context) => {
-            // Retry up to 15 times with 1-second delays (about 15 seconds
-            // total).  Returning null stops retrying.
-            if (context.retryCount >= 15) return null;
-            return 1000;
-          },
-        },
-      });
-      // Track this Room so a concurrent joinChannel/leaveChannel can disconnect
-      // it before it lands in Zustand state.
-      inFlightJoinRoom = room;
-
-      const connectCandidates = buildLivekitConnectCandidates(data.url, data.url_candidates);
-      const normalizedUrl = connectCandidates[0] ?? normalizeLivekitUrlFromServerValue(data.url);
-
-      // Read saved audio device preferences from user settings.
-      const savedInputId = getSavedInputDeviceId();
-      const savedOutputId = getSavedOutputDeviceId();
-      selectedAudioOutputDeviceId = savedOutputId;
-
-      // Register listeners before connecting so we do not miss early
-      // subscriptions published during initial room sync.
-      const thisRoom = room;
-      activeRoomListenerCleanup = registerRoomListeners(room, (reason?: DisconnectReason) => {
-        // Ignore disconnect events from stale rooms (e.g. when joinChannel
-        // was called again, the old room fires Disconnected asynchronously).
-        if (get().room !== thisRoom) return;
-        activeRoomListenerCleanup = null;
-        console.warn('[voice] LiveKit room disconnected, reason:', reason);
-        logVoiceDiagnostic('[voice] LiveKit room disconnected', { reason: reason ?? 'unknown' });
-        // If we were streaming, explicitly clear stream state server-side.
-        const wasStreaming = get().selfStream;
-        const streamChannelId = get().channelId;
-        if (wasStreaming && streamChannelId) {
-          voiceApi.stopStream(streamChannelId).catch((err) => {
-            console.warn('[voice] Failed to stop stream during disconnect cleanup:', err);
-          });
-        }
-        detachAllAttachedRemoteAudio();
-        void stopNativeSystemAudio();
-        suppressVoiceForStream(false);
-        // Do NOT call voiceApi.leaveChannel() here; that tells the server
-        // to delete the room, destroying it for all participants.  Let
-        // LiveKit's participant_left webhook handle server-side cleanup
-        // when the WebRTC peer connection truly goes away.
-        const cId = get().channelId;
-        const auth = useAuthStore.getState().user;
-        set((prev) => {
-          const channelParticipants = new Map(prev.channelParticipants);
-          if (cId && auth) {
-            const members = channelParticipants.get(cId);
-            if (members) {
-              const filtered = members.filter((p) => p.user_id !== auth.id);
-              if (filtered.length === 0) channelParticipants.delete(cId);
-              else channelParticipants.set(cId, filtered);
-            }
-          }
-          return {
-            connected: false,
-            channelId: null,
-            guildId: null,
-            selfMute: false,
-            selfDeaf: false,
-            selfStream: false,
-            selfVideo: false,
-            participants: new Map(),
-            channelParticipants,
-            speakingUsers: new Set<string>(),
-            livekitToken: null,
-            livekitUrl: null,
-            roomName: null,
-            voiceSessionId: null,
-            room: null,
-            joining: false,
-            joiningChannelId: null,
-            streamAudioWarning: null,
-            systemAudioCaptureActive: false,
-            voiceSuppressedForStream: false,
-            watchedStreamerId: null,
-            previewStreamerId: null,
-          };
-        });
-      });
-
-      // ── LiveKit connection: parallel probe then connect ──
-      voiceTimingLog(`[voice] +${elapsed()} connect starting candidates=${JSON.stringify(connectCandidates)}`);
-      logVoiceDiagnostic(`[voice] +${elapsed()} LiveKit connect starting`, {
-        normalizedUrl,
-        serverUrl: data.url,
-        candidates: connectCandidates,
-      });
-      let connected = false;
-      let lastConnectError: unknown = null;
-
-      // In Tauri/WebView2, race all candidates in parallel to find the
-      // first reachable server, then connect once. This avoids the old
-      // sequential approach that wasted minutes timing out on unreachable
-      // candidates (e.g. localhost URLs rejected by WebView2 TLS).
-      if (TAURI_FAST_CONNECT && connectCandidates.length > 1 && activeJoinAttempt === joinAttempt) {
-        console.info('[voice] Racing', connectCandidates.length, 'candidates:', connectCandidates);
-        voiceTimingLog(`[voice] +${elapsed()} probing ${connectCandidates.length} candidates in parallel`);
-        const bestUrl = await findReachableLivekitUrl(connectCandidates, 3_000);
-        console.info('[voice] Best reachable candidate:', bestUrl);
-        voiceTimingLog(`[voice] +${elapsed()} probe winner: ${bestUrl}`);
-        try {
-          await connectWithAttemptTimeout(room, bestUrl, data.token);
-          tuneLivekitSignalHeartbeat(room);
-          connected = true;
-          voiceTimingLog(`[voice] +${elapsed()} connect SUCCESS via ${bestUrl}`);
-          logVoiceDiagnostic('[voice] connect SUCCESS via parallel probe', { candidate: bestUrl });
-          console.info('[voice] Connected via parallel probe.');
-        } catch (probeErr) {
-          lastConnectError = probeErr;
-          console.warn('[voice] Probe winner failed to connect:', probeErr);
-          voiceTimingLog(`[voice] +${elapsed()} probe winner FAILED, falling back to sequential`);
-          try { await room.disconnect(); } catch { /* ignore */ }
-        }
-      }
-
-      // Sequential fallback: browser mode, single candidate, or parallel probe failed.
-      if (!connected) {
-        const totalAttempts = connectCandidates.length * LIVEKIT_CONNECT_ATTEMPTS_PER_CANDIDATE;
-        let attemptCounter = 0;
-        outer: for (let i = 0; i < connectCandidates.length; i += 1) {
-          const candidate = connectCandidates[i]!;
-          for (let retry = 0; retry < LIVEKIT_CONNECT_ATTEMPTS_PER_CANDIDATE; retry += 1) {
-            if (activeJoinAttempt !== joinAttempt) {
-              lastConnectError = new Error('Voice join superseded by a newer attempt');
-              break outer;
-            }
-            attemptCounter += 1;
-            const retryLabel =
-              LIVEKIT_CONNECT_ATTEMPTS_PER_CANDIDATE > 1
-                ? ` (candidate ${i + 1}/${connectCandidates.length}, retry ${retry + 1}/${LIVEKIT_CONNECT_ATTEMPTS_PER_CANDIDATE})`
-                : '';
-            console.info(
-              `[voice] LiveKit connect attempt ${attemptCounter}/${totalAttempts}${retryLabel}: ${candidate}`
-            );
-            voiceTimingLog(`[voice] +${elapsed()} connect attempt ${attemptCounter}/${totalAttempts}: ${candidate}`);
-            try {
-              await connectWithAttemptTimeout(room, candidate, data.token);
-              tuneLivekitSignalHeartbeat(room);
-              connected = true;
-              voiceTimingLog(`[voice] +${elapsed()} connect SUCCESS via ${candidate}`);
-              logVoiceDiagnostic(`[voice] connect SUCCESS via ${candidate}`, {
-                attemptCounter,
-                candidate,
-              });
-              if (attemptCounter > 1) {
-                console.info('[voice] LiveKit connected after retry.');
-              }
-              break outer;
-            } catch (connectErr) {
-              lastConnectError = connectErr;
-              const remainingAttempts = totalAttempts - attemptCounter;
-              const connectMessage =
-                connectErr instanceof Error
-                  ? connectErr.message
-                  : typeof connectErr === 'string'
-                    ? connectErr
-                    : '';
-              const retryable = remainingAttempts > 0 && isTransientVoiceConnectError(connectMessage);
-              voiceTimingLog(`[voice] +${elapsed()} FAILED attempt ${attemptCounter}/${totalAttempts}: ${candidate} err=${connectMessage}`);
-              if (retryable) {
-                console.info(
-                  `[voice] LiveKit connect attempt ${attemptCounter}/${totalAttempts} failed; retrying:`,
-                  connectErr
-                );
-              } else {
-                console.warn(
-                  `[voice] LiveKit connect attempt ${attemptCounter}/${totalAttempts} failed:`,
-                  connectErr
-                );
-              }
-              try {
-                await room.disconnect();
-              } catch {
-                // ignore disconnect errors between attempts
-              }
-              if (remainingAttempts > 0) {
-                const retryDelayMs = computeConnectRetryDelayMs(retry, LIVEKIT_CONNECT_RETRY_BASE_DELAY_MS);
-                await delay(retryDelayMs);
-              }
-            }
-          }
-        }
-        if (!connected) {
-          logVoiceDiagnostic('[voice] LiveKit connect exhausted all attempts', {
-            totalAttempts,
-            candidates: connectCandidates,
-            lastError:
-              lastConnectError instanceof Error
-                ? lastConnectError.message
-                : typeof lastConnectError === 'string'
-                  ? lastConnectError
-                  : 'unknown',
-          });
-          throw (
-            lastConnectError instanceof Error
-              ? lastConnectError
-              : new Error('Unable to establish LiveKit signaling connection')
-          );
-        }
-      }
-      voiceTimingLog(`[voice] +${elapsed()} startAudio`);
-      logVoiceDiagnostic(`[voice] +${elapsed()} startAudio`);
-      await room.startAudio().catch((err) => {
-        console.warn('[voice] Failed to start audio playback:', err);
-      });
-      voiceTimingLog(`[voice] +${elapsed()} startAudio done`);
-      logVoiceDiagnostic(`[voice] +${elapsed()} startAudio done`);
-
-      // Apply saved audio output device before publishing so remote audio
-      // plays through the correct speakers/headphones.
-      if (savedOutputId) {
-        await room.switchActiveDevice('audiooutput', savedOutputId).catch(() => { });
-      }
-      await applyAttachedRemoteAudioOutput(savedOutputId);
-      voiceTimingLog(`[voice] +${elapsed()} audio output configured`);
-      logVoiceDiagnostic(`[voice] +${elapsed()} audio output configured`);
-
-      // Enable/disable microphone based on previous mute/deafen state.
-      const stageListenOnly = data.suppress === true;
-      const microphoneEnabled = await setMicrophoneEnabledWithFallback(
-        room,
-        !shouldMuteOnJoin && !stageListenOnly,
-        savedInputId
-      );
-      voiceTimingLog(`[voice] +${elapsed()} mic setup done enabled=${microphoneEnabled}`);
-      logVoiceDiagnostic(`[voice] +${elapsed()} mic setup done, enabled=${microphoneEnabled}`);
-      if (microphoneEnabled && !shouldMuteOnJoin) {
-        startLocalAudioUplinkMonitor(room);
-      }
-      setAttachedRemoteAudioMuted(previousSelfDeaf);
-      syncRemoteAudioTracks(room, previousSelfDeaf);
-
-      // Add local user to channelParticipants immediately so the sidebar
-      // shows them without waiting for the gateway VOICE_STATE_UPDATE event.
-      const localVoiceState = buildLocalVoiceState(
-        channelId,
-        guildId || null,
-        data.session_id ?? '',
-        shouldMuteOnJoin || !microphoneEnabled,
-        previousSelfDeaf,
-        false,
-        false,
-        stageListenOnly,
-      );
-      if (activeJoinAttempt !== joinAttempt) {
-        inFlightJoinRoom = null;
-        clearActiveRoomListeners();
-        stopLocalMicAnalyser();
-        stopLocalAudioUplinkMonitor();
-        stopRemoteAudioReconcile();
-        startPendingDisconnect(room.disconnect());
-        detachAllAttachedRemoteAudio();
-        return;
-      }
-      // Room is about to be stored in state — stop tracking it as in-flight.
-      inFlightJoinRoom = null;
-      set((prev) => {
-        const channelParticipants = new Map(prev.channelParticipants);
-        const participants = new Map(prev.participants);
-        if (localVoiceState) {
-          const existing = (channelParticipants.get(channelId) || []).filter(
-            (p) => p.user_id !== localVoiceState.user_id
-          );
-          existing.push(localVoiceState);
-          channelParticipants.set(channelId, existing);
-          participants.set(localVoiceState.user_id, localVoiceState);
-        }
-        return {
-          connected: true,
-          joining: false,
-          joiningChannelId: null,
-          channelId,
-          guildId: guildId || null,
-          livekitToken: data.token,
-          livekitUrl: normalizedUrl,
-          roomName: data.room_name,
-          voiceSessionId: joinedSessionId,
-          room,
-          participants,
-          channelParticipants,
-          selfMute: shouldMuteOnJoin || !microphoneEnabled,
-          selfDeaf: previousSelfDeaf,
-          watchedStreamerId: null,
-          previewStreamerId: null,
-        };
-      });
-      syncLivekitRoomPresence(room);
-    } catch (error) {
-      inFlightJoinRoom = null;
-      const isLatestJoinAttempt = activeJoinAttempt === joinAttempt;
-      const message =
-        error instanceof Error && error.message
-          ? error.message
-          : 'Unable to connect to voice right now.';
-      console.error('[voice] Join attempt failed', {
-        channelId,
-        isLatestJoinAttempt,
-        joinedServer,
-        internalRetryAttempt,
-        message,
-      });
-      logVoiceDiagnostic('[voice] Join attempt failed', {
-        channelId,
-        isLatestJoinAttempt,
-        joinedServer,
-        internalRetryAttempt,
-        message,
-      });
-      if (!isLatestJoinAttempt) {
-        clearActiveRoomListeners();
-        stopLocalMicAnalyser();
-        stopLocalAudioUplinkMonitor();
-        stopRemoteAudioReconcile();
-        if (room) {
-          startPendingDisconnect(room.disconnect());
-        }
-        detachAllAttachedRemoteAudio();
-        return;
-      }
-      clearActiveRoomListeners();
-      stopLocalMicAnalyser();
-      stopLocalAudioUplinkMonitor();
-      stopRemoteAudioReconcile();
-      if (room) {
-        startPendingDisconnect(room.disconnect());
-      }
-      detachAllAttachedRemoteAudio();
-      if (joinedServer) {
-        await voiceApi.leaveChannel(channelId, { sessionId: joinedSessionId ?? undefined }).catch((err) => {
-          console.warn('[voice] rollback leave API error after failed join:', err);
-        });
-      }
-      const shouldAutoRetry =
-        internalRetryAttempt < 1 &&
-        joinedServer &&
-        isTransientVoiceConnectError(message);
-      if (shouldAutoRetry) {
-        console.warn(
-          `[voice] Transient signaling failure detected; auto-retrying join once (attempt ${internalRetryAttempt + 2}/2).`
-        );
-        set({
-          joining: false,
-          joiningChannelId: null,
-        });
-        await delay(500);
-        return get().joinChannel(channelId, guildId, internalRetryAttempt + 1);
-      }
-      suppressVoiceForStream(false);
-      set({
-        connected: false,
-        joining: false,
-        joiningChannelId: null,
-        channelId: null,
-        guildId: null,
-        room: null,
-        selfStream: false,
-        streamAudioWarning: null,
-        systemAudioCaptureActive: false,
-        voiceSuppressedForStream: false,
-        livekitToken: null,
-        livekitUrl: null,
-        roomName: null,
-        voiceSessionId: null,
-        connectionError: message,
-        connectionErrorChannelId: channelId,
-        watchedStreamerId: null,
-        previewStreamerId: null,
-        useNativeMedia: true,
-        mediaEngine: null,
-      });
-      return;
-    }
+    const previousMute = get().selfMute;
+    const previousDeaf = get().selfDeaf;
+    const priorRelease = currentCall ? closeCall(currentCall) : Promise.resolve();
+    const owner: CallSession = new CallSession(context, target, () => currentCall === owner, () => { void closeCall(owner); },
+      { ...((useAuthStore.getState().settings?.notifications ?? {}) as Record<string, unknown>) });
+    currentCall = owner;
+    set({ callId: owner.id, callScope: context.scope, callPhase: 'joining', joining: true,
+      joiningChannelId: channelId, channelId, guildId: target.guildId, connected: false,
+      connectionError: null, connectionErrorChannelId: null, selfMute: previousMute, selfDeaf: previousDeaf });
+    owner.joinPromise = priorRelease.then(() => performCallJoin(owner, previousMute, previousDeaf));
+    return owner.joinPromise;
   },
 
-  leaveChannel: async () => {
-    activeJoinAttempt = ++joinAttemptSeq;
-    const { channelId, guildId: currentGuildId, selfStream, voiceSessionId } = get();
-    const authUser = useAuthStore.getState().user;
+  leaveChannel: () => currentCall ? closeCall(currentCall) : Promise.resolve(),
 
-    // ── Stop active stream BEFORE tearing down connections ──────────
-    // channelId is still valid here so the server API call works.
-    const currentEngine = get().mediaEngine;
-    if (selfStream && currentEngine) {
-      await currentEngine.stopScreenShare();
-    }
-    if (selfStream && channelId) {
-      voiceApi.stopStream(channelId).catch(() => { });
-    }
-
-    // ── Native media engine teardown ────────────────────────────────
-    if (currentEngine) {
-      currentEngine.disconnect().catch((err) => {
-        console.warn('[voice] Native media engine disconnect error:', err);
-      });
-    }
-
-    // Disconnect any in-flight Room from a concurrent join that hasn't
-    // stored its room in state yet.
-    if (inFlightJoinRoom) {
-      const staleRoom = inFlightJoinRoom;
-      inFlightJoinRoom = null;
-      startPendingDisconnect(staleRoom.disconnect());
-    }
-    // Disconnect room and update UI FIRST so the user gets instant feedback.
-    const currentRoom = get().room;
-    if (currentRoom) {
-      clearActiveRoomListeners();
-      stopLocalMicAnalyser();
-      stopLocalAudioUplinkMonitor();
-      stopRemoteAudioReconcile();
-      // Store the disconnect promise so joinChannel can await it before
-      // opening a new connection. Without this, the old WebSocket teardown
-      // races with the new connect(), causing "could not establish signal
-      // connection" errors on rejoin.
-      startPendingDisconnect(currentRoom.disconnect());
-    }
-    void stopNativeSystemAudio();
-    suppressVoiceForStream(false);
-    forceRedForCompatibility = false;
-    detachAllAttachedRemoteAudio();
-    selectedAudioOutputDeviceId = undefined;
-    set((state) => {
-      // Remove local user from channelParticipants
-      const channelParticipants = new Map(state.channelParticipants);
-      if (channelId && authUser) {
-        const members = channelParticipants.get(channelId);
-        if (members) {
-          const filtered = members.filter((p) => p.user_id !== authUser.id);
-          if (filtered.length === 0) {
-            channelParticipants.delete(channelId);
-          } else {
-            channelParticipants.set(channelId, filtered);
-          }
-        }
-      }
-      return {
-        connected: false,
-        channelId: null,
-        guildId: null,
-        selfMute: false,
-        selfDeaf: false,
-        selfStream: false,
-        selfVideo: false,
-        participants: new Map(),
-        channelParticipants,
-        speakingUsers: new Set<string>(),
-        livekitToken: null,
-        livekitUrl: null,
-        roomName: null,
-        voiceSessionId: null,
-        room: null,
-        joining: false,
-        joiningChannelId: null,
-        connectionError: null,
-        connectionErrorChannelId: null,
-        streamAudioWarning: null,
-        systemAudioCaptureActive: false,
-        voiceSuppressedForStream: false,
-        watchedStreamerId: null,
-        previewStreamerId: null,
-        useNativeMedia: true,
-        mediaEngine: null,
-      };
-    });
-    // Await the disconnect (with a timeout) so the WebSocket teardown has
-    // a better chance of completing before the user triggers a rejoin.
-    // The UI has already updated above, so this await doesn't block the user
-    // visually; it just keeps the async leaveChannel() promise open a bit
-    // longer which helps joinChannel's pendingDisconnect check.
-    if (pendingDisconnect) {
-      await waitForPendingDisconnect(DISCONNECT_WAIT_ON_LEAVE_MS);
-    }
-    // Notify server AFTER UI is clean. Fire-and-forget with a short timeout
-    // so a slow/hung server doesn't block anything. The server also detects
-    // our departure when the WebSocket/WebRTC connection drops.
-    if (channelId) {
-      if (currentGuildId === 'dm') {
-        voiceApi.leaveDmChannel(channelId).catch((err) => {
-          console.warn('[voice] leave DM channel API error (continuing disconnect):', err);
-        });
-      } else {
-        voiceApi.leaveChannel(channelId, { sessionId: voiceSessionId ?? undefined }).catch((err) => {
-          console.warn('[voice] leave channel API error (continuing disconnect):', err);
-        });
-      }
-    }
-  },
-
-  reset: async () => {
-    // Route through leaveChannel so the room, media engine, mic analyser and
-    // screen share are torn down properly rather than merely forgotten.
-    try {
-      await get().leaveChannel();
-    } catch (err) {
-      console.warn('[voice] reset: leaveChannel failed, clearing state anyway:', err);
-    }
-    set({
-      connected: false,
-      joining: false,
-      joiningChannelId: null,
-      connectionError: null,
-      connectionErrorChannelId: null,
-      channelId: null,
-      guildId: null,
-      selfMute: false,
-      selfDeaf: false,
-      selfStream: false,
-      selfVideo: false,
-      participants: new Map(),
-      channelParticipants: new Map(),
-      speakingUsers: new Set(),
-      livekitToken: null,
-      livekitUrl: null,
-      roomName: null,
-      voiceSessionId: null,
-      room: null,
-      mediaEngine: null,
-      micInputActive: false,
-      micInputLevel: 0,
-      micServerDetected: false,
-      streamAudioWarning: null,
-      systemAudioCaptureActive: false,
-      showSystemAudioPrivacyWarning: false,
-      voiceSuppressedForStream: false,
-      watchedStreamerId: null,
-      previewStreamerId: null,
-      pttEngaged: false,
-    });
+  reset: () => {
+    const owner = currentCall;
+    // Clear synchronously. A pending release can never erase the next login's call.
+    const release = owner ? closeCall(owner) : Promise.resolve();
+    set({ channelParticipants: new Map(), participants: new Map(), speakingUsers: new Set(),
+      showSystemAudioPrivacyWarning: false, pttEngaged: false });
+    return release;
   },
 
   toggleMute: async () => {
+    const owner = currentCall;
+    const action = owner?.operation('microphone');
     const state = get();
     const nextSelfMute = !state.selfMute;
     const nextSelfDeaf = nextSelfMute ? state.selfDeaf : false;
@@ -3056,6 +2068,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
     }
     const targetMicEnabled = !nextSelfMute;
     const ok = await setMicrophoneEnabledWithFallback(state.room, targetMicEnabled, getSavedInputDeviceId());
+    if (!action?.current()) return;
     if (ok && targetMicEnabled) {
       startLocalAudioUplinkMonitor(state.room as Room);
     } else if (!targetMicEnabled) {
@@ -3068,6 +2081,8 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
   },
 
   toggleDeaf: async () => {
+    const owner = currentCall;
+    const action = owner?.operation('microphone');
     const state = get();
     const nextSelfDeaf = !state.selfDeaf;
     const nextSelfMute = nextSelfDeaf ? true : state.selfMute;
@@ -3093,6 +2108,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
     }
     const targetMicEnabled = !nextSelfMute;
     const ok = await setMicrophoneEnabledWithFallback(state.room, targetMicEnabled, getSavedInputDeviceId());
+    if (!action?.current()) return;
     if (ok && targetMicEnabled) {
       startLocalAudioUplinkMonitor(state.room as Room);
     } else if (!targetMicEnabled) {
@@ -3104,11 +2120,15 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
   },
 
   startStream: async (qualityPreset = '1080p60', sourceId?: string) => {
+    const owner = currentCall;
+    if (!owner?.current) throw new Error('Voice connection is not ready');
+    const action = owner.operation('screen');
+    const api = callApi(owner);
     const { channelId, room, mediaEngine } = get();
 
     // Native media path: use MediaEngine screen share instead of LiveKit
     if (channelId && mediaEngine) {
-      set({ streamAudioWarning: null, systemAudioCaptureActive: false });
+      if (action.current()) set({ streamAudioWarning: null, systemAudioCaptureActive: false });
       try {
         // Use the same quality presets as the LiveKit path so resolution,
         // framerate, and bitrate targets match what the user selected.
@@ -3138,23 +2158,25 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
           contentHint: capture.hint,
           sourceId,
         });
+        action.assertCurrent();
         const nativeStreamAudioActive = mediaEngine.isScreenShareAudioActive();
         const nativeStreamAudioWarning = nativeStreamAudioActive
           ? null
           : 'Stream started without PC audio. Native system audio capture failed. Try stopping the stream and starting it again.';
 
         // Screen selected and tuned — now register with server
-        await voiceApi.startStream(channelId, { quality_preset: qualityPreset });
+        await api.startStream(channelId, { quality_preset: qualityPreset });
+        action.assertCurrent();
         // Handle user clicking "Stop sharing" in the browser's native overlay
         mediaEngine.onScreenShareEnded(() => {
-          if (get().selfStream) {
+          if (action.current() && get().selfStream) {
             get().stopStream();
           }
         });
         // Update local voice state for stream indicator and auto-watch self
         // so the StreamViewer subscribes to the published stream immediately.
-        const localUserId = useAuthStore.getState().user?.id;
-        set((state) => {
+        const localUserId = currentCallUser()?.id;
+        if (action.current()) set((state) => {
           const participants = new Map(state.participants);
           const channelParticipants = new Map(state.channelParticipants);
           if (localUserId) {
@@ -3190,10 +2212,12 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
           };
         });
       } catch (error) {
+      if (!action.current()) return;
+        if (!action.current()) return;
         logVoiceDiagnostic('[voice] startStream native error', { error: String(error), type: typeof error, isError: error instanceof Error, name: (error as { name?: string })?.name, message: (error as { message?: string })?.message });
         await mediaEngine.stopScreenShare();
-        voiceApi.stopStream(channelId).catch(() => { });
-        set({ selfStream: false, streamAudioWarning: null, systemAudioCaptureActive: false });
+        api.stopStream(channelId).catch(() => { });
+        if (action.current()) set({ selfStream: false, streamAudioWarning: null, systemAudioCaptureActive: false });
         throw error;
       }
       return;
@@ -3205,7 +2229,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
     if (!isRoomConnected(room)) {
       throw new Error('Voice connection is not stable — try again in a moment');
     }
-    set({ streamAudioWarning: null, systemAudioCaptureActive: false });
+    if (action.current()) set({ streamAudioWarning: null, systemAudioCaptureActive: false });
     try {
       // 1. Start screen share FIRST to preserve the transient user activation
       //    with resolution/framerate constraints matching the preset.
@@ -3270,7 +2294,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
       // When connected via LiveKit fallback (native media was intended but
       // failed), pass fallback=livekit so the server uses the LiveKit path.
       const isLivekitFallback = get().useNativeMedia && !get().mediaEngine;
-      const { data } = await voiceApi.startStream(channelId, {
+      const { data } = await api.startStream(channelId, {
         quality_preset: qualityPreset,
         ...(isLivekitFallback ? { fallback: 'livekit' } : {}),
       });
@@ -3279,7 +2303,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
       // Join tokens already allow screen-share sources for speakers.
       const normalizedUrl = normalizeLivekitUrl(data.url, data.url_candidates);
 
-      const streamNotif = (useAuthStore.getState().settings?.notifications ?? {}) as Record<string, unknown>;
+      const streamNotif = owner.preferences;
       const streamOutputId = normalizeDeviceId(
         typeof streamNotif['audioOutputDeviceId'] === 'string'
           ? (streamNotif['audioOutputDeviceId'] as string)
@@ -3312,39 +2336,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
       }
 
       let streamAudioWarning: string | null = null;
-      let systemAudioCaptureActive = false;
-
-      const publishNativeSystemAudio = async (): Promise<boolean> => {
-        for (let attempt = 1; attempt <= 2; attempt += 1) {
-          const nativeAudioTrack = await startNativeSystemAudio();
-          if (!nativeAudioTrack) {
-            if (attempt < 2) {
-              await delay(250);
-            }
-            continue;
-          }
-
-          try {
-            await room.localParticipant.publishTrack(nativeAudioTrack, {
-              source: Track.Source.ScreenShareAudio,
-              audioPreset: { maxBitrate: 128_000 },
-              forceStereo: true,
-              dtx: false,
-              red: false,
-            });
-            console.info('[voice] Published native system audio as ScreenShareAudio (Tauri)');
-            return true;
-          } catch (err) {
-            console.warn('[voice] Failed to publish native system audio track:', err);
-            void stopNativeSystemAudio();
-            if (attempt < 2) {
-              await delay(250);
-            }
-          }
-        }
-
-        return false;
-      };
+      const systemAudioCaptureActive = false;
 
       const waitForScreenShareAudioPublication = async (
         timeoutMs = 1600
@@ -3357,7 +2349,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
           if (publication?.track) {
             return publication;
           }
-          await delay(120);
+          await owner.delay(120);
         }
 
         return room.localParticipant.getTrackPublication(
@@ -3367,18 +2359,9 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
 
       if (isTauriApp) {
         if (!hasAcknowledgedSystemAudioPrivacyWarning()) {
-          set({ showSystemAudioPrivacyWarning: true });
+          if (action.current()) set({ showSystemAudioPrivacyWarning: true });
         }
-        // In Tauri, publish native loopback audio with a retry path so brief
-        // backend races don't leave the stream silently video-only.
-        const nativePublished = await publishNativeSystemAudio();
-        systemAudioCaptureActive = nativePublished;
-        if (!nativePublished) {
-          streamAudioWarning =
-            'Stream started without PC audio. Native system audio capture failed. ' +
-            'Try stopping the stream and starting it again.';
-          console.warn('[voice] Native system audio capture failed; stream is video-only.');
-        }
+        streamAudioWarning = 'Desktop system audio requires the native media connection. This fallback stream shares video only.';
       } else {
         const screenShareAudioPub = await waitForScreenShareAudioPublication();
         if (screenShareAudioPub?.track) {
@@ -3401,7 +2384,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
       // this at the OS level, so voice plays normally.
       if (!hasProcessLoopbackExclusion()) {
         suppressVoiceForStream(true);
-        set({ voiceSuppressedForStream: true });
+        if (action.current()) set({ voiceSuppressedForStream: true });
         if (!streamAudioWarning) {
           streamAudioWarning =
             'Voice chat audio is muted during streaming to prevent echo. ' +
@@ -3439,8 +2422,8 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
       }
       // Update local voice state for stream indicator and auto-watch self
       // so the StreamViewer subscribes to the published stream immediately.
-      const localUserId = useAuthStore.getState().user?.id;
-      set((state) => {
+      const localUserId = currentCallUser()?.id;
+      if (action.current()) set((state) => {
         const participants = new Map(state.participants);
         const channelParticipants = new Map(state.channelParticipants);
         if (localUserId) {
@@ -3474,21 +2457,25 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
         };
       });
     } catch (error) {
-      void stopNativeSystemAudio();
+      if (!action.current()) return;
       suppressVoiceForStream(false);
       await room.localParticipant.setScreenShareEnabled(false).catch(() => { });
       // Notify server that stream failed
       if (channelId) {
-        voiceApi.stopStream(channelId).catch((err) => {
+        api.stopStream(channelId).catch((err) => {
           console.warn('[voice] Failed to stop stream after start failure rollback:', err);
         });
       }
-      set({ selfStream: false, streamAudioWarning: null, systemAudioCaptureActive: false, voiceSuppressedForStream: false });
+      if (action.current()) set({ selfStream: false, streamAudioWarning: null, systemAudioCaptureActive: false, voiceSuppressedForStream: false });
       throw error;
     }
   },
 
   stopStream: () => {
+    const owner = currentCall;
+    if (!owner?.current) return;
+    owner.operation('screen');
+    const api = callApi(owner);
     const { channelId, room, mediaEngine, selfStream: wasStreaming } = get();
     if (!wasStreaming) return; // Already stopped — prevent re-entrant calls
     // Mark stream as stopped IMMEDIATELY so the onScreenShareEnded callback
@@ -3496,7 +2483,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
     set({ selfStream: false });
     // Notify server to clear stream state
     if (channelId) {
-      voiceApi.stopStream(channelId).catch((err) => {
+      api.stopStream(channelId).catch((err) => {
         console.warn('[voice] Failed to stop stream on manual stop:', err);
       });
     }
@@ -3505,7 +2492,6 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
       void mediaEngine.stopScreenShare();
     }
     room?.localParticipant.setScreenShareEnabled(false).catch(() => { });
-    void stopNativeSystemAudio();
     // Restore voice audio that was suppressed to prevent echo in stream capture.
     suppressVoiceForStream(false);
     // Revert voice audio elements to the user's selected output device
@@ -3522,7 +2508,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
     // Also update the local user's voice-state entry so that
     // participants-derived flags reflect the stream ending immediately,
     // even before a gateway event arrives.
-    const localUserId = useAuthStore.getState().user?.id;
+    const localUserId = currentCallUser()?.id;
     set((state) => {
       const participants = new Map(state.participants);
       const channelParticipants = new Map(state.channelParticipants);
@@ -3556,11 +2542,14 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
   },
 
   toggleVideo: async () => {
+    const owner = currentCall;
+    const action = owner?.operation('camera');
     const state = get();
     const nextSelfVideo = !state.selfVideo;
-    const localUserId = useAuthStore.getState().user?.id;
+    const localUserId = currentCallUser()?.id;
 
     const setLocalSelfVideo = (enabled: boolean) => {
+      if (!action?.current()) return;
       set((prev) => {
         const participants = new Map(prev.participants);
         if (localUserId) {
@@ -3612,7 +2601,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
 
     if (nextSelfVideo) {
       // Enable camera
-      const notif = (useAuthStore.getState().settings?.notifications ?? {}) as Record<string, unknown>;
+      const notif = getNotificationSettings();
       const videoDeviceId =
         typeof notif['videoInputDeviceId'] === 'string'
           ? (notif['videoInputDeviceId'] as string).trim()
@@ -3658,11 +2647,15 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
     return [];
   },
   applyAudioInputDevice: async (deviceId) => {
+    const owner = currentCall;
+    const action = owner?.operation('input-device');
+    if (owner?.current) owner.preferences['audioInputDeviceId'] = deviceId;
     const state = get();
     const normalizedDeviceId = normalizeDeviceId(deviceId);
     if (isTauri() && state.mediaEngine != null) {
+      if (!owner?.current || !action) return false;
       try {
-        await switchNativeInputDevice(normalizedDeviceId ?? null);
+        await switchNativeInputDevice(normalizedDeviceId ?? null, { id: state.mediaEngine.sessionOwnerId ?? owner.id, assertCurrent: action.assertCurrent });
         return true;
       } catch (err) {
         console.warn('[voice] Failed to switch native input device:', err);
@@ -3699,6 +2692,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
       }
       // If the user is currently unmuted, ensure the active mic is enabled
       // on the newly selected device.
+      if (!action?.current()) return false;
       if (!state.selfMute && !state.selfDeaf) {
         const ok = await setMicrophoneEnabledWithFallback(room, true, resolvedDeviceId);
         if (ok) {
@@ -3712,6 +2706,9 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
     }
   },
   applyAudioOutputDevice: async (deviceId) => {
+    const owner = currentCall;
+    const action = owner?.operation('output-device');
+    if (owner?.current) owner.preferences['audioOutputDeviceId'] = deviceId;
     const state = get();
     const normalizedDeviceId = normalizeDeviceId(deviceId);
     selectedAudioOutputDeviceId = normalizedDeviceId;
@@ -3720,6 +2717,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
     if (room) {
       try {
         await room.switchActiveDevice('audiooutput', normalizedDeviceId ?? 'default');
+        if (!action?.current()) return false;
         await applyAttachedRemoteAudioOutput(normalizedDeviceId);
       } catch (err) {
         console.warn('[voice] Failed to switch output device:', err);
@@ -3730,8 +2728,9 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
     // output device, so also route the OS output device through the native
     // media command. Degrades to a no-op on web / older desktop builds.
     if (isTauri() && state.mediaEngine != null) {
+      if (!owner?.current || !action) return false;
       try {
-        await switchNativeOutputDevice(normalizedDeviceId ?? null);
+        await switchNativeOutputDevice(normalizedDeviceId ?? null, { id: state.mediaEngine.sessionOwnerId ?? owner.id, assertCurrent: action.assertCurrent });
       } catch (err) {
         console.warn('[voice] Failed to switch native output device:', err);
         ok = false;
@@ -3740,6 +2739,12 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
     return ok;
   },
   reapplyAudioConstraints: async () => {
+    const owner = currentCall;
+    if (!owner?.current) return;
+    const preferences = (useAuthStore.getState().settings?.notifications ?? {}) as Record<string, unknown>;
+    for (const key of ['noiseSuppression', 'echoCancellation', 'autoGainControl', 'voiceIsolation']) {
+      if (key in preferences) owner.preferences[key] = preferences[key];
+    }
     const state = get();
     const room = state.room;
     if (!room || !state.connected) return;
@@ -3754,41 +2759,27 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
   },
   clearConnectionError: () => set({ connectionError: null, connectionErrorChannelId: null }),
   handleMediaTransportLost: async (reason) => {
-    const state = get();
-    if (!state.connected || !state.channelId) {
-      return;
-    }
-    const { channelId, mediaEngine } = state;
-    if (mediaEngine) {
-      await mediaEngine.disconnect().catch(() => { });
-    }
-    suppressVoiceForStream(false);
-    set({
-      connected: false,
-      joining: false,
-      joiningChannelId: null,
-      connectionError: reason || 'Voice connection lost',
-      connectionErrorChannelId: channelId,
-      mediaEngine: null,
-      room: null,
-      selfStream: false,
-      streamAudioWarning: null,
-      systemAudioCaptureActive: false,
-      voiceSuppressedForStream: false,
-      watchedStreamerId: null,
-      previewStreamerId: null,
-    });
+    const owner = currentCall;
+    if (owner) await closeCall(owner, reason || 'Voice connection lost');
   },
   acknowledgeSystemAudioPrivacyWarning: () => {
     persistSystemAudioPrivacyWarningAcknowledgement();
     set({ showSystemAudioPrivacyWarning: false });
   },
 
-  handleVoiceStateUpdate: (voiceState) => {
+  handleVoiceStateUpdate: (voiceState, scope) => {
+    if (currentCall && (!scope || accountScopeKey(scope) !== currentCall.context.key)) return;
+    const owner = currentCall;
+    const previous = get().participants.get(voiceState.user_id);
+    if (!voiceState.channel_id && voiceState.session_id && previous?.session_id && previous.session_id !== voiceState.session_id) return;
+    if (owner?.current && voiceState.user_id === owner.context.scope.userId && voiceState.session_id) {
+      if (voiceState.session_id !== owner.membershipSessionId) return;
+      if (!voiceState.channel_id) { void closeCall(owner); return; }
+    }
     // Determine join/leave sounds BEFORE mutating state so we can compare
     // the previous channel of the updating user against our current channel.
     const currentState = get();
-    const localUserId = useAuthStore.getState().user?.id;
+    const localUserId = currentCallUser()?.id;
     const myChannelId = currentState.channelId;
 
     if (
@@ -3878,11 +2869,12 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
     });
   },
 
-  loadVoiceStates: (guildId, states) =>
+  loadVoiceStates: (guildId, states, scope) =>
     set((prev) => {
+      if (currentCall && (!scope || accountScopeKey(scope) !== currentCall.context.key)) return prev;
       const channelParticipants = new Map(prev.channelParticipants);
       const participants = new Map(prev.participants);
-      const myId = useAuthStore.getState().user?.id;
+      const myId = currentCallUser()?.id;
       const existingLocal = myId ? prev.participants.get(myId) : undefined;
       // Preserve local voice presence when we're actively connected in this
       // guild, even if READY briefly arrives with stale or empty voice states.
@@ -3970,21 +2962,303 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
   setPttEngaged: (engaged) => set({ pttEngaged: engaged }),
 }));
 
-// Cleanly disconnect the LiveKit room or native media engine before the
-// page unloads so the browser doesn't tear down connections mid-flight,
-// which causes unhandled promise rejections.
 if (typeof window !== 'undefined') {
-  window.addEventListener('beforeunload', () => {
-    const state = useVoiceStore.getState();
-    if (state.mediaEngine) {
-      state.mediaEngine.disconnect().catch(() => { });
+  window.addEventListener('beforeunload', () => { if (currentCall) void closeCall(currentCall); });
+}
+subscribeServerDisconnect(serverId => {
+  if (currentCall?.target.scope.serverId === serverId) void closeCall(currentCall);
+});
+registerSessionReset('voice', () => useVoiceStore.getState().reset());
+
+function createLivekitRoom(): Room {
+  return new Room({
+        // Audio capture defaults: read user's voice settings for noise
+        // suppression, echo cancellation, and voice isolation.
+        audioCaptureDefaults: buildAudioCaptureOptions() as AudioCaptureOptions,
+        // Publish defaults tuned for voice chat.
+        publishDefaults: {
+          audioPreset: AudioPresets.speech,
+          dtx: false,
+          // Prefer broad compatibility across browsers/WebViews and mixed
+          // client versions. Some peers fail to decode RED reliably, causing
+          // one-way audio (you can hear them, they can't hear you).
+          red: false,
+          forceStereo: false,
+          stopMicTrackOnMute: false,
+          // Default screen share encoding as a safety net. The startStream
+          // method passes preset-specific encoding on each publish, but this
+          // ensures any fallback screen-share path still gets decent quality.
+          screenShareEncoding: {
+            maxBitrate: 15_000_000,
+            maxFramerate: 60,
+            priority: 'high',
+          },
+          screenShareSimulcastLayers: [],
+        },
+        // Adaptive stream adjusts subscribed quality based on element size.
+        // Disabled because it causes screen share viewers to get low quality
+        // when the video element hasn't been resized to full size yet.
+        adaptiveStream: false,
+        // Pause video layers no subscriber is watching.
+        dynacast: true,
+        // livekit-client v2.17 defaults to single-PC mode. In this deployment
+        // we observe periodic signal disconnect loops with that mode enabled.
+        // Force dual-PC mode for stability unless/until upstream behavior changes.
+        singlePeerConnection: false,
+        // Let the LiveKit reconnect policy handle transient disconnects
+        // instead of proactively tearing down on page lifecycle events.
+        // With disconnectOnPageLeave enabled, HMR reloads, service worker
+        // updates, and browser power-saving pagehide events all cause
+        // spurious disconnects while the user is idle in a voice call.
+        // LiveKit's participant_left webhook handles server-side cleanup
+        // when the WebRTC peer connection truly goes away.
+        disconnectOnPageLeave: false,
+        // Be generous with reconnection so transient signal drops
+        // (e.g. hairpin NAT, brief proxy hiccups) don't kick the user.
+        reconnectPolicy: {
+          nextRetryDelayInMs: (context) => {
+            // Retry up to 15 times with 1-second delays (about 15 seconds
+            // total).  Returning null stops retrying.
+            if (context.retryCount >= 15) return null;
+            return 1000;
+          },
+        },
+      });
+}
+
+/** Only the owner being closed may clear the current projection or shared DOM. */
+function closeCall(owner: CallSession, error?: string): Promise<void> {
+  const existing = callReleasePromises.get(owner);
+  if (existing) return existing;
+  const closingCurrent = currentCall === owner;
+  const release = owner.close();
+  callReleasePromises.set(owner, release);
+  if (closingCurrent) {
+    clearActiveRoomListeners();
+    stopLocalMicAnalyser();
+    stopLocalAudioUplinkMonitor();
+    stopRemoteAudioReconcile();
+    detachAllAttachedRemoteAudio();
+    suppressVoiceForStream(false);
+    forceRedForCompatibility = false;
+    selectedAudioOutputDeviceId = undefined;
+    currentCall = null;
+    useVoiceStore.setState(state => {
+      const channelParticipants = new Map(state.channelParticipants);
+      const members = (channelParticipants.get(owner.target.channelId) ?? [])
+        .filter(member => member.user_id !== owner.context.user.id);
+      if (members.length) channelParticipants.set(owner.target.channelId, members);
+      else channelParticipants.delete(owner.target.channelId);
+      return {
+        callId: null, callScope: null, callPhase: error ? 'failed' : 'idle',
+        connected: false, joining: false, joiningChannelId: null, channelId: null, guildId: null,
+        connectionError: error ?? null, connectionErrorChannelId: error ? owner.target.channelId : null,
+        room: null, mediaEngine: null, livekitToken: null, livekitUrl: null, roomName: null, voiceSessionId: null,
+        selfMute: false, selfDeaf: false, selfVideo: false, selfStream: false,
+        participants: new Map(), channelParticipants, speakingUsers: new Set(),
+        streamAudioWarning: null, systemAudioCaptureActive: false, voiceSuppressedForStream: false,
+        watchedStreamerId: null, previewStreamerId: null, pttEngaged: false,
+      };
+    });
+  }
+  // A canceled join can still return a receipt. Keep its captured account alive
+  // until that response settles; never send compensation using the next login.
+  void (owner.joinPromise ?? Promise.resolve()).catch(() => {}).then(async () => {
+    try {
+      const sessionId = owner.membershipSessionId;
+      if (sessionId && !owner.context.signal.aborted) {
+        await createCallVoiceApi(owner.context).leave(owner.target.channelId, owner.target.guildId === 'dm', sessionId);
+      }
+    } catch (failure) {
+      console.warn('[voice] Conditional membership cleanup pending:', failure);
+    } finally {
+      owner.context.dispose();
     }
-    if (state.room) {
-      state.room.disconnect().catch(() => { });
-    }
+  });
+  return release;
+}
+
+function ownLivekitRoom(owner: CallSession, room: Room): () => Promise<void> {
+  const lease = { owner, active: true };
+  roomOwners.set(room, lease);
+  // The SDK's capture promises cannot be aborted. Stop any tracks they produce
+  // after release, including a permission dialog resolved after disconnect.
+  const participant = room.localParticipant as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+  for (const key of ['setMicrophoneEnabled', 'setCameraEnabled', 'setScreenShareEnabled', 'publishTrack']) {
+    const original = participant[key]?.bind(room.localParticipant);
+    if (!original) continue;
+    participant[key] = async (...args) => {
+      if (!isCurrentRoom(room)) throw new DOMException('The call has ended.', 'AbortError');
+      const result = await original(...args);
+      if (!isCurrentRoom(room)) {
+        for (const publication of room.localParticipant.trackPublications.values()) publication.track?.stop();
+        await room.disconnect().catch(() => {});
+        throw new DOMException('The call has ended.', 'AbortError');
+      }
+      return result;
+    };
+  }
+  const removeListeners = registerRoomListeners(room, reason => {
+    if (isCurrentRoom(room)) void closeCall(owner, `Voice connection lost${reason === undefined ? '' : ` (${reason})`}`);
+  });
+  return owner.own(async () => {
+    lease.active = false;
+    removeListeners();
+    if (localMicAnalyserRoom === room) stopLocalMicAnalyser();
+    if (localAudioUplinkMonitorRoom === room) stopLocalAudioUplinkMonitor();
+    if (remoteAudioReconcileRoom === room) stopRemoteAudioReconcile();
+    for (const publication of room.localParticipant.trackPublications.values()) publication.track?.stop();
+    await room.disconnect();
   });
 }
 
-// Cleared on logout; see `sessionReset` for why this is a registration
-// rather than a direct import from `authStore`.
-registerSessionReset('voice', () => useVoiceStore.getState().reset());
+function bindEngine(owner: CallSession, engine: MediaEngine): void {
+  const { channelId, guildId, scope } = owner.target;
+  engine.onParticipantJoin(owner.guard(userId => {
+    useVoiceStore.getState().handleVoiceStateUpdate({
+      user_id: userId, channel_id: channelId, guild_id: guildId === 'dm' ? undefined : guildId ?? undefined,
+      session_id: '', self_mute: false, self_deaf: false, self_stream: false, self_video: false,
+      mute: false, deaf: false, suppress: false,
+    }, scope);
+  }));
+  engine.onParticipantLeave(owner.guard(userId => {
+    useVoiceStore.getState().handleVoiceStateUpdate({
+      user_id: userId, channel_id: undefined, session_id: '', self_mute: false, self_deaf: false,
+      self_stream: false, self_video: false, mute: false, deaf: false, suppress: false,
+    }, scope);
+  }));
+  engine.onSpeakingChange(owner.guard(speakers => {
+    useVoiceStore.getState().setSpeakingUsers([...speakers.keys()].map(id => id === 'local' ? owner.context.user.id : id));
+  }));
+  engine.onTransportLost(owner.guard(reason => { void closeCall(owner, reason); }));
+  engine.onCameraFailure?.(owner.guard(error => {
+    useVoiceStore.setState({ selfVideo: false });
+    useToastStore.getState().addToast('error', error.message);
+  }));
+}
+
+function commitCall(owner: CallSession, data: VoiceJoinResponse, media: { room: Room } | { mediaEngine: MediaEngine }, muted: boolean, deafened: boolean): void {
+  owner.assertCurrent();
+  owner.phase = 'connected';
+  const local = buildLocalVoiceState(owner.target.channelId, owner.target.guildId, data.session_id ?? '', muted, deafened, false, false, data.suppress === true);
+  useVoiceStore.setState(state => {
+    const channelParticipants = new Map(state.channelParticipants);
+    const participants = new Map<string, VoiceState>();
+    for (const member of channelParticipants.get(owner.target.channelId) ?? []) participants.set(member.user_id, member);
+    if (local) {
+      participants.set(local.user_id, local);
+      channelParticipants.set(owner.target.channelId, [...participants.values()]);
+    }
+    return {
+      ...media, room: 'room' in media ? media.room : null, mediaEngine: 'mediaEngine' in media ? media.mediaEngine : null,
+      callPhase: 'connected', connected: true, joining: false, joiningChannelId: null,
+      channelId: owner.target.channelId, guildId: owner.target.guildId,
+      livekitToken: data.token, livekitUrl: data.url, roomName: data.room_name,
+      voiceSessionId: data.session_id ?? null, selfMute: muted, selfDeaf: deafened,
+      participants, channelParticipants,
+    };
+  });
+  if ('room' in media) syncLivekitRoomPresence(media.room);
+  playVoiceJoinSound();
+}
+
+async function performCallJoin(owner: CallSession, previousMute: boolean, previousDeaf: boolean): Promise<void> {
+  configureLivekitLogging();
+  const api = createCallVoiceApi(owner.context);
+  const { channelId, guildId } = owner.target;
+  const isDm = guildId === 'dm';
+  const ptt = getNotificationSettings()['voiceInputMode'] === 'push_to_talk';
+  const shouldMute = previousMute || previousDeaf || ptt;
+  const receiveJoin = async (fallback?: 'livekit') => {
+    owner.assertCurrent();
+    owner.membershipUncertain = true;
+    const { data } = await api.join(channelId, isDm, fallback);
+    owner.membershipSessionId = data.session_id ?? null;
+    owner.membershipUncertain = !data.session_id;
+    owner.assertCurrent();
+    return data;
+  };
+  try {
+    let data = await receiveJoin();
+    if (data.native_media || useVoiceStore.getState().useNativeMedia) {
+      const candidates = (data.media_endpoint_candidates?.length ? data.media_endpoint_candidates : [data.media_endpoint, data.url])
+        .filter((url): url is string => typeof url === 'string' && !!url.trim());
+      const token = data.media_token || data.token;
+      let nativeError: unknown = new Error('Server did not return native media connection details');
+      if (candidates.length && token) {
+        for (const endpoint of candidates) {
+          owner.assertCurrent();
+          const engine = await createMediaEngine();
+          const release = owner.own(() => engine.disconnect());
+          try {
+            owner.assertCurrent();
+            bindEngine(owner, engine);
+            await engine.connect(endpoint, token, data.cert_hash, { id: owner.id, signal: owner.signal, account: owner.context });
+            owner.assertCurrent();
+            const muted = shouldMute || data.suppress === true;
+            engine.setMute(muted);
+            engine.setDeaf(previousDeaf);
+            commitCall(owner, data, { mediaEngine: engine }, muted, previousDeaf);
+            return;
+          } catch (error) {
+            nativeError = error;
+            await release();
+            owner.assertCurrent();
+          }
+        }
+      }
+      if (data.native_media || (candidates.length && token)) {
+        if (!allowNativeToLivekitFallback() || !(data.livekit_available || (data.url && data.token))) throw nativeError;
+        if (owner.membershipSessionId) await api.leave(channelId, isDm, owner.membershipSessionId);
+        owner.membershipSessionId = null;
+        data = await receiveJoin('livekit');
+      }
+    }
+    owner.assertCurrent();
+    const candidates = buildLivekitConnectCandidates(data.url, data.url_candidates);
+    if (!candidates.length) candidates.push(normalizeLivekitUrlFromServerValue(data.url));
+    if (TAURI_FAST_CONNECT && candidates.length > 1) {
+      const best = await findReachableLivekitUrl(candidates, 3_000);
+      owner.assertCurrent();
+      candidates.splice(0, candidates.length, best, ...candidates.filter(candidate => candidate !== best));
+    }
+    let lastError: unknown = new Error('Unable to establish LiveKit signaling connection');
+    for (const candidate of candidates) {
+      for (let retry = 0; retry < LIVEKIT_CONNECT_ATTEMPTS_PER_CANDIDATE; retry++) {
+        owner.assertCurrent();
+        const room = createLivekitRoom();
+        const release = ownLivekitRoom(owner, room);
+        try {
+          await connectWithAttemptTimeout(room, owner, candidate, data.token);
+          tuneLivekitSignalHeartbeat(room);
+          await room.startAudio().catch(() => {});
+          owner.assertCurrent();
+          const output = getSavedOutputDeviceId();
+          selectedAudioOutputDeviceId = output;
+          if (output) await room.switchActiveDevice('audiooutput', output).catch(() => {});
+          owner.assertCurrent();
+          await applyAttachedRemoteAudioOutput(output);
+          owner.assertCurrent();
+          const microphone = await setMicrophoneEnabledWithFallback(room, !shouldMute && !data.suppress, getSavedInputDeviceId());
+          owner.assertCurrent();
+          commitCall(owner, data, { room }, shouldMute || !microphone || data.suppress === true, previousDeaf);
+          if (microphone && !shouldMute) startLocalAudioUplinkMonitor(room);
+          setAttachedRemoteAudioMuted(previousDeaf);
+          syncRemoteAudioTracks(room, previousDeaf);
+          return;
+        } catch (error) {
+          lastError = error;
+          await release();
+          owner.assertCurrent();
+          if (!isTransientVoiceConnectError(error instanceof Error ? error.message : String(error))) break;
+          await owner.delay(computeConnectRetryDelayMs(retry, LIVEKIT_CONNECT_RETRY_BASE_DELAY_MS));
+        }
+      }
+    }
+    throw lastError;
+  } catch (error) {
+    if (!owner.current) { await closeCall(owner); return; }
+    const message = error instanceof Error ? error.message : 'Unable to connect to voice';
+    await closeCall(owner, owner.membershipUncertain ? `${message}. Server membership has not been confirmed.` : message);
+  }
+}

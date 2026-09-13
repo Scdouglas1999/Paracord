@@ -23,9 +23,13 @@ pub enum Command {
     /// Runs the PostgreSQL migrations against the target, then copies every
     /// table inside a single transaction. Every table's row count is verified
     /// against the source; any mismatch rolls the whole transaction back, so
-    /// the target is left untouched on failure. Stop the server (and ensure the
-    /// SQLite file is not being written) before running this.
+    /// copied rows roll back on failure. Target schema migrations and their seed
+    /// rows remain applied. Keep both databases offline while running this.
     MigrateToPostgres(MigrateToPostgresArgs),
+
+    /// Prepare and verify an isolated archive recovery. Existing server data is
+    /// retained; activate by selecting the generated config after stopping all instances.
+    RestoreBackup(RestoreBackupArgs),
 
     /// Generate the config file (if absent) and print onboarding instructions,
     /// then exit without starting the server.
@@ -59,7 +63,29 @@ pub struct MigrateToPostgresArgs {
     #[arg(long, default_value_t = 1000)]
     pub batch_size: u32,
 
-    /// Validate row counts and column mappings without writing any data.
+    /// Apply target schema migrations and seeds, then validate source counts and
+    /// column mappings without copying source rows or rotating an existing epoch.
     #[arg(long)]
     pub dry_run: bool,
+}
+
+#[derive(ClapArgs, Debug)]
+pub struct RestoreBackupArgs {
+    /// Archive created by Paracord backup (.tar.gz), never a raw database dump.
+    #[arg(long)]
+    pub archive: std::path::PathBuf,
+    /// New recovery directory. Must not exist; its parent must exist.
+    #[arg(long)]
+    pub output_dir: std::path::PathBuf,
+    /// Environment variable containing the URL of a fresh, isolated PostgreSQL database.
+    /// Required for PostgreSQL archives; never point it at the running database.
+    #[arg(long)]
+    pub postgres_url_env: Option<String>,
+    /// Matching external media export with uploads/ and files/ subdirectories.
+    /// Required for database-only archives or exported S3 objects.
+    #[arg(long)]
+    pub media_dir: Option<std::path::PathBuf>,
+    /// Maximum unpacked archive bytes and maximum external media export bytes.
+    #[arg(long, default_value_t = 68_719_476_736)]
+    pub max_unpacked_bytes: u64,
 }

@@ -30,15 +30,29 @@ const mockApiBaseUrl = vi.hoisted(() => ({
 
 const mockHasAccount = vi.hoisted(() => vi.fn(() => false));
 
+const legacyAttachment = vi.hoisted(() => vi.fn());
+
+const mockGetSetupStatus = vi.hoisted(() => vi.fn());
+
+// Meets the real server policy: 10+ UTF-8 bytes with ASCII upper, lower,
+// digit, and a non-alphanumeric ASCII character.
+const VALID_PASSWORD = 'ValidPass123!';
+
 vi.mock('../api/auth', () => ({
   authApi: {
     options: vi.fn(),
-    attachPublicKey: vi.fn(),
+    attachPublicKey: legacyAttachment,
   },
 }));
 
 vi.mock('../api/client', () => ({
   extractApiError: (err: unknown) => (err instanceof Error ? err.message : 'Registration failed'),
+}));
+
+vi.mock('../api/instance', () => ({
+  instanceApi: {
+    getSetupStatus: mockGetSetupStatus,
+  },
 }));
 
 vi.mock('../stores/authStore', () => {
@@ -78,6 +92,7 @@ function renderRegisterPage() {
         <Route path="/login" element={<div>Login page</div>} />
         <Route path="/terms" element={<div>Terms</div>} />
         <Route path="/privacy" element={<div>Privacy</div>} />
+        <Route path="/setup-server" element={<div>Set up your Paracord server</div>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -97,7 +112,60 @@ describe('RegisterPage', () => {
     vi.mocked(authApi.options).mockResolvedValue({
       data: { allow_username_login: true, require_email: false },
     } as never);
-    vi.mocked(authApi.attachPublicKey).mockResolvedValue({ data: {} } as never);
+    legacyAttachment.mockResolvedValue({ data: {} } as never);
+    mockGetSetupStatus.mockResolvedValue({ data: { setup_required: false } });
+  });
+
+  it('sends the operator to the claim flow when the server has no owner yet', async () => {
+    mockGetSetupStatus.mockResolvedValue({
+      data: { setup_required: true },
+    });
+
+    renderRegisterPage();
+
+    expect(await screen.findByText('Set up your Paracord server')).toBeInTheDocument();
+  });
+
+  it('stays on registration when the setup check fails, rather than guessing', async () => {
+    mockGetSetupStatus.mockRejectedValue(new Error('offline'));
+
+    renderRegisterPage();
+
+    await waitFor(() => expect(mockGetSetupStatus).toHaveBeenCalled());
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeInTheDocument();
+  });
+
+  it('explains the password requirements before typing', () => {
+    renderRegisterPage();
+
+    const hint = screen.getByText(/10–128 bytes/);
+    expect(hint).toBeInTheDocument();
+    expect(hint.textContent).toMatch(/uppercase letter \(A–Z\)/);
+    expect(hint.textContent).toMatch(/lowercase letter \(a–z\)/);
+    expect(hint.textContent).toMatch(/digit \(0–9\)/);
+    expect(hint.textContent).toMatch(/ASCII symbol.*or space/);
+    expect(screen.getByLabelText(/^Password/)).toHaveAccessibleDescription(hint.textContent!);
+    expect(screen.getByLabelText(/^Password/)).not.toHaveAttribute('minlength');
+  });
+
+  it.each([
+    ['an uppercase letter', 'aa1!bcdefg', 'Password must include an uppercase letter (A–Z).'],
+    ['a lowercase letter', 'AA1!BCDEFG', 'Password must include a lowercase letter (a–z).'],
+    ['a digit', 'Aa!!bcdefg', 'Password must include a digit (0–9).'],
+    ['a symbol or space', 'Aa1bcdefgh', 'Password must include a symbol or space.'],
+  ])('blocks registration when the password lacks %s', async (_missing, password, message) => {
+    const user = userEvent.setup();
+
+    renderRegisterPage();
+
+    await user.type(screen.getByLabelText(/Username/), 'ada');
+    await user.type(screen.getByLabelText(/^Password/), password);
+    await user.type(screen.getByLabelText(/Confirm Password/), password);
+    await user.click(screen.getByLabelText(/I have read and agree/));
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(mockAuthState.register).not.toHaveBeenCalled();
   });
 
   it('blocks registration when password confirmation does not match', async () => {
@@ -106,16 +174,35 @@ describe('RegisterPage', () => {
     renderRegisterPage();
 
     await user.type(screen.getByLabelText(/Username/), 'ada');
-    await user.type(screen.getByLabelText(/^Password/), 'ValidPass123');
-    await user.type(screen.getByLabelText(/Confirm Password/), 'DifferentPass123');
+    await user.type(screen.getByLabelText(/^Password/), VALID_PASSWORD);
+    await user.type(screen.getByLabelText(/Confirm Password/), 'DifferentPass1!');
     await user.click(screen.getByLabelText(/I have read and agree/));
     await user.click(screen.getByRole('button', { name: 'Continue' }));
 
     expect(await screen.findByText('Passwords do not match.')).toBeInTheDocument();
+    expect(screen.getByLabelText(/Confirm Password/)).toHaveAccessibleDescription('These passwords don’t match yet.');
+    expect(screen.getByLabelText(/Confirm Password/)).toHaveAttribute('aria-invalid', 'true');
     expect(mockAuthState.register).not.toHaveBeenCalled();
   });
 
-  it('trims account fields, stores the connected server, and opens the app', async () => {
+  it.each([' ValidPass1! ', 'Aa1!ééé'])('passes an accepted password to register without trimming or a different character limit', async password => {
+    const user = userEvent.setup();
+
+    renderRegisterPage();
+
+    await user.type(screen.getByLabelText(/Username/), 'ada');
+    await user.type(screen.getByLabelText(/^Password/), password);
+    await user.type(screen.getByLabelText(/Confirm Password/), password);
+    await user.click(screen.getByLabelText(/I have read and agree/));
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+
+    await waitFor(() => {
+      expect(mockAuthState.register).toHaveBeenCalledWith('', 'ada', password, '');
+    });
+    expect(await screen.findByText('App shell')).toBeInTheDocument();
+  });
+
+  it('trims account fields and opens the app without duplicating the home session', async () => {
     const user = userEvent.setup();
 
     renderRegisterPage();
@@ -123,8 +210,8 @@ describe('RegisterPage', () => {
     await user.type(screen.getByLabelText(/Email/), 'ada@example.test');
     await user.type(screen.getByLabelText(/Display Name/), '  Ada Lovelace  ');
     await user.type(screen.getByLabelText(/Username/), '  ada  ');
-    await user.type(screen.getByLabelText(/^Password/), 'ValidPass123');
-    await user.type(screen.getByLabelText(/Confirm Password/), 'ValidPass123');
+    await user.type(screen.getByLabelText(/^Password/), VALID_PASSWORD);
+    await user.type(screen.getByLabelText(/Confirm Password/), VALID_PASSWORD);
     await user.click(screen.getByLabelText(/I have read and agree/));
     await user.click(screen.getByRole('button', { name: 'Continue' }));
 
@@ -132,20 +219,16 @@ describe('RegisterPage', () => {
       expect(mockAuthState.register).toHaveBeenCalledWith(
         'ada@example.test',
         'ada',
-        'ValidPass123',
+        VALID_PASSWORD,
         'Ada Lovelace',
       );
     });
-    expect(mockApiBaseUrl.setStoredServerUrl).toHaveBeenCalledWith('https://chat.example.test');
-    expect(mockServerListState.addServer).toHaveBeenCalledWith(
-      'https://chat.example.test',
-      'chat.example.test',
-      'access-token',
-    );
+    expect(mockServerListState.addServer).not.toHaveBeenCalled();
+    expect(mockServerListState.updateToken).not.toHaveBeenCalled();
     expect(await screen.findByText('App shell')).toBeInTheDocument();
   });
 
-  it('attaches an unlocked local public key after registration', async () => {
+  it('keeps registration credentials when a local identity is already unlocked', async () => {
     const user = userEvent.setup();
     mockHasAccount.mockReturnValue(true);
     mockAccountState.isUnlocked = true;
@@ -154,15 +237,13 @@ describe('RegisterPage', () => {
     renderRegisterPage();
 
     await user.type(screen.getByLabelText(/Username/), 'ada');
-    await user.type(screen.getByLabelText(/^Password/), 'ValidPass123');
-    await user.type(screen.getByLabelText(/Confirm Password/), 'ValidPass123');
+    await user.type(screen.getByLabelText(/^Password/), VALID_PASSWORD);
+    await user.type(screen.getByLabelText(/Confirm Password/), VALID_PASSWORD);
     await user.click(screen.getByLabelText(/I have read and agree/));
     await user.click(screen.getByRole('button', { name: 'Continue' }));
 
-    await waitFor(() => {
-      // The password must travel with the key: the server re-authenticates
-      // before accepting a standalone credential that outlives a password change.
-      expect(authApi.attachPublicKey).toHaveBeenCalledWith('public-key-1', 'ValidPass123');
-    });
+    expect(await screen.findByText('App shell')).toBeInTheDocument();
+    expect(legacyAttachment).not.toHaveBeenCalled();
+    expect(mockServerListState.addServer).not.toHaveBeenCalled();
   });
 });

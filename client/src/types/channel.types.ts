@@ -31,7 +31,8 @@ export interface Channel {
   user_limit?: number;
   rate_limit_per_user?: number;
   parent_id?: string | null;
-  last_message_id?: string;
+  last_message_id?: string | null;
+  message_revision?: string;
   required_role_ids?: string[];
   thread_metadata?: ThreadMetadata | null;
   owner_id?: string | null;

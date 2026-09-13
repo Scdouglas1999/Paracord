@@ -329,7 +329,7 @@ pub fn spawn_screen_audio_send_task(session: &mut NativeMediaSession) {
 }
 
 /// Spawn the datagram receive task: QUIC datagram → parse header → decrypt → dispatch audio/video.
-pub fn spawn_datagram_recv_task(session: &mut NativeMediaSession, app: tauri::AppHandle) {
+pub fn spawn_datagram_recv_task(session: &mut NativeMediaSession, app: super::CallEventSink) {
     let shutdown = session.shutdown.clone();
     let remote_audio = session.remote_audio.clone();
     let stream_remote_audio = session.stream_remote_audio.clone();
@@ -550,7 +550,7 @@ pub fn spawn_datagram_recv_task(session: &mut NativeMediaSession, app: tauri::Ap
 /// keyframe or large frame) → read to FIN → hand to the video pipeline, which
 /// decrypts the single AEAD unit and feeds it into the same per-track
 /// reorder/decode pipeline as the datagram delta path (keyed by frame_id).
-pub fn spawn_uni_stream_recv_task(session: &mut NativeMediaSession, app: tauri::AppHandle) {
+pub fn spawn_uni_stream_recv_task(session: &mut NativeMediaSession, app: super::CallEventSink) {
     let shutdown = session.shutdown.clone();
     let conn_inner = session.connection.inner().clone();
     let frame_decryptor = session.frame_decryptor.clone();

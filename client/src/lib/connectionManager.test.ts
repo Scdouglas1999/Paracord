@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GatewayEvents } from '../gateway/events';
+import { useAuthStore } from '../stores/authStore';
+import { useServerListStore } from '../stores/serverListStore';
+import type { User } from '../types';
+import { acceptDatabaseHistoryEpoch, clearDatabaseHistoryMemory, getDatabaseHistoryEpoch, registerAccountHistoryReset, requestHistoryReconciliation } from './databaseHistory';
+import { dispatchGatewayEvent } from '../gateway/dispatch';
+vi.mock('../gateway/dispatch', () => ({ dispatchGatewayEvent: vi.fn() }));
+vi.mock('./messages/accountMessagingRuntime', () => ({ pauseAccountMessagingForRecovery: vi.fn() }));
 import {
   connectionManager,
   warnMalformedFrame,
@@ -37,6 +44,7 @@ function makeConnection(overrides: Partial<ServerConnection> = {}): ServerConnec
 
 // Private surface of the singleton that the tests drive directly.
 type ManagerInternals = {
+  connectLocalInternal: () => Promise<void>;
   connections: Map<string, ServerConnection>;
   offline: boolean;
   handleDispatch: (conn: ServerConnection, event: string, data: unknown) => void;
@@ -48,6 +56,14 @@ type ManagerInternals = {
 };
 
 const manager = connectionManager as unknown as ManagerInternals;
+const scope = { serverId: '__test__', userId: '42' };
+const oldHistory = '7257b8f7-610e-4a8b-a20c-5a94a7b98428';
+const newHistory = '31349d45-0b51-4c83-b41b-49ac76d648ce';
+beforeEach(() => {
+  localStorage.clear(); clearDatabaseHistoryMemory();
+  vi.mocked(dispatchGatewayEvent).mockClear();
+  useServerListStore.setState({ servers: [{ id: '__test__', name: 'Test server', url: 'http://localhost:8090', connected: true, token: 'token', userId: '42', user: { id: '42', username: 'owner' } as User }] });
+});
 
 /** Register a connection for the duration of a test, then clean up. */
 function withConnection<T>(conn: ServerConnection, fn: () => T): T {
@@ -81,6 +97,18 @@ async function withConnectionAsync(
 }
 
 describe('connectionManager gateway lifecycle', () => {
+  it.each([GatewayEvents.RESUMED, GatewayEvents.MESSAGE_CREATE])('closes %s cleanly when saved history cannot be read', event => {
+    localStorage.setItem('paracord:database-history:["__test__","42"]', 'corrupt');
+    const close = vi.fn();
+    const conn = makeConnection({ eventSource: { close } as unknown as EventSource });
+    withConnection(conn, () => {
+      expect(() => manager.handleDispatch(conn, event, {})).not.toThrow();
+      expect(manager.connections.has(conn.serverId)).toBe(false);
+    });
+    expect(close).toHaveBeenCalledOnce();
+    expect(dispatchGatewayEvent).not.toHaveBeenCalled();
+  });
+
   it('flushes queued messages and resets reconnect attempts after RESUMED', () => {
     const sent: string[] = [];
     const conn = makeConnection({
@@ -105,6 +133,75 @@ describe('connectionManager gateway lifecycle', () => {
       { op: 3, d: { status: 'online' } },
       { op: 4, d: { guild_id: '1', channel_id: '2' } },
     ]);
+  });
+
+  it('accepts lower restored history through a currently owned READY even with the same SSE session ID', () => {
+    acceptDatabaseHistoryEpoch(scope, oldHistory);
+    const reset = vi.fn(); registerAccountHistoryReset('connection-test', reset);
+    const conn = makeConnection({ historyEpoch: oldHistory, accountId: '42', pendingMessages: [{ op: 4, d: { channel_id: 'old' } }] });
+    withConnection(conn, () => manager.handleDispatch(conn, GatewayEvents.READY, { user: { id: '42' }, session_id: 'session-before', database_history_epoch: newHistory }));
+    expect(getDatabaseHistoryEpoch(scope)).toBe(newHistory);
+    expect(conn.historyEpoch).toBe(newHistory);
+    expect(conn.sessionId).toBe('session-before');
+    expect(conn.pendingMessages).toEqual([]);
+    expect(reset).toHaveBeenCalledTimes(1);
+    expect(dispatchGatewayEvent).toHaveBeenCalledWith('__test__', 'READY', expect.objectContaining({ database_history_epoch: newHistory }));
+  });
+
+  it('does not reset a healthy READY or RESUMED for the same accepted history', () => {
+    acceptDatabaseHistoryEpoch(scope, oldHistory);
+    const reset = vi.fn(); registerAccountHistoryReset('connection-test', reset);
+    const conn = makeConnection({ historyEpoch: oldHistory, accountId: '42' });
+    withConnection(conn, () => {
+      manager.handleDispatch(conn, GatewayEvents.READY, { user: { id: '42' }, database_history_epoch: oldHistory, session_id: 'session' });
+      manager.handleDispatch(conn, GatewayEvents.RESUMED, { database_history_epoch: oldHistory, session_id: 'session' });
+    });
+    expect(reset).not.toHaveBeenCalled();
+    expect(dispatchGatewayEvent).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects stale connection handshakes and mismatched account projections', () => {
+    acceptDatabaseHistoryEpoch(scope, newHistory);
+    const old = makeConnection({ historyEpoch: oldHistory });
+    const current = makeConnection({ historyEpoch: newHistory, accountId: '42' });
+    withConnection(current, () => {
+      manager.handleDispatch(old, GatewayEvents.READY, { user: { id: '42' }, database_history_epoch: oldHistory });
+      manager.handleDispatch(current, GatewayEvents.READY, { user: { id: 'other' }, database_history_epoch: oldHistory });
+    });
+    expect(getDatabaseHistoryEpoch(scope)).toBe(newHistory);
+    expect(dispatchGatewayEvent).not.toHaveBeenCalled();
+  });
+
+  it('requires a fresh READY when RESUMED identifies a changed history', () => {
+    acceptDatabaseHistoryEpoch(scope, oldHistory);
+    const close = vi.fn();
+    const conn = makeConnection({ historyEpoch: oldHistory, accountId: '42', ws: { close } as unknown as WebSocket });
+    withConnection(conn, () => {
+      manager.handleDispatch(conn, GatewayEvents.RESUMED, { database_history_epoch: newHistory, session_id: 'same-session' });
+      expect(conn.sessionId).toBeNull();
+      expect(conn.historyEpoch).toBeUndefined();
+      expect(conn.reconnectTimer).not.toBeNull();
+      manager.handleDispatch(conn, GatewayEvents.MESSAGE_CREATE, { id: '1', channel_id: '2' });
+    });
+    expect(close).toHaveBeenCalledOnce();
+    expect(dispatchGatewayEvent).not.toHaveBeenCalled();
+  });
+
+  it('closes a mismatching HTTP history transport and discards buffered commands without adopting a reply epoch', () => {
+    acceptDatabaseHistoryEpoch(scope, oldHistory);
+    const close = vi.fn();
+    const conn = makeConnection({ historyEpoch: oldHistory, accountId: '42', eventSource: { close } as unknown as EventSource, pendingMessages: [{ op: 4 }] });
+    withConnection(conn, () => {
+      requestHistoryReconciliation(scope);
+      expect(conn.reconnectTimer).not.toBeNull();
+      expect(conn.pendingMessages).toEqual([]);
+      expect(conn.sequence).toBeNull();
+      expect(conn.realtimeCursor).toBeNull();
+      manager.handleDispatch(conn, GatewayEvents.MESSAGE_CREATE, { id: '1', channel_id: '2' });
+    });
+    expect(close).toHaveBeenCalledOnce();
+    expect(getDatabaseHistoryEpoch(scope)).toBe(oldHistory);
+    expect(dispatchGatewayEvent).not.toHaveBeenCalled();
   });
 });
 
@@ -447,5 +544,30 @@ describe('connectionManager SSE watchdog', () => {
       // The watchdog timer is not owned by withConnection's cleanup; clear it.
       if (conn.sseWatchdogTimer) clearInterval(conn.sseWatchdogTimer);
     });
+  });
+});
+
+describe('replacement sessions own their transport', () => {
+  const local = (overrides: Partial<ServerConnection> = {}) =>
+    makeConnection({ serverId: LOCAL_SERVER_ID, sessionToken: 'revoked-token', sessionId: 'old-session', sequence: 4, realtimeCursor: 9,
+      eventSource: { close: () => {} } as unknown as ServerConnection['eventSource'], lastFrameTs: Date.now(), ...overrides });
+  afterEach(() => { useAuthStore.setState({ token: null } as never); vi.restoreAllMocks(); });
+
+  it('drops a stream opened with a revoked credential and forgets its resume point', async () => {
+    useAuthStore.setState({ token: 'replacement-token' } as never);
+    const conn = local();
+    const replaced = vi.spyOn(manager, 'connectRealtime').mockImplementation(() => {});
+    await withConnection(conn, async () => { await manager.connectLocalInternal(); });
+    expect(replaced).toHaveBeenCalledWith(conn);
+    expect(conn.sessionId).toBeNull(); expect(conn.sequence).toBeNull(); expect(conn.realtimeCursor).toBeNull();
+  });
+
+  it('keeps a healthy stream when the same session refreshed its access token', async () => {
+    useAuthStore.setState({ token: 'same-token' } as never);
+    const conn = local({ sessionToken: 'same-token' });
+    const replaced = vi.spyOn(manager, 'connectRealtime').mockImplementation(() => {});
+    await withConnection(conn, async () => { await manager.connectLocalInternal(); });
+    expect(replaced).not.toHaveBeenCalled();
+    expect(conn.sessionId).toBe('old-session'); expect(conn.realtimeCursor).toBe(9);
   });
 });

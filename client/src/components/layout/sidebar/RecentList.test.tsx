@@ -8,6 +8,7 @@ import type { ConversationEntry } from '../../../lib/attention/conversationModel
 function makeEntry(over: Partial<ConversationEntry> & { key: string }): ConversationEntry {
   return {
     serverId: 'srv',
+    scope: { serverId: 'srv', userId: 'user-1' },
     channelId: over.key.split(':')[1] ?? '0',
     guildId: 'g1',
     userId: null,

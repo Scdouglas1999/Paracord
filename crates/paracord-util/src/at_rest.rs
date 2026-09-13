@@ -277,7 +277,7 @@ fn parse_hex_key(raw: &str) -> Result<[u8; 32], AtRestKeyError> {
     }
 
     let mut out = [0_u8; 32];
-    for (i, chunk) in bytes.chunks_exact(2).enumerate() {
+    for (i, chunk) in bytes.as_chunks::<2>().0.iter().enumerate() {
         let hi = decode_hex_nibble(chunk[0]).ok_or(AtRestKeyError::InvalidHex)?;
         let lo = decode_hex_nibble(chunk[1]).ok_or(AtRestKeyError::InvalidHex)?;
         out[i] = (hi << 4) | lo;

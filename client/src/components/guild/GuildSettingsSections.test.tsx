@@ -9,7 +9,6 @@ const guild: Guild = {
   name: 'Test Guild',
   owner_id: 'owner-1',
   member_count: 2,
-  features: [],
   created_at: '2026-01-01T00:00:00.000Z',
 };
 

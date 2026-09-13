@@ -166,7 +166,7 @@ export function FocusedWebcamView({ participantId, username, isLocal }: FocusedW
           ref={videoRef}
           autoPlay
           playsInline
-          muted={isLocal}
+          muted // Camera track only; call audio is rendered separately by the voice engine.
           className="h-full w-full object-cover"
           style={{
             transform: isLocal ? 'scaleX(-1)' : undefined,

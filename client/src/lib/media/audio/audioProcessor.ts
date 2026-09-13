@@ -3,7 +3,11 @@
 // It runs in the AudioWorklet global scope, NOT the main thread.
 
 // AudioWorklet globals are not in the standard DOM lib types.
-// @ts-nocheck
+declare abstract class AudioWorkletProcessor {
+  readonly port: MessagePort;
+  abstract process(inputs: Float32Array[][], outputs: Float32Array[][], parameters: Record<string, Float32Array>): boolean;
+}
+declare function registerProcessor(name: string, processor: new () => AudioWorkletProcessor): void;
 
 const FRAME_SIZE = 960; // 20ms at 48kHz
 

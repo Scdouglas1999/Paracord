@@ -165,6 +165,7 @@ impl LiveKitConfig {
         room_name: &str,
         user_id: i64,
         user_name: &str,
+        session_id: &str,
         can_publish: bool,
         can_subscribe: bool,
     ) -> Result<String, anyhow::Error> {
@@ -172,6 +173,7 @@ impl LiveKitConfig {
 
         let metadata = serde_json::json!({
             "user_id": user_id,
+            "voice_session_id": session_id,
             "priority_speaker": false,
         });
 

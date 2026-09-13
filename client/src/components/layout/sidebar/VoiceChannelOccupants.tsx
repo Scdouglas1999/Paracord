@@ -1,5 +1,5 @@
+import { useSelectedGuildId } from '../../../hooks/useGuilds';
 import { useNavigate } from 'react-router';
-import { useGuildStore } from '../../../stores/guildStore';
 import { useVoiceStore } from '../../../stores/voiceStore';
 import type { ConversationEntry } from '../../../lib/attention/conversationModel';
 import { ChannelType, type Channel } from '../../../types/index';
@@ -16,7 +16,7 @@ export function VoiceChannelOccupants({ entry }: { entry: ConversationEntry }) {
 
 function VoiceChannelOccupantsInner({ entry }: { entry: ConversationEntry }) {
   const navigate = useNavigate();
-  const selectedGuildId = useGuildStore((s) => s.selectedGuildId);
+  const selectedGuildId = useSelectedGuildId();
   const participants = useVoiceStore((s) => s.channelParticipants.get(entry.channelId) ?? EMPTY);
   const speakingUsers = useVoiceStore((s) => s.speakingUsers);
 

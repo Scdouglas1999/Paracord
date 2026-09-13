@@ -87,7 +87,7 @@ const ACCESS_COOKIE_NAME: &str = "paracord_access";
 const CSRF_COOKIE_NAME: &str = "paracord_csrf";
 const CSRF_HEADER_NAME: &str = "x-paracord-csrf";
 
-pub fn build_router() -> Router<AppState> {
+pub fn build_router(state: &AppState) -> Router<AppState> {
     let cors = build_cors_layer();
     let request_timeout = resolve_request_timeout();
     Router::new()
@@ -199,6 +199,17 @@ pub fn build_router() -> Router<AppState> {
         .route("/api/v1/auth/register", post(routes::auth::register))
         .route("/api/v1/auth/login", post(routes::auth::login))
         .route("/api/v1/auth/options", get(routes::auth::auth_options))
+        // First-owner setup. Public by necessity: a browser must be able to
+        // tell an unclaimed server from a claimed one before anyone can sign
+        // in, and the claim itself is the only way an unclaimed server gets its
+        // first account. Both are token-gated or contentless; neither leaks the
+        // bootstrap token or its hash.
+        .route("/api/v1/setup/status", get(routes::setup::setup_status))
+        .route(
+            "/api/v1/setup/password-requirements",
+            get(routes::setup::password_requirements),
+        )
+        .route("/api/v1/setup/claim", post(routes::setup::claim_instance))
         .route("/api/v1/auth/refresh", post(routes::auth::refresh))
         .route("/api/v1/auth/logout", post(routes::auth::logout))
         .route("/api/v1/auth/challenge", post(routes::auth::challenge))
@@ -519,8 +530,20 @@ pub fn build_router() -> Router<AppState> {
                 .delete(routes::channels::delete_channel),
         )
         .route(
+            "/api/v1/channels/{channel_id}/capabilities",
+            get(routes::channels::get_channel_capabilities),
+        )
+        .route(
             "/api/v1/channels/{channel_id}/messages",
             get(routes::channels::get_messages).post(routes::channels::send_message),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/messages/recovery",
+            get(routes::channels::recover_messages),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/messages/attention",
+            get(routes::channels::get_attention_target),
         )
         .route(
             "/api/v1/channels/{channel_id}/messages/search",
@@ -533,6 +556,10 @@ pub fn build_router() -> Router<AppState> {
         .route(
             "/api/v1/channels/{channel_id}/messages/bulk-delete",
             post(routes::channels::bulk_delete_messages),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/message-deliveries/{nonce}/resolve",
+            post(routes::channels::resolve_message_delivery),
         )
         .route(
             "/api/v1/channels/{channel_id}/messages/{message_id}",
@@ -565,6 +592,14 @@ pub fn build_router() -> Router<AppState> {
         .route(
             "/api/v1/channels/{channel_id}/e2ee/sender-keys/ack",
             post(routes::message_features::ack_group_sender_keys),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/messages/{message_id}/edits/{edit_nonce}/resolve",
+            post(routes::channels::resolve_message_edit),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/messages/{message_id}/deletions/{delete_nonce}/resolve",
+            post(routes::channels::resolve_message_deletion),
         )
         .route(
             "/api/v1/channels/{channel_id}/messages/{message_id}/edits",
@@ -801,7 +836,10 @@ pub fn build_router() -> Router<AppState> {
             put(routes::bots::upsert_store_bot_review),
         )
         // Signal prekey management
-        .route("/api/v1/users/@me/keys", put(routes::keys::upload_keys))
+        .route(
+            "/api/v1/users/@me/keys",
+            get(routes::keys::get_own_keys).put(routes::keys::upload_keys),
+        )
         .route(
             "/api/v1/users/@me/keys/count",
             get(routes::keys::get_key_count),
@@ -853,6 +891,11 @@ pub fn build_router() -> Router<AppState> {
         .route(
             "/api/v1/voice/livekit/webhook",
             post(routes::voice::livekit_webhook),
+        )
+        // Side-effect-free transport facts for the guided connection check.
+        .route(
+            "/api/v1/voice/transport-diagnostics",
+            get(routes::voice_diagnostics::transport_diagnostics),
         )
         .route(
             "/api/v2/voice/{channel_id}/join",
@@ -948,6 +991,10 @@ pub fn build_router() -> Router<AppState> {
         .layer(from_fn(metrics_middleware))
         .layer(from_fn(rate_limit_middleware))
         .layer(from_fn(csrf_middleware))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::database_history_middleware,
+        ))
         .layer(from_fn(security_headers_middleware))
         .layer(cors)
         .layer(
@@ -1070,7 +1117,9 @@ fn build_cors_layer() -> tower_http::cors::CorsLayer {
             header::CONTENT_TYPE,
             header::ACCEPT,
             header::ORIGIN,
+            HeaderName::from_static(middleware::HISTORY_EPOCH_HEADER),
         ])
+        .expose_headers([HeaderName::from_static(middleware::HISTORY_EPOCH_HEADER)])
         .max_age(Duration::from_secs(600));
 
     if allow_any {

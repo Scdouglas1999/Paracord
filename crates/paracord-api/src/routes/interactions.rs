@@ -19,7 +19,7 @@ const MAX_SELECT_VALUES: usize = 25;
 const MAX_MODAL_INPUTS: usize = 5;
 const MAX_MODAL_VALUE_LEN: usize = 4_000;
 
-use paracord_util::validation::contains_dangerous_markup;
+use paracord_util::validation::contains_dangerous_markup_except_mentions as contains_dangerous_markup;
 
 fn validate_component_url(raw: &str) -> Result<(), ApiError> {
     let trimmed = raw.trim();
@@ -1202,6 +1202,7 @@ pub async fn edit_original_response(
 
     let msg_json = json!({
         "id": updated.id.to_string(),
+                "message_revision": updated.recovery_revision.to_string(),
         "channel_id": updated.channel_id.to_string(),
         "author_id": updated.author_id.to_string(),
         "content": updated.content,
@@ -1216,7 +1217,13 @@ pub async fn edit_original_response(
     // Dispatch MESSAGE_UPDATE
     state
         .event_bus
-        .dispatch("MESSAGE_UPDATE", msg_json.clone(), token_row.guild_id);
+        .dispatch_message(
+            &state.db,
+            "MESSAGE_UPDATE",
+            msg_json.clone(),
+            token_row.guild_id,
+        )
+        .await;
 
     Ok(Json(msg_json))
 }
@@ -1251,15 +1258,19 @@ pub async fn delete_original_response(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
     // Dispatch MESSAGE_DELETE
-    state.event_bus.dispatch(
-        "MESSAGE_DELETE",
-        json!({
-            "id": msg_id.to_string(),
-            "channel_id": token_row.channel_id.to_string(),
-            "guild_id": token_row.guild_id.map(|id| id.to_string()),
-        }),
-        token_row.guild_id,
-    );
+    state
+        .event_bus
+        .dispatch_message(
+            &state.db,
+            "MESSAGE_DELETE",
+            json!({
+                "id": msg_id.to_string(),
+                "channel_id": token_row.channel_id.to_string(),
+                "guild_id": token_row.guild_id.map(|id| id.to_string()),
+            }),
+            token_row.guild_id,
+        )
+        .await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1330,7 +1341,14 @@ pub async fn create_followup_message(
     let embeds_json = serde_json::to_string(&embeds)
         .map_err(|_| ApiError::BadRequest("Invalid embeds payload".into()))?;
 
-    let msg = paracord_db::messages::create_message_with_payload(
+    let mentioned_users = paracord_core::message_attention::member_mentions(
+        &state.db,
+        token_row.channel_id,
+        bot_app.bot_user_id,
+        content,
+    )
+    .await?;
+    let msg = paracord_db::messages::create_message_with_payload_mentions(
         &state.db,
         message_id,
         token_row.channel_id,
@@ -1339,10 +1357,9 @@ pub async fn create_followup_message(
         20, // APPLICATION_COMMAND message type
         None,
         flags,
-        None,
-        None,
         Some(&components_json),
         Some(&embeds_json),
+        &mentioned_users,
     )
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
@@ -1365,7 +1382,13 @@ pub async fn create_followup_message(
 
     state
         .event_bus
-        .dispatch("MESSAGE_CREATE", msg_json.clone(), token_row.guild_id);
+        .dispatch_message(
+            &state.db,
+            "MESSAGE_CREATE",
+            msg_json.clone(),
+            token_row.guild_id,
+        )
+        .await;
 
     Ok((StatusCode::CREATED, Json(msg_json)))
 }

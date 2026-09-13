@@ -8,6 +8,7 @@ members = [
     "crates/paracord-db",
     "crates/paracord-federation",
     "crates/paracord-models",
+    "crates/paracord-contracts",
     "crates/paracord-media",
     "crates/paracord-util",
     # Custom media server crates
@@ -25,6 +26,7 @@ rust-version = "1.88"
 license-file = "LICENSE"
 
 [workspace.dependencies]
+paracord-contracts = { path = "crates/paracord-contracts" }
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 
@@ -40,6 +42,7 @@ sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio",
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+schemars = "=1.2.1"
 regex = "1"
 unicode-normalization = "0.1"
 unicode-properties = "0.1"

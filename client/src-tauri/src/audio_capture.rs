@@ -184,7 +184,7 @@ fn show_native_consent_dialog() -> bool {
 ///
 /// Idempotent: if a capture is already running it is a no-op success, so the
 /// enable path can be called repeatedly without a spurious "already running".
-pub fn start_system_audio_capture_into(sink: ScreenAudioSink) -> Result<(), String> {
+pub fn start_system_audio_capture_into(sink: ScreenAudioSink, stop_flag: Arc<AtomicBool>) -> Result<(), String> {
     if !SYSTEM_AUDIO_CAPTURE_ENABLED.load(Ordering::SeqCst) {
         return Err("System audio capture disabled".into());
     }
@@ -193,13 +193,13 @@ pub fn start_system_audio_capture_into(sink: ScreenAudioSink) -> Result<(), Stri
     // native prompt — so a renderer XSS cannot start covert system-audio
     // capture on its own. This is the actual consent boundary (CWE-862/CWE-359).
     require_native_consent()?;
+    if stop_flag.load(Ordering::SeqCst) { return Err("system audio capture was canceled".into()); }
 
     let mut guard = CAPTURE.lock().map_err(|e| e.to_string())?;
     if guard.is_some() {
         return Ok(());
     }
 
-    let stop_flag = Arc::new(AtomicBool::new(false));
     let stop = stop_flag.clone();
 
     // Echo-free routing: capture a private null sink holding every

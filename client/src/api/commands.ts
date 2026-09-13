@@ -23,34 +23,34 @@ export interface UpdateCommandRequest {
 
 export const commandApi = {
   // Global commands
-  listGlobalCommands: (appId: string) =>
+  listGlobalCommands: async (appId: string) =>
     getApi().get<ApplicationCommand[]>(`/applications/${appId}/commands`),
-  createGlobalCommand: (appId: string, data: CreateCommandRequest) =>
+  createGlobalCommand: async (appId: string, data: CreateCommandRequest) =>
     getApi().post<ApplicationCommand>(`/applications/${appId}/commands`, data),
-  getGlobalCommand: (appId: string, cmdId: string) =>
+  getGlobalCommand: async (appId: string, cmdId: string) =>
     getApi().get<ApplicationCommand>(`/applications/${appId}/commands/${cmdId}`),
-  updateGlobalCommand: (appId: string, cmdId: string, data: UpdateCommandRequest) =>
+  updateGlobalCommand: async (appId: string, cmdId: string, data: UpdateCommandRequest) =>
     getApi().patch<ApplicationCommand>(`/applications/${appId}/commands/${cmdId}`, data),
-  deleteGlobalCommand: (appId: string, cmdId: string) =>
+  deleteGlobalCommand: async (appId: string, cmdId: string) =>
     getApi().delete(`/applications/${appId}/commands/${cmdId}`),
-  bulkOverwriteGlobalCommands: (appId: string, commands: CreateCommandRequest[]) =>
+  bulkOverwriteGlobalCommands: async (appId: string, commands: CreateCommandRequest[]) =>
     getApi().put<ApplicationCommand[]>(`/applications/${appId}/commands`, commands),
 
   // Guild commands
-  listGuildCommands: (appId: string, guildId: string) =>
+  listGuildCommands: async (appId: string, guildId: string) =>
     getApi().get<ApplicationCommand[]>(`/applications/${appId}/guilds/${guildId}/commands`),
-  createGuildCommand: (appId: string, guildId: string, data: CreateCommandRequest) =>
+  createGuildCommand: async (appId: string, guildId: string, data: CreateCommandRequest) =>
     getApi().post<ApplicationCommand>(`/applications/${appId}/guilds/${guildId}/commands`, data),
-  getGuildCommand: (appId: string, guildId: string, cmdId: string) =>
+  getGuildCommand: async (appId: string, guildId: string, cmdId: string) =>
     getApi().get<ApplicationCommand>(`/applications/${appId}/guilds/${guildId}/commands/${cmdId}`),
-  updateGuildCommand: (appId: string, guildId: string, cmdId: string, data: UpdateCommandRequest) =>
+  updateGuildCommand: async (appId: string, guildId: string, cmdId: string, data: UpdateCommandRequest) =>
     getApi().patch<ApplicationCommand>(`/applications/${appId}/guilds/${guildId}/commands/${cmdId}`, data),
-  deleteGuildCommand: (appId: string, guildId: string, cmdId: string) =>
+  deleteGuildCommand: async (appId: string, guildId: string, cmdId: string) =>
     getApi().delete(`/applications/${appId}/guilds/${guildId}/commands/${cmdId}`),
-  bulkOverwriteGuildCommands: (appId: string, guildId: string, commands: CreateCommandRequest[]) =>
+  bulkOverwriteGuildCommands: async (appId: string, guildId: string, commands: CreateCommandRequest[]) =>
     getApi().put<ApplicationCommand[]>(`/applications/${appId}/guilds/${guildId}/commands`, commands),
 
   // All commands available in a guild (global + guild-specific)
-  listGuildAvailableCommands: (guildId: string) =>
+  listGuildAvailableCommands: async (guildId: string) =>
     getApi().get<ApplicationCommand[]>(`/guilds/${guildId}/commands`),
 };

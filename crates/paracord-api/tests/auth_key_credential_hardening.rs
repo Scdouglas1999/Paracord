@@ -58,7 +58,7 @@ impl Harness {
     fn with_config(&self, mutate: impl FnOnce(&mut paracord_core::AppConfig)) -> Router {
         let mut state = self.test_app.state.clone();
         mutate(&mut state.config);
-        paracord_api::build_router().with_state(state)
+        paracord_api::build_router(&state).with_state(state)
     }
 
     fn db(&self) -> &paracord_db::DbPool {
@@ -802,6 +802,380 @@ async fn login_fails_closed_when_the_mfa_lookup_errors() -> anyhow::Result<()> {
     assert!(
         body["token"].as_str().unwrap_or_default().is_empty(),
         "no token may leak on the failure path: {body}"
+    );
+    Ok(())
+}
+
+async fn attachment_request(
+    harness: &Harness,
+    account: &Account,
+    key: &SigningKey,
+    token: &str,
+    expected: Option<String>,
+) -> anyhow::Result<Request<Body>> {
+    let (nonce, timestamp, signature) = signed_challenge(harness, key).await?;
+    Ok(json_request(
+        "POST",
+        "/api/v1/auth/attach-public-key",
+        json!({
+            "public_key": public_key_hex(key), "expected_public_key": expected,
+            "nonce": nonce, "timestamp": timestamp, "signature": signature, "password": account.password,
+        }),
+        Some(token),
+    ))
+}
+
+#[tokio::test]
+async fn initial_enrollment_does_not_replace_a_key_even_with_the_correct_password(
+) -> anyhow::Result<()> {
+    let harness = Harness::new().await?;
+    let account = create_account(harness.db(), "expected_key").await?;
+    let original = signing_key(0x71);
+    let replacement = signing_key(0x72);
+    paracord_db::users::update_user_public_key(
+        harness.db(),
+        account.id(),
+        &public_key_hex(&original),
+    )
+    .await?;
+    let token = session_token(harness.db(), &harness.test_app.jwt_secret, account.id()).await?;
+    let request = attachment_request(&harness, &account, &replacement, &token, None).await?;
+    let (status, _) = harness.send(request).await?;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        stored_public_key(harness.db(), account.id()).await?,
+        Some(public_key_hex(&original))
+    );
+    assert_eq!(
+        harness
+            .send(get_request("/api/v1/users/@me", &token))
+            .await?
+            .0,
+        StatusCode::OK
+    );
+    let request = attachment_request(
+        &harness,
+        &account,
+        &replacement,
+        &token,
+        Some(public_key_hex(&original)),
+    )
+    .await?;
+    let (status, body) = harness.send(request).await?;
+    assert_eq!(status, StatusCode::OK, "explicit replacement: {body}");
+    assert_eq!(
+        stored_public_key(harness.db(), account.id()).await?,
+        Some(public_key_hex(&replacement))
+    );
+    assert_eq!(
+        harness
+            .send(get_request("/api/v1/users/@me", &token))
+            .await?
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        harness
+            .send(get_request(
+                "/api/v1/users/@me",
+                body["token"].as_str().unwrap()
+            ))
+            .await?
+            .0,
+        StatusCode::OK
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn simultaneous_initial_enrollments_commit_only_one_identity_and_live_session(
+) -> anyhow::Result<()> {
+    let harness = Harness::new().await?;
+    let account = create_account(harness.db(), "competing_keys").await?;
+    let token = session_token(harness.db(), &harness.test_app.jwt_secret, account.id()).await?;
+    let keys = [signing_key(0x73), signing_key(0x74)];
+    let first = attachment_request(&harness, &account, &keys[0], &token, None).await?;
+    let second = attachment_request(&harness, &account, &keys[1], &token, None).await?;
+    let (first, second) = tokio::join!(harness.send(first), harness.send(second));
+    let results = [first?, second?];
+    assert_eq!(
+        results
+            .iter()
+            .filter(|(status, _)| *status == StatusCode::OK)
+            .count(),
+        1,
+        "{results:?}"
+    );
+    let winner = results
+        .iter()
+        .position(|(status, _)| *status == StatusCode::OK)
+        .unwrap();
+    let rejected = &results[1 - winner];
+    assert!(
+        matches!(rejected.0, StatusCode::CONFLICT | StatusCode::UNAUTHORIZED),
+        "{rejected:?}"
+    );
+    assert_eq!(
+        stored_public_key(harness.db(), account.id()).await?,
+        Some(public_key_hex(&keys[winner]))
+    );
+    assert_eq!(
+        harness
+            .send(get_request(
+                "/api/v1/users/@me",
+                results[winner].1["token"].as_str().unwrap()
+            ))
+            .await?
+            .0,
+        StatusCode::OK
+    );
+    let (count,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM auth_sessions WHERE user_id = $1 AND revoked_at IS NULL",
+    )
+    .bind(account.id())
+    .fetch_one(harness.db())
+    .await?;
+    assert_eq!(count, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn retrying_the_current_key_keeps_existing_sessions_alive() -> anyhow::Result<()> {
+    let harness = Harness::new().await?;
+    let account = create_account(harness.db(), "same_identity").await?;
+    let token = session_token(harness.db(), &harness.test_app.jwt_secret, account.id()).await?;
+    let key = signing_key(0x75);
+    let request = attachment_request(&harness, &account, &key, &token, None).await?;
+    let (status, first) = harness.send(request).await?;
+    assert_eq!(status, StatusCode::OK);
+    let token = first["token"].as_str().unwrap();
+    let request = attachment_request(&harness, &account, &key, token, None).await?;
+    let (status, second) = harness.send(request).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        harness
+            .send(get_request("/api/v1/users/@me", token))
+            .await?
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        harness
+            .send(get_request(
+                "/api/v1/users/@me",
+                second["token"].as_str().unwrap()
+            ))
+            .await?
+            .0,
+        StatusCode::OK
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn replacement_session_failure_rolls_back_the_identity_and_revocation() -> anyhow::Result<()>
+{
+    let harness = Harness::new().await?;
+    let account = create_account(harness.db(), "atomic_identity").await?;
+    let token = session_token(harness.db(), &harness.test_app.jwt_secret, account.id()).await?;
+    let key = signing_key(0x76);
+    match paracord_db::active_database_engine() {
+        paracord_db::DatabaseEngine::Sqlite => {
+            sqlx::query("CREATE TRIGGER reject_identity_session BEFORE INSERT ON auth_sessions BEGIN SELECT RAISE(ABORT, 'injected session failure'); END").execute(harness.db()).await?;
+        }
+        paracord_db::DatabaseEngine::Postgres => {
+            sqlx::query("CREATE FUNCTION reject_identity_session() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected session failure'; END; $$").execute(harness.db()).await?;
+            sqlx::query("CREATE TRIGGER reject_identity_session BEFORE INSERT ON auth_sessions FOR EACH ROW EXECUTE FUNCTION reject_identity_session()").execute(harness.db()).await?;
+        }
+    }
+    let request = attachment_request(&harness, &account, &key, &token, None).await?;
+    let (status, _) = harness.send(request).await?;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(stored_public_key(harness.db(), account.id()).await?, None);
+    assert_eq!(
+        harness
+            .send(get_request("/api/v1/users/@me", &token))
+            .await?
+            .0,
+        StatusCode::OK
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_revocation_does_not_partially_detach_the_identity() -> anyhow::Result<()> {
+    let harness = Harness::new().await?;
+    let account = create_account(harness.db(), "atomic_detach").await?;
+    let key = public_key_hex(&signing_key(0x77));
+    paracord_db::users::update_user_public_key(harness.db(), account.id(), &key).await?;
+    let token = session_token(harness.db(), &harness.test_app.jwt_secret, account.id()).await?;
+    match paracord_db::active_database_engine() {
+        paracord_db::DatabaseEngine::Sqlite => {
+            sqlx::query("CREATE TRIGGER reject_identity_revocation BEFORE UPDATE ON auth_sessions WHEN NEW.revoked_at IS NOT NULL BEGIN SELECT RAISE(ABORT, 'injected revocation failure'); END").execute(harness.db()).await?;
+        }
+        paracord_db::DatabaseEngine::Postgres => {
+            sqlx::query("CREATE FUNCTION reject_identity_revocation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.revoked_at IS NOT NULL THEN RAISE EXCEPTION 'injected revocation failure'; END IF; RETURN NEW; END; $$").execute(harness.db()).await?;
+            sqlx::query("CREATE TRIGGER reject_identity_revocation BEFORE UPDATE ON auth_sessions FOR EACH ROW EXECUTE FUNCTION reject_identity_revocation()").execute(harness.db()).await?;
+        }
+    }
+    let (status, _) = harness
+        .send(json_request(
+            "POST",
+            "/api/v1/auth/attach-public-key",
+            json!({ "detach": true, "password": account.password }),
+            Some(&token),
+        ))
+        .await?;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        stored_public_key(harness.db(), account.id()).await?,
+        Some(key)
+    );
+    assert_eq!(
+        harness
+            .send(get_request("/api/v1/users/@me", &token))
+            .await?
+            .0,
+        StatusCode::OK
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn uppercase_identity_encoding_cannot_claim_another_accounts_key() -> anyhow::Result<()> {
+    let harness = Harness::new().await?;
+    let owner = create_account(harness.db(), "case_owner").await?;
+    let other = create_account(harness.db(), "case_other").await?;
+    let key = signing_key(0x78);
+    let canonical = public_key_hex(&key);
+    // Preserve a legacy uppercase row to verify the database invariant too.
+    sqlx::query("UPDATE users SET public_key = $2 WHERE id = $1")
+        .bind(owner.id())
+        .bind(canonical.to_ascii_uppercase())
+        .execute(harness.db())
+        .await?;
+    assert_eq!(
+        paracord_db::users::get_user_by_public_key(harness.db(), &canonical)
+            .await?
+            .unwrap()
+            .id,
+        owner.id()
+    );
+    let token = session_token(harness.db(), &harness.test_app.jwt_secret, other.id()).await?;
+    let (nonce, timestamp, signature) = signed_challenge(&harness, &key).await?;
+    let (status, _) = harness
+        .send(json_request(
+            "POST",
+            "/api/v1/auth/attach-public-key",
+            json!({
+                "public_key": canonical.to_ascii_uppercase(), "password": other.password,
+                "nonce": nonce, "timestamp": timestamp, "signature": signature,
+            }),
+            Some(&token),
+        ))
+        .await?;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(stored_public_key(harness.db(), other.id()).await?, None);
+    assert_eq!(
+        harness
+            .send(get_request("/api/v1/users/@me", &token))
+            .await?
+            .0,
+        StatusCode::OK
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn stale_password_or_session_proofs_cannot_commit_an_identity() -> anyhow::Result<()> {
+    let harness = Harness::new().await?;
+    let account = create_account(harness.db(), "stale_identity").await?;
+    let _token = session_token(harness.db(), &harness.test_app.jwt_secret, account.id()).await?;
+    let (session_id,): (String,) =
+        sqlx::query_as("SELECT id FROM auth_sessions WHERE user_id = $1")
+            .bind(account.id())
+            .fetch_one(harness.db())
+            .await?;
+    let old = paracord_db::users::get_user_auth_by_id(harness.db(), account.id())
+        .await?
+        .unwrap();
+    let key = public_key_hex(&signing_key(0x79));
+    sqlx::query("UPDATE users SET password_hash = $2 WHERE id = $1")
+        .bind(account.id())
+        .bind("changed-password-hash")
+        .execute(harness.db())
+        .await?;
+    let mut transaction = harness.db().begin().await?;
+    let failure = paracord_db::users::lock_identity_attachment(
+        &mut transaction,
+        account.id(),
+        &session_id,
+        &old.password_hash,
+        None,
+        &key,
+    )
+    .await;
+    assert!(matches!(failure, Err(paracord_db::DbError::Conflict(_))));
+    transaction.rollback().await?;
+    sqlx::query("UPDATE auth_sessions SET revoked_at = $2 WHERE id = $1")
+        .bind(&session_id)
+        .bind(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string())
+        .execute(harness.db())
+        .await?;
+    let mut transaction = harness.db().begin().await?;
+    let failure = paracord_db::users::lock_identity_attachment(
+        &mut transaction,
+        account.id(),
+        &session_id,
+        "changed-password-hash",
+        None,
+        &key,
+    )
+    .await;
+    assert!(matches!(failure, Err(paracord_db::DbError::Conflict(_))));
+    transaction.rollback().await?;
+    assert_eq!(stored_public_key(harness.db(), account.id()).await?, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn identity_uniqueness_upgrade_refuses_ambiguous_legacy_owners() -> anyhow::Result<()> {
+    let harness = Harness::new().await?;
+    let first = create_account(harness.db(), "legacy_key_first").await?;
+    let second = create_account(harness.db(), "legacy_key_second").await?;
+    let canonical = public_key_hex(&signing_key(0x7a));
+    sqlx::query("DROP INDEX idx_users_public_key_case_insensitive")
+        .execute(harness.db())
+        .await?;
+    for (user, spelling) in [
+        (first.id(), canonical.clone()),
+        (second.id(), canonical.to_ascii_uppercase()),
+    ] {
+        sqlx::query("UPDATE users SET public_key = $2 WHERE id = $1")
+            .bind(user)
+            .bind(spelling)
+            .execute(harness.db())
+            .await?;
+    }
+    let migration = match paracord_db::active_database_engine() {
+        paracord_db::DatabaseEngine::Sqlite => include_str!(
+            "../../paracord-db/migrations/20260909000004_identity_key_case_uniqueness.sql"
+        ),
+        paracord_db::DatabaseEngine::Postgres => include_str!(
+            "../../paracord-db/migrations_pg/20260909000004_identity_key_case_uniqueness.sql"
+        ),
+    };
+    let mut transaction = harness.db().begin().await?;
+    let result = sqlx::raw_sql(migration).execute(&mut *transaction).await;
+    assert!(matches!(result, Err(sqlx::Error::Database(error)) if error.is_unique_violation()));
+    transaction.rollback().await?;
+    assert_eq!(
+        stored_public_key(harness.db(), first.id()).await?,
+        Some(canonical.clone())
+    );
+    assert_eq!(
+        stored_public_key(harness.db(), second.id()).await?,
+        Some(canonical.to_ascii_uppercase())
     );
     Ok(())
 }

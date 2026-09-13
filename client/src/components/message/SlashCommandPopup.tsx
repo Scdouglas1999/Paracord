@@ -52,15 +52,14 @@ export function SlashCommandPopup({
     }
   }, [visible, showingChoices, guildId, guildCommands, fetchGuildCommands]);
 
-  const commands = guildCommands.get(guildId) ?? [];
-
   const filteredCommands = useMemo(() => {
     if (showingChoices) return [];
+    const commands = guildCommands.get(guildId) ?? [];
     const q = query.toLowerCase();
     return commands
       .filter((cmd) => cmd.name.toLowerCase().startsWith(q))
       .slice(0, MAX_VISIBLE);
-  }, [commands, query, showingChoices]);
+  }, [guildCommands, guildId, query, showingChoices]);
 
   const visibleChoices = useMemo(
     () => (showingChoices ? (autocompleteChoices ?? []).slice(0, MAX_VISIBLE) : []),
@@ -200,7 +199,7 @@ export function SlashCommandPopup({
     );
   }
 
-  if (loading && commands.length === 0) {
+  if (loading && !guildCommands.get(guildId)?.length) {
     return (
       <motion.div {...enter} transition={transition} className={`${POPOVER_CLASS} p-3`}>
         <LoadingSpinner size="sm" label="Loading commands…" />

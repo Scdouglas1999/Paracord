@@ -1,3 +1,4 @@
+import { useCurrentChannelStore } from '../hooks/useChannels';
 import { useCallback, useEffect, useRef } from 'react';
 import { Outlet, useLocation, useParams } from 'react-router';
 import { AnimatePresence, motion, MotionConfig } from 'framer-motion';
@@ -10,7 +11,6 @@ import { MiniVoiceBar } from '../components/voice/MiniVoiceBar';
 import { MobileBottomNav } from '../components/layout/MobileBottomNav';
 import { useUIStore } from '../stores/uiStore';
 import { useVoiceStore } from '../stores/voiceStore';
-import { useChannelStore } from '../stores/channelStore';
 import { useKeyboardNavigation } from '../hooks/useKeyboardNavigation';
 import { useSwipeGesture } from '../hooks/useSwipeGesture';
 import { useMobile } from '../hooks/useMobile';
@@ -51,7 +51,7 @@ export function AppShell() {
   const voiceChannelId = useVoiceStore((s) => s.channelId);
   const location = useLocation();
   const { guildId, channelId } = useParams();
-  const activeChannel = useChannelStore((s) => (channelId ? s.channelsById[channelId] : undefined));
+  const activeChannel = useCurrentChannelStore((s) => (channelId ? s.channelsById[channelId] : undefined));
 
   const userSettingsOpen = useUIStore((s) => s.userSettingsOpen);
   const guildSettingsId = useUIStore((s) => s.guildSettingsId);
@@ -285,7 +285,7 @@ export function AppShell() {
                 aria-modal="true"
                 aria-label="Details"
                 tabIndex={-1}
-                className="h-full max-w-[88vw] overflow-hidden shadow-xl outline-none"
+                className="context-panel-overlay h-full w-[var(--member-list-width)] max-w-[88vw] overflow-hidden shadow-xl outline-none"
                 initial={{ x: 24, opacity: 0 }}
                 animate={{ x: 0, opacity: 1 }}
                 exit={{ x: 24, opacity: 0 }}

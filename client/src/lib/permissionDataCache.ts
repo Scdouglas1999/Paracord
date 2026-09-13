@@ -1,5 +1,8 @@
-import { channelApi } from '../api/channels';
-import { guildApi } from '../api/guilds';
+import { createChannelApi } from '../api/channels';
+import { createGuildApi } from '../api/guilds';
+import { captureOperationContext } from './operationContext';
+import { entityScopeKey, entityKeyBelongsToScope } from './serverScope';
+import { registerAccountHistoryReset } from './databaseHistory';
 import type { ChannelOverwrite, Role } from '../types';
 
 /**
@@ -19,6 +22,7 @@ import type { ChannelOverwrite, Role } from '../types';
 const TTL_MS = 30_000;
 
 interface CacheEntry<T> {
+  entityId: string;
   /** Resolved value, present once the first request settles. */
   value?: T;
   /** Timestamp of the last successful resolution. */
@@ -40,6 +44,7 @@ function readFresh<T>(cache: Map<string, CacheEntry<T>>, key: string): T | undef
 function share<T>(
   cache: Map<string, CacheEntry<T>>,
   key: string,
+  entityId: string,
   request: () => Promise<T>,
 ): Promise<T> {
   const fresh = readFresh(cache, key);
@@ -48,39 +53,49 @@ function share<T>(
   const existing = cache.get(key);
   if (existing?.inflight) return existing.inflight;
 
+  const entry: CacheEntry<T> = { entityId, at: 0 };
+  cache.set(key, entry);
   const inflight = request()
     .then((value) => {
-      cache.set(key, { value, at: Date.now() });
+      if (cache.get(key) === entry) {
+        entry.value = value;
+        entry.at = Date.now();
+        entry.inflight = undefined;
+      }
       return value;
     })
     .catch((err: unknown) => {
       // Never cache a failure — the next caller must be able to retry.
-      cache.delete(key);
+      if (cache.get(key) === entry) cache.delete(key);
       throw err;
     });
 
-  cache.set(key, { at: existing?.at ?? 0, value: existing?.value, inflight });
+  entry.inflight = inflight;
   return inflight;
 }
 
-export function fetchGuildRoles(guildId: string): Promise<Role[]> {
-  return share(roleCache, guildId, () => guildApi.getRoles(guildId).then(({ data }) => data));
+export async function fetchGuildRoles(guildId: string): Promise<Role[]> {
+  const context = captureOperationContext();
+  return share(roleCache, entityScopeKey(context.scope, guildId), guildId,
+    () => createGuildApi(() => context.api).getRoles(guildId).then(({ data }) => data),
+  ).finally(() => context.dispose());
 }
 
-export function fetchChannelOverwrites(channelId: string): Promise<ChannelOverwrite[]> {
-  return share(overwriteCache, channelId, () =>
-    channelApi.getOverwrites(channelId).then(({ data }) => data),
-  );
+export async function fetchChannelOverwrites(channelId: string): Promise<ChannelOverwrite[]> {
+  const context = captureOperationContext();
+  return share(overwriteCache, entityScopeKey(context.scope, channelId), channelId,
+    () => createChannelApi(() => context.api).getOverwrites(channelId).then(({ data }) => data),
+  ).finally(() => context.dispose());
 }
 
 export function invalidateGuildRoles(guildId?: string): void {
-  if (guildId) roleCache.delete(guildId);
-  else roleCache.clear();
+  if (!guildId) roleCache.clear();
+  else for (const [key, entry] of roleCache) if (entry.entityId === guildId) roleCache.delete(key);
 }
 
 export function invalidateChannelOverwrites(channelId?: string): void {
-  if (channelId) overwriteCache.delete(channelId);
-  else overwriteCache.clear();
+  if (!channelId) overwriteCache.clear();
+  else for (const [key, entry] of overwriteCache) if (entry.entityId === channelId) overwriteCache.delete(key);
 }
 
 /** Drop everything. Called on logout so the next account re-fetches. */
@@ -88,6 +103,11 @@ export function clearPermissionDataCache(): void {
   roleCache.clear();
   overwriteCache.clear();
 }
+
+registerAccountHistoryReset('permissions', scope => {
+  for (const key of roleCache.keys()) if (entityKeyBelongsToScope(key, scope)) roleCache.delete(key);
+  for (const key of overwriteCache.keys()) if (entityKeyBelongsToScope(key, scope)) overwriteCache.delete(key);
+});
 
 if (typeof window !== 'undefined') {
   // The gateway is the authority on role changes; a demotion must invalidate

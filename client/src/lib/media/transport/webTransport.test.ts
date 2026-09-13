@@ -1,10 +1,44 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebTransportManager } from './webTransport';
 
 /** Flush pending microtasks + the `void`-spawned per-stream reader tasks. */
 function flush(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(done => { resolve = done; });
+  return { promise, resolve };
+}
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe('WebTransport deferred acquisition ownership', () => {
+  it('closes a transport whose ready result arrives after disposal without authenticating', async () => {
+    const ready = deferred<void>();
+    const close = vi.fn(); const authenticate = vi.fn();
+    vi.stubGlobal('WebTransport', class { ready = ready.promise; close = close; createBidirectionalStream = authenticate; });
+    const manager = new WebTransportManager();
+    const connect = manager.connect('https://media.example', 'old-token').catch(error => error);
+    await manager.disconnect(); ready.resolve();
+    expect((await connect).name).toBe('AbortError');
+    expect(close).toHaveBeenCalled(); expect(authenticate).not.toHaveBeenCalled();
+    expect(manager.isConnected).toBe(false);
+  });
+
+  it('aborts a unidirectional stream acquired after disposal rather than writing a late frame', async () => {
+    const stream = deferred<WritableStream<Uint8Array>>();
+    const abort = vi.fn(async () => {}); const write = vi.fn(); const releaseLock = vi.fn();
+    const manager = new WebTransportManager();
+    (manager as unknown as { transport: unknown }).transport = { createUnidirectionalStream: () => stream.promise, close: vi.fn() };
+    const send = manager.sendUniStream(new Uint8Array([1, 2]));
+    await manager.disconnect();
+    stream.resolve({ getWriter: () => ({ abort, write, releaseLock }) } as unknown as WritableStream<Uint8Array>);
+    await send;
+    expect(abort).toHaveBeenCalledTimes(1); expect(write).not.toHaveBeenCalled(); expect(releaseLock).toHaveBeenCalled();
+  });
+});
 
 describe('WebTransportManager datagram writer reuse', () => {
   it('sendDatagram reuses one writer and does not call getWriter per send', () => {

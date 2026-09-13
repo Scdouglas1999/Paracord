@@ -1,3 +1,8 @@
+import { getAccountChannelView } from '../../lib/channelView';
+import { getServerAccountScope } from '../../lib/serverIdentity';
+import { useServerListStore } from '../../stores/serverListStore';
+import { LOCAL_SERVER_ID } from '../../lib/serverScope';
+import { useCurrentChannelStore } from '../../hooks/useChannels';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { ExternalLink, Hash, Volume2, User, Shield } from 'lucide-react';
 import { ComponentType, ButtonStyle, type Component } from '../../types/components';
@@ -6,7 +11,6 @@ import type { Interaction } from '../../types/interactions';
 import { extractApiError } from '../../api/client';
 import { getApi } from '../../api/activeClient';
 import { guildApi } from '../../api/guilds';
-import { useChannelStore } from '../../stores/channelStore';
 import { useInteractionStore } from '../../stores/interactionStore';
 import { toast } from '../../stores/toastStore';
 import type { Member, Role, Channel } from '../../types';
@@ -26,7 +30,7 @@ interface MessageComponentsProps {
 
 function resolveGuildIdForChannel(channelId: string, explicit?: string): string | undefined {
   if (explicit) return explicit;
-  const channelsByGuild = useChannelStore.getState().channelsByGuild;
+  const channelsByGuild = getAccountChannelView(getServerAccountScope(useServerListStore.getState().activeServerId ?? LOCAL_SERVER_ID)).channelsByGuild;
   return Object.entries(channelsByGuild).find(([, chs]) =>
     chs.some((c) => c.id === channelId),
   )?.[0];
@@ -602,7 +606,7 @@ function UserSelectMenu({
   messageId: string;
   guildId?: string;
 }) {
-  const channelsByGuild = useChannelStore((s) => s.channelsByGuild);
+  const channelsByGuild = useCurrentChannelStore((s) => s.channelsByGuild);
 
   // Derive guildId from the channelId
   const guildId =
@@ -677,7 +681,7 @@ function RoleSelectMenu({
   messageId: string;
   guildId?: string;
 }) {
-  const channelsByGuild = useChannelStore((s) => s.channelsByGuild);
+  const channelsByGuild = useCurrentChannelStore((s) => s.channelsByGuild);
 
   const guildId =
     guildIdProp ??
@@ -745,7 +749,7 @@ function MentionableSelectMenu({
   messageId: string;
   guildId?: string;
 }) {
-  const channelsByGuild = useChannelStore((s) => s.channelsByGuild);
+  const channelsByGuild = useCurrentChannelStore((s) => s.channelsByGuild);
 
   const guildId =
     guildIdProp ??
@@ -854,7 +858,7 @@ function ChannelSelectMenu({
   messageId: string;
   guildId?: string;
 }) {
-  const channelsByGuild = useChannelStore((s) => s.channelsByGuild);
+  const channelsByGuild = useCurrentChannelStore((s) => s.channelsByGuild);
 
   const guildId =
     guildIdProp ??

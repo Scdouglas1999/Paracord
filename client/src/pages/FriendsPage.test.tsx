@@ -70,6 +70,8 @@ const mockChannelState = vi.hoisted(() => ({
     '': [],
   } as Record<string, Array<Record<string, unknown>>>,
   setDmChannels: vi.fn(),
+  createDm: vi.fn(),
+  createGroupDm: vi.fn(),
   selectChannel: vi.fn(),
 }));
 
@@ -129,6 +131,10 @@ function renderFriendsPage() {
 describe('FriendsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockChannelState.createDm.mockImplementation(async (id, scope) => {
+      const { data } = await dmApi.create(id);
+      return { ...data, scope, key: JSON.stringify([scope.serverId, scope.userId, data.id]) };
+    });
     mockRelationshipState.relationships = [{ id: 'rel-1', type: 1, user: testData.friend }];
     mockRelationshipState.fetchRelationships.mockResolvedValue(undefined);
     mockRelationshipState.addFriend.mockResolvedValue(undefined);
@@ -263,3 +269,19 @@ describe('FriendsPage', () => {
     expect(screen.getByRole('textbox', { name: /username or user id/i })).toBeInTheDocument();
   });
 });
+
+vi.mock('../hooks/useChannels', async () => {
+  const actual = await vi.importActual<typeof import('../hooks/useChannels')>('../hooks/useChannels');
+  const { useChannelStore } = await import('../stores/channelStore');
+  return {
+    ...actual,
+    useCurrentChannelStore: useChannelStore,
+    useChannelActions: () => useChannelStore.getState(),
+    getAccountChannelView: () => useChannelStore.getState(),
+    useGuildChannels: (id: string) => useChannelStore(state => state.channelsByGuild[id] ?? []),
+  };
+});
+
+vi.mock('../lib/channelNavigation', () => ({ activateChannel: (channel: { id: string }) => mockChannelState.selectChannel(channel.id) }));
+
+vi.mock('../hooks/useCurrentUser', () => ({ useCurrentAccountScope: () => ({ serverId: '__local__', userId: 'me' }) }));

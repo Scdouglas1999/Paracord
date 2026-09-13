@@ -52,7 +52,7 @@ describe('MiniVoiceBar', () => {
       pttEngaged: false,
       leaveChannel: vi.fn().mockResolvedValue(undefined),
     };
-    channelState.current = { channels: [{ id: 'chan-1', name: 'General Voice' }] };
+    channelState.current = { channelsById: { 'chan-1': { id: 'chan-1', name: 'General Voice' } } };
     setPttMode(false);
   });
 
@@ -63,7 +63,7 @@ describe('MiniVoiceBar', () => {
   });
 
   it('falls back to a generic channel name when the channel is unknown', () => {
-    channelState.current = { channels: [] };
+    channelState.current = { channelsById: {} };
     render(<MiniVoiceBar />);
     expect(screen.getByText('Voice Channel')).toBeInTheDocument();
   });
@@ -115,4 +115,16 @@ describe('MiniVoiceBar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
     expect(voiceState.current.leaveChannel).toHaveBeenCalledTimes(1);
   });
+});
+
+vi.mock('../../hooks/useChannels', async () => {
+  const actual = await vi.importActual<typeof import('../../hooks/useChannels')>('../../hooks/useChannels');
+  const { useChannelStore } = await import('../../stores/channelStore');
+  return {
+    ...actual,
+    useCurrentChannelStore: useChannelStore,
+    useChannelActions: () => useChannelStore.getState(),
+    getAccountChannelView: () => useChannelStore.getState(),
+    useGuildChannels: (id: string) => useChannelStore(state => state.channelsByGuild[id] ?? []),
+  };
 });

@@ -3,7 +3,9 @@ import { useNavigate } from 'react-router';
 import { Check, Search, User, UserPlus, Users } from 'lucide-react';
 import { useChannelStore } from '../../stores/channelStore';
 import { useRelationshipStore } from '../../stores/relationshipStore';
-import { dmApi } from '../../api/dms';
+import { activateChannel } from '../../lib/channelNavigation';
+import type { ScopedChannel } from '../../lib/channelScope';
+import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
 import { extractApiError } from '../../api/client';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/Button';
@@ -13,7 +15,6 @@ import { Input } from '../ui/Input';
 import type { Channel } from '../../types/index';
 import { displayName } from '../../lib/displayName';
 
-const EMPTY_CHANNELS: Channel[] = [];
 
 export interface DmPickerModalProps {
   open: boolean;
@@ -34,9 +35,7 @@ export interface DmPickerModalProps {
  */
 export function DmPickerModal({ open, onClose, onCreated }: DmPickerModalProps) {
   const navigate = useNavigate();
-  const dmChannels = useChannelStore((s) => s.channelsByGuild[''] ?? EMPTY_CHANNELS);
-  const setDmChannels = useChannelStore((s) => s.setDmChannels);
-  const selectChannel = useChannelStore((s) => s.selectChannel);
+  const scope = useCurrentAccountScope();
   const relationships = useRelationshipStore((s) => s.relationships);
   const fetchRelationships = useRelationshipStore((s) => s.fetchRelationships);
 
@@ -67,12 +66,8 @@ export function DmPickerModal({ open, onClose, onCreated }: DmPickerModalProps) 
       || relationship.user.username.toLocaleLowerCase().includes(normalized);
   });
 
-  const commitChannel = (channel: Channel) => {
-    const next = dmChannels.some((c) => c.id === channel.id)
-      ? dmChannels
-      : [...dmChannels, channel];
-    setDmChannels(next);
-    selectChannel(channel.id);
+  const commitChannel = (channel: ScopedChannel) => {
+    activateChannel(channel);
     onCreated?.(channel);
     onClose();
     navigate(`/app/dms/${channel.id}`);
@@ -83,7 +78,8 @@ export function DmPickerModal({ open, onClose, onCreated }: DmPickerModalProps) 
     setError(null);
     setSubmitting(true);
     try {
-      const { data } = await dmApi.create(userId);
+      if (!scope) throw new Error('Sign in to this server before messaging.');
+      const data = await useChannelStore.getState().createDm(userId, scope);
       commitChannel(data);
     } catch (err) {
       setError(extractApiError(err) || 'Failed to start this direct message.');
@@ -97,7 +93,8 @@ export function DmPickerModal({ open, onClose, onCreated }: DmPickerModalProps) 
     setError(null);
     setSubmitting(true);
     try {
-      const { data } = await dmApi.createGroup(groupSelected, groupName || undefined);
+      if (!scope) throw new Error('Sign in to this server before messaging.');
+      const data = await useChannelStore.getState().createGroupDm(groupSelected, groupName || undefined, scope);
       commitChannel(data);
     } catch (err) {
       setError(extractApiError(err) || 'Failed to create this group DM.');

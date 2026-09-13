@@ -1,172 +1,139 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { OperationContext } from '../lib/operationContext';
+import type { MediaEngine } from '../lib/media/mediaEngine';
 
-// Simulate a browser runtime (NOT Tauri desktop). This is the case where the
-// old teardown reset (useNativeMedia: isTauri()) silently flipped native OFF
-// for the next join even though the browser has a real WebTransport engine.
-vi.mock('../lib/tauriEnv', () => ({
-  isTauri: () => false,
+const fixture = vi.hoisted(() => ({
+  selected: 'A', user: '1', contexts: [] as Array<AbortController>,
+  join: vi.fn(), leave: vi.fn(), factory: vi.fn(), publish: vi.fn(),
 }));
-
-// Silence audio side effects that touch DOM/Audio APIs during join.
-vi.mock('../lib/features/voiceSounds', () => ({
-  playVoiceJoinSound: vi.fn(),
-  playVoiceLeaveSound: vi.fn(),
-}));
-
-const joinChannelMock = vi.fn(
-  (_channelId: string, _options?: unknown): Promise<unknown> => Promise.resolve(),
-);
-const leaveChannelMock = vi.fn(
-  (_channelId: string, _options?: unknown): Promise<unknown> => Promise.resolve(),
-);
-
-vi.mock('../api/voice', () => ({
-  voiceApi: {
-    joinChannel: (channelId: string, options?: unknown) => joinChannelMock(channelId, options),
-    joinDmChannel: (channelId: string, options?: unknown) => joinChannelMock(channelId, options),
-    leaveChannel: (channelId: string, options?: unknown) => leaveChannelMock(channelId, options),
-    leaveDmChannel: () => Promise.resolve(),
-    startStream: () => Promise.resolve({ data: {} }),
-    stopStream: () => Promise.resolve(),
+vi.mock('../lib/tauriEnv', () => ({ isTauri: () => false }));
+vi.mock('../lib/features/voiceSounds', () => ({ playVoiceJoinSound: vi.fn(), playVoiceLeaveSound: vi.fn() }));
+vi.mock('../gateway/manager', () => ({ gateway: { updateVoiceState: fixture.publish } }));
+vi.mock('../lib/operationContext', () => ({
+  captureOperationContext: () => {
+    const serverId = fixture.selected;
+    const userId = fixture.user;
+    const controller = new AbortController();
+    fixture.contexts.push(controller);
+    return { scope: { serverId, userId }, key: accountScopeKey({ serverId, userId }),
+      signal: controller.signal, user: { id: userId, username: `user-${userId}` },
+      assertCurrent: () => { if (controller.signal.aborted) throw new DOMException('Account expired', 'AbortError'); },
+      dispose: () => controller.abort(),
+    } as unknown as OperationContext;
   },
 }));
-
-// Track how the native engine is constructed/connected so we can assert the
-// native branch (not LiveKit) was taken.
-const engineConnect = vi.fn(() => Promise.resolve());
-const createMediaEngineMock = vi.fn();
-
-function makeFakeEngine() {
-  return {
-    connect: engineConnect,
-    disconnect: vi.fn(() => Promise.resolve()),
-    setMute: vi.fn(),
-    setDeaf: vi.fn(),
-    onParticipantJoin: vi.fn(),
-    onParticipantLeave: vi.fn(),
-    onSpeakingChange: vi.fn(),
-    onTransportLost: vi.fn(),
-  };
-}
-
-vi.mock('../lib/media/mediaEngine', () => ({
-  createMediaEngine: () => createMediaEngineMock(),
+vi.mock('../api/voice', () => ({
+  createCallVoiceApi: (context: OperationContext) => ({
+    join: (channel: string, dm: boolean, fallback?: string) => fixture.join(context.scope.serverId, channel, dm, fallback),
+    leave: (channel: string, dm: boolean, session: string) => fixture.leave(context.scope.serverId, channel, dm, session),
+    startStream: vi.fn(async () => ({ data: {} })), stopStream: vi.fn(async () => {}),
+  }),
 }));
+vi.mock('../lib/media/mediaEngine', () => ({ createMediaEngine: () => fixture.factory() }));
 
 import { useVoiceStore } from './voiceStore';
+import { accountScopeKey } from '../lib/serverScope';
+import { notifyServerDisconnected } from '../lib/serverDisconnect';
 
-describe('voiceStore join in a browser after engine teardown', () => {
-  beforeEach(() => {
-    joinChannelMock.mockReset();
-    leaveChannelMock.mockClear();
-    engineConnect.mockClear();
-    createMediaEngineMock.mockReset();
-    createMediaEngineMock.mockImplementation(() => Promise.resolve(makeFakeEngine()));
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(done => { resolve = done; });
+  return { resolve, promise };
+}
+function engine() {
+  const callbacks: { lost?: (reason: string) => void; join?: (id: string) => void } = {};
+  const transport = { connect: vi.fn(async () => {}), disconnect: vi.fn(async () => {}), setMute: vi.fn(), setDeaf: vi.fn(),
+    onParticipantJoin: (cb: (id: string) => void) => { callbacks.join = cb; }, onParticipantLeave: vi.fn(),
+    onSpeakingChange: vi.fn(), onTransportLost: (cb: (reason: string) => void) => { callbacks.lost = cb; },
+  };
+  return { transport: transport as unknown as MediaEngine, connect: transport.connect, disconnect: transport.disconnect, callbacks };
+}
+function response(session = 'receipt') {
+  return { data: { token: 'token', url: 'https://media.example', room_name: 'room', session_id: session,
+    native_media: true, media_endpoint: 'https://media.example', media_token: 'media-token' } };
+}
+async function flush() { for (let i = 0; i < 12; i++) await Promise.resolve(); }
 
-    joinChannelMock.mockImplementation(() =>
-      Promise.resolve({
-        data: {
-          token: 'lk-token',
-          url: 'wss://server.example/livekit',
-          room_name: 'room-xyz',
-          session_id: 'sess-1',
-          native_media: true,
-          media_endpoint: 'https://media.example:4443/webtransport',
-          media_token: 'native-token',
-          livekit_available: true,
-        },
-      }),
-    );
+beforeEach(async () => {
+  await useVoiceStore.getState().reset(); await flush();
+  fixture.selected = 'A'; fixture.user = '1'; fixture.contexts = [];
+  fixture.join.mockReset().mockResolvedValue(response()); fixture.leave.mockReset().mockResolvedValue(undefined);
+  fixture.factory.mockReset().mockImplementation(async () => engine().transport);
+  fixture.publish.mockReset();
+  useVoiceStore.setState({ useNativeMedia: true });
+});
+afterEach(async () => { await useVoiceStore.getState().reset(); await flush(); });
+
+describe('voiceStore call ownership across deferred boundaries', () => {
+  it('keeps native preference when replacing an actual committed native call', async () => {
+    const first = engine(); const second = engine();
+    fixture.factory.mockResolvedValueOnce(first.transport).mockResolvedValueOnce(second.transport);
+    await useVoiceStore.getState().joinChannel('one', 'guild');
+    fixture.join.mockResolvedValue({ data: { ...response().data, native_media: undefined } });
+    await useVoiceStore.getState().joinChannel('two', 'guild');
+    expect(first.disconnect).toHaveBeenCalledTimes(1);
+    expect(second.connect).toHaveBeenCalledWith('https://media.example', 'media-token', undefined,
+      expect.objectContaining({ account: expect.objectContaining({ scope: { serverId: 'A', userId: '1' } }) }));
+    expect(useVoiceStore.getState().useNativeMedia).toBe(true);
+    expect(useVoiceStore.getState().mediaEngine).toBe(second.transport);
   });
 
-  afterEach(() => {
-    useVoiceStore.setState({
-      mediaEngine: null,
-      room: null,
-      connected: false,
-      channelId: null,
-      useNativeMedia: true,
-    });
-    vi.clearAllMocks();
+  it('shares the pending join promise for the same account/channel', async () => {
+    const pending = deferred<ReturnType<typeof response>>(); fixture.join.mockReturnValue(pending.promise);
+    const first = useVoiceStore.getState().joinChannel('same', 'guild');
+    const duplicate = useVoiceStore.getState().joinChannel('same', 'guild');
+    expect(duplicate).toBe(first);
+    pending.resolve(response()); await first;
+    expect(fixture.join).toHaveBeenCalledTimes(1);
   });
 
-  it('takes the native branch when the server returns native_media after tearing down a prior engine', async () => {
-    // Simulate a prior native session whose engine must be torn down. In a
-    // browser this is exactly where useNativeMedia used to be downgraded to
-    // false (isTauri() === false), breaking the next join.
-    const priorEngine = makeFakeEngine();
-    useVoiceStore.setState({
-      connected: false,
-      channelId: null,
-      mediaEngine: priorEngine as never,
-      useNativeMedia: true,
-    });
-
-    await useVoiceStore.getState().joinChannel('chan-1', 'guild-1');
-
-    // Prior engine was disconnected during teardown.
-    expect(priorEngine.disconnect).toHaveBeenCalled();
-
-    // Native branch was taken: a fresh engine was built and connected to the
-    // server-provided media endpoint with the native token — never LiveKit.
-    expect(createMediaEngineMock).toHaveBeenCalled();
-    expect(engineConnect).toHaveBeenCalledWith(
-      'https://media.example:4443/webtransport',
-      'native-token',
-      undefined,
-    );
-
-    const state = useVoiceStore.getState();
-    expect(state.connected).toBe(true);
-    expect(state.channelId).toBe('chan-1');
-    expect(state.mediaEngine).not.toBeNull();
-    // Native path leaves the LiveKit room null and keeps native selected.
-    expect(state.room).toBeNull();
-    expect(state.useNativeMedia).toBe(true);
+  it('releases a late A receipt without clearing B or creating an A engine', async () => {
+    const pending = deferred<ReturnType<typeof response>>(); fixture.join.mockReturnValueOnce(pending.promise);
+    const first = useVoiceStore.getState().joinChannel('same', 'dm'); await flush();
+    fixture.selected = 'B';
+    await useVoiceStore.getState().joinChannel('same', 'dm');
+    pending.resolve(response('old-A')); await first; await flush();
+    expect(fixture.leave).toHaveBeenCalledWith('A', 'same', true, 'old-A');
+    expect(useVoiceStore.getState().callScope?.serverId).toBe('B');
+    expect(useVoiceStore.getState().connected).toBe(true);
+    expect(fixture.factory).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps the stable native preference across teardown so the store drives the native branch even when the server omits native_media', async () => {
-    // This is the exact regression the teardown fix guards: with native_media
-    // absent, only the store preference can select native. The old teardown
-    // reset (useNativeMedia: isTauri() === false in a browser) would have
-    // flipped the preference OFF and routed this join through LiveKit instead.
-    joinChannelMock.mockImplementation(() =>
-      Promise.resolve({
-        data: {
-          token: 'lk-token',
-          url: 'wss://server.example/livekit',
-          room_name: 'room-xyz',
-          session_id: 'sess-2',
-          // No native_media flag from the server.
-          media_endpoint: 'https://media.example:4443/webtransport',
-          media_token: 'native-token',
-          livekit_available: true,
-        },
-      }),
-    );
+  it('owns the engine before connect and ignores its callbacks after replacement', async () => {
+    const pending = deferred<void>(); const first = engine(); const second = engine();
+    first.connect.mockImplementation(() => pending.promise);
+    fixture.factory.mockResolvedValueOnce(first.transport).mockResolvedValueOnce(second.transport);
+    const join = useVoiceStore.getState().joinChannel('one', 'guild'); await flush();
+    await useVoiceStore.getState().joinChannel('two', 'guild');
+    expect(first.disconnect).toHaveBeenCalledTimes(1);
+    first.callbacks.lost?.('old connection lost'); first.callbacks.join?.('stale-peer');
+    pending.resolve(); await join;
+    expect(useVoiceStore.getState().mediaEngine).toBe(second.transport);
+    expect(useVoiceStore.getState().participants.has('stale-peer')).toBe(false);
+  });
 
-    const priorEngine = makeFakeEngine();
-    useVoiceStore.setState({
-      connected: false,
-      channelId: null,
-      mediaEngine: priorEngine as never,
-      useNativeMedia: true,
-    });
+  it('retains A while browsing B, publishes only to A, and cancels on explicit disconnect A', async () => {
+    const media = engine(); fixture.factory.mockResolvedValue(media.transport);
+    await useVoiceStore.getState().joinChannel('one', 'guild');
+    fixture.selected = 'B';
+    useVoiceStore.getState().publishVoiceState();
+    expect(fixture.publish.mock.calls[0]?.[0]).toBe('A');
+    notifyServerDisconnected('B'); expect(useVoiceStore.getState().connected).toBe(true);
+    notifyServerDisconnected('A'); await flush();
+    expect(media.disconnect).toHaveBeenCalledTimes(1);
+    expect(useVoiceStore.getState().connected).toBe(false);
+  });
 
-    await useVoiceStore.getState().joinChannel('chan-2', 'guild-1');
-
-    expect(priorEngine.disconnect).toHaveBeenCalled();
-    // Store preference alone drove the native branch — no LiveKit Room built.
-    expect(engineConnect).toHaveBeenCalledWith(
-      'https://media.example:4443/webtransport',
-      'native-token',
-      undefined,
-    );
-
-    const state = useVoiceStore.getState();
-    expect(state.connected).toBe(true);
-    expect(state.mediaEngine).not.toBeNull();
-    expect(state.room).toBeNull();
-    expect(state.useNativeMedia).toBe(true);
+  it('account reset cancels pending connect and cannot clear a replacement login', async () => {
+    const pending = deferred<void>(); const first = engine(); const second = engine();
+    first.connect.mockImplementation(() => pending.promise);
+    fixture.factory.mockResolvedValueOnce(first.transport).mockResolvedValueOnce(second.transport);
+    const join = useVoiceStore.getState().joinChannel('one', 'guild'); await flush();
+    fixture.contexts[0]!.abort();
+    fixture.user = '2';
+    await useVoiceStore.getState().joinChannel('two', 'guild');
+    pending.resolve(); await join;
+    expect(useVoiceStore.getState().callScope).toEqual({ serverId: 'A', userId: '2' });
+    expect(useVoiceStore.getState().participants.has('1')).toBe(false);
   });
 });

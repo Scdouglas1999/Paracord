@@ -1,345 +1,304 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { useChannelStore } from './channelStore';
-import { useServerListStore, type ServerEntry } from './serverListStore';
-import type { Channel } from '../types';
-
-// Mock the per-server transport so loadAllDmChannels() fan-out is deterministic.
-vi.mock('../lib/connectionManager', () => ({
-  LOCAL_SERVER_ID: '__local__',
-  connectionManager: { getApiClient: vi.fn() },
-}));
-
-// Imported after the mock so we get the mocked instance.
-import { connectionManager } from '../lib/connectionManager';
-
-const mockGetApiClient = vi.mocked(connectionManager.getApiClient);
-
-function server(id: string, connected = true): ServerEntry {
-  return { id, url: `https://${id}`, name: id, token: 't', connected } as ServerEntry;
+import axios, { AxiosHeaders, type AxiosInstance, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Channel, User } from '../types';
+const clients = vi.hoisted(() => new Map<string, AxiosInstance>());
+vi.mock('../lib/connectionManager', () => ({ connectionManager: { getApiClient: (id: string) => clients.get(id) } }));
+vi.mock('../lib/secureStorage', () => ({ secureSet: vi.fn(), secureDelete: vi.fn(), secureGet: vi.fn() }));
+import { useChannelStore, refreshGuildChannelVisibility } from './channelStore';
+import { useServerListStore } from './serverListStore';
+import { entityScopeKey, type AccountScope } from '../lib/serverScope';
+import { getAccountChannelView } from '../hooks/useChannels';
+import { toast } from './toastStore';
+const a: AccountScope = { serverId: 'a', userId: '42' };
+const b: AccountScope = { serverId: 'b', userId: '42' };
+const channel = (name = 'A', id = '1', guildId: string | null = 'g'): Channel => ({ id, guild_id: guildId, type: guildId ? 0 : 1, name, position: 0, nsfw: false, created_at: '2026-01-01' });
+const reply = (config: InternalAxiosRequestConfig, data: unknown): AxiosResponse => ({ config, data, headers: new AxiosHeaders(), status: 200, statusText: 'OK' });
+const state = () => useChannelStore.getState();
+const cached = (scope = a, id = '1') => state().channelsById[entityScopeKey(scope, id)];
+function delay(serverId = 'a') {
+  const waiting = new Map<string, (data: unknown) => void>();
+  const adapter = vi.fn(async (config: InternalAxiosRequestConfig) => new Promise<AxiosResponse>(resolve => { waiting.set(config.url!, data => resolve(reply(config, data))); }));
+  clients.get(serverId)!.defaults.adapter = adapter;
+  return { adapter, finish: (url: string, data: unknown) => waiting.get(url)!(data), finishGuild: (data: Channel[], visible = data.map(c => c.id), guildId = 'g') => {
+    waiting.get(`/guilds/${guildId}/channels`)!(data); waiting.get(`/guilds/${guildId}/channels/visible`)!({ channel_ids: visible });
+  } };
 }
+beforeEach(() => {
+  state().reset(); clients.clear();
+  useServerListStore.setState({ activeServerId: 'a', servers: ['a', 'b'].map(id => ({ id, url: `https://${id}.test`, name: id, token: `${id}-token`, userId: '42', user: { id: '42', username: id } as User, connected: true })) });
+  for (const id of ['a', 'b']) clients.set(id, axios.create({ adapter: async config => reply(config, config.url?.endsWith('/visible') ? { channel_ids: ['1'] } : [channel(id)]) }));
+});
+afterEach(() => { state().reset(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
-function makeChannel(overrides: Partial<Channel> = {}): Channel {
-  return {
-    id: '1',
-    type: 0,
-    channel_type: 0,
-    guild_id: 'g1',
-    name: 'general',
-    position: 0,
-    nsfw: false,
-    created_at: '2025-01-01T00:00:00Z',
-    required_role_ids: [],
-    thread_metadata: null,
-    owner_id: null,
-    message_count: null,
-    attachments: [],
-    ...overrides,
-  } as Channel;
-}
-
-describe('channelStore', () => {
-  beforeEach(() => {
-    useChannelStore.setState({
-      channelsByGuild: {},
-      dmChannelsByServer: {},
-      channelsById: {},
-      channels: [],
-      guildChannelsLoaded: {},
-      selectedChannelId: null,
-      selectedGuildId: null,
-      isLoading: false,
-    });
-    useServerListStore.setState({ activeServerId: null, servers: [] });
-    mockGetApiClient.mockReset();
+describe('channel account ownership and snapshot reconciliation', () => {
+  it('fetches colliding channel and guild IDs concurrently on separate servers', async () => {
+    await Promise.all([state().fetchChannels('g', a), state().fetchChannels('g', b)]);
+    expect(cached()?.name).toBe('a'); expect(cached(b)?.name).toBe('b');
+    expect(Object.keys(state().channelsById)).toHaveLength(2);
   });
-
-  it('has correct initial state', () => {
-    const state = useChannelStore.getState();
-    expect(state.channelsByGuild).toEqual({});
-    expect(state.channelsById).toEqual({});
-    expect(state.channels).toEqual([]);
-    expect(state.guildChannelsLoaded).toEqual({});
-    expect(state.selectedChannelId).toBeNull();
-    expect(state.selectedGuildId).toBeNull();
-    expect(state.isLoading).toBe(false);
+  it('does not cancel unrelated guild requests on the same server', async () => {
+    const pending = delay(); const first = state().fetchChannels('g', a); const second = state().fetchChannels('other', a);
+    await vi.waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(4));
+    pending.finishGuild([channel()]); await first;
+    expect(state().loading[entityScopeKey(a, 'other')]).toBe(true);
+    pending.finishGuild([channel('Other', '2', 'other')], ['2'], 'other'); await second;
+    expect(cached(a, '2')?.name).toBe('Other'); expect(cached()?.name).toBe('A');
   });
-
-  it('selectChannel sets selected channel id', () => {
-    useChannelStore.getState().selectChannel('ch1');
-    expect(useChannelStore.getState().selectedChannelId).toBe('ch1');
+  it('coalesces duplicate list fetches and exposes account-local views', async () => {
+    const pending = delay(); const first = state().fetchChannels('g', a); const second = state().fetchChannels('g', a);
+    await vi.waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(2));
+    pending.finishGuild([channel()]); await Promise.all([first, second]);
+    expect(getAccountChannelView(a).channelsById['1']?.name).toBe('A');
+    expect(getAccountChannelView(b).channelsById['1']).toBeUndefined();
   });
-
-  it('selectChannel clears with null', () => {
-    useChannelStore.getState().selectChannel('ch1');
-    useChannelStore.getState().selectChannel(null);
-    expect(useChannelStore.getState().selectedChannelId).toBeNull();
+  it('never substitutes the unfiltered list when visibility fails', async () => {
+    vi.spyOn(toast, 'error').mockImplementation(() => 'toast');
+    clients.get('a')!.defaults.adapter = async config => { if (config.url?.endsWith('/visible')) throw new Error('Visibility unavailable'); return reply(config, [channel('Hidden')]); };
+    await state().fetchChannels('g', a);
+    expect(cached()).toBeUndefined(); expect(state().errors[entityScopeKey(a, 'g')]).toContain('Visibility unavailable');
   });
-
-  it('selectGuild sets guild and populates channels', () => {
-    const ch = makeChannel({ id: 'c1', guild_id: 'g1' });
-    useChannelStore.getState().setChannels([ch]);
-
-    useChannelStore.getState().selectGuild('g1');
-    expect(useChannelStore.getState().selectedGuildId).toBe('g1');
-    expect(useChannelStore.getState().channels.map((c) => c.id)).toEqual(['c1']);
+  it('filters by the acknowledged visibility list and preserves sort order', async () => {
+    const pending = delay(); const load = state().fetchChannels('g', a);
+    await vi.waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(2));
+    pending.finishGuild([{ ...channel('Later', '2'), position: 2 }, channel(), channel('Hidden', '3')], ['1', '2']); await load;
+    expect(getAccountChannelView(a).channelsByGuild.g.map(c => c.name)).toEqual(['A', 'Later']);
   });
-
-  it('selectGuild with null clears channels', () => {
-    useChannelStore.getState().selectGuild(null);
-    expect(useChannelStore.getState().selectedGuildId).toBeNull();
-    expect(useChannelStore.getState().channels).toEqual([]);
+  it('reconciles creates, coalesced edits and deletes over a stale list', async () => {
+    const pending = delay(); const load = state().fetchChannels('g', a);
+    await vi.waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(2));
+    state().updateChannel({ id: '1', guild_id: 'g', name: 'Renamed' }, a);
+    state().updateChannel({ id: '1', guild_id: 'g', topic: 'Updated topic' }, a);
+    state().removeChannel('g', 'removed', a); state().addChannel(channel('New', 'new'), a);
+    pending.finishGuild([channel('Old'), channel('Removed', 'removed')]); await load;
+    expect(cached()).toMatchObject({ name: 'Renamed', topic: 'Updated topic' });
+    expect(cached(a, 'removed')).toBeUndefined(); expect(cached(a, 'new')?.name).toBe('New');
   });
-
-  describe('setChannels', () => {
-    it('builds correct byId index and flat array', () => {
-      const a = makeChannel({ id: 'c1', guild_id: 'g1', position: 1 });
-      const b = makeChannel({ id: 'c2', guild_id: 'g1', position: 0 });
-      useChannelStore.getState().setChannels([a, b]);
-
-      const state = useChannelStore.getState();
-      // channelsByGuild sorted by position
-      expect(state.channelsByGuild['g1'].map((c) => c.id)).toEqual(['c2', 'c1']);
-      // byId indexes every channel
-      expect(Object.keys(state.channelsById).sort()).toEqual(['c1', 'c2']);
-      expect(state.channelsById['c1'].id).toBe('c1');
-      expect(state.channelsById['c2'].id).toBe('c2');
-      // flat array holds the normalized input
-      expect(state.channels.map((c) => c.id).sort()).toEqual(['c1', 'c2']);
-    });
-
-    it('groups channels across guilds and reindexes each', () => {
-      const a = makeChannel({ id: 'c1', guild_id: 'g1' });
-      const b = makeChannel({ id: 'c2', guild_id: 'g2' });
-      useChannelStore.getState().setChannels([a, b]);
-
-      const state = useChannelStore.getState();
-      expect(state.channelsByGuild['g1'].map((c) => c.id)).toEqual(['c1']);
-      expect(state.channelsByGuild['g2'].map((c) => c.id)).toEqual(['c2']);
-      expect(state.channelsById['c1'].guild_id).toBe('g1');
-      expect(state.channelsById['c2'].guild_id).toBe('g2');
-    });
+  it('does not let stale edits resurrect a deleted channel', async () => {
+    const pending = delay(); const load = state().fetchChannels('g', a);
+    await vi.waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(2));
+    state().removeChannel('g', '1', a); state().updateChannel({ id: '1', guild_id: 'g', name: 'Stale' }, a);
+    pending.finishGuild([channel()]); await load; expect(cached()).toBeUndefined();
   });
-
-  it('addChannel adds a channel to the correct guild', () => {
-    const ch = makeChannel({ id: 'c1', guild_id: 'g1', position: 0 });
-    useChannelStore.getState().addChannel(ch);
-    expect(useChannelStore.getState().channelsByGuild['g1']).toHaveLength(1);
-    expect(useChannelStore.getState().channelsByGuild['g1'][0].id).toBe('c1');
+  it('DM create, update, removal and last-message changes touch only their account', () => {
+    state().addChannel(channel('A', '1', null), a); state().addChannel(channel('B', '1', null), b);
+    state().updateChannel({ id: '1', name: 'Renamed' }, a); state().applyMessageActivity('1', { channel_id: '1', guild_id: null, last_message_id: '999', revision: '1' }, a);
+    expect(cached()).toMatchObject({ name: 'Renamed', last_message_id: '999' });
+    expect(cached(b)?.name).toBe('B'); expect(cached(b)?.last_message_id).toBeUndefined();
+    state().selectChannel({ id: '1', scope: b }); state().removeChannel('', '1', a);
+    expect(cached(b)?.name).toBe('B'); expect(state().selectedChannel?.scope).toEqual(b);
+    state().removeChannel('', '1', b); expect(state().selectedChannel).toBeNull();
   });
-
-  it('addChannel does not duplicate', () => {
-    const ch = makeChannel({ id: 'c1', guild_id: 'g1', position: 0 });
-    useChannelStore.getState().addChannel(ch);
-    useChannelStore.getState().addChannel(ch);
-    expect(useChannelStore.getState().channelsByGuild['g1']).toHaveLength(1);
+  it('stores background DM lists in the index even when another server is selected', async () => {
+    clients.get('b')!.defaults.adapter = async config => reply(config, [channel('Background DM', '1', null)]);
+    await state().fetchDmChannels(b); expect(cached(b)?.name).toBe('Background DM'); expect(cached()).toBeUndefined();
   });
-
-  it('addChannel sorts by position', () => {
-    const ch1 = makeChannel({ id: 'c1', guild_id: 'g1', position: 2 });
-    const ch2 = makeChannel({ id: 'c2', guild_id: 'g1', position: 0 });
-    useChannelStore.getState().addChannel(ch1);
-    useChannelStore.getState().addChannel(ch2);
-    const guild = useChannelStore.getState().channelsByGuild['g1'];
-    expect(guild[0].id).toBe('c2');
-    expect(guild[1].id).toBe('c1');
+  it.each(['createDm', 'createGroupDm', 'createChannel'] as const)('%s keeps the origin through a selection switch', async action => {
+    const pending = delay(); const promise = action === 'createDm' ? state().createDm('peer', a) : action === 'createGroupDm' ? state().createGroupDm(['peer'], 'Group', a) : state().createChannel('g', { name: 'Created', channel_type: 0 }, a);
+    await vi.waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(1));
+    useServerListStore.getState().setActive('b'); const request = pending.adapter.mock.calls[0][0];
+    expect(request.baseURL).toBe('https://a.test/api/v1');
+    pending.finish(request.url!, channel('Created', '1', action === 'createChannel' ? 'g' : null));
+    expect(await promise).toMatchObject({ scope: a }); expect(cached(b)).toBeUndefined();
   });
-
-  it('addChannel keeps byGuild, byId and flat in sync', () => {
-    useChannelStore.getState().selectGuild('g1');
-    const ch1 = makeChannel({ id: 'c1', guild_id: 'g1', position: 0 });
-    const ch2 = makeChannel({ id: 'c2', guild_id: 'g1', position: 1 });
-    useChannelStore.getState().addChannel(ch1);
-    useChannelStore.getState().addChannel(ch2);
-
-    const state = useChannelStore.getState();
-    expect(state.channelsByGuild['g1'].map((c) => c.id)).toEqual(['c1', 'c2']);
-    expect(Object.keys(state.channelsById).sort()).toEqual(['c1', 'c2']);
-    // byId points at the exact object stored in the guild bucket
-    expect(state.channelsById['c1']).toBe(state.channelsByGuild['g1'][0]);
-    expect(state.channelsById['c2']).toBe(state.channelsByGuild['g1'][1]);
-    // flat view mirrors the selected guild
-    expect(state.channels.map((c) => c.id)).toEqual(['c1', 'c2']);
+  it('reorders only after acknowledgement without rolling back concurrent edits on failure', async () => {
+    state().addChannel(channel(), a); const pending = delay(); const reorder = state().reorderChannels('g', [{ id: '1', position: 5 }], a);
+    await vi.waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(1));
+    state().updateChannel({ id: '1', name: 'New name' }, a); expect(cached()?.position).toBe(0);
+    pending.finish('/guilds/g/channels', { updated: 1 }); await reorder;
+    expect(cached()).toMatchObject({ position: 5, name: 'New name' });
+    clients.get('a')!.defaults.adapter = async () => { throw new Error('offline'); };
+    await expect(state().reorderChannels('g', [{ id: '1', position: 8 }], a)).rejects.toThrow('offline');
+    expect(cached()).toMatchObject({ position: 5, name: 'New name' });
   });
-
-  it('updateChannel updates an existing channel', () => {
-    const ch = makeChannel({ id: 'c1', guild_id: 'g1', name: 'old' });
-    useChannelStore.getState().addChannel(ch);
-
-    const updated = makeChannel({ id: 'c1', guild_id: 'g1', name: 'new' });
-    useChannelStore.getState().updateChannel(updated);
-    expect(useChannelStore.getState().channelsByGuild['g1'][0].name).toBe('new');
-    expect(useChannelStore.getState().channelsById['c1'].name).toBe('new');
+  it('reset prevents delayed create or snapshot responses from repopulating the cache', async () => {
+    const pending = delay(); const create = state().createDm('peer', a); const rejected = expect(create).rejects.toThrow(); const load = state().fetchChannels('g', a);
+    await vi.waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(3));
+    state().reset(); pending.finish('/users/@me/dms', channel()); pending.finishGuild([channel()]);
+    await rejected; await load; expect(state().channelsById).toEqual({}); expect(state().loading).toEqual({});
   });
-
-  it('removeChannel removes a channel', () => {
-    const ch = makeChannel({ id: 'c1', guild_id: 'g1' });
-    useChannelStore.getState().addChannel(ch);
-    expect(useChannelStore.getState().channelsByGuild['g1']).toHaveLength(1);
-
-    useChannelStore.getState().removeChannel('g1', 'c1');
-    expect(useChannelStore.getState().channelsByGuild['g1']).toHaveLength(0);
+  it('revocation releases loading immediately and a late response cannot clear replacement loading', async () => {
+    const old = delay(); const oldLoad = state().fetchDmChannels(a);
+    await vi.waitFor(() => expect(old.adapter).toHaveBeenCalledTimes(1));
+    await useServerListStore.getState().clearSessions();
+    expect(state().loading[entityScopeKey(a, '')]).toBe(false);
+    useServerListStore.getState().updateToken('a', 'fresh'); useServerListStore.getState().setAuthenticatedUser('a', { id: '42', username: 'fresh' } as User);
+    const fresh = delay(); const newLoad = state().fetchDmChannels(a);
+    await vi.waitFor(() => expect(fresh.adapter).toHaveBeenCalledTimes(1));
+    old.finish('/users/@me/dms', [channel('Old', '1', null)]); await oldLoad;
+    expect(state().loading[entityScopeKey(a, '')]).toBe(true); expect(cached()).toBeUndefined();
+    fresh.finish('/users/@me/dms', [channel('Fresh', '1', null)]); await newLoad; expect(cached()?.name).toBe('Fresh');
   });
-
-  it('removeChannel keeps byGuild, byId and flat in sync', () => {
-    useChannelStore.getState().selectGuild('g1');
-    useChannelStore.getState().setChannels([
-      makeChannel({ id: 'c1', guild_id: 'g1', position: 0 }),
-      makeChannel({ id: 'c2', guild_id: 'g1', position: 1 }),
+  it('debounced visibility refresh keeps its original account across switches', async () => {
+    vi.useFakeTimers(); const adapter = vi.fn(async (config: InternalAxiosRequestConfig) => reply(config, config.url?.endsWith('/visible') ? { channel_ids: ['1'] } : [channel()])); clients.get('a')!.defaults.adapter = adapter;
+    refreshGuildChannelVisibility('g', a); useServerListStore.getState().setActive('b'); await vi.advanceTimersByTimeAsync(751);
+    expect(adapter).toHaveBeenCalledTimes(2); expect(cached()?.name).toBe('A'); expect(cached(b)).toBeUndefined();
+  });
+  it('journals last-message activity even before its guild channel has loaded', async () => {
+    const pending = delay(); const load = state().fetchChannels('g', a);
+    await vi.waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(2));
+    state().updateChannel({ id: '1', guild_id: 'g', last_message_id: '999', message_revision: '1' }, a);
+    pending.finishGuild([{ ...channel(), last_message_id: '100' }]); await load;
+    expect(cached()?.last_message_id).toBe('999');
+  });
+  it('coalesces repeated field updates without retaining an event per edit', async () => {
+    const pending = delay(); const load = state().fetchChannels('g', a);
+    await vi.waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(2));
+    for (let i = 0; i < 12_000; i++) state().updateChannel({ id: '1', guild_id: 'g', topic: String(i) }, a);
+    pending.finishGuild([channel()]); await load; expect(cached()?.topic).toBe('11999');
+  });
+  it('invalidates an overflowing snapshot explicitly instead of applying an incomplete journal', async () => {
+    vi.spyOn(toast, 'error').mockImplementation(() => 'toast');
+    const pending = delay(); const load = state().fetchChannels('g', a);
+    await vi.waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(2));
+    for (let i = 0; i <= 10_000; i++) state().updateChannel({ id: String(i), guild_id: 'g', name: 'New' }, a);
+    expect(state().loading[entityScopeKey(a, 'g')]).toBe(false);
+    expect(state().guildChannelsLoaded[entityScopeKey(a, 'g')]).toBe(false);
+    expect(state().errors[entityScopeKey(a, 'g')]).toContain('exceeded');
+    pending.finishGuild([channel('Stale')]); await load; expect(cached()).toBeUndefined();
+  });
+  it('updates recipients and leaves a group only in the originating account', async () => {
+    state().addChannel(channel('A', '1', null), a); state().addChannel(channel('B', '1', null), b);
+    const adapter = vi.fn(async (config: InternalAxiosRequestConfig) => reply(config, config.method === 'get' ? [{ id: 'peer', username: 'Peer', discriminator: 0 }] : {}));
+    clients.get('a')!.defaults.adapter = adapter;
+    useServerListStore.getState().setActive('b');
+    await state().changeDmRecipient('1', 'peer', true, a);
+    expect(cached()?.recipients?.[0].username).toBe('Peer'); expect(cached(b)?.recipients).toBeUndefined();
+    await state().changeDmRecipient('1', '42', false, a);
+    expect(cached()).toBeUndefined(); expect(cached(b)?.name).toBe('B');
+    expect(adapter.mock.calls.map(([config]) => [config.method, config.url])).toEqual([
+      ['put', '/channels/1/recipients/peer'], ['get', '/channels/1/recipients'], ['delete', '/channels/1/recipients/42'],
     ]);
-    // flat view follows the selected guild after seeding
-    useChannelStore.getState().selectGuild('g1');
-
-    useChannelStore.getState().removeChannel('g1', 'c1');
-    const state = useChannelStore.getState();
-    expect(state.channelsByGuild['g1'].map((c) => c.id)).toEqual(['c2']);
-    expect(Object.keys(state.channelsById)).toEqual(['c2']);
-    expect(state.channelsById['c1']).toBeUndefined();
-    expect(state.channels.map((c) => c.id)).toEqual(['c2']);
   });
 
-  describe('updateLastMessageId', () => {
-    it('updates the last message id on the target only', () => {
-      const ch = makeChannel({ id: 'c1', guild_id: 'g1', last_message_id: 'old' });
-      useChannelStore.getState().setChannels([ch]);
+});
 
-      useChannelStore.getState().updateLastMessageId('c1', 'new-msg-id');
-      const state = useChannelStore.getState();
-      expect(state.channelsByGuild['g1'][0].last_message_id).toBe('new-msg-id');
-      expect(state.channelsById['c1'].last_message_id).toBe('new-msg-id');
-    });
+describe('ordered channel message activity', () => {
+  const row = (revision: string, tail: string | null): Channel => ({ ...channel('Activity', '1', '100'), message_revision: revision, last_message_id: tail });
+  const activity = (revision: string, tail: string | null, scope = a) => state().applyMessageActivity('1', { channel_id: '1', guild_id: '100', revision, last_message_id: tail }, scope);
 
-    it('does nothing for unknown channel (state reference unchanged)', () => {
-      const ch = makeChannel({ id: 'c1', guild_id: 'g1' });
-      useChannelStore.getState().setChannels([ch]);
-
-      const before = useChannelStore.getState();
-      useChannelStore.getState().updateLastMessageId('unknown', 'msg');
-      expect(useChannelStore.getState().channelsByGuild).toBe(before.channelsByGuild);
-      expect(useChannelStore.getState().channelsById).toBe(before.channelsById);
-    });
-
-    it('preserves === identity of untouched channel objects and array length', () => {
-      useChannelStore.getState().selectGuild('g1');
-      useChannelStore.getState().setChannels([
-        makeChannel({ id: 'c1', guild_id: 'g1', position: 0 }),
-        makeChannel({ id: 'c2', guild_id: 'g1', position: 1 }),
-        makeChannel({ id: 'd1', guild_id: 'g2', position: 0 }),
-      ]);
-      useChannelStore.getState().selectGuild('g1');
-
-      const before = useChannelStore.getState();
-      const untouchedSameGuild = before.channelsByGuild['g1'][1]; // c2
-      const untouchedGuildArray = before.channelsByGuild['g2'];
-      const beforeLen = before.channelsByGuild['g1'].length;
-
-      useChannelStore.getState().updateLastMessageId('c1', 'msg-99');
-      const after = useChannelStore.getState();
-
-      // target mutated to a new object
-      expect(after.channelsByGuild['g1'][0]).not.toBe(before.channelsByGuild['g1'][0]);
-      expect(after.channelsByGuild['g1'][0].last_message_id).toBe('msg-99');
-      // sibling channel object identity preserved
-      expect(after.channelsByGuild['g1'][1]).toBe(untouchedSameGuild);
-      // untouched guild's array reference preserved
-      expect(after.channelsByGuild['g2']).toBe(untouchedGuildArray);
-      // array length unchanged
-      expect(after.channelsByGuild['g1'].length).toBe(beforeLen);
-      // flat view patched in place, identity of sibling preserved
-      expect(after.channels).toHaveLength(before.channels.length);
-      expect(after.channels[1]).toBe(untouchedSameGuild);
-      expect(after.channels[0].last_message_id).toBe('msg-99');
-    });
+  it('keeps deletion across old creation events and snapshots while applying ordinary metadata', () => {
+    state().addChannel(row('1', '999'), a);
+    activity('2', null);
+    activity('1', '999');
+    state().setChannels('100', [{ ...row('1', '999'), name: 'Renamed' }], a);
+    expect(cached()).toMatchObject({ name: 'Renamed', message_revision: '2', last_message_id: null });
+    state().updateChannel({ id: '1', topic: 'New topic', last_message_id: '999' }, a);
+    expect(cached()).toMatchObject({ topic: 'New topic', message_revision: '2', last_message_id: null });
+    activity('3', '1000');
+    activity('2', null);
+    expect(cached()).toMatchObject({ message_revision: '3', last_message_id: '1000' });
   });
 
-  it('setDmChannels sets DMs under empty guild key', () => {
-    const dm = makeChannel({ id: 'dm1', guild_id: undefined, name: 'DM' });
-    useChannelStore.getState().setDmChannels([dm]);
-    expect(useChannelStore.getState().channelsByGuild['']).toHaveLength(1);
-    expect(useChannelStore.getState().channelsByGuild[''][0].id).toBe('dm1');
-    expect(useChannelStore.getState().channelsById['dm1'].id).toBe('dm1');
+  it('coalesces revisions before an initial collection arrives and accepts a newer snapshot', async () => {
+    const pending = delay();
+    const first = state().fetchChannels('100', a);
+    await vi.waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(2));
+    activity('4', null);
+    activity('3', '999');
+    pending.finishGuild([row('2', '888')], ['1'], '100');
+    await first;
+    expect(cached()).toMatchObject({ message_revision: '4', last_message_id: null });
+    const second = state().fetchChannels('100', a);
+    await vi.waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(4));
+    activity('5', null);
+    pending.finishGuild([row('6', '1001')], ['1'], '100');
+    await second;
+    expect(cached()).toMatchObject({ message_revision: '6', last_message_id: '1001' });
   });
 
-  it('addChannel indexes DM creates into dmChannelsByServer for the active server', () => {
-    useServerListStore.setState({ activeServerId: 's1', servers: [] });
-    const dm = makeChannel({ id: 'dm-live', guild_id: undefined, type: 1, channel_type: 1 });
-    useChannelStore.getState().addChannel(dm);
-
-    const state = useChannelStore.getState();
-    expect(state.channelsByGuild[''].map((c) => c.id)).toContain('dm-live');
-    expect(state.dmChannelsByServer['s1'].map((c) => c.id)).toEqual(['dm-live']);
+  it('compares full-width revisions and rejects equal-revision conflicting tails', () => {
+    state().addChannel(row('9007199254740992', '900'), a);
+    activity('9007199254740993', null);
+    activity('9007199254740992', '900');
+    activity('9007199254740993', '900');
+    expect(cached()).toMatchObject({ message_revision: '9007199254740993', last_message_id: null });
   });
 
-  describe('setDmChannelsForServer', () => {
-    it('indexes DMs per server', () => {
-      useServerListStore.setState({ activeServerId: 's1', servers: [] });
-      const a = makeChannel({ id: 'dmA', guild_id: undefined, name: 'A' });
-      const b = makeChannel({ id: 'dmB', guild_id: undefined, name: 'B' });
-      useChannelStore.getState().setDmChannelsForServer('s1', [a]);
-      useChannelStore.getState().setDmChannelsForServer('s2', [b]);
-
-      const state = useChannelStore.getState();
-      expect(state.dmChannelsByServer['s1'].map((c) => c.id)).toEqual(['dmA']);
-      expect(state.dmChannelsByServer['s2'].map((c) => c.id)).toEqual(['dmB']);
-    });
-
-    it("mirrors channelsByGuild[''] + channelsById only for the active server", () => {
-      useServerListStore.setState({ activeServerId: 's1', servers: [] });
-      const active = makeChannel({ id: 'dmActive', guild_id: undefined });
-      const background = makeChannel({ id: 'dmBg', guild_id: undefined });
-
-      useChannelStore.getState().setDmChannelsForServer('s1', [active]);
-      useChannelStore.getState().setDmChannelsForServer('s2', [background]);
-
-      const state = useChannelStore.getState();
-      // Active server mirrors into back-compat surfaces.
-      expect(state.channelsByGuild[''].map((c) => c.id)).toEqual(['dmActive']);
-      expect(state.channelsById['dmActive'].id).toBe('dmActive');
-      // Background server does NOT touch back-compat surfaces.
-      expect(state.channelsById['dmBg']).toBeUndefined();
-    });
+  it('owns revisions by server/account and rejects malformed or mismatched envelopes', () => {
+    state().addChannel(row('1', '900'), a); state().addChannel(row('1', '901'), b);
+    activity('2', null, b);
+    expect(cached()).toMatchObject({ message_revision: '1', last_message_id: '900' });
+    expect(cached(b)).toMatchObject({ message_revision: '2', last_message_id: null });
+    for (const bad of [undefined, {}, { channel_id: '2', guild_id: '100', revision: '3', last_message_id: null }, { channel_id: '1', guild_id: '101', revision: '3', last_message_id: null }, { channel_id: '1', guild_id: '100', revision: 3, last_message_id: null }, { channel_id: '1', guild_id: '100', revision: '9223372036854775808', last_message_id: null }, { channel_id: '1', guild_id: '100', revision: '03', last_message_id: null }]) state().applyMessageActivity('1', bad, a);
+    expect(cached()).toMatchObject({ message_revision: '1', last_message_id: '900' });
   });
+});
 
-  describe('loadAllDmChannels', () => {
-    it('fans out over connected servers and writes each result', async () => {
-      useServerListStore.setState({
-        activeServerId: 's1',
-        servers: [server('s1', true), server('s2', true), server('s3', false)],
-      });
-      const s1Dm = makeChannel({ id: 'dm-s1', guild_id: undefined });
-      const s2Dm = makeChannel({ id: 'dm-s2', guild_id: undefined });
-      mockGetApiClient.mockImplementation((id: string) => {
-        if (id === 's1') return { get: vi.fn().mockResolvedValue({ data: [s1Dm] }) } as never;
-        if (id === 's2') return { get: vi.fn().mockResolvedValue({ data: [s2Dm] }) } as never;
-        return undefined;
-      });
 
-      await useChannelStore.getState().loadAllDmChannels();
+it('retains early activity until an authorized channel arrives and clears it on removal or reset', () => {
+  const early = { channel_id: '1', guild_id: '100', revision: '2', last_message_id: null };
+  state().applyMessageActivity('1', early, a);
+  state().applyMessageActivity('1', { ...early, revision: '1', last_message_id: '999' }, a);
+  expect(cached()).toBeUndefined();
+  state().addChannel({ ...channel('Arrived', '1', '100'), message_revision: '1', last_message_id: '999' }, a);
+  expect(cached()).toMatchObject({ message_revision: '2', last_message_id: null });
+  state().applyMessageActivity('2', { ...early, channel_id: '2' }, a);
+  state().removeChannel('100', '2', a);
+  state().addChannel({ ...channel('Removed then fetched', '2', '100'), message_revision: '0', last_message_id: null }, a);
+  expect(cached(a, '2')?.message_revision).toBe('0');
+  state().applyMessageActivity('3', { ...early, channel_id: '3' }, a);
+  state().reset();
+  state().addChannel({ ...channel('New session', '3', '100'), message_revision: '0', last_message_id: null }, a);
+  expect(cached(a, '3')?.message_revision).toBe('0');
+});
 
-      const state = useChannelStore.getState();
-      expect(state.dmChannelsByServer['s1'].map((c) => c.id)).toEqual(['dm-s1']);
-      expect(state.dmChannelsByServer['s2'].map((c) => c.id)).toEqual(['dm-s2']);
-      // Disconnected server never queried.
-      expect(state.dmChannelsByServer['s3']).toBeUndefined();
-      expect(mockGetApiClient).not.toHaveBeenCalledWith('s3');
-    });
+it('retains activity arriving during an older list that omits its channel', async () => {
+  const pending = delay();
+  const load = state().fetchChannels('100', a);
+  await vi.waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(2));
+  state().applyMessageActivity('1', { channel_id: '1', guild_id: '100', revision: '2', last_message_id: null }, a);
+  pending.finishGuild([], [], '100');
+  await load;
+  expect(cached()).toBeUndefined();
+  state().addChannel({ ...channel('Arrived', '1', '100'), message_revision: '1', last_message_id: '999' }, a);
+  expect(cached()).toMatchObject({ message_revision: '2', last_message_id: null });
+});
 
-    it('tolerates one server rejecting and still loads the others', async () => {
-      useServerListStore.setState({
-        activeServerId: 's1',
-        servers: [server('s1', true), server('s2', true)],
-      });
-      const s2Dm = makeChannel({ id: 'dm-s2', guild_id: undefined });
-      mockGetApiClient.mockImplementation((id: string) => {
-        if (id === 's1') return { get: vi.fn().mockRejectedValue(new Error('down')) } as never;
-        if (id === 's2') return { get: vi.fn().mockResolvedValue({ data: [s2Dm] }) } as never;
-        return undefined;
-      });
+it('releases absent early activity after a newer authorized list, within its account and guild', async () => {
+  for (const [scope, id, guildId] of [[a, '1', '100'], [a, '2', '101'], [b, '1', '100']] as const) {
+    state().applyMessageActivity(id, { channel_id: id, guild_id: guildId, revision: '2', last_message_id: null }, scope);
+  }
+  const pending = delay();
+  const load = state().fetchChannels('100', a);
+  await vi.waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(2));
+  pending.finishGuild([], [], '100');
+  await load;
+  for (const [scope, id, guildId] of [[a, '1', '100'], [a, '2', '101'], [b, '1', '100']] as const) {
+    state().addChannel({ ...channel('Metadata', id, guildId), message_revision: '1', last_message_id: '999' }, scope);
+  }
+  expect(cached()).toMatchObject({ message_revision: '1', last_message_id: '999' });
+  expect(cached(a, '2')).toMatchObject({ message_revision: '2', last_message_id: null });
+  expect(cached(b)).toMatchObject({ message_revision: '2', last_message_id: null });
+});
 
-      await expect(useChannelStore.getState().loadAllDmChannels()).resolves.toBeUndefined();
+it('cancels an older list on early-activity overflow without consuming another account capacity', async () => {
+  for (let id = 1; id <= 10_000; id++) {
+    state().applyMessageActivity(String(id), { channel_id: String(id), guild_id: '100', revision: '2', last_message_id: null }, a);
+  }
+  const pending = delay();
+  const load = state().fetchChannels('100', a);
+  await vi.waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(2));
+  state().applyMessageActivity('10001', { channel_id: '10001', guild_id: '100', revision: '2', last_message_id: null }, a);
+  expect(state().loading[entityScopeKey(a, '100')]).toBe(false);
+  expect(state().guildChannelsLoaded[entityScopeKey(a, '100')]).toBe(false);
+  expect(state().errors[entityScopeKey(a, '100')]).toContain('exceeded');
+  state().applyMessageActivity('1', { channel_id: '1', guild_id: '100', revision: '2', last_message_id: null }, b);
+  state().addChannel({ ...channel('Other account', '1', '100'), message_revision: '1', last_message_id: '999' }, b);
+  expect(cached(b)).toMatchObject({ message_revision: '2', last_message_id: null });
+  pending.finishGuild([channel('Old', '1', '100')], ['1'], '100');
+  await load;
+  expect(cached()).toBeUndefined();
+  expect(state().guildChannelsLoaded[entityScopeKey(a, '100')]).toBe(false);
+  expect(state().errors[entityScopeKey(a, '100')]).toContain('exceeded');
 
-      const state = useChannelStore.getState();
-      expect(state.dmChannelsByServer['s1']).toBeUndefined();
-      expect(state.dmChannelsByServer['s2'].map((c) => c.id)).toEqual(['dm-s2']);
-    });
-  });
+  // A replacement full list reclaims absent entries and permits new activity.
+  const refresh = state().fetchChannels('100', a);
+  await vi.waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(4));
+  pending.finishGuild([], [], '100');
+  await refresh;
+  expect(state().guildChannelsLoaded[entityScopeKey(a, '100')]).toBe(true);
+  expect(state().errors[entityScopeKey(a, '100')]).toBeUndefined();
+  state().applyMessageActivity('10002', { channel_id: '10002', guild_id: '100', revision: '2', last_message_id: null }, a);
+  state().addChannel({ ...channel('Reconciled', '10002', '100'), message_revision: '1', last_message_id: '999' }, a);
+  expect(cached(a, '10002')).toMatchObject({ message_revision: '2', last_message_id: null });
 });

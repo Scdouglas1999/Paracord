@@ -1371,7 +1371,7 @@ fn dispatch_federated_message_fallback(
 /// a guild channel, so `guild_id()` being `None` here means the event no longer
 /// describes anything a client should be told about — drop it rather than
 /// broadcast it.
-fn dispatch_federated_guild_event(
+async fn dispatch_federated_guild_event(
     state: &AppState,
     payload: &FederationEventEnvelope,
     guild_id: Option<i64>,
@@ -1387,7 +1387,104 @@ fn dispatch_federated_guild_event(
         );
         return;
     };
-    state.event_bus.dispatch(event_type, body, Some(guild_id));
+    if matches!(
+        event_type,
+        "MESSAGE_CREATE" | "MESSAGE_UPDATE" | "MESSAGE_DELETE" | "MESSAGE_DELETE_BULK"
+    ) {
+        state
+            .event_bus
+            .dispatch_message(&state.db, event_type, body, Some(guild_id))
+            .await;
+    } else {
+        state.event_bus.dispatch(event_type, body, Some(guild_id));
+    }
+}
+
+/// Serialize the committed local audience into the recipients' own namespaces.
+/// A mapped remote user must retain their canonical identity when forwarded.
+pub(crate) async fn outbound_message_mentions(
+    state: &AppState,
+    service: &FederationService,
+    channel_id: i64,
+    message_id: i64,
+) -> Result<Vec<String>, ApiError> {
+    let recipients =
+        paracord_db::messages::get_message_mention_recipients(&state.db, channel_id, message_id)
+            .await?;
+    let mut identities = Vec::with_capacity(recipients.len());
+    for user_id in recipients {
+        if let Some(mapping) =
+            paracord_db::federation::get_remote_user_mapping_by_local(&state.db, user_id)
+                .await
+                .map_err(paracord_db::DbError::from)?
+        {
+            identities.push(mapping.remote_user_id);
+        } else {
+            let user = paracord_db::users::get_user_by_id(&state.db, user_id)
+                .await?
+                .ok_or(ApiError::NotFound)?;
+            identities.push(format!("@{}:{}", user.username, service.domain()));
+        }
+    }
+    Ok(identities)
+}
+
+/// The signed structured recipient list carries canonical identities. Bare
+/// snowflakes in the body belong to the sender's namespace and are never local
+/// user IDs. Resolving a mention must not materialize an arbitrary remote user.
+pub async fn resolve_federated_message_mentions(
+    state: &AppState,
+    payload: &FederationEventEnvelope,
+    channel: &paracord_db::channels::ChannelRow,
+    author_id: i64,
+) -> Result<Vec<i64>, ApiError> {
+    let Some(guild_id) = channel.guild_id() else {
+        return Ok(Vec::new());
+    };
+    let Some(mentions) = payload.content.get("m.mentions") else {
+        return Ok(Vec::new());
+    };
+    let ids = mentions
+        .get("user_ids")
+        .and_then(Value::as_array)
+        .ok_or_else(|| ApiError::BadRequest("Invalid federated mention audience".into()))?;
+    let service = federation_service_from_state(state);
+    let mut candidates = Vec::new();
+    for raw in ids {
+        let identity = raw
+            .as_str()
+            .and_then(FederatedIdentity::parse)
+            .ok_or_else(|| ApiError::BadRequest("Invalid federated mention identity".into()))?;
+        if identity.server.eq_ignore_ascii_case(service.domain())
+            || identity.server.eq_ignore_ascii_case(service.server_name())
+        {
+            // Username-only federation identities cannot select a discriminator.
+            // Ambiguous identities resolve to nobody, never an arbitrary account.
+            let user_id = paracord_db::federation::resolve_unique_local_username_id(
+                &state.db,
+                &identity.localpart,
+            )
+            .await
+            .map_err(paracord_db::DbError::from)?;
+            if let Some(user_id) = user_id {
+                candidates.push(user_id);
+            }
+        } else if let Some(mapping) =
+            paracord_db::federation::get_remote_user_mapping(&state.db, &identity.to_canonical())
+                .await
+                .map_err(paracord_db::DbError::from)?
+        {
+            candidates.push(mapping.local_user_id);
+        }
+    }
+    Ok(paracord_core::message_attention::explicit_mentions(
+        &state.db,
+        guild_id,
+        channel.id,
+        author_id,
+        &candidates,
+    )
+    .await?)
 }
 
 /// Handle an inbound federated message event: store it as a local message and
@@ -1553,9 +1650,19 @@ async fn dispatch_federated_message(state: &AppState, payload: &FederationEventE
         }
     };
 
-    // Store the federated message in the local messages table.
-    // Author ID is always a mapped remote pseudo-user.
-    match paracord_db::messages::create_message(
+    let mentioned_users = match resolve_federated_message_mentions(
+        state, payload, &channel, author_id,
+    )
+    .await
+    {
+        Ok(recipients) => recipients,
+        Err(error) => {
+            tracing::warn!(event_id = payload.event_id, %error, "federation: rejected invalid message audience");
+            return;
+        }
+    };
+    // Author ID is a mapped remote pseudo-user, not a local posting member.
+    match paracord_db::messages::create_message_with_payload_mentions(
         &state.db,
         local_msg_id,
         local_channel_id,
@@ -1563,6 +1670,10 @@ async fn dispatch_federated_message(state: &AppState, payload: &FederationEventE
         &body_text,
         0,
         None,
+        0,
+        None,
+        None,
+        &mentioned_users,
     )
     .await
     {
@@ -1609,7 +1720,8 @@ async fn dispatch_federated_message(state: &AppState, payload: &FederationEventE
 
             state
                 .event_bus
-                .dispatch("MESSAGE_CREATE", msg_json, channel.guild_id());
+                .dispatch_message(&state.db, "MESSAGE_CREATE", msg_json, channel.guild_id())
+                .await;
 
             let remote_mid = payload
                 .content
@@ -2083,6 +2195,7 @@ async fn dispatch_federated_message_edit(state: &AppState, payload: &FederationE
     let guild_id = channel.and_then(|c| c.guild_id());
     let msg_json = json!({
         "id": updated.id.to_string(),
+                "message_revision": updated.recovery_revision.to_string(),
         "channel_id": updated.channel_id.to_string(),
         "author": {
             "id": updated.author_id.to_string(),
@@ -2095,7 +2208,7 @@ async fn dispatch_federated_message_edit(state: &AppState, payload: &FederationE
             "origin_server": payload.origin_server,
         }
     });
-    dispatch_federated_guild_event(state, payload, guild_id, "MESSAGE_UPDATE", msg_json);
+    dispatch_federated_guild_event(state, payload, guild_id, "MESSAGE_UPDATE", msg_json).await;
 }
 
 async fn dispatch_federated_message_delete(state: &AppState, payload: &FederationEventEnvelope) {
@@ -2163,7 +2276,8 @@ async fn dispatch_federated_message_delete(state: &AppState, payload: &Federatio
                 "origin_server": payload.origin_server,
             }
         }),
-    );
+    )
+    .await;
 }
 
 async fn dispatch_federated_reaction_add(state: &AppState, payload: &FederationEventEnvelope) {
@@ -2220,7 +2334,8 @@ async fn dispatch_federated_reaction_add(state: &AppState, payload: &FederationE
             "message_id": local_message_id.to_string(),
             "emoji": emoji,
         }),
-    );
+    )
+    .await;
 }
 
 async fn dispatch_federated_reaction_remove(state: &AppState, payload: &FederationEventEnvelope) {
@@ -2277,7 +2392,8 @@ async fn dispatch_federated_reaction_remove(state: &AppState, payload: &Federati
             "message_id": local_message_id.to_string(),
             "emoji": emoji,
         }),
-    );
+    )
+    .await;
 }
 
 async fn dispatch_federated_member_join(state: &AppState, payload: &FederationEventEnvelope) {
@@ -3150,6 +3266,7 @@ pub async fn media_token(
     ensure_identity_matches_origin_or_alias(&state, &identity, &body.origin_server).await?;
     let local_user_id = ensure_remote_user_mapping(&state, &identity).await?;
 
+    let _membership = state.voice.lock_membership(local_user_id).await;
     let channel_id = body
         .channel_id
         .parse::<i64>()
@@ -3199,10 +3316,14 @@ pub async fn media_token(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
+    let previous_memberships =
+        paracord_db::voice_states::get_all_user_voice_states(&state.db, local_user_id)
+            .await
+            .map_err(|error| ApiError::Internal(error.into()))?;
     let session_id = uuid::Uuid::new_v4().to_string();
     let join_resp = state
         .voice
-        .join_channel(
+        .prepare_channel_join(
             channel_id,
             guild_id,
             local_user_id,
@@ -3214,6 +3335,27 @@ pub async fn media_token(
         .await
         .map_err(ApiError::Internal)?;
 
+    paracord_db::voice_states::begin_voice_state_transition(
+        &state.db,
+        local_user_id,
+        Some(guild_id),
+        channel_id,
+        &session_id,
+        false,
+    )
+    .await
+    .map_err(|error| ApiError::Internal(error.into()))?
+    .commit()
+    .await
+    .map_err(|error| ApiError::Internal(error.into()))?;
+    state.voice.install_channel_participant(
+        channel_id,
+        guild_id,
+        local_user_id,
+        &session_id,
+        paracord_media::AudioBitrate::default(),
+    );
+    super::voice::release_previous_memberships(&state, local_user_id, &previous_memberships).await;
     Ok(Json(json!({
         "token": join_resp.token,
         "url": state.config.livekit_public_url,

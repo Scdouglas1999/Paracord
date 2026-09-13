@@ -7,7 +7,6 @@
 //! then asserts a legitimate 50-participant call still fits comfortably inside
 //! it. None of them allocates at attack scale; the point is the invariant.
 
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -26,7 +25,7 @@ use crate::relay::{
     accept_control_frame, BridgedKeyframeStreams, ConnectionHandle, RelayForwarder,
     MAX_BRIDGED_KEYFRAME_SSRCS, MAX_CACHED_SSRCS_PER_SENDER,
 };
-use crate::room::{MediaRoomManager, GET_ROOM_CLONES};
+use crate::room::{get_room_clones, reset_get_room_clones, MediaRoomManager};
 use crate::speaker::SpeakerDetector;
 
 /// A realistic full room: 50 participants, all mutually subscribed.
@@ -51,10 +50,24 @@ fn audio_header(ssrc: u32) -> MediaHeader {
     }
 }
 
+/// A bridged connection whose media receipt is the session id `full_room`
+/// joins each participant with, which is what the relay's ownership fence
+/// checks before it will mutate anything on the connection's behalf.
 fn bridged_handle(user_id: i64, room_id: &str) -> ConnectionHandle {
+    bridged_handle_with_session(user_id, room_id, &format!("sess-{user_id}"))
+}
+
+fn bridged_handle_with_session(user_id: i64, room_id: &str, session_id: &str) -> ConnectionHandle {
     let (tx, _out_rx) = mpsc::channel::<Bytes>(8);
     let (_in_tx, rx) = mpsc::channel::<Bytes>(8);
-    ConnectionHandle::new_bridged(user_id, room_id.to_string(), tx, rx, None)
+    ConnectionHandle::new_bridged(
+        user_id,
+        room_id.to_string(),
+        session_id.to_string(),
+        tx,
+        rx,
+        None,
+    )
 }
 
 fn simulcast_track(publisher: i64, stream: &str, track: &str) -> PublishedTrack {
@@ -331,13 +344,15 @@ async fn control_messages_never_deep_clone_the_room() {
     // A sampled downlink is what lets relay-driven layer selection run at all;
     // without it the expensive branch is skipped and the test proves nothing.
     forwarder.record_downlink_sample_for_test(2, 12_500, Duration::from_millis(20), Instant::now());
+    let viewer_two = forwarder
+        .connection_for_test(2)
+        .expect("full_room registers a connection per participant");
 
-    GET_ROOM_CLONES.store(0, Ordering::Relaxed);
+    reset_get_room_clones();
     for _ in 0..32 {
         forwarder
             .handle_control_message(
-                2,
-                &room_id,
+                &viewer_two,
                 ControlMessage::ReceiverReport {
                     stream_id: track.stream_id.clone(),
                     track_id: track.track_id.clone(),
@@ -350,21 +365,20 @@ async fn control_messages_never_deep_clone_the_room() {
             .await;
     }
     assert_eq!(
-        GET_ROOM_CLONES.load(Ordering::Relaxed),
+        get_room_clones(),
         0,
         "ReceiverReport must not deep-clone the room"
     );
 
     // The other peer-reachable control paths are held to the same rule.
-    GET_ROOM_CLONES.store(0, Ordering::Relaxed);
+    reset_get_room_clones();
     forwarder
         .broadcast_control_in_room(&room_id, Some(1), &ControlMessage::Ping)
         .await;
-    forwarder.run_layer_selection(2, &room_id).await;
+    forwarder.run_layer_selection_for(&viewer_two).await;
     forwarder
         .handle_control_message(
-            3,
-            &room_id,
+            &forwarder.connection_for_test(3).unwrap(),
             ControlMessage::SubscribeStream {
                 subscription: TrackSubscription {
                     stream_id: track.stream_id.clone(),
@@ -378,8 +392,7 @@ async fn control_messages_never_deep_clone_the_room() {
         .await;
     forwarder
         .handle_control_message(
-            1,
-            &room_id,
+            &forwarder.connection_for_test(1).unwrap(),
             ControlMessage::TrackLayers {
                 stream_id: track.stream_id.clone(),
                 track_id: track.track_id.clone(),
@@ -388,10 +401,10 @@ async fn control_messages_never_deep_clone_the_room() {
         )
         .await;
     forwarder
-        .send_initial_track_state(&bridged_handle(4, &room_id))
+        .send_initial_track_state(&forwarder.connection_for_test(4).unwrap())
         .await;
     assert_eq!(
-        GET_ROOM_CLONES.load(Ordering::Relaxed),
+        get_room_clones(),
         0,
         "no peer-reachable control path may deep-clone the room"
     );
@@ -406,8 +419,7 @@ async fn subscribe_stream_still_registers_a_subscription_after_the_borrow_refact
     mgr.publish_track(&room_id, 1, track.clone()).unwrap();
     forwarder
         .handle_control_message(
-            2,
-            &room_id,
+            &forwarder.connection_for_test(2).unwrap(),
             ControlMessage::SubscribeStream {
                 subscription: TrackSubscription {
                     stream_id: track.stream_id.clone(),
@@ -466,11 +478,16 @@ async fn replacing_a_users_connection_closes_the_displaced_one() {
     let (second_conn, _second_client) = quinn_pair().await;
     let (_mgr, forwarder, room_id) = full_room();
 
-    let first = ConnectionHandle::new(1, room_id.clone(), first_conn);
+    let first = ConnectionHandle::new(1, room_id.clone(), "session-first".to_string(), first_conn);
     forwarder.add_connection(first.clone());
     assert!(first.is_alive());
 
-    forwarder.add_connection(ConnectionHandle::new(1, room_id.clone(), second_conn));
+    forwarder.add_connection(ConnectionHandle::new(
+        1,
+        room_id.clone(),
+        "session-second".to_string(),
+        second_conn,
+    ));
     assert!(
         !first.is_alive(),
         "a superseded connection must be closed, not merely unrouted"

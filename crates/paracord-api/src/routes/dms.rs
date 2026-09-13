@@ -44,6 +44,7 @@ pub async fn list_dms(
                 "guild_id": null,
                 "name": null,
                 "last_message_id": c.last_message_id.map(|id| id.to_string()),
+            "message_revision": c.message_revision.to_string(),
                 "recipient": {
                     "id": c.recipient_id.to_string(),
                     "username": c.recipient_username,
@@ -88,6 +89,7 @@ pub async fn list_dms(
             "name": g.name,
             "owner_id": g.owner_id.map(|id| id.to_string()),
             "last_message_id": g.last_message_id.map(|id| id.to_string()),
+            "message_revision": g.message_revision.to_string(),
             "recipients": recipients_json,
         }));
     }
@@ -160,6 +162,7 @@ pub async fn create_dm(
             "guild_id": null,
             "name": null,
             "last_message_id": channel.last_message_id.map(|id| id.to_string()),
+            "message_revision": channel.message_revision.to_string(),
             "recipient": {
                 "id": recipient.id.to_string(),
                 "username": recipient.username,
@@ -279,6 +282,7 @@ pub async fn create_group_dm(
             "name": channel.name,
             "owner_id": channel.owner_id.map(|id| id.to_string()),
             "last_message_id": channel.last_message_id.map(|id| id.to_string()),
+            "message_revision": channel.message_revision.to_string(),
             "recipients": recipients_json,
         })),
     ))
@@ -428,6 +432,7 @@ pub async fn join_dm_voice(
     Path(channel_id): Path<i64>,
     Query(query): Query<DmVoiceJoinQuery>,
 ) -> Result<Json<Value>, ApiError> {
+    let _membership = state.voice.lock_membership(auth.user_id).await;
     if !state.config.livekit_available && !state.config.native_media_enabled {
         return Err(ApiError::ServiceUnavailable(
             "Voice is not available on this server".into(),
@@ -460,45 +465,36 @@ pub async fn join_dm_voice(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
+    crate::routes::channels::ensure_channel_permissions(
+        &state,
+        &channel,
+        auth.user_id,
+        &[paracord_models::permissions::Permissions::CONNECT],
+    )
+    .await?;
+
+    let previous_memberships =
+        paracord_db::voice_states::get_all_user_voice_states(&state.db, auth.user_id)
+            .await
+            .map_err(|error| ApiError::Internal(error.into()))?;
+
     // Native media path
     let requesting_livekit_fallback = query.fallback.as_deref() == Some("livekit");
     if state.config.native_media_enabled && !requesting_livekit_fallback {
         let session_id = uuid::Uuid::new_v4().to_string();
         let room_name = format!("0:{}", channel_id);
-        paracord_db::voice_states::upsert_voice_state(
-            &state.db,
+        super::voice::commit_native_membership(
+            &state,
             auth.user_id,
             None,
             channel_id,
             &session_id,
+            false,
+            true,
         )
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-
-        if let Some(native_media) = state.native_media.as_ref() {
-            if let Err(err) = native_media.rooms.join_room(
-                0,
-                channel_id,
-                paracord_relay::participant::MediaParticipant::new(
-                    auth.user_id,
-                    session_id.clone(),
-                ),
-            ) {
-                let _ = paracord_db::voice_states::remove_voice_state_if_session(
-                    &state.db,
-                    auth.user_id,
-                    None,
-                    &session_id,
-                )
-                .await;
-                return Err(match err {
-                    paracord_relay::room::RoomError::RoomFull(_) => {
-                        ApiError::BadRequest("Voice channel is full".into())
-                    }
-                    other => ApiError::Internal(anyhow::anyhow!(other.to_string())),
-                });
-            }
-        }
+        .await?;
+        super::voice::release_previous_memberships(&state, auth.user_id, &previous_memberships)
+            .await;
 
         let (media_endpoint, media_endpoint_candidates) =
             super::voice::native_media_endpoints(&headers, state.config.native_media_port);
@@ -567,7 +563,7 @@ pub async fn join_dm_voice(
     // Use guild_id=0 for DM voice rooms; room name scoped to DM channel
     let join_resp = state
         .voice
-        .join_channel(
+        .prepare_channel_join(
             channel_id,
             0, // no guild for DMs
             auth.user_id,
@@ -578,6 +574,28 @@ pub async fn join_dm_voice(
         )
         .await
         .map_err(ApiError::Internal)?;
+
+    paracord_db::voice_states::begin_voice_state_transition(
+        &state.db,
+        auth.user_id,
+        None,
+        channel_id,
+        &session_id,
+        false,
+    )
+    .await
+    .map_err(|error| ApiError::Internal(error.into()))?
+    .commit()
+    .await
+    .map_err(|error| ApiError::Internal(error.into()))?;
+    state.voice.install_channel_participant(
+        channel_id,
+        0,
+        auth.user_id,
+        &session_id,
+        paracord_media::AudioBitrate::default(),
+    );
+    super::voice::release_previous_memberships(&state, auth.user_id, &previous_memberships).await;
 
     // Dispatch voice state update to DM recipients only.
     state.event_bus.dispatch_to_users(
@@ -622,7 +640,9 @@ pub async fn leave_dm_voice(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(channel_id): Path<i64>,
+    Query(query): Query<super::voice::VoiceLeaveQuery>,
 ) -> Result<StatusCode, ApiError> {
+    let _membership = state.voice.lock_membership(auth.user_id).await;
     // Verify the channel exists and is a DM or group DM
     let channel = paracord_db::channels::get_channel(&state.db, channel_id)
         .await
@@ -646,35 +666,57 @@ pub async fn leave_dm_voice(
     let active_dm_voice =
         paracord_db::voice_states::get_user_voice_session(&state.db, auth.user_id, None)
             .await
-            .ok()
-            .flatten();
+            .map_err(|error| ApiError::Internal(error.into()))?;
     let left_active_native_voice = active_dm_voice
         .as_ref()
         .is_some_and(|state| state.channel_id == channel_id);
-    if left_active_native_voice {
-        let _ = paracord_db::voice_states::remove_voice_state(&state.db, auth.user_id, None).await;
+    if let Some(expected) = query.session_id.as_deref() {
+        if !active_dm_voice.as_ref().is_some_and(|current| {
+            current.channel_id == channel_id && current.session_id == expected
+        }) {
+            return Ok(StatusCode::NO_CONTENT);
+        }
+        let removed = paracord_db::voice_states::remove_voice_state_if_session(
+            &state.db,
+            auth.user_id,
+            None,
+            expected,
+        )
+        .await
+        .map_err(|error| ApiError::Internal(anyhow::anyhow!(error.to_string())))?;
+        if !removed {
+            return Ok(StatusCode::NO_CONTENT);
+        }
+    } else if left_active_native_voice {
+        paracord_db::voice_states::remove_voice_state(&state.db, auth.user_id, None)
+            .await
+            .map_err(|error| ApiError::Internal(anyhow::anyhow!(error.to_string())))?;
     }
 
     if let Some(native_media) = state.native_media.as_ref() {
-        let _ = native_media.rooms.leave_room(0, channel_id, auth.user_id);
+        let _ = native_media.rooms.leave_room_if_session(
+            0,
+            channel_id,
+            auth.user_id,
+            query.session_id.as_deref(),
+        );
     }
 
-    let participants = state.voice.leave_room(channel_id, auth.user_id).await;
+    let participants = state
+        .voice
+        .leave_room_if_session(channel_id, auth.user_id, query.session_id.as_deref())
+        .await;
     let left_livekit_voice = participants.is_some();
-    if let Some(current) = participants {
-        if current.is_empty() {
-            let voice = state.voice.clone();
-            tokio::spawn(async move {
-                let _ = voice.cleanup_room(channel_id).await;
-            });
-        }
-    }
 
     let user = paracord_db::users::get_user_by_id(&state.db, auth.user_id)
         .await
         .ok()
         .flatten();
-    if left_active_native_voice || left_livekit_voice {
+    // Mirrors `leave_voice`: a caller with no membership at all still gets the
+    // leave announced so a client whose local state drifted is corrected. A
+    // request that was stale for a *different* call already returned above.
+    let announce = active_dm_voice.is_none() || left_active_native_voice || left_livekit_voice;
+    if announce {
         state.event_bus.dispatch_to_users(
             "VOICE_STATE_UPDATE",
             json!({

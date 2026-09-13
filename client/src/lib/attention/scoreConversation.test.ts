@@ -14,8 +14,9 @@ function snowflakeForMs(ms: number): string {
 
 function entry(over: Partial<ConversationEntry> = {}): ConversationEntry {
   return {
-    key: conversationKey('s', 'c'),
+    key: conversationKey({ serverId: 's', userId: 'viewer' }, 'c'),
     serverId: 's',
+        scope: { serverId: 's', userId: 'viewer' },
     channelId: 'c',
     guildId: 'g',
     kind: 'guild_text',

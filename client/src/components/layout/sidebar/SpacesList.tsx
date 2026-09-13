@@ -1,18 +1,19 @@
+import { useCurrentAccountScope } from '../../../hooks/useCurrentUser';
+import { markGuildRead } from '../../../lib/guildActions';
+import { useServerListStore } from '../../../stores/serverListStore';
+import { getServerAccountScope } from '../../../lib/serverIdentity';
+import { accountScopeKey, LOCAL_SERVER_ID } from '../../../lib/serverScope';
+import { activateGuild } from '../../../lib/guildNavigation';
+import { findScopedGuild } from '../../../lib/guildScope';
 import { useNavigate } from 'react-router';
 import { Bell, BellOff, CheckCheck, LogOut, Plus, Settings } from 'lucide-react';
-import { useServerListStore } from '../../../stores/serverListStore';
-import { useChannelStore } from '../../../stores/channelStore';
 import { useGuildStore } from '../../../stores/guildStore';
-import { useAuthStore } from '../../../stores/authStore';
-import { useReadStateStore } from '../../../stores/readStateStore';
 import { useUIStore } from '../../../stores/uiStore';
 import { useMutedGuilds } from '../../../hooks/useMutedGuilds';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '../../ui/ContextMenu';
-import { ChannelType } from '../../../types';
 import { cn } from '../../../lib/utils';
 import { guildInitials, resolveGuildIconUrl } from '../../../lib/guildIcon';
 import type { GuildSummary } from '../../../hooks/useUnifiedConversations';
-import { channelApi } from '../../../api/channels';
 import { extractApiError } from '../../../api/client';
 import { toast } from '../../../stores/toastStore';
 import { confirm } from '../../../stores/confirmStore';
@@ -31,16 +32,16 @@ import { canAccessGuildSettingsSync } from '../../../lib/guildSettingsAccess';
  *
  * The old guild-rail context menu is re-homed here (layout-spec §2 — "folder/
  * context-menu logic absorbed into SpacesList"): right-click a space to Mute /
- * Unmute it (the sole writer of the `muted-guilds` set that feeds attention
+ * Unmute it (the sole writer of the account-owned mute set that feeds attention
  * ranking — see `useMutedGuilds`) or Mark the whole space read.
  */
 
 export interface SpacesListProps {
   spaces: GuildSummary[];
   /** Guilds carrying unread, mention, reply, or live-room attention. */
-  attentionGuildIds?: ReadonlySet<string>;
-  /** Currently-open guild id (route param) → active row highlight. */
-  activeGuildId?: string | null;
+  attentionGuildKeys?: ReadonlySet<string>;
+  /** Account-qualified currently-open guild key → active row highlight. */
+  activeGuildKey?: string | null;
   /**
    * Open the create/join-server flow. The old guild rail's "+" was the only persistent
    * create/join entry and died with the rail; the always-visible "Add a space" row
@@ -56,14 +57,15 @@ export interface SpacesListProps {
 
 export function SpacesList({
   spaces,
-  attentionGuildIds,
-  activeGuildId,
+  attentionGuildKeys,
+  activeGuildKey,
   onAddSpace,
   navIndexStart = 0,
   activeNavIndex,
 }: SpacesListProps) {
   const navigate = useNavigate();
-  const { mutedGuildIds, toggleMute } = useMutedGuilds();
+  const activeScope = useCurrentAccountScope();
+  const { mutedGuildKeys, toggleMute, saving } = useMutedGuilds();
   const { contextMenu, onContextMenu, closeContextMenu } = useContextMenu();
 
   // Never returns null now: even with zero joined spaces the "Add a space" row must
@@ -71,27 +73,13 @@ export function SpacesList({
   const addSpaceNavIndex = navIndexStart + spaces.length;
 
   const openSpace = (space: GuildSummary) => {
-    if (useServerListStore.getState().activeServerId !== space.serverId) {
-      useServerListStore.getState().setActive(space.serverId);
-    }
+    activateGuild(space);
     navigate(`/app/guilds/${space.id}`);
   };
 
-  // Mark every channel of a guild read via the serverId-scoped read-state store.
   const markSpaceRead = async (space: GuildSummary) => {
-    const channels = useChannelStore.getState().channelsByGuild[space.id] ?? [];
-    const markRead = useReadStateStore.getState().markRead;
-    const writes: Promise<unknown>[] = [];
-    for (const ch of channels) {
-      if (ch.type === ChannelType.Category || !ch.last_message_id) continue;
-      markRead(space.serverId, ch.id, ch.last_message_id);
-      writes.push(channelApi.updateReadStateForServer(space.serverId, ch.id, ch.last_message_id));
-    }
-    const results = await Promise.allSettled(writes);
-    const failed = results.find((result) => result.status === 'rejected');
-    if (failed?.status === 'rejected') {
-      toast.error(`Failed to save read positions: ${extractApiError(failed.reason)}`);
-    }
+    try { await markGuildRead(space); }
+    catch (err) { toast.error(`Failed to save read positions: ${extractApiError(err)}`); }
   };
 
   const leaveSpace = async (space: GuildSummary) => {
@@ -103,12 +91,10 @@ export function SpacesList({
     });
     if (!ok) return;
     try {
-      if (useServerListStore.getState().activeServerId !== space.serverId) {
-        useServerListStore.getState().setActive(space.serverId);
-      }
-      await useGuildStore.getState().leaveGuild(space.id);
+      await useGuildStore.getState().leaveGuild(space.id, space.scope);
       toast.success(`Left ${space.name}.`);
-      if (typeof window !== 'undefined' && window.location.pathname.includes(`/guilds/${space.id}`)) {
+      const currentScope = getServerAccountScope(useServerListStore.getState().activeServerId ?? LOCAL_SERVER_ID);
+      if (currentScope && accountScopeKey(currentScope) === accountScopeKey(space.scope) && typeof window !== 'undefined' && window.location.pathname.includes(`/guilds/${space.id}`)) {
         navigate('/app');
       }
     } catch (err) {
@@ -117,16 +103,17 @@ export function SpacesList({
   };
 
   const buildItems = (space: GuildSummary): ContextMenuItem[] => {
-    const muted = mutedGuildIds.includes(space.id);
-    const currentUserId = useAuthStore.getState().user?.id;
-    const guild = useGuildStore.getState().guilds.find((g) => g.id === space.id);
+    const muted = mutedGuildKeys.includes(space.key);
+    const currentUserId = space.scope.userId;
+    const guild = findScopedGuild(useGuildStore.getState().guilds, space.scope, space.id);
     const isOwner = Boolean(currentUserId && guild?.owner_id === currentUserId);
-    const canOpenSettings = canAccessGuildSettingsSync(space.id);
+    const canOpenSettings = canAccessGuildSettingsSync(space.id, space.scope);
     const items: ContextMenuItem[] = [
       {
         label: muted ? 'Unmute space' : 'Mute space',
         icon: muted ? <Bell size={16} /> : <BellOff size={16} />,
-        action: () => toggleMute(space.id),
+        disabled: saving[space.key] ?? false,
+        action: () => { void toggleMute(space); },
       },
       {
         label: 'Mark as read',
@@ -140,7 +127,7 @@ export function SpacesList({
       items.push({
         label: 'Space settings',
         icon: <Settings size={16} />,
-        action: () => useUIStore.getState().setGuildSettingsId(space.id),
+        action: () => { activateGuild(space); useUIStore.getState().setGuildSettingsId(space.id); },
       });
     }
     if (!isOwner) {
@@ -159,13 +146,13 @@ export function SpacesList({
       <h2 className="px-2 pb-1 text-section uppercase text-text-muted">Spaces</h2>
       <div role="group" aria-label="Joined spaces" className="flex flex-col gap-0.5">
         {spaces.map((space, i) => {
-          const active = space.id === activeGuildId;
-          const muted = mutedGuildIds.includes(space.id);
-          const needsAttention = !active && !muted && Boolean(attentionGuildIds?.has(space.id));
+          const active = space.key === activeGuildKey && !!activeScope && accountScopeKey(activeScope) === accountScopeKey(space.scope);
+          const muted = mutedGuildKeys.includes(space.key);
+          const needsAttention = !active && !muted && Boolean(attentionGuildKeys?.has(space.key));
           const iconSrc = resolveGuildIconUrl({ icon: space.icon });
           return (
             <button
-              key={space.id}
+              key={space.key}
               type="button"
               role="option"
               aria-selected={active}

@@ -73,20 +73,20 @@ export type UpdateAutomodRuleRequest = Partial<
 >;
 
 export const automodApi = {
-  listRules: (guildId: string) =>
+  listRules: async (guildId: string) =>
     getApi().get<{ rules: AutomodRule[] }>(`/guilds/${guildId}/automod/rules`),
-  createRule: (guildId: string, data: CreateAutomodRuleRequest) =>
+  createRule: async (guildId: string, data: CreateAutomodRuleRequest) =>
     getApi().post<AutomodRule>(`/guilds/${guildId}/automod/rules`, data),
-  updateRule: (guildId: string, ruleId: string, data: UpdateAutomodRuleRequest) =>
+  updateRule: async (guildId: string, ruleId: string, data: UpdateAutomodRuleRequest) =>
     getApi().patch<AutomodRule>(`/guilds/${guildId}/automod/rules/${ruleId}`, data),
-  deleteRule: (guildId: string, ruleId: string) =>
+  deleteRule: async (guildId: string, ruleId: string) =>
     getApi().delete(`/guilds/${guildId}/automod/rules/${ruleId}`),
-  listHits: (guildId: string, limit = 50) =>
+  listHits: async (guildId: string, limit = 50) =>
     getApi().get<{ hits: AutomodHit[] }>(`/guilds/${guildId}/automod/hits`, {
       params: { limit },
     }),
   /** Dry-run a trigger against sample text. Nothing is persisted. */
-  testRule: (
+  testRule: async (
     guildId: string,
     data: {
       trigger_type: number;

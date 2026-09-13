@@ -232,24 +232,45 @@ pub async fn record_hit(
     matched_excerpt: Option<&str>,
     content_excerpt: Option<&str>,
 ) -> Result<(), DbError> {
+    let hit = AutomodHitRow {
+        id,
+        guild_id,
+        rule_id,
+        rule_name: rule_name.to_owned(),
+        user_id,
+        channel_id,
+        trigger_type,
+        actions_taken: actions_taken.to_owned(),
+        matched_excerpt: matched_excerpt.map(str::to_owned),
+        content_excerpt: content_excerpt.map(str::to_owned),
+        created_at: Utc::now(),
+    };
+    record_hit_in_connection(&mut *pool.acquire().await?, &hit).await
+}
+
+/// Record inside the transaction that owns the associated message mutation.
+pub async fn record_hit_in_connection(
+    connection: &mut crate::DbConnection,
+    hit: &AutomodHitRow,
+) -> Result<(), DbError> {
     sqlx::query(
         "INSERT INTO automod_hits (
             id, space_id, rule_id, rule_name, user_id, channel_id,
             trigger_type, actions_taken, matched_excerpt, content_excerpt, created_at
          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
     )
-    .bind(id)
-    .bind(guild_id)
-    .bind(rule_id)
-    .bind(rule_name)
-    .bind(user_id)
-    .bind(channel_id)
-    .bind(trigger_type)
-    .bind(actions_taken)
-    .bind(matched_excerpt)
-    .bind(content_excerpt)
-    .bind(datetime_to_db_text(Utc::now()))
-    .execute(pool)
+    .bind(&hit.id)
+    .bind(&hit.guild_id)
+    .bind(&hit.rule_id)
+    .bind(&hit.rule_name)
+    .bind(&hit.user_id)
+    .bind(&hit.channel_id)
+    .bind(&hit.trigger_type)
+    .bind(&hit.actions_taken)
+    .bind(&hit.matched_excerpt)
+    .bind(&hit.content_excerpt)
+    .bind(datetime_to_db_text(hit.created_at))
+    .execute(connection)
     .await?;
     Ok(())
 }

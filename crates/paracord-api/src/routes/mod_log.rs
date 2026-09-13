@@ -89,7 +89,9 @@ pub async fn emit_mod_log(
 
     let content = build_mod_log_content(title, summary, details);
     let message_id = paracord_util::snowflake::generate(1);
-    let Ok(message) = paracord_db::messages::create_message(
+    // Audit details can contain user-controlled mention syntax. Logging never
+    // grants that text the system author's authority to notify people.
+    let Ok(message) = paracord_db::messages::create_message_with_payload_mentions(
         &state.db,
         message_id,
         channel_id,
@@ -97,35 +99,43 @@ pub async fn emit_mod_log(
         &content,
         0,
         None,
+        0,
+        None,
+        None,
+        &[],
     )
     .await
     else {
         return;
     };
 
-    state.event_bus.dispatch(
-        "MESSAGE_CREATE",
-        json!({
-            "id": message.id.to_string(),
-            "channel_id": message.channel_id.to_string(),
-            "author_id": message.author_id.to_string(),
-            "content": message.content,
-            "nonce": message.nonce,
-            "message_type": message.message_type,
-            "flags": message.flags,
-            "pinned": message.pinned,
-            "e2ee_header": message.e2ee_header,
-            "created_at": message.created_at.to_rfc3339(),
-            "edited_at": message.edited_at.map(|d| d.to_rfc3339()),
-            "author": {
-                "id": MOD_LOG_BOT_ID.to_string(),
-                "username": MOD_LOG_BOT_USERNAME,
-                "discriminator": 0,
-                "avatar_hash": serde_json::Value::Null,
-                "flags": USER_FLAG_BOT,
-                "bot": true,
-            }
-        }),
-        Some(guild_id),
-    );
+    state
+        .event_bus
+        .dispatch_message(
+            &state.db,
+            "MESSAGE_CREATE",
+            json!({
+                "id": message.id.to_string(),
+                "channel_id": message.channel_id.to_string(),
+                "author_id": message.author_id.to_string(),
+                "content": message.content,
+                "nonce": message.nonce,
+                "message_type": message.message_type,
+                "flags": message.flags,
+                "pinned": message.pinned,
+                "e2ee_header": message.e2ee_header,
+                "created_at": message.created_at.to_rfc3339(),
+                "edited_at": message.edited_at.map(|d| d.to_rfc3339()),
+                "author": {
+                    "id": MOD_LOG_BOT_ID.to_string(),
+                    "username": MOD_LOG_BOT_USERNAME,
+                    "discriminator": 0,
+                    "avatar_hash": serde_json::Value::Null,
+                    "flags": USER_FLAG_BOT,
+                    "bot": true,
+                }
+            }),
+            Some(guild_id),
+        )
+        .await;
 }

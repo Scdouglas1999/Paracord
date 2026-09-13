@@ -43,6 +43,36 @@ fn validate_attachment_metadata(filename: &str, content_type: &str) -> Result<()
     Ok(())
 }
 
+/// True for a conversation whose messages are end-to-end encrypted: a direct
+/// message or a group direct message, which have no space.
+///
+/// Attachments in those conversations are client-encrypted ciphertext. The
+/// server is not supposed to learn what they are, so it keeps no metadata the
+/// sender did not have to give it, and derives no preview, thumbnail or inline
+/// type from them.
+fn is_encrypted_conversation(channel: &paracord_db::channels::ChannelRow) -> bool {
+    channel.guild_id().is_none() && matches!(channel.channel_type, 1 | 3)
+}
+
+/// The stored name for an encrypted conversation's attachment.
+///
+/// A well-formed opaque name from the client is kept, so a retry of the same
+/// upload lands on the same object; anything else — a real filename from an
+/// older client, or any name at all — is replaced by one derived from the
+/// attachment's own ID. Either way no part of the sender's filename survives.
+fn opaque_attachment_filename(attachment_id: i64, requested: &str) -> String {
+    let opaque = requested.len() == 36
+        && requested.ends_with(".bin")
+        && requested[..32]
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    if opaque {
+        requested.to_string()
+    } else {
+        format!("{attachment_id}.bin")
+    }
+}
+
 fn attachment_aad(attachment_id: i64) -> String {
     format!("{ATTACHMENT_AAD_PREFIX}{attachment_id}")
 }
@@ -80,9 +110,19 @@ pub async fn instance_info(
     State(state): State<AppState>,
     _auth: AuthUser,
 ) -> Result<Json<Value>, ApiError> {
+    // `setup_required` and `instance_name` are also served unauthenticated by
+    // `GET /api/v1/setup/status` (a signed-out browser has to be able to tell
+    // an unclaimed server from a claimed one). They are repeated here so an
+    // authenticated client that already reads instance metadata does not need a
+    // second round trip, and both read the same `instance_setup` row.
+    let setup = paracord_db::instance_setup::get(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     Ok(Json(json!({
         "max_upload_size": state.config.max_upload_size,
         "p2p_threshold": state.config.media_p2p_threshold,
+        "setup_required": setup.is_pending(),
+        "instance_name": setup.instance_name,
     })))
 }
 
@@ -776,16 +816,32 @@ pub async fn upload_file(
     hasher.update(&data);
     let content_hash = format!("{:x}", hasher.finalize());
 
+    let attachment_id = paracord_util::snowflake::generate(1);
+    let encrypted_conversation = is_encrypted_conversation(&channel);
+
     // Check guild-level upload policy against the type that will be stored,
     // after active-content downgrades. Otherwise a forged Content-Type could
     // bypass an allowlist before being persisted as application/octet-stream.
-    let content_type =
-        resolve_stored_content_type(&filename, claimed_content_type.as_deref(), &data);
+    //
+    // An encrypted conversation skips that resolution entirely: its body is
+    // ciphertext, so there is nothing to sniff and nothing the claimed type
+    // could truthfully describe. The stored type is always opaque and the
+    // stored name is always generated, which is also what stops a filename from
+    // reaching the server for a conversation whose messages it cannot read.
+    let (filename, content_type) = if encrypted_conversation {
+        (
+            opaque_attachment_filename(attachment_id, &filename),
+            "application/octet-stream".to_string(),
+        )
+    } else {
+        let content_type =
+            resolve_stored_content_type(&filename, claimed_content_type.as_deref(), &data);
+        (filename, content_type)
+    };
     validate_attachment_metadata(&filename, &content_type)?;
     limits.check(&state, size, &content_type).await?;
 
     // Store file via storage backend
-    let attachment_id = paracord_util::snowflake::generate(1);
     scan_upload_with_malware_hook(&data, &filename, &state.config.storage_path, attachment_id)
         .await?;
 
@@ -1050,13 +1106,32 @@ pub async fn process_uploaded_file(
     hasher.update(data);
     let content_hash = format!("{:x}", hasher.finalize());
 
+    let attachment_id = paracord_util::snowflake::generate(1);
+    // The transport-agnostic path applies the same rule as the multipart route:
+    // an encrypted conversation stores opaque ciphertext under a generated name.
+    let encrypted_conversation = paracord_db::channels::get_channel(&state.db, channel_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .as_ref()
+        .is_some_and(is_encrypted_conversation);
+
     // Check guild-level upload policy against the type that will be stored,
     // after active-content downgrades.
-    let content_type = resolve_stored_content_type(filename, claimed_content_type, data);
+    let (filename, content_type) = if encrypted_conversation {
+        (
+            opaque_attachment_filename(attachment_id, filename),
+            "application/octet-stream".to_string(),
+        )
+    } else {
+        (
+            filename.to_string(),
+            resolve_stored_content_type(filename, claimed_content_type, data),
+        )
+    };
+    let filename = filename.as_str();
     validate_attachment_metadata(filename, &content_type)?;
     check_guild_upload_policy(state, channel_id, size, &content_type).await?;
 
-    let attachment_id = paracord_util::snowflake::generate(1);
     scan_upload_with_malware_hook(data, filename, &state.config.storage_path, attachment_id)
         .await?;
 

@@ -167,7 +167,8 @@ describe('TopBar channel follows', () => {
     vi.mocked(channelApi.addFollower).mockRejectedValue(new Error('Manage Webhooks is required.'));
     renderAnnouncementTopBar();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Manage follows' }));
+    fireEvent.click(screen.getByRole('button', { name: 'More channel actions' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Manage follows/ }));
     await waitFor(() => expect(channelApi.getFollowers).toHaveBeenCalledWith('ann-1'));
     await user.click(await screen.findByRole('button', { name: 'Follow' }));
 
@@ -184,7 +185,8 @@ describe('TopBar channel follows', () => {
     vi.mocked(channelApi.removeFollower).mockRejectedValue(new Error('Follow target was already removed.'));
     renderAnnouncementTopBar();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Manage follows' }));
+    fireEvent.click(screen.getByRole('button', { name: 'More channel actions' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Manage follows/ }));
     await waitFor(() => expect(channelApi.getFollowers).toHaveBeenCalledWith('ann-1'));
     await user.click(await screen.findByRole('button', { name: 'Unfollow' }));
 
@@ -193,3 +195,22 @@ describe('TopBar channel follows', () => {
     );
   });
 });
+
+vi.mock('../../hooks/useChannels', async () => {
+  const actual = await vi.importActual<typeof import('../../hooks/useChannels')>('../../hooks/useChannels');
+  const { useChannelStore } = await import('../../stores/channelStore');
+  return {
+    ...actual,
+    useCurrentChannelStore: useChannelStore,
+    useChannelActions: () => useChannelStore.getState(),
+    getAccountChannelView: () => useChannelStore.getState(),
+    useGuildChannels: (id: string) => useChannelStore(state => state.channelsByGuild[id] ?? []),
+  };
+});
+
+vi.mock('../../hooks/useConversationActions', () => ({
+  useConversationActions: () => ({
+    actions: Object.fromEntries(['send', 'poll', 'schedule', 'attach', 'summary', 'voice', 'video', 'screen_share'].map(action => [action, { supported: true, allowed: true, reason: null }])),
+    error: null, loading: false, refresh: vi.fn(),
+  }),
+}));

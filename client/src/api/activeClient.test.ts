@@ -1,43 +1,38 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AxiosInstance } from 'axios';
 
-const { legacyClientStub, activeClientStub, getActiveApiClient } = vi.hoisted(() => ({
-  legacyClientStub: { __id: 'legacy' } as unknown as AxiosInstance,
-  activeClientStub: { __id: 'active' } as unknown as AxiosInstance,
-  getActiveApiClient: vi.fn<() => AxiosInstance | undefined>(),
+const mocks = vi.hoisted(() => ({
+  local: { id: 'local' } as unknown as AxiosInstance,
+  remote: { id: 'remote' } as unknown as AxiosInstance,
+  selected: null as string | null,
+  getApiClient: vi.fn<(id: string) => AxiosInstance | undefined>(),
 }));
+vi.mock('./client', () => ({ apiClient: mocks.local }));
+vi.mock('../lib/connectionManager', () => ({ connectionManager: { getApiClient: mocks.getApiClient } }));
+vi.mock('../stores/serverListStore', () => ({ useServerListStore: { getState: () => ({ activeServerId: mocks.selected }) } }));
+import { getApi, getServerApi } from './activeClient';
 
-vi.mock('./client', () => ({
-  apiClient: legacyClientStub,
-}));
-
-vi.mock('../lib/connectionManager', () => ({
-  connectionManager: {
-    getActiveApiClient,
-  },
-}));
-
-import { getApi } from './activeClient';
-
-describe('getApi() REST routing', () => {
-  afterEach(() => {
-    getActiveApiClient.mockReset();
+describe('explicit REST server routing', () => {
+  beforeEach(() => { mocks.selected = null; mocks.getApiClient.mockReset(); });
+  it('uses the home client only for the home scope', () => {
+    expect(getApi()).toBe(mocks.local);
+    expect(getServerApi('__local__')).toBe(mocks.local);
   });
-
-  it('returns the active server per-server client when one exists', () => {
-    getActiveApiClient.mockReturnValue(activeClientStub);
-    expect(getApi()).toBe(activeClientStub);
+  it('uses the selected remote connection', () => {
+    mocks.selected = 'remote';
+    mocks.getApiClient.mockReturnValue(mocks.remote);
+    expect(getApi()).toBe(mocks.remote);
+    expect(mocks.getApiClient).toHaveBeenCalledWith('remote');
   });
-
-  it('falls back to the LOCAL-only singleton when no active client exists', () => {
-    getActiveApiClient.mockReturnValue(undefined);
-    expect(getApi()).toBe(legacyClientStub);
+  it('refuses to substitute home when a remote connection is unavailable', () => {
+    mocks.selected = 'remote';
+    expect(() => getApi()).toThrow('not connected');
   });
-
-  it('resolves the active client at call time (not captured at module load)', () => {
-    getActiveApiClient.mockReturnValueOnce(legacyClientStub);
-    expect(getApi()).toBe(legacyClientStub);
-    getActiveApiClient.mockReturnValueOnce(activeClientStub);
-    expect(getApi()).toBe(activeClientStub);
+  it('keeps explicit server operations independent of selection changes', () => {
+    mocks.getApiClient.mockImplementation(id => id === 'remote' ? mocks.remote : undefined);
+    const captured = getServerApi('remote');
+    mocks.selected = '__local__';
+    expect(getApi()).toBe(mocks.local);
+    expect(captured).toBe(mocks.remote);
   });
 });

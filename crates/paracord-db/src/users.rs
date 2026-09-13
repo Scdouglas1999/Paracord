@@ -51,6 +51,39 @@ async fn claim_first_admin_slot(executor: &mut sqlx::AnyConnection) -> Result<bo
     Ok(affected == 1)
 }
 
+/// Remove an account that was created moments ago and never used, as part of
+/// rolling back a failed first-owner claim.
+///
+/// [`delete_user_typed`] is the right tool for a real account: it anonymises
+/// authored content behind a "Deleted User" tombstone so conversations stay
+/// coherent. A rolled-back bootstrap owner has authored nothing, so minting
+/// that tombstone would leave a permanent phantom member on a server that has
+/// never had a single user — visible in member lists and admin views for the
+/// life of the instance. This deletes the row outright and lets the schema's
+/// own cascades clean up behind it.
+pub async fn delete_unused_account(pool: &DbPool, id: i64) -> Result<(), DbError> {
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Release the "first administrator" slot after a bootstrap claim was rolled
+/// back.
+///
+/// Only the first-owner claim path uses this, and only when the owner account
+/// it just created has been deleted again: without it the marker row outlives
+/// the rolled-back account and the operator's retry silently produces an owner
+/// with no administrator rights.
+pub async fn release_first_admin_slot(pool: &DbPool) -> Result<(), DbError> {
+    sqlx::query("DELETE FROM server_settings WHERE key = $1")
+        .bind(FIRST_ADMIN_CLAIM_KEY)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 async fn count_local_human_users_for_first_admin(
     executor: &mut sqlx::AnyConnection,
 ) -> Result<i64, sqlx::Error> {
@@ -823,7 +856,7 @@ pub async fn update_user_public_key_typed(
          RETURNING id, username, discriminator, email, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key, email_verified",
     )
     .bind(id)
-    .bind(public_key)
+    .bind(public_key.to_ascii_lowercase())
     .bind(datetime_to_db_text(Utc::now()))
     .fetch_one(pool)
     .await?;
@@ -837,6 +870,226 @@ pub async fn update_user_public_key(
     public_key: &str,
 ) -> Result<UserRow, DbError> {
     update_user_public_key_typed(pool, UserId::new(id), public_key).await
+}
+
+/// An attachment transaction owns this lock until its replacement session commits.
+/// The initial no-op UPDATE acquires the SQLite write lock before any reads and
+/// the PostgreSQL user-row lock, avoiding stale read-to-write upgrades.
+async fn lock_identity_account(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Any>,
+    user_id: i64,
+    session_id: &str,
+    verified_password_hash: &str,
+) -> Result<UserRow, DbError> {
+    let current = sqlx::query_as::<_, UserRow>(
+        "UPDATE users SET id = id WHERE id = $1
+         RETURNING id, username, discriminator, email, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key, email_verified",
+    ).bind(user_id).fetch_optional(&mut **transaction).await?.ok_or(DbError::NotFound)?;
+    let (password_hash,): (String,) =
+        sqlx::query_as("SELECT password_hash FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_one(&mut **transaction)
+            .await?;
+    if password_hash != verified_password_hash {
+        return Err(DbError::Conflict(
+            "The account password changed during identity setup. Sign in again.".into(),
+        ));
+    }
+    let active = sqlx::query(
+        "UPDATE auth_sessions SET id = id WHERE id = $1 AND user_id = $2
+         AND revoked_at IS NULL AND expires_at > $3",
+    )
+    .bind(session_id)
+    .bind(user_id)
+    .bind(datetime_to_db_text(Utc::now()))
+    .execute(&mut **transaction)
+    .await?;
+    if active.rows_affected() != 1 {
+        return Err(DbError::Conflict(
+            "The login session ended during identity setup. Sign in again.".into(),
+        ));
+    }
+    Ok(current)
+}
+
+pub async fn detach_identity_in_transaction(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Any>,
+    user_id: i64,
+    session_id: &str,
+    verified_password_hash: &str,
+) -> Result<(UserRow, bool), DbError> {
+    let mut current =
+        lock_identity_account(transaction, user_id, session_id, verified_password_hash).await?;
+    sqlx::query("UPDATE users SET public_key = NULL, updated_at = $2 WHERE id = $1")
+        .bind(user_id)
+        .bind(datetime_to_db_text(Utc::now()))
+        .execute(&mut **transaction)
+        .await?;
+    sqlx::query("UPDATE auth_sessions SET revoked_at = $2, revoked_reason = 'public_key_detached' WHERE user_id = $1 AND revoked_at IS NULL")
+        .bind(user_id).bind(datetime_to_db_text(Utc::now())).execute(&mut **transaction).await?;
+    let removed = current.public_key.take().is_some();
+    Ok((current, removed))
+}
+
+/// Resolve public identity observers from current persistent relationships.
+/// UNION gives each account one notification even when it shares several
+/// guilds and conversations. No profile loads or variable-length IN clauses
+/// are needed. Call inside the credential transaction so a read failure also
+/// rolls back the credential change and session rotation.
+pub async fn identity_observer_ids_in_transaction(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Any>,
+    user_id: i64,
+) -> Result<Vec<i64>, DbError> {
+    let rows: Vec<(i64,)> = sqlx::query_as(
+        "SELECT id AS user_id FROM users WHERE id = $1
+         UNION
+         SELECT peer.user_id FROM members own
+         INNER JOIN members peer ON peer.guild_id = own.guild_id
+         WHERE own.user_id = $1
+         UNION
+         SELECT peer.user_id FROM dm_recipients own
+         INNER JOIN dm_recipients peer ON peer.channel_id = own.channel_id
+         INNER JOIN channels c ON c.id = own.channel_id
+         WHERE own.user_id = $1 AND c.channel_type IN (1, 3)
+         UNION
+         SELECT target_id AS user_id FROM relationships
+         WHERE user_id = $1 AND rel_type = 1",
+    )
+    .bind(user_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
+/// A password change must not commit while an attached login key or another
+/// login session survives a failed revocation. Recheck the verified password
+/// and caller session under the same lock used by identity enrollment.
+pub async fn change_password_credential_in_transaction(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Any>,
+    user_id: i64,
+    session_id: &str,
+    verified_password_hash: &str,
+    new_password_hash: &str,
+) -> Result<(UserRow, bool), DbError> {
+    let mut user =
+        lock_identity_account(transaction, user_id, session_id, verified_password_hash).await?;
+    let removed = replace_password_credential(
+        transaction,
+        &mut user,
+        new_password_hash,
+        Some(session_id),
+        "password_changed",
+    )
+    .await?;
+    Ok((user, removed))
+}
+
+/// The initial token lookup is only a hint. Acquire the user write lock before
+/// consuming the still-valid, same-user token, preventing stale read upgrades
+/// on SQLite and serializing different reset links for the same account.
+pub async fn reset_password_credential_in_transaction(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Any>,
+    user_id: i64,
+    token_hash: &str,
+    new_password_hash: &str,
+) -> Result<Option<(UserRow, bool)>, DbError> {
+    let Some(mut user) = sqlx::query_as::<_, UserRow>(
+        "UPDATE users SET id = id WHERE id = $1
+         RETURNING id, username, discriminator, email, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key, email_verified",
+    ).bind(user_id).fetch_optional(&mut **transaction).await? else {
+        return Ok(None);
+    };
+    let now = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let consumed = sqlx::query(
+        "UPDATE password_reset_tokens SET used_at = $3
+         WHERE token_hash = $1 AND user_id = $2 AND used_at IS NULL AND expires_at > $3",
+    )
+    .bind(token_hash)
+    .bind(user_id)
+    .bind(now)
+    .execute(&mut **transaction)
+    .await?;
+    if consumed.rows_affected() != 1 {
+        return Ok(None);
+    }
+    let removed = replace_password_credential(
+        transaction,
+        &mut user,
+        new_password_hash,
+        None,
+        "password_reset",
+    )
+    .await?;
+    Ok(Some((user, removed)))
+}
+
+async fn replace_password_credential(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Any>,
+    user: &mut UserRow,
+    new_password_hash: &str,
+    keep_session_id: Option<&str>,
+    reason: &str,
+) -> Result<bool, DbError> {
+    let now = datetime_to_db_text(Utc::now());
+    sqlx::query(
+        "UPDATE users SET password_hash = $2, public_key = NULL, updated_at = $3 WHERE id = $1",
+    )
+    .bind(user.id)
+    .bind(new_password_hash)
+    .bind(&now)
+    .execute(&mut **transaction)
+    .await?;
+    let sql = if keep_session_id.is_some() {
+        "UPDATE auth_sessions SET revoked_at = $2, revoked_reason = $3
+         WHERE user_id = $1 AND revoked_at IS NULL AND id != $4"
+    } else {
+        "UPDATE auth_sessions SET revoked_at = $2, revoked_reason = $3
+         WHERE user_id = $1 AND revoked_at IS NULL"
+    };
+    let mut query = sqlx::query(sql).bind(user.id).bind(&now).bind(reason);
+    if let Some(id) = keep_session_id {
+        query = query.bind(id);
+    }
+    query.execute(&mut **transaction).await?;
+    Ok(user.public_key.take().is_some())
+}
+
+pub async fn lock_identity_attachment(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Any>,
+    user_id: i64,
+    session_id: &str,
+    verified_password_hash: &str,
+    expected_public_key: Option<&str>,
+    public_key: &str,
+) -> Result<(UserRow, bool), DbError> {
+    let current =
+        lock_identity_account(transaction, user_id, session_id, verified_password_hash).await?;
+    let current_key = current.public_key.as_deref().map(str::to_ascii_lowercase);
+    let changed = current_key.as_deref() != Some(public_key);
+    if !changed && current.public_key.as_deref() == Some(public_key) {
+        return Ok((current, false));
+    }
+    if changed && current_key.as_deref() != expected_public_key {
+        return Err(DbError::Conflict("The account identity changed. Restore its current identity or explicitly confirm replacement.".into()));
+    }
+    let updated = sqlx::query_as::<_, UserRow>(
+        "UPDATE users SET public_key = $2, updated_at = $3 WHERE id = $1
+         RETURNING id, username, discriminator, email, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key, email_verified",
+    ).bind(user_id).bind(public_key.to_ascii_lowercase()).bind(datetime_to_db_text(Utc::now()))
+        .fetch_one(&mut **transaction).await;
+    let updated = match updated {
+        Err(sqlx::Error::Database(error)) if error.is_unique_violation() => {
+            return Err(DbError::Conflict(
+                "This public key is already in use by another account".into(),
+            ));
+        }
+        result => result?,
+    };
+    if changed {
+        sqlx::query("UPDATE auth_sessions SET revoked_at = $2, revoked_reason = 'public_key_rotated' WHERE user_id = $1 AND revoked_at IS NULL")
+        .bind(user_id).bind(datetime_to_db_text(Utc::now())).execute(&mut **transaction).await?;
+    }
+    Ok((updated, changed))
 }
 
 /// Detach the Ed25519 login key from an account. Returns `true` when a key was
@@ -961,9 +1214,9 @@ pub async fn get_user_by_public_key(
 ) -> Result<Option<UserRow>, DbError> {
     let row = sqlx::query_as::<_, UserRow>(
         "SELECT id, username, discriminator, email, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key, email_verified
-         FROM users WHERE public_key = $1",
+         FROM users WHERE lower(public_key) = lower($1)",
     )
-    .bind(public_key)
+    .bind(public_key.to_ascii_lowercase())
     .fetch_optional(pool)
     .await?;
     Ok(row)
@@ -1072,7 +1325,7 @@ pub async fn create_user_from_pubkey_typed(
     .bind(username)
     .bind(&placeholder_email)
     .bind(display_name)
-    .bind(public_key)
+    .bind(public_key.to_ascii_lowercase())
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -1127,7 +1380,7 @@ pub async fn create_user_from_pubkey_as_first_admin_typed(
     .bind(username)
     .bind(&placeholder_email)
     .bind(display_name)
-    .bind(public_key)
+    .bind(public_key.to_ascii_lowercase())
     .bind(flags)
     .fetch_one(&mut *tx)
     .await?;

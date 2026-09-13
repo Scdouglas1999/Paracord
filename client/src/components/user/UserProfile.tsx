@@ -1,14 +1,15 @@
+import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
+import { useSelectedGuildId } from '../../hooks/useGuilds';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { MessageSquare, UserPlus, Ban, Users, CalendarDays, Link2, ShieldCheck, ShieldAlert, QrCode, Copy, Flag, Radio, BadgeCheck, StickyNote, UserCheck, UserX, UserMinus } from 'lucide-react';
 import { isAdmin, type User } from '../../types/index';
 import { extractApiError } from '../../api/client';
-import { getApi } from '../../api/activeClient';
-import { dmApi } from '../../api/dms';
+import { activateChannel } from '../../lib/channelNavigation';
 import { relationshipApi } from '../../api/relationships';
+import { userApi } from '../../api/users';
 import { keysApi } from '../../api/keys';
 import { guildApi } from '../../api/guilds';
-import { useGuildStore } from '../../stores/guildStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { usePresenceStore } from '../../stores/presenceStore';
 import { useServerListStore } from '../../stores/serverListStore';
@@ -36,41 +37,13 @@ import { writeClipboardText } from '../../lib/clipboard';
 import { Modal } from '../ui/Modal';
 import QRCode from 'qrcode';
 
-interface MutualGuild {
-  id: string;
-  name: string;
-  icon_url?: string | null;
-}
+import type { PublicUserProfile } from '../../api/generated/PublicUserProfile';
 
-interface MutualFriend {
-  id: string;
-  username: string;
-  discriminator: number | string;
-  avatar_hash?: string | null;
-}
-
-interface ProfileData {
-  user: {
-    id: string;
-    username: string;
-    discriminator: number | string;
-    display_name?: string | null;
-    avatar_hash?: string | null;
-    banner_hash?: string | null;
-    bio?: string | null;
-    pronouns?: string | null;
-    linked_accounts?: Array<{ label: string; url: string }> | null;
-    flags: number;
-    created_at: string;
-  };
-  roles: Array<{ id: string; name: string; color: number }>;
-  mutual_guilds: MutualGuild[];
-  mutual_friends: MutualFriend[];
-  created_at: string;
-}
+/** The popup needs only an identity anchor; richer fields render when present. */
+type ProfileSubject = Pick<User, 'id' | 'username'> & Partial<User>;
 
 interface UserProfilePopupProps {
-  user: User;
+  user: ProfileSubject;
   position: { x: number; y: number };
   onClose: () => void;
   roles?: Array<{ id: string; name: string; color: number }>;
@@ -110,6 +83,7 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 
 export function UserProfilePopup({ user, position, onClose, roles = [] }: UserProfilePopupProps) {
   const navigate = useNavigate();
+  const channelScope = useCurrentAccountScope();
   const popupWidth = Math.min(21.5 * 16, window.innerWidth - 16);
   const estimatedHeight = Math.min(32.5 * 16, window.innerHeight - 16);
   const fitsLeft = position.x - popupWidth - 16 > 0;
@@ -123,9 +97,9 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
   const [reportReason, setReportReason] = useState('');
   const [reportEvidence, setReportEvidence] = useState('');
   const [reportSubmitting, setReportSubmitting] = useState(false);
-  const activeGuildId = useGuildStore((s) => s.selectedGuildId);
+  const activeGuildId = useSelectedGuildId();
   const [now, setNow] = useState(() => Date.now());
-  const [profileData, setProfileData] = useState<ProfileData | null>(null);
+  const [profileData, setProfileData] = useState<PublicUserProfile | null>(null);
   const [identityFingerprint, setIdentityFingerprint] = useState<string | null>(null);
   const [identityVerified, setIdentityVerified] = useState(false);
   const [identityRotationWarning, setIdentityRotationWarning] = useState<string | null>(null);
@@ -162,8 +136,8 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
   // Fetch profile data from API
   useEffect(() => {
     let cancelled = false;
-    getApi()
-      .get<ProfileData>(`/users/${user.id}/profile`)
+    userApi
+      .getProfile(user.id)
       .then(({ data }) => {
         if (!cancelled) setProfileData(data);
       })
@@ -245,9 +219,8 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
   }, [showIdentityVerifyModal, verificationPayload]);
 
   // Merge roles: prefer API profile roles over passed-in roles
-  const displayRoles = profileData?.roles && profileData.roles.length > 0
-    ? profileData.roles
-    : roles;
+  const displayRoles: Array<{ id: string; name: string; color: number }> =
+    profileData?.roles && profileData.roles.length > 0 ? profileData.roles : roles;
 
   const mutualGuilds = profileData?.mutual_guilds ?? [];
   const mutualFriends = profileData?.mutual_friends ?? [];
@@ -275,7 +248,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
     .filter((entry): entry is { label: string; url: string } => Boolean(entry));
   const createdAt = profileData?.created_at ?? profileData?.user?.created_at ?? user.created_at;
   const isBotUser = user.bot;
-  const isStaffUser = isAdmin(profileData?.user?.flags ?? user.flags);
+  const isStaffUser = isAdmin(profileData?.user?.flags ?? user.flags ?? 0);
   const isStreaming = activity ? getActivityType(activity) === 1 : false;
   const avatarSrc = resolveUserAvatarUrl(
     profileData?.user?.avatar_hash ?? user.avatar_hash ?? user.avatar,
@@ -309,12 +282,9 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
   const handleMessage = async () => {
     try {
       setActionError(null);
-      const { data } = await dmApi.create(user.id);
-      const dmChannels = useChannelStore.getState().channelsByGuild[''] || [];
-      if (!dmChannels.some((c) => c.id === data.id)) {
-        useChannelStore.getState().setDmChannels([...dmChannels, data]);
-      }
-      useChannelStore.getState().selectChannel(data.id);
+      if (!channelScope) throw new Error('Sign in to this server before messaging.');
+      const data = await useChannelStore.getState().createDm(user.id, channelScope);
+      activateChannel(data);
       onClose();
       navigate(`/app/dms/${data.id}`);
     } catch (err) {

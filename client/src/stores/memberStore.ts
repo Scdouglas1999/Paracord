@@ -1,116 +1,179 @@
 import { create } from 'zustand';
 import type { Member, User } from '../types';
-import { guildApi } from '../api/guilds';
+import { createGuildApi } from '../api/guilds';
 import { extractApiError } from '../api/client';
+import { captureOperationContext, type OperationContext } from '../lib/operationContext';
+import { accountScopeKey, entityScopeKey, entityKeyBelongsToScope, type AccountScope } from '../lib/serverScope';
 import { toast } from './toastStore';
 import { registerSessionReset } from './sessionReset';
+import { registerAccountHistoryReset } from '../lib/databaseHistory';
 
 interface MemberState {
-  // Members indexed by guild ID
+  /** Keys include the server, authenticated account and guild. */
   members: Map<string, Member[]>;
   membersLoaded: Record<string, boolean>;
-  isLoading: boolean;
-
-  fetchMembers: (guildId: string) => Promise<void>;
-  getMembersForGuild: (guildId: string) => Member[];
-
-  // Gateway event handlers
-  addMember: (guildId: string, member: Member) => void;
-  removeMember: (guildId: string, userId: string) => void;
-  updateMember: (guildId: string, member: Partial<Member> & { user: { id: string } }) => void;
-  updateUserIdentity: (user: User) => void;
-  /** Drop every cached member list. Called on logout. */
+  loading: Record<string, boolean>;
+  fetchMembers: (guildId: string, scope: AccountScope) => Promise<void>;
+  addMember: (guildId: string, member: Member, scope: AccountScope) => void;
+  removeMember: (guildId: string, userId: string, scope: AccountScope) => void;
+  updateMember: (guildId: string, member: MemberPatch, scope: AccountScope) => void;
+  updateUserIdentity: (user: User, scope: AccountScope) => void;
+  resetAccount: (scope: AccountScope) => void;
   reset: () => void;
 }
 
-const _fetchInFlight = new Set<string>();
+type MemberPatch = Omit<Partial<Member>, 'user'> & { user: { id: string } & Partial<User> };
+type MemberMutation = { kind: 'delete' } | { kind: 'upsert'; member: Member } | { kind: 'patch'; member: MemberPatch };
+interface MemberRequest {
+  context: OperationContext;
+  promise: Promise<void>;
+  mutations: Map<string, MemberMutation>;
+}
+const requests = new Map<string, MemberRequest>();
+const MAX_PENDING_MEMBERS = 10_000;
+const scopes = new Map<string, string>();
 
-export const useMemberStore = create<MemberState>()((set, get) => ({
-  members: new Map(),
-  membersLoaded: {},
-  isLoading: false,
+function applyMutation(members: Member[], userId: string, mutation: MemberMutation): Member[] {
+  if (mutation.kind === 'delete') return members.filter(member => member.user.id !== userId);
+  if (mutation.kind === 'upsert') return members.some(member => member.user.id === userId)
+    ? members.map(member => member.user.id === userId ? mutation.member : member)
+    : [...members, mutation.member];
+  return members.map(member => member.user.id === userId
+    ? { ...member, ...mutation.member, user: { ...member.user, ...mutation.member.user } }
+    : member);
+}
 
-  fetchMembers: async (guildId) => {
-    if (_fetchInFlight.has(guildId)) return;
-    _fetchInFlight.add(guildId);
-    set({ isLoading: true });
-    try {
-      const { data } = await guildApi.getMembers(guildId);
-      set((state) => {
-        const members = new Map(state.members);
-        members.set(guildId, data);
-        const membersLoaded = { ...state.membersLoaded, [guildId]: true };
-        return { members, membersLoaded, isLoading: false };
+function reconcileSnapshot(snapshot: Member[], mutations: Map<string, MemberMutation>): Member[] {
+  const members = new Map(snapshot.map(member => [member.user.id, member]));
+  for (const [userId, mutation] of mutations) {
+    if (mutation.kind === 'delete') {
+      members.delete(userId);
+    } else if (mutation.kind === 'upsert') {
+      members.set(userId, mutation.member);
+    } else {
+      const existing = members.get(userId);
+      if (existing) members.set(userId, {
+        ...existing, ...mutation.member, user: { ...existing.user, ...mutation.member.user },
       });
-    } catch (err) {
-      set({ isLoading: false });
-      toast.error(`Failed to load members: ${extractApiError(err)}`);
-    } finally {
-      _fetchInFlight.delete(guildId);
     }
-  },
+  }
+  return [...members.values()];
+}
 
-  getMembersForGuild: (guildId) => {
-    return get().members.get(guildId) || [];
-  },
+function recordMutation(key: string, userId: string, mutation: MemberMutation) {
+  const pending = requests.get(key);
+  if (!pending || pending.context.signal.aborted) return;
+  if (!pending.mutations.has(userId) && pending.mutations.size >= MAX_PENDING_MEMBERS) {
+    pending.context.dispose();
+    useMemberStore.setState(state => ({ membersLoaded: { ...state.membersLoaded, [key]: false } }));
+    toast.error('Member activity exceeded this snapshot. Reopen the member list to refresh.');
+    return;
+  }
+  const prior = pending.mutations.get(userId);
+  // Coalesce fields, never closures or event arrays: repeated updates for a
+  // single member cannot grow the journal or the reconciliation call stack.
+  if (mutation.kind === 'patch' && prior) {
+    if (prior.kind === 'delete') return;
+    pending.mutations.set(userId, {
+      ...prior,
+      member: { ...prior.member, ...mutation.member, user: { ...prior.member.user, ...mutation.member.user } },
+    } as MemberMutation);
+  } else {
+    pending.mutations.set(userId, mutation);
+  }
+}
 
-  addMember: (guildId, member) =>
-    set((state) => {
+export const useMemberStore = create<MemberState>()((set, get) => {
+  const apply = (guildId: string, scope: AccountScope, userId: string, mutation: MemberMutation) => {
+    const key = entityScopeKey(scope, guildId);
+    scopes.set(key, accountScopeKey(scope));
+    recordMutation(key, userId, mutation);
+    set(state => {
       const members = new Map(state.members);
-      const existing = members.get(guildId) || [];
-      if (existing.some((m) => m.user.id === member.user.id)) return state;
-      members.set(guildId, [...existing, member]);
+      members.set(key, applyMutation(members.get(key) ?? [], userId, mutation));
       return { members };
-    }),
-
-  removeMember: (guildId, userId) =>
-    set((state) => {
-      const members = new Map(state.members);
-      const existing = members.get(guildId) || [];
-      members.set(
-        guildId,
-        existing.filter((m) => m.user.id !== userId)
-      );
-      return { members };
-    }),
-
-  updateMember: (guildId, memberData) =>
-    set((state) => {
-      const members = new Map(state.members);
-      const existing = members.get(guildId) || [];
-      members.set(
-        guildId,
-        existing.map((m) =>
-          m.user.id === memberData.user.id ? { ...m, ...memberData } : m
-        )
-      );
-      return { members };
-    }),
-
-  updateUserIdentity: (user) =>
-    set((state) => {
-      const members = new Map(state.members);
-      for (const [guildId, existing] of members) {
-        members.set(
-          guildId,
-          existing.map((member) =>
-            member.user.id === user.id
-              ? { ...member, user: { ...member.user, ...user } }
-              : member
-          ),
-        );
+    });
+  };
+  return {
+    members: new Map(),
+    membersLoaded: {},
+    loading: {},
+    fetchMembers: async (guildId, scope) => {
+      const key = entityScopeKey(scope, guildId);
+      const existing = requests.get(key);
+      if (existing) return existing.promise;
+      let context: OperationContext;
+      try {
+        context = captureOperationContext(scope.serverId);
+        if (context.scope.userId !== scope.userId) {
+          context.dispose();
+          return;
+        }
+      } catch {
+        return; // No authenticated connection exists for this view.
       }
-      return { members };
-    }),
+      const request: MemberRequest = { context, mutations: new Map(), promise: Promise.resolve() };
+      requests.set(key, request);
+      context.signal.addEventListener('abort', () => {
+        if (requests.get(key) !== request) return;
+        requests.delete(key);
+        set(state => ({ loading: { ...state.loading, [key]: false } }));
+      }, { once: true });
+      scopes.set(key, accountScopeKey(scope));
+      set(state => ({ loading: { ...state.loading, [key]: true } }));
+      request.promise = (async () => {
+        try {
+          const { data } = await createGuildApi(() => context.api).getMembers(guildId);
+          context.assertCurrent();
+          if (requests.get(key) !== request) return;
+          const reconciled = reconcileSnapshot(data, request.mutations);
+          set(state => ({
+            members: new Map(state.members).set(key, reconciled),
+            membersLoaded: { ...state.membersLoaded, [key]: true },
+          }));
+        } catch (err) {
+          if (!context.signal.aborted && requests.get(key) === request) {
+            toast.error(`Failed to load members: ${extractApiError(err)}`);
+          }
+        } finally {
+          context.dispose();
+        }
+      })();
+      return request.promise;
+    },
+    addMember: (guildId, member, scope) => apply(guildId, scope, member.user.id, { kind: 'upsert', member }),
+    removeMember: (guildId, userId, scope) => apply(guildId, scope, userId, { kind: 'delete' }),
+    updateMember: (guildId, member, scope) => apply(guildId, scope, member.user.id, { kind: 'patch', member }),
+    updateUserIdentity: (user, scope) => {
+      const owner = accountScopeKey(scope);
+      const mutation: MemberMutation = { kind: 'patch', member: { user } };
+      const members = new Map(get().members);
+      for (const [key, keyScope] of scopes) {
+        if (keyScope !== owner) continue;
+        recordMutation(key, user.id, mutation);
+        const existing = members.get(key);
+        if (existing) members.set(key, applyMutation(existing, user.id, mutation));
+      }
+      set({ members });
+    },
+    resetAccount: scope => {
+      const owner = accountScopeKey(scope);
+      for (const request of requests.values()) if (request.context.key === owner) request.context.dispose();
+      for (const [key, keyScope] of scopes) if (keyScope === owner) scopes.delete(key);
+      const retain = <T,>(values: Record<string, T>) => Object.fromEntries(Object.entries(values).filter(([id]) => !entityKeyBelongsToScope(id, scope)));
+      set(state => ({
+        members: new Map([...state.members].filter(([id]) => !entityKeyBelongsToScope(id, scope))),
+        membersLoaded: retain(state.membersLoaded), loading: retain(state.loading),
+      }));
+    },
+    reset: () => {
+      for (const request of requests.values()) request.context.dispose();
+      requests.clear();
+      scopes.clear();
+      set({ members: new Map(), membersLoaded: {}, loading: {} });
+    },
+  };
+});
 
-  reset: () => {
-    // Clear the in-flight guard too, or the first fetch after the next login is
-    // dropped as a duplicate of one that will never resolve into this store.
-    _fetchInFlight.clear();
-    set({ members: new Map(), membersLoaded: {}, isLoading: false });
-  },
-}));
-
-// Cleared on logout; see `sessionReset` for why this is a registration
-// rather than a direct import from `authStore`.
 registerSessionReset('members', () => useMemberStore.getState().reset());
+registerAccountHistoryReset('members', scope => useMemberStore.getState().resetAccount(scope));

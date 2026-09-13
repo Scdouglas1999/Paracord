@@ -22,6 +22,32 @@ default media path and needs no extra services. LiveKit is an opt-in fallback
 > `.env` is entirely optional and only holds overrides (see `.env.example`). It
 > is git-ignored; only `.env.example` is tracked. Do not commit secrets.
 
+## No-clone quick start
+
+You do not need a git checkout at all — the same `docker-compose.yml` works on
+its own. Download just that file, then either pull the image CI publishes to
+GHCR, or build straight from the remote repository:
+
+```bash
+curl -fsSL -o docker-compose.yml \
+  https://raw.githubusercontent.com/Scdouglas1999/Paracord/main/docker-compose.yml
+
+# Pull the prebuilt image published to GHCR by CI on each main-branch build:
+PARACORD_PULL_POLICY=missing docker compose up -d
+
+# …or build from the remote git context instead (slower, no image needed):
+PARACORD_BUILD_CONTEXT=https://github.com/Scdouglas1999/Paracord.git#main \
+  docker compose up -d
+```
+
+If the pull fails with `denied`/`not found`, the GHCR package is not marked
+public on your fork — either flip the package's visibility in GitHub settings,
+or use the `PARACORD_BUILD_CONTEXT` variant which needs no published image.
+
+With neither override set, `docker compose up -d` in a checkout builds the local
+source exactly as before — the defaults (`pull_policy: build`, `build: .`) keep
+existing behaviour unchanged.
+
 ## TLS & Voice
 
 By default the container serves **plain HTTP on port 8090** — `PARACORD_TLS_ENABLED=false`
@@ -62,7 +88,7 @@ All configuration can be overridden via environment variables in `docker-compose
 | `PARACORD_LIVEKIT_HTTP_URL` | `http://livekit:7880` | Internal LiveKit HTTP URL |
 | `PARACORD_LIVEKIT_PUBLIC_URL` | (derived from server) | Public LiveKit URL for clients |
 | `PARACORD_LIVEKIT_API_KEY` | `paracordlocal` in compose | LiveKit API key id (not a secret); must match the LiveKit service |
-| `PARACORD_LIVEKIT_API_SECRET` | local dev default | Shared LiveKit secret; defaults to a local dev value and is read by both the paracord and livekit services. Override in `.env` before exposing LiveKit to a network. `openssl rand -hex 32` |
+| `PARACORD_LIVEKIT_API_SECRET` | (unset/empty) | Shared LiveKit secret; read by both the paracord and livekit services. There is **no** built-in default — the server refuses to start with a missing/placeholder secret when LiveKit is actually in use. Set a strong random value in `.env` before enabling the `livekit` profile: `openssl rand -hex 32` |
 
 ## Volume Mounts
 
@@ -112,9 +138,10 @@ LiveKit release.
 
 ### Production LiveKit Configuration
 
-Both the paracord and livekit services read `PARACORD_LIVEKIT_API_SECRET`, which
-defaults to a local dev value so the fallback works with zero configuration. Set
-a strong random value in `.env` before exposing LiveKit to a network:
+Both the paracord and livekit services read `PARACORD_LIVEKIT_API_SECRET`. It has
+**no built-in default**: when the secret is empty the paracord service refuses to
+start with LiveKit routed (and the `livekit` service gets an empty key). Set a
+strong random value in `.env` before enabling the profile:
 
 ```dotenv
 # .env
@@ -136,7 +163,7 @@ comes from the shared variable):
 ```yaml
 livekit:
   environment:
-    - "LIVEKIT_KEYS=your-strong-api-key: ${PARACORD_LIVEKIT_API_SECRET:-paracord-local-dev-livekit-secret}"
+    - "LIVEKIT_KEYS=your-strong-api-key: ${PARACORD_LIVEKIT_API_SECRET}"
 ```
 
 ## Building Only the Server Image

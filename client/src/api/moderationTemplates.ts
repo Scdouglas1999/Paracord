@@ -28,13 +28,13 @@ export interface ApplyModerationTemplateRequest {
 }
 
 export const moderationTemplateApi = {
-  list: (guildId: string) =>
+  list: async (guildId: string) =>
     getApi().get<ModerationTemplate[]>(`/guilds/${guildId}/moderation/templates`),
-  create: (guildId: string, data: CreateModerationTemplateRequest) =>
+  create: async (guildId: string, data: CreateModerationTemplateRequest) =>
     getApi().post<ModerationTemplate>(`/guilds/${guildId}/moderation/templates`, data),
-  delete: (guildId: string, templateId: string) =>
+  delete: async (guildId: string, templateId: string) =>
     getApi().delete(`/guilds/${guildId}/moderation/templates/${templateId}`),
-  apply: (guildId: string, templateId: string, data: ApplyModerationTemplateRequest) =>
+  apply: async (guildId: string, templateId: string, data: ApplyModerationTemplateRequest) =>
     getApi().post(`/guilds/${guildId}/moderation/templates/${templateId}/apply`, data),
 };
 

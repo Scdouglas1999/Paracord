@@ -1,8 +1,10 @@
+import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
+import { entityScopeKey as memberScopeKey } from '../../lib/serverScope';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Shield, Trash2, Plus, User, RotateCcw } from 'lucide-react';
 import { channelApi } from '../../api/channels';
 import { extractApiError } from '../../api/client';
-import type { ChannelOverwrite, Role } from '../../types';
+import type { ChannelOverwrite, Role, Member } from '../../types';
 import { Permissions } from '../../types';
 import { cn } from '../../lib/utils';
 import { useMemberStore } from '../../stores/memberStore';
@@ -10,6 +12,8 @@ import { LoadingSpinner, ErrorBanner } from '../ui/Feedback';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { displayName } from '../../lib/displayName';
+
+const EMPTY_MEMBERS: Member[] = [];
 
 interface ChannelPermissionsEditorProps {
   channelId: string;
@@ -126,14 +130,15 @@ export function ChannelPermissionsEditor({
   const [targetMode, setTargetMode] = useState<'role' | 'member'>('role');
   const [memberSearch, setMemberSearch] = useState('');
 
-  const { getMembersForGuild, fetchMembers, membersLoaded } = useMemberStore();
-  const guildMembers = getMembersForGuild(guildId);
+  const memberScope = useCurrentAccountScope();
+  const { members, fetchMembers, membersLoaded } = useMemberStore();
+  const guildMembers = (memberScope ? members.get(memberScopeKey(memberScope, guildId)) : undefined) ?? EMPTY_MEMBERS;
 
   useEffect(() => {
-    if (!membersLoaded[guildId]) {
-      void fetchMembers(guildId);
+    if (memberScope && !membersLoaded[memberScopeKey(memberScope, guildId)]) {
+      void fetchMembers(guildId, memberScope);
     }
-  }, [guildId, membersLoaded, fetchMembers]);
+  }, [guildId, membersLoaded, fetchMembers, memberScope]);
 
   const filteredMembers = useMemo(() => {
     if (!memberSearch.trim()) return guildMembers.slice(0, 20);

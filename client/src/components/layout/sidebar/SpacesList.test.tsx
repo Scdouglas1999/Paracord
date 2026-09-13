@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SpacesList } from './SpacesList';
 import { useServerListStore } from '../../../stores/serverListStore';
 import { useAuthStore } from '../../../stores/authStore';
-import { useGuildStore } from '../../../stores/guildStore';
+import { useGuildStore, scopeGuild } from '../../../stores/guildStore';
 import { useUIStore } from '../../../stores/uiStore';
 import type { GuildSummary } from '../../../hooks/useUnifiedConversations';
 
@@ -20,7 +20,9 @@ vi.mock('../../../lib/guildSettingsAccess', () => ({
 }));
 
 function space(over: Partial<GuildSummary> & { id: string; name: string }): GuildSummary {
-  return { icon: null, serverId: 'srv-a', ...over };
+  const serverId = over.serverId ?? 'srv-a';
+  const scope = { serverId, userId: 'user-1' };
+  return { icon: null, serverId, scope, key: JSON.stringify([serverId, scope.userId, over.id]), ...over };
 }
 
 beforeEach(() => {
@@ -28,12 +30,12 @@ beforeEach(() => {
   canAccessSync.mockReset();
   canAccessSync.mockReturnValue(false);
   // Two connected servers — Spaces MERGES guilds across them (layout-spec §1).
-  useServerListStore.setState({ activeServerId: 'srv-a' });
+  useServerListStore.setState({ activeServerId: 'srv-a', servers: ['srv-a', 'srv-b'].map(id => ({ id, name: id, url: `https://${id}.test`, token: 'token', userId: 'user-1', user: { id: 'user-1' } as never, connected: true })) });
   useAuthStore.setState({ user: { id: 'user-1' } as never });
   useGuildStore.setState({
     guilds: [
-      { id: 'g1', name: 'Emerald HQ', owner_id: 'user-1' },
-      { id: 'g2', name: 'Weekend Crew', owner_id: 'other' },
+      scopeGuild({ id: 'g1', name: 'Emerald HQ', owner_id: 'user-1' } as never, { serverId: 'srv-a', userId: 'user-1' }),
+      scopeGuild({ id: 'g2', name: 'Weekend Crew', owner_id: 'other' } as never, { serverId: 'srv-b', userId: 'user-1' }),
     ] as never,
   });
   useUIStore.setState({ guildSettingsId: null });
@@ -74,7 +76,7 @@ describe('SpacesList', () => {
       space({ id: 'g1', name: 'Emerald HQ' }),
       space({ id: 'g2', name: 'Weekend Crew' }),
     ];
-    render(<SpacesList spaces={spaces} activeGuildId="g2" />);
+    render(<SpacesList spaces={spaces} activeGuildKey={spaces[1].key} />);
 
     const options = screen.getAllByRole('option');
     expect(options[0]).toHaveAttribute('aria-selected', 'false');
@@ -90,8 +92,8 @@ describe('SpacesList', () => {
     render(
       <SpacesList
         spaces={spaces}
-        activeGuildId="g2"
-        attentionGuildIds={new Set(['g1', 'g2'])}
+        activeGuildKey={spaces[1].key}
+        attentionGuildKeys={new Set(spaces.map(space => space.key))}
       />,
     );
 
@@ -155,4 +157,13 @@ describe('SpacesList', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Space settings' }));
     expect(useUIStore.getState().guildSettingsId).toBe('g1');
   });
+  it('highlights only the current server when guild IDs collide', () => {
+    render(<SpacesList spaces={[
+      space({ id: 'same', name: 'Space A', serverId: 'srv-a' }),
+      space({ id: 'same', name: 'Space B', serverId: 'srv-b' }),
+    ]} activeGuildKey={space({ id: 'same', name: 'Space A', serverId: 'srv-a' }).key} />);
+    expect(screen.getByRole('option', { name: 'Space A' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('option', { name: 'Space B' })).toHaveAttribute('aria-selected', 'false');
+  });
+
 });

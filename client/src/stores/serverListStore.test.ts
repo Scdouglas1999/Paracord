@@ -8,6 +8,7 @@ vi.mock('../lib/secureStorage', () => ({
 }));
 
 import { useServerListStore, resolveDefaultServerTarget } from './serverListStore';
+import { secureGet } from '../lib/secureStorage';
 
 function reset() {
   useServerListStore.setState({
@@ -64,6 +65,47 @@ describe('serverListStore', () => {
       const id2 = useServerListStore.getState().addServer('https://b.example.com', 'B');
       expect(id2).not.toBe(id1);
       expect(useServerListStore.getState().servers).toHaveLength(2);
+    });
+
+    it('does not alias URLs that collide under the former 32-bit hash', () => {
+      const first = useServerListStore.getState().addServer('https://example.test/Aa', 'A');
+      const second = useServerListStore.getState().addServer('https://example.test/BB', 'B');
+      expect(first).not.toBe(second);
+      expect(useServerListStore.getState().servers).toHaveLength(2);
+    });
+  });
+
+  it('requires a fresh authenticated profile when reconnect supplies a different credential', () => {
+    const store = useServerListStore.getState();
+    const id = store.addServer('https://example.test', 'A', 'old-token');
+    store.setAuthenticatedUser(id, { id: 'old-user', username: 'old-user', flags: 1 } as never);
+    store.addServer('https://example.test', 'A', 'new-token');
+    expect(store.getServer(id)?.user).toBeUndefined();
+    expect(store.getServer(id)?.userId).toBeUndefined();
+    expect(store.getServer(id)?.token).toBe('new-token');
+  });
+
+  describe('credential hydration ownership', () => {
+    it('does not restore credentials that finish loading after logout', async () => {
+      const id = useServerListStore.getState().addServer('https://example.test', 'A');
+      let finish!: (token: string | null) => void;
+      vi.mocked(secureGet).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+      const pending = useServerListStore.getState().hydrateTokens();
+      await useServerListStore.getState().clearSessions();
+      finish('old-access-token');
+      await pending;
+      expect(useServerListStore.getState().getServer(id)?.token).toBeNull();
+    });
+
+    it('does not replace a newly issued credential with an older stored token', async () => {
+      const id = useServerListStore.getState().addServer('https://example.test', 'A');
+      let finish!: (token: string | null) => void;
+      vi.mocked(secureGet).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+      const pending = useServerListStore.getState().hydrateTokens();
+      useServerListStore.getState().updateToken(id, 'new-access-token');
+      finish('old-access-token');
+      await pending;
+      expect(useServerListStore.getState().getServer(id)?.token).toBe('new-access-token');
     });
   });
 

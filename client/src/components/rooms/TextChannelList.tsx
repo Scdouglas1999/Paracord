@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from 'react-router';
 import { Bell, Hash, MessageSquare, MessagesSquare } from 'lucide-react';
 import { buildChannelGroups } from '../../lib/features/channelGroups';
 import { useUnreadCounts } from '../../hooks/useUnreadCounts';
-import { getVersionedJson } from '../../lib/versionedStorage';
+import { useMutedGuilds } from '../../hooks/useMutedGuilds';
 import { ChannelType, type Channel } from '../../types';
 import { cn } from '../../lib/utils';
 
@@ -18,26 +18,18 @@ function isVoiceLike(channel: Channel): boolean {
   return type === ChannelType.Voice || type === ChannelType.Stage;
 }
 
-function readMutedGuildIds(): string[] {
-  try {
-    return getVersionedJson<string[]>('muted-guilds', [], ['muted-guilds']);
-  } catch {
-    return [];
-  }
-}
-
 /**
  * Grouped text-channel list for the guild home — categories preserved via
  * buildChannelGroups, unread/mention state from useUnreadCounts (single-arg
- * mutedGuildIds signature; resolves per-server internally). Each row follows the
+ * account-qualified mute keys). Each row follows the
  * design-spec Nav-item recipe: active = --accent-tint + a 3px teal left bar, an
  * 8px emerald unread dot, and an emerald mention badge — never a full fill.
  */
 export function TextChannelList({ guildId, channels }: TextChannelListProps) {
   const navigate = useNavigate();
   const location = useLocation();
-  const mutedGuildIds = useMemo(readMutedGuildIds, []);
-  const { isChannelUnread, channelMentionCounts } = useUnreadCounts(mutedGuildIds);
+  const { mutedGuildKeys } = useMutedGuilds();
+  const { isChannelUnread, channelMentionCounts } = useUnreadCounts(mutedGuildKeys);
 
   const groups = useMemo(
     () => buildChannelGroups(channels.filter((c) => !isVoiceLike(c))),

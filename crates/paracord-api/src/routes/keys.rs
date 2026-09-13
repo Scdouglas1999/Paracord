@@ -3,8 +3,9 @@ use axum::{
     Json,
 };
 use paracord_core::AppState;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 use crate::error::ApiError;
 use crate::middleware::AuthUser;
@@ -24,21 +25,25 @@ fn is_valid_base64(s: &str, expected_len: usize) -> bool {
     })
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct SignedPrekeyUpload {
     pub id: i64,
     pub public_key: String,
     pub signature: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct OneTimePrekeyUpload {
     pub id: i64,
     pub public_key: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct UploadKeysRequest {
+    /// An immutable publication ID and enrolled identity are required together.
+    /// Legacy clients may omit both; new clients persist both before sending.
+    pub request_id: Option<String>,
+    pub expected_identity_key: Option<String>,
     pub signed_prekey: Option<SignedPrekeyUpload>,
     pub one_time_prekeys: Option<Vec<OneTimePrekeyUpload>>,
     /// Long-lived last-resort one-time prekey. Handed out (without deletion) as
@@ -52,10 +57,19 @@ pub async fn upload_keys(
     State(state): State<AppState>,
     auth: AuthUser,
     Json(body): Json<UploadKeysRequest>,
-) -> Result<Json<Value>, ApiError> {
-    let mut signed_prekey_id: Option<i64> = None;
-    let mut opk_stored: u64 = 0;
-
+) -> Result<Json<paracord_db::prekeys::PrekeyPublication>, ApiError> {
+    match (&body.request_id, &body.expected_identity_key) {
+        (Some(id), Some(key)) if uuid::Uuid::parse_str(id).is_ok() && key.len() == 64
+            && key.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) => {},
+        (None, None) => {},
+        _ => return Err(ApiError::BadRequest("A valid publication UUID and lowercase hexadecimal enrolled identity key are required together.".into())),
+    }
+    let request_hash = format!(
+        "{:x}",
+        Sha256::digest(
+            serde_json::to_vec(&body).map_err(|error| ApiError::Internal(error.into()))?
+        )
+    );
     if let Some(spk) = &body.signed_prekey {
         if !is_valid_base64(&spk.public_key, EXPECTED_KEY_BASE64_LEN) {
             return Err(ApiError::BadRequest(
@@ -67,16 +81,6 @@ pub async fn upload_keys(
                 "Invalid signed prekey signature format (expected 88 base64 chars)".into(),
             ));
         }
-        let row = paracord_db::prekeys::upsert_signed_prekey(
-            &state.db,
-            spk.id,
-            auth.user_id,
-            &spk.public_key,
-            &spk.signature,
-        )
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-        signed_prekey_id = Some(row.id);
     }
 
     if let Some(opks) = &body.one_time_prekeys {
@@ -96,40 +100,91 @@ pub async fn upload_keys(
                 ));
             }
         }
-        let keys: Vec<(i64, String)> = opks.iter().map(|k| (k.id, k.public_key.clone())).collect();
-        opk_stored = paracord_db::prekeys::upload_one_time_prekeys(&state.db, auth.user_id, &keys)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     }
 
-    let mut last_resort_prekey_id: Option<i64> = None;
     if let Some(lrk) = &body.last_resort_prekey {
         if !is_valid_base64(&lrk.public_key, EXPECTED_KEY_BASE64_LEN) {
             return Err(ApiError::BadRequest(
                 "Invalid last-resort prekey public_key format (expected 44 base64 chars)".into(),
             ));
         }
-        paracord_db::prekeys::upsert_last_resort_prekey(
-            &state.db,
-            lrk.id,
-            auth.user_id,
-            &lrk.public_key,
-        )
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-        last_resort_prekey_id = Some(lrk.id);
     }
 
-    let total = paracord_db::prekeys::count_one_time_prekeys(&state.db, auth.user_id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let keys: Vec<_> = body
+        .one_time_prekeys
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .map(|key| (key.id, key.public_key.clone()))
+        .collect();
+    let publication = paracord_db::prekeys::publish_prekeys(
+        &state.db,
+        auth.user_id,
+        body.signed_prekey
+            .as_ref()
+            .map(|key| (key.id, key.public_key.as_str(), key.signature.as_str())),
+        &keys,
+        body.last_resort_prekey
+            .as_ref()
+            .map(|key| (key.id, key.public_key.as_str())),
+        body.request_id
+            .as_ref()
+            .zip(body.expected_identity_key.as_ref())
+            .map(|(request_id, expected_identity_key)| {
+                paracord_db::prekeys::PrekeyPublicationIdentity {
+                    request_id,
+                    expected_identity_key,
+                    request_hash: &request_hash,
+                }
+            }),
+    )
+    .await?;
 
-    Ok(Json(json!({
-        "signed_prekey_id": signed_prekey_id,
-        "one_time_prekeys_stored": opk_stored,
-        "one_time_prekeys_total": total,
-        "last_resort_prekey_id": last_resort_prekey_id,
-    })))
+    // A peer's encryption readiness depends on published prekeys, not only on an
+    // enrolled identity key. Republish the same public profile hint the identity
+    // routes use so a conversation that could not be encrypted a moment ago is
+    // re-checked by its current observers. The hint is advisory: the channel
+    // capability endpoint remains authoritative, so a failed audience read is
+    // logged rather than reported as a failed publication.
+    if publication.signed_prekey_id.is_some()
+        || publication.one_time_prekeys_total > 0
+        || publication.last_resort_prekey_id.is_some()
+    {
+        match publish_readiness_hint(&state, auth.user_id).await {
+            Ok(()) => {}
+            Err(error) => tracing::warn!(
+                user_id = auth.user_id,
+                error = %error,
+                "published prekeys but could not notify this account's observers"
+            ),
+        }
+    }
+
+    Ok(Json(publication))
+}
+
+/// Resolve the same observer audience the identity routes use and publish the
+/// account's public profile to it.
+async fn publish_readiness_hint(state: &AppState, user_id: i64) -> Result<(), ApiError> {
+    let Some(user) = paracord_db::users::get_user_by_id(&state.db, user_id).await? else {
+        return Err(ApiError::NotFound);
+    };
+    if user.public_key.is_none() {
+        return Ok(());
+    }
+    let mut transaction = state
+        .db
+        .begin()
+        .await
+        .map_err(|error| ApiError::Internal(anyhow::anyhow!(error.to_string())))?;
+    let observers =
+        paracord_db::users::identity_observer_ids_in_transaction(&mut transaction, user_id).await?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| ApiError::Internal(anyhow::anyhow!(error.to_string())))?;
+    super::auth::publish_identity_update(state, &user, observers);
+    Ok(())
 }
 
 /// GET /api/v1/users/{user_id}/keys -- Fetch peer's prekey bundle
@@ -195,4 +250,75 @@ pub async fn get_key_count(
         "signed_prekey_uploaded": has_spk,
         "last_resort_prekey_uploaded": has_last_resort,
     })))
+}
+
+#[derive(Serialize)]
+pub struct PublicSignedPrekey {
+    pub id: i64,
+    pub public_key: String,
+    pub signature: String,
+}
+
+#[derive(Serialize)]
+pub struct PublicOneTimePrekey {
+    pub id: i64,
+    pub public_key: String,
+}
+
+#[derive(Serialize)]
+pub struct OwnPublicKeysResponse {
+    pub identity_key: Option<String>,
+    pub signed_prekey: Option<PublicSignedPrekey>,
+    pub one_time_prekeys: Vec<PublicOneTimePrekey>,
+    pub last_resort_prekey: Option<PublicOneTimePrekey>,
+}
+
+/// GET /api/v1/users/@me/keys -- Inspect authenticated ownership without
+/// consuming a peer bundle or guessing which account owns local private keys.
+pub async fn get_own_keys(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<OwnPublicKeysResponse>, ApiError> {
+    let rows = paracord_db::prekeys::get_public_prekey_state(&state.db, auth.user_id).await?;
+    let first = rows.first().ok_or(ApiError::NotFound)?;
+    let signed_prekey = match (
+        first.signed_prekey_id,
+        first.signed_prekey_public_key.as_ref(),
+        first.signed_prekey_signature.as_ref(),
+    ) {
+        (Some(id), Some(key), Some(signature)) => Some(PublicSignedPrekey {
+            id,
+            public_key: key.clone(),
+            signature: signature.clone(),
+        }),
+        (None, None, None) => None,
+        _ => {
+            return Err(ApiError::Internal(anyhow::anyhow!(
+                "Incomplete published signed prekey"
+            )))
+        }
+    };
+    let mut response = OwnPublicKeysResponse {
+        identity_key: first.identity_key.clone(),
+        signed_prekey,
+        one_time_prekeys: Vec::new(),
+        last_resort_prekey: None,
+    };
+    for row in rows {
+        match (row.prekey_id, row.prekey_public_key, row.last_resort) {
+            (None, None, None) => {}
+            (Some(id), Some(public_key), Some(0)) => response
+                .one_time_prekeys
+                .push(PublicOneTimePrekey { id, public_key }),
+            (Some(id), Some(public_key), Some(1)) if response.last_resort_prekey.is_none() => {
+                response.last_resort_prekey = Some(PublicOneTimePrekey { id, public_key });
+            }
+            _ => {
+                return Err(ApiError::Internal(anyhow::anyhow!(
+                    "Invalid published one-time prekey state"
+                )))
+            }
+        }
+    }
+    Ok(Json(response))
 }

@@ -1,5 +1,7 @@
+import type { OperationContext } from '../operationContext';
 import type {
   MediaEngine,
+  MediaSessionContext,
   MediaStreamCapabilities,
   MediaStreamDiagnostics,
   PublishedTrackDescriptor,
@@ -508,10 +510,55 @@ export class TauriMediaEngine implements MediaEngine {
   private transportLostUnlisten: UnlistenFn | null = null;
   private transportLostCb: ((reason: string) => void) | null = null;
   private disconnecting = false;
+  private disposed = false;
+  private cameraRevision = 0;
+  private screenRevision = 0;
+  private disposePromise: Promise<void> | null = null;
+  private startScheduled = false;
+  readonly sessionOwnerId = crypto.randomUUID();
+  private removeAbortListener: (() => void) | null = null;
+  private account?: OperationContext;
+
+  private assertOpen(): void {
+    if (this.disposed) throw new DOMException('The native media session has ended.', 'AbortError');
+  }
+
+  private failKeyExchange(error: unknown): void {
+    if (this.disposed) return;
+    const reason = `Media encryption could not verify a participant: ${error instanceof Error ? error.message : String(error)}`;
+    this.transportLostCb?.(reason);
+    void this.disconnect();
+  }
+
+  private async invokeOwned(command: string, args?: Record<string, unknown>): Promise<unknown> {
+    this.assertOpen();
+    await tauriReady;
+    this.assertOpen();
+    const result = await invoke(command, { ...args, ownerId: this.sessionOwnerId });
+    this.assertOpen();
+    return result;
+  }
+
+  private async invokeCleanup(command: string, args?: Record<string, unknown>): Promise<unknown> {
+    await tauriReady;
+    return invoke(command, { ...args, ownerId: this.sessionOwnerId });
+  }
+
+  private async listenOwned(event: string, callback: (event: { payload: unknown }) => void): Promise<UnlistenFn> {
+    await tauriReady;
+    if (this.disposed) return () => {};
+    const unlisten = await listen(`${event}:${this.sessionOwnerId}`, value => {
+      if (!this.disposed) callback(value);
+    });
+    if (this.disposed) { unlisten(); return () => {}; }
+    return unlisten;
+  }
   // Remote screen-share audio tracks we've registered for. Playback happens in
   // the native cpal mixer (contract C4); the webview only drives the relay
   // track subscription, so we track subscribers to unregister on teardown.
   private screenShareAudioSubscribers = new Set<string>();
+  private audioSubscriptionReleases = new Map<string, () => void>();
+  private videoSubscriptionReleases = new Map<string, () => void>();
 
   // Native camera capture state. There is no JS getUserMedia / frame-extraction
   // path anymore (contract CAM4): capture, encode, and the self-view all live in
@@ -519,8 +566,17 @@ export class TauriMediaEngine implements MediaEngine {
   private cameraEventUnlisten: (() => void) | null = null;
   private cameraFailureCb: ((error: Error) => void) | null = null;
 
-  async connect(endpoint: string, token: string, certHash?: string): Promise<void> {
+  async connect(endpoint: string, token: string, certHash?: string, session?: MediaSessionContext): Promise<void> {
+    this.assertOpen();
+    if (session) {
+      this.account = session.account;
+      const abort = () => { void this.disconnect(); };
+      session.signal.addEventListener('abort', abort, { once: true });
+      this.removeAbortListener = () => session.signal.removeEventListener('abort', abort);
+      if (session.signal.aborted) { await this.disconnect(); this.assertOpen(); }
+    }
     await tauriReady;
+    this.assertOpen();
     if (!certHash) {
       throw new Error('native media server did not provide a TLS certificate pin');
     }
@@ -530,31 +586,40 @@ export class TauriMediaEngine implements MediaEngine {
     // starting the session so we don't miss early events on cold boot.
     if (this.listenerPromises.length > 0) {
       await Promise.all(this.listenerPromises);
+      this.assertOpen();
       this.listenerPromises = [];
     }
     const relayEndpoint = normalizeNativeRelayEndpoint(endpoint);
     try {
       const advertisedCapabilities = await this.getStreamCapabilities().catch(() => null);
-      await invoke('start_voice_session', {
+      this.assertOpen();
+      this.startScheduled = true;
+      await this.invokeOwned('start_voice_session', {
         endpoint: relayEndpoint,
         token,
         certHash,
         roomId: '',
         advertisedCapabilities,
       });
+      this.assertOpen();
       await this.initializePublishedTrackListeners();
+      this.assertOpen();
       await this.initializeMediaKeyListeners();
+      this.assertOpen();
       await this.initializeTransportListeners();
+      this.assertOpen();
       const tracks = await this.listPublishedTracks().catch(() => []);
+      this.assertOpen();
       for (const track of tracks) {
         this.publishedTracks.set(`${track.streamId}:${track.trackId}`, track);
       }
       const participants = await this.listSessionParticipantCapabilities().catch(() => []);
+      this.assertOpen();
       this.sessionParticipantCapabilities.clear();
       for (const participant of participants) {
         this.sessionParticipantCapabilities.set(participant.userId, participant);
       }
-      await this.announceWrappedLocalSenderKeys().catch(() => {});
+      await this.announceWrappedLocalSenderKeys();
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       throw new Error(
@@ -563,36 +628,37 @@ export class TauriMediaEngine implements MediaEngine {
     }
   }
 
-  async disconnect(): Promise<void> {
-    await tauriReady;
+  disconnect(): Promise<void> {
+    if (this.disposePromise) return this.disposePromise;
+    this.disposed = true;
     this.disconnecting = true;
-    this.transportLostCb = null;
+    this.removeAbortListener?.();
+    this.removeAbortListener = null;
+    this.transportLostCb = this.cameraFailureCb = this.screenShareEndedCb = null;
     this.clearVideoSubscriptions();
     this.clearScreenShareAudioSubscriptions();
-    this.cleanupScreenShare();
     this.screenAudioActive = false;
     for (const unlisten of this.unlisteners) {
-      unlisten();
+      try { unlisten(); } catch { /* attempt the remaining releases */ }
     }
     this.unlisteners = [];
-    this.screenEventUnlisten = null;
-    this.cameraEventUnlisten = null;
-    this.transportLostUnlisten = null;
+    this.screenEventUnlisten = this.cameraEventUnlisten = this.transportLostUnlisten = null;
     this.publishedTracks.clear();
     this.sessionParticipantCapabilities.clear();
     this.publishedTrackListenersReady = false;
-    this.localUserId = null;
-    this.localRoomId = null;
-    await invoke('stop_voice_session');
-    this.disconnecting = false;
+    this.localUserId = this.localRoomId = null;
+    this.disposePromise = this.startScheduled
+      ? this.invokeCleanup('stop_voice_session').then(() => undefined)
+      : Promise.resolve();
+    return this.disposePromise;
   }
 
   setMute(muted: boolean): void {
-    invoke('voice_set_mute', { muted });
+    void this.invokeOwned('voice_set_mute', { muted }).catch(() => {});
   }
 
   setDeaf(deafened: boolean): void {
-    invoke('voice_set_deaf', { deafened });
+    void this.invokeOwned('voice_set_deaf', { deafened }).catch(() => {});
   }
 
   /**
@@ -608,12 +674,15 @@ export class TauriMediaEngine implements MediaEngine {
    * assignable to the `MediaEngine.enableVideo(enabled)` signature.
    */
   async enableVideo(enabled: boolean, deviceId?: string): Promise<void> {
+    const actionRevision = ++this.cameraRevision;
     await tauriReady;
+    this.assertOpen();
     if (enabled) {
       await this.ensureNativeCameraEventListener();
+      if (actionRevision !== this.cameraRevision) throw new DOMException("Camera action canceled", "AbortError");
       try {
-        await invoke('voice_enable_video', {
-          enabled: true,
+        await this.invokeOwned('voice_enable_video', {
+          enabled: true, actionRevision,
           deviceId: deviceId ?? null,
           quality: null,
         });
@@ -624,14 +693,14 @@ export class TauriMediaEngine implements MediaEngine {
         throw err instanceof Error ? err : new Error(String(err));
       }
     } else {
-      await invoke('voice_enable_video', { enabled: false, deviceId: null, quality: null });
+      await this.invokeOwned('voice_enable_video', { enabled: false, actionRevision, deviceId: null, quality: null });
     }
   }
 
   /** Enumerate native capture cameras for device selection (contract CAM1). */
   async listCameraDevices(): Promise<Array<{ id: string; label: string }>> {
     await tauriReady;
-    const devices = await invoke('camera_list_devices');
+    const devices = await this.invokeOwned('camera_list_devices');
     return (devices as Array<{ id: string; label: string }>) ?? [];
   }
 
@@ -646,7 +715,7 @@ export class TauriMediaEngine implements MediaEngine {
    */
   private async ensureNativeCameraEventListener(): Promise<void> {
     if (!listen || this.cameraEventUnlisten) return;
-    this.cameraEventUnlisten = await listen('native_camera_event', (event) => {
+    this.cameraEventUnlisten = await this.listenOwned('native_camera_event', (event) => {
       const payload = event.payload as { kind?: string; message?: string | null };
       if (payload.kind === 'error') {
         const message = payload.message ?? 'unknown camera error';
@@ -658,13 +727,16 @@ export class TauriMediaEngine implements MediaEngine {
   }
 
   async startScreenShare(config: ScreenShareConfig): Promise<void> {
+    const actionRevision = ++this.screenRevision;
+    const assertAction = () => { this.assertOpen(); if (actionRevision !== this.screenRevision) throw new DOMException("Screen action canceled", "AbortError"); };
     await tauriReady;
+    assertAction();
 
     if (!invoke) {
       throw new Error('Tauri IPC not available — cannot start screen share');
     }
 
-    this.cleanupScreenShare();
+    this.screenAudioActive = false;
     this.screenAudioActive = false;
     await this.ensureNativeScreenShareEventListener();
     const resolvedCodec = config.preferredCodec ?? (await this.choosePreferredScreenCodec());
@@ -675,8 +747,10 @@ export class TauriMediaEngine implements MediaEngine {
       );
     }
 
+    assertAction();
     const targetFps = config.maxFrameRate ?? 30;
-    await invoke('screen_share_start', {
+    await this.invokeOwned('screen_share_start', {
+      actionRevision,
       request: {
         sourceId: config.sourceId ?? null,
         maxFrameRate: targetFps,
@@ -689,8 +763,9 @@ export class TauriMediaEngine implements MediaEngine {
       },
     });
 
+    assertAction();
     if (config.audio) {
-      const audioReady = await this.enableNativeScreenAudio();
+      const audioReady = await this.enableNativeScreenAudio(actionRevision);
       if (!audioReady) {
         // Fail loudly to the diagnostics log; the voice store surfaces the
         // video-only state to the UI via isScreenShareAudioActive() (W9/C4).
@@ -698,18 +773,19 @@ export class TauriMediaEngine implements MediaEngine {
           '[media] native system audio capture unavailable; streaming video-only',
         );
       }
+      assertAction();
       this.screenAudioActive = audioReady;
     } else {
-      await invoke('voice_set_screen_audio_enabled', { enabled: false }).catch(() => { });
+      await this.invokeCleanup('voice_set_screen_audio_enabled', { enabled: false, actionRevision }).catch(() => { });
       this.screenAudioActive = false;
     }
   }
 
   async stopScreenShare(): Promise<void> {
-    this.cleanupScreenShare();
+    const actionRevision = ++this.screenRevision;
     this.screenAudioActive = false;
     if (!invoke) return;
-    await invoke('screen_share_stop').catch(() => { });
+    await this.invokeOwned('screen_share_stop', { actionRevision }).catch(() => { });
   }
 
   supportsNativeSourcePicker(): boolean {
@@ -718,13 +794,13 @@ export class TauriMediaEngine implements MediaEngine {
 
   async listScreenShareSources(): Promise<ScreenShareSource[]> {
     await tauriReady;
-    const sources = await invoke('screen_share_list_sources');
+    const sources = await this.invokeOwned('screen_share_list_sources');
     return (sources as ScreenShareSource[]) ?? [];
   }
 
   async getScreenShareSourceThumbnail(sourceId: string): Promise<ScreenShareThumbnail | null> {
     await tauriReady;
-    const thumbnail = await invoke('screen_share_source_thumbnail', { sourceId });
+    const thumbnail = await this.invokeOwned('screen_share_source_thumbnail', { sourceId });
     return (thumbnail as ScreenShareThumbnail | null) ?? null;
   }
 
@@ -744,7 +820,7 @@ export class TauriMediaEngine implements MediaEngine {
     if (!listen) return;
 
     if (!this.screenEventUnlisten) {
-      this.screenEventUnlisten = await listen('native_screen_share_event', (event) => {
+      this.screenEventUnlisten = await this.listenOwned('native_screen_share_event', (event) => {
         const payload = event.payload as { kind?: string; message?: string | null };
         if (payload.kind === 'error') {
           console.warn('[TauriMediaEngine] Native screen share error:', payload.message ?? 'unknown error');
@@ -768,19 +844,18 @@ export class TauriMediaEngine implements MediaEngine {
    * JS audio round-trip. The webview only issues the consent gate and enables
    * the screen-audio track; the receive side is played by the native cpal mixer.
    */
-  private async enableNativeScreenAudio(): Promise<boolean> {
+  private async enableNativeScreenAudio(actionRevision: number): Promise<boolean> {
     try {
       // Consent gate + enable the screen-audio track. Native capture starts with
       // screen_share_start's captureAudio flag; nothing streams over IPC here.
-      await invoke('set_system_audio_capture_enabled', { enabled: true });
-      await invoke('voice_set_screen_audio_enabled', { enabled: true });
+      await this.invokeOwned('voice_set_screen_audio_enabled', { enabled: true, actionRevision });
       this.screenAudioActive = true;
       return true;
     } catch (err) {
       logVoiceDiagnostic('[media] native system audio enable failed', {
         error: err instanceof Error ? err.message : String(err),
       });
-      this.disableNativeScreenAudio();
+      if (actionRevision === this.screenRevision) this.disableNativeScreenAudio();
       return false;
     }
   }
@@ -788,14 +863,12 @@ export class TauriMediaEngine implements MediaEngine {
   private disableNativeScreenAudio(): void {
     this.screenAudioActive = false;
     if (!invoke) return;
-    invoke('stop_system_audio_capture').catch(() => {});
-    invoke('set_system_audio_capture_enabled', { enabled: false }).catch(() => {});
-    invoke('voice_set_screen_audio_enabled', { enabled: false }).catch(() => {});
+    this.invokeCleanup('voice_set_screen_audio_enabled', { enabled: false, actionRevision: this.screenRevision }).catch(() => {});
   }
 
   onSpeakingChange(cb: (speakers: Map<string, number>) => void): void {
     const p = tauriReady.then(async () => {
-      const unlisten = await listen('media_speaking_change', (event) => {
+      const unlisten = await this.listenOwned('media_speaking_change', (event) => {
         const payload = event.payload;
         const speakers =
           payload && typeof payload === 'object'
@@ -810,7 +883,7 @@ export class TauriMediaEngine implements MediaEngine {
 
   onParticipantJoin(cb: (userId: string) => void): void {
     const p = tauriReady.then(async () => {
-      const unlisten = await listen('media_participant_join', (event) => {
+      const unlisten = await this.listenOwned('media_participant_join', (event) => {
         cb(event.payload as string);
       });
       this.unlisteners.push(unlisten);
@@ -818,10 +891,21 @@ export class TauriMediaEngine implements MediaEngine {
     this.listenerPromises.push(p);
   }
 
+  private matchParticipantDeparture(payload: unknown): string | null {
+    if (typeof payload === 'string') return payload; // legacy native event
+    if (!payload || typeof payload !== 'object') return null;
+    const { userId, sessionId } = payload as { userId?: unknown; sessionId?: unknown };
+    if (typeof userId !== 'string') return null;
+    if (typeof sessionId === 'string' && this.sessionParticipantCapabilities.get(userId)?.sessionId !== sessionId) return null;
+    return userId;
+  }
+
   onParticipantLeave(cb: (userId: string) => void): void {
     const p = tauriReady.then(async () => {
-      const unlisten = await listen('media_participant_leave', (event) => {
-        cb(event.payload as string);
+      const unlisten = await this.listenOwned('media_participant_leave', (event) => {
+        const departed = this.matchParticipantDeparture(event.payload);
+        if (departed) cb(departed);
+
       });
       this.unlisteners.push(unlisten);
     });
@@ -836,17 +920,20 @@ export class TauriMediaEngine implements MediaEngine {
   // and mixed natively (contract C4); volume is applied via setSourceVolume →
   // voice_set_source_volume on the audio actor.
   subscribeScreenShareAudio(userId: string, getVolume: () => number): () => void {
+    if (this.disposed) return () => {};
+    this.audioSubscriptionReleases.get(userId)?.();
+    let stopped = false;
     let registered: { streamId: string; trackId: string } | null = null;
     this.screenShareAudioSubscribers.add(userId);
     // Apply the caller's current volume immediately and keep it in sync.
     this.setSourceVolume(userId, getVolume());
     const volumeTimer = setInterval(() => {
-      if (!this.screenShareAudioSubscribers.has(userId)) return;
+      if ((stopped || this.disposed || !this.screenShareAudioSubscribers.has(userId))) return;
       this.setSourceVolume(userId, getVolume());
     }, 100);
 
     void tauriReady.then(async () => {
-      if (!this.screenShareAudioSubscribers.has(userId)) {
+      if ((stopped || this.disposed || !this.screenShareAudioSubscribers.has(userId))) {
         return;
       }
       const tracks = await this.listPublishedTracks().catch(() => []);
@@ -856,7 +943,7 @@ export class TauriMediaEngine implements MediaEngine {
           track.trackId === 'screen-audio' &&
           track.kind === 'audio',
       );
-      if (audioTrack && this.screenShareAudioSubscribers.has(userId)) {
+      if (audioTrack && !stopped && !this.disposed && this.screenShareAudioSubscribers.has(userId)) {
         registered = { streamId: audioTrack.streamId, trackId: audioTrack.trackId };
         await this.registerTrackSubscription({
           streamId: audioTrack.streamId,
@@ -866,7 +953,10 @@ export class TauriMediaEngine implements MediaEngine {
       }
     });
 
-    return () => {
+    const release = () => {
+      if (stopped) return;
+      stopped = true;
+      this.audioSubscriptionReleases.delete(userId);
       clearInterval(volumeTimer);
       this.screenShareAudioSubscribers.delete(userId);
       if (registered) {
@@ -874,11 +964,13 @@ export class TauriMediaEngine implements MediaEngine {
         registered = null;
       }
     };
+    this.audioSubscriptionReleases.set(userId, release);
+    return release;
   }
 
   setSourceVolume(userId: string, gain: number): void {
     void tauriReady.then(() =>
-      invoke('voice_set_source_volume', {
+      this.invokeOwned('voice_set_source_volume', {
         userId,
         ssrc: null,
         gain: Math.min(2, Math.max(0, gain)),
@@ -887,6 +979,8 @@ export class TauriMediaEngine implements MediaEngine {
   }
 
   private clearScreenShareAudioSubscriptions(): void {
+    for (const release of this.audioSubscriptionReleases.values()) release();
+    this.audioSubscriptionReleases.clear();
     this.screenShareAudioSubscribers.clear();
   }
 
@@ -894,7 +988,7 @@ export class TauriMediaEngine implements MediaEngine {
     if (!listen) return;
 
     if (!this.transportLostUnlisten) {
-      this.transportLostUnlisten = await listen('media_transport_lost', (event) => {
+      this.transportLostUnlisten = await this.listenOwned('media_transport_lost', (event) => {
         if (this.disconnecting) return;
         const reason =
           typeof event.payload === 'string'
@@ -909,7 +1003,7 @@ export class TauriMediaEngine implements MediaEngine {
     // C4). The media_stream_audio_pcm JSON event and its WebAudio playback path
     // are intentionally gone — no per-sample JSON round trip through the webview.
 
-    const bandwidthUnlisten = await listen('media_bandwidth_feedback', (event) => {
+    const bandwidthUnlisten = await this.listenOwned('media_bandwidth_feedback', (event) => {
       const payload = event.payload as { availableKbps?: number } | null;
       const availableKbps = Number(payload?.availableKbps ?? 0);
       if (!Number.isFinite(availableKbps) || availableKbps <= 0) return;
@@ -935,7 +1029,7 @@ export class TauriMediaEngine implements MediaEngine {
       if (sub.activeLayer === targetLayer) continue;
       sub.activeLayer = targetLayer;
       const viewport = rendererCanvasSize(sub.renderer);
-      await invoke('media_register_stream_video_subscription', {
+      await this.invokeOwned('media_register_stream_video_subscription', {
         streamId: sub.streamId,
         trackId: sub.trackId,
         ssrc: track.layers.find((layer) => layer.layerId === targetLayer)?.ssrc,
@@ -956,7 +1050,7 @@ export class TauriMediaEngine implements MediaEngine {
     await tauriReady;
     if (!nativeStreamCapabilitiesPromise) {
       nativeStreamCapabilitiesPromise = (async () => {
-        const nativeCapabilities = (await invoke(
+        const nativeCapabilities = (await this.invokeOwned(
           'media_get_stream_capabilities',
         )) as MediaStreamCapabilities;
         return mergeNativeAndViewerCapabilities(nativeCapabilities);
@@ -967,7 +1061,7 @@ export class TauriMediaEngine implements MediaEngine {
 
   async getStreamingDiagnostics(): Promise<MediaStreamDiagnostics> {
     await tauriReady;
-    const diagnostics = (await invoke('media_get_stream_diagnostics')) as MediaStreamDiagnostics;
+    const diagnostics = (await this.invokeOwned('media_get_stream_diagnostics')) as MediaStreamDiagnostics;
     const preferredCommonCodec = await this.choosePreferredScreenCodec().catch(() => null);
     const localUserId = String(this.localUserId ?? '');
     const localTracks = (diagnostics.publishedTracks ?? []).filter(
@@ -991,7 +1085,7 @@ export class TauriMediaEngine implements MediaEngine {
 
   async listPublishedTracks(): Promise<PublishedTrackDescriptor[]> {
     await tauriReady;
-    const tracks = (await invoke('media_list_published_tracks')) as PublishedTrackDescriptor[] | null;
+    const tracks = (await this.invokeOwned('media_list_published_tracks')) as PublishedTrackDescriptor[] | null;
     if (tracks) {
       this.publishedTracks.clear();
       for (const track of tracks) {
@@ -1021,7 +1115,7 @@ export class TauriMediaEngine implements MediaEngine {
     if (this.isOwnPublishedTrack(request.streamId, request.trackId)) {
       return;
     }
-    await invoke('media_register_track_subscription', {
+    await this.invokeOwned('media_register_track_subscription', {
       request: {
         streamId: request.streamId,
         trackId: request.trackId,
@@ -1038,11 +1132,12 @@ export class TauriMediaEngine implements MediaEngine {
     if (this.isOwnPublishedTrack(streamId, trackId)) {
       return;
     }
-    await invoke('media_unregister_track_subscription', { streamId, trackId });
+    await this.invokeCleanup('media_unregister_track_subscription', { streamId, trackId });
   }
 
   private clearVideoSubscriptions(): void {
-    for (const [, sub] of this.videoSubscriptions) {
+    for (const release of this.videoSubscriptionReleases.values()) release();
+    this.videoSubscriptionReleases.clear();    for (const [, sub] of this.videoSubscriptions) {
       sub.stop();
       sub.decoder?.close();
       sub.renderer.destroy();
@@ -1066,7 +1161,7 @@ export class TauriMediaEngine implements MediaEngine {
       return;
     }
     this.keyframeRequestAt.set(key, now);
-    void invoke('media_request_keyframe', { streamId, trackId }).catch((err) => {
+    void this.invokeOwned('media_request_keyframe', { streamId, trackId }).catch((err) => {
       logVoiceDiagnostic('[media] media_request_keyframe failed', {
         streamId,
         trackId,
@@ -1123,8 +1218,10 @@ export class TauriMediaEngine implements MediaEngine {
     publisherUserId: string,
     timeoutMs = 10000,
     preferredTrackId?: 'camera' | 'screen',
+    signal?: AbortSignal,
   ): Promise<PublishedTrackDescriptor | null> {
     await this.initializePublishedTrackListeners();
+    if (signal?.aborted || this.disposed) return null;
     const waitKey = this.publishedVideoWaitKey(publisherUserId, preferredTrackId);
 
     const cached = this.pickPublishedVideoTrack(
@@ -1137,6 +1234,7 @@ export class TauriMediaEngine implements MediaEngine {
     }
 
     const tracks = await this.listPublishedTracks().catch(() => []);
+    if (signal?.aborted || this.disposed) return null;
     for (const track of tracks) {
       this.publishedTracks.set(`${track.streamId}:${track.trackId}`, track);
     }
@@ -1156,6 +1254,7 @@ export class TauriMediaEngine implements MediaEngine {
           return;
         }
         settled = true;
+        signal?.removeEventListener('abort', cancel);
         window.clearTimeout(timeoutId);
         const waiters = this.pendingPublishedVideoTrackWaits.get(waitKey);
         waiters?.delete(notify);
@@ -1179,6 +1278,8 @@ export class TauriMediaEngine implements MediaEngine {
       }
       waiters.add(notify);
 
+      const cancel = () => finish(null);
+      signal?.addEventListener('abort', cancel, { once: true });
       const timeoutId = window.setTimeout(() => finish(null), timeoutMs);
     });
   }
@@ -1189,13 +1290,13 @@ export class TauriMediaEngine implements MediaEngine {
       return;
     }
 
-    const publishUnlisten = await listen('media_track_publish', (event) => {
+    const publishUnlisten = await this.listenOwned('media_track_publish', (event) => {
       const track = event.payload as PublishedTrackDescriptor | null;
       if (!track?.streamId || !track.trackId) return;
       this.publishedTracks.set(`${track.streamId}:${track.trackId}`, track);
       this.notifyPublishedVideoTrackWaiters(track);
       if (String(track.publisherUserId) === String(this.localUserId ?? '')) {
-        void this.announceWrappedTrackKey(track).catch(() => {});
+        void this.announceWrappedTrackKey(track).catch(error => this.failKeyExchange(error));
       }
       const userId = String(track.publisherUserId);
       const existing =
@@ -1223,7 +1324,7 @@ export class TauriMediaEngine implements MediaEngine {
       if (existingChannel) {
         void isWebCodecsDecodeSupported(track.codec ?? 'vp9')
           .then((preferEncoded) =>
-            invoke('media_register_stream_video_subscription', {
+            this.invokeOwned('media_register_stream_video_subscription', {
               streamId: track.streamId,
               trackId: track.trackId,
               ssrc: selectedLayer.ssrc,
@@ -1241,7 +1342,7 @@ export class TauriMediaEngine implements MediaEngine {
       }).catch(() => {});
     });
 
-    const unpublishUnlisten = await listen('media_track_unpublish', (event) => {
+    const unpublishUnlisten = await this.listenOwned('media_track_unpublish', (event) => {
       const payload = event.payload as { streamId?: string; trackId?: string } | null;
       if (!payload?.streamId || !payload.trackId) return;
       this.publishedTracks.delete(`${payload.streamId}:${payload.trackId}`);
@@ -1254,7 +1355,7 @@ export class TauriMediaEngine implements MediaEngine {
   private async initializeMediaKeyListeners(): Promise<void> {
     if (!listen) return;
 
-    const audioKeyUnlisten = await listen('media_key_deliver', (event) => {
+    const audioKeyUnlisten = await this.listenOwned('media_key_deliver', (event) => {
       const payload = event.payload as {
         senderUserId?: string;
         epoch?: number;
@@ -1266,19 +1367,19 @@ export class TauriMediaEngine implements MediaEngine {
       void unwrapDeliveredMediaSenderKey(
         this.audioKeyScope(),
         payload.senderUserId,
-        Uint8Array.from(payload.ciphertext),
+        Uint8Array.from(payload.ciphertext), this.account,
       )
         .then((decrypted) =>
-          invoke('media_apply_audio_sender_key', {
+          this.invokeOwned('media_apply_audio_sender_key', {
             senderUserId: payload.senderUserId,
             epoch: decrypted.epoch || payload.epoch,
             rawKey: Array.from(decrypted.rawKey),
           }),
         )
-        .catch(() => {});
+        .catch(error => this.failKeyExchange(error));
     });
 
-    const streamKeyUnlisten = await listen('media_stream_key_deliver', (event) => {
+    const streamKeyUnlisten = await this.listenOwned('media_stream_key_deliver', (event) => {
       const payload = event.payload as {
         streamId?: string;
         trackId?: string;
@@ -1298,40 +1399,41 @@ export class TauriMediaEngine implements MediaEngine {
       void unwrapDeliveredMediaSenderKey(
         this.trackKeyScope(payload.streamId, payload.trackId),
         payload.senderUserId,
-        Uint8Array.from(payload.ciphertext),
+        Uint8Array.from(payload.ciphertext), this.account,
       )
         .then((decrypted) =>
-          invoke('media_apply_track_sender_key', {
+          this.invokeOwned('media_apply_track_sender_key', {
             streamId: payload.streamId,
             trackId: payload.trackId,
             epoch: decrypted.epoch || payload.epoch,
             rawKey: Array.from(decrypted.rawKey),
           }),
         )
-        .catch(() => {});
+        .catch(error => this.failKeyExchange(error));
     });
-    const participantJoinUnlisten = await listen('media_participant_join', (event) => {
+    const participantJoinUnlisten = await this.listenOwned('media_participant_join', (event) => {
       const userId = String(event.payload ?? '');
       if (!userId || userId === String(this.localUserId ?? '')) {
         return;
       }
-      void this.announceWrappedLocalSenderKeys([userId]).catch(() => {});
+      void this.announceWrappedLocalSenderKeys([userId]).catch(error => this.failKeyExchange(error));
     });
-    const participantJoinDetailsUnlisten = await listen('media_participant_join_details', (event) => {
+    const participantJoinDetailsUnlisten = await this.listenOwned('media_participant_join_details', (event) => {
       const payload = event.payload as SessionParticipantCapabilities | null;
       if (!payload?.userId || payload.userId === String(this.localUserId ?? '')) {
         return;
       }
       this.sessionParticipantCapabilities.set(payload.userId, payload);
     });
-    const participantLeaveUnlisten = await listen('media_participant_leave', (event) => {
-      const userId = String(event.payload ?? '');
+    const participantLeaveUnlisten = await this.listenOwned('media_participant_leave', (event) => {
+      const userId = this.matchParticipantDeparture(event.payload);
+      if (!userId) return;
       if (userId) {
         this.sessionParticipantCapabilities.delete(userId);
       }
-      void this.announceWrappedLocalSenderKeys().catch(() => {});
+      void this.announceWrappedLocalSenderKeys().catch(error => this.failKeyExchange(error));
     });
-    const requestStreamKeyUnlisten = await listen('media_request_stream_key', (event) => {
+    const requestStreamKeyUnlisten = await this.listenOwned('media_request_stream_key', (event) => {
       const payload = event.payload as {
         streamId?: string;
         trackId?: string;
@@ -1344,7 +1446,7 @@ export class TauriMediaEngine implements MediaEngine {
       if (!track || String(track.publisherUserId) !== String(this.localUserId ?? '')) {
         return;
       }
-      void this.announceWrappedTrackKey(track, [payload.recipientUserId]).catch(() => {});
+      void this.announceWrappedTrackKey(track, [payload.recipientUserId]).catch(error => this.failKeyExchange(error));
     });
 
     this.unlisteners.push(
@@ -1378,7 +1480,7 @@ export class TauriMediaEngine implements MediaEngine {
     const { streamId, trackId, channel } = sub;
     void isWebCodecsDecodeSupported(track?.codec ?? 'vp9')
       .then((preferEncoded) =>
-        invoke('media_register_stream_video_subscription', {
+        this.invokeOwned('media_register_stream_video_subscription', {
           streamId,
           trackId,
           ssrc,
@@ -1395,17 +1497,51 @@ export class TauriMediaEngine implements MediaEngine {
     onFrame?: () => void,
     options?: { preferredTrackId?: 'camera' | 'screen' },
   ): () => void {
+    if (this.disposed) return () => {};
     let disposed = false;
+    const cancellation = new AbortController();
+    const teardowns: Array<() => void> = [];
+    const own = (cleanup: () => void) => { if (disposed) cleanup(); else teardowns.push(cleanup); };
+    let ownedSubscription: NativeVideoSubscription | null = null;
     const preferredTrackId = options?.preferredTrackId;
     // Camera and screen can be subscribed concurrently for the same publisher;
     // key the map so they don't tear each other down.
     const subscriptionKey = preferredTrackId ? `${userId}:${preferredTrackId}` : userId;
+    this.videoSubscriptionReleases.get(subscriptionKey)?.();
     const existing = this.videoSubscriptions.get(subscriptionKey);
     if (existing) {
       existing.stop();
       existing.renderer.destroy();
       this.videoSubscriptions.delete(subscriptionKey);
     }
+
+    const release = () => {
+      if (disposed) return;
+      disposed = true;
+      cancellation.abort();
+      for (const teardown of teardowns.splice(0)) teardown();
+      if (this.videoSubscriptionReleases.get(subscriptionKey) === release) this.videoSubscriptionReleases.delete(subscriptionKey);
+      const current = this.videoSubscriptions.get(subscriptionKey);
+      if (current && current === ownedSubscription) {
+        if (current.streamId && current.trackId) {
+          void this.unregisterTrackSubscription(current.streamId, current.trackId).catch(() => {});
+          // Only the passthrough route registered a stream video subscription;
+          // a native-surface subscription (no channel) is torn down via the
+          // tile's native_render_detach in current.stop() below (spec §3.6).
+          if (current.channel) {
+            void this.invokeCleanup('media_unregister_stream_video_subscription', {
+              streamId: current.streamId,
+              trackId: current.trackId,
+            }).catch(() => {});
+          }
+        }
+        current.stop();
+        current.decoder?.close();
+        current.renderer.destroy();
+        this.videoSubscriptions.delete(subscriptionKey);
+      }
+    };
+    this.videoSubscriptionReleases.set(subscriptionKey, release);
 
     void tauriReady.then(async () => {
       if (disposed) return;
@@ -1415,6 +1551,7 @@ export class TauriMediaEngine implements MediaEngine {
           preferredTrackId: preferredTrackId ?? null,
         });
         const renderer = new CanvasRenderer(canvas);
+        own(() => renderer.destroy());
         // On becoming visible again, replay the latest stored frame by
         // re-registering (the native side re-pushes it), so a paused/off-screen
         // stream repaints immediately instead of waiting for the sender's next
@@ -1430,16 +1567,17 @@ export class TauriMediaEngine implements MediaEngine {
             resumeSubscription();
           }
         });
+        own(() => visibility.cleanup());
         const publishedTrack = await this.waitForPublishedVideoTrack(
           userId,
           10000,
           preferredTrackId,
+          cancellation.signal,
         );
         let subscription: NativeVideoSubscription;
         // Teardowns that must survive a watchdog channel rebuild (W6): the
         // visibility/resize observers and the stall timer are torn down only
         // when the whole subscription stops, not when its channel is swapped.
-        const teardowns: Array<() => void> = [];
         let lastFrameAt = Date.now();
         const markFrame = () => {
           lastFrameAt = Date.now();
@@ -1499,7 +1637,7 @@ export class TauriMediaEngine implements MediaEngine {
             registerChannel: VideoFrameChannel,
             ssrc: number | undefined,
           ) => {
-            await invoke('media_register_stream_video_subscription', {
+            await this.invokeOwned('media_register_stream_video_subscription', {
               streamId,
               trackId,
               ssrc,
@@ -1543,7 +1681,7 @@ export class TauriMediaEngine implements MediaEngine {
           };
           resumeSubscription = () => this.replayStreamVideoFrame(userId);
           notifyNativeVisibility = (visible: boolean) => {
-            void invoke('media_set_stream_visibility', { streamId, trackId, visible }).catch(
+            void this.invokeOwned('media_set_stream_visibility', { streamId, trackId, visible }).catch(
               (err) => {
                 logVoiceDiagnostic('[media] media_set_stream_visibility failed', {
                   streamId,
@@ -1592,7 +1730,7 @@ export class TauriMediaEngine implements MediaEngine {
             startDriverOnChannel(freshChannel);
             void registerStreamOnChannel(freshChannel, ssrc).catch(() => {});
           }, 1000);
-          teardowns.push(() => clearInterval(stallTimer));
+          own(() => clearInterval(stallTimer));
           } else if (nativeSurfaceAvailable) {
             // native-surface route (spec §2/§3.6): the functional WebCodecs
             // probe failed for this codec, so the native side decodes and
@@ -1620,7 +1758,16 @@ export class TauriMediaEngine implements MediaEngine {
               element: canvas,
               streamId,
               trackId,
-              invoke,
+              invoke: async (command, args) => {
+                if (command === 'native_render_attach') {
+                  this.assertOpen();
+                  await tauriReady;
+                  this.assertOpen();
+                }
+                // Tile.attach owns a late returned surface id and detaches it
+                // if destroyed. Do not throw away that cleanup receipt here.
+                return this.invokeCleanup(command, args);
+              },
               // Underlay: never blank the GL surface for DOM overlays. Stage
               // chrome and body portals paint above the hole; solid CSS keeps
               // them readable. (Re-enable `'underlay'` only with center-only
@@ -1644,7 +1791,7 @@ export class TauriMediaEngine implements MediaEngine {
                   visible,
                 });
                 dispatchUnderlayVisibility(visible);
-                void invoke('media_set_stream_visibility', {
+                void this.invokeOwned('media_set_stream_visibility', {
                   streamId,
                   trackId,
                   visible,
@@ -1683,8 +1830,8 @@ export class TauriMediaEngine implements MediaEngine {
             // "track is live" state reflects actual presentation, not merely a
             // created surface.
             let firstFrameUnlisten: UnlistenFn | null = null;
-            if (listen) {
-              firstFrameUnlisten = await listen('media_native_render_first_frame', (event) => {
+            {
+              firstFrameUnlisten = await this.listenOwned('media_native_render_first_frame', (event) => {
                 const payload = event.payload as {
                   streamId?: string;
                   trackId?: string;
@@ -1697,8 +1844,8 @@ export class TauriMediaEngine implements MediaEngine {
               this.unlisteners.push(firstFrameUnlisten);
             }
             let failureUnlisten: UnlistenFn | null = null;
-            if (listen) {
-              failureUnlisten = await listen('media_native_render_failed', (event) => {
+            {
+              failureUnlisten = await this.listenOwned('media_native_render_failed', (event) => {
                 const payload = event.payload as {
                   streamId?: string;
                   trackId?: string;
@@ -1836,7 +1983,7 @@ export class TauriMediaEngine implements MediaEngine {
           const { streamId: currentStreamId, trackId: currentTrackId, channel: currentChannel } = current;
           void isWebCodecsDecodeSupported(track.codec ?? 'vp9')
             .then((preferEncoded) =>
-              invoke('media_register_stream_video_subscription', {
+              this.invokeOwned('media_register_stream_video_subscription', {
                 streamId: currentStreamId,
                 trackId: currentTrackId,
                 ssrc: selectedLayer.ssrc,
@@ -1854,17 +2001,16 @@ export class TauriMediaEngine implements MediaEngine {
             resizeTimer = setTimeout(updateViewportSubscription, 120);
           });
           resizeObserver.observe(canvas);
-          teardowns.push(() => {
+          own(() => {
             if (resizeTimer) {
               clearTimeout(resizeTimer);
             }
             resizeObserver?.disconnect();
           });
         }
-        teardowns.push(() => visibility.cleanup());
         const originalStop = subscription.stop;
         subscription.stop = () => {
-          for (const teardown of teardowns) {
+          for (const teardown of teardowns.splice(0)) {
             teardown();
           }
           originalStop();
@@ -1879,8 +2025,10 @@ export class TauriMediaEngine implements MediaEngine {
           subscription.renderer.destroy();
           return;
         }
+        ownedSubscription = subscription;
         this.videoSubscriptions.set(subscriptionKey, subscription);
       } catch (err) {
+        release();
         logVoiceDiagnostic('[media] failed to start native remote video subscription', {
           userId,
           preferredTrackId: preferredTrackId ?? null,
@@ -1889,28 +2037,7 @@ export class TauriMediaEngine implements MediaEngine {
       }
     });
 
-    return () => {
-      disposed = true;
-      const current = this.videoSubscriptions.get(subscriptionKey);
-      if (current) {
-        if (current.streamId && current.trackId) {
-          void this.unregisterTrackSubscription(current.streamId, current.trackId).catch(() => {});
-          // Only the passthrough route registered a stream video subscription;
-          // a native-surface subscription (no channel) is torn down via the
-          // tile's native_render_detach in current.stop() below (spec §3.6).
-          if (current.channel) {
-            void invoke('media_unregister_stream_video_subscription', {
-              streamId: current.streamId,
-              trackId: current.trackId,
-            }).catch(() => {});
-          }
-        }
-        current.stop();
-        current.decoder?.close();
-        current.renderer.destroy();
-        this.videoSubscriptions.delete(subscriptionKey);
-      }
-    };
+    return release;
   }
 
   subscribeLocalPublishedScreen(canvas: HTMLCanvasElement, onFrame?: () => void): () => void {
@@ -1923,7 +2050,7 @@ export class TauriMediaEngine implements MediaEngine {
 
   private async listSessionParticipantCapabilities(): Promise<SessionParticipantCapabilities[]> {
     await tauriReady;
-    const participants = await invoke('media_list_session_participant_capabilities');
+    const participants = await this.invokeOwned('media_list_session_participant_capabilities');
     return ((participants as SessionParticipantCapabilities[] | null) ?? []).filter(
       (participant) => participant.userId && participant.userId !== String(this.localUserId ?? ''),
     );
@@ -2016,7 +2143,7 @@ export class TauriMediaEngine implements MediaEngine {
 
   private async listSessionParticipants(): Promise<string[]> {
     await tauriReady;
-    const participants = await invoke('media_list_session_participants');
+    const participants = await this.invokeOwned('media_list_session_participants');
     return ((participants as string[] | null) ?? []).filter(
       (userId) => userId && userId !== String(this.localUserId ?? ''),
     );
@@ -2031,7 +2158,7 @@ export class TauriMediaEngine implements MediaEngine {
       scope,
       Uint8Array.from(senderKey.rawKey),
       senderKey.epoch,
-      recipientUserIds,
+      recipientUserIds, this.account,
     );
     return wrapped.map((entry) => ({
       recipientUserId: entry.recipientUserId,
@@ -2046,7 +2173,7 @@ export class TauriMediaEngine implements MediaEngine {
     if (!recipients.length) {
       return;
     }
-    const senderKey = (await invoke('media_export_audio_sender_key')) as ExportedSenderKey;
+    const senderKey = (await this.invokeOwned('media_export_audio_sender_key')) as ExportedSenderKey;
     const encryptedKeys = await this.buildWrappedRecipients(
       this.audioKeyScope(),
       senderKey,
@@ -2055,7 +2182,7 @@ export class TauriMediaEngine implements MediaEngine {
     if (!encryptedKeys.length) {
       return;
     }
-    await invoke('media_send_audio_key_announce', {
+    await this.invokeOwned('media_send_audio_key_announce', {
       epoch: senderKey.epoch,
       encryptedKeys,
     });
@@ -2069,7 +2196,7 @@ export class TauriMediaEngine implements MediaEngine {
     if (!recipients.length) {
       return;
     }
-    const senderKey = (await invoke('media_export_track_sender_key', {
+    const senderKey = (await this.invokeOwned('media_export_track_sender_key', {
       streamId: track.streamId,
       trackId: track.trackId,
     })) as ExportedSenderKey;
@@ -2081,7 +2208,7 @@ export class TauriMediaEngine implements MediaEngine {
     if (!encryptedKeys.length) {
       return;
     }
-    await invoke('media_send_track_key_announce', {
+    await this.invokeOwned('media_send_track_key_announce', {
       streamId: track.streamId,
       trackId: track.trackId,
       codec: track.codec ?? null,

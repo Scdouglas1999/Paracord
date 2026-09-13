@@ -1,3 +1,6 @@
+import { useCurrentAccountScope } from '../hooks/useCurrentUser';
+import { guildLandingPath } from '../lib/guildNavigation';
+import { useCurrentGuilds } from '../hooks/useGuilds';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router';
@@ -5,7 +8,6 @@ import { ArrowLeft, CalendarDays, Compass, Globe2, Search, Server, Users } from 
 import { extractApiError } from '../api/client';
 import { getApi } from '../api/activeClient';
 import { useGuildStore } from '../stores/guildStore';
-import { useChannelStore } from '../stores/channelStore';
 import { toast } from '../stores/toastStore';
 import { cn } from '../lib/utils';
 import { safeStoredImageDataUrl } from '../lib/security';
@@ -52,6 +54,7 @@ const CATEGORIES = [
 const DISCOVERY_SEARCH_DEBOUNCE_MS = 300;
 
 export function DiscoveryPage() {
+  const guildScope = useCurrentAccountScope();
   const navigate = useNavigate();
   const [guilds, setGuilds] = useState<DiscoverableGuild[]>([]);
   const [total, setTotal] = useState(0);
@@ -62,7 +65,7 @@ export function DiscoveryPage() {
   const [joiningId, setJoiningId] = useState<string | null>(null);
   const [selectedGuild, setSelectedGuild] = useState<DiscoverableGuild | null>(null);
   const [joinError, setJoinError] = useState<string | null>(null);
-  const myGuilds = useGuildStore((s) => s.guilds);
+  const myGuilds = useCurrentGuilds();
   const myGuildIds = new Set(myGuilds.map((g) => g.id));
 
   const fetchDiscovery = useCallback(
@@ -117,39 +120,16 @@ export function DiscoveryPage() {
   }, [fetchDiscovery, search, selectedTag]);
 
   const handleJoin = async (guild: DiscoverableGuild) => {
-    if (myGuildIds.has(guild.id)) {
-      // Already a member, navigate to the guild
-      const guildChannels = useChannelStore.getState().channelsByGuild[guild.id];
-      if (!guildChannels?.length) {
-        await useChannelStore.getState().fetchChannels(guild.id);
-      }
-      const channels = useChannelStore.getState().channelsByGuild[guild.id] || [];
-      const firstChannel =
-        channels.find((c) => c.type === 0) ||
-        channels.find((c) => c.type !== 4) ||
-        channels[0];
-      if (firstChannel) {
-        navigate(`/app/guilds/${guild.id}/channels/${firstChannel.id}`);
-      }
-      return;
-    }
-
+    if (!guildScope) return;
     setJoiningId(guild.id);
     setJoinError(null);
     try {
-      const { data: joinedGuild } = await getApi().put(`/guilds/${guild.id}/members/@me`);
-      useGuildStore.getState().addGuild(joinedGuild);
-      await useChannelStore.getState().fetchChannels(joinedGuild.id);
-      const channels = useChannelStore.getState().channelsByGuild[joinedGuild.id] || [];
-      const firstChannel =
-        joinedGuild.default_channel_id
-          ? channels.find((c) => c.id === joinedGuild.default_channel_id)
-          : channels.find((c) => c.type === 0) || channels.find((c) => c.type !== 4) || channels[0];
-      toast.success(`Joined ${guild.name}!`);
+      const existing = myGuilds.find(entry => entry.id === guild.id);
+      const joined = existing ?? await useGuildStore.getState().joinPublic(guild.id, guildScope);
+      const path = await guildLandingPath(joined);
+      if (!existing) toast.success(`Joined ${guild.name}!`);
       setSelectedGuild(null);
-      if (firstChannel) {
-        navigate(`/app/guilds/${joinedGuild.id}/channels/${firstChannel.id}`);
-      }
+      navigate(path);
     } catch (err) {
       setJoinError(`We couldn't join this space: ${extractApiError(err)}`);
     } finally {

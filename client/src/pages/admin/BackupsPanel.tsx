@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Download, Loader2, Plus, RotateCcw, Trash2, AlertTriangle, Archive } from 'lucide-react';
+import { Download, Loader2, Plus, BookOpen, Trash2, AlertTriangle, Archive } from 'lucide-react';
 import { adminApi } from '../../api/admin';
 import { extractApiError } from '../../api/client';
 import { toast } from '../../stores/toastStore';
@@ -26,7 +26,8 @@ export function BackupsPanel() {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [includeMedia, setIncludeMedia] = useState(true);
-  const [restoringName, setRestoringName] = useState<string | null>(null);
+  const [preparingName, setPreparingName] = useState<string | null>(null);
+  const [recovery, setRecovery] = useState<Awaited<ReturnType<typeof adminApi.prepareRestore>>['data'] | null>(null);
   const [deletingName, setDeletingName] = useState<string | null>(null);
   const [downloadingName, setDownloadingName] = useState<string | null>(null);
 
@@ -97,21 +98,15 @@ export function BackupsPanel() {
     }
   };
 
-  const handleRestore = async (name: string) => {
-    if (!(await confirm({
-      title: 'Restore backup?',
-      description: `Restore "${name}" now? This will overwrite current data on disk. A server restart is recommended after restore.`,
-      confirmLabel: 'Restore',
-      variant: 'danger',
-    }))) return;
-    setRestoringName(name);
+  const handlePrepareRestore = async (name: string) => {
+    setPreparingName(name);
     try {
-      const { data } = await adminApi.restoreBackup(name);
-      toast.success(data.message || `Backup restored: ${name}`);
+      const { data } = await adminApi.prepareRestore(name);
+      setRecovery(data);
     } catch (err) {
-      toast.error(`Failed to restore backup: ${extractApiError(err)}`);
+      toast.error(`Failed to load recovery instructions: ${extractApiError(err)}`);
     } finally {
-      setRestoringName(null);
+      setPreparingName(null);
     }
   };
 
@@ -121,7 +116,7 @@ export function BackupsPanel() {
         <div>
           <h2 className="font-display text-heading text-text-primary">Backups</h2>
           <p className="mt-1 text-body text-text-secondary">
-            Create point-in-time snapshots and restore this server from one.
+            Create database snapshots with optional media and prepare offline recovery.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -144,10 +139,23 @@ export function BackupsPanel() {
       <div className="mb-6 flex items-start gap-3 rounded-md border border-accent-warning/30 bg-warning-tint px-4 py-3">
         <AlertTriangle size={18} className="mt-0.5 shrink-0 text-accent-warning" />
         <p className="text-body text-text-secondary">
-          <span className="font-semibold text-text-primary">Restoring overwrites everything.</span>{' '}
-          A restore replaces current data on disk with the snapshot's contents. Download a fresh backup first, then restart the server once the restore completes.
+          <span className="font-semibold text-text-primary">Recovery is an offline operation.</span>{' '}
+          Download an archive and retain the server configuration, encryption key environment, TLS keys and federation signing key separately. The restore command verifies a new database and media directory before you select its configuration. Stop every old server instance before activation.
         </p>
       </div>
+
+      {recovery && (
+        <section aria-label="Recovery instructions" className="mb-6 rounded-md border border-border-subtle bg-bg-secondary p-5">
+          <h3 className="text-heading text-text-primary">Recover {recovery.filename}</h3>
+          <p className="mt-2 text-body text-text-secondary">{recovery.message}</p>
+          <ol className="mt-3 list-decimal space-y-2 pl-5 text-body text-text-secondary">
+            {recovery.steps.map(step => <li key={step}>{step}</li>)}
+          </ol>
+          <pre className="mt-4 overflow-x-auto rounded-sm bg-bg-tertiary p-3 text-meta"><code>{recovery.command}</code></pre>
+          <p className="mt-2 text-meta text-text-secondary">For PostgreSQL, also supply <code>{recovery.postgres_argument}</code> after creating a separate empty database.</p>
+          <Button className="mt-3 gap-2" onClick={() => handleDownload(recovery.filename)} loading={downloadingName === recovery.filename}><Download size={16} />Download archive</Button>
+        </section>
+      )}
 
       {loading ? (
         <div className="rounded-md border border-border-subtle bg-bg-secondary px-6 py-10 shadow-sm">
@@ -197,13 +205,13 @@ export function BackupsPanel() {
                     <td className="px-5 py-3">
                       <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity duration-[140ms] focus-within:opacity-100 group-hover/row:opacity-100">
                         <button
-                          onClick={() => handleRestore(b.name)}
-                          disabled={restoringName === b.name}
+                          onClick={() => handlePrepareRestore(b.name)}
+                          disabled={preparingName === b.name}
                           className="flex h-8 w-8 items-center justify-center rounded-sm text-interactive-normal outline-none transition-colors hover:bg-warning-tint hover:text-accent-warning focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
-                          title="Restore backup"
-                          aria-label={`Restore backup ${b.name}`}
+                          title="Recovery instructions"
+                          aria-label={`Recovery instructions for ${b.name}`}
                         >
-                          {restoringName === b.name ? <Loader2 size={16} className="animate-spin" /> : <RotateCcw size={16} />}
+                          {preparingName === b.name ? <Loader2 size={16} className="animate-spin" /> : <BookOpen size={16} />}
                         </button>
                         <button
                           onClick={() => handleDownload(b.name)}

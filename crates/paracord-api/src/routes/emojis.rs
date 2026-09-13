@@ -3,10 +3,10 @@ use axum::{
     http::StatusCode,
     Json,
 };
+use paracord_contracts::emoji::{GuildEmoji, UpdateEmojiRequest};
 use paracord_core::AppState;
 use paracord_models::permissions::Permissions;
-use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::json;
 
 use crate::error::ApiError;
 use crate::middleware::AuthUser;
@@ -22,15 +22,15 @@ const MAX_EMOJI_IMAGE_SIZE: usize = 256 * 1024; // 256 KB
 /// per-IP write budget. 250 x 256 KB caps a space at roughly 62 MB of emoji.
 const MAX_EMOJIS_PER_GUILD: usize = 250;
 
-fn emoji_to_json(e: &paracord_db::emojis::EmojiRow) -> Value {
-    json!({
-        "id": e.id.to_string(),
-        "guild_id": e.guild_id.to_string(),
-        "name": e.name,
-        "animated": e.animated,
-        "creator_id": e.creator_id.map(|id| id.to_string()),
-        "created_at": e.created_at.to_rfc3339(),
-    })
+fn emoji_to_json(e: &paracord_db::emojis::EmojiRow) -> GuildEmoji {
+    GuildEmoji {
+        id: e.id.to_string(),
+        guild_id: e.guild_id.to_string(),
+        name: e.name.clone(),
+        animated: e.animated,
+        creator_id: e.creator_id.map(|id| id.to_string()),
+        created_at: e.created_at.to_rfc3339(),
+    }
 }
 
 async fn ensure_emoji_permission(
@@ -65,15 +65,15 @@ pub async fn list_guild_emojis(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(guild_id): Path<i64>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<Vec<GuildEmoji>>, ApiError> {
     paracord_core::permissions::ensure_guild_member(&state.db, guild_id, auth.user_id).await?;
 
     let emojis = paracord_db::emojis::get_guild_emojis(&state.db, guild_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
-    let result: Vec<Value> = emojis.iter().map(emoji_to_json).collect();
-    Ok(Json(json!(result)))
+    let result: Vec<GuildEmoji> = emojis.iter().map(emoji_to_json).collect();
+    Ok(Json(result))
 }
 
 pub async fn create_emoji(
@@ -81,7 +81,7 @@ pub async fn create_emoji(
     auth: AuthUser,
     Path(guild_id): Path<i64>,
     mut multipart: Multipart,
-) -> Result<(StatusCode, Json<Value>), ApiError> {
+) -> Result<(StatusCode, Json<GuildEmoji>), ApiError> {
     ensure_emoji_permission(&state, guild_id, auth.user_id).await?;
 
     // Checked before the body is consumed so a space that is already at its cap
@@ -198,7 +198,8 @@ pub async fn create_emoji(
         "GUILD_EMOJIS_UPDATE",
         json!({
             "guild_id": guild_id.to_string(),
-            "emoji": emoji_json,
+            "emoji": serde_json::to_value(&emoji_json)
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?,
         }),
         Some(guild_id),
     );
@@ -219,17 +220,12 @@ pub async fn create_emoji(
     Ok((StatusCode::CREATED, Json(emoji_json)))
 }
 
-#[derive(Deserialize)]
-pub struct UpdateEmojiRequest {
-    pub name: String,
-}
-
 pub async fn update_emoji(
     State(state): State<AppState>,
     auth: AuthUser,
     Path((guild_id, emoji_id)): Path<(i64, i64)>,
     Json(body): Json<UpdateEmojiRequest>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<GuildEmoji>, ApiError> {
     ensure_emoji_permission(&state, guild_id, auth.user_id).await?;
 
     if body.name.is_empty() || body.name.len() > MAX_EMOJI_NAME_LEN {
@@ -258,7 +254,8 @@ pub async fn update_emoji(
         "GUILD_EMOJIS_UPDATE",
         json!({
             "guild_id": guild_id.to_string(),
-            "emoji": emoji_json,
+            "emoji": serde_json::to_value(&emoji_json)
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?,
         }),
         Some(guild_id),
     );

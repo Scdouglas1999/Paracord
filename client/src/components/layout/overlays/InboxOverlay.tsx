@@ -1,3 +1,4 @@
+import { useCurrentAccountScope } from '../../../hooks/useCurrentUser';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import { Bookmark, Check, CheckCheck, Hash, Inbox, Loader2, MessageSquare, Trash2 } from 'lucide-react';
@@ -53,6 +54,7 @@ function authorName(message: Message): string {
 
 export function InboxOverlay({ open, onClose, unreadItems, allChannels, error }: InboxOverlayProps) {
   const navigate = useNavigate();
+  const readScope = useCurrentAccountScope();
   const dialogRef = useRef<HTMLDivElement>(null);
   const [tab, setTab] = useState<InboxTab>('unread');
   const [previews, setPreviews] = useState<Record<string, Message | null>>({});
@@ -69,11 +71,14 @@ export function InboxOverlay({ open, onClose, unreadItems, allChannels, error }:
     [unreadItems],
   );
 
+  const wasOpen = useRef(false);
   useEffect(() => {
-    if (!open) return;
+    const newlyOpened = open && !wasOpen.current;
+    wasOpen.current = open;
+    if (!newlyOpened) return;
     setTab(mentionItems.length > 0 ? 'mentions' : 'unread');
     void useSavedMessageStore.getState().load(true);
-  }, [open]); // Reset only for a newly opened inbox, not as live read states change.
+  }, [open, mentionItems.length]); // Reset only for a newly opened inbox, not as live read states change.
 
   useEffect(() => {
     if (!open || unreadItems.length === 0) return;
@@ -111,15 +116,15 @@ export function InboxOverlay({ open, onClose, unreadItems, allChannels, error }:
   const markItemRead = (channelId: string) => {
     const channel = allChannels.find((candidate) => candidate.id === channelId);
     const lastId = channel?.last_message_id;
-    if (!lastId) return;
-    useReadStateStore.getState().markRead(channelId, lastId);
-    void channelApi.updateReadState(channelId, lastId).catch((err) => {
+    if (!lastId || !readScope) return;
+    useReadStateStore.getState().markRead(readScope, channelId, lastId);
+    void useReadStateStore.getState().saveReadPosition(readScope, channelId, lastId).catch((err) => {
       toast.error(`Failed to save read position: ${extractApiError(err)}`);
     });
   };
 
   const markAllRead = async () => {
-    if (markingAllRead) return;
+    if (markingAllRead || !readScope) return;
     const targets = unreadItems.flatMap(({ state }) => {
       const lastId = allChannels.find((channel) => channel.id === state.channel_id)?.last_message_id;
       return lastId ? [{ channelId: state.channel_id, lastId }] : [];
@@ -127,10 +132,10 @@ export function InboxOverlay({ open, onClose, unreadItems, allChannels, error }:
     if (targets.length === 0) return;
     setMarkingAllRead(true);
     targets.forEach(({ channelId, lastId }) => {
-      useReadStateStore.getState().markRead(channelId, lastId);
+      useReadStateStore.getState().markRead(readScope, channelId, lastId);
     });
     const results = await Promise.allSettled(
-      targets.map(({ channelId, lastId }) => channelApi.updateReadState(channelId, lastId)),
+      targets.map(({ channelId, lastId }) => useReadStateStore.getState().saveReadPosition(readScope, channelId, lastId)),
     );
     const failures = results.filter((result) => result.status === 'rejected').length;
     if (failures > 0) {

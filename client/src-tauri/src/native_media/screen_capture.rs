@@ -19,7 +19,7 @@ use image::ColorType;
 #[cfg(not(target_os = "linux"))]
 use image::ImageEncoder;
 use serde::Serialize;
-use tauri::Emitter;
+
 #[cfg(not(target_os = "linux"))]
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
@@ -299,10 +299,12 @@ pub fn capture_source_thumbnail(source_id: &str) -> Result<Option<ScreenShareThu
 
 pub async fn start_capture(
     state: &MediaState,
-    app: tauri::AppHandle,
+    app: super::CallEventSink,
     request: StartScreenShareRequest,
+    stop_flag: Arc<AtomicBool>,
 ) -> Result<(), String> {
     ensure_screen_capture_consent(&app).await?;
+    state.calls.check_action(app.owner_id(), &stop_flag)?;
     stop_capture_internal(state, false).await?;
 
     if !scap::is_supported() {
@@ -312,6 +314,7 @@ pub async fn start_capture(
         return Err("Screen capture permission was denied.".into());
     }
 
+    state.calls.check_action(app.owner_id(), &stop_flag)?;
     let session_arc = state.session.clone();
     let runtime_handle = tokio::runtime::Handle::current();
 
@@ -356,7 +359,6 @@ pub async fn start_capture(
         )
     };
 
-    let stop_flag = Arc::new(AtomicBool::new(false));
     let worker_stop = stop_flag.clone();
     let worker_app = app.clone();
     let source_id = request.source_id.clone();
@@ -408,6 +410,11 @@ pub async fn start_capture(
 
     match startup_rx.recv_timeout(Duration::from_secs(3)) {
         Ok(Ok(())) => {
+            if let Err(error) = state.calls.check_action(app.owner_id(), &stop_flag) {
+                stop_flag.store(true, Ordering::SeqCst);
+                let _ = worker.join();
+                return Err(error);
+            }
             let track_already_published = {
                 let guard = state.session.lock().await;
                 guard
@@ -461,6 +468,8 @@ pub async fn stop_capture(state: &MediaState) -> Result<(), String> {
 }
 
 async fn stop_capture_internal(state: &MediaState, revoke_consent: bool) -> Result<(), String> {
+    crate::audio_capture::stop_system_audio_capture()?;
+    crate::audio_capture::set_system_audio_capture_enabled(false);
     if let Ok(mut guard) = state.screen_capture.lock() {
         if let Some(mut active) = guard.take() {
             active.stop();
@@ -504,7 +513,7 @@ async fn stop_capture_internal(state: &MediaState, revoke_consent: bool) -> Resu
     Ok(())
 }
 
-async fn announce_screen_track(state: &MediaState, app: &tauri::AppHandle) -> Result<(), String> {
+async fn announce_screen_track(state: &MediaState, app: &super::CallEventSink) -> Result<(), String> {
     let mut guard = state.session.lock().await;
     let session = guard.as_mut().ok_or("no active session")?;
     let track = build_screen_track(session)?;
@@ -554,7 +563,7 @@ pub(crate) fn build_screen_audio_track(session: &NativeMediaSession) -> Publishe
 
 pub async fn announce_screen_audio_track_public(
     state: &MediaState,
-    app: &tauri::AppHandle,
+    app: &super::CallEventSink,
 ) -> Result<(), String> {
     let mut guard = state.session.lock().await;
     let session = guard.as_mut().ok_or("no active session")?;
@@ -655,7 +664,7 @@ fn codec_to_transport_codec(codec: paracord_codec::video::VideoCodec) -> Transpo
 fn run_capture_loop(
     session_arc: Arc<tokio::sync::Mutex<Option<NativeMediaSession>>>,
     runtime_handle: tokio::runtime::Handle,
-    app: tauri::AppHandle,
+    app: super::CallEventSink,
     stop_flag: Arc<AtomicBool>,
     source_id: Option<String>,
     max_frame_rate: u32,

@@ -385,7 +385,9 @@ async fn update_guild_caps_icon_and_settings_blobs() -> anyhow::Result<()> {
         .request_json(
             Method::PATCH,
             &format!("/api/v1/guilds/{guild_id}"),
-            Some(json!({ "bot_settings": { "blurb": "x".repeat(70 * 1024) } })),
+            // `bot_settings` is a typed map of bot id -> config; the oversize payload
+            // must be well-formed so the size bound, not the shape, rejects it.
+            Some(json!({ "bot_settings": { "welcome": { "enabled": true, "blurb": "x".repeat(70 * 1024) } } })),
         )
         .await?;
     assert_eq!(

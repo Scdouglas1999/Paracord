@@ -1,3 +1,9 @@
+import { useMobile } from '../hooks/useMobile';
+import { captureScopedOperation } from '../lib/operationContext';
+import { useCurrentChannelStore, getAccountChannelView, useGuildChannels } from '../hooks/useChannels';
+import { useCurrentGuilds } from '../hooks/useGuilds';
+import { entityScopeKey as memberScopeKey } from '../lib/serverScope';
+import { useCurrentUser, useCurrentAccountScope } from '../hooks/useCurrentUser';
 import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router';
 import { TopBar } from '../components/layout/TopBar';
@@ -6,42 +12,40 @@ import { useChannelStore } from '../stores/channelStore';
 import { useGuildStore } from '../stores/guildStore';
 import { useMemberStore } from '../stores/memberStore';
 import { cancelMessageFetch } from '../stores/messageStore';
-import { useAuthStore } from '../stores/authStore';
 import { useVoiceStore } from '../stores/voiceStore';
 import { GuildWelcomeScreen } from '../components/guild/GuildWelcomeScreen';
 import { GuildOnboardingGate } from '../components/guild/GuildOnboardingGate';
-import { channelApi } from '../api/channels';
+import { createChannelApi } from '../api/channels';
 import { usePermissions } from '../hooks/usePermissions';
 import { Permissions, hasPermission } from '../types';
 import {
   getVersionedStorageItem,
   setVersionedStorageItem,
 } from '../lib/versionedStorage';
-import { GuildLoadingScreen, ChannelNotFoundScreen } from './guild/GuildStateScreens';
+import { GuildLoadingScreen, ChannelNotFoundScreen, ChannelLoadErrorScreen } from './guild/GuildStateScreens';
 import { VoiceStageChannel } from './guild/VoiceStageChannel';
 import { TextChannelView } from './guild/TextChannelView';
 
 export function GuildPage() {
   const { guildId, channelId } = useParams();
   const selectGuild = useGuildStore((s) => s.selectGuild);
-  const channels = useChannelStore((s) => s.channels);
-  const fetchChannels = useChannelStore((s) => s.fetchChannels);
+  const channels = useGuildChannels(guildId);
+  const channelError = useCurrentChannelStore(s => guildId ? s.errors[guildId] : undefined);
+  const fetchChannels = useCurrentChannelStore((s) => s.fetchChannels);
+  const memberScope = useCurrentAccountScope();
   const fetchMembers = useMemberStore((s) => s.fetchMembers);
-  const isLoading = useChannelStore((s) =>
-    guildId ? (s.isLoading && !(s.channelsByGuild[guildId]?.length > 0)) : false
+  const isLoading = useCurrentChannelStore((s) =>
+    guildId ? (s.loading[guildId] && !(s.channelsByGuild[guildId]?.length > 0)) : false
   );
-  const selectChannel = useChannelStore((s) => s.selectChannel);
+  const selectChannel = useCurrentChannelStore((s) => s.selectChannel);
   const channel = channels.find((c) => c.id === channelId);
-  const currentUserId = useAuthStore((s) => s.user?.id ?? null);
+  const currentUserId = useCurrentUser()?.id ?? null;
   const setWatchedStreamer = useVoiceStore((s) => s.setWatchedStreamer);
 
-  const [isPhoneLayout, setIsPhoneLayout] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    return window.matchMedia('(max-width: 768px)').matches;
-  });
+  const isPhoneLayout = useMobile();
 
   // Welcome screen state
-  const guilds = useGuildStore((s) => s.guilds);
+  const guilds = useCurrentGuilds();
   const currentGuild = guilds.find((g) => g.id === guildId);
   const [showWelcome, setShowWelcome] = useState(() => {
     if (!guildId) return false;
@@ -71,19 +75,22 @@ export function GuildPage() {
 
   // Fetch channels when guildId changes
   useEffect(() => {
-    if (guildId) {
-      selectGuild(guildId);
-      useChannelStore.getState().selectGuild(guildId);
-      if (!useChannelStore.getState().guildChannelsLoaded[guildId]) {
+    if (guildId && memberScope) {
+      if (memberScope) selectGuild({ id: guildId, scope: memberScope });
+      if (!getAccountChannelView(memberScope).guildChannelsLoaded[guildId]) {
         fetchChannels(guildId);
       }
-      if (!useMemberStore.getState().membersLoaded[guildId]) {
-        void fetchMembers(guildId);
+      if (memberScope && !useMemberStore.getState().membersLoaded[memberScopeKey(memberScope, guildId)]) {
+        void fetchMembers(guildId, memberScope);
       }
     }
     // Only re-run when guildId changes, not when loaded-state objects change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [guildId]);
+  }, [guildId, memberScope]);
+
+  useEffect(() => () => {
+    if (memberScope && channelId) cancelMessageFetch(memberScope, channelId);
+  }, [memberScope, channelId]);
 
   const prevChannelIdRef = useRef<string | undefined>(channelId);
 
@@ -92,7 +99,6 @@ export function GuildPage() {
     prevChannelIdRef.current = channelId;
 
     if (prevChannelId && prevChannelId !== channelId) {
-      cancelMessageFetch(prevChannelId);
       // Only drop a watched stream when the user actually switches channels.
       // Clearing on the initial mount would stomp a RoomCard "Watch" handoff,
       // which sets voiceStore.watchedStreamerId *before* navigating here.
@@ -105,25 +111,13 @@ export function GuildPage() {
   }, [channelId, channel, selectChannel, setWatchedStreamer]);
 
   useEffect(() => {
-    if (!channelId) return;
-    channelApi
-      .get(channelId)
-      .then(({ data }) => {
-        useChannelStore.getState().updateChannel(data);
-      })
-      .catch(() => {
-        /* keep existing channel cache on failure */
-      });
-  }, [channelId]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const mediaQuery = window.matchMedia('(max-width: 768px)');
-    const updateIsPhoneLayout = () => setIsPhoneLayout(mediaQuery.matches);
-    updateIsPhoneLayout();
-    mediaQuery.addEventListener('change', updateIsPhoneLayout);
-    return () => mediaQuery.removeEventListener('change', updateIsPhoneLayout);
-  }, []);
+    if (!channelId || !memberScope) return;
+    const context = captureScopedOperation(memberScope);
+    createChannelApi(() => context.api).get(channelId)
+      .then(({ data }) => { context.assertCurrent(); useChannelStore.getState().updateChannel(data, memberScope); })
+      .catch(() => { /* The channel list exposes its request error. */ });
+    return () => context.dispose();
+  }, [channelId, memberScope]);
 
   // Listen for custom event to re-show welcome screen from sidebar menu
   useEffect(() => {
@@ -139,6 +133,10 @@ export function GuildPage() {
 
   if (isLoading) {
     return <GuildLoadingScreen />;
+  }
+
+  if (channelError && guildId) {
+    return <ChannelLoadErrorScreen error={channelError} onRetry={() => { void fetchChannels(guildId); }} />;
   }
 
   if (channelId && !channel) {

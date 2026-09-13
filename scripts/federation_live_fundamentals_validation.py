@@ -581,6 +581,10 @@ def main() -> int:
         # continue blocking private/internal federation endpoints by default.
         child_env["PARACORD_ALLOW_PRIVATE_FEDERATION_URLS"] = "true"
         child_env["PARACORD_FEDERATION_ALLOWED_GUILD_IDS"] = "*"
+        # Each node registers its own first account over REST, so bootstrap
+        # the instances without a first-owner claim: the first registration
+        # owns each node, exactly as pre-claim releases behaved.
+        child_env["PARACORD_SETUP_REQUIRE_CLAIM"] = "false"
 
         log("[2/14] Building paracord-server binary")
         run(["cargo", "build", "-p", "paracord-server"], cwd=ROOT)

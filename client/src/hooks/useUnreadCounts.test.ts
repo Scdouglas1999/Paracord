@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { computeGuildUnread, isMessageUnread, useUnreadCounts } from './useUnreadCounts';
 import { useChannelStore } from '../stores/channelStore';
-import { useGuildStore } from '../stores/guildStore';
+import { useGuildStore, scopeGuild } from '../stores/guildStore';
 import { useReadStateStore } from '../stores/readStateStore';
 import { useServerListStore } from '../stores/serverListStore';
 import { ChannelType, type Channel, type Guild, type ReadState } from '../types';
@@ -24,15 +24,9 @@ function chan(over: Partial<Channel> & { id: string; type: ChannelType }): Chann
   return { position: 0, nsfw: false, created_at: '', ...over } as Channel;
 }
 
-function guild(over: Partial<Guild> & { id: string; server_url: string }): Guild {
-  return {
-    name: over.id,
-    owner_id: '0',
-    member_count: 0,
-    features: [],
-    created_at: '',
-    ...over,
-  } as Guild;
+function guild(over: Partial<Guild> & { id: string; server_url: string }) {
+  const scope = { serverId: over.originServerId ?? (over.server_url === URL_B ? 'b' : 'a'), userId: 'viewer' };
+  return scopeGuild({ name: over.id, owner_id: '0', member_count: 0, created_at: '', ...over }, scope);
 }
 
 function rs(channelId: string, lastMessageId: string, mentions = 0): ReadState {
@@ -42,23 +36,23 @@ function rs(channelId: string, lastMessageId: string, mentions = 0): ReadState {
 function seed(): void {
   useReadStateStore.setState({
     // Override the mount fan-out so no network is attempted.
-    refresh: async () => {},
-    byServer: {
+    refreshAll: async () => {},
+    byAccount: {
       // g1 → server 'b'. In 'a', c1 is fully read (a mis-read would drop g1).
-      a: {
+      [JSON.stringify(['a', 'viewer'])]: {
         c1: rs('c1', 'm-latest', 0),
         // g2 falls back here — unread + 3 mentions live only in 'a'.
         c2: rs('c2', 'm-old', 3),
       },
-      b: {
+      [JSON.stringify(['b', 'viewer'])]: {
         c1: rs('c1', 'm-old', 2),
       },
     },
   });
   useServerListStore.setState({
     servers: [
-      { id: 'a', url: URL_A, name: 'A', token: null, connected: true },
-      { id: 'b', url: URL_B, name: 'B', token: null, connected: true },
+      { id: 'a', url: URL_A, name: 'A', token: 'token', userId: 'viewer', user: { id: 'viewer', username: 'viewer' } as never, connected: true },
+      { id: 'b', url: URL_B, name: 'B', token: 'token', userId: 'viewer', user: { id: 'viewer', username: 'viewer' } as never, connected: true },
     ],
     activeServerId: 'a',
   } as never);
@@ -69,12 +63,9 @@ function seed(): void {
       guild({ id: 'g2', server_url: 'https://unmapped.example.com' }),
     ],
   });
-  useChannelStore.setState({
-    channelsByGuild: {
-      g1: [chan({ id: 'c1', type: ChannelType.Text, last_message_id: 'm-latest' })],
-      g2: [chan({ id: 'c2', type: ChannelType.Text, last_message_id: 'm-latest' })],
-    },
-  });
+  useChannelStore.getState().reset();
+  useChannelStore.getState().setChannels('g1', [chan({ id: 'c1', guild_id: 'g1', type: ChannelType.Text, last_message_id: 'm-latest' })], { serverId: 'b', userId: 'viewer' });
+  useChannelStore.getState().setChannels('g2', [chan({ id: 'c2', guild_id: 'g2', type: ChannelType.Text, last_message_id: 'm-latest' })], { serverId: 'a', userId: 'viewer' });
 }
 
 beforeEach(() => {
@@ -128,25 +119,25 @@ describe('useUnreadCounts — per-server read-state resolution', () => {
 
     // g1 resolves to server 'b': stale read (unread) + 2 mentions live only there.
     // Had it read the active server 'a' (where c1 is fully read), g1 would drop out.
-    expect(result.current.guildUnreads.get('g1')).toEqual({ unreadCount: 1, mentionCount: 2 });
-    expect(result.current.isChannelUnread.has('c1')).toBe(true);
-    expect(result.current.channelMentionCounts.get('c1')).toBe(2);
+    expect(result.current.guildUnreads.get(JSON.stringify(['b', 'viewer', 'g1']))).toEqual({ unreadCount: 1, mentionCount: 2 });
+    expect(result.current.isChannelUnread.has('c1')).toBe(false);
+    expect(result.current.channelMentionCounts.get('c1')).toBeUndefined();
   });
 
-  it('falls back to the active server when the guild.server_url is unmapped (§9 flag-3)', () => {
+  it('reads current-account channel badges without inferring ownership from URLs', () => {
     const { result } = renderHook(() => useUnreadCounts([]));
 
     // g2's server_url resolves to nothing → active server 'a', where c2 is stale
     // + carries 3 mentions. An empty-bucket regression would lose the mention count.
-    expect(result.current.guildUnreads.get('g2')).toEqual({ unreadCount: 1, mentionCount: 3 });
+    expect(result.current.guildUnreads.get(JSON.stringify(['a', 'viewer', 'g2']))).toEqual({ unreadCount: 1, mentionCount: 3 });
     expect(result.current.channelMentionCounts.get('c2')).toBe(3);
   });
 
   it('excludes muted guilds from the per-guild unread totals', () => {
-    const { result } = renderHook(() => useUnreadCounts(['g1']));
+    const { result } = renderHook(() => useUnreadCounts([JSON.stringify(['b', 'viewer', 'g1'])]));
 
-    expect(result.current.guildUnreads.has('g1')).toBe(false);
+    expect(result.current.guildUnreads.has(JSON.stringify(['b', 'viewer', 'g1']))).toBe(false);
     // Non-muted guilds are unaffected.
-    expect(result.current.guildUnreads.get('g2')).toEqual({ unreadCount: 1, mentionCount: 3 });
+    expect(result.current.guildUnreads.get(JSON.stringify(['a', 'viewer', 'g2']))).toEqual({ unreadCount: 1, mentionCount: 3 });
   });
 });

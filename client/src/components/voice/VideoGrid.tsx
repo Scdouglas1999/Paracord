@@ -307,7 +307,7 @@ function VideoTileView({
           ref={videoRef}
           autoPlay
           playsInline
-          muted={tile.isLocal}
+          muted // Camera track only; call audio is rendered separately by the voice engine.
           className="h-full w-full object-cover"
           style={{
             transform: tile.isLocal ? 'scaleX(-1)' : undefined,

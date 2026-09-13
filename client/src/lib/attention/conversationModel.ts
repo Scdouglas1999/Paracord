@@ -1,3 +1,5 @@
+import { entityScopeKey, type AccountScope } from '../serverScope';
+
 /**
  * Unified-conversation data model (layout-spec §3.1).
  *
@@ -17,8 +19,9 @@ export type ConversationKind =
   | 'guild_home';
 
 export interface ConversationEntry {
-  /** `${serverId}:${channelId}` — collision-safe across servers. */
+  /** JSON tuple of server, account and channel. */
   key: string;
+  scope: AccountScope;
   /** Resolved from guild.server_url→serverId map, or the DM's owning server. */
   serverId: string;
   channelId: string;
@@ -66,6 +69,6 @@ export function snowflakeToMs(id: string): number {
 }
 
 /** Composite key used by every cross-server map (read-state, pins, entries). */
-export function conversationKey(serverId: string, channelId: string): string {
-  return `${serverId}:${channelId}`;
+export function conversationKey(scope: AccountScope, channelId: string): string {
+  return entityScopeKey(scope, channelId);
 }

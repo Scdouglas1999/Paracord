@@ -1,3 +1,4 @@
+import { useCurrentChannelStore } from '../../hooks/useChannels';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   DndContext,
@@ -21,7 +22,6 @@ import type { Channel, Role } from '../../types';
 import { guildApi } from '../../api/guilds';
 import { channelApi, type ChannelFeatureSettings } from '../../api/channels';
 import { extractApiError } from '../../api/client';
-import { useChannelStore } from '../../stores/channelStore';
 import { buildChannelGroups, isVirtualGroup, type ChannelGroup } from '../../lib/features/channelGroups';
 import { cn } from '../../lib/utils';
 import { ChannelPermissionsEditor } from './ChannelPermissionsEditor';
@@ -64,7 +64,7 @@ function channelTypeBadge(type: number) {
 }
 
 export function ChannelManager({ guildId, channels, roles, canManageRoles, highlightedChannelId, onRefresh }: ChannelManagerProps) {
-  const reorderChannels = useChannelStore((s) => s.reorderChannels);
+  const reorderChannels = useCurrentChannelStore((s) => s.reorderChannels);
 
   const [newChannelName, setNewChannelName] = useState('');
   const [newChannelType, setNewChannelType] = useState<'text' | 'voice' | 'forum' | 'stage'>('text');

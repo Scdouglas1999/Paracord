@@ -1,3 +1,6 @@
+import { getAccountChannelView } from '../lib/channelView';
+import { isReadyGuildCore } from '../api/generated/validators';
+import { entityScopeKey } from '../lib/serverScope';
 import { useGuildStore } from '../stores/guildStore';
 import { refreshGuildChannelVisibility, useChannelStore } from '../stores/channelStore';
 import { useMemberStore } from '../stores/memberStore';
@@ -6,15 +9,12 @@ import { useVoiceStore } from '../stores/voiceStore';
 import { useTypingStore } from '../stores/typingStore';
 import { useRelationshipStore } from '../stores/relationshipStore';
 import { useUIStore } from '../stores/uiStore';
-import { useMessageStore } from '../stores/messageStore';
+import { getMessageStore, normalizeIncomingMessage } from '../stores/messageStore';
 import { usePollStore } from '../stores/pollStore';
-import { useAuthStore } from '../stores/authStore';
-import { useServerListStore } from '../stores/serverListStore';
+import { getServerUser, getServerAccountScope, mergeServerUserProjection } from '../lib/serverIdentity';
 import { useReadStateStore } from '../stores/readStateStore';
 import { useInteractionStore } from '../stores/interactionStore';
-import { hasUnlockedPrivateKey } from '../lib/accountSession';
-import { mentionsEveryone } from '../lib/mentions';
-import { ensurePrekeysUploaded } from '../lib/signalPrekeys';
+import { getAccountMessagingRuntime } from '../lib/messages/accountMessagingRuntime';
 import { GatewayEvents } from './events';
 import { sendNotification, isEnabled as notificationsEnabled } from '../lib/features/notifications';
 import type { Channel, Guild, Member, Message, Poll, Presence, User, VoiceState } from '../types';
@@ -62,6 +62,9 @@ type GatewayDispatchData = Omit<
     guilds?: ReadyGuildPayload[];
     ids?: string[];
     message_id?: string;
+    channel_activity?: unknown;
+    recovery_required?: boolean;
+    message_revisions?: Record<string, string>;
     emoji?: EmojiRef;
     poll?: unknown;
     /** Channel.type, Message.type, or INTERACTION_CREATE callback type. */
@@ -87,14 +90,44 @@ function warnDispatchParseFailure(event: string, reason: string): void {
   console.warn(`[gateway] dropping malformed ${event} payload: ${reason}`);
 }
 
-export function dispatchGatewayEvent(serverId: string, event: string, data: GatewayDispatchData): void {
+export function dispatchGatewayEvent(serverId: string, event: string, data: GatewayDispatchData, recovered = false): void | Promise<void> {
+  const memberScope = getServerAccountScope(serverId);
+  const channels = getAccountChannelView(memberScope);
+  if (!recovered && memberScope && data.channel_id) {
+    if ([GatewayEvents.MESSAGE_CREATE, GatewayEvents.MESSAGE_UPDATE, GatewayEvents.MESSAGE_DELETE].includes(event as never) && data.id) {
+      const kind = event === GatewayEvents.MESSAGE_CREATE ? 'create' : event === GatewayEvents.MESSAGE_UPDATE ? 'update' : 'delete';
+      const current = getMessageStore(memberScope).getState().messages[data.channel_id]?.find(message => message.id === data.id);
+      const message = kind === 'delete' ? undefined : normalizeIncomingMessage({ ...current, ...data }) ?? undefined;
+      const runtime = getAccountMessagingRuntime(memberScope); const ownership = runtime.captureGatewayLease();
+      return runtime.acceptGatewayMutation({ kind, channelId: data.channel_id, messageId: data.id,
+        revision: data.message_revision, message, recoveryRequired: data.recovery_required }).then(authoritative => {
+        ownership.assertCurrent();
+        if (kind !== 'delete' && !authoritative) return;
+        return dispatchGatewayEvent(serverId, event, { ...data, ...authoritative }, true);
+      });
+    }
+    if (event === GatewayEvents.MESSAGE_DELETE_BULK && data.ids?.length) {
+      const runtime = getAccountMessagingRuntime(memberScope);
+      const ownership = runtime.captureGatewayLease();
+      const ids = [...data.ids].sort((a, b) => {
+        const left = data.message_revisions?.[a]; const right = data.message_revisions?.[b];
+        return left && right ? (BigInt(left) < BigInt(right) ? -1 : 1) : 0;
+      });
+      return ids.reduce((prior, messageId) => prior.then(async () => { ownership.assertCurrent(); await runtime.acceptGatewayMutation({ kind: 'delete', channelId: data.channel_id!, messageId,
+        revision: data.message_revisions?.[messageId], recoveryRequired: data.recovery_required }); }), Promise.resolve())
+        .then(() => { ownership.assertCurrent(); return dispatchGatewayEvent(serverId, event, data, true); });
+    }
+  }
+  if (memberScope && ['READY', 'CHANNEL_UPDATE', 'CHANNEL_DELETE', 'GUILD_MEMBER_UPDATE', 'GUILD_MEMBER_REMOVE', 'GUILD_ROLE_CREATE', 'GUILD_ROLE_UPDATE', 'GUILD_ROLE_DELETE', 'RELATIONSHIP_ADD', 'RELATIONSHIP_REMOVE', 'USER_UPDATE'].includes(event)) {
+    window.dispatchEvent(new CustomEvent('paracord:conversation-capabilities-changed', { detail: memberScope }));
+  }
   switch (event) {
     case GatewayEvents.READY: {
       useUIStore.getState().setServerRestarting(false);
 
       // Pull an authoritative read-state snapshot on every (re)connect so unread
       // and mention badges reconcile after any events missed while offline.
-      void useReadStateStore.getState().refresh();
+      if (memberScope) void useReadStateStore.getState().refresh(memberScope).catch(() => { /* Per-account refresh errors remain available in the read-state store. */ });
 
       // READY carries the *public* projection of the account (id, username,
       // avatar, display name) — not private fields like `flags` or `email`.
@@ -102,53 +135,40 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
       // a real server admin lost the admin panel the moment the gateway
       // connected. Merge so the authoritative REST profile survives.
       if (data.user) {
-        const current = useAuthStore.getState().user;
-        useAuthStore.setState({
-          user: current ? { ...current, ...data.user } : data.user,
-        });
+        mergeServerUserProjection(serverId, data.user);
       }
 
       const readyGuildIds: string[] = [];
-      data.guilds?.forEach((g) => {
-        // id and owner_id are required. Fabricating them (e.g. owner_id: '')
-        // briefly flips owner-only UI to the wrong state, so skip the guild and
-        // let the REST fetch supply an authoritative copy instead of guessing.
-        if (!g?.id) {
-          warnDispatchParseFailure('READY', 'guild missing id');
-          return;
-        }
-        if (!g.owner_id) {
-          warnDispatchParseFailure('READY', 'guild missing owner_id');
-          return;
-        }
-        readyGuildIds.push(g.id);
+      if (data.guilds !== undefined && !Array.isArray(data.guilds)) warnDispatchParseFailure('READY', 'guild list is not an array');
+      (Array.isArray(data.guilds) ? data.guilds : []).forEach((g) => {
+        // Invalid metadata cannot overwrite a confirmed REST projection. The
+        // generated guard shares the six-field core used by both transports.
+        const core: unknown = g;
+        if (!isReadyGuildCore(core)) { warnDispatchParseFailure('READY', 'guild core contract mismatch'); return; }
+        if (!Number.isFinite(Date.parse(core.created_at))) { warnDispatchParseFailure('READY', 'guild invalid created_at'); return; }
+        readyGuildIds.push(core.id);
         const normalizedGuild: Guild = {
-          ...(g as Guild),
-          id: g.id,
-          owner_id: g.owner_id,
+          id: core.id,
+          owner_id: core.owner_id,
           // Tag the TRUE originating server so the cross-server merge reads the
           // right per-server unread/mention bucket (§9 flag 3). server_url alone
           // mis-attributes background-server guilds to the active server.
           originServerId: serverId,
-          name: g.name ?? 'Unnamed Server',
-          created_at: g.created_at ?? new Date().toISOString(),
-          member_count: g.member_count ?? 0,
-          features: g.features ?? [],
-          default_channel_id:
-            g.default_channel_id
-            ?? g.channels?.find((c) => (c.channel_type ?? c.type) === 0)?.id
-            ?? null,
+          name: core.name,
+          icon_hash: core.icon_hash,
+          created_at: core.created_at,
+          member_count: core.member_count,
         };
-        useGuildStore.getState().addGuild(normalizedGuild);
+        if (memberScope) useGuildStore.getState().addGuild(normalizedGuild, memberScope);
 
-        const guildChannels = g.channels ?? [];
+        const guildChannels = Array.isArray(g.channels) ? g.channels : [];
         if (guildChannels.length > 0) {
           guildChannels.forEach((c) => {
             if (!c.id) {
               warnDispatchParseFailure('READY', 'channel missing id');
               return;
             }
-            useChannelStore.getState().addChannel({
+            if (memberScope) channels.addChannel({
               ...c,
               id: c.id,
               guild_id: c.guild_id ?? g.id,
@@ -159,16 +179,9 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
               created_at: c.created_at ?? new Date().toISOString(),
             });
           });
-          // Mark channels as loaded from READY so the UI doesn't show
-          // empty state while the REST fetch is still in-flight.
-          const channelState = useChannelStore.getState();
-          if (!channelState.guildChannelsLoaded[g.id]) {
-            useChannelStore.setState((state) => ({
-              guildChannelsLoaded: { ...state.guildChannelsLoaded, [g.id]: true },
-            }));
-          }
+
         }
-        useVoiceStore.getState().loadVoiceStates(g.id, g.voice_states ?? []);
+        if (memberScope) useVoiceStore.getState().loadVoiceStates(g.id, g.voice_states ?? [], memberScope);
         if (g.presences?.length) {
           for (const p of g.presences) {
             usePresenceStore.getState().updatePresence(p, serverId);
@@ -176,18 +189,19 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
         }
       });
 
-      const selectedGuildId = useGuildStore.getState().selectedGuildId;
+      const selected = useGuildStore.getState().selectedGuild;
+      const selectedGuildId = memberScope && selected && selected.scope.serverId === serverId && selected.scope.userId === memberScope.userId ? selected.id : null;
       const activeGuildId = selectedGuildId && readyGuildIds.includes(selectedGuildId)
         ? selectedGuildId
         : readyGuildIds[0];
       if (activeGuildId) {
-        const channelState = useChannelStore.getState();
-        if (!channelState.guildChannelsLoaded[activeGuildId]) {
+        const channelState = getAccountChannelView(memberScope);
+        if (memberScope && !channelState.guildChannelsLoaded[activeGuildId]) {
           void channelState.fetchChannels(activeGuildId);
         }
         const memberState = useMemberStore.getState();
-        if (!memberState.membersLoaded[activeGuildId]) {
-          void memberState.fetchMembers(activeGuildId);
+        if (memberScope && !memberState.membersLoaded[entityScopeKey(memberScope, activeGuildId)]) {
+          void memberState.fetchMembers(activeGuildId, memberScope);
         }
       }
 
@@ -202,14 +216,12 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
         }, serverId);
       }
 
-      // Ensure Signal prekeys are uploaded for E2EE DMs
-      if (hasUnlockedPrivateKey()) {
-        void ensurePrekeysUploaded().catch((err) => {
-          console.warn('Failed to upload/replenish prekeys:', err);
-        });
-      }
+      if (memberScope) return getAccountMessagingRuntime(memberScope).acceptHandshake();
       break;
     }
+    case GatewayEvents.RESUMED:
+      if (memberScope) return getAccountMessagingRuntime(memberScope).acceptHandshake();
+      break;
 
     case GatewayEvents.MESSAGE_CREATE:
       if (!data.channel_id || !data.id) break;
@@ -217,8 +229,8 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
       // an `author` object, so asserting `as Message` here was a lie that put an
       // authorless record in the store and crashed the whole feed on render.
       // `addMessage` normalizes and drops anything it cannot make safe.
-      useMessageStore.getState().addMessage(data.channel_id, data);
-      useChannelStore.getState().updateLastMessageId(data.channel_id, data.id);
+      if (memberScope) getMessageStore(memberScope).getState().addMessage(data.channel_id, data);
+      if (memberScope) useChannelStore.getState().applyMessageActivity(data.channel_id, data.channel_activity, memberScope);
       // Slash / component responses arrive as MESSAGE_CREATE with an interaction
       // payload. Clear the invoking client's pending/thinking state.
       {
@@ -239,42 +251,17 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
           }
         }
       }
-      // Keep the read-state cache live for mention badges between authoritative
-      // refreshes: a message the user didn't author that mentions them — either
-      // directly (<@id> / <@!id> in the content) or via @everyone — bumps the
-      // channel's unread mention count. Reconciled on the next READY/refresh.
-      {
-        const mentionAuthorId =
-          data.author?.id ?? (data as { author_id?: string }).author_id ?? data.user_id;
-        const selfUserId =
-          useServerListStore.getState().getServer(serverId)?.userId ||
-          useAuthStore.getState().user?.id ||
-          '';
-        if (selfUserId && mentionAuthorId && mentionAuthorId !== selfUserId) {
-          const content = typeof data.content === 'string' ? data.content : '';
-          const mentionsSelf =
-            // The server never emits `mention_everyone`, so reading the field
-            // alone meant an @everyone ping never produced a mention badge.
-            mentionsEveryone(data) ||
-            new RegExp(`<@!?${selfUserId}>`).test(content);
-          if (mentionsSelf) {
-            useReadStateStore.getState().incrementMention(serverId, data.channel_id);
-          }
-        }
-      }
       // Desktop notification for messages not from self and not in focused channel
       if (notificationsEnabled()) {
-        const currentUserId = useAuthStore.getState().user?.id;
+        const currentUserId = getServerUser(serverId)?.id;
         const authorId = data.author?.id ?? data.user_id;
-        const focusedChannelId = useChannelStore.getState().selectedChannelId;
+        const focusedChannelId = channels.selectedChannelId;
         const isDocumentFocused = typeof document !== 'undefined' && document.hasFocus();
         if (
           authorId !== currentUserId &&
           !(isDocumentFocused && focusedChannelId === data.channel_id)
         ) {
-          const channelName = useChannelStore.getState().channels.find(
-            (c) => c.id === data.channel_id,
-          )?.name;
+          const channelName = channels.channelsById[data.channel_id]?.name;
           const authorName = data.author?.username ?? 'Someone';
           const title = channelName ? `#${channelName}` : `DM from ${authorName}`;
           const body = data.e2ee
@@ -283,10 +270,23 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
           void sendNotification(title, body);
         }
       }
+      if (!recovered && memberScope && data.e2ee) {
+        const message = normalizeIncomingMessage(data);
+        if (!message) return Promise.reject(new Error('The encrypted message envelope has no verifiable author.'));
+        return getAccountMessagingRuntime(memberScope).ingestEncryptedMessage(message);
+      }
+      break;
+    case GatewayEvents.MESSAGE_MENTION:
+      // The server targets actual recipients. Replayed events only refresh an
+      // authoritative count; message text never grants mention permission.
+      if (memberScope) useReadStateStore.getState().refreshAfterEvent(memberScope);
       break;
     case GatewayEvents.MESSAGE_UPDATE: {
       if (!data.channel_id || !data.id) break;
-      useMessageStore.getState().updateMessage(data.channel_id, { ...data, id: data.id });
+      if (memberScope) {
+        getMessageStore(memberScope).getState().updateMessage(data.channel_id, { ...data, id: data.id });
+        useReadStateStore.getState().invalidateAttention(memberScope, data.channel_id);
+      }
       {
         const store = useInteractionStore.getState();
         const interactionId = data.interaction?.id;
@@ -305,6 +305,12 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
             }
           }
         }
+      }
+      if (!recovered && memberScope && data.e2ee) {
+        const current = getMessageStore(memberScope).getState().messages[data.channel_id]?.find(message => message.id === data.id);
+        const message = normalizeIncomingMessage({ ...current, ...data });
+        if (!message) return Promise.reject(new Error('The encrypted message envelope has no verifiable author.'));
+        return getAccountMessagingRuntime(memberScope).ingestEncryptedMessage(message);
       }
       break;
     }
@@ -356,41 +362,56 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
     }
     case GatewayEvents.MESSAGE_DELETE:
       if (!data.channel_id || !data.id) break;
-      useMessageStore.getState().removeMessage(data.channel_id, data.id);
+      if (memberScope) {
+        getMessageStore(memberScope).getState().removeMessage(data.channel_id, data.id);
+        useChannelStore.getState().applyMessageActivity(data.channel_id, data.channel_activity, memberScope);
+        useReadStateStore.getState().invalidateAttention(memberScope, data.channel_id);
+        useReadStateStore.getState().refreshAfterEvent(memberScope);
+        if (!recovered) return getAccountMessagingRuntime(memberScope).observeDeleted(data.channel_id, data.id);
+      }
       break;
     case GatewayEvents.MESSAGE_DELETE_BULK:
       if (data.channel_id && data.ids?.length) {
-        useMessageStore.getState().removeMessages(data.channel_id, data.ids);
+        if (memberScope) {
+          getMessageStore(memberScope).getState().removeMessages(data.channel_id, data.ids);
+          useChannelStore.getState().applyMessageActivity(data.channel_id, data.channel_activity, memberScope);
+          useReadStateStore.getState().invalidateAttention(memberScope, data.channel_id);
+          useReadStateStore.getState().refreshAfterEvent(memberScope);
+          if (!recovered) {
+            const runtime = getAccountMessagingRuntime(memberScope);
+            return data.ids.reduce((previous, id) => previous.then(() => runtime.observeDeleted(data.channel_id!, id)), Promise.resolve());
+          }
+        }
       }
       break;
 
     case GatewayEvents.GUILD_CREATE:
       // Tag the originating server so cross-server unread attribution is correct.
-      useGuildStore.getState().addGuild({ ...(data as Guild), originServerId: serverId });
+      if (memberScope) useGuildStore.getState().addGuild(data as Guild, memberScope);
       break;
     case GatewayEvents.GUILD_UPDATE:
       if (!data.id) break;
-      useGuildStore.getState().updateGuildData(data.id, data as Partial<Guild>);
+      if (memberScope) useGuildStore.getState().updateGuildData(data.id, data as Partial<Guild>, memberScope);
       break;
     case GatewayEvents.GUILD_DELETE:
       if (!data.id) break;
-      useGuildStore.getState().removeGuild(data.id);
+      if (memberScope) useGuildStore.getState().removeGuild(data.id, memberScope);
       break;
 
     case GatewayEvents.CHANNEL_CREATE:
-      useChannelStore.getState().addChannel(data as Channel);
+      if (memberScope) channels.addChannel(data as Channel);
       break;
     case GatewayEvents.CHANNEL_UPDATE:
-      useChannelStore.getState().updateChannel(data as Channel);
+      if (memberScope) channels.updateChannel(data as Channel);
       break;
     case GatewayEvents.CHANNEL_DELETE:
-      if (!data.guild_id || !data.id) break;
-      useChannelStore.getState().removeChannel(data.guild_id, data.id);
+      if (!data.id) break;
+      if (memberScope) channels.removeChannel(data.guild_id ?? '', data.id);
       break;
 
     case GatewayEvents.THREAD_CREATE:
       if (!data.id) break;
-      useChannelStore.getState().addChannel({
+      if (memberScope) channels.addChannel({
         ...data,
         id: data.id,
         type: data.channel_type ?? data.type ?? 6,
@@ -402,7 +423,7 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
       break;
     case GatewayEvents.THREAD_UPDATE:
       if (!data.id) break;
-      useChannelStore.getState().updateChannel({
+      if (memberScope) channels.updateChannel({
         ...data,
         id: data.id,
         type: data.channel_type ?? data.type ?? 6,
@@ -414,26 +435,17 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
       break;
     case GatewayEvents.THREAD_DELETE: {
       if (!data.id) break;
-      const channelsByGuild = useChannelStore.getState().channelsByGuild;
-      let fallbackGuildId = '';
-      for (const [gid, list] of Object.entries(channelsByGuild)) {
-        if (list.some((ch) => ch.id === data.id)) {
-          fallbackGuildId = gid;
-          break;
-        }
-      }
-      useChannelStore
-        .getState()
-        .removeChannel(data.guild_id || fallbackGuildId, data.id);
+      const guildId = data.guild_id ?? channels.channelsById[data.id]?.guild_id;
+      if (memberScope && guildId) channels.removeChannel(guildId, data.id);
       break;
     }
 
     case GatewayEvents.GUILD_MEMBER_ADD:
       if (!data.guild_id) break;
       if (data.user) {
-        useMemberStore.getState().addMember(data.guild_id, data as unknown as Member);
+        if (memberScope) useMemberStore.getState().addMember(data.guild_id, data as unknown as Member, memberScope);
       } else {
-        void useMemberStore.getState().fetchMembers(data.guild_id);
+        if (memberScope) void useMemberStore.getState().fetchMembers(data.guild_id, memberScope);
       }
       break;
     case GatewayEvents.GUILD_MEMBER_REMOVE:
@@ -441,21 +453,22 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
       {
         const targetUserId = data.user?.id ?? data.user_id;
         if (targetUserId) {
-          useMemberStore.getState().removeMember(data.guild_id, targetUserId);
+          if (memberScope) useMemberStore.getState().removeMember(data.guild_id, targetUserId, memberScope);
         } else {
-          void useMemberStore.getState().fetchMembers(data.guild_id);
+          if (memberScope) void useMemberStore.getState().fetchMembers(data.guild_id, memberScope);
         }
       }
       break;
     case GatewayEvents.GUILD_MEMBER_UPDATE:
       if (!data.guild_id) break;
       if (data.user?.id) {
-        useMemberStore.getState().updateMember(
+        if (memberScope) useMemberStore.getState().updateMember(
           data.guild_id,
           data as Partial<Member> & { user: { id: string } },
+          memberScope,
         );
       } else {
-        void useMemberStore.getState().fetchMembers(data.guild_id);
+        if (memberScope) void useMemberStore.getState().fetchMembers(data.guild_id, memberScope);
       }
       break;
 
@@ -464,7 +477,7 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
       break;
 
     case GatewayEvents.VOICE_STATE_UPDATE:
-      useVoiceStore.getState().handleVoiceStateUpdate(data as VoiceState);
+      if (memberScope) useVoiceStore.getState().handleVoiceStateUpdate(data as VoiceState, memberScope);
       break;
 
     case GatewayEvents.MESSAGE_REACTION_ADD: {
@@ -475,10 +488,8 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
         break;
       }
       const currentUserId =
-        useServerListStore.getState().getServer(serverId)?.userId ||
-        useAuthStore.getState().user?.id ||
-        '';
-      useMessageStore.getState().handleReactionAdd(
+        getServerUser(serverId)?.id ?? '';
+      if (memberScope) getMessageStore(memberScope).getState().handleReactionAdd(
         data.channel_id,
         data.message_id,
         emojiKey,
@@ -495,10 +506,8 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
         break;
       }
       const currentUserId2 =
-        useServerListStore.getState().getServer(serverId)?.userId ||
-        useAuthStore.getState().user?.id ||
-        '';
-      useMessageStore.getState().handleReactionRemove(
+        getServerUser(serverId)?.id ?? '';
+      if (memberScope) getMessageStore(memberScope).getState().handleReactionRemove(
         data.channel_id,
         data.message_id,
         emojiKey,
@@ -516,7 +525,7 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
 
     case GatewayEvents.CHANNEL_PINS_UPDATE:
       if (data.channel_id) {
-        useMessageStore.getState().fetchPins(data.channel_id);
+        if (memberScope) getMessageStore(memberScope).getState().fetchPins(data.channel_id);
       }
       break;
 
@@ -531,16 +540,15 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
       // relationships, and DM titles. Keep all of them live from one event.
       if (!data.user?.id) break;
       const updatedUserId = data.user.id;
-      const currentUserId = useAuthStore.getState().user?.id;
+      const currentUserId = getServerUser(serverId)?.id;
       const isSelf = currentUserId === updatedUserId;
       if (isSelf) {
-        const current = useAuthStore.getState().user;
-        useAuthStore.setState({ user: current ? { ...current, ...data.user } : data.user });
+        mergeServerUserProjection(serverId, data.user);
       }
       // These two are cheap and self-limiting — they bail internally when the
       // user owns nothing cached.
-      useMemberStore.getState().updateUserIdentity(data.user);
-      useMessageStore.getState().updateUserIdentity(data.user);
+      if (memberScope) useMemberStore.getState().updateUserIdentity(data.user, memberScope);
+      if (memberScope) getMessageStore(memberScope).getState().updateUserIdentity(data.user);
 
       // The refetches below are not cheap: `loadAllDmChannels` hits every
       // connected server. Firing both on every profile edit by anyone visible
@@ -549,7 +557,7 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
       const isKnownRelationship = useRelationshipStore
         .getState()
         .relationships.some((relationship) => relationship.user?.id === updatedUserId);
-      const isDmRecipient = Object.values(useChannelStore.getState().dmChannelsByServer).some(
+      const isDmRecipient = [channels.channelsByGuild[''] ?? []].some(
         (channels) =>
           channels.some(
             (channel) =>
@@ -561,7 +569,7 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
         void useRelationshipStore.getState().fetchRelationships();
       }
       if (isSelf || isDmRecipient) {
-        void useChannelStore.getState().loadAllDmChannels();
+        if (memberScope) void useChannelStore.getState().fetchDmChannels(memberScope);
       }
       break;
     }
@@ -641,12 +649,10 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
       {
         // Level/XP activity can unlock progressive channels for the local user.
         const selfUserId =
-          useServerListStore.getState().getServer(serverId)?.userId ||
-          useAuthStore.getState().user?.id ||
-          '';
+          getServerUser(serverId)?.id ?? '';
         const eventUserId = (data as { user_id?: string }).user_id;
         if (selfUserId && eventUserId && eventUserId === selfUserId) {
-          refreshGuildChannelVisibility(data.guild_id);
+          if (memberScope) refreshGuildChannelVisibility(data.guild_id, memberScope);
         }
       }
       break;

@@ -83,8 +83,21 @@ const env = {
   PARACORD_BACKUP_DIR: join(dataDir, 'backups'),
   PARACORD_REGISTRATION_ENABLED: 'true',
   PARACORD_AUTH_REQUIRE_EMAIL: 'true',
+  // This smoke registers its own first account through the REST API, so the
+  // instance is bootstrapped without a first-owner claim: the first account
+  // registered owns it, exactly as pre-claim releases behaved. The claim flow
+  // itself is covered by real-server-setup.spec.ts, which launches its own
+  // unclaimed instance with a pinned token.
+  PARACORD_SETUP_REQUIRE_CLAIM: 'false',
   PARACORD_LOG_ANSI: 'false',
   RUST_LOG: process.env.RUST_LOG ?? 'warn',
+  // The native media (QUIC/UDP) listener defaults to 8443, which collides with
+  // anything real running on this host. The voice connection-check specs set
+  // PARACORD_E2E_MEDIA_PORT so the server binds — and advertises — a port in the
+  // E2E range instead. Left unset, the harness keeps the product default.
+  ...(process.env.PARACORD_E2E_MEDIA_PORT
+    ? { PARACORD_VOICE_PORT: process.env.PARACORD_E2E_MEDIA_PORT }
+    : {}),
 };
 
 const child = spawn(serverBin, ['-c', join(dataDir, 'paracord.toml')], {

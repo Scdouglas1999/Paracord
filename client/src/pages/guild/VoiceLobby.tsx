@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import type { StageInstance } from '../../api/stage';
 import type { VoiceState } from '../../types';
 import { Button } from '../../components/ui/Button';
+import { VoiceConnectionCheckButton } from '../../components/voice/VoiceConnectionCheckButton';
 import { displayName } from '../../lib/displayName';
 
 interface VoiceLobbyProps {
@@ -162,11 +163,14 @@ export function VoiceLobby({
 
           <div className="flex shrink-0 items-center gap-2.5">
             {voiceJoinError ? (
-              channelId && guildId && (
-                <Button variant="secondary" onClick={onRetryJoin}>
-                  Try joining again
-                </Button>
-              )
+              <>
+                <VoiceConnectionCheckButton label="Run connection check" autoStart />
+                {channelId && guildId && (
+                  <Button variant="secondary" onClick={onRetryJoin}>
+                    Try joining again
+                  </Button>
+                )}
+              </>
             ) : (
               <Button
                 size="lg"
@@ -182,8 +186,14 @@ export function VoiceLobby({
         </div>
 
         {voiceJoinError && (
-          <div className="rounded-md border border-accent-danger/35 bg-danger-tint px-3.5 py-2.5 text-label text-accent-danger">
-            {isStage ? 'Stage' : 'Voice'} connection failed: {voiceJoinError}
+          <div className="rounded-md border border-accent-danger/35 bg-danger-tint px-3.5 py-2.5 text-accent-danger">
+            <p className="text-label">
+              {isStage ? 'Stage' : 'Voice'} connection failed: {voiceJoinError}
+            </p>
+            <p className="mt-1 text-meta text-text-secondary">
+              Chat still works. Calls use a separate network path, so the connection check above
+              will say which part failed.
+            </p>
           </div>
         )}
 

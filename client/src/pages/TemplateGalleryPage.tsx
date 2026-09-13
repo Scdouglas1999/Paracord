@@ -1,10 +1,12 @@
+import { useCurrentAccountScope } from '../hooks/useCurrentUser';
+import { guildLandingPath } from '../lib/guildNavigation';
+import { useCurrentGuilds } from '../hooks/useGuilds';
+import { useCurrentUser } from '../hooks/useCurrentUser';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { FileText, Trash2, Upload, Hash, Volume2, Megaphone, Folder, MessagesSquare, Search, Shield } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import { templateApi, type GuildTemplate } from '../api/templates';
-import { useAuthStore } from '../stores/authStore';
 import { useGuildStore } from '../stores/guildStore';
-import { useChannelStore } from '../stores/channelStore';
 import { ErrorBanner, LoadingSpinner, EmptyState } from '../components/ui/Feedback';
 import { Button } from '../components/ui/Button';
 import { Input, Select } from '../components/ui/Input';
@@ -27,9 +29,10 @@ function channelTypeIcon(type: number) {
 }
 
 export function TemplateGalleryPage() {
+  const guildScope = useCurrentAccountScope();
   const navigate = useNavigate();
-  const user = useAuthStore((s) => s.user);
-  const guilds = useGuildStore((s) => s.guilds);
+  const user = useCurrentUser();
+  const guilds = useCurrentGuilds();
   const [templates, setTemplates] = useState<GuildTemplate[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -84,14 +87,12 @@ export function TemplateGalleryPage() {
   }, [refreshTemplates]);
 
   const applyTemplate = async () => {
-    if (!selectedTemplate || !applyName.trim()) return;
+    if (!selectedTemplate || !applyName.trim() || !guildScope) return;
     setBusyTemplateId(selectedTemplate.id);
     setError(null);
     try {
-      const { data: guild } = await templateApi.apply(selectedTemplate.id, applyName.trim());
-      useGuildStore.getState().addGuild(guild);
-      await useChannelStore.getState().fetchChannels(guild.id);
-      navigate(`/app/guilds/${guild.id}`);
+      const guild = await useGuildStore.getState().applyTemplate(selectedTemplate.id, applyName.trim(), guildScope);
+      navigate(await guildLandingPath(guild));
     } catch (err) {
       setError(extractApiError(err) || 'Failed to create server from template.');
     } finally {

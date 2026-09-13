@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef } from 'react';
-import { gateway } from '../gateway/manager';
 import { useAuthStore } from '../stores/authStore';
 import { useVoiceStore } from '../stores/voiceStore';
 
@@ -79,13 +78,7 @@ function isTypingTarget(target: EventTarget | null): boolean {
 
 function publishVoiceState() {
   const state = useVoiceStore.getState();
-  gateway.updateVoiceStateAll(
-    state.guildId,
-    state.channelId,
-    state.selfMute,
-    state.selfDeaf,
-    state.selfVideo
-  );
+  state.publishVoiceState();
 }
 
 async function toggleMuteAndPublish() {
