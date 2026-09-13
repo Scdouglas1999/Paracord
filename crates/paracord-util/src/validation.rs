@@ -573,6 +573,169 @@ mod dangerous_markup_tests {
     }
 }
 
+/// Unicode's `Default_Ignorable_Code_Point` set: code points a conforming
+/// renderer draws nothing for. Kept whole rather than sampled — unlike a list
+/// of dangerous tag names, this set is closed and defined by the standard, so
+/// enumerating it is exact rather than a guess at what an attacker might try.
+///
+/// Membership here does **not** make a character illegal. A zero-width joiner
+/// and the variation selectors are how a family emoji or a flag is spelled, so
+/// they are perfectly legal inside a label; they simply do not count towards
+/// the label having anything to show. See [`label_is_blank`].
+const DEFAULT_IGNORABLE_RANGES: &[(u32, u32)] = &[
+    (0x00AD, 0x00AD),   // soft hyphen
+    (0x034F, 0x034F),   // combining grapheme joiner
+    (0x061C, 0x061C),   // arabic letter mark
+    (0x115F, 0x1160),   // hangul choseong/jungseong fillers
+    (0x17B4, 0x17B5),   // khmer inherent vowels
+    (0x180B, 0x180F),   // mongolian variation selectors + vowel separator
+    (0x200B, 0x200F),   // zero-width space/joiners, LTR/RTL marks
+    (0x202A, 0x202E),   // bidi embedding and override controls
+    (0x2060, 0x206F),   // word joiner, invisible operators, deprecated bidi
+    (0x3164, 0x3164),   // hangul filler
+    (0xFE00, 0xFE0F),   // variation selectors
+    (0xFEFF, 0xFEFF),   // zero-width no-break space / BOM
+    (0xFFA0, 0xFFA0),   // halfwidth hangul filler
+    (0xFFF0, 0xFFF8),   // unassigned, specified as default-ignorable
+    (0x1BCA0, 0x1BCA3), // shorthand format controls
+    (0x1D173, 0x1D17A), // musical format controls
+    (0xE0000, 0xE0FFF), // tags and variation selectors supplement
+];
+
+fn is_default_ignorable(c: char) -> bool {
+    let cp = c as u32;
+    DEFAULT_IGNORABLE_RANGES
+        .iter()
+        .any(|(lo, hi)| cp >= *lo && cp <= *hi)
+}
+
+/// Bidi controls that re-order the characters around them. A label carrying one
+/// does not read the way its stored bytes read — `a\u{202E}gnp.exe` renders as
+/// `aexe.png` — which is the Trojan Source class, applied to a name a person is
+/// asked to trust. The plain direction *marks* (U+200E/U+200F) are not here:
+/// they hint at direction for text that genuinely needs it without reversing
+/// anything.
+fn is_bidi_reordering_control(c: char) -> bool {
+    matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
+/// True when a label would render as nothing at all: every character in it is
+/// whitespace or draws no glyph.
+fn label_is_blank(value: &str) -> bool {
+    !value
+        .chars()
+        .any(|c| !c.is_whitespace() && !is_default_ignorable(c))
+}
+
+/// A label a person is asked to read must actually render something, and must
+/// not lie about which way it reads.
+///
+/// This is the companion to [`contains_dangerous_markup`] for the same family
+/// of fields — space names, room names, and anything else shown to a reader as
+/// the identity of a thing. That function closes the tag-injection class;
+/// this one closes two others it says nothing about:
+///
+/// * **Blank labels.** A name of nothing but spaces, or of nothing but
+///   zero-width characters, passes a `len()` bound and then renders as an empty
+///   row. The reader cannot name it, search for it, or tell two of them apart.
+/// * **Direction spoofing.** U+202E and its siblings reverse the text that
+///   follows, so a stored name can present itself as a completely different
+///   string — the Trojan Source trick, pointed at a label rather than at source
+///   code.
+///
+/// Control characters go with them: a newline in a name breaks every single-line
+/// surface that renders it, and a NUL truncates the name for any consumer that
+/// hands it to a C API.
+///
+/// Length is deliberately **not** checked here; callers already bound their own
+/// field against their own column.
+pub fn validate_visible_label(value: &str) -> Result<(), ValidationError> {
+    if value.chars().any(char::is_control) {
+        return Err(ValidationError::InvalidCharacters);
+    }
+    if value.chars().any(is_bidi_reordering_control) {
+        return Err(ValidationError::InvalidCharacters);
+    }
+    if label_is_blank(value) {
+        return Err(ValidationError::TooShort { min: 1, got: 0 });
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod visible_label_tests {
+    use super::validate_visible_label;
+
+    #[test]
+    fn accepts_names_people_actually_use() {
+        for value in [
+            "General",
+            "general",
+            "Ada Lovelace",
+            "salon-de-the",
+            // Emoji-only names are ordinary. The family sequence is spelled with
+            // zero-width joiners and the flag with regional indicators; neither
+            // may be mistaken for a blank label.
+            "\u{1F680}",
+            "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}",
+            "\u{1F1EF}\u{1F1F5}",
+            "\u{2764}\u{FE0F}",
+            // Right-to-left script is fine; it is the *override* that is not.
+            "\u{0645}\u{0631}\u{062D}\u{0628}\u{0627}",
+            "3 - 2 is math",
+        ] {
+            assert!(
+                validate_visible_label(value).is_ok(),
+                "must accept {value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_labels_that_render_as_nothing() {
+        for value in [
+            "",
+            "   ",
+            "\u{00A0}\u{00A0}",
+            "\u{200B}\u{200B}\u{200B}",
+            "\u{FEFF}",
+            "\u{2060}",
+            "\u{3164}",
+            "\u{E0041}",
+        ] {
+            assert!(
+                validate_visible_label(value).is_err(),
+                "must reject blank label {value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_control_characters() {
+        for value in ["a\u{0000}b", "a\nb", "a\rb", "a\tb", "\u{0007}bell"] {
+            assert!(
+                validate_visible_label(value).is_err(),
+                "must reject control character in {value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_direction_spoofing() {
+        for value in [
+            // Renders as "aexe.png".
+            "a\u{202E}gnp.exe",
+            "\u{202D}forced-ltr",
+            "\u{2066}isolated\u{2069}",
+        ] {
+            assert!(
+                validate_visible_label(value).is_err(),
+                "must reject direction spoofing in {value:?}"
+            );
+        }
+    }
+}
+
 /// Rich-message producers use mention tokens as syntax, not HTML. Permit only
 /// complete positive snowflake mention tokens while retaining the strict markup
 /// rejection used by their existing content validation.

@@ -57,7 +57,7 @@ fn channel_route_slow_ms() -> u64 {
     })
 }
 
-use paracord_util::validation::contains_dangerous_markup;
+use paracord_util::validation::{contains_dangerous_markup, validate_visible_label};
 
 fn normalize_discovery_tags(tags: &[String]) -> Result<String, ApiError> {
     if tags.len() > MAX_DISCOVERY_TAGS {
@@ -246,6 +246,14 @@ pub async fn create_guild(
             "Guild name contains unsafe markup".into(),
         ));
     }
+    // The markup contract says nothing about a name that renders as nothing at
+    // all, or one that renders as something other than what it stores. The
+    // length bound above measures bytes, so "\u{200B}\u{200B}\u{200B}" and
+    // "      " both cleared it and produced a space with an unnameable,
+    // unsearchable, blank label in the sidebar; "a\u{202E}gnp.exe" cleared it
+    // and renders to every member as "aexe.png".
+    validate_visible_label(&body.name)
+        .map_err(|_| ApiError::BadRequest("Guild name must be readable text".into()))?;
 
     ensure_guild_creation_allowed(&state, auth.user_id).await?;
 
@@ -338,6 +346,8 @@ pub async fn update_guild(
         if contains_dangerous_markup(name) {
             return Err(ApiError::BadRequest("name contains unsafe markup".into()));
         }
+        validate_visible_label(name)
+            .map_err(|_| ApiError::BadRequest("name must be readable text".into()))?;
     }
     // Measured on the raw value, which is what reaches the column below;
     // checking `trim()` let an arbitrarily whitespace-padded description past.

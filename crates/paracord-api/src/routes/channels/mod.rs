@@ -99,7 +99,7 @@ const MAX_POLL_DURATION_MINUTES: i64 = 60 * 24 * 14; // 14 days
 const MAX_MESSAGE_NONCE_LEN: usize = 64;
 const MAX_FORUM_SEARCH_POSTS: usize = 250;
 
-use paracord_util::validation::contains_dangerous_markup;
+use paracord_util::validation::{contains_dangerous_markup, validate_visible_label};
 
 fn parse_optional_datetime_param(
     raw: Option<&str>,
@@ -919,6 +919,12 @@ pub async fn create_channel(
     if contains_dangerous_markup(&body.name) {
         return Err(ApiError::BadRequest("name contains unsafe markup".into()));
     }
+    // There was no lower bound at all: `""` created a room whose sidebar row is
+    // a blank strip nobody can name, click for, or search. A name of nothing but
+    // spaces or zero-width characters reads the same way, and a newline in one
+    // breaks every single-line surface that renders it.
+    validate_visible_label(&body.name)
+        .map_err(|_| ApiError::BadRequest("name must be readable text".into()))?;
     let channel_id = paracord_util::snowflake::generate(1);
     let required_role_ids = match body.required_role_ids.as_deref() {
         Some(raw_role_ids) => {
@@ -987,6 +993,8 @@ pub async fn update_channel(
         if contains_dangerous_markup(name) {
             return Err(ApiError::BadRequest("name contains unsafe markup".into()));
         }
+        validate_visible_label(name)
+            .map_err(|_| ApiError::BadRequest("name must be readable text".into()))?;
     }
     // Measured on the raw value, which is what reaches the column; checking
     // `trim()` let an arbitrarily whitespace-padded topic past.
