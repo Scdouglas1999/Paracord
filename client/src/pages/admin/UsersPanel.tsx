@@ -160,7 +160,13 @@ export function UsersPanel() {
             <span className="pc-mono tabular-nums text-text-primary">
               {total.toLocaleString()}
             </span>{' '}
-            registered {total === 1 ? 'account' : 'accounts'} on this server.
+            {total === 1 ? ' account' : ' accounts'} on this server, bots included.
+            {/* Says "bots included" because it is: this total is every row the
+                list renders, while the Overview panel's "Registered users"
+                counts people (paracord_db::users::count_human_users excludes
+                the seeded Welcome Bot and Auto-Moderator). Two admin screens
+                answering "how many accounts" with different numbers and the
+                same word is the part that reads like a bug. */}
           </>
         }
         action={
