@@ -1,7 +1,6 @@
 import * as React from 'react';
 import { useEffect, useRef } from 'react';
 
-import { Lamp } from '../ui';
 import { cn } from '../../lib/utils';
 import { darkRoomCaption, type RoomLight } from '../../lib/attention/light';
 import type { RoomFrame } from '../../lib/media/roomFrameTap';
@@ -54,20 +53,20 @@ export const RoomThumbnail = React.forwardRef<HTMLDivElement, RoomThumbnailProps
       <div
         ref={ref}
         className={cn(
-          'relative w-full shrink-0 overflow-hidden bg-bg-well shadow-[var(--shadow-tile)]',
+          'relative w-full shrink-0 overflow-hidden shadow-[var(--shadow-tile)]',
           'rounded-[var(--radius-thumb)]',
+          // A lit window has a tinted frame; a dark one is the plain matte well.
+          room.lit ? 'bg-[var(--thumb-frame-lit)]' : 'bg-bg-well',
           className,
         )}
         style={{ height, ...style }}
         {...props}
       >
-        {/* The thumbnail's own lamp, matching the reference render's
-            `radial-gradient(70% 120% at 20% 0%)`: an ellipse centred on the top
-            edge, a fifth of the way across, so the glow hugs the top-left
-            corner instead of washing the middle. */}
-        {room.lit && (
-          <Lamp style={{ left: '-50%', top: '-120%', width: '140%', height: '240%' }} />
-        )}
+        {/* The thumbnail's own glow — `pc-thumb-glow`, not the card lamp. The
+            reference renders paint it into the frame
+            (`radial-gradient(70% 120% at 20% 0%)`), so it hugs the top-left
+            corner of the window instead of fogging it (§1.2, §8). */}
+        {room.lit && <span aria-hidden className="pc-thumb-glow" />}
 
         {room.thumbnail.live && frame ? (
           <FrameCanvas frame={frame} />

@@ -447,6 +447,11 @@
   --ring-lit-plate: 0 0 0 1px rgba(243, 234, 216, 0.16), 0 0 34px rgba(243, 234, 216, 0.1);
   /* The one permitted radial: one lamp per lit building/room card. */
   --lamp-radial: radial-gradient(closest-side, rgba(243, 234, 216, 0.16), rgba(243, 234, 216, 0));
+  /* A lit room thumbnail. NOT the lamp: the reference renders paint the glow
+     INTO the frame (`radial-gradient(70% 120% at 20% 0%)` over a tinted ground),
+     so it hugs the top-left corner of the window instead of fogging it. */
+  --thumb-frame-lit: #101a16;
+  --thumb-glow: radial-gradient(70% 120% at 20% 0%, rgba(243, 234, 216, 0.16), rgba(243, 234, 216, 0));
   /* Away / offline. No rim. */
   --dim-filter: saturate(0.35) brightness(0.72);
   /* A name tag over a live tile. */
@@ -649,6 +654,8 @@
   --ring-speaking-peak: 0 0 0 1.5px rgba(23, 23, 15, 0.4), 0 0 18px rgba(23, 23, 15, 0.13);
   --ring-lit-plate: 0 0 0 1px rgba(23, 23, 15, 0.16), 0 0 34px rgba(23, 23, 15, 0.05);
   --lamp-radial: radial-gradient(closest-side, rgba(133, 94, 48, 0.14), rgba(133, 94, 48, 0));
+  --thumb-frame-lit: #e4e8e1;
+  --thumb-glow: radial-gradient(70% 120% at 20% 0%, rgba(133, 94, 48, 0.14), rgba(133, 94, 48, 0));
   --dim-filter: saturate(0.35) brightness(1.06) opacity(0.62);
   --tag-fill: rgba(251, 249, 244, 0.82);
 
@@ -670,6 +677,7 @@
   --bg-mod-strong: rgba(243, 234, 216, 0.12);
   --window-dark: #16181d;
   --overlay-backdrop: rgba(0, 0, 0, 0.88);
+  --thumb-frame-lit: #080d0b;
 
   --border-subtle: rgba(243, 234, 216, 0.1);
   --border-strong: rgba(243, 234, 216, 0.18);
@@ -767,6 +775,8 @@
   --ring-speaking-peak: 0 0 0 2px rgba(243, 234, 216, 1), 0 0 18px rgba(243, 234, 216, 0.37);
   --ring-lit-plate: 0 0 0 2px rgba(243, 234, 216, 0.24), 0 0 34px rgba(243, 234, 216, 0.15);
   --lamp-radial: radial-gradient(closest-side, rgba(243, 234, 216, 0.24), rgba(243, 234, 216, 0));
+  --thumb-frame-lit: #0b1210;
+  --thumb-glow: radial-gradient(70% 120% at 20% 0%, rgba(243, 234, 216, 0.24), rgba(243, 234, 216, 0));
   --dim-filter: saturate(0.35) brightness(0.72);
   --tag-fill: rgba(0, 0, 0, 0.9);
 

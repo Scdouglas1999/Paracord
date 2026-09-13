@@ -1,4 +1,4 @@
-import { useSearchParams } from 'react-router';
+import { useLocation, useSearchParams } from 'react-router';
 
 import {
   RoomChatRibbon,
@@ -103,8 +103,14 @@ function RibbonMessage({
 
 export default function StagePreviewPage() {
   const [params] = useSearchParams();
+  const { pathname } = useLocation();
   const state = params.get('state') ?? 'share';
   const phone = params.get('phone') === '1';
+  // Mounted at /app/design-stage the page is the AppShell's outlet, so the
+  // Buildings column is beside it exactly as it is in a real call (§7.1); the
+  // shell already owns the viewport height and the gutter. Mounted at
+  // /design-stage it owns the window itself.
+  const inShell = pathname.startsWith('/app/');
   const sharing = state === 'share';
 
   const hasDominant = state !== 'speakers';
@@ -201,7 +207,13 @@ export default function StagePreviewPage() {
   );
 
   return (
-    <div className="flex h-[100dvh] w-full flex-col bg-bg-base p-[var(--gutter)]">
+    <div
+      className={
+        inShell
+          ? 'flex h-full min-h-0 w-full flex-col bg-bg-base'
+          : 'flex h-[100dvh] w-full flex-col bg-bg-base p-[var(--gutter)]'
+      }
+    >
       <StageLayout
         phone={phone}
         header={

@@ -320,6 +320,12 @@ export default function App() {
         <Route path="templates" element={lazyRoute(<TemplateGalleryPage />)} />
         <Route path="oauth2/authorize" element={lazyRoute(<BotAuthorizePage />)} />
         <Route path="developers" element={lazyRoute(<DeveloperPage />)} />
+        {/* The Stage inside the real shell, so the Buildings column stands
+            beside it as it does in a call (lantern-stage-spec §7.1/§7.2).
+            Dev builds only, stripped from production. */}
+        {import.meta.env.DEV && StagePreviewPage && (
+          <Route path="design-stage" element={lazyRoute(<StagePreviewPage />)} />
+        )}
       </Route>
 
       {/* Media engine test harness — registered in dev builds only, stripped from production. */}
