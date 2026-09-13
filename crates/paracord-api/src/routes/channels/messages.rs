@@ -738,11 +738,36 @@ pub async fn send_message(
         }
     }
 
+    // A reply's target has to be a message this channel actually holds. The
+    // sibling route that stores the same column — `POST
+    // /channels/{id}/scheduled-messages` — has always checked exactly this
+    // ("referenced_message_id does not exist" / "must belong to this channel");
+    // the immediate-send path parsed the id and stored it unread. An arbitrary
+    // i64 therefore persisted as a reply target, including the id of a message
+    // in a private channel of a guild the author is not in. Nothing leaked —
+    // the reply payload carries only the id, and a reader who fetches it is
+    // still refused — but the row is a reference the product can never resolve,
+    // so every client renders the reply with a quote that silently resolves to
+    // nothing. Reject it at the door instead, the way an `attachment_id` that
+    // does not exist is already rejected two blocks below.
     let referenced_message_id = match body.referenced_message_id.as_deref() {
-        Some(id) => Some(
-            id.parse::<i64>()
-                .map_err(|_| ApiError::BadRequest("Invalid referenced_message_id".into()))?,
-        ),
+        Some(id) => {
+            let parsed = id
+                .parse::<i64>()
+                .map_err(|_| ApiError::BadRequest("Invalid referenced_message_id".into()))?;
+            let referenced = paracord_db::messages::get_message(&state.db, parsed)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+                .ok_or_else(|| {
+                    ApiError::BadRequest("referenced_message_id does not exist".into())
+                })?;
+            if referenced.channel_id != channel_id {
+                return Err(ApiError::BadRequest(
+                    "referenced_message_id must belong to this channel".into(),
+                ));
+            }
+            Some(parsed)
+        }
         None => None,
     };
 
