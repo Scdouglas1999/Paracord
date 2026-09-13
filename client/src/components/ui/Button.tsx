@@ -1,9 +1,5 @@
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
-import { motion, HTMLMotionProps } from "framer-motion";
-// §5.3: one reduced-motion switch for the whole app (lib/motion), never
-// framer-motion's own hook — that one cannot see the user's Motion setting.
-import { useReducedMotion } from '../../lib/motion';
 import { Loader2 } from "lucide-react";
 import { cn } from "../../lib/utils";
 
@@ -31,32 +27,37 @@ import { cn } from "../../lib/utils";
  */
 const buttonVariants = cva(
     [
+        // pc-focusable: the §9 ring, faded in over --duration-fast (primitives).
+        // Each visual variant carries pc-pressable — the §5.1 shared press:
+        // 1px lift on hover, 0.96 for the 80ms press, a spring back on release
+        // — and the accent ones layer pc-pressable-accent's one-beat flash.
+        // `link` is underlined text, not a pressable surface, so it opts out.
+        "pc-focusable",
         "relative inline-flex select-none items-center justify-center gap-[7px] whitespace-nowrap",
         "rounded-[var(--radius-control)] text-label font-medium outline-none",
         "transition-[background-color,color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]",
-        "focus-visible:shadow-[var(--focus-ring)]",
         "disabled:pointer-events-none disabled:opacity-60",
     ].join(" "),
     {
         variants: {
             variant: {
                 primary:
-                    "bg-accent-primary font-semibold text-text-on-accent hover:bg-accent-primary-hover active:bg-accent-primary-active",
+                    "pc-pressable pc-pressable-accent bg-accent-primary font-semibold text-text-on-accent hover:bg-accent-primary-hover active:bg-accent-primary-active",
                 light:
-                    "bg-light-white font-semibold text-text-on-light shadow-[var(--glow-light-fill)] hover:brightness-[1.04] active:brightness-[0.96]",
+                    "pc-pressable bg-light-white font-semibold text-text-on-light shadow-[var(--glow-light-fill)] hover:brightness-[1.04] active:brightness-[0.96]",
                 ghost:
-                    "bg-transparent text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary active:bg-bg-mod-strong",
+                    "pc-pressable bg-transparent text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary active:bg-bg-mod-strong",
                 danger:
-                    "bg-danger-well font-semibold text-accent-danger hover:brightness-125 active:brightness-95",
+                    "pc-pressable bg-danger-well font-semibold text-accent-danger hover:brightness-125 active:brightness-95",
                 // ---- legacy aliases (deprecated) ----
                 default:
-                    "bg-accent-primary font-semibold text-text-on-accent hover:bg-accent-primary-hover active:bg-accent-primary-active",
+                    "pc-pressable pc-pressable-accent bg-accent-primary font-semibold text-text-on-accent hover:bg-accent-primary-hover active:bg-accent-primary-active",
                 destructive:
-                    "bg-danger-well font-semibold text-accent-danger hover:brightness-125 active:brightness-95",
+                    "pc-pressable bg-danger-well font-semibold text-accent-danger hover:brightness-125 active:brightness-95",
                 secondary:
-                    "bg-bg-raised text-text-primary shadow-[var(--shadow-chip)] hover:bg-bg-mod-strong",
+                    "pc-pressable bg-bg-raised text-text-primary shadow-[var(--shadow-chip)] hover:bg-bg-mod-strong",
                 outline:
-                    "border border-border-subtle bg-transparent text-text-primary hover:bg-bg-mod-subtle",
+                    "pc-pressable border border-border-subtle bg-transparent text-text-primary hover:bg-bg-mod-subtle",
                 link: "px-1 py-0 text-text-link underline-offset-4 hover:underline",
             },
             size: {
@@ -77,7 +78,7 @@ const buttonVariants = cva(
 );
 
 export interface ButtonProps
-    extends Omit<HTMLMotionProps<"button">, "ref">,
+    extends Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, "ref">,
     VariantProps<typeof buttonVariants> {
     asChild?: boolean;
     loading?: boolean;
@@ -85,20 +86,17 @@ export interface ButtonProps
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     ({ className, variant, size, loading, children, disabled, type = "button", ...props }, ref) => {
-        const reduceMotion = useReducedMotion();
         return (
-            <motion.button
+            <button
                 ref={ref}
                 type={type}
-                whileTap={reduceMotion ? undefined : { scale: 0.97 }}
-                transition={{ duration: 0.12, ease: [0.22, 1, 0.36, 1] }}
                 className={cn(buttonVariants({ variant, size, className }))}
                 disabled={disabled || loading}
                 {...props}
             >
                 {loading && <Loader2 className="h-4 w-4 animate-spin" aria-hidden />}
-                {children as React.ReactNode}
-            </motion.button>
+                {children}
+            </button>
         );
     }
 );
