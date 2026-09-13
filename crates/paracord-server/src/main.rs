@@ -3553,7 +3553,7 @@ async fn handle_webtransport_connection(
         }
     };
 
-    let wt_session = match tokio::time::timeout(
+    let mut wt_session = match tokio::time::timeout(
         std::time::Duration::from_secs(10),
         h3_session.accept_session(),
     )
@@ -3779,27 +3779,29 @@ async fn handle_webtransport_connection(
         "WebTransport: authenticated"
     );
 
-    // Spawn datagram bridge (handles QSID framing).
-    // The first WebTransport session on a fresh connection has QSID = 0.
-    let (outbound_tx, inbound_rx) = paracord_transport::webtransport::spawn_webtransport_bridge(
-        wt_session.quinn_conn().clone(),
-        0,
-    );
+    // Spawn the datagram bridge with this session's own quarter stream id
+    // (the CONNECT stream id / 4), so outbound media is attributed to the
+    // session and inbound datagrams naming another one are dropped.
+    let (outbound_tx, inbound_rx) = wt_session.spawn_datagram_bridge();
 
-    // Create bridged connection handle and start forwarding
+    // Create bridged connection handle and start forwarding. The handle gets
+    // the session's stream framer, not the bare quinn connection: a browser's
+    // control and keyframe streams are HTTP/3 WebTransport streams and must be
+    // opened and accepted with the session header applied.
     let handle = paracord_relay::relay::ConnectionHandle::new_bridged(
         user_id,
         room_id.clone(),
         media_session_id,
         outbound_tx,
         inbound_rx,
-        Some(wt_session.quinn_conn().clone()),
+        Some(wt_session.streams()),
     );
     relay.add_connection(handle.clone());
     relay.spawn_forwarding_task(handle.clone());
     relay.spawn_control_task(handle.clone());
     {
         let relay = relay.clone();
+        let handle = handle.clone();
         tokio::spawn(async move {
             relay.send_initial_track_state(&handle).await;
         });
@@ -3807,7 +3809,37 @@ async fn handle_webtransport_connection(
     tracing::info!(
         user_id,
         room_id = %room_id,
+        session_id = wt_session.session_id(),
         "WebTransport: relay forwarding started"
+    );
+
+    // Park here for the life of the call, holding the HTTP/3 connection and the
+    // session's CONNECT stream. Both are load-bearing, not bookkeeping:
+    // `h3::server::Connection::drop` closes the QUIC connection with
+    // H3_NO_ERROR, and dropping the CONNECT request stream FINs it, which is
+    // how a WebTransport session is torn down. Returning here without them
+    // killed every browser call the instant forwarding started.
+    //
+    // `closed()` watches that CONNECT stream as well as the QUIC connection,
+    // because a browser ends a session by closing the former and leaves the
+    // latter warm — waiting only on the connection kept a departed participant
+    // registered with the relay until the QUIC idle timeout.
+    let closed = wt_session.closed().await;
+
+    // Retiring the relay connection is transport-driven and lease-fenced: the
+    // bridge task's `read_datagram` must fail for the forwarding task to run
+    // its cleanup. When the session (rather than the connection) ended, the
+    // connection is still alive, so close it — this handle's connection carries
+    // exactly this session. If the account has already reconnected, this handle
+    // no longer owns it and the lease fence makes the cleanup a no-op.
+    handle.close("WebTransport session closed");
+    drop(wt_session);
+    drop(h3_session);
+    tracing::info!(
+        user_id,
+        room_id = %room_id,
+        reason = %closed,
+        "WebTransport: session closed"
     );
 }
 

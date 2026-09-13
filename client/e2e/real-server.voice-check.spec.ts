@@ -197,11 +197,13 @@ test.describe('voice connection check against a reachable media endpoint', () =>
       expect(typeof payload.certificate_pin_sha256).toBe('string');
 
       await expect(step(page, 'secure-context')).toHaveAttribute('data-status', 'pass');
-      // A headless runner has no real capture hardware, so the microphone step
-      // may legitimately report a problem. What must hold is that it settles
-      // with a precise, named cause rather than hanging or going vague.
-      await expect(step(page, 'microphone')).toHaveAttribute('data-status', /pass|warn|fail/);
-      await expect(step(page, 'microphone')).toContainText(/MIC_[A-Z_]+/);
+      // Chromium is launched with a fake capture device, so the microphone step
+      // must actually pass. It used to report MIC_DENIED here no matter what,
+      // because the server sent `Permissions-Policy: camera=(), microphone=()`
+      // on its own UI document and disabled `getUserMedia` for every browser
+      // client. This assertion is what keeps that header honest.
+      await expect(step(page, 'microphone')).toHaveAttribute('data-status', 'pass');
+      await expect(step(page, 'microphone')).toContainText(/MIC_OK/);
       await expect(step(page, 'media-configuration')).toHaveAttribute('data-status', 'pass');
       await expect(step(page, 'media-configuration')).toContainText(
         `https://127.0.0.1:${MEDIA_PORT}/media`,

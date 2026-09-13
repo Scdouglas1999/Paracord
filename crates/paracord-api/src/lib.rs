@@ -897,6 +897,12 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
             "/api/v1/voice/transport-diagnostics",
             get(routes::voice_diagnostics::transport_diagnostics),
         )
+        // Side-effect-free proof of what the relay actually moved for a room,
+        // gated by the same permissions a join is.
+        .route(
+            "/api/v1/voice/{channel_id}/media-stats",
+            get(routes::voice_diagnostics::channel_media_stats),
+        )
         .route(
             "/api/v2/voice/{channel_id}/join",
             post(routes::voice_v2::join_voice_v2),
@@ -1727,7 +1733,19 @@ pub async fn security_headers_middleware(req: Request, next: Next) -> Response {
     );
     headers.insert(
         HeaderName::from_static("permissions-policy"),
-        HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
+        // A voice-and-video product must allow itself the capture APIs it is
+        // built on. `camera=(), microphone=()` disabled `getUserMedia` for every
+        // browser client of a Paracord-served page — the call could open its
+        // media transport and then never capture a thing, and the guided
+        // connection check reported `MIC_DENIED` even under Chromium's
+        // fake-device flags. `(self)` grants them to this origin only: a
+        // cross-origin frame still gets nothing, which is what the empty list
+        // was really protecting. `display-capture` is the same story for screen
+        // share (`getDisplayMedia`). Everything else stays denied — notably
+        // `geolocation`, which this product never asks for.
+        HeaderValue::from_static(
+            "camera=(self), microphone=(self), display-capture=(self), geolocation=()",
+        ),
     );
     headers.insert(
         HeaderName::from_static("cross-origin-opener-policy"),

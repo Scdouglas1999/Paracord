@@ -13,8 +13,13 @@
 //! operator configured, and the client's connection check performs the actual
 //! transport attempt against it.
 
-use axum::{extract::State, http::HeaderMap, Json};
+use axum::{
+    extract::{Path, State},
+    http::HeaderMap,
+    Json,
+};
 use paracord_core::AppState;
+use paracord_models::permissions::Permissions;
 use serde_json::{json, Value};
 
 use crate::error::ApiError;
@@ -86,5 +91,83 @@ pub async fn transport_diagnostics(
         "livekit_available": state.config.livekit_available,
         "e2ee_required": state.config.native_media_e2ee_required,
         "max_participants": state.config.native_media_max_participants,
+    })))
+}
+
+/// `GET /api/v1/voice/{channel_id}/media-stats`
+///
+/// Authenticated, side-effect free, and gated by the same `VIEW_CHANNEL` +
+/// `CONNECT` permissions a join is: it reports who currently holds a live media
+/// connection to this room and how much media each of them has actually moved.
+///
+/// This is the only surface that can answer "did the call carry audio". The
+/// voice-state tables say a member *joined*; the bandwidth estimator's window
+/// says how fast someone is sending *right now* and forgets it seconds later.
+/// Neither survives as evidence that packets flowed, which is what an operator
+/// diagnosing a silent call — and the browser-voice end-to-end test — needs.
+///
+/// Counters are cumulative for the life of one media connection, so a reconnect
+/// restarts them; `session_id` says which call each row belongs to.
+pub async fn channel_media_stats(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(channel_id): Path<i64>,
+) -> Result<Json<Value>, ApiError> {
+    let channel = paracord_db::channels::get_channel(&state.db, channel_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    if channel.channel_type != 2 && channel.channel_type != 13 {
+        return Err(ApiError::BadRequest("Not a voice channel".into()));
+    }
+    let guild_id = channel.guild_id().ok_or(ApiError::BadRequest(
+        "Voice is only supported in guild channels".into(),
+    ))?;
+    paracord_core::permissions::ensure_guild_member(&state.db, guild_id, auth.user_id).await?;
+    let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    let perms = paracord_core::permissions::compute_channel_permissions(
+        &state.db,
+        guild_id,
+        channel_id,
+        guild.owner_id,
+        auth.user_id,
+    )
+    .await?;
+    paracord_core::permissions::require_permission(perms, Permissions::VIEW_CHANNEL)?;
+    paracord_core::permissions::require_permission(perms, Permissions::CONNECT)?;
+
+    let room_id = format!("{guild_id}:{channel_id}");
+    let participants: Vec<Value> = state
+        .native_media
+        .as_ref()
+        .map(|native| native.relay_forwarder.room_media_stats(&room_id))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|stats| {
+            json!({
+                // Snowflakes cross the wire as strings, as everywhere else.
+                "user_id": stats.user_id.to_string(),
+                "session_id": stats.session_id,
+                "transport": stats.transport,
+                "datagrams_received": stats.datagrams_received,
+                "bytes_received": stats.bytes_received,
+                "audio_datagrams_received": stats.audio_datagrams_received,
+                "video_datagrams_received": stats.video_datagrams_received,
+                "stream_frames_received": stats.stream_frames_received,
+                "datagrams_sent": stats.datagrams_sent,
+                "bytes_sent": stats.bytes_sent,
+                "stream_frames_sent": stats.stream_frames_sent,
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "transport": configured_transport(&state),
+        "room_id": room_id,
+        "connected_participants": participants.len(),
+        "participants": participants,
     })))
 }

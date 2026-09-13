@@ -5440,6 +5440,7 @@ dependencies = [
  "axum",
  "axum-extra",
  "base64 0.22.1",
+ "bytes",
  "chrono",
  "dashmap",
  "ed25519-dalek",

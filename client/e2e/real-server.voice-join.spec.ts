@@ -1,0 +1,471 @@
+import { resolve } from 'node:path';
+import { expect, test, type APIRequestContext, type Browser, type Page } from '@playwright/test';
+
+// The end-to-end proof that a *browser* can hold a call on the native media
+// transport. Nothing here is mocked or stubbed: Chromium loads the embedded UI
+// out of the release binary, joins a real guild voice room through
+// `BrowserMediaEngine`, opens a real WebTransport session to the release
+// binary's QUIC media port, and publishes real (fake-device) Opus audio, which
+// the relay counts.
+//
+// It asserts four separate things, because each one has failed on its own:
+//
+//   1. the UI reaches a connected call and reports no error;
+//   2. the *server* agrees — the relay names this account as a live participant
+//      of the room, on the `webtransport` path, under the same media-session
+//      receipt the REST join issued;
+//   3. audio actually moved — the relay's cumulative per-connection counters
+//      show audio datagrams arriving from this user (a joined-but-silent call
+//      passes 1 and 2 and fails here);
+//   4. leaving retires the connection.
+//
+// Assertion 3 is the one that catches WebTransport stream/datagram framing:
+// before it, the browser's auth stream arrived with its HTTP/3
+// `WEBTRANSPORT_STREAM` header in front of the length prefix and the session
+// never authenticated at all.
+
+const PORT = process.env.PARACORD_E2E_PORT ?? '18150';
+const BASE = `http://127.0.0.1:${PORT}`;
+
+// Joining runs a real handshake, a real getUserMedia, a WebCodecs Opus encoder
+// and an AudioWorklet before the first packet leaves, and the relay counters are
+// then polled. Give the whole journey room on a cold runner.
+test.setTimeout(180_000);
+
+function shotPath(name: string): string {
+  // Playwright runs with `client/` as the working directory.
+  return resolve(process.cwd(), '..', 'output', 'improvement-program', 'browser-voice-join', name);
+}
+
+const MEDIA_LAUNCH_ARGS = [
+  // A deterministic 440 Hz capture device, auto-granted, so the microphone step
+  // does not depend on the runner having hardware.
+  '--use-fake-device-for-media-stream',
+  '--use-fake-ui-for-media-stream',
+  '--autoplay-policy=no-user-gesture-required',
+];
+
+type PlaywrightFixture = {
+  chromium: { launch: (options: { args: string[] }) => Promise<Browser> };
+};
+
+/**
+ * Playwright refuses per-test `launchOptions`, and these cases need the fake
+ * capture device, so each launches its own browser (same shape as
+ * real-server.voice-check.spec.ts). `body` receives a factory so a case can
+ * open as many independent, separately-signed-in participants as it needs.
+ */
+async function withChromium(
+  playwrightFixture: PlaywrightFixture,
+  body: (newParticipant: () => Promise<Page>) => Promise<void>,
+): Promise<void> {
+  const browser = await playwrightFixture.chromium.launch({ args: MEDIA_LAUNCH_ARGS });
+  const pages: Page[] = [];
+  try {
+    const newParticipant = async () => {
+      const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+      await context.grantPermissions(['microphone', 'camera'], { origin: BASE });
+      context.setDefaultTimeout(30_000);
+      const page = await context.newPage();
+      pages.push(page);
+      return page;
+    };
+    try {
+      await body(newParticipant);
+    } catch (error) {
+      for (const [index, page] of pages.entries()) {
+        await page
+          .screenshot({ path: shotPath(`failure-${Date.now()}-${index}.png`) })
+          .catch(() => {});
+      }
+      throw error;
+    }
+  } finally {
+    await browser.close();
+  }
+}
+
+interface Account {
+  email: string;
+  password: string;
+  token: string;
+  csrf: string;
+}
+
+/**
+ * Register a fresh account, waiting out the real server's registration rate
+ * limit rather than failing on it.
+ *
+ * The whole real-server project shares one registration budget, and this file
+ * runs last, so a 429 here means "the suite has been busy", not "registration is
+ * broken". The server says exactly how long to wait; honour it.
+ */
+async function register(api: APIRequestContext): Promise<Account> {
+  const unique = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
+  const email = `voicejoin-${unique}@example.test`;
+  const username = `vj${unique}`.slice(0, 32);
+  const password = 'Voice-Join-Password-123!';
+  let response = await api.post(`${BASE}/api/v1/auth/register`, {
+    data: { email, username, password },
+  });
+  for (let attempt = 0; attempt < 3 && response.status() === 429; attempt++) {
+    const retryAfter = Number((await response.json()).retry_after) || 5;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(retryAfter, 30) * 1000 + 500));
+    response = await api.post(`${BASE}/api/v1/auth/register`, {
+      data: { email, username, password },
+    });
+  }
+  expect(
+    response.ok(),
+    `register failed: ${response.status()} ${await response.text()}`,
+  ).toBeTruthy();
+  const body = await response.json();
+  // Register sets the ambient auth + CSRF cookies on this context, so writes
+  // from here need the double-submit header the real client sends.
+  const cookies = (await api.storageState()).cookies;
+  const csrf = cookies.find((cookie) => cookie.name === 'paracord_csrf')?.value;
+  expect(csrf, 'register should set a readable paracord_csrf cookie').toBeTruthy();
+  return { email, password, token: body.token as string, csrf: csrf! };
+}
+
+/** Create the space and its voice room over REST — the UI paths for both are
+ * covered elsewhere and are not what this case is testing. */
+async function createVoiceRoom(
+  api: APIRequestContext,
+  account: Account,
+): Promise<{ guildId: string; channelId: string }> {
+  const headers = {
+    Authorization: `Bearer ${account.token}`,
+    'x-paracord-csrf': account.csrf,
+  };
+  const guildResponse = await api.post(`${BASE}/api/v1/guilds`, {
+    headers,
+    data: { name: 'Browser voice proof' },
+  });
+  expect(
+    guildResponse.status(),
+    `guild creation: ${await guildResponse.text()}`,
+  ).toBe(201);
+  const guild = await guildResponse.json();
+
+  const channelResponse = await api.post(`${BASE}/api/v1/guilds/${guild.id}/channels`, {
+    headers,
+    data: { name: 'lounge', channel_type: 2 },
+  });
+  expect(
+    channelResponse.status(),
+    `voice channel creation: ${await channelResponse.text()}`,
+  ).toBe(201);
+  const channel = await channelResponse.json();
+  return { guildId: String(guild.id), channelId: String(channel.id) };
+}
+
+async function signIn(page: Page, account: Account): Promise<void> {
+  // Registration already authenticated this context's cookie jar; clear it so
+  // the form below is a genuine sign-in rather than an instant redirect.
+  await page.context().clearCookies();
+  await page.goto(`${BASE}/login`);
+  await page.locator('input[autocomplete="username"]').fill(account.email);
+  await page.locator('input[autocomplete="current-password"]').fill(account.password);
+  await page.getByRole('button', { name: 'Log In', exact: true }).click();
+  await expect(page).toHaveURL(/\/app/);
+
+  await dismissFirstRunOverlays(page);
+}
+
+/**
+ * Two first-run panels sit on top of the app and swallow clicks: the layout
+ * tour, and the per-space welcome screen that appears the first time a member
+ * opens a guild. Both are dismissible and neither is what these cases are about.
+ *
+ * The welcome screen renders only once the guild's channels have loaded, so it
+ * can appear *after* the Join button is already on screen — dismissing once on
+ * arrival is a race.
+ */
+async function dismissFirstRunOverlays(page: Page): Promise<void> {
+  for (const name of ['Skip tour', 'Close welcome screen']) {
+    const button = page.getByRole('button', { name, exact: true });
+    if (await button.isVisible().catch(() => false)) {
+      await button.click().catch(() => {});
+      await expect(button).toHaveCount(0);
+    }
+  }
+}
+
+/**
+ * Press Join voice, re-clearing the first-run overlays if one of them appears
+ * between the button rendering and the click landing.
+ */
+async function joinVoice(page: Page): Promise<void> {
+  const joinButton = page.getByRole('button', { name: 'Join voice', exact: true });
+  await expect(joinButton).toBeVisible();
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await dismissFirstRunOverlays(page);
+    try {
+      await joinButton.click({ timeout: 3_000 });
+      return;
+    } catch {
+      // An overlay landed on top of the button; clear it and try again.
+    }
+  }
+  throw new Error('Join voice stayed obstructed by a first-run overlay');
+}
+
+interface RelayParticipant {
+  user_id: string;
+  session_id: string;
+  transport: string;
+  datagrams_received: number;
+  audio_datagrams_received: number;
+  bytes_received: number;
+}
+
+interface RelayRoom {
+  transport: string;
+  room_id: string;
+  connected_participants: number;
+  participants: RelayParticipant[];
+}
+
+/** Read the relay's live counters for the room. Authenticated as the signed-in
+ * browser (this shares the page's cookie jar), and side-effect free. */
+async function readRelayRoom(page: Page, channelId: string): Promise<RelayRoom> {
+  const response = await page.request.get(`${BASE}/api/v1/voice/${channelId}/media-stats`);
+  expect(
+    response.ok(),
+    `media-stats failed: ${response.status()} ${await response.text()}`,
+  ).toBeTruthy();
+  return (await response.json()) as RelayRoom;
+}
+
+/**
+ * Poll the relay until `predicate` holds, then return the snapshot.
+ *
+ * `expect.poll` would report only the final boolean; the room snapshot itself is
+ * what makes a failure diagnosable ("joined, zero datagrams" is a completely
+ * different defect from "never joined"), so keep the last one and print it.
+ */
+async function waitForRelay(
+  page: Page,
+  channelId: string,
+  what: string,
+  predicate: (room: RelayRoom) => boolean,
+  timeoutMs = 45_000,
+): Promise<RelayRoom> {
+  const deadline = Date.now() + timeoutMs;
+  let last: RelayRoom | null = null;
+  while (Date.now() < deadline) {
+    last = await readRelayRoom(page, channelId);
+    if (predicate(last)) return last;
+    await page.waitForTimeout(500);
+  }
+  throw new Error(
+    `timed out waiting for the relay to report ${what}; last snapshot: ${JSON.stringify(last)}`,
+  );
+}
+
+test('a browser joins a guild voice room, its audio reaches the relay, and leaving retires the connection', async ({
+  playwright,
+}) => {
+  await withChromium(playwright, async (newParticipant) => {
+    const page = await newParticipant();
+    const consoleErrors: string[] = [];
+    page.on('console', (message) => {
+      if (message.type() === 'error') consoleErrors.push(message.text());
+    });
+
+    const account = await register(page.request);
+    const { guildId, channelId } = await createVoiceRoom(page.request, account);
+    await signIn(page, account);
+
+    // The native join contract is what the browser engine dials with; if any of
+    // it is missing the failure downstream is unreadable.
+    const joinResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes(`/api/v2/voice/${channelId}/join`) && response.request().method() === 'POST',
+      { timeout: 60_000 },
+    );
+    joinResponse.catch(() => {});
+
+    await page.goto(`${BASE}/app/guilds/${guildId}/channels/${channelId}`);
+    await joinVoice(page);
+
+    const join = await joinResponse;
+    expect(join.status(), `voice join: ${await join.text()}`).toBe(200);
+    const joinBody = await join.json();
+    expect(joinBody.native_media, 'this proof is about the native transport').toBe(true);
+    expect(typeof joinBody.media_token).toBe('string');
+    expect(typeof joinBody.cert_hash).toBe('string');
+    expect(joinBody.room_name).toBe(`${guildId}:${channelId}`);
+    const voiceSessionId = joinBody.session_id as string;
+    expect(typeof voiceSessionId).toBe('string');
+
+    // 1. The UI reaches a connected call. The call dock only renders while
+    //    `voiceStore.connected` is true, and the lobby replaces the Join button
+    //    with an error block on failure — so assert the absence of that too,
+    //    otherwise a failed join that re-renders quickly could slip through.
+    await expect(page.getByTestId('call-dock')).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByText(/Voice connection failed:/)).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Disconnect from voice' })).toBeVisible();
+
+    // 2. The server agrees: the relay holds a live WebTransport connection for
+    //    this account in this room, under the receipt the REST join issued.
+    const connected = await waitForRelay(
+      page,
+      channelId,
+      'a connected participant',
+      (room) => room.connected_participants === 1,
+    );
+    expect(connected.transport).toBe('native');
+    expect(connected.room_id).toBe(`${guildId}:${channelId}`);
+    const participant = connected.participants[0];
+    expect(
+      participant.transport,
+      'a browser must be bridged over WebTransport, not raw QUIC',
+    ).toBe('webtransport');
+    expect(
+      participant.session_id,
+      'the media connection must be fenced on the receipt the join issued',
+    ).toBe(voiceSessionId);
+
+    // 3. Audio actually flows. The counters are cumulative, so this is proof the
+    //    packets arrived rather than a snapshot of an instantaneous rate.
+    // Ten 20 ms frames is a fifth of a second of continuous capture, so this
+    // cannot be satisfied by one stray packet that happened to parse.
+    const flowing = await waitForRelay(
+      page,
+      channelId,
+      'a stream of audio datagrams from the browser',
+      (room) => (room.participants[0]?.audio_datagrams_received ?? 0) >= 10,
+      60_000,
+    );
+    const audible = flowing.participants[0];
+    expect(audible.audio_datagrams_received).toBeGreaterThanOrEqual(10);
+    expect(audible.datagrams_received).toBeGreaterThanOrEqual(
+      audible.audio_datagrams_received,
+    );
+    expect(audible.bytes_received).toBeGreaterThan(0);
+
+    await page.screenshot({ path: shotPath('browser-voice-connected.png') });
+
+    // 4. Leaving retires the connection on both sides, *promptly*. The 15 s
+    //    budget is deliberate: a browser ends a WebTransport session by closing
+    //    its CONNECT stream and leaves the QUIC connection warm, so a server
+    //    that watches only the connection keeps the departed participant
+    //    registered until the ~30 s idle timeout. That is what this bound
+    //    catches.
+    await page.getByRole('button', { name: 'Disconnect from voice' }).click();
+    await expect(page.getByTestId('call-dock')).toHaveCount(0, { timeout: 30_000 });
+    const empty = await waitForRelay(
+      page,
+      channelId,
+      'an empty room after leaving',
+      (room) => room.connected_participants === 0,
+      15_000,
+    );
+    expect(empty.participants).toEqual([]);
+
+    // A call that logs errors while "working" is not working.
+    expect(
+      consoleErrors.filter((text) => /voice|media|webtransport|worklet/i.test(text)),
+      'the call must not log media errors',
+    ).toEqual([]);
+  });
+});
+
+test('two browsers in one room exchange audio through the relay', async ({ playwright }) => {
+  await withChromium(playwright, async (newParticipant) => {
+    const host = await newParticipant();
+    const guest = await newParticipant();
+
+    const hostAccount = await register(host.request);
+    const { guildId, channelId } = await createVoiceRoom(host.request, hostAccount);
+    const guestAccount = await register(guest.request);
+
+    // The guest reaches the room the way a real second person does.
+    const invite = await host.request.post(`${BASE}/api/v1/channels/${channelId}/invites`, {
+      headers: {
+        Authorization: `Bearer ${hostAccount.token}`,
+        'x-paracord-csrf': hostAccount.csrf,
+      },
+      data: {},
+    });
+    expect(invite.status(), `invite creation: ${await invite.text()}`).toBe(201);
+    const inviteCode = (await invite.json()).code as string;
+    const accepted = await guest.request.post(`${BASE}/api/v1/invites/${inviteCode}`, {
+      headers: {
+        Authorization: `Bearer ${guestAccount.token}`,
+        'x-paracord-csrf': guestAccount.csrf,
+      },
+      data: {},
+    });
+    expect(accepted.ok(), `invite accept: ${await accepted.text()}`).toBeTruthy();
+
+    for (const [page, account] of [
+      [host, hostAccount],
+      [guest, guestAccount],
+    ] as const) {
+      await signIn(page, account);
+      await page.goto(`${BASE}/app/guilds/${guildId}/channels/${channelId}`);
+      await joinVoice(page);
+      await expect(page.getByTestId('call-dock')).toBeVisible({ timeout: 60_000 });
+      await expect(page.getByText(/Voice connection failed:/)).toHaveCount(0);
+    }
+
+    // Both are live on the WebTransport path…
+    const both = await waitForRelay(
+      host,
+      channelId,
+      'two connected participants',
+      (room) => room.connected_participants === 2,
+    );
+    expect(both.participants.map((entry) => entry.transport)).toEqual([
+      'webtransport',
+      'webtransport',
+    ]);
+
+    // …and media is genuinely being exchanged, not merely published: each
+    // connection is both receiving its own browser's audio and being *sent*
+    // packets, which can only be the other participant's audio fanned out.
+    const exchanging = await waitForRelay(
+      host,
+      channelId,
+      'audio flowing in both directions',
+      (room) =>
+        room.participants.length === 2 &&
+        room.participants.every(
+          (entry) => entry.audio_datagrams_received >= 10 && entry.datagrams_sent >= 10,
+        ),
+      60_000,
+    );
+    for (const entry of exchanging.participants) {
+      expect(entry.audio_datagrams_received).toBeGreaterThanOrEqual(10);
+      expect(entry.datagrams_sent).toBeGreaterThanOrEqual(10);
+      expect(entry.bytes_sent).toBeGreaterThan(0);
+    }
+
+    await host.screenshot({ path: shotPath('browser-voice-two-party.png') });
+
+    // One leaving must not disturb the other.
+    await guest.getByRole('button', { name: 'Disconnect from voice' }).click();
+    await expect(guest.getByTestId('call-dock')).toHaveCount(0, { timeout: 30_000 });
+    const remaining = await waitForRelay(
+      host,
+      channelId,
+      'only the host left in the room',
+      (room) => room.connected_participants === 1,
+      15_000,
+    );
+    expect(remaining.participants[0].session_id).not.toBe('');
+    await expect(host.getByTestId('call-dock')).toBeVisible();
+
+    await host.getByRole('button', { name: 'Disconnect from voice' }).click();
+    await waitForRelay(
+      host,
+      channelId,
+      'an empty room',
+      (room) => room.connected_participants === 0,
+      15_000,
+    );
+  });
+});
