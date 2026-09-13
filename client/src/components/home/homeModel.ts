@@ -24,6 +24,14 @@ export const BUILDING_TEXT_ROOMS = 3;
 export function aroundNowPeople(buildings: readonly BuildingLight[]): PersonLight[] {
   const byId = new Map<string, PersonLight>();
   for (const building of buildings) {
+    // Everybody the building can see whose light is doing something — lit or
+    // merely dim. Somebody with their lights on but in no room is still around,
+    // and leaving them out is what let the well say "nobody" while the sentence
+    // above it counted them.
+    for (const person of building.people) {
+      if (person.level === 'off') continue;
+      if (!byId.has(person.userId)) byId.set(person.userId, person);
+    }
     for (const room of building.rooms) {
       for (const occupant of room.occupants) {
         const existing = byId.get(occupant.person.userId);
@@ -32,7 +40,8 @@ export function aroundNowPeople(buildings: readonly BuildingLight[]): PersonLigh
         }
       }
       for (const reader of room.readers) {
-        if (!byId.has(reader.person.userId)) byId.set(reader.person.userId, reader.person);
+        const existing = byId.get(reader.person.userId);
+        if (!existing || existing.level === 'off') byId.set(reader.person.userId, reader.person);
       }
     }
   }

@@ -289,15 +289,26 @@ export function useBuildingLights(): BuildingLight[] {
 /**
  * "+17 lights on" across every building (§7.3).
  *
- * A person visible through two connected servers is two accounts as far as the
- * client can prove, so they are counted per building and summed. When account
- * linking lands, this is the single place that changes.
+ * Counted **per person, not per building**: somebody who is in three of your
+ * buildings on one server is one person with their lights on, and summing the
+ * per-building counts made Home claim three (and contradict the Around-now well
+ * one line below it).
+ *
+ * A person visible through two *connected servers* is still two accounts as far
+ * as the client can prove — the key is scoped to the account, so those stay
+ * separate. When account linking lands, this is the single place that changes.
  */
 export function useLightsOnAcrossBuildings(buildings: readonly BuildingLight[]): number {
-  return useMemo(
-    () => buildings.reduce((total, building) => total + building.lightsOn, 0),
-    [buildings],
-  );
+  return useMemo(() => {
+    const lit = new Set<string>();
+    for (const building of buildings) {
+      const account = accountScopeKey(building.scope);
+      for (const person of building.people) {
+        if (person.level === 'on') lit.add(`${account}:${person.userId}`);
+      }
+    }
+    return lit.size;
+  }, [buildings]);
 }
 
 /** The one-sentence "Around now" summary for one building, or for all of them. */
@@ -308,7 +319,13 @@ export function useAroundNow(
 ): string {
   return useMemo(() => {
     const rooms = buildings.flatMap((building) => building.rooms);
+    // Everybody the buildings can see — not just the people already standing in
+    // a room — so the sentence can say "away" and can say "has their lights on"
+    // instead of denying a light the title bar is counting.
     const byId = new Map<string, PersonLight>();
+    for (const building of buildings) {
+      for (const person of building.people) byId.set(person.userId, person);
+    }
     for (const room of rooms) {
       for (const occupant of room.occupants) byId.set(occupant.person.userId, occupant.person);
       for (const reader of room.readers) byId.set(reader.person.userId, reader.person);

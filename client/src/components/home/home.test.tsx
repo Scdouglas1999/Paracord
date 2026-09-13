@@ -142,17 +142,33 @@ describe('what Home picks out of the light models', () => {
     const room = voice({
       occupants: [{ person: REN }, { person: speaking, speaking: true }, { person: MARA }],
     });
+    expect(
+      aroundNowPeople([building([room], { members: [MARA, REN] })]).map((person) => person.name),
+    ).toEqual(['Zara', 'Mara', 'Ren']);
+  });
+
+  it('carries a face for somebody whose lights are on but who is in no room', () => {
+    // Priya is a member with her lights on and is in nothing. Leaving her out
+    // is what let the well say "nobody" while the title counted her.
+    const room = voice({ occupants: [{ person: MARA }] });
     expect(aroundNowPeople([building([room])]).map((person) => person.name)).toEqual([
-      'Zara',
       'Mara',
+      'Priya',
       'Ren',
     ]);
+  });
+
+  it('leaves a member whose lights are off out of the faces', () => {
+    const off = who('6', 'Tomas', { status: 'offline' });
+    const people = aroundNowPeople([building([voice()], { members: [MARA, off] })]);
+    expect(people.map((person) => person.name)).toEqual(['Mara']);
   });
 
   it('counts one person once even when two rooms can see them', () => {
     const room = voice({ occupants: [{ person: MARA }] });
     const reading = text({ typingUserIds: ['1'] });
-    expect(aroundNowPeople([building([room, reading])])).toHaveLength(1);
+    const people = aroundNowPeople([building([room, reading], { members: [MARA] })]);
+    expect(people).toHaveLength(1);
   });
 
   it('treats only a lit voice room as a lit building', () => {

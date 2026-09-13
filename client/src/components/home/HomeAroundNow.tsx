@@ -23,10 +23,13 @@ export interface HomeAroundNowProps {
  * this cannot disagree with the sidebar or the Lobby.
  */
 export function HomeAroundNow({ people, sentence, lightsOn }: HomeAroundNowProps) {
-  const shown = Math.min(people.length, AROUND_NOW_FACES);
-  // With nobody in a room the sentence already says so; a bare "+1 lights on"
-  // beside it reads as a contradiction rather than a count.
-  const overflow = people.length > 0 ? Math.max(0, lightsOn - shown) : 0;
+  // Only the faces actually on screen count against the tail, and only the lit
+  // ones: the stack can carry a dim face, and "+N lights on" must stay a count
+  // of lights rather than of avatars.
+  const shownLit = people
+    .slice(0, AROUND_NOW_FACES)
+    .filter((person) => person.level === 'on').length;
+  const overflow = Math.max(0, lightsOn - shownLit);
 
   return (
     <Well

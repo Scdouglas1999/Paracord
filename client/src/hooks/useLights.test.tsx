@@ -85,6 +85,7 @@ function seed(): void {
     members: new Map([
       [entityScopeKey(SCOPE, GUILD), [member('1', 'mara'), member('2', 'priya'), member('3', 'ren')]],
     ]),
+    membersLoaded: { [entityScopeKey(SCOPE, GUILD)]: true },
   });
   usePresenceStore.getState().setPresences(
     [
@@ -263,14 +264,55 @@ describe('useBuildingLights across servers', () => {
       });
     });
     const { result } = renderHook(() => useAroundNow(useBuildingLights()));
-    expect(result.current).toBe('mara is in Shop floor');
+    expect(result.current).toBe('mara is in Shop floor · ren is away');
+  });
+
+  it('names the lights that are on when nobody is in a room', () => {
+    // The title bar counts mara and priya; the well one line below it must not
+    // answer "Nobody's lights are on right now".
+    const { result } = renderHook(() => useAroundNow(useBuildingLights()));
+    expect(result.current).toBe('mara and priya have their lights on · ren is away');
   });
 
   it('stays in the metaphor when nothing is lit', () => {
+    act(() => {
+      usePresenceStore.getState().setPresences(
+        [
+          { user_id: '1', status: 'offline', activities: [] },
+          { user_id: '2', status: 'offline', activities: [] },
+          { user_id: '3', status: 'offline', activities: [] },
+        ],
+        SERVER,
+      );
+    });
     const { result } = renderHook(() =>
       useAroundNow(useBuildingLights(), 3, 'Every building is dark'),
     );
     expect(result.current).toBe('Every building is dark');
+  });
+
+  it('counts a person in two buildings on one server once', () => {
+    act(() => {
+      useGuildStore.getState().setGuilds(
+        [
+          { id: GUILD, name: 'Kestrel Robotics', owner_id: 'viewer', member_count: 61, created_at: '' },
+          { id: 'g2', name: 'Saltmarsh Sailing', owner_id: 'viewer', member_count: 12, created_at: '' },
+        ],
+        SCOPE,
+      );
+      useMemberStore.setState({
+        members: new Map([
+          [entityScopeKey(SCOPE, GUILD), [member('1', 'mara')]],
+          [entityScopeKey(SCOPE, 'g2'), [member('1', 'mara')]],
+        ]),
+        membersLoaded: {
+          [entityScopeKey(SCOPE, GUILD)]: true,
+          [entityScopeKey(SCOPE, 'g2')]: true,
+        },
+      });
+    });
+    const { result } = renderHook(() => useLightsOnAcrossBuildings(useBuildingLights()));
+    expect(result.current).toBe(1);
   });
 });
 

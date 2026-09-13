@@ -180,6 +180,13 @@ export interface BuildingLight {
   readingCount: number;
   /** Members of this building whose lights are on. */
   lightsOn: number;
+  /**
+   * Everybody this building can see, lit or not — so a count across several
+   * buildings can be de-duplicated rather than summed (one person in two
+   * buildings is one person), and so the Around-now sentence can name somebody
+   * whose lights are on while they are in no room at all.
+   */
+  people: PersonLight[];
   memberCount: number;
 
   /** Ordering key — brightest building first (§7.1, §7.5). Higher is brighter. */

@@ -105,7 +105,8 @@ export function buildingLight(input: BuildingLightInput): BuildingLight {
   const roomsLit = voiceRooms.filter((room) => room.lit).length;
   const talkingCount = voiceRooms.reduce((sum, room) => sum + room.talkingCount, 0);
   const readingCount = rooms.reduce((sum, room) => sum + room.readingCount, 0);
-  const lightsOn = input.members.filter((person) => person.level === 'on').length;
+  const people = [...new Map(input.members.map((person) => [person.userId, person])).values()];
+  const lightsOn = people.filter((person) => person.level === 'on').length;
 
   // The building's live thumbnail comes from its loudest lit voice room.
   const brightestRoom =
@@ -134,6 +135,7 @@ export function buildingLight(input: BuildingLightInput): BuildingLight {
     talkingCount,
     readingCount,
     lightsOn,
+    people,
     memberCount: input.memberCount ?? input.members.length,
     brightness: brightnessOf({ talkingCount, roomsLit, readingCount, lightsOn }),
     caption: buildingCaption(roomsLit, readingCount),
@@ -150,6 +152,9 @@ export function orderBuildingsByBrightness(buildings: readonly BuildingLight[]):
     (a, b) => b.brightness - a.brightness || b.lightsOn - a.lightsOn || a.name.localeCompare(b.name),
   );
 }
+
+/** How many names the "lights on, but nobody's in a room" clause spells out. */
+const LIT_ONLY_NAMES = 3;
 
 export interface AroundNowInput {
   /** Rooms to summarise, across one building or every building. */
@@ -201,6 +206,24 @@ export function aroundNowSentence(input: AroundNowInput): string {
     for (const occupant of room.occupants) busy.add(occupant.person.userId);
     for (const reader of room.readers) busy.add(reader.person.userId);
   }
+
+  // Nobody is in a room and nobody is reading — but people can still have their
+  // lights on, and this well must not deny what the count above it asserts
+  // (§9: the light always has a text equivalent, and two rows never disagree).
+  // Only when there is no room clause: with somebody actually in a room, the
+  // rest of the lit building is what the "+N lights on" tail is for.
+  if (clauses.length === 0) {
+    const lit = [
+      ...new Map(
+        (input.people ?? [])
+          .filter((person) => person.level === 'on' && !busy.has(person.userId))
+          .map((person) => [person.userId, person]),
+      ).values(),
+    ];
+    const names = nameList(lit.map((person) => person.name), LIT_ONLY_NAMES);
+    if (names) clauses.push(`${names} ${lit.length === 1 ? 'has' : 'have'} their lights on`);
+  }
+
   const away = (input.people ?? []).filter(
     (person) => person.level === 'dim' && !busy.has(person.userId),
   );
