@@ -46,12 +46,20 @@ export const BuildingPlate = React.forwardRef<HTMLElement, BuildingPlateProps>(
       >
         {lit && <Lamp {...{ [LAMP_MARK]: '' }} />}
         {children}
+        {/* `flex-1` made the map a zero-basis item: it contributed nothing to
+            the line, so a six-room building on a 390px phone kept its row
+            rather than wrapping, and the grid inside — which is `shrink-0`,
+            because half a window is not a window — spilled straight through
+            the "1 in · quiet" caption beside it. Growing from the map's own
+            width instead keeps the sidebar's right-aligned caption (there is
+            room to grow into) and, where there is not, makes the building NAME
+            give way, which is the half a reader can afford to lose. */}
         <WindowMap
           windows={building.windows}
           overflowCount={building.overflowCount}
           caption={caption ?? building.caption}
           scale={scale}
-          className="relative flex-1"
+          className="relative grow basis-auto shrink-0"
         />
       </Plate>
     );
