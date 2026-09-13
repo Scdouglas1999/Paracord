@@ -145,7 +145,7 @@ export function ContextMenu({ items, position, onClose, label = 'Context menu', 
   return createPortal(
     <div
       ref={menuRef}
-      className="fixed z-[100] min-w-[min(13rem,calc(100vw-1rem))] max-w-[calc(100vw-1rem)] max-h-[calc(100dvh-1rem)] overflow-y-auto rounded-md border border-border-subtle bg-bg-floating p-1 shadow-lg outline-none"
+      className="pc-floating fixed z-[100] min-w-[min(13rem,calc(100vw-1rem))] max-w-[calc(100vw-1rem)] max-h-[calc(100dvh-1rem)] overflow-y-auto p-1.5 outline-none"
       style={{ left: adjustedPosition.x, top: adjustedPosition.y }}
       tabIndex={-1}
       role="menu"
@@ -165,14 +165,13 @@ export function ContextMenu({ items, position, onClose, label = 'Context menu', 
             id={`context-menu-item-${i}`}
             role="menuitem"
             className={cn(
-              'flex w-full items-center justify-between gap-3 rounded-sm px-2.5 py-1.5 text-left text-sm outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] [@media(pointer:coarse)]:min-h-11',
+              'flex w-full items-center justify-between gap-3 rounded-[var(--radius-chip)] px-2.5 py-1.5 text-left text-label outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] [@media(pointer:coarse)]:min-h-11',
+              // A destructive item takes danger INK, never a red fill (§1.3).
               item.danger ? 'text-accent-danger' : 'text-text-secondary',
               item.disabled && 'cursor-not-allowed text-text-muted',
               active &&
                 !item.disabled &&
-                (item.danger
-                  ? 'bg-accent-danger text-text-on-danger'
-                  : 'bg-accent-tint text-text-primary'),
+                (item.danger ? 'bg-bg-mod-subtle' : 'bg-bg-mod-subtle text-text-primary'),
             )}
             disabled={item.disabled}
             onClick={() => {

@@ -28,7 +28,10 @@ export function ErrorBanner({
     <div
       role="alert"
       className={cn(
-        'flex justify-between gap-3 rounded-md border border-accent-danger/35 bg-danger-tint px-4 py-3 text-label text-accent-danger',
+        // A danger surface is the danger *well* carrying danger ink (§1.3),
+        // never a saturated red fill and never a border-only edge.
+        'flex justify-between gap-3 rounded-[var(--radius-well)] bg-danger-well px-4 py-3',
+        'text-label text-accent-danger shadow-[var(--shadow-well)]',
         multiline ? 'items-start' : 'items-center',
         className,
       )}
@@ -41,7 +44,7 @@ export function ErrorBanner({
         <button
           type="button"
           onClick={onRetry}
-          className="shrink-0 rounded-sm border border-accent-danger/45 px-2.5 py-1 text-meta font-semibold outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-danger hover:text-text-on-danger focus-visible:shadow-[var(--focus-ring)]"
+          className="pc-focusable shrink-0 rounded-[var(--radius-chip)] bg-bg-mod-strong px-2.5 py-1 text-meta font-semibold transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary"
         >
           {retryLabel}
         </button>
@@ -89,9 +92,9 @@ interface EmptyStateProps {
   role?: 'alert' | 'status';
 }
 
-// Recipe: design-spec §7 (Empty state) — left-aligned, never a centered
-// icon-in-circle. Line icon in a tinted well, Subhead title, warm 1–2 line copy,
-// then a primary action.
+// Recipe: lantern-stage-spec §6.10 — left-aligned, never a centred
+// icon-in-circle. A line icon in a well, a Gabarito heading, one specific line
+// of copy, then one action. Never "No data" / "It's quiet here" (§6.9).
 export function EmptyState({
   title,
   description,
@@ -103,15 +106,13 @@ export function EmptyState({
   return (
     <div role={role} className={cn('flex flex-col items-start px-2 py-8', className)}>
       {icon && (
-        <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-sm bg-accent-tint text-text-muted">
+        <div className="pc-well mb-4 flex h-10 w-10 items-center justify-center text-text-muted">
           {icon}
         </div>
       )}
-      <h3 className="text-subhead text-text-primary">{title}</h3>
+      <h3 className="pc-display text-heading text-text-primary">{title}</h3>
       {description && (
-        <p className="mt-1.5 max-w-prose text-sm leading-relaxed text-text-secondary">
-          {description}
-        </p>
+        <p className="mt-1.5 max-w-prose text-body text-text-secondary">{description}</p>
       )}
       {action && <div className="mt-5">{action}</div>}
     </div>

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Check, Copy } from 'lucide-react';
-import { cn } from '../../lib/utils';
+import { Chip, IconButton, ToggleRow, Well } from '../ui';
 
 interface IntentSelectorProps {
   value: number;
@@ -58,57 +58,44 @@ export function IntentSelector({ value, onChange }: IntentSelectorProps) {
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <span className="text-section text-text-muted">Gateway intents</span>
-        <span className="text-meta tabular-nums text-text-muted">{enabledCount} enabled</span>
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-section text-text-faint">Gateway intents</span>
+        <span className="text-meta tabular-nums text-text-faint">{enabledCount} enabled</span>
       </div>
 
-      <div className="grid gap-1.5 sm:grid-cols-2">
+      {/* Rows parted by hairlines, never tiled cards (§6.8). */}
+      <div className="grid gap-x-8 sm:grid-cols-2">
         {INTENTS.map((intent) => (
-          <label
+          <ToggleRow
             key={intent.bit}
-            className={cn(
-              'flex cursor-pointer items-start gap-2.5 rounded-sm border px-3 py-2 transition-colors duration-[140ms] ease-[var(--ease-out)]',
-              intent.privileged
-                ? 'border-accent-warning/35 bg-warning-tint hover:bg-accent-warning/20'
-                : 'border-border-subtle bg-bg-mod-subtle hover:bg-bg-mod-strong',
-            )}
-          >
-            <input
-              type="checkbox"
-              checked={isChecked(intent.bit)}
-              onChange={() => toggle(intent.bit)}
-              className="mt-0.5 accent-accent-primary"
-            />
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="text-label text-text-primary">{intent.name}</span>
+            className="border-b border-border-subtle py-2.5"
+            checked={isChecked(intent.bit)}
+            onChange={() => toggle(intent.bit)}
+            ariaLabel={intent.privileged ? `${intent.name} (privileged intent)` : intent.name}
+            label={
+              <span className="flex flex-wrap items-center gap-1.5">
+                <span className="pc-mono text-meta text-text-primary">{intent.name}</span>
                 {intent.privileged && (
-                  <span className="rounded-xs bg-warning-tint px-1.5 py-0.5 text-meta font-semibold uppercase text-accent-warning">
+                  <Chip size="sm" className="text-accent-warning">
                     Privileged
-                  </span>
+                  </Chip>
                 )}
-              </div>
-              <p className="mt-0.5 text-meta text-text-muted">{intent.description}</p>
-            </div>
-          </label>
+              </span>
+            }
+            description={intent.description}
+          />
         ))}
       </div>
 
-      {/* Computed intent bitfield readout with copy (design-spec §2 code face). */}
-      <div className="flex items-center gap-3 rounded-md border border-border-subtle bg-bg-tertiary px-3.5 py-2.5">
-        <span className="text-section shrink-0 uppercase text-text-muted">Value</span>
-        <code className="min-w-0 flex-1 truncate font-code text-meta text-text-primary">{value}</code>
-        <button
-          type="button"
-          onClick={() => void copyValue()}
-          aria-label="Copy intent value"
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-sm text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
-        >
+      {/* Computed intent bitfield readout with copy (spec §2 code face). */}
+      <Well className="flex items-center gap-3 px-3.5 py-2.5">
+        <span className="shrink-0 text-section text-text-faint">Value</span>
+        <code className="pc-mono min-w-0 flex-1 truncate text-meta text-text-primary">{value}</code>
+        <IconButton label="Copy intent value" onClick={() => void copyValue()}>
           {copied ? <Check size={15} className="text-accent-success" /> : <Copy size={15} />}
-        </button>
-      </div>
+        </IconButton>
+      </Well>
     </div>
   );
 }

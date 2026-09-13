@@ -1,14 +1,26 @@
 import * as React from "react"
 import { cn } from "../../lib/utils"
 
-// Recipe: design-spec §7 (Input / select / textarea). 40px, inset fill darker than
-// surround (--bg-tertiary), 1px --border-subtle, radius-sm. Focus = --accent-primary
-// border + --focus-ring-input (no outer glow).
-const fieldBase =
-    "w-full rounded-sm border border-border-subtle bg-bg-tertiary text-body text-text-primary placeholder:text-text-muted outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus-visible:border-accent-primary focus-visible:shadow-[var(--focus-ring-input)] disabled:cursor-not-allowed disabled:opacity-50"
+/**
+ * The three bare form controls, on the Lantern Stage well recipe
+ * (docs/lantern-stage-spec.md §1.1, §3, §9).
+ *
+ * A field you type into is a **well**: recessed inside its plate, depth from
+ * the inset shadow, never a border-only edge. Focus is the §9 ring layered over
+ * that shadow; an invalid field carries a 1px danger edge in the same slot.
+ *
+ * {@link TextField} composes an Input with its label, hint and error wiring —
+ * prefer it. These are for the cases that already own their labelling.
+ */
+const fieldBase = [
+    "pc-well w-full text-label text-text-primary placeholder:text-text-faint",
+    "outline-none transition-[box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]",
+    "focus-visible:shadow-[var(--shadow-well),var(--focus-ring)]",
+    "disabled:cursor-not-allowed disabled:opacity-60",
+].join(" ")
 
 const fieldError =
-    "border-accent-danger focus-visible:border-accent-danger focus-visible:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent-danger)_25%,transparent)]"
+    "shadow-[var(--shadow-well),0_0_0_1px_var(--accent-danger)] focus-visible:shadow-[var(--shadow-well),0_0_0_1px_var(--accent-danger),var(--focus-ring)]"
 
 export interface InputProps
     extends React.InputHTMLAttributes<HTMLInputElement> {
@@ -22,8 +34,8 @@ const Input = React.forwardRef<HTMLInputElement, InputProps>(
                 type={type}
                 className={cn(
                     fieldBase,
-                    "h-10 px-3 file:border-0 file:bg-transparent file:text-sm file:font-medium",
-                    error ? fieldError : "hover:border-border-strong",
+                    "h-[var(--h-control-phone)] px-3 file:border-0 file:bg-transparent file:text-label file:font-medium file:text-text-secondary",
+                    error && fieldError,
                     className
                 )}
                 ref={ref}
@@ -46,7 +58,7 @@ const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
                 className={cn(
                     fieldBase,
                     "min-h-[80px] px-3 py-2.5 leading-relaxed",
-                    error ? fieldError : "hover:border-border-strong",
+                    error && fieldError,
                     className
                 )}
                 ref={ref}
@@ -62,22 +74,20 @@ export interface SelectProps
     error?: boolean;
 }
 
-// appearance-none + a tokenized inline chevron (currentColor, muted) — never the
-// browser default arrow.
-const CHEVRON =
-    "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%237A8B82' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E\")"
-
+/**
+ * Select — the browser's own arrow is suppressed; the chevron comes from
+ * `--select-chevron`, which each theme defines in its own muted ink.
+ */
 const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
     ({ className, error, children, ...props }, ref) => {
         return (
             <select
                 className={cn(
                     fieldBase,
-                    "h-10 cursor-pointer appearance-none bg-[position:right_0.65rem_center] bg-no-repeat pl-3 pr-9",
-                    error ? fieldError : "hover:border-border-strong",
+                    "pc-select h-[var(--h-control-phone)] cursor-pointer appearance-none pl-3 pr-9",
+                    error && fieldError,
                     className
                 )}
-                style={{ backgroundImage: CHEVRON }}
                 ref={ref}
                 {...props}
             >

@@ -164,7 +164,7 @@ export function Modal({
         // behind); the opaque panel below carries the content and reads clearly.
         <div
           className={cn(
-            'fixed inset-0 flex modal-backdrop backdrop-blur-sm',
+            'fixed inset-0 flex modal-backdrop',
             zIndexClassName,
             PLACEMENT_CLASS[placement],
             backdropClassName,
@@ -190,7 +190,9 @@ export function Modal({
             exit={panelMotion.exit}
             transition={MODAL_TRANSITION}
             className={cn(
-              'relative max-h-[calc(100dvh-2rem)] max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border border-border-strong bg-bg-accent shadow-xl',
+              // A dialog is a plate that floats over the street (spec §4):
+              // --bg-floating + the plate shadow, the plate's radius, no border.
+              'pc-dialog relative max-h-[calc(100dvh-2rem)] max-w-[calc(100vw-2rem)] overflow-hidden',
               SIZE_CLASS[size],
               panelClassName,
             )}
@@ -218,7 +220,9 @@ export function ModalCloseButton({ className }: { className?: string }) {
       onClick={ctx.onClose}
       aria-label={ctx.closeLabel}
       className={cn(
-        'absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-sm text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]',
+        'pc-focusable absolute right-4 top-4 flex h-[var(--h-control)] w-[var(--h-control)] items-center justify-center',
+        'rounded-[var(--radius-control)] text-text-muted',
+        'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary',
         className,
       )}
     >
@@ -237,7 +241,7 @@ export function ModalHeader({
   icon?: ReactNode;
 }) {
   return (
-    <div className={cn('flex items-start gap-3 px-6 pb-2 pt-6', className)}>
+    <div className={cn('flex items-start gap-3 px-6 pb-3 pt-6', className)}>
       {icon && <div className="shrink-0">{icon}</div>}
       <div className="min-w-0 flex-1">{children}</div>
     </div>
@@ -256,10 +260,7 @@ export function ModalTitle({
   return (
     <h2
       id={id}
-      className={cn(
-        'font-display text-title text-text-primary',
-        className,
-      )}
+      className={cn('pc-display text-title text-text-primary', className)}
     >
       {children}
     </h2>
@@ -278,10 +279,7 @@ export function ModalDescription({
   return (
     <p
       id={id}
-      className={cn(
-        'mt-2 text-body text-text-secondary',
-        className,
-      )}
+      className={cn('mt-2 max-w-prose text-body text-text-secondary', className)}
     >
       {children}
     </p>
@@ -295,7 +293,7 @@ export function ModalBody({
   children: ReactNode;
   className?: string;
 }) {
-  return <div className={cn('px-6 py-2', className)}>{children}</div>;
+  return <div className={cn('px-6 py-3', className)}>{children}</div>;
 }
 
 export function ModalFooter({
@@ -307,10 +305,7 @@ export function ModalFooter({
 }) {
   return (
     <div
-      className={cn(
-        'flex justify-end gap-3 px-6 pb-5 pt-4',
-        className,
-      )}
+      className={cn('flex flex-wrap justify-end gap-2 px-6 pb-6 pt-5', className)}
     >
       {children}
     </div>

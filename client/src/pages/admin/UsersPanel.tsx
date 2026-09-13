@@ -6,9 +6,15 @@ import { extractApiError } from '../../api/client';
 import { toast } from '../../stores/toastStore';
 import { isAdmin, UserFlags } from '../../types';
 import { confirm } from '../../stores/confirmStore';
-import { Input } from '../../components/ui/Input';
-import { Button } from '../../components/ui/Button';
-import { EmptyState } from '../../components/ui/Feedback';
+import { getIdentityColor } from '../../lib/colors';
+import {
+  Button,
+  Chip,
+  EmptyState,
+  IconButton,
+  SettingsSectionHeader,
+  TextField,
+} from '../../components/ui';
 
 type UserRow = {
   id: string;
@@ -132,12 +138,12 @@ export function UsersPanel() {
     }
   };
 
-  const SortHeader = ({ label, keyName, className }: { label: string; keyName: SortKey; className?: string }) => (
-    <th scope="col" className={className}>
+  const SortHeader = ({ label, keyName }: { label: string; keyName: SortKey }) => (
+    <th scope="col" className="px-3 pb-2 pt-0">
       <button
         type="button"
         onClick={() => toggleSort(keyName)}
-        className="inline-flex items-center gap-1 rounded-sm text-section text-text-secondary outline-none transition-colors hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+        className="pc-focusable inline-flex h-[var(--h-control-sm)] items-center gap-1 rounded-[var(--radius-chip)] text-section text-text-faint transition-colors hover:text-text-primary"
       >
         {label}
         {sortKey === keyName && (sortAsc ? <ArrowUp size={12} /> : <ArrowDown size={12} />)}
@@ -147,139 +153,149 @@ export function UsersPanel() {
 
   return (
     <div>
-      <header className="mb-6 flex flex-wrap items-baseline justify-between gap-3">
-        <div>
-          <h2 className="font-display text-heading text-text-primary">Users</h2>
-          <p className="mt-1 text-body text-text-secondary">
-            <span className="font-display tabular-nums text-text-primary">{total.toLocaleString()}</span>{' '}
+      <SettingsSectionHeader
+        title="Users"
+        description={
+          <>
+            <span className="pc-mono tabular-nums text-text-primary">
+              {total.toLocaleString()}
+            </span>{' '}
             registered {total === 1 ? 'account' : 'accounts'} on this server.
-          </p>
-        </div>
-        <div className="relative w-full max-w-xs">
-          <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
-          <Input
+          </>
+        }
+        action={
+          <TextField
+            label="Search users"
+            hideLabel
             type="text"
-            aria-label="Search users"
             placeholder="Search name or email"
+            icon={<Search size={16} />}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="pl-9"
+            className="w-[min(18rem,100%)]"
           />
-        </div>
-      </header>
+        }
+      />
 
-      <div className="overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[720px] text-left">
-            <thead>
-              <tr className="border-b border-border-subtle bg-bg-tertiary/40">
-                <SortHeader label="User" keyName="name" className="px-5 py-3" />
-                <th scope="col" className="px-5 py-3 text-section text-text-secondary">Email</th>
-                <th scope="col" className="px-5 py-3 text-section text-text-secondary">Role</th>
-                <SortHeader label="Joined" keyName="joined" className="px-5 py-3" />
-                <th scope="col" className="px-5 py-3 text-right text-section text-text-secondary">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleUsers.map((u) => {
-                const self = u.id === currentUser?.id;
-                const admin = isAdmin(u.flags);
-                return (
-                  <tr
-                    key={u.id}
-                    className="group/row border-b border-border-subtle/60 transition-colors last:border-b-0 hover:bg-bg-mod-subtle"
-                  >
-                    <td className="px-5 py-3">
-                      <div className="flex items-center gap-3">
-                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent-tint text-meta font-semibold text-accent-primary">
-                          {initials(u.display_name || u.username)}
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[640px] text-left">
+          <thead>
+            <tr>
+              <SortHeader label="User" keyName="name" />
+              <th scope="col" className="px-3 pb-2 text-section text-text-faint">Email</th>
+              <th scope="col" className="px-3 pb-2 text-section text-text-faint">Role</th>
+              <SortHeader label="Joined" keyName="joined" />
+              <th scope="col" className="px-3 pb-2 text-right text-section text-text-faint">
+                Actions
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {visibleUsers.map((u) => {
+              const self = u.id === currentUser?.id;
+              const admin = isAdmin(u.flags);
+              return (
+                <tr
+                  key={u.id}
+                  className="border-t border-border-subtle transition-colors hover:bg-bg-mod-subtle"
+                >
+                  <td className="px-3 py-2.5">
+                    <div className="flex items-center gap-3">
+                      <span
+                        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-full)] text-meta font-semibold text-text-on-light"
+                        style={{ backgroundColor: getIdentityColor(u.id) }}
+                        aria-hidden
+                      >
+                        {initials(u.display_name || u.username)}
+                      </span>
+                      <span className="min-w-0">
+                        <span className="pc-display block truncate text-name text-text-primary">
+                          {u.display_name || u.username}
                         </span>
-                        <span className="min-w-0">
-                          <span className="block truncate text-label font-semibold text-text-primary">
-                            {u.display_name || u.username}
-                          </span>
-                          <span className="block truncate font-code text-meta text-text-muted">
-                            {u.username}#{String(u.discriminator).padStart(4, '0')}
-                          </span>
+                        <span className="pc-mono block truncate text-meta text-text-muted">
+                          {u.username}#{String(u.discriminator).padStart(4, '0')}
                         </span>
-                      </div>
-                    </td>
-                    <td className="px-5 py-3 text-body text-text-secondary">{u.email}</td>
-                    <td className="px-5 py-3">
-                      {admin ? (
-                        <span className="inline-flex items-center gap-1 rounded-xs bg-accent-tint px-2 py-0.5 text-meta font-semibold text-accent-primary">
-                          <Shield size={12} /> Admin
-                        </span>
-                      ) : (
-                        <span className="text-body text-text-muted">Member</span>
-                      )}
-                    </td>
-                    <td className="px-5 py-3 font-code text-meta tabular-nums text-text-secondary">
-                      {new Date(u.created_at).toLocaleDateString()}
-                    </td>
-                    <td className="px-5 py-3">
-                      <div className="flex items-center justify-end gap-1">
-                        {self ? (
-                          <span className="rounded-xs bg-bg-mod-strong px-2 py-0.5 text-meta font-medium text-text-secondary">You</span>
-                        ) : (
-                          <div className="flex items-center gap-1 opacity-0 transition-opacity duration-[140ms] focus-within:opacity-100 group-hover/row:opacity-100">
-                            <button
-                              onClick={() => toggleAdmin(u.id, u.flags)}
-                              className="flex h-8 w-8 items-center justify-center rounded-sm text-interactive-normal outline-none transition-colors hover:bg-bg-mod-strong hover:text-text-primary focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)]"
-                              title={admin ? 'Remove admin' : 'Make admin'}
-                              aria-label={`${admin ? 'Remove admin from' : 'Make admin'} ${u.display_name || u.username}`}
-                            >
-                              {admin ? <ShieldOff size={16} /> : <Shield size={16} />}
-                            </button>
-                            <button
-                              onClick={() => deleteUser(u.id, u.username)}
-                              className="flex h-8 w-8 items-center justify-center rounded-sm text-interactive-normal outline-none transition-colors hover:bg-danger-tint hover:text-accent-danger focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)]"
-                              title="Delete user"
-                              aria-label={`Delete user ${u.display_name || u.username}`}
-                            >
-                              <Trash2 size={16} />
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-              {visibleUsers.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="px-5">
-                    {search.trim() ? (
-                      <EmptyState
-                        icon={<SearchX size={20} />}
-                        title={`Nothing matched "${search.trim()}"`}
-                        description="No account on this page matches that name or email. Try a different term or clear the search."
-                        action={<Button variant="secondary" size="sm" onClick={() => setSearch('')}>Clear search</Button>}
-                      />
+                      </span>
+                    </div>
+                  </td>
+                  <td className="px-3 py-2.5 text-label text-text-secondary">{u.email}</td>
+                  <td className="px-3 py-2.5">
+                    {admin ? (
+                      <Chip size="sm" tone="accent">
+                        <Shield size={12} aria-hidden /> Admin
+                      </Chip>
                     ) : (
-                      <EmptyState
-                        icon={<Shield size={20} />}
-                        title="No users on this page yet"
-                        description="Accounts will appear here as people register on this server."
-                      />
+                      <span className="text-label text-text-muted">Member</span>
                     )}
                   </td>
+                  <td className="px-3 py-2.5">
+                    <span className="pc-mono text-meta tabular-nums text-text-secondary">
+                      {new Date(u.created_at).toLocaleDateString()}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <div className="flex items-center justify-end gap-1">
+                      {self ? (
+                        <Chip size="sm">You</Chip>
+                      ) : (
+                        <>
+                          <IconButton
+                            label={`${admin ? 'Remove admin from' : 'Make admin'} ${u.display_name || u.username}`}
+                            onClick={() => toggleAdmin(u.id, u.flags)}
+                          >
+                            {admin ? <ShieldOff size={16} /> : <Shield size={16} />}
+                          </IconButton>
+                          <IconButton
+                            label={`Delete user ${u.display_name || u.username}`}
+                            onClick={() => deleteUser(u.id, u.username)}
+                            className="hover:bg-danger-well hover:text-accent-danger"
+                          >
+                            <Trash2 size={16} />
+                          </IconButton>
+                        </>
+                      )}
+                    </div>
+                  </td>
                 </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+              );
+            })}
+            {visibleUsers.length === 0 && (
+              <tr>
+                <td colSpan={5}>
+                  {search.trim() ? (
+                    <EmptyState
+                      icon={<SearchX size={20} />}
+                      title={`Nothing matched "${search.trim()}"`}
+                      description="No account on this page matches that name or email. Try a different term or clear the search."
+                      action={
+                        <Button variant="ghost" size="sm" onClick={() => setSearch('')}>
+                          Clear search
+                        </Button>
+                      }
+                    />
+                  ) : (
+                    <EmptyState
+                      icon={<Shield size={20} />}
+                      title="No users on this page yet"
+                      description="Accounts will appear here as people register on this server."
+                    />
+                  )}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       </div>
 
       {(cursorStack.length > 0 || nextCursor !== null) && (
-        <div className="mt-4 flex items-center justify-between">
-          <Button variant="secondary" size="sm" onClick={goPreviousPage} disabled={cursorStack.length === 0}>
+        <div className="mt-4 flex items-center justify-between gap-3">
+          <Button variant="ghost" size="sm" onClick={goPreviousPage} disabled={cursorStack.length === 0}>
             Previous
           </Button>
-          <span className="font-code text-meta tabular-nums text-text-muted">
+          <span className="pc-mono text-meta tabular-nums text-text-faint">
             {pageStart}–{Math.min(pageEnd, total)} of {total.toLocaleString()}
           </span>
-          <Button variant="secondary" size="sm" onClick={goNextPage} disabled={nextCursor === null}>
+          <Button variant="ghost" size="sm" onClick={goNextPage} disabled={nextCursor === null}>
             Next
           </Button>
         </div>

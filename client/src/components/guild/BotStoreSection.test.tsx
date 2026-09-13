@@ -118,7 +118,7 @@ describe('BotStoreSection', () => {
 
     render(<BotStoreSection guildId="guild-1" canManage />);
 
-    await user.click(screen.getByRole('button', { name: 'Public Store' }));
+    await user.click(screen.getByRole('tab', { name: 'Public Store' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Failed to load public bots: Public bot index is rebuilding.',
@@ -162,7 +162,7 @@ describe('BotStoreSection', () => {
 
     render(<BotStoreSection guildId="guild-1" canManage />);
 
-    await user.click(screen.getByRole('button', { name: 'Public Store' }));
+    await user.click(screen.getByRole('tab', { name: 'Public Store' }));
     await user.click(await screen.findByRole('button', { name: 'Add Deploy Helper' }));
 
     await waitFor(() => {

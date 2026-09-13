@@ -8,6 +8,9 @@ import { isPortableLink, decodePortableLink } from '../lib/portableLinks';
 import { OnboardingWizard, hasCompletedOnboarding } from '../components/onboarding/OnboardingWizard';
 import { ErrorBanner } from '../components/ui/Feedback';
 import { Button } from '../components/ui/Button';
+import { IconButton } from '../components/ui/IconButton';
+import { Input } from '../components/ui/Input';
+import { Divider } from '../components/ui/Divider';
 import { syncTrustedHosts } from '../lib/trustedHosts';
 import { isTauri } from '../lib/tauriEnv';
 import { AuthCanvas, AuthCard, AuthHeading, Field } from './authScaffold';
@@ -281,29 +284,29 @@ export function ServerConnectPage() {
     <AuthCanvas>
       <div className="mx-auto flex w-full max-w-md flex-col gap-5">
         <AuthCard>
-          <form onSubmit={handleSubmit} className="flex flex-col gap-6 p-8">
+          <form onSubmit={handleSubmit} className="flex flex-col gap-6 p-7 sm:p-8">
             <AuthHeading
               title="Connect to a server"
               subtitle="Paste a server address, invite, or portable link. Paracord probes it before you sign in."
             />
 
-            {error && <ErrorBanner message={error} />}
+            {error && <ErrorBanner multiline message={error} />}
 
             <Field label="Server URL or Invite Link" required>
-              <input
+              <Input
                 type="text"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 required
-                className="input-field font-code"
+                className="pc-mono"
                 placeholder="chat.example.com or paracord://invite/…"
                 autoFocus
               />
             </Field>
 
-            <div className="rounded-md border border-border-subtle bg-bg-tertiary/50 px-4 py-3">
-              <span className="text-section text-text-muted">Accepted formats</span>
-              <ul className="mt-2 space-y-1 font-code text-meta leading-relaxed text-text-secondary">
+            <div className="pc-well px-4 py-3">
+              <span className="text-section text-text-faint">Accepted formats</span>
+              <ul className="mt-2 space-y-1 pc-mono text-meta leading-relaxed text-text-secondary">
                 <li>paracord://invite/aBcDeFgH…</li>
                 <li>http://192.168.1.5:8090/invite/abc123</li>
                 <li>192.168.1.5:8090 · chat.example.com</li>
@@ -311,88 +314,102 @@ export function ServerConnectPage() {
             </div>
 
             {status && (
-              <div className="flex items-center gap-2 rounded-md border border-border-subtle bg-bg-tertiary/40 px-4 py-2.5 text-label text-text-secondary">
+              <div
+                className="pc-well flex items-center gap-2 px-4 py-2.5 text-label text-text-secondary"
+                aria-live="polite"
+              >
                 <Loader2 size={15} className="shrink-0 animate-spin text-accent-primary" />
                 <span>{status}</span>
               </div>
             )}
 
             <div className="flex flex-col gap-2.5">
-              <Button type="submit" loading={loading} disabled={loading} className="w-full">
+              <Button type="submit" size="lg" loading={loading} disabled={loading} className="w-full">
                 Add Server
               </Button>
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="lg"
                 onClick={() => setUrl(PUBLIC_DEMO_SERVER_URL)}
-                className="inline-flex items-center justify-center gap-1.5 rounded-sm px-3 py-2 text-label font-semibold text-text-link transition-colors hover:bg-accent-tint"
+                className="w-full"
               >
-                <Sparkles size={15} />
+                <Sparkles size={15} aria-hidden />
                 Try a public demo server
-              </button>
+              </Button>
             </div>
           </form>
         </AuthCard>
 
-        {/* Recent servers — selectable rows, grouped by dividers rather than tiled cards. */}
+        {/* Recent servers — selectable rows on their own plate, divided by a
+            hairline rather than tiled as identical cards (spec §6.8). */}
         {servers.length > 0 && (
           <AuthCard>
-            <div className="flex items-center justify-between px-6 pt-5">
-              <h2 className="text-section text-text-secondary">Your servers</h2>
-              <span className="text-meta text-text-muted">{servers.length}</span>
-            </div>
-            <ul className="mt-2 flex flex-col divide-y divide-border-subtle px-3 pb-3">
-              {servers.map((server) => {
-                const state = server.connected
-                  ? { dot: 'bg-accent-success', label: 'Connected', tone: 'text-accent-success' }
-                  : server.token
-                    ? { dot: 'bg-accent-warning', label: 'Saved — not connected', tone: 'text-accent-warning' }
-                    : { dot: 'bg-text-faint', label: 'Sign-in required', tone: 'text-text-muted' };
-                const reconnecting = reconnectingId === server.id;
-                return (
-                  <li
-                    key={server.id}
-                    className="flex items-center gap-3 rounded-sm px-3 py-3 transition-colors hover:bg-bg-mod-subtle"
-                  >
-                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-accent-tint text-accent-primary">
-                      <Server size={17} />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-label font-semibold text-text-primary">
-                        {server.name}
-                      </div>
-                      <div className="mt-0.5 flex items-center gap-1.5">
-                        <span className={`inline-block h-1.5 w-1.5 rounded-full ${state.dot}`} />
-                        <span className={`text-meta ${state.tone}`}>{state.label}</span>
-                        <span className="truncate font-code text-meta text-text-muted">· {server.url}</span>
-                      </div>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-1">
-                      {!server.connected && (
-                        <button
-                          onClick={() => void handleReconnectServer(server.id)}
-                          disabled={reconnecting}
-                          className="inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1.5 text-meta font-semibold text-accent-primary transition-colors hover:bg-accent-tint disabled:opacity-60"
+            <div className="p-4 sm:p-5">
+              <div className="flex items-center justify-between px-2 pb-1">
+                <h2 className="pc-display text-heading text-text-primary">Your servers</h2>
+                <span className="pc-mono text-meta text-text-faint">{servers.length}</span>
+              </div>
+              <ul className="mt-1 flex flex-col">
+                {servers.map((server, index) => {
+                  // Presence here is a word, never a coloured dot (spec §1.5, §6.6).
+                  const stateLabel = server.connected
+                    ? 'Connected'
+                    : server.token
+                      ? 'Saved — not connected'
+                      : 'Sign-in required';
+                  const reconnecting = reconnectingId === server.id;
+                  return (
+                    <li key={server.id}>
+                      {index > 0 && <Divider className="mx-2" />}
+                      <div className="flex items-center gap-3 rounded-[var(--radius-control)] px-2 py-3 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle">
+                        <span
+                          className="pc-well flex h-9 w-9 shrink-0 items-center justify-center text-text-secondary"
+                          aria-hidden
                         >
-                          <RefreshCw size={13} className={reconnecting ? 'animate-spin' : ''} />
-                          {reconnecting ? 'Reconnecting…' : 'Reconnect'}
-                        </button>
-                      )}
-                      <button
-                        onClick={() => handleRemoveServer(server.id)}
-                        aria-label={`Remove ${server.name}`}
-                        className="flex h-8 w-8 items-center justify-center rounded-sm text-text-muted transition-colors hover:bg-danger-tint hover:text-accent-danger"
-                      >
-                        <X size={15} />
-                      </button>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-            <div className="border-t border-border-subtle p-4">
-              <Button onClick={() => navigate('/app')} className="w-full">
-                Continue to app
-              </Button>
+                          <Server size={17} />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate pc-display text-name text-text-primary">
+                            {server.name}
+                          </div>
+                          <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
+                            <span className="shrink-0 text-meta text-text-secondary">{stateLabel}</span>
+                            <span className="truncate pc-mono text-meta text-text-faint">
+                              · {server.url}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1">
+                          {!server.connected && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              onClick={() => void handleReconnectServer(server.id)}
+                              disabled={reconnecting}
+                            >
+                              <RefreshCw size={13} className={reconnecting ? 'animate-spin' : ''} aria-hidden />
+                              {reconnecting ? 'Reconnecting…' : 'Reconnect'}
+                            </Button>
+                          )}
+                          <IconButton
+                            label={`Remove ${server.name}`}
+                            onClick={() => handleRemoveServer(server.id)}
+                          >
+                            <X size={15} />
+                          </IconButton>
+                        </div>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+              <Divider className="mx-2 mt-1" />
+              <div className="px-2 pt-4">
+                <Button size="lg" onClick={() => navigate('/app')} className="w-full">
+                  Continue to app
+                </Button>
+              </div>
             </div>
           </AuthCard>
         )}
@@ -400,5 +417,3 @@ export function ServerConnectPage() {
     </AuthCanvas>
   );
 }
-
-

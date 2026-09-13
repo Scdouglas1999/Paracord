@@ -1,6 +1,7 @@
 import { Plus } from 'lucide-react';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
+import { SettingsSectionHeader } from '../../components/ui/SettingsShell';
 
 interface CreateBotFormProps {
   name: string;
@@ -12,12 +13,14 @@ interface CreateBotFormProps {
 
 export function CreateBotForm({ name, description, onNameChange, onDescriptionChange, onCreate }: CreateBotFormProps) {
   return (
-    <section className="rounded-md border border-border-subtle bg-bg-secondary p-5 shadow-sm">
-      <h2 className="font-display text-subhead text-text-primary">Create an application</h2>
-      <p className="mt-1 text-body text-text-secondary">
-        A bot user is created automatically. The token is shown once on creation — copy it right away.
-      </p>
-      <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
+    // Inside the settings plate, so no box of its own (spec §4: never nest a
+    // plate in a plate) — a heading and the fields, which are already wells.
+    <section>
+      <SettingsSectionHeader
+        title="Create an application"
+        description="A bot user is created automatically. The token is shown once on creation — copy it right away."
+      />
+      <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
         <label htmlFor="new-bot-name" className="sr-only">
           Bot name
         </label>

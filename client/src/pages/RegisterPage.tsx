@@ -10,7 +10,7 @@ import {
 } from '../lib/registrationPassword';
 import { ErrorBanner } from '../components/ui/Feedback';
 import { Button } from '../components/ui/Button';
-import { AuthCanvas, AuthCard, AuthHeading, AppMark, BrandAside, Field } from './authScaffold';
+import { AuthCanvas, AuthCard, AuthHeading, Field } from './authScaffold';
 
 export function RegisterPage() {
   const passwordHintId = useId();
@@ -111,15 +111,10 @@ export function RegisterPage() {
 
   return (
     <AuthCanvas>
-      <AuthCard className="max-w-4xl overflow-hidden">
-        <div className="flex">
-          <BrandAside />
-          <form onSubmit={handleSubmit} className="flex flex-1 flex-col gap-6 p-8 sm:p-10">
-            <div className="mb-1 lg:hidden">
-              <AppMark size={40} />
-            </div>
+      <AuthCard className="max-w-md">
+        <div>
+          <form onSubmit={handleSubmit} className="flex flex-1 flex-col gap-6 p-7 sm:p-8">
             <AuthHeading
-              mark={false}
               title="Create your account"
               subtitle="Claim a username, and you’re in — you can add servers and a recovery identity next."
             />

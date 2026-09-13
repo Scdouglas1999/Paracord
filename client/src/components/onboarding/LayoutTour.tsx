@@ -267,7 +267,7 @@ export function LayoutTour() {
           left: rect.left - 4,
           width: rect.width + 8,
           height: rect.height + 8,
-          borderRadius: 'var(--radius-md)',
+          borderRadius: 'var(--radius-well)',
           boxShadow: 'var(--focus-ring)',
           pointerEvents: 'none',
           zIndex: 118,
@@ -290,13 +290,13 @@ export function LayoutTour() {
           }
         }}
         style={{ position: 'fixed', top: pos.top, left: pos.left, width: TOOLTIP_W }}
-        className="z-[120] rounded-md border border-border-subtle bg-bg-floating p-3 shadow-lg outline-none"
+        className="pc-floating z-[120] p-3 outline-none"
       >
-        <p id={BODY_ID} className="text-meta leading-relaxed text-text-primary">
+        <p id={BODY_ID} className="text-label leading-relaxed text-text-primary">
           {step.body}
         </p>
         <div className="mt-3 flex items-center justify-between gap-2">
-          <span className="text-meta tabular-nums text-text-muted">
+          <span className="pc-mono text-meta text-text-faint">
             {steps.length > 1 ? `${active.index + 1} of ${steps.length}` : ''}
           </span>
           <div className="flex items-center gap-1">
@@ -304,7 +304,7 @@ export function LayoutTour() {
               <button
                 type="button"
                 onClick={skip}
-                className="rounded-sm px-2 py-1 text-meta font-medium text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+                className="pc-focusable inline-flex h-[var(--h-control)] items-center rounded-[var(--radius-control)] px-2.5 text-meta font-medium text-text-secondary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary"
               >
                 Skip tour
               </button>
@@ -312,7 +312,7 @@ export function LayoutTour() {
             <button
               type="button"
               onClick={next}
-              className="rounded-sm bg-accent-tint px-2.5 py-1 text-meta font-semibold text-accent-primary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-tint-strong focus-visible:shadow-[var(--focus-ring)]"
+              className="pc-focusable inline-flex h-[var(--h-control)] items-center rounded-[var(--radius-control)] bg-accent-primary px-3 text-meta font-semibold text-text-on-accent transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active"
             >
               {hasMore ? 'Next' : 'Done'}
             </button>

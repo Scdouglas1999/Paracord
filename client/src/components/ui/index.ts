@@ -24,3 +24,25 @@ export { TextField, SearchWell, type TextFieldProps, type SearchWellProps } from
 export { Divider, type DividerProps } from './Divider';
 export { Popover, MenuItem, MenuLabel, type PopoverProps, type MenuItemProps } from './Popover';
 export { Tooltip } from './Tooltip';
+export { Switch, ToggleRow, type SwitchProps, type ToggleRowProps } from './Switch';
+export { Tabs, type TabsProps, type TabItem } from './Tabs';
+export {
+  SettingsShell,
+  SettingsSectionHeader,
+  type SettingsShellProps,
+  type SettingsNavItem,
+  type SettingsNavGroup,
+  type SettingsSectionHeaderProps,
+} from './SettingsShell';
+export { Input, Textarea, Select, type InputProps, type TextareaProps, type SelectProps } from './Input';
+export { ErrorBanner, EmptyState, LoadingSpinner } from './Feedback';
+export {
+  Modal,
+  ModalBody,
+  ModalCloseButton,
+  ModalDescription,
+  ModalFooter,
+  ModalHeader,
+  ModalTitle,
+  type ModalProps,
+} from './Modal';

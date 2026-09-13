@@ -14,6 +14,9 @@ import { Kbd } from './Kbd';
 import { TextField, SearchWell } from './TextField';
 import { Divider } from './Divider';
 import { Popover, MenuItem, MenuLabel } from './Popover';
+import { Switch, ToggleRow } from './Switch';
+import { Tabs } from './Tabs';
+import { SettingsShell, SettingsSectionHeader } from './SettingsShell';
 import { presenceLight } from '../../lib/presence';
 
 /**
@@ -339,6 +342,185 @@ describe('presence is light, never a coloured dot (§1.5)', () => {
   });
 });
 
+describe('Switch', () => {
+  it('exposes the boolean to assistive tech, not just to the eye', () => {
+    render(<Switch checked={false} onChange={() => {}} label="Compact messages" />);
+    const control = screen.getByRole('switch', { name: 'Compact messages' });
+    expect(control).toHaveAttribute('aria-checked', 'false');
+  });
+
+  it('toggles to the opposite value', async () => {
+    const onChange = vi.fn();
+    render(<Switch checked onChange={onChange} label="Compact messages" />);
+    await userEvent.click(screen.getByRole('switch'));
+    expect(onChange).toHaveBeenCalledWith(false);
+  });
+
+  it('off is a well, on is the emerald — never a light token (§6.3)', () => {
+    const { rerender } = render(<Switch checked={false} onChange={() => {}} label="a" />);
+    expect(screen.getByRole('switch')).toHaveClass('bg-bg-well');
+    rerender(<Switch checked onChange={() => {}} label="a" />);
+    const on = screen.getByRole('switch');
+    expect(on).toHaveClass('bg-accent-primary');
+    expect(on.className).not.toContain('light-white');
+  });
+
+  it('ToggleRow names its switch from the row text', () => {
+    render(
+      <ToggleRow
+        label="Play a sound for mentions"
+        description="Only when the app is in the background."
+        checked
+        onChange={() => {}}
+      />,
+    );
+    expect(screen.getByRole('switch', { name: 'Play a sound for mentions' })).toBeInTheDocument();
+  });
+});
+
+const TAB_ITEMS = [
+  { value: 'general', label: 'General' },
+  { value: 'roles', label: 'Roles', meta: '4' },
+  { value: 'audit', label: 'Audit log' },
+] as const;
+
+describe('Tabs', () => {
+  it('renders a named tablist with one selected tab', () => {
+    render(<Tabs items={TAB_ITEMS} value="roles" onChange={() => {}} label="Space settings" />);
+    const list = screen.getByRole('tablist', { name: 'Space settings' });
+    expect(within(list).getByRole('tab', { name: /Roles/ })).toHaveAttribute('aria-selected', 'true');
+    expect(within(list).getByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'false');
+  });
+
+  it('selection is a raised surface, never an accent bar', () => {
+    render(<Tabs items={TAB_ITEMS} value="general" onChange={() => {}} label="Space settings" />);
+    expect(screen.getByRole('tab', { name: 'General' })).toHaveClass('bg-bg-raised');
+  });
+
+  it('moves between tabs with the arrow keys (WAI-ARIA tabs pattern)', async () => {
+    const onChange = vi.fn();
+    render(<Tabs items={TAB_ITEMS} value="general" onChange={onChange} label="Space settings" />);
+    screen.getByRole('tab', { name: 'General' }).focus();
+    await userEvent.keyboard('{ArrowRight}');
+    expect(onChange).toHaveBeenCalledWith('roles');
+    await userEvent.keyboard('{End}');
+    expect(onChange).toHaveBeenCalledWith('audit');
+  });
+
+  it('only the selected tab is in the tab order', () => {
+    render(<Tabs items={TAB_ITEMS} value="audit" onChange={() => {}} label="Space settings" />);
+    expect(screen.getByRole('tab', { name: 'Audit log' })).toHaveAttribute('tabindex', '0');
+    expect(screen.getByRole('tab', { name: 'General' })).toHaveAttribute('tabindex', '-1');
+  });
+});
+
+const SETTINGS_GROUPS = [
+  { items: [{ id: 'account', label: 'My account' }] },
+  { label: 'Preferences', items: [{ id: 'voice', label: 'Voice and video' }] },
+];
+
+describe('SettingsShell', () => {
+  it('is one plate carrying a named index and the selected section', () => {
+    const { container } = render(
+      <SettingsShell
+        label="User settings"
+        title="Sam Douglas"
+        groups={SETTINGS_GROUPS}
+        active="voice"
+        onSelect={() => {}}
+        onClose={() => {}}
+        closeLabel="Close user settings"
+      >
+        <SettingsSectionHeader title="Voice and video" description="Pick the microphone you use." />
+      </SettingsShell>,
+    );
+    expect(container.firstElementChild).toHaveClass('pc-plate');
+    const index = screen.getByRole('navigation', { name: 'User settings' });
+    expect(within(index).getByRole('button', { name: 'Voice and video' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+    expect(screen.getByRole('heading', { name: 'Voice and video' })).toBeInTheDocument();
+  });
+
+  it('section labels stay sentence case (§6.8)', () => {
+    render(
+      <SettingsShell
+        label="User settings"
+        title="Sam Douglas"
+        groups={SETTINGS_GROUPS}
+        active="account"
+        onSelect={() => {}}
+        onClose={() => {}}
+        closeLabel="Close user settings"
+      >
+        content
+      </SettingsShell>,
+    );
+    expect(screen.getByText('Preferences').className).not.toContain('uppercase');
+  });
+
+  it('selects a section from the index', async () => {
+    const onSelect = vi.fn();
+    render(
+      <SettingsShell
+        label="User settings"
+        title="Sam Douglas"
+        groups={SETTINGS_GROUPS}
+        active="account"
+        onSelect={onSelect}
+        onClose={() => {}}
+        closeLabel="Close user settings"
+      >
+        content
+      </SettingsShell>,
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Voice and video' }));
+    expect(onSelect).toHaveBeenCalledWith('voice');
+  });
+
+  it('on a phone the index and the content are two screens', async () => {
+    const onShowIndex = vi.fn();
+    const { rerender } = render(
+      <SettingsShell
+        label="User settings"
+        title="Sam Douglas"
+        groups={SETTINGS_GROUPS}
+        active="account"
+        onSelect={() => {}}
+        onClose={() => {}}
+        closeLabel="Close user settings"
+        isMobile
+        showIndex
+        onShowIndex={onShowIndex}
+      >
+        content
+      </SettingsShell>,
+    );
+    expect(screen.queryByText('content')).toBeNull();
+
+    rerender(
+      <SettingsShell
+        label="User settings"
+        title="Sam Douglas"
+        groups={SETTINGS_GROUPS}
+        active="account"
+        onSelect={() => {}}
+        onClose={() => {}}
+        closeLabel="Close user settings"
+        isMobile
+        showIndex={false}
+        onShowIndex={onShowIndex}
+      >
+        content
+      </SettingsShell>,
+    );
+    expect(screen.getByText('content')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Back to the settings index' }));
+    expect(onShowIndex).toHaveBeenCalledWith(true);
+  });
+});
+
 describe('no primitive hard-codes a colour', () => {
   it('renders every primitive without a literal hex or rgb value', () => {
     const ref = createRef<HTMLButtonElement>();
@@ -362,6 +544,17 @@ describe('no primitive hard-codes a colour', () => {
           …
         </IconButton>
         <TextField label="Room name" hint="Short and specific" />
+        <Switch checked onChange={() => {}} label="Compact messages" />
+        <Switch checked={false} onChange={() => {}} label="Quiet hours" />
+        <ToggleRow label="Play a sound" checked onChange={() => {}} />
+        <Tabs items={TAB_ITEMS} value="roles" onChange={() => {}} label="Space settings" />
+        <Tabs
+          items={TAB_ITEMS}
+          value="roles"
+          onChange={() => {}}
+          label="Space settings, as pages"
+          variant="underline"
+        />
       </Plate>,
     );
     const markup = container.innerHTML;

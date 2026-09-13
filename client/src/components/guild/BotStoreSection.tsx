@@ -18,9 +18,25 @@ import {
   X,
   Plus,
 } from 'lucide-react';
-import { cn } from '../../lib/utils';
 import { useGuildStore } from '../../stores/guildStore';
-import { Button } from '../ui/Button';
+import {
+  Button,
+  Chip,
+  Divider,
+  EmptyState,
+  ErrorBanner,
+  IconButton,
+  Input,
+  Raised,
+  SearchWell,
+  Select,
+  Tabs,
+  Textarea,
+  Well,
+  type TabItem,
+} from '../ui';
+import { Skeleton } from '../ui/Skeleton';
+import { GroupLabel, SectionHeader, Switch, ToggleRow } from './SettingsPrimitives';
 import type { Channel, GuildBotConfig } from '../../types';
 import { botStoreApi, type StoreBot } from '../../api/botStore';
 import { BotStoreCard } from './BotStoreCard';
@@ -87,14 +103,14 @@ const BUILT_IN_BOTS: BuiltInBot[] = [
     id: 'welcome_bot',
     name: 'Welcome Bot',
     description: 'Automatically greet new members when they join the server.',
-    icon: <Smile className="text-accent-success" size={24} />,
+    icon: <Smile size={22} aria-hidden />,
     features: ['Customizable welcome message', 'Channel selection'],
   },
   {
     id: 'auto_mod',
     name: 'Auto-Moderator',
     description: 'Rule-based moderation, raid protection, and verification gates.',
-    icon: <Shield className="text-accent-danger" size={24} />,
+    icon: <Shield size={22} aria-hidden />,
     features: ['Rule engine', 'Quarantine + mod log', 'Anti-raid + verification gate'],
   },
 ];
@@ -104,31 +120,53 @@ const INCLUDED_TOOLS: BuiltInBot[] = [
     id: 'system-roles',
     name: 'Member Onboarding',
     description: 'Let new members choose optional roles and acknowledge community rules.',
-    icon: <Zap className="text-accent-primary" size={24} />,
+    icon: <Zap size={22} aria-hidden />,
     features: ['Self-selected roles', 'Rules acknowledgement', 'Welcome prompts'],
   },
   {
     id: 'system-economy',
     name: 'Economy & Levels',
     description: 'Gamify your server with XP, levels, and leaderboards for active members.',
-    icon: <Gamepad2 className="text-accent-warning" size={24} />,
+    icon: <Gamepad2 size={22} aria-hidden />,
     features: ['Activity tracking', 'Level up alerts', 'Server leaderboard'],
   },
   {
     id: 'system-polls',
     name: 'Polls',
     description: 'Quickly spin up robust, multi-option polls with real-time tracking.',
-    icon: <Volume2 className="text-text-secondary" size={24} />,
+    icon: <Volume2 size={22} aria-hidden />,
     features: ['Multiple choices', 'Anonymous voting', 'Timed polls'],
   },
 ];
 
-const BOT_ICON_BG_CLASS: Record<string, string> = {
-  welcome_bot: 'bg-accent-success/15',
-  auto_mod: 'bg-accent-danger/15',
-  'system-roles': 'bg-accent-primary/15',
-  'system-economy': 'bg-accent-warning/15',
-  'system-polls': 'bg-bg-mod-strong',
+/** The two views of the store (spec §6.8: one Tabs recipe, sentence case). */
+const STORE_TABS: readonly TabItem<'built-in' | 'public'>[] = [
+  { value: 'built-in', label: 'Built-in Bots' },
+  { value: 'public', label: 'Public Store' },
+];
+
+/** The label above a control inside the configure panel (§2 Section step). */
+const fieldLabelClass = 'mb-2 block text-section text-text-faint';
+
+const DEFAULT_ANTI_RAID = {
+  enabled: false,
+  join_window_seconds: 30,
+  join_threshold: 10,
+  lockdown_minutes: 10,
+  min_account_age_minutes: 0,
+  auto_action: 'none',
+} as const;
+
+const DEFAULT_VERIFICATION_GATE: {
+  enabled: boolean;
+  require_ack: boolean;
+  waiting_period_minutes: number;
+  questions: { question: string; answer: string }[];
+} = {
+  enabled: false,
+  require_ack: true,
+  waiting_period_minutes: 0,
+  questions: [],
 };
 
 const EMPTY_GUILD_CHANNELS: Channel[] = [];
@@ -371,81 +409,58 @@ export function BotStoreSection({
   };
 
   return (
-    <div className="settings-surface-card min-h-[calc(100dvh-13.5rem)] !p-8 max-sm:!p-6 card-stack-relaxed">
-      <div className="flex flex-col gap-2 mb-6">
-        <h2 className="settings-section-title !mb-0 flex items-center gap-2">
-          <Bot size={20} className="text-accent-primary" />
-          Bot Store
-        </h2>
-        <p className="text-sm text-text-muted">
-          Install official bots, configure moderation rules, or browse the public bot store.
-        </p>
-      </div>
+    <div className="flex flex-col gap-8">
+      <SectionHeader
+        title="Bot store"
+        description="Install the bots that ship with Paracord, tune their moderation rules, or browse what other developers have published."
+      />
 
-      {/* Tab switcher */}
-      <div className="flex gap-1 mb-5 rounded-xl border border-border-subtle bg-bg-mod-subtle/40 p-1">
-        <button
-          onClick={() => setActiveTab('built-in')}
-          className={cn(
-            'flex-1 rounded-lg px-3 py-2 text-sm font-semibold transition-colors',
-            activeTab === 'built-in'
-              ? 'bg-accent-primary text-on-accent shadow-sm'
-              : 'text-text-secondary hover:text-text-primary'
-          )}
-        >
-          Built-in Bots
-        </button>
-        <button
-          onClick={() => setActiveTab('public')}
-          className={cn(
-            'flex-1 rounded-lg px-3 py-2 text-sm font-semibold transition-colors',
-            activeTab === 'public'
-              ? 'bg-accent-primary text-on-accent shadow-sm'
-              : 'text-text-secondary hover:text-text-primary'
-          )}
-        >
-          Public Store
-        </button>
-      </div>
+      <Tabs
+        label="Bot store view"
+        items={STORE_TABS}
+        value={activeTab}
+        onChange={(next) => setActiveTab(next)}
+        fill
+      />
 
-      <div className="relative mb-6">
-        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-text-muted"><Search size={16} /></div>
-        <input
-          type="text"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder={activeTab === 'public' ? 'Search public bots...' : 'Search for bots...'}
-          className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-border-subtle bg-bg-mod-subtle/50 text-sm text-text-primary placeholder:text-text-muted outline-none transition-colors focus:border-interactive-normal focus:bg-bg-mod-subtle"
-        />
-      </div>
+      <SearchWell
+        label={activeTab === 'public' ? 'Search public bots' : 'Search built-in bots'}
+        icon={<Search size={16} />}
+        value={searchQuery}
+        onChange={(e) => setSearchQuery(e.target.value)}
+      />
 
       {activeTab === 'public' && (
         <div>
           {publicBotsLoading ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="flex flex-col gap-3">
               {Array.from({ length: 4 }, (_, i) => (
-                <div key={i} className="h-48 animate-pulse rounded-2xl border border-border-subtle bg-bg-mod-subtle/40" />
+                <Skeleton key={i} height={132} borderRadius="var(--radius-well)" />
               ))}
             </div>
           ) : publicBotsError ? (
-            <div
-              role="alert"
-              className="rounded-xl border border-accent-danger/35 bg-accent-danger/10 px-4 py-3 text-sm text-accent-danger"
-            >
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <span>{publicBotsError}</span>
-                <Button type="button" size="sm" variant="outline" onClick={() => loadPublicBots()}>
-                  Retry
-                </Button>
-              </div>
-            </div>
+            <ErrorBanner
+              message={publicBotsError}
+              multiline
+              onRetry={() => loadPublicBots()}
+            />
           ) : publicBots.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 text-center">
-              <Bot size={32} className="mb-3 text-text-muted" />
-              <p className="text-sm text-text-muted">No public bots found.</p>
-            </div>
+            <EmptyState
+              icon={<Bot size={20} />}
+              title="Nothing published matches"
+              description={
+                searchQuery.trim()
+                  ? `No public bot is listed under “${searchQuery.trim()}”. Try a shorter word, or use the bots that already ship with this space.`
+                  : 'No developer has published a bot to this server yet. The built-in bots cover welcomes and moderation without an install.'
+              }
+              action={
+                <Button variant="ghost" onClick={() => setActiveTab('built-in')}>
+                  Show built-in bots
+                </Button>
+              }
+            />
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="flex flex-col gap-3">
               {publicBots.map((bot) => (
                 <BotStoreCard
                   key={bot.id}
@@ -462,36 +477,38 @@ export function BotStoreSection({
 
       {activeTab === 'built-in' && <>
       {configuringId && (
-        <div className="mb-6 p-5 border border-border-subtle bg-bg-mod-subtle rounded-xl shadow-lg relative overflow-hidden">
-          <div className="absolute top-0 left-0 w-1 h-full bg-accent-primary" />
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold text-text-primary text-base">Configure {filteredBots.find((b) => b.id === configuringId)?.name}</h3>
-            <button onClick={() => setConfiguringId(null)} className="text-text-muted hover:text-text-primary transition-colors"><X size={20} /></button>
+        <Raised bare lifted className="flex flex-col gap-5 p-5">
+          <div className="flex items-start justify-between gap-3">
+            <h3 className="pc-display min-w-0 text-heading text-text-primary">
+              Configure {filteredBots.find((b) => b.id === configuringId)?.name}
+            </h3>
+            <IconButton label="Close bot settings" onClick={() => setConfiguringId(null)}>
+              <X size={18} />
+            </IconButton>
           </div>
 
-          <div className="flex flex-col gap-4 mb-5">
+          <div className="flex flex-col gap-5">
             {configuringId === 'welcome_bot' && (
               <>
                 <div>
-                  <label htmlFor={`${formId}-welcome-channel`} className="settings-label">Welcome Channel</label>
-                  <select
+                  <label htmlFor={`${formId}-welcome-channel`} className={fieldLabelClass}>Welcome channel</label>
+                  <Select
                     id={`${formId}-welcome-channel`} aria-label="Welcome Channel"
                     value={String(configState.channel_id || '')}
                     onChange={(e) => setConfigState({ ...configState, channel_id: e.target.value })}
-                    className="select-field"
                   >
                     {textLikeChannels.map((channel) => (
                       <option key={channel.id} value={channel.id}>#{channel.name || channel.id}</option>
                     ))}
-                  </select>
+                  </Select>
                 </div>
                 <div>
-                  <label htmlFor={`${formId}-message-template`} className="settings-label">Message Template</label>
-                  <textarea
+                  <label htmlFor={`${formId}-message-template`} className={fieldLabelClass}>Message template</label>
+                  <Textarea
                     id={`${formId}-message-template`} aria-label="Message Template"
                     value={String(configState.message_template || '')}
                     onChange={(e) => setConfigState({ ...configState, message_template: e.target.value })}
-                    className="w-full h-24 p-3 rounded-lg border border-border-subtle bg-bg-secondary text-sm text-text-primary outline-none transition-colors focus:border-interactive-normal resize-none"
+                    className="h-24 resize-none"
                     placeholder="Welcome to the server, {user}!"
                   />
                 </div>
@@ -502,32 +519,34 @@ export function BotStoreSection({
               <>
                 <div className="grid gap-3 md:grid-cols-2">
                   <div>
-                    <label htmlFor={`${formId}-mod-log-channel`} className="settings-label">Mod Log Channel</label>
-                    <select id={`${formId}-mod-log-channel`} aria-label="Mod Log Channel" className="select-field" value={autoModConfig.mod_log_channel_id || ''} onChange={(e) => setAutoModConfig({ ...autoModConfig, mod_log_channel_id: e.target.value || undefined })}>
+                    <label htmlFor={`${formId}-mod-log-channel`} className={fieldLabelClass}>Mod log channel</label>
+                    <Select id={`${formId}-mod-log-channel`} aria-label="Mod Log Channel" value={autoModConfig.mod_log_channel_id || ''} onChange={(e) => setAutoModConfig({ ...autoModConfig, mod_log_channel_id: e.target.value || undefined })}>
                       <option value="">Disabled</option>
                       {textLikeChannels.map((channel) => (<option key={channel.id} value={channel.id}>#{channel.name || channel.id}</option>))}
-                    </select>
+                    </Select>
                   </div>
                   <div>
-                    <label htmlFor={`${formId}-quarantine-channel`} className="settings-label">Quarantine Channel</label>
-                    <select id={`${formId}-quarantine-channel`} aria-label="Quarantine Channel" className="select-field" value={autoModConfig.quarantine_channel_id || ''} onChange={(e) => setAutoModConfig({ ...autoModConfig, quarantine_channel_id: e.target.value || undefined })}>
+                    <label htmlFor={`${formId}-quarantine-channel`} className={fieldLabelClass}>Quarantine channel</label>
+                    <Select id={`${formId}-quarantine-channel`} aria-label="Quarantine Channel" value={autoModConfig.quarantine_channel_id || ''} onChange={(e) => setAutoModConfig({ ...autoModConfig, quarantine_channel_id: e.target.value || undefined })}>
                       <option value="">Disabled</option>
                       {textLikeChannels.map((channel) => (<option key={channel.id} value={channel.id}>#{channel.name || channel.id}</option>))}
-                    </select>
+                    </Select>
                   </div>
                 </div>
 
-                <div className="rounded-xl border border-border-subtle bg-bg-primary/35 p-4">
-                  <div className="mb-2 flex items-center justify-between">
-                    <h4 className="text-sm font-semibold text-text-primary">Rules</h4>
-                    <Button size="sm" variant="secondary" onClick={() => setAutoModConfig({ ...autoModConfig, rules: [...(autoModConfig.rules || []), makeRule()] })}><Plus size={14} />Add Rule</Button>
+                <Divider />
+
+                <section className="flex flex-col gap-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <GroupLabel>Rules</GroupLabel>
+                    <Button size="sm" variant="ghost" onClick={() => setAutoModConfig({ ...autoModConfig, rules: [...(autoModConfig.rules || []), makeRule()] })}><Plus size={14} />Add Rule</Button>
                   </div>
-                  <div className="space-y-2">
+                  <div className="flex flex-col gap-2">
                     {(autoModConfig.rules || []).map((rule) => (
-                      <div key={rule.id} className="rounded-lg border border-border-subtle bg-bg-secondary/35 p-3">
+                      <Well key={rule.id} bare className="flex flex-col gap-2 p-3">
                         <div className="grid gap-2 md:grid-cols-4">
-                          <input className="input-field" value={rule.name} onChange={(e) => setAutoModConfig({ ...autoModConfig, rules: (autoModConfig.rules || []).map((r) => r.id === rule.id ? { ...r, name: e.target.value } : r) })} placeholder="Rule name" />
-                          <select className="select-field" value={rule.type} onChange={(e) => setAutoModConfig({ ...autoModConfig, rules: (autoModConfig.rules || []).map((r) => r.id === rule.id ? { ...r, type: e.target.value as RuleType } : r) })}>
+                          <Input aria-label="Rule name" value={rule.name} onChange={(e) => setAutoModConfig({ ...autoModConfig, rules: (autoModConfig.rules || []).map((r) => r.id === rule.id ? { ...r, name: e.target.value } : r) })} placeholder="Rule name" />
+                          <Select aria-label={`Trigger for ${rule.name}`} value={rule.type} onChange={(e) => setAutoModConfig({ ...autoModConfig, rules: (autoModConfig.rules || []).map((r) => r.id === rule.id ? { ...r, type: e.target.value as RuleType } : r) })}>
                             <option value="keyword">Keyword</option>
                             <option value="regex">Regex</option>
                             <option value="link_allowlist">Link allowlist</option>
@@ -535,139 +554,177 @@ export function BotStoreSection({
                             <option value="spam_duplicate">Duplicate spam</option>
                             <option value="mention_spam">Mention spam</option>
                             <option value="account_age_gate">Account age gate</option>
-                          </select>
-                          <label className="flex items-center gap-2 rounded-lg border border-border-subtle bg-bg-mod-subtle px-3 text-xs text-text-secondary"><input type="checkbox" checked={rule.enabled} onChange={(e) => setAutoModConfig({ ...autoModConfig, rules: (autoModConfig.rules || []).map((r) => r.id === rule.id ? { ...r, enabled: e.target.checked } : r) })} />Enabled</label>
-                          <Button size="sm" variant="destructive" onClick={() => setAutoModConfig({ ...autoModConfig, rules: (autoModConfig.rules || []).filter((r) => r.id !== rule.id) })}><Trash2 size={14} />Remove</Button>
+                          </Select>
+                          <div className="flex h-[var(--h-control-phone)] items-center gap-2.5">
+                            <Switch checked={rule.enabled} onChange={(next) => setAutoModConfig({ ...autoModConfig, rules: (autoModConfig.rules || []).map((r) => r.id === rule.id ? { ...r, enabled: next } : r) })} label={`Enable ${rule.name}`} size="sm" />
+                            <span className="text-label text-text-secondary">Enabled</span>
+                          </div>
+                          <Button size="sm" variant="danger" onClick={() => setAutoModConfig({ ...autoModConfig, rules: (autoModConfig.rules || []).filter((r) => r.id !== rule.id) })}><Trash2 size={14} />Remove</Button>
                         </div>
-                        <input className="input-field mt-2" value={rule.value} onChange={(e) => setAutoModConfig({ ...autoModConfig, rules: (autoModConfig.rules || []).map((r) => r.id === rule.id ? { ...r, value: e.target.value } : r) })} placeholder="Rule value (comma list, regex, domain list, or numeric params)" />
-                      </div>
+                        <Input aria-label={`Value for ${rule.name}`} value={rule.value} onChange={(e) => setAutoModConfig({ ...autoModConfig, rules: (autoModConfig.rules || []).map((r) => r.id === rule.id ? { ...r, value: e.target.value } : r) })} placeholder="Rule value (comma list, regex, domain list, or numeric params)" />
+                      </Well>
                     ))}
                   </div>
-                </div>
+                </section>
 
-                <div className="rounded-xl border border-border-subtle bg-bg-primary/35 p-4">
-                  <h4 className="text-sm font-semibold text-text-primary mb-2">Anti-Raid</h4>
+                <Divider />
+
+                <section className="flex flex-col gap-3">
+                  <GroupLabel>Anti-raid</GroupLabel>
+                  <Well bare className="px-4">
+                    <ToggleRow
+                      label="Watch for raids"
+                      description="Locks the space down when a burst of accounts joins at once."
+                      checked={autoModConfig.anti_raid?.enabled === true}
+                      onChange={(next) => setAutoModConfig({ ...autoModConfig, anti_raid: { ...(autoModConfig.anti_raid || DEFAULT_ANTI_RAID), enabled: next } })}
+                    />
+                  </Well>
                   <div className="grid gap-2 md:grid-cols-2">
-                    <label className="flex items-center gap-2 rounded-lg border border-border-subtle bg-bg-mod-subtle px-3 py-2 text-sm text-text-secondary"><input type="checkbox" checked={autoModConfig.anti_raid?.enabled === true} onChange={(e) => setAutoModConfig({ ...autoModConfig, anti_raid: { ...(autoModConfig.anti_raid || { enabled: false, join_window_seconds: 30, join_threshold: 10, lockdown_minutes: 10, min_account_age_minutes: 0, auto_action: 'none' }), enabled: e.target.checked } })} />Enabled</label>
-                    <select className="select-field" value={autoModConfig.anti_raid?.auto_action || 'none'} onChange={(e) => setAutoModConfig({ ...autoModConfig, anti_raid: { ...(autoModConfig.anti_raid || { enabled: false, join_window_seconds: 30, join_threshold: 10, lockdown_minutes: 10, min_account_age_minutes: 0, auto_action: 'none' }), auto_action: e.target.value as 'none' | 'kick' | 'ban' } })}>
+                    <Select aria-label="Automatic action on a suspected raid" value={autoModConfig.anti_raid?.auto_action || 'none'} onChange={(e) => setAutoModConfig({ ...autoModConfig, anti_raid: { ...(autoModConfig.anti_raid || DEFAULT_ANTI_RAID), auto_action: e.target.value as 'none' | 'kick' | 'ban' } })}>
                       <option value="none">No auto-action</option>
                       <option value="kick">Kick suspicious</option>
                       <option value="ban">Ban suspicious</option>
-                    </select>
-                    <input type="number" min={5} className="input-field" value={autoModConfig.anti_raid?.join_window_seconds || 30} onChange={(e) => setAutoModConfig({ ...autoModConfig, anti_raid: { ...(autoModConfig.anti_raid || { enabled: false, join_window_seconds: 30, join_threshold: 10, lockdown_minutes: 10, min_account_age_minutes: 0, auto_action: 'none' }), join_window_seconds: Number(e.target.value || 30) } })} placeholder="Join window (seconds)" />
-                    <input type="number" min={2} className="input-field" value={autoModConfig.anti_raid?.join_threshold || 10} onChange={(e) => setAutoModConfig({ ...autoModConfig, anti_raid: { ...(autoModConfig.anti_raid || { enabled: false, join_window_seconds: 30, join_threshold: 10, lockdown_minutes: 10, min_account_age_minutes: 0, auto_action: 'none' }), join_threshold: Number(e.target.value || 10) } })} placeholder="Join threshold" />
-                    <input type="number" min={1} className="input-field" value={autoModConfig.anti_raid?.lockdown_minutes || 10} onChange={(e) => setAutoModConfig({ ...autoModConfig, anti_raid: { ...(autoModConfig.anti_raid || { enabled: false, join_window_seconds: 30, join_threshold: 10, lockdown_minutes: 10, min_account_age_minutes: 0, auto_action: 'none' }), lockdown_minutes: Number(e.target.value || 10) } })} placeholder="Lockdown minutes" />
-                    <input type="number" min={0} className="input-field" value={autoModConfig.anti_raid?.min_account_age_minutes || 0} onChange={(e) => setAutoModConfig({ ...autoModConfig, anti_raid: { ...(autoModConfig.anti_raid || { enabled: false, join_window_seconds: 30, join_threshold: 10, lockdown_minutes: 10, min_account_age_minutes: 0, auto_action: 'none' }), min_account_age_minutes: Number(e.target.value || 0) } })} placeholder="Min account age minutes" />
+                    </Select>
+                    <Input type="number" min={5} aria-label="Join window in seconds" value={autoModConfig.anti_raid?.join_window_seconds || 30} onChange={(e) => setAutoModConfig({ ...autoModConfig, anti_raid: { ...(autoModConfig.anti_raid || DEFAULT_ANTI_RAID), join_window_seconds: Number(e.target.value || 30) } })} placeholder="Join window (seconds)" />
+                    <Input type="number" min={2} aria-label="Join threshold" value={autoModConfig.anti_raid?.join_threshold || 10} onChange={(e) => setAutoModConfig({ ...autoModConfig, anti_raid: { ...(autoModConfig.anti_raid || DEFAULT_ANTI_RAID), join_threshold: Number(e.target.value || 10) } })} placeholder="Join threshold" />
+                    <Input type="number" min={1} aria-label="Lockdown minutes" value={autoModConfig.anti_raid?.lockdown_minutes || 10} onChange={(e) => setAutoModConfig({ ...autoModConfig, anti_raid: { ...(autoModConfig.anti_raid || DEFAULT_ANTI_RAID), lockdown_minutes: Number(e.target.value || 10) } })} placeholder="Lockdown minutes" />
+                    <Input type="number" min={0} aria-label="Minimum account age in minutes" value={autoModConfig.anti_raid?.min_account_age_minutes || 0} onChange={(e) => setAutoModConfig({ ...autoModConfig, anti_raid: { ...(autoModConfig.anti_raid || DEFAULT_ANTI_RAID), min_account_age_minutes: Number(e.target.value || 0) } })} placeholder="Min account age minutes" />
                   </div>
-                </div>
+                </section>
 
-                <div className="rounded-xl border border-border-subtle bg-bg-primary/35 p-4">
-                  <h4 className="text-sm font-semibold text-text-primary mb-2">Verification Gate</h4>
-                  <label className="flex items-center gap-2 rounded-lg border border-border-subtle bg-bg-mod-subtle px-3 py-2 text-sm text-text-secondary mb-2"><input type="checkbox" checked={autoModConfig.verification_gate?.enabled === true} onChange={(e) => setAutoModConfig({ ...autoModConfig, verification_gate: { ...(autoModConfig.verification_gate || { enabled: false, require_ack: true, waiting_period_minutes: 0, questions: [] }), enabled: e.target.checked } })} />Enabled</label>
-                  <div className="grid gap-2 md:grid-cols-2">
-                    <label className="flex items-center gap-2 rounded-lg border border-border-subtle bg-bg-mod-subtle px-3 py-2 text-sm text-text-secondary"><input type="checkbox" checked={autoModConfig.verification_gate?.require_ack !== false} onChange={(e) => setAutoModConfig({ ...autoModConfig, verification_gate: { ...(autoModConfig.verification_gate || { enabled: false, require_ack: true, waiting_period_minutes: 0, questions: [] }), require_ack: e.target.checked } })} />Require acknowledgement</label>
-                    <input type="number" min={0} className="input-field" value={autoModConfig.verification_gate?.waiting_period_minutes || 0} onChange={(e) => setAutoModConfig({ ...autoModConfig, verification_gate: { ...(autoModConfig.verification_gate || { enabled: false, require_ack: true, waiting_period_minutes: 0, questions: [] }), waiting_period_minutes: Number(e.target.value || 0) } })} placeholder="Waiting period (minutes)" />
-                  </div>
-                  <div className="mt-2 space-y-2">
+                <Divider />
+
+                <section className="flex flex-col gap-3">
+                  <GroupLabel>Verification gate</GroupLabel>
+                  <Well bare className="divide-y divide-border-subtle px-4">
+                    <ToggleRow
+                      label="Ask new members to verify"
+                      description="Members stay in the gate until they answer and acknowledge."
+                      checked={autoModConfig.verification_gate?.enabled === true}
+                      onChange={(next) => setAutoModConfig({ ...autoModConfig, verification_gate: { ...(autoModConfig.verification_gate || DEFAULT_VERIFICATION_GATE), enabled: next } })}
+                    />
+                    <ToggleRow
+                      label="Require acknowledgement"
+                      description="They have to tick the rules before they can post."
+                      checked={autoModConfig.verification_gate?.require_ack !== false}
+                      onChange={(next) => setAutoModConfig({ ...autoModConfig, verification_gate: { ...(autoModConfig.verification_gate || DEFAULT_VERIFICATION_GATE), require_ack: next } })}
+                    />
+                  </Well>
+                  <Input type="number" min={0} className="md:max-w-xs" aria-label="Waiting period in minutes" value={autoModConfig.verification_gate?.waiting_period_minutes || 0} onChange={(e) => setAutoModConfig({ ...autoModConfig, verification_gate: { ...(autoModConfig.verification_gate || DEFAULT_VERIFICATION_GATE), waiting_period_minutes: Number(e.target.value || 0) } })} placeholder="Waiting period (minutes)" />
+                  <div className="flex flex-col gap-2">
                     {(autoModConfig.verification_gate?.questions || []).map((q, idx) => (
                       <div key={`${idx}-${q.question}`} className="grid gap-2 md:grid-cols-2">
-                        <input className="input-field" value={q.question} onChange={(e) => setAutoModConfig({ ...autoModConfig, verification_gate: { ...(autoModConfig.verification_gate || { enabled: false, require_ack: true, waiting_period_minutes: 0, questions: [] }), questions: (autoModConfig.verification_gate?.questions || []).map((item, i) => i === idx ? { ...item, question: e.target.value } : item) } })} placeholder="Question" />
-                        <div className="flex gap-2"><input className="input-field flex-1" value={q.answer} onChange={(e) => setAutoModConfig({ ...autoModConfig, verification_gate: { ...(autoModConfig.verification_gate || { enabled: false, require_ack: true, waiting_period_minutes: 0, questions: [] }), questions: (autoModConfig.verification_gate?.questions || []).map((item, i) => i === idx ? { ...item, answer: e.target.value } : item) } })} placeholder="Expected answer" /><Button size="sm" variant="destructive" onClick={() => setAutoModConfig({ ...autoModConfig, verification_gate: { ...(autoModConfig.verification_gate || { enabled: false, require_ack: true, waiting_period_minutes: 0, questions: [] }), questions: (autoModConfig.verification_gate?.questions || []).filter((_, i) => i !== idx) } })}><Trash2 size={14} /></Button></div>
+                        <Input aria-label={`Question ${idx + 1}`} value={q.question} onChange={(e) => setAutoModConfig({ ...autoModConfig, verification_gate: { ...(autoModConfig.verification_gate || DEFAULT_VERIFICATION_GATE), questions: (autoModConfig.verification_gate?.questions || []).map((item, i) => i === idx ? { ...item, question: e.target.value } : item) } })} placeholder="Question" />
+                        <div className="flex gap-2"><Input aria-label={`Expected answer ${idx + 1}`} className="flex-1" value={q.answer} onChange={(e) => setAutoModConfig({ ...autoModConfig, verification_gate: { ...(autoModConfig.verification_gate || DEFAULT_VERIFICATION_GATE), questions: (autoModConfig.verification_gate?.questions || []).map((item, i) => i === idx ? { ...item, answer: e.target.value } : item) } })} placeholder="Expected answer" /><IconButton label={`Remove question ${idx + 1}`} tone="danger" size="lg" onClick={() => setAutoModConfig({ ...autoModConfig, verification_gate: { ...(autoModConfig.verification_gate || DEFAULT_VERIFICATION_GATE), questions: (autoModConfig.verification_gate?.questions || []).filter((_, i) => i !== idx) } })}><Trash2 size={14} /></IconButton></div>
                       </div>
                     ))}
-                    <Button size="sm" variant="secondary" onClick={() => setAutoModConfig({ ...autoModConfig, verification_gate: { ...(autoModConfig.verification_gate || { enabled: false, require_ack: true, waiting_period_minutes: 0, questions: [] }), questions: [...(autoModConfig.verification_gate?.questions || []), { question: '', answer: '' }] } })}><Plus size={14} />Add Question</Button>
+                    <Button size="sm" variant="ghost" className="self-start" onClick={() => setAutoModConfig({ ...autoModConfig, verification_gate: { ...(autoModConfig.verification_gate || DEFAULT_VERIFICATION_GATE), questions: [...(autoModConfig.verification_gate?.questions || []), { question: '', answer: '' }] } })}><Plus size={14} />Add Question</Button>
                   </div>
-                </div>
+                </section>
 
-                <div className="rounded-xl border border-border-subtle bg-bg-primary/35 p-4">
-                  <h4 className="text-sm font-semibold text-text-primary mb-1">Trigger Logs</h4>
-                  <p className="text-xs text-text-muted mb-2">Recent server-side AutoMod triggers.</p>
-                  <div className="max-h-52 overflow-y-auto space-y-2">
-                    {(autoModConfig.trigger_logs || []).length === 0 && <div className="rounded-lg border border-border-subtle bg-bg-secondary/30 px-3 py-4 text-center text-xs text-text-muted">No trigger logs yet.</div>}
-                    {(autoModConfig.trigger_logs || []).map((entry, idx) => (
-                      <div key={String(entry.id || idx)} className="rounded-lg border border-border-subtle bg-bg-secondary/30 px-3 py-2">
-                        <div className="text-xs font-semibold text-text-primary">{String(entry.rule || 'Rule')}</div>
-                        <div className="text-[11px] text-text-muted">user {String(entry.user_id || 'unknown')} in channel {String(entry.channel_id || 'unknown')}</div>
-                        {Boolean(entry.excerpt) && <div className="mt-1 text-xs text-text-secondary">{String(entry.excerpt)}</div>}
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                <Divider />
+
+                <section className="flex flex-col gap-3">
+                  <GroupLabel>Trigger log</GroupLabel>
+                  {(autoModConfig.trigger_logs || []).length === 0 ? (
+                    <EmptyState
+                      icon={<Shield size={20} />}
+                      title="Auto-Moderator has not acted yet"
+                      description="Each time a rule catches a message, the rule, the member and the channel are recorded here."
+                    />
+                  ) : (
+                    <Well bare className="max-h-52 divide-y divide-border-subtle overflow-y-auto px-4">
+                      {(autoModConfig.trigger_logs || []).map((entry, idx) => (
+                        <div key={String(entry.id || idx)} className="py-2.5">
+                          <div className="pc-display text-name text-text-primary">{String(entry.rule || 'Rule')}</div>
+                          <div className="text-meta text-text-faint">user <span className="pc-mono">{String(entry.user_id || 'unknown')}</span> in channel <span className="pc-mono">{String(entry.channel_id || 'unknown')}</span></div>
+                          {Boolean(entry.excerpt) && <div className="mt-1 text-meta leading-relaxed text-text-secondary">{String(entry.excerpt)}</div>}
+                        </div>
+                      ))}
+                    </Well>
+                  )}
+                </section>
               </>
             )}
           </div>
 
-          <div className="flex items-center justify-between pt-4 border-t border-border-subtle/50">
-            <Button variant="destructive" size="sm" onClick={() => configuringId && void handleUninstall(configuringId)} className="gap-1.5 flex items-center"><Trash2 size={14} /> Remove Bot</Button>
+          <Divider />
+
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <Button variant="danger" size="sm" onClick={() => configuringId && void handleUninstall(configuringId)}><Trash2 size={14} /> Remove Bot</Button>
             <div className="flex items-center gap-2">
               <Button variant="ghost" size="sm" onClick={() => setConfiguringId(null)}>Cancel</Button>
-              <Button variant="default" size="sm" onClick={() => void saveConfig()} className="gap-1.5 flex items-center shadow-lg shadow-accent-primary/20"><Save size={14} /> Save Changes</Button>
+              <Button variant="primary" size="sm" onClick={() => void saveConfig()}><Save size={14} /> Save Changes</Button>
             </div>
           </div>
-        </div>
+        </Raised>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {filteredBots.map((bot) => {
-          const installed = botSettings[bot.id]?.enabled === true;
-          return (
-            <div key={bot.id} className={cn('card-surface flex flex-col rounded-2xl border border-border-subtle bg-bg-mod-subtle/40 p-5 transition-colors', installed ? 'border-accent-primary/50 shadow-sm shadow-accent-primary/5' : 'hover:border-border-strong hover:bg-bg-mod-subtle/60')}>
-              <div className="flex items-start gap-4 mb-4">
-                <div
-                  className={cn(
-                    'h-12 w-12 shrink-0 rounded-xl flex items-center justify-center',
-                    BOT_ICON_BG_CLASS[bot.id] || 'bg-bg-mod-strong',
-                  )}
-                >
-                  {bot.icon}
-                </div>
-                <div className="flex-1">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-base font-bold text-text-primary">{bot.name}</h3>
-                    {installed && <span className="text-[10px] font-bold uppercase tracking-wider text-accent-primary bg-accent-primary/10 px-2 py-0.5 rounded-full">Active</span>}
+      <section className="flex flex-col gap-3">
+        <GroupLabel>Bots that ship with Paracord</GroupLabel>
+        <Well bare className="divide-y divide-border-subtle px-4">
+          {filteredBots.map((bot) => {
+            const installed = botSettings[bot.id]?.enabled === true;
+            return (
+              <div key={bot.id} className="flex flex-col gap-3 py-4 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex min-w-0 gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-card)] bg-bg-raised text-text-secondary shadow-[var(--shadow-raised)]">
+                    {bot.icon}
+                  </span>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="pc-display text-name text-text-primary">{bot.name}</h3>
+                      {installed && <Chip size="sm" tone="accent">Installed</Chip>}
+                    </div>
+                    <p className="mt-0.5 text-body leading-relaxed text-text-secondary">{bot.description}</p>
+                    <ul className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
+                      {bot.features.map((feature) => (
+                        <li key={feature} className="flex items-center gap-1.5 text-meta text-text-faint">
+                          <Check size={13} aria-hidden />
+                          {feature}
+                        </li>
+                      ))}
+                    </ul>
                   </div>
-                  <p className="text-[13px] text-text-muted mt-0.5 line-clamp-2 leading-relaxed">{bot.description}</p>
+                </div>
+                <div className="flex shrink-0 items-center gap-3 sm:pl-3">
+                  <span className="inline-flex items-center gap-1.5 text-meta text-text-faint">
+                    <Wrench size={12} aria-hidden />
+                    Runs in the app
+                  </span>
+                  {installed ? (
+                    <Button
+                      onClick={() => setConfiguringId(bot.id)}
+                      disabled={!canManage}
+                      size="sm"
+                      variant="ghost"
+                    >
+                      <Settings size={14} /> Configure
+                    </Button>
+                  ) : (
+                    <Button
+                      onClick={() => void handleInstall(bot.id)}
+                      disabled={!canManage || installingId === bot.id}
+                      size="sm"
+                      variant="ghost"
+                    >
+                      {installingId === bot.id ? 'Installing...' : 'Add to Server'}
+                      {installingId !== bot.id && <ArrowRight size={14} />}
+                    </Button>
+                  )}
                 </div>
               </div>
-              <div className="flex flex-col gap-2 mb-6 flex-1">
-                <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Features</span>
-                <ul className="flex flex-col gap-1.5">{bot.features.map((feature) => <li key={feature} className="flex items-center gap-2 text-[13px] text-text-secondary"><Check size={14} className="text-text-muted" />{feature}</li>)}</ul>
-              </div>
-              <div className="mt-auto pt-4 border-t border-border-subtle/50 flex items-center justify-between">
-                <span className="text-xs font-semibold text-text-muted flex items-center gap-1"><Wrench size={12} />Native App</span>
-                {installed ? (
-                  <Button
-                    onClick={() => setConfiguringId(bot.id)}
-                    disabled={!canManage}
-                    size="sm"
-                    variant="outline"
-                    className="gap-1.5"
-                  >
-                    <Settings size={14} /> Configure
-                  </Button>
-                ) : (
-                  <Button
-                    onClick={() => void handleInstall(bot.id)}
-                    disabled={!canManage || installingId === bot.id}
-                    size="sm"
-                    className="gap-1.5 shadow-sm shadow-accent-primary/20 hover:shadow-accent-primary/40"
-                  >
-                    {installingId === bot.id ? 'Installing...' : 'Add to Server'}
-                    {installingId !== bot.id && <ArrowRight size={14} />}
-                  </Button>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </Well>
+      </section>
 
-      <section className="mt-6 rounded-xl border border-border-subtle bg-bg-primary/35 p-4" aria-labelledby="included-tools-heading">
-        <div className="mb-3">
-          <h3 id="included-tools-heading" className="text-sm font-semibold text-text-primary">Already included with every space</h3>
-          <p className="mt-0.5 text-xs text-text-muted">These are native Paracord tools, so there is no bot to install.</p>
+      <section className="flex flex-col gap-3" aria-labelledby="included-tools-heading">
+        <div>
+          <h3 id="included-tools-heading" className="pc-display text-heading text-text-primary">Already included with every space</h3>
+          <p className="mt-1 text-body leading-relaxed text-text-secondary">These are native Paracord tools, so there is no bot to install.</p>
         </div>
-        <div className="grid gap-2 lg:grid-cols-3">
+        <Well bare className="divide-y divide-border-subtle px-4">
           {INCLUDED_TOOLS.map((tool) => {
             const action = tool.id === 'system-roles'
               ? { label: 'Open Onboarding', disabled: !onOpenSettings, run: () => onOpenSettings?.('onboarding') }
@@ -675,24 +732,26 @@ export function BotStoreSection({
                 ? { label: 'Open Economy', disabled: !onOpenSettings, run: () => onOpenSettings?.('economy') }
                 : { label: 'Open a channel', disabled: !firstTextChannel || !onOpenChannel, run: () => firstTextChannel && onOpenChannel?.(firstTextChannel.id) };
             return (
-              <div key={tool.id} className="flex flex-col rounded-lg border border-border-subtle bg-bg-secondary/45 p-3.5">
-                <div className="flex items-center gap-2.5">
-                  <span className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-lg', BOT_ICON_BG_CLASS[tool.id] || 'bg-bg-mod-strong')}>
+              <div key={tool.id} className="flex flex-col gap-3 py-4 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex min-w-0 gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-card)] bg-bg-raised text-text-secondary shadow-[var(--shadow-raised)]">
                     {tool.icon}
                   </span>
                   <div className="min-w-0">
-                    <div className="text-sm font-semibold text-text-primary">{tool.name}</div>
-                    <div className="text-[11px] font-semibold uppercase tracking-wide text-accent-primary">Available now</div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h4 className="pc-display text-name text-text-primary">{tool.name}</h4>
+                      <Chip size="sm" tone="accent">Available now</Chip>
+                    </div>
+                    <p className="mt-0.5 text-body leading-relaxed text-text-secondary">{tool.description}</p>
                   </div>
                 </div>
-                <p className="mt-2 flex-1 text-xs leading-relaxed text-text-secondary">{tool.description}</p>
-                <Button type="button" size="sm" variant="secondary" className="mt-3 w-full" disabled={action.disabled} onClick={action.run}>
+                <Button type="button" size="sm" variant="ghost" className="shrink-0 self-start sm:self-center" disabled={action.disabled} onClick={action.run}>
                   {action.label}
                 </Button>
               </div>
             );
           })}
-        </div>
+        </Well>
       </section>
       </>}
     </div>

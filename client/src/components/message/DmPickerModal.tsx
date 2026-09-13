@@ -123,14 +123,16 @@ export function DmPickerModal({ open, onClose, onCreated }: DmPickerModalProps) 
         <p className="mt-1 text-meta text-text-secondary">
           {groupMode ? 'Choose friends for a shared conversation.' : 'Choose a friend to start or reopen a conversation.'}
         </p>
-        <div role="tablist" aria-label="Message type" className="mt-3 grid grid-cols-2 rounded-sm bg-bg-tertiary p-1">
+        <div role="tablist" aria-label="Message type" className="pc-well mt-3 grid grid-cols-2 gap-1 p-1">
           <button
             type="button"
             role="tab"
             aria-selected={!groupMode}
             className={cn(
-              'flex h-8 items-center justify-center gap-1.5 rounded-xs text-label font-semibold outline-none transition-colors focus-visible:shadow-[var(--focus-ring)]',
-              !groupMode ? 'bg-bg-secondary text-text-primary shadow-sm' : 'text-text-muted hover:text-text-primary',
+              'pc-focusable flex h-[var(--h-control)] items-center justify-center gap-1.5 rounded-[var(--radius-chip)] text-label transition-[background-color,color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+              !groupMode
+                ? 'bg-bg-raised font-semibold text-text-primary shadow-[var(--shadow-raised)]'
+                : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
             )}
             onClick={() => {
               setGroupMode(false);
@@ -146,8 +148,10 @@ export function DmPickerModal({ open, onClose, onCreated }: DmPickerModalProps) 
             role="tab"
             aria-selected={groupMode}
             className={cn(
-              'flex h-8 items-center justify-center gap-1.5 rounded-xs text-label font-semibold outline-none transition-colors focus-visible:shadow-[var(--focus-ring)]',
-              groupMode ? 'bg-bg-secondary text-text-primary shadow-sm' : 'text-text-muted hover:text-text-primary',
+              'pc-focusable flex h-[var(--h-control)] items-center justify-center gap-1.5 rounded-[var(--radius-chip)] text-label transition-[background-color,color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+              groupMode
+                ? 'bg-bg-raised font-semibold text-text-primary shadow-[var(--shadow-raised)]'
+                : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
             )}
             onClick={() => {
               setGroupMode(true);
@@ -178,7 +182,7 @@ export function DmPickerModal({ open, onClose, onCreated }: DmPickerModalProps) 
             type="text"
             placeholder="Group name (optional)"
             aria-label="Group name"
-            className="mt-2.5 w-full rounded-sm border border-border-subtle bg-bg-tertiary px-3 py-2 text-body text-text-primary outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] placeholder:text-text-muted focus-visible:border-accent-primary focus-visible:shadow-[var(--focus-ring-input)]"
+            className="pc-well mt-2.5 h-[var(--h-control-phone)] w-full px-3 text-label text-text-primary outline-none transition-[box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)] placeholder:text-text-faint focus-visible:shadow-[var(--shadow-well),var(--focus-ring)]"
             value={groupName}
             onChange={(e) => setGroupName(e.target.value)}
           />
@@ -208,8 +212,8 @@ export function DmPickerModal({ open, onClose, onCreated }: DmPickerModalProps) 
                 key={rel.id}
                 type="button"
                 className={cn(
-                  'group w-full rounded-sm px-3 py-2 text-left text-label font-medium outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]',
-                  groupMode && selected && 'bg-accent-tint text-accent-primary',
+                  'pc-focusable group w-full rounded-[var(--radius-control)] px-3 py-2 text-left text-label font-medium transition-[background-color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle',
+                  groupMode && selected && 'bg-bg-raised shadow-[var(--shadow-raised)]',
                 )}
                 onClick={() => {
                   if (groupMode) {
@@ -250,7 +254,7 @@ export function DmPickerModal({ open, onClose, onCreated }: DmPickerModalProps) 
       {error && (
         <div
           role="alert"
-          className="mx-3 mb-3 rounded-sm border border-accent-danger/40 bg-danger-tint px-3 py-2 text-label font-medium text-accent-danger"
+          className="mx-3 mb-3 rounded-[var(--radius-well)] bg-danger-well px-3.5 py-2.5 text-label font-medium leading-relaxed text-accent-danger shadow-[var(--shadow-well)]"
         >
           {error}
         </div>

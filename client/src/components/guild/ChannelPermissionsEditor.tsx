@@ -8,9 +8,20 @@ import type { ChannelOverwrite, Role, Member } from '../../types';
 import { Permissions } from '../../types';
 import { cn } from '../../lib/utils';
 import { useMemberStore } from '../../stores/memberStore';
-import { LoadingSpinner, ErrorBanner } from '../ui/Feedback';
-import { Modal } from '../ui/Modal';
-import { Button } from '../ui/Button';
+import {
+  Button,
+  Divider,
+  EmptyState,
+  ErrorBanner,
+  IconButton,
+  Input,
+  LoadingSpinner,
+  Modal,
+  Select,
+  Tabs,
+  Well,
+} from '../ui';
+import { GroupLabel } from './SettingsPrimitives';
 import { displayName } from '../../lib/displayName';
 
 const EMPTY_MEMBERS: Member[] = [];
@@ -377,9 +388,11 @@ export function ChannelPermissionsEditor({
     return role?.name ?? `Role ${targetId.slice(0, 6)}`;
   };
 
+  // A role's own colour is data, not design (spec §1 exception): the hex comes
+  // from the role, and a role with no colour falls back to a text token.
   const getRoleColor = (targetId: string) => {
     const role = roles.find((r) => r.id === targetId);
-    return role?.color ? `#${role.color.toString(16).padStart(6, '0')}` : '#99aab5';
+    return role?.color ? `#${role.color.toString(16).padStart(6, '0')}` : 'var(--text-faint)';
   };
 
   const availableRolesToAdd = displayRoles.filter(
@@ -395,52 +408,57 @@ export function ChannelPermissionsEditor({
     >
       <div>
         {/* Header */}
-        <div className="flex items-center gap-3 border-b border-border-subtle bg-bg-secondary px-6 py-4">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-sm bg-accent-tint text-accent-primary">
-            <Shield size={18} />
+        <div className="flex items-center gap-3 px-6 py-4">
+          <div className="pc-well flex h-9 w-9 shrink-0 items-center justify-center text-text-secondary">
+            <Shield size={18} aria-hidden />
           </div>
           <div className="min-w-0 flex-1">
-            <div id="channel-permissions-title" className="font-display text-heading text-text-primary">
+            <h2 id="channel-permissions-title" className="pc-display text-title text-text-primary">
               Permissions
-            </div>
-            <div className="truncate font-code text-meta text-text-muted">#{channelName}</div>
+            </h2>
+            <div className="pc-mono truncate text-meta text-text-faint">#{channelName}</div>
           </div>
           <Button variant="ghost" size="sm" onClick={onClose}>Close</Button>
         </div>
+        <Divider />
 
         <div className="flex max-h-[78vh] min-h-[20rem] flex-col sm:max-h-[70vh] sm:flex-row">
           {/* Left panel: list of overwrites */}
-          <div className="flex max-h-[42vh] w-full shrink-0 flex-col border-b border-border-subtle bg-bg-secondary/40 sm:max-h-none sm:w-52 sm:border-b-0 sm:border-r">
-            <div className="px-3 pb-2 pt-3">
-              <div className="mb-1.5 px-1 text-section text-text-muted">Overrides</div>
+          <div className="flex max-h-[42vh] w-full shrink-0 flex-col sm:max-h-none sm:w-56">
+            <div className="flex flex-col gap-1.5 px-3 pb-2 pt-3">
+              <GroupLabel className="px-1">Overrides</GroupLabel>
               {loading ? (
-                <LoadingSpinner size="sm" className="px-1 py-1.5" label="Loading…" />
+                <LoadingSpinner size="sm" className="justify-start px-1 py-1.5" label="Loading overrides…" />
               ) : overwrites.length === 0 ? (
-                <p className="px-1 text-meta leading-relaxed text-text-muted">
-                  No overrides yet. Add a role or member below to fine-tune access.
+                <p className="px-1 text-meta leading-relaxed text-text-secondary">
+                  #{channelName} follows the space-wide roles. Add a role or member below to change
+                  what they can do in here.
                 </p>
               ) : (
-                <div className="space-y-0.5">
+                <div className="flex flex-col gap-0.5">
                   {overwrites.map((ow) => (
                     <button
                       key={ow.target_id}
                       onClick={() => startEditing(ow)}
+                      aria-pressed={selectedOverwriteId === ow.target_id}
                       className={cn(
-                        'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
+                        'pc-focusable flex h-[var(--h-list-row)] w-full items-center gap-2 rounded-[var(--radius-control)] px-2 text-left',
+                        'text-label transition-[background-color,color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
                         selectedOverwriteId === ow.target_id
-                          ? 'bg-accent-tint text-text-primary'
+                          ? 'bg-bg-raised font-semibold text-text-primary shadow-[var(--shadow-raised)]'
                           : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary'
                       )}
                     >
                       {ow.target_type === 1 ? (
-                        <User size={13} className="shrink-0 text-text-muted" />
+                        <User size={13} className="shrink-0 text-text-faint" aria-hidden />
                       ) : (
                         <span
-                          className="h-2.5 w-2.5 shrink-0 rounded-full"
+                          aria-hidden
+                          className="h-2.5 w-2.5 shrink-0 rounded-[var(--radius-full)]"
                           style={{ backgroundColor: getRoleColor(ow.target_id) }}
                         />
                       )}
-                      <span className="flex-1 truncate text-label">{getTargetName(ow.target_id, ow.target_type)}</span>
+                      <span className="min-w-0 flex-1 truncate">{getTargetName(ow.target_id, ow.target_type)}</span>
                     </button>
                   ))}
                 </div>
@@ -448,34 +466,34 @@ export function ChannelPermissionsEditor({
             </div>
 
             {/* Add overwrite */}
-            <div className="mt-auto space-y-2 border-t border-border-subtle px-3 py-3">
-              <div className="flex items-center gap-1 rounded-sm bg-bg-tertiary p-1">
-                {(['role', 'member'] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    className={cn(
-                      'flex-1 rounded-sm px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.04em] outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
-                      targetMode === mode
-                        ? 'bg-accent-primary text-text-on-accent'
-                        : 'text-text-muted hover:text-text-secondary'
-                    )}
-                    onClick={() => {
-                      setTargetMode(mode);
-                      if (mode === 'role') setMemberSearch('');
-                      else setAddTargetId('');
-                    }}
-                  >
-                    {mode === 'role' ? 'Role' : 'Member'}
-                  </button>
-                ))}
-              </div>
+            <div className="mt-auto flex flex-col gap-2 px-3 py-3">
+              <Divider className="mb-1" />
+              <Tabs
+                size="sm"
+                fill
+                label="Give the override to a role or a member"
+                value={targetMode}
+                onChange={(mode) => {
+                  setTargetMode(mode);
+                  if (mode === 'role') setMemberSearch('');
+                  else setAddTargetId('');
+                }}
+                items={[
+                  { value: 'role', label: 'Role' },
+                  { value: 'member', label: 'Member' },
+                ]}
+              />
               {targetMode === 'role' ? (
                 availableRolesToAdd.length === 0 ? (
-                  <div className="px-1 text-meta text-text-muted">Every role already has an override.</div>
+                  <p className="px-1 text-meta leading-relaxed text-text-secondary">
+                    Every role already has an override here. Pick one above to change it, or switch
+                    to Member.
+                  </p>
                 ) : (
                   <div className="flex flex-col gap-1.5">
-                    <select
-                      className="w-full rounded-sm border border-border-subtle bg-bg-tertiary px-2 py-1.5 text-label text-text-primary outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
+                    <Select
+                      className="h-[var(--h-control)] w-full text-label"
+                      aria-label="Role to add an override for"
                       value={addTargetId}
                       onChange={(e) => setAddTargetId(e.target.value)}
                     >
@@ -483,39 +501,43 @@ export function ChannelPermissionsEditor({
                       {availableRolesToAdd.map((r) => (
                         <option key={r.id} value={r.id}>{r.id === guildId ? '@everyone' : r.name}</option>
                       ))}
-                    </select>
+                    </Select>
                     <Button
+                      variant="ghost"
                       size="sm"
                       onClick={() => void handleAddTarget(addTargetId, 0)}
                       disabled={!addTargetId || saving}
                       className="w-full gap-1"
                     >
-                      <Plus size={13} />
+                      <Plus size={13} aria-hidden />
                       Add
                     </Button>
                   </div>
                 )
               ) : (
                 <div className="flex flex-col gap-1.5">
-                  <input
-                    className="w-full rounded-sm border border-border-subtle bg-bg-tertiary px-2 py-1.5 text-label text-text-primary outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] placeholder:text-text-muted focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
+                  <Input
+                    className="h-[var(--h-control)] w-full"
                     placeholder="Search members…"
+                    aria-label="Search members"
                     value={memberSearch}
                     onChange={(e) => setMemberSearch(e.target.value)}
                   />
-                  <div className="max-h-28 space-y-0.5 overflow-y-auto">
+                  <div className="flex max-h-28 flex-col gap-0.5 overflow-y-auto">
                     {filteredMembers.length === 0 ? (
-                      <div className="px-1 text-meta text-text-muted">No members match that search.</div>
+                      <p className="px-1 text-meta leading-relaxed text-text-secondary">
+                        Nobody in this space matches that search.
+                      </p>
                     ) : (
                       filteredMembers.map((m) => (
                         <button
                           key={m.user.id}
-                          className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-label text-text-secondary outline-none transition-colors hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+                          className="pc-focusable flex h-[var(--h-list-row)] w-full items-center gap-2 rounded-[var(--radius-control)] px-2 text-left text-label text-text-secondary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary"
                           onClick={() => void handleAddTarget(m.user.id, 1)}
                           disabled={saving}
                         >
-                          <User size={13} className="shrink-0 text-text-muted" />
-                          <span className="truncate">{displayName(m.user, m.nick)}</span>
+                          <User size={13} className="shrink-0 text-text-faint" aria-hidden />
+                          <span className="min-w-0 truncate">{displayName(m.user, m.nick)}</span>
                         </button>
                       ))
                     )}
@@ -525,42 +547,46 @@ export function ChannelPermissionsEditor({
             </div>
           </div>
 
+          <Divider className="sm:hidden" />
+          <Divider orientation="vertical" className="hidden sm:block" />
+
           {/* Right panel: permission editor */}
           <div className="flex flex-1 flex-col overflow-hidden">
-            {error && <ErrorBanner message={error} className="mx-4 mt-4" />}
+            {error && <ErrorBanner message={error} multiline className="mx-4 mt-4" />}
 
             {editing ? (
               <div className="flex flex-1 flex-col overflow-hidden">
-                <div className="flex items-center justify-between gap-2 border-b border-border-subtle px-5 py-3">
+                <div className="flex items-center justify-between gap-2 px-5 py-3">
                   <div className="flex min-w-0 items-center gap-2">
                     {editing.targetType === 1 ? (
-                      <User size={14} className="shrink-0 text-text-muted" />
+                      <User size={14} className="shrink-0 text-text-faint" aria-hidden />
                     ) : (
                       <span
-                        className="h-2.5 w-2.5 shrink-0 rounded-full"
+                        aria-hidden
+                        className="h-2.5 w-2.5 shrink-0 rounded-[var(--radius-full)]"
                         style={{ backgroundColor: getRoleColor(editing.targetId) }}
                       />
                     )}
-                    <span className="truncate text-label font-semibold text-text-primary">
+                    <span className="pc-display truncate text-name text-text-primary">
                       {getTargetName(editing.targetId, editing.targetType)}
                     </span>
                   </div>
-                  <button
-                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-text-muted outline-none transition-colors hover:bg-danger-tint hover:text-accent-danger focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
-                    title="Remove overwrite"
-                    aria-label={`Remove permission overwrite for ${getTargetName(editing.targetId, editing.targetType)}`}
+                  <IconButton
+                    label={`Remove permission overwrite for ${getTargetName(editing.targetId, editing.targetType)}`}
+                    className="hover:bg-danger-well hover:text-accent-danger"
                     onClick={() => void handleDelete(editing.targetId)}
                     disabled={saving}
                   >
                     <Trash2 size={15} />
-                  </button>
+                  </IconButton>
                 </div>
+                <Divider />
 
                 {effectivePreview && (
-                  <div className="border-b border-border-subtle bg-bg-tertiary/70 px-5 py-3">
+                  <Well className="mx-5 my-3 px-4 py-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-section text-text-muted">Effective access preview</span>
-                      <span className="text-meta font-semibold tabular-nums text-text-secondary">
+                      <GroupLabel>Effective access preview</GroupLabel>
+                      <span className="pc-mono text-meta text-text-secondary">
                         {previewAllowedCount} allowed · {previewPermissionCount - previewAllowedCount} denied
                       </span>
                     </div>
@@ -575,13 +601,13 @@ export function ChannelPermissionsEditor({
                               ? 'Combines the @everyone base role with this channel override.'
                               : 'Shows a member with @everyone plus this role, then applies channel overrides.'}
                     </p>
-                  </div>
+                  </Well>
                 )}
 
-                <div className="flex-1 space-y-5 overflow-y-auto px-5 py-4">
+                <div className="flex flex-1 flex-col gap-5 overflow-y-auto px-5 py-4">
                   {PERMISSION_GROUPS.map(({ group, perms }) => (
                     <div key={group}>
-                      <div className="mb-2 text-section text-text-muted">{group}</div>
+                      <GroupLabel className="mb-2">{group}</GroupLabel>
                       <div className="divide-y divide-border-subtle">
                         {perms.map(({ key, label }) => {
                           const flag = Permissions[key];
@@ -595,35 +621,19 @@ export function ChannelPermissionsEditor({
                                 <span className="block truncate text-label text-text-secondary">{label}</span>
                                 <span className={cn(
                                   'block text-meta',
-                                  effectivelyAllowed ? 'text-accent-success' : 'text-text-muted',
+                                  effectivelyAllowed ? 'text-text-secondary' : 'text-text-faint',
                                 )}>
                                   {state === 'inherit' ? 'Inherited' : 'Effective'} → {effectivelyAllowed ? 'allowed' : 'denied'}
                                 </span>
                               </span>
-                              <div className="flex shrink-0 items-center rounded-sm border border-border-subtle bg-bg-tertiary p-0.5">
-                                {PERM_STATES.map(({ value, label: stateLabel }) => {
-                                  const active = state === value;
-                                  return (
-                                    <button
-                                      key={value}
-                                      type="button"
-                                      onClick={() => applyPermState(flag, value)}
-                                      aria-pressed={active}
-                                      aria-label={`${stateLabel} ${label}`}
-                                      title={stateLabel}
-                                      className={cn(
-                                        'rounded-xs px-2.5 py-1 text-[11px] font-semibold outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
-                                        active && value === 'allow' && 'bg-accent-success text-text-on-accent',
-                                        active && value === 'deny' && 'bg-accent-danger text-text-on-danger',
-                                        active && value === 'inherit' && 'bg-bg-mod-strong text-text-primary',
-                                        !active && 'text-text-muted hover:text-text-secondary',
-                                      )}
-                                    >
-                                      {stateLabel}
-                                    </button>
-                                  );
-                                })}
-                              </div>
+                              <Tabs
+                                size="sm"
+                                className="shrink-0"
+                                label={`${label} in this channel`}
+                                value={state}
+                                onChange={(next) => applyPermState(flag, next)}
+                                items={PERM_STATES}
+                              />
                             </div>
                           );
                         })}
@@ -632,7 +642,8 @@ export function ChannelPermissionsEditor({
                   ))}
                 </div>
 
-                <div className="flex items-center justify-between gap-2 border-t border-border-subtle px-5 py-3">
+                <Divider />
+                <div className="flex items-center justify-between gap-2 px-5 py-3">
                   <Button
                     variant="ghost"
                     size="sm"
@@ -640,7 +651,7 @@ export function ChannelPermissionsEditor({
                     disabled={!hasOverrides || saving}
                     className="gap-1.5"
                   >
-                    <RotateCcw size={14} />
+                    <RotateCcw size={14} aria-hidden />
                     Reset to inherit
                   </Button>
                   <div className="flex items-center gap-2">
@@ -661,17 +672,16 @@ export function ChannelPermissionsEditor({
                 </div>
               </div>
             ) : (
-              <div className="flex flex-1 flex-col items-start justify-center px-6 py-8">
-                <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-sm bg-accent-tint text-text-muted">
-                  <Shield size={20} />
-                </div>
-                <h3 className="text-subhead text-text-primary">Fine-tune who can do what</h3>
-                <p className="mt-1.5 max-w-xs text-sm leading-relaxed text-text-secondary">
-                  {overwrites.length === 0
-                    ? 'Add a role or member on the left, then allow or deny individual permissions for #' + channelName + '.'
-                    : 'Pick an override on the left to allow or deny permissions for it.'}
-                </p>
-              </div>
+              <EmptyState
+                className="flex-1 justify-center px-6"
+                icon={<Shield size={20} aria-hidden />}
+                title="Fine-tune who can do what"
+                description={
+                  overwrites.length === 0
+                    ? `Add a role or member on the left, then allow or deny individual permissions for #${channelName}.`
+                    : `Pick an override on the left to allow or deny permissions for it in #${channelName}.`
+                }
+              />
             )}
           </div>
         </div>

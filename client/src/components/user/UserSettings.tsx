@@ -1,9 +1,6 @@
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router';
 import {
-  X,
-  ArrowLeft,
-  ChevronRight,
   User,
   Palette,
   Mic,
@@ -47,6 +44,15 @@ import { Button } from '../ui/Button';
 import { Input, Textarea, Select } from '../ui/Input';
 import { Skeleton } from '../ui/Skeleton';
 import {
+  NavRow,
+  SettingsSectionHeader,
+  SettingsShell,
+  Switch,
+  Tabs,
+  ToggleRow as UiToggleRow,
+  Well,
+} from '../ui';
+import {
   isEnabled as isNotificationsEnabled,
   setEnabled as setNotificationsEnabled,
   isPermissionGranted as checkNotificationPermission,
@@ -63,6 +69,7 @@ import { formatIdentityFingerprint } from '../../lib/keyVerification';
 import { isAllowedImageMimeType, safeExternalUrl } from '../../lib/security';
 import { resolveUserAvatarUrl } from '../../lib/userAvatar';
 import { displayName as resolveDisplayName } from '../../lib/displayName';
+import { getIdentityColor } from '../../lib/colors';
 import { formatShortcut } from '../../lib/keyboardShortcuts';
 import { CustomCSS } from '../customization/CustomCSS';
 import { VoiceConnectionCheckButton } from '../voice/VoiceConnectionCheckButton';
@@ -924,178 +931,59 @@ export function UserSettings({ onClose }: UserSettingsProps) {
     }
   }, [importPreview]);
 
-  const activeLabel = NAV_ITEMS.find((i) => i.id === activeSection)?.label ?? activeSection;
   const maskedEmail = user?.email ? user.email.replace(/(.{2})(.*)(@.*)/, '$1***$3') : '***@***';
   const voiceInputMode = (mergedNotifications['voiceInputMode'] ?? 'voice_activity') as
     | 'voice_activity'
     | 'push_to_talk';
 
+  const navGroups = NAV_GROUPS.map((group) => ({
+    label: group.label,
+    items: group.items
+      .filter((item) => !item.adminOnly || userIsAdmin)
+      .map((item) => {
+        const Icon = item.icon;
+        return { id: item.id, label: item.label, icon: <Icon size={16} /> };
+      }),
+  })).filter((group) => group.items.length > 0);
+
   return (
-    <div
-      className={cn(
-        'relative h-full min-h-0 overflow-hidden rounded-lg border border-border-subtle bg-bg-primary',
-        isMobile ? 'flex flex-col' : 'flex'
-      )}
+    <SettingsShell
+      label="User settings"
+      title={user ? resolveDisplayName(user) : 'Settings'}
+      groups={navGroups}
+      active={activeSection}
+      onSelect={(id) => (isMobile ? selectMobileSection(id as SettingsSection) : setActiveSection(id as SettingsSection))}
+      onClose={onClose}
+      closeLabel="Close user settings"
+      isMobile={isMobile}
+      showIndex={mobileShowNav}
+      onShowIndex={setMobileShowNav}
       onKeyDown={handleKeyDown}
-      tabIndex={-1}
-    >
-      {!isMobile && (
-        <div className="absolute right-6 top-6 z-50 flex flex-col items-center gap-1">
-          <button
-            onClick={onClose}
-            className="flex h-9 w-9 items-center justify-center rounded-sm border border-border-subtle bg-bg-secondary text-interactive-normal shadow-sm outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-interactive-hover focus-visible:shadow-[var(--focus-ring)]"
-            aria-label="Close user settings"
-            title="Close user settings"
+      indexFooter={
+        <>
+          <NavRow
+            icon={<Code2 size={16} />}
+            onClick={() => {
+              onClose();
+              navigate('/app/developers');
+            }}
           >
-            <X size={18} />
-          </button>
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">Esc</span>
-        </div>
-      )}
-
-      {isMobile ? (
-        mobileShowNav ? (
-          <div className="relative z-10 flex flex-1 flex-col overflow-y-auto bg-bg-secondary pt-[calc(var(--safe-top)+0.75rem)]">
-            <div className="flex items-center justify-between px-4 pb-3">
-              <div className="text-section text-text-muted">User settings</div>
-              <button
-                onClick={onClose}
-                className="flex h-9 w-9 items-center justify-center rounded-sm border border-border-subtle bg-bg-secondary text-interactive-normal"
-                aria-label="Close user settings"
-                title="Close user settings"
-              >
-                <X size={17} />
-              </button>
-            </div>
-            <div className="flex flex-col gap-4 px-2 pb-[calc(var(--safe-bottom)+1rem)]">
-              {NAV_GROUPS.map((group, gi) => {
-                const items = group.items.filter((item) => !item.adminOnly || userIsAdmin);
-                if (items.length === 0) return null;
-                return (
-                  <div key={group.label ?? `group-${gi}`}>
-                    {group.label && (
-                      <div className="px-3 pb-1.5 text-section text-text-muted">{group.label}</div>
-                    )}
-                    {items.map((item) => {
-                      const Icon = item.icon;
-                      return (
-                        <button
-                          key={item.id}
-                          onClick={() => selectMobileSection(item.id)}
-                          className="flex w-full items-center gap-3 rounded-sm px-3 py-3 text-label text-text-primary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle active:bg-bg-mod-strong"
-                        >
-                          <Icon size={18} className="shrink-0 text-text-muted" />
-                          <span className="flex-1 text-left">{item.label}</span>
-                          <ChevronRight size={16} className="text-text-muted" />
-                        </button>
-                      );
-                    })}
-                  </div>
-                );
-              })}
-              <div className="mx-3 h-px bg-border-subtle" />
-              <button
-                onClick={() => { onClose(); navigate('/app/developers'); }}
-                className="flex w-full items-center gap-3 rounded-sm px-3 py-3 text-label text-text-primary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle active:bg-bg-mod-strong"
-              >
-                <Code2 size={18} className="shrink-0 text-text-muted" />
-                <span className="flex-1 text-left">Developer Portal</span>
-                <ChevronRight size={16} className="text-text-muted" />
-              </button>
-              <button
-                onClick={() => { void logout(); onClose(); }}
-                className="flex w-full items-center gap-3 rounded-sm px-3 py-3 text-label text-accent-danger transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-danger-tint"
-              >
-                <LogOut size={18} className="shrink-0" />
-                <span className="flex-1 text-left">Log Out</span>
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="relative z-10 flex items-center gap-2 border-b border-border-subtle bg-bg-secondary px-3 pb-2.5 pt-[calc(var(--safe-top)+0.75rem)]">
-            <button
-              onClick={() => setMobileShowNav(true)}
-              className="flex h-9 w-9 items-center justify-center rounded-sm border border-border-subtle bg-bg-secondary text-interactive-normal"
-              aria-label="Back to settings menu"
-            >
-              <ArrowLeft size={17} />
-            </button>
-            <div className="flex-1 text-subhead text-text-primary">{activeLabel}</div>
-            <button
-              onClick={onClose}
-              className="flex h-9 w-9 items-center justify-center rounded-sm border border-border-subtle bg-bg-secondary text-interactive-normal"
-              aria-label="Close user settings"
-              title="Close user settings"
-            >
-              <X size={17} />
-            </button>
-          </div>
-        )
-      ) : (
-        <nav
-          aria-label="User settings"
-          className="relative z-10 flex w-[clamp(11rem,24vw,16rem)] shrink-0 flex-col overflow-y-auto border-r border-border-subtle bg-bg-secondary px-3 py-6"
-        >
-          <button
-            onClick={onClose}
-            className="group mb-4 flex items-center gap-2 self-start rounded-sm px-2.5 py-1.5 text-label text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
-          >
-            <ArrowLeft size={15} className="transition-transform group-hover:-translate-x-0.5" />
-            Back
-          </button>
-          <div className="flex flex-col gap-5">
-            {NAV_GROUPS.map((group, gi) => {
-              const items = group.items.filter((item) => !item.adminOnly || userIsAdmin);
-              if (items.length === 0) return null;
-              return (
-                <div key={group.label ?? `group-${gi}`}>
-                  {group.label && (
-                    <div className="mb-1.5 px-2.5 text-section text-text-muted">{group.label}</div>
-                  )}
-                  <div className="flex flex-col gap-0.5">
-                    {items.map((item) => (
-                      <NavButton
-                        key={item.id}
-                        item={item}
-                        active={activeSection === item.id}
-                        onClick={() => setActiveSection(item.id)}
-                      />
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          <div className="my-5 h-px bg-border-subtle" />
-          <button
-            onClick={() => { onClose(); navigate('/app/developers'); }}
-            className="flex items-center gap-2.5 rounded-sm px-2.5 py-2 text-label text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
-          >
-            <Code2 size={17} className="shrink-0 text-text-muted" />
             Developer Portal
-          </button>
-          <button
-            onClick={() => { void logout(); onClose(); }}
-            className="mt-0.5 flex items-center gap-2.5 rounded-sm px-2.5 py-2 text-label text-accent-danger outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-danger-tint focus-visible:shadow-[var(--focus-ring)]"
+          </NavRow>
+          <NavRow
+            icon={<LogOut size={16} />}
+            className="text-accent-danger hover:bg-danger-well hover:text-accent-danger"
+            onClick={() => {
+              void logout();
+              onClose();
+            }}
           >
-            <LogOut size={17} className="shrink-0" />
             Log Out
-          </button>
-        </nav>
-      )}
-
-      {/* Content area */}
-      {(!isMobile || !mobileShowNav) && (
-        <div className={cn('relative z-10 flex-1 overflow-y-auto', isMobile ? 'px-4 pb-[calc(var(--safe-bottom)+1.5rem)] pt-4' : 'px-10 py-10')}>
-          <div className="mx-auto w-full max-w-3xl">
-            {!isMobile && (
-              <nav className="mb-6 flex items-center gap-1.5 text-meta text-text-muted" aria-label="Breadcrumb">
-                <span>Settings</span>
-                <ChevronRight size={13} aria-hidden className="text-text-muted" />
-                <span className="font-medium text-text-secondary">{activeLabel}</span>
-              </nav>
-            )}
-
+          </NavRow>
+        </>
+      }
+    >
+      <div>
             {statusText && statusKind === 'error' && (
               <div className="mb-6">
                 <ErrorBanner message={statusText} />
@@ -1103,7 +991,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
             )}
             {statusText && statusKind === 'success' && (
               <div
-                className="mb-6 flex items-center gap-2.5 rounded-md border border-border-subtle bg-bg-accent px-4 py-3 shadow-sm"
+                className="mb-6 flex items-center gap-2.5 pc-well px-4 py-3 shadow-[var(--shadow-chip)]"
                 role="status"
                 aria-live="polite"
               >
@@ -1115,7 +1003,10 @@ export function UserSettings({ onClose }: UserSettingsProps) {
             {activeSection === 'account' && (
               <div>
                 <header className="mb-8 flex items-center gap-4">
-                  <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-full bg-accent-tint font-display text-2xl font-bold text-accent-primary ring-1 ring-inset ring-border-strong">
+                  <div
+                    className="pc-display flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-full text-title text-text-on-light"
+                    style={{ backgroundColor: getIdentityColor(user?.id ?? 'me') }}
+                  >
                     {avatarPreview ? (
                       <img src={avatarPreview} alt="" className="h-full w-full object-cover" />
                     ) : (
@@ -1124,7 +1015,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                   </div>
                   <div className="min-w-0">
                     <h2 className="truncate text-heading text-text-primary">{user ? resolveDisplayName(user) : 'My Account'}</h2>
-                    <p className="mt-0.5 text-sm text-text-secondary">
+                    <p className="mt-0.5 text-body text-text-secondary">
                       Manage your profile, security, and how you sign in.
                     </p>
                   </div>
@@ -1139,7 +1030,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                         <div className="text-label text-text-primary">Avatar</div>
                         <p className="mt-0.5 text-meta text-text-secondary">PNG, JPG, GIF, or WEBP up to 2 MB.</p>
                       </div>
-                      <label className="inline-flex cursor-pointer items-center gap-2 rounded-sm border border-border-subtle px-3 py-1.5 text-label font-medium text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary">
+                      <label className="inline-flex h-[var(--h-control)] cursor-pointer items-center gap-2 rounded-[var(--radius-control)] bg-bg-raised px-3 text-label font-medium text-text-primary shadow-[var(--shadow-chip)] transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong focus-within:shadow-[var(--focus-ring)]">
                         Change avatar
                         <input
                           type="file"
@@ -1158,7 +1049,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                         <div className="text-label text-text-primary">Username</div>
                         <p className="mt-0.5 text-meta text-text-secondary">Your unique handle across the server.</p>
                       </div>
-                      <span className="font-code text-sm text-text-secondary">{user?.username || 'unknown'}</span>
+                      <span className="font-code text-body text-text-secondary">{user?.username || 'unknown'}</span>
                     </div>
 
                     <div className="py-4">
@@ -1205,7 +1096,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                       </p>
                       <Textarea
                         id="acct-links"
-                        className="mt-2.5 max-w-xl resize-none font-code text-sm"
+                        className="mt-2.5 max-w-xl resize-none font-code text-body"
                         rows={4}
                         value={linkedAccountsInput}
                         onChange={(e) => setLinkedAccountsInput(e.target.value)}
@@ -1346,7 +1237,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                     {mfaStatus && (
                       <div
                         className={cn(
-                          'mt-3 rounded-md border px-4 py-3 text-sm font-medium',
+                          'mt-3 rounded-[var(--radius-well)] border px-4 py-3 text-body font-medium',
                           mfaStatus.includes('enabled') || mfaStatus.includes('disabled')
                             ? 'border-accent-success/30 bg-success-tint text-accent-success'
                             : 'border-accent-danger/30 bg-danger-tint text-accent-danger'
@@ -1361,7 +1252,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                     {mfaBackupCodes.length > 0 && (
                       <div className="mt-4 max-w-md">
                         <div className="text-section text-accent-warning">Save these backup codes</div>
-                        <div className="mt-2 rounded-md border border-border-subtle bg-bg-tertiary p-3 font-code text-sm leading-relaxed text-text-primary">
+                        <div className="mt-2 pc-well p-3 font-code text-body leading-relaxed text-text-primary">
                           {mfaBackupCodes.map((code) => (
                             <div key={code}>{code}</div>
                           ))}
@@ -1377,16 +1268,16 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
                     {mfaView === 'setup' && mfaSetupData && (
                       <div className="mt-4 max-w-md space-y-4">
-                        <p className="text-sm text-text-secondary">
+                        <p className="text-body text-text-secondary">
                           1. Scan this QR code with your authenticator app (Google Authenticator, Authy, and friends), or enter the secret by hand.
                         </p>
-                        <div className="flex justify-center rounded-md border border-border-subtle bg-bg-tertiary p-4">
-                          <img src={mfaSetupData.qr_code} alt="TOTP QR code" className="h-40 w-40 rounded-sm" />
+                        <div className="flex justify-center pc-well p-4">
+                          <img src={mfaSetupData.qr_code} alt="TOTP QR code" className="h-40 w-40 rounded-[var(--radius-control)]" />
                         </div>
-                        <div className="rounded-md border border-border-subtle bg-bg-tertiary p-3 font-code text-sm break-all text-text-primary">
+                        <div className="pc-well p-3 font-code text-body break-all text-text-primary">
                           {mfaSetupData.secret}
                         </div>
-                        <p className="text-sm text-text-secondary">2. Enter the 6-digit code the app shows.</p>
+                        <p className="text-body text-text-secondary">2. Enter the 6-digit code the app shows.</p>
                         <Input
                           type="text"
                           aria-label="Authenticator code"
@@ -1413,7 +1304,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
                     {mfaView === 'disable' && (
                       <div className="mt-4 max-w-md space-y-4">
-                        <p className="text-sm text-text-secondary">
+                        <p className="text-body text-text-secondary">
                           Enter a current authenticator code or one of your backup codes to turn two-factor off.
                         </p>
                         <Input
@@ -1474,7 +1365,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                                 {session.user_agent || session.device_id || 'Unknown device'}
                               </span>
                               {session.current && (
-                                <span className="rounded-xs bg-success-tint px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent-success">
+                                <span className="rounded-[var(--radius-chip)] bg-success-tint px-1.5 py-0.5 text-meta font-semibold text-accent-success">
                                   Current
                                 </span>
                               )}
@@ -1495,7 +1386,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                         </div>
                       ))}
                       {!sessionsLoading && sessions.length === 0 && (
-                        <p className="py-4 text-sm text-text-secondary">
+                        <p className="py-4 text-body text-text-secondary">
                           No other devices are signed in right now.
                         </p>
                       )}
@@ -1531,7 +1422,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                     />
                   </div>
                   {!localCryptoAccountReady ? (
-                    <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-border-subtle bg-bg-tertiary px-4 py-3">
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-3 pc-well px-4 py-3">
                       <p className="min-w-0 text-meta text-text-secondary">
                         You haven't set up a local crypto identity for this account yet.
                       </p>
@@ -1550,12 +1441,12 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
                 {/* Danger zone */}
                 <section className="mt-10">
-                  <div className="rounded-md border border-accent-danger/30 bg-danger-tint p-5">
+                  <div className="rounded-[var(--radius-well)] bg-danger-well shadow-[var(--shadow-well)] p-5">
                     <div className="flex items-start gap-3">
                       <ShieldAlert size={18} className="mt-0.5 shrink-0 text-accent-danger" />
                       <div className="min-w-0">
                         <h3 className="text-subhead text-text-primary">Delete account</h3>
-                        <p className="mt-1 max-w-xl text-sm leading-relaxed text-text-secondary">
+                        <p className="mt-1 max-w-xl text-body leading-relaxed text-text-secondary">
                           Permanently erase your profile, messages, and memberships on this server. Friends lose the
                           connection and your username is freed. This can't be undone.
                         </p>
@@ -1578,10 +1469,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                   description="Tune the look and density of Paracord to match how you read."
                 />
                 <section>
-                  <h3 className="text-section text-text-muted">Theme</h3>
-                  <div className="mt-3">
-                    <ThemeSelector currentTheme={theme} onThemeChange={(t) => handleThemeChange(t)} />
-                  </div>
+                  <ThemeSelector currentTheme={theme} onThemeChange={(t) => handleThemeChange(t)} />
                 </section>
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
@@ -1621,10 +1509,10 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
                   <h3 className="text-section text-text-muted">Custom CSS</h3>
-                  <p className="mt-2 max-w-xl text-sm text-text-secondary">
+                  <p className="mt-2 max-w-xl text-body text-text-secondary">
                     For power users — inject your own styles. Applies instantly on save.
                   </p>
-                  <div className="mt-3 rounded-md border border-border-subtle bg-bg-tertiary p-4">
+                  <div className="mt-3 pc-well p-4">
                     <CustomCSS initialCSS={customCss} onSave={(css) => setCustomCss(css)} />
                   </div>
                 </section>
@@ -1776,7 +1664,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
                   <h3 className="text-section text-text-muted">Trouble with calls</h3>
-                  <p className="mt-2 max-w-xl text-sm text-text-secondary">
+                  <p className="mt-2 max-w-xl text-body text-text-secondary">
                     Calls travel over a different network path than chat, so they can fail on their
                     own. The connection check tests your microphone, speaker, this device&rsquo;s
                     codec support and the route to the server one step at a time, and explains
@@ -1892,21 +1780,23 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
                   <h3 className="text-section text-text-muted">Detected apps</h3>
-                  <p className="mt-2 max-w-xl text-sm text-text-secondary">
+                  <p className="mt-2 max-w-xl text-body text-text-secondary">
                     Turn off any app you'd rather keep private. Paracord stops reporting it right away.
                   </p>
                   {visibleKnownActivityApps.length === 0 ? (
-                    <div className="mt-4 flex items-start gap-3 rounded-md border border-border-subtle bg-bg-tertiary px-4 py-4">
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-sm bg-accent-tint text-text-muted">
+                    <Well className="mt-4 flex items-start gap-3 px-4 py-4">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-well)] bg-bg-mod-subtle text-text-muted">
                         <Eye size={18} />
                       </div>
                       <div className="min-w-0">
-                        <div className="text-label text-text-primary">Nothing detected yet</div>
-                        <p className="mt-0.5 text-meta text-text-secondary">
+                        <div className="text-label text-text-primary">
+                          Paracord hasn't seen you in another app yet
+                        </div>
+                        <p className="mt-0.5 text-meta leading-relaxed text-text-secondary">
                           Launch a game or app while Paracord is open and it'll appear here to manage.
                         </p>
                       </div>
-                    </div>
+                    </Well>
                   ) : (
                     <div className="mt-3 divide-y divide-border-subtle">
                       {visibleKnownActivityApps.map((appId) => {
@@ -1917,7 +1807,11 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                               <div className="truncate text-label text-text-primary">{readableAppName(appId)}</div>
                               <div className="truncate font-code text-meta text-text-muted">{appId}</div>
                             </div>
-                            <ToggleSwitch on={enabled} onToggle={() => toggleActivityApp(appId)} />
+                            <ToggleSwitch
+                              on={enabled}
+                              onToggle={() => toggleActivityApp(appId)}
+                              label={`Share ${readableAppName(appId)}`}
+                            />
                           </div>
                         );
                       })}
@@ -1947,7 +1841,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                       <div key={kb.key} className="flex flex-col gap-2 py-4 sm:flex-row sm:items-center sm:justify-between">
                         <span className="text-label text-text-primary">{kb.action}</span>
                         <input
-                          className="h-10 w-full rounded-sm border border-border-subtle bg-bg-tertiary px-3 font-code text-sm text-text-muted outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus-visible:border-accent-primary focus-visible:shadow-[var(--focus-ring-input)] sm:w-52"
+                          className="h-10 w-full pc-well px-3 font-code text-body text-text-muted outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus-visible:border-accent-primary focus-visible:shadow-[var(--focus-ring-input)] sm:w-52"
                           value={
                             capturingKeybind === kb.key
                               ? 'Press keys…'
@@ -1994,7 +1888,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 {identityStatus && (
                   <div
                     className={cn(
-                      'mb-6 rounded-md border px-4 py-3 text-sm font-medium',
+                      'mb-6 rounded-[var(--radius-well)] border px-4 py-3 text-body font-medium',
                       identityStatus.toLowerCase().includes('failed')
                         ? 'border-accent-danger/30 bg-danger-tint text-accent-danger'
                         : 'border-accent-success/30 bg-success-tint text-accent-success'
@@ -2007,16 +1901,16 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
                 <section>
                   <h3 className="text-section text-text-muted">Current identity key</h3>
-                  <p className="mt-2 max-w-xl text-sm text-text-secondary">
+                  <p className="mt-2 max-w-xl text-body text-text-secondary">
                     Share this fingerprint with trusted contacts so they can confirm it's really you.
                   </p>
                   {ownIdentityFingerprint ? (
-                    <div className="mt-3 rounded-md border border-border-subtle bg-bg-tertiary px-4 py-3">
+                    <div className="mt-3 pc-well px-4 py-3">
                       <div className="text-section text-text-muted">Fingerprint</div>
-                      <div className="mt-1.5 break-all font-code text-sm text-text-primary">{ownIdentityFingerprint}</div>
+                      <div className="mt-1.5 break-all font-code text-body text-text-primary">{ownIdentityFingerprint}</div>
                     </div>
                   ) : (
-                    <p className="mt-3 rounded-md border border-border-subtle bg-bg-tertiary px-4 py-3 text-sm text-text-secondary">
+                    <p className="mt-3 pc-well px-4 py-3 text-body text-text-secondary">
                       No public identity key is attached to this account yet.
                     </p>
                   )}
@@ -2024,7 +1918,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
                   <h3 className="text-section text-text-muted">Export identity</h3>
-                  <p className="mt-2 max-w-xl text-sm text-text-secondary">
+                  <p className="mt-2 max-w-xl text-body text-text-secondary">
                     Download a signed bundle you can import into another Paracord server.
                   </p>
                   <div className="mt-2 divide-y divide-border-subtle">
@@ -2051,7 +1945,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
                   <h3 className="text-section text-text-muted">Import identity</h3>
-                  <p className="mt-2 max-w-xl text-sm text-text-secondary">
+                  <p className="mt-2 max-w-xl text-body text-text-secondary">
                     Bring in a bundle from another server. Imported data is merged with this account.
                   </p>
                   <div className="mt-4">
@@ -2061,7 +1955,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                       type="file"
                       accept=".json"
                       onChange={handleImportFileSelect}
-                      className="mt-2.5 block w-full max-w-md text-sm text-text-muted file:mr-3 file:rounded-sm file:border file:border-border-subtle file:bg-bg-secondary file:px-3 file:py-2 file:text-sm file:font-medium file:text-text-primary hover:file:bg-bg-mod-subtle"
+                      className="mt-2.5 block w-full max-w-md text-body text-text-muted file:mr-3 file:rounded-[var(--radius-control)] file:border file:border-border-subtle file:bg-bg-secondary file:px-3 file:py-2 file:text-body file:font-medium file:text-text-primary hover:file:bg-bg-mod-subtle"
                     />
                     {importFile && (
                       <p className="mt-2 text-meta text-text-secondary">Selected: {importFile.name}</p>
@@ -2069,9 +1963,9 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                   </div>
 
                   {importPreview && (
-                    <div className="mt-5 rounded-md border border-border-subtle bg-bg-tertiary px-4 py-4">
+                    <div className="mt-5 pc-well px-4 py-4">
                       <div className="text-section text-text-muted">Import preview</div>
-                      <dl className="mt-3 space-y-2 text-sm">
+                      <dl className="mt-3 space-y-2 text-body">
                         {([
                           ['Origin server', String(importPreview.origin_server ?? 'Unknown')],
                           ['Username', (importPreview.user as Record<string, unknown>)?.username ? String((importPreview.user as Record<string, unknown>).username) : 'Unknown'],
@@ -2088,7 +1982,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                           </div>
                         ))}
                       </dl>
-                      <div className="mt-4 flex items-start gap-2.5 rounded-md border border-accent-warning/30 bg-warning-tint px-3.5 py-3 text-meta text-accent-warning">
+                      <div className="mt-4 flex items-start gap-2.5 rounded-[var(--radius-well)] bg-warning-tint shadow-[var(--shadow-well)] px-3.5 py-3 text-meta text-accent-warning">
                         <ShieldAlert size={15} className="mt-0.5 shrink-0" />
                         <span>This merges the imported identity into your account. Profile fields will be overwritten.</span>
                       </div>
@@ -2110,12 +2004,12 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                   description="Administrative controls for this Paracord instance."
                 />
                 <section>
-                  <div className="rounded-md border border-accent-warning/30 bg-warning-tint p-5">
+                  <div className="rounded-[var(--radius-well)] bg-warning-tint shadow-[var(--shadow-well)] p-5">
                     <div className="flex items-start gap-3">
                       <ShieldAlert size={18} className="mt-0.5 shrink-0 text-accent-warning" />
                       <div className="min-w-0">
                         <h3 className="text-subhead text-text-primary">Update &amp; restart</h3>
-                        <p className="mt-1 max-w-xl text-sm leading-relaxed text-text-secondary">
+                        <p className="mt-1 max-w-xl text-body leading-relaxed text-text-secondary">
                           Pull the latest code, rebuild the client and server, then restart. Everyone connected is
                           briefly disconnected.
                         </p>
@@ -2171,49 +2065,13 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </section>
               </div>
             )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function NavButton({ item, active, onClick }: { item: NavItem; active: boolean; onClick: () => void }) {
-  const Icon = item.icon;
-  return (
-    <button
-      type="button"
-      aria-label={item.label}
-      onClick={onClick}
-      aria-current={active ? 'page' : undefined}
-      className={cn(
-        'group relative flex w-full items-center gap-2.5 rounded-sm px-2.5 py-2 text-label outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
-        active
-          ? 'bg-accent-tint text-text-primary'
-          : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary'
-      )}
-    >
-      {active && (
-        <span aria-hidden className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-full bg-accent-secondary" />
-      )}
-      <Icon
-        size={17}
-        className={cn('shrink-0', active ? 'text-accent-primary' : 'text-text-muted group-hover:text-text-secondary')}
-      />
-      <span className="truncate">{item.label}</span>
-    </button>
+      </div>
+    </SettingsShell>
   );
 }
 
 function SettingsHeader({ title, description }: { title: string; description?: string }) {
-  return (
-    <header className="mb-8">
-      <h2 className="text-heading text-text-primary">{title}</h2>
-      {description && (
-        <p className="mt-1.5 max-w-xl text-sm leading-relaxed text-text-secondary">{description}</p>
-      )}
-    </header>
-  );
+  return <SettingsSectionHeader title={title} description={description} />;
 }
 
 function ToggleRow({
@@ -2232,14 +2090,16 @@ function ToggleRow({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="flex items-start justify-between gap-4 py-4">
-      <div className="min-w-0">
-        <div className="text-label text-text-primary">{title}</div>
-        {description && <p className="mt-0.5 text-meta leading-relaxed text-text-secondary">{description}</p>}
-        {children}
-      </div>
-      <ToggleSwitch on={on} onToggle={onToggle} disabled={disabled} />
-    </div>
+    <UiToggleRow
+      label={title}
+      description={description}
+      checked={on}
+      onChange={onToggle}
+      disabled={disabled}
+      className="py-4"
+    >
+      {children}
+    </UiToggleRow>
   );
 }
 
@@ -2253,51 +2113,26 @@ function Segmented<T extends string>({
   options: { value: T; label: string }[];
 }) {
   return (
-    <div className="inline-flex shrink-0 rounded-sm border border-border-subtle bg-bg-tertiary p-0.5">
-      {options.map((option) => {
-        const selected = option.value === value;
-        return (
-          <button
-            key={option.value}
-            type="button"
-            aria-pressed={selected}
-            onClick={() => onChange(option.value)}
-            className={cn(
-              'rounded-[6px] px-3 py-1.5 text-label outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
-              selected
-                ? 'bg-accent-primary text-text-on-accent shadow-sm'
-                : 'text-text-secondary hover:text-text-primary'
-            )}
-          >
-            {option.label}
-          </button>
-        );
-      })}
-    </div>
+    <Tabs
+      items={options}
+      value={value}
+      onChange={onChange}
+      label="Choose one"
+      className="shrink-0 self-start"
+    />
   );
 }
 
-// Toggle track ramps --bg-mod-strong (off) → --accent-primary (on) per design-spec
-// §7; the knob is the only pill, focus renders the layered ring.
-function ToggleSwitch({ on, onToggle, disabled = false }: { on: boolean; onToggle: () => void; disabled?: boolean }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={on}
-      onClick={onToggle}
-      disabled={disabled}
-      className={cn(
-        'relative inline-flex h-6 w-11 shrink-0 items-center rounded-full outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50',
-        on ? 'bg-accent-primary' : 'bg-bg-mod-strong'
-      )}
-    >
-      <span
-        className={cn(
-          'inline-block h-[18px] w-[18px] rounded-full bg-white shadow-sm transition-transform duration-[140ms] ease-[var(--ease-out)]',
-          on ? 'translate-x-[23px]' : 'translate-x-[3px]'
-        )}
-      />
-    </button>
-  );
+function ToggleSwitch({
+  on,
+  onToggle,
+  disabled = false,
+  label,
+}: {
+  on: boolean;
+  onToggle: () => void;
+  disabled?: boolean;
+  label: string;
+}) {
+  return <Switch checked={on} onChange={onToggle} disabled={disabled} label={label} />;
 }

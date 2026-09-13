@@ -16,8 +16,6 @@ import {
   AuthCanvas,
   AuthCard,
   AuthHeading,
-  AppMark,
-  BrandAside,
   Field,
   SuccessNote,
 } from './authScaffold';
@@ -505,15 +503,10 @@ export function LoginPage() {
 
   return (
     <AuthCanvas>
-      <AuthCard className="max-w-4xl overflow-hidden">
-        <div className="flex">
-          <BrandAside />
-          <form onSubmit={handleSubmit} className="flex flex-1 flex-col gap-6 p-8 sm:p-10">
-            <div className="mb-1 lg:hidden">
-              <AppMark size={40} />
-            </div>
+      <AuthCard className="max-w-md">
+        <div>
+          <form onSubmit={handleSubmit} className="flex flex-1 flex-col gap-6 p-7 sm:p-8">
             <AuthHeading
-              mark={false}
               title="Welcome back"
               subtitle="Sign in to pick up where you left off across your spaces."
             />

@@ -2,9 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { Trash2, HardDrive } from 'lucide-react';
 import { guildStorageApi, type GuildStoragePolicy, type GuildStorageInfo, type GuildFile } from '../../api/guildStorage';
 import { confirm } from '../../stores/confirmStore';
-import { Button } from '../ui/Button';
-import { Input } from '../ui/Input';
-import { EmptyState } from '../ui/Feedback';
+import { Button, Divider, EmptyState, ErrorBanner, Input, Well } from '../ui';
 import { Skeleton } from '../ui/Skeleton';
 import { SectionHeader, FieldLabel, GroupLabel, GateNotice } from './SettingsPrimitives';
 
@@ -155,218 +153,224 @@ export function FileStorageSection({ guildId, canManage }: FileStorageSectionPro
   const quota = storageInfo?.quota;
   const usagePercent = quota && quota > 0 ? Math.min(100, (usage / quota) * 100) : 0;
   const overQuota = usagePercent >= 90;
-  const meterColor = overQuota
-    ? 'var(--accent-danger)'
+  // §9: colour is never the only cue — the numbers and the sentence below carry
+  // the same reading the meter does.
+  const meterTone = overQuota
+    ? 'bg-accent-danger'
     : usagePercent >= 75
-      ? 'var(--accent-warning)'
-      : 'var(--accent-primary)';
+      ? 'bg-accent-warning'
+      : 'bg-accent-primary';
 
   return (
-    <div className="settings-surface-card min-h-[calc(100dvh-13.5rem)] !p-8 max-sm:!p-6">
-      <div className="flex flex-col gap-8">
-        <SectionHeader
-          title="File Storage"
-          description="Track how much storage this space is using and set the rules for what members can upload."
-        />
+    <div className="flex flex-col gap-8">
+      <SectionHeader
+        title="File storage"
+        description="Track how much storage this space is using and set the rules for what members can upload."
+      />
 
-        {error && (
-          <div className="rounded-md border border-accent-danger/35 bg-danger-tint px-4 py-3 text-label text-accent-danger">
-            {error}
-          </div>
-        )}
+      {error && <ErrorBanner message={error} multiline />}
 
-        {loading ? (
-          <div className="flex flex-col gap-4">
-            <Skeleton height={72} borderRadius="var(--radius-md)" />
-            <Skeleton height={44} borderRadius="var(--radius-sm)" />
-            <Skeleton height={44} borderRadius="var(--radius-sm)" />
-          </div>
-        ) : (
-          <>
-            {/* Storage usage meter */}
-            <section className="border-t border-border-subtle pt-6">
-              <div className="flex items-baseline justify-between gap-3">
-                <GroupLabel>Storage used</GroupLabel>
-                <span className="font-code text-meta tabular-nums text-text-muted">
-                  {quota != null ? `${usagePercent.toFixed(1)}%` : 'no quota set'}
-                </span>
-              </div>
-              <div className="mt-3 flex items-baseline gap-2">
-                <span className="font-code text-2xl font-semibold tabular-nums text-text-primary">{formatBytes(usage)}</span>
-                {quota != null && (
-                  <span className="font-code text-meta tabular-nums text-text-muted">/ {formatBytes(quota)}</span>
-                )}
-              </div>
-              {quota != null && quota > 0 && (
+      {loading ? (
+        <div className="flex flex-col gap-4">
+          <Skeleton height={96} borderRadius="var(--radius-well)" />
+          <Skeleton height={44} borderRadius="var(--radius-control)" />
+          <Skeleton height={44} borderRadius="var(--radius-control)" />
+        </div>
+      ) : (
+        <>
+          {/* Storage usage — a recessed readout, never a second plate. */}
+          <Well as="section" bare className="px-5 py-4">
+            <div className="flex items-baseline justify-between gap-3">
+              <GroupLabel>Storage used</GroupLabel>
+              <span className="pc-mono text-meta text-text-muted">
+                {quota != null ? `${usagePercent.toFixed(1)}%` : 'no quota set'}
+              </span>
+            </div>
+            <div className="mt-3 flex items-baseline gap-2">
+              <span className="pc-mono text-title text-text-primary">{formatBytes(usage)}</span>
+              {quota != null && (
+                <span className="pc-mono text-meta text-text-muted">/ {formatBytes(quota)}</span>
+              )}
+            </div>
+            {quota != null && quota > 0 && (
+              <div
+                className="mt-3 h-2.5 w-full overflow-hidden rounded-[var(--radius-full)] bg-bg-mod-strong"
+                role="progressbar"
+                aria-valuenow={Math.round(usagePercent)}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuetext={`${formatBytes(usage)} of ${formatBytes(quota)} used`}
+              >
                 <div
-                  className="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-bg-mod-strong"
-                  role="progressbar"
-                  aria-valuenow={Math.round(usagePercent)}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                >
-                  <div
-                    className="h-full rounded-full transition-[width] duration-300"
-                    style={{ width: `${usagePercent}%`, backgroundColor: meterColor }}
-                  />
-                </div>
-              )}
-              {overQuota && (
-                <p className="mt-2 text-meta text-accent-danger">
-                  This server is nearly out of space. Delete files or raise the quota to keep uploads flowing.
-                </p>
-              )}
-            </section>
-
-            {/* Policy */}
-            {canManage ? (
-              <section className="border-t border-border-subtle pt-6">
-                <GroupLabel>Upload policy</GroupLabel>
-                <div className="mt-4 grid gap-5 sm:grid-cols-3">
-                  <label className="block">
-                    <FieldLabel>Max file size (MB)</FieldLabel>
-                    <Input
-                      type="number"
-                      min="0"
-                      value={maxFileSizeMB}
-                      onChange={(e) => setMaxFileSizeMB(e.target.value)}
-                      className="font-code tabular-nums"
-                      placeholder="No limit"
-                    />
-                  </label>
-                  <label className="block">
-                    <FieldLabel>Storage quota (MB)</FieldLabel>
-                    <Input
-                      type="number"
-                      min="0"
-                      value={storageQuotaMB}
-                      onChange={(e) => setStorageQuotaMB(e.target.value)}
-                      className="font-code tabular-nums"
-                      placeholder="No limit"
-                    />
-                  </label>
-                  <label className="block">
-                    <FieldLabel>Retention (days)</FieldLabel>
-                    <Input
-                      type="number"
-                      min="0"
-                      value={retentionDays}
-                      onChange={(e) => setRetentionDays(e.target.value)}
-                      className="font-code tabular-nums"
-                      placeholder="Forever"
-                    />
-                  </label>
-                </div>
-                <div className="mt-5 grid gap-5 sm:grid-cols-2">
-                  <div>
-                    <label className="block">
-                      <FieldLabel>Allowed MIME types</FieldLabel>
-                      <Input
-                        type="text"
-                        value={allowedTypes}
-                        onChange={(e) => setAllowedTypes(e.target.value)}
-                        placeholder="image/png, image/jpeg"
-                      />
-                    </label>
-                    <p className="mt-2 text-meta text-text-muted">Comma-separated. Empty allows every type.</p>
-                  </div>
-                  <div>
-                    <label className="block">
-                      <FieldLabel>Blocked MIME types</FieldLabel>
-                      <Input
-                        type="text"
-                        value={blockedTypes}
-                        onChange={(e) => setBlockedTypes(e.target.value)}
-                        placeholder="application/x-msdownload"
-                      />
-                    </label>
-                    <p className="mt-2 text-meta text-text-muted">Blocked types always win over allowed.</p>
-                  </div>
-                </div>
-                <div className="mt-5">
-                  <Button onClick={() => void savePolicy()} loading={saving} disabled={saving}>
-                    Save policy
-                  </Button>
-                </div>
-              </section>
-            ) : (
-              <section className="border-t border-border-subtle pt-6">
-                <GateNotice>Only members with server-management permission can change the upload policy.</GateNotice>
-              </section>
+                  className={`h-full rounded-[var(--radius-full)] transition-[width] duration-[var(--duration-normal)] ${meterTone}`}
+                  style={{ width: `${usagePercent}%` }}
+                />
+              </div>
             )}
+            {overQuota && (
+              <p className="mt-2.5 text-meta leading-relaxed text-accent-danger">
+                This space is nearly out of room. Delete files or raise the quota to keep uploads flowing.
+              </p>
+            )}
+          </Well>
 
-            {/* File browser */}
-            <section className="border-t border-border-subtle pt-6">
-              <div className="flex items-center justify-between gap-3">
-                <GroupLabel>Uploaded files</GroupLabel>
-                {canManage && selectedFileIds.length > 0 && (
-                  <Button
-                    variant="destructive"
-                    size="sm"
-                    onClick={() => void deleteSelectedFiles()}
-                  >
-                    <Trash2 size={14} className="mr-1.5" />
-                    Delete {selectedFileIds.length} selected
-                  </Button>
+          <Divider />
+
+          {/* Policy */}
+          {canManage ? (
+            <section>
+              <GroupLabel>Upload policy</GroupLabel>
+              <div className="mt-4 grid gap-5 sm:grid-cols-3">
+                <label className="block">
+                  <FieldLabel>Max file size (MB)</FieldLabel>
+                  <Input
+                    type="number"
+                    min="0"
+                    value={maxFileSizeMB}
+                    onChange={(e) => setMaxFileSizeMB(e.target.value)}
+                    className="pc-mono"
+                    placeholder="No limit"
+                  />
+                </label>
+                <label className="block">
+                  <FieldLabel>Storage quota (MB)</FieldLabel>
+                  <Input
+                    type="number"
+                    min="0"
+                    value={storageQuotaMB}
+                    onChange={(e) => setStorageQuotaMB(e.target.value)}
+                    className="pc-mono"
+                    placeholder="No limit"
+                  />
+                </label>
+                <label className="block">
+                  <FieldLabel>Retention (days)</FieldLabel>
+                  <Input
+                    type="number"
+                    min="0"
+                    value={retentionDays}
+                    onChange={(e) => setRetentionDays(e.target.value)}
+                    className="pc-mono"
+                    placeholder="Forever"
+                  />
+                </label>
+              </div>
+              <div className="mt-5 grid gap-5 sm:grid-cols-2">
+                <div>
+                  <label className="block">
+                    <FieldLabel>Allowed MIME types</FieldLabel>
+                    <Input
+                      type="text"
+                      value={allowedTypes}
+                      onChange={(e) => setAllowedTypes(e.target.value)}
+                      placeholder="image/png, image/jpeg"
+                    />
+                  </label>
+                  <p className="mt-2 text-meta leading-relaxed text-text-muted">
+                    Comma-separated. Empty allows every type.
+                  </p>
+                </div>
+                <div>
+                  <label className="block">
+                    <FieldLabel>Blocked MIME types</FieldLabel>
+                    <Input
+                      type="text"
+                      value={blockedTypes}
+                      onChange={(e) => setBlockedTypes(e.target.value)}
+                      placeholder="application/x-msdownload"
+                    />
+                  </label>
+                  <p className="mt-2 text-meta leading-relaxed text-text-muted">
+                    Blocked types always win over allowed.
+                  </p>
+                </div>
+              </div>
+              <div className="mt-5">
+                <Button variant="primary" onClick={() => void savePolicy()} loading={saving} disabled={saving}>
+                  Save policy
+                </Button>
+              </div>
+            </section>
+          ) : (
+            <section>
+              <GateNotice>Only members with server-management permission can change the upload policy.</GateNotice>
+            </section>
+          )}
+
+          <Divider />
+
+          {/* File browser */}
+          <section>
+            <div className="flex items-center justify-between gap-3">
+              <GroupLabel>Uploaded files</GroupLabel>
+              {canManage && selectedFileIds.length > 0 && (
+                <Button
+                  variant="danger"
+                  size="sm"
+                  onClick={() => void deleteSelectedFiles()}
+                >
+                  <Trash2 size={14} />
+                  Delete {selectedFileIds.length} selected
+                </Button>
+              )}
+            </div>
+
+            {files.length === 0 ? (
+              <EmptyState
+                className="!py-8"
+                icon={<HardDrive size={20} />}
+                title="No files stored yet"
+                description="Attachments members share in channels collect here, where you can audit them or delete the ones eating your quota."
+              />
+            ) : (
+              <div className="mt-4">
+                <div className="hidden items-center gap-3 px-1 pb-2 text-section text-text-faint sm:flex">
+                  {canManage && <span className="w-4" />}
+                  <span className="flex-1">Filename</span>
+                  <span className="w-24 text-right">Size</span>
+                  <span className="w-32 text-right">Uploaded</span>
+                </div>
+                <Divider className="hidden sm:block" />
+                <ul className="divide-y divide-border-subtle">
+                  {files.map((file) => (
+                    <li
+                      key={file.id}
+                      className="flex flex-col items-start gap-1.5 px-1 py-2.5 text-label sm:flex-row sm:items-center sm:gap-3"
+                    >
+                      {canManage && (
+                        <input
+                          type="checkbox"
+                          className="pc-focusable h-4 w-4 shrink-0 rounded-[var(--radius-window)] accent-accent-primary"
+                          checked={selectedFileIds.includes(file.id)}
+                          onChange={() => toggleFileSelection(file.id)}
+                          aria-label={`Select ${file.filename}`}
+                        />
+                      )}
+                      <span className="min-w-0 flex-1 truncate text-text-primary">{file.filename}</span>
+                      {file.content_type && (
+                        <span className="hidden pc-mono text-meta text-text-muted sm:inline">{file.content_type}</span>
+                      )}
+                      <span className="pc-mono text-meta text-text-muted sm:w-24 sm:text-right">
+                        {formatBytes(file.size)}
+                      </span>
+                      <span className="pc-mono text-meta text-text-muted sm:w-32 sm:text-right">
+                        {new Date(file.created_at).toLocaleDateString()}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                {hasMoreFiles && (
+                  <div className="mt-4">
+                    <Button variant="ghost" size="sm" onClick={() => void loadMoreFiles()}>
+                      Load more
+                    </Button>
+                  </div>
                 )}
               </div>
-
-              {files.length === 0 ? (
-                <EmptyState
-                  className="!py-8"
-                  icon={<HardDrive size={20} />}
-                  title="Nothing stored yet"
-                  description="Attachments members share in channels will collect here, where you can audit and prune them."
-                />
-              ) : (
-                <div className="mt-4">
-                  <div className="hidden items-center gap-3 border-b border-border-subtle px-1 pb-2 text-section text-text-muted sm:flex">
-                    {canManage && <span className="w-4" />}
-                    <span className="flex-1">Filename</span>
-                    <span className="w-24 text-right">Size</span>
-                    <span className="w-32 text-right">Uploaded</span>
-                  </div>
-                  <ul className="divide-y divide-border-subtle">
-                    {files.map((file) => (
-                      <li
-                        key={file.id}
-                        className="flex flex-col items-start gap-1.5 px-1 py-2.5 text-label sm:flex-row sm:items-center sm:gap-3"
-                      >
-                        {canManage && (
-                          <input
-                            type="checkbox"
-                            className="h-4 w-4 shrink-0 rounded-sm border-border-subtle accent-accent-primary"
-                            checked={selectedFileIds.includes(file.id)}
-                            onChange={() => toggleFileSelection(file.id)}
-                            aria-label={`Select ${file.filename}`}
-                          />
-                        )}
-                        <span className="min-w-0 flex-1 truncate text-text-primary">{file.filename}</span>
-                        {file.content_type && (
-                          <span className="hidden font-code text-meta text-text-muted sm:inline">{file.content_type}</span>
-                        )}
-                        <span className="font-code text-meta tabular-nums text-text-muted sm:w-24 sm:text-right">
-                          {formatBytes(file.size)}
-                        </span>
-                        <span className="font-code text-meta tabular-nums text-text-muted sm:w-32 sm:text-right">
-                          {new Date(file.created_at).toLocaleDateString()}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                  {hasMoreFiles && (
-                    <div className="mt-4">
-                      <Button variant="outline" size="sm" onClick={() => void loadMoreFiles()}>
-                        Load more
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              )}
-            </section>
-          </>
-        )}
-      </div>
+            )}
+          </section>
+        </>
+      )}
     </div>
   );
 }

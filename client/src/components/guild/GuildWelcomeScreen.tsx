@@ -1,7 +1,17 @@
-import { Hash, Volume2, MessageSquare, Users, Compass, X } from 'lucide-react';
+import { Hash, Volume2, MessageSquare, Users, Compass } from 'lucide-react';
 import type { Guild, Channel } from '../../types';
 import { safeStoredImageDataUrl } from '../../lib/security';
 import { Button } from '../ui/Button';
+import { Divider } from '../ui/Divider';
+import {
+  Modal,
+  ModalBody,
+  ModalDescription,
+  ModalFooter,
+  ModalHeader,
+  ModalTitle,
+} from '../ui/Modal';
+import { GroupLabel } from './SettingsPrimitives';
 
 interface GuildWelcomeScreenProps {
   guild: Guild;
@@ -65,21 +75,20 @@ export function GuildWelcomeScreen({ guild, channels, onDismiss }: GuildWelcomeS
   ];
 
   return (
-    <div className="absolute inset-0 z-30 flex items-center justify-center bg-bg-tertiary/75 p-4 backdrop-blur-sm">
-      <div className="relative w-full max-w-lg overflow-hidden rounded-lg border border-border-strong bg-bg-accent shadow-xl">
-        {/* Close button */}
-        <button
-          onClick={onDismiss}
-          className="absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-sm text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
-          aria-label="Close welcome screen"
-        >
-          <X size={18} />
-        </button>
-
-        {/* Solid raised header — not a gradient hero */}
-        <div className="border-b border-border-subtle bg-bg-secondary px-6 pb-6 pt-7">
-          <div className="flex items-start gap-4">
-            <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border-subtle bg-bg-mod-subtle font-display text-2xl font-bold text-text-primary shadow-sm">
+    <Modal
+      open
+      onClose={onDismiss}
+      labelledBy="guild-welcome-title"
+      describedBy="guild-welcome-description"
+      showCloseButton
+      closeLabel="Close welcome screen"
+      panelClassName="w-[min(92vw,32rem)]"
+    >
+      <div className="flex max-h-[min(86dvh,42rem)] flex-col">
+        <ModalHeader
+          className="pb-5 pr-14"
+          icon={
+            <div className="pc-well flex h-16 w-16 items-center justify-center overflow-hidden rounded-[var(--radius-card)]">
               {iconSrc ? (
                 <img
                   src={iconSrc}
@@ -87,39 +96,44 @@ export function GuildWelcomeScreen({ guild, channels, onDismiss }: GuildWelcomeS
                   className="h-full w-full object-cover"
                 />
               ) : (
-                guild.name.charAt(0).toUpperCase()
+                <span className="pc-display text-title text-text-primary">
+                  {guild.name.charAt(0).toUpperCase()}
+                </span>
               )}
             </div>
-            <div className="min-w-0 pt-0.5">
-              <div className="text-section text-accent-primary">Welcome aboard</div>
-              <h2 className="mt-1 font-display text-title text-text-primary">
-                {guild.name}
-              </h2>
-              {guild.description ? (
-                <p className="mt-1.5 text-sm leading-relaxed text-text-secondary">
-                  {guild.description}
-                </p>
-              ) : (
-                <p className="mt-1.5 flex items-center gap-1.5 text-meta text-text-muted">
-                  <Users size={13} className="shrink-0" />
-                  {guild.member_count} member{guild.member_count !== 1 ? 's' : ''}
-                </p>
-              )}
-            </div>
-          </div>
-        </div>
+          }
+        >
+          <GroupLabel>Welcome aboard</GroupLabel>
+          <ModalTitle id="guild-welcome-title" className="mt-1">
+            {guild.name}
+          </ModalTitle>
+          {guild.description ? (
+            <ModalDescription id="guild-welcome-description">
+              {guild.description}
+            </ModalDescription>
+          ) : (
+            <p
+              id="guild-welcome-description"
+              className="mt-2 flex items-center gap-1.5 text-meta text-text-muted"
+            >
+              <Users size={13} className="shrink-0" aria-hidden />
+              {guild.member_count} member{guild.member_count !== 1 ? 's' : ''}
+            </p>
+          )}
+        </ModalHeader>
+        <Divider />
 
-        <div className="px-6 py-5">
+        <ModalBody className="min-h-0 flex-1 overflow-auto py-5">
           {/* Getting-started rows */}
-          <div className="text-section text-text-muted">Get started</div>
+          <GroupLabel>Get started</GroupLabel>
           <div className="mt-2 divide-y divide-border-subtle">
             {gettingStarted.map(({ icon: Icon, title, body }) => (
               <div key={title} className="flex items-start gap-3 py-3">
-                <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-accent-tint text-accent-primary">
-                  <Icon size={16} />
+                <div className="pc-well mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center text-text-muted">
+                  <Icon size={16} aria-hidden />
                 </div>
                 <div className="min-w-0">
-                  <div className="text-label text-text-primary">{title}</div>
+                  <div className="pc-display text-name text-text-primary">{title}</div>
                   <p className="mt-0.5 text-meta leading-relaxed text-text-secondary">{body}</p>
                 </div>
               </div>
@@ -129,12 +143,12 @@ export function GuildWelcomeScreen({ guild, channels, onDismiss }: GuildWelcomeS
           {/* Channel overview */}
           {textChannels.length > 0 && (
             <div className="mt-5">
-              <div className="text-section text-text-muted">Explore channels</div>
+              <GroupLabel>Explore channels</GroupLabel>
               <div className="scrollbar-thin mt-2 max-h-44 space-y-0.5 overflow-y-auto">
                 {Array.from(categories.entries()).map(([catId, cat]) => (
                   <div key={catId || '__uncategorized'}>
                     {catId && (
-                      <div className="mb-0.5 mt-2 px-2 text-section text-text-muted">
+                      <div className="mb-0.5 mt-2 px-2 text-section text-text-faint">
                         {cat.name}
                       </div>
                     )}
@@ -144,18 +158,18 @@ export function GuildWelcomeScreen({ guild, channels, onDismiss }: GuildWelcomeS
                       return (
                         <div
                           key={ch.id}
-                          className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-text-secondary"
+                          className="flex items-center gap-2 rounded-[var(--radius-control)] px-2 py-1.5 text-label text-text-secondary"
                         >
                           {isVoice ? (
-                            <Volume2 size={16} className="shrink-0 text-channel-icon" />
+                            <Volume2 size={16} className="shrink-0 text-channel-icon" aria-hidden />
                           ) : isForum ? (
-                            <MessageSquare size={16} className="shrink-0 text-channel-icon" />
+                            <MessageSquare size={16} className="shrink-0 text-channel-icon" aria-hidden />
                           ) : (
-                            <Hash size={16} className="shrink-0 text-channel-icon" />
+                            <Hash size={16} className="shrink-0 text-channel-icon" aria-hidden />
                           )}
                           <span className="truncate font-medium">{ch.name || 'unknown'}</span>
                           {ch.topic && (
-                            <span className="ml-auto max-w-[140px] truncate text-meta text-text-muted">
+                            <span className="ml-auto max-w-[140px] truncate text-meta text-text-faint">
                               {ch.topic}
                             </span>
                           )}
@@ -167,15 +181,16 @@ export function GuildWelcomeScreen({ guild, channels, onDismiss }: GuildWelcomeS
               </div>
             </div>
           )}
-        </div>
+        </ModalBody>
 
-        {/* Footer action */}
-        <div className="flex items-center justify-end gap-3 border-t border-border-subtle bg-bg-secondary px-6 py-4">
-          <Button onClick={onDismiss} size="lg">
+        {/* Footer action — the one primary action on this screen. */}
+        <Divider />
+        <ModalFooter className="items-center pt-4">
+          <Button onClick={onDismiss}>
             Jump in
           </Button>
-        </div>
+        </ModalFooter>
       </div>
-    </div>
+    </Modal>
   );
 }

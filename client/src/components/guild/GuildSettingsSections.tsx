@@ -18,9 +18,7 @@ import type { AuditLogEntry, Ban, Channel, Guild, GuildEmoji, Invite, Member, Mo
 import type { BotApplication, GuildBotEntry } from '../../api/bots';
 import type { ApplyModerationTemplateRequest, ModerationTemplate } from '../../api/moderationTemplates';
 import { ACTION_TYPE_LABELS } from '../../api/moderationTemplates';
-import { Button } from '../ui/Button';
-import { Input, Select, Textarea } from '../ui/Input';
-import { EmptyState } from '../ui/Feedback';
+import { Button, Chip, EmptyState, IconButton, Input, Select, Textarea } from '../ui';
 import { buildGuildEmojiImageUrl } from '../../lib/customEmoji';
 import { cn } from '../../lib/utils';
 import { SectionHeader, GroupLabel, FieldLabel, ToggleRow, GateNotice } from './SettingsPrimitives';
@@ -38,14 +36,12 @@ export type ReportStatusFilter =
 
 type ReportResolutionAction = 'approve' | 'reject' | 'dismiss' | 'warn' | 'mute' | 'ban';
 
-// Shared surface wrapper: one elevated settings panel per section (kill-list #5 —
-// never tile identical cards; group with dividers instead).
+// Shared section stack. Settings are ONE plate over the street (SettingsShell,
+// spec §4) and every section renders inside it, so this is a bare rhythm
+// wrapper — never a second surface. Depth inside comes from wells and raised
+// rows; separation comes from hairline dividers, never from tiled cards.
 function SettingsPanel({ children }: { children: ReactNode }) {
-  return (
-    <div className="settings-surface-card min-h-[calc(100dvh-13.5rem)] !p-8 max-sm:!p-6">
-      <div className="flex flex-col gap-8">{children}</div>
-    </div>
-  );
+  return <div className="flex flex-col gap-8">{children}</div>;
 }
 
 function initialFor(name: string) {
@@ -150,13 +146,14 @@ export function OverviewSection({
       <section className="flex flex-col gap-6 border-t border-border-subtle pt-6 sm:flex-row sm:gap-8">
         <label className="group shrink-0 cursor-pointer">
           <input type="file" accept="image/*" className="hidden" onChange={onIconChange} />
-          <div className="flex h-24 w-24 flex-col items-center justify-center overflow-hidden rounded-full border border-border-strong bg-bg-tertiary transition-colors group-hover:border-accent-primary/60">
+          {/* The icon well: recessed, matte, no border-as-depth (§1.1). */}
+          <div className="pc-well flex h-24 w-24 flex-col items-center justify-center overflow-hidden rounded-[var(--radius-full)] transition-colors group-hover:bg-bg-mod-subtle">
             {iconDataUrl ? (
               <img src={iconDataUrl} alt="Space icon" className="h-full w-full object-cover" />
             ) : (
               <>
-                <Upload size={20} className="text-text-muted" />
-                <span className="mt-1 text-meta font-semibold uppercase text-text-muted">Upload</span>
+                <Upload size={20} className="text-text-muted" aria-hidden />
+                <span className="mt-1 text-meta text-text-muted">Upload</span>
               </>
             )}
           </div>
@@ -179,12 +176,12 @@ export function OverviewSection({
         </div>
       </section>
 
-      {/* Stat strip — not tiled cards; a divided figure row */}
-      <section className="grid grid-cols-2 divide-border-subtle border-t border-border-subtle pt-6 sm:grid-cols-4 sm:divide-x">
+      {/* Stat strip — a read-only readout, so a well; not tiled cards. */}
+      <section className="pc-well grid grid-cols-2 gap-y-4 divide-border-subtle px-5 py-4 sm:grid-cols-4 sm:divide-x">
         {stats.map((stat) => (
-          <div key={stat.label} className="px-1 first:pl-0 sm:px-5">
-            <div className="font-code text-2xl font-semibold tabular-nums text-text-primary">{stat.value}</div>
-            <div className="mt-0.5 text-meta tracking-[0.04em] text-text-muted">{stat.label}</div>
+          <div key={stat.label} className="px-1 first:pl-0 sm:px-5 sm:first:pl-1">
+            <div className="pc-mono text-title text-text-primary">{stat.value}</div>
+            <div className="mt-0.5 text-meta text-text-muted">{stat.label}</div>
           </div>
         ))}
       </section>
@@ -192,19 +189,20 @@ export function OverviewSection({
       {isOwner && (
         <section className="border-t border-border-subtle pt-6">
           <GroupLabel>Vanity invite</GroupLabel>
-          <p className="mt-2 text-[13.5px] leading-relaxed text-text-secondary">
+          <p className="mt-2 max-w-prose text-body leading-relaxed text-text-secondary">
             Give out a memorable invite path like{' '}
-            <span className="font-code text-[12.5px] text-text-secondary">/your-server</span>. Leave blank to remove it.
+            <span className="pc-mono text-meta text-text-secondary">/your-server</span>. Leave blank to remove it.
           </p>
           <div className="mt-4 flex flex-wrap items-center gap-3">
             <Input
-              className="min-w-[16rem] flex-1 font-code"
+              aria-label="Vanity invite path"
+              className="min-w-[16rem] flex-1 pc-mono"
               value={vanityCode}
               onChange={(e) => onVanityCodeChange(e.target.value)}
               placeholder="your-server"
               maxLength={32}
             />
-            <Button onClick={onSaveVanity} disabled={savingVanity} loading={savingVanity}>
+            <Button variant="ghost" onClick={onSaveVanity} disabled={savingVanity} loading={savingVanity}>
               Save
             </Button>
           </div>
@@ -214,11 +212,12 @@ export function OverviewSection({
       {isOwner && (
         <section className="border-t border-border-subtle pt-6">
           <GroupLabel>Transfer ownership</GroupLabel>
-          <p className="mt-2 text-[13.5px] leading-relaxed text-text-secondary">
+          <p className="mt-2 max-w-prose text-body leading-relaxed text-text-secondary">
             Hand this space to another member. You'll immediately lose owner privileges — this can't be undone.
           </p>
           <div className="mt-4 flex flex-wrap items-center gap-3">
             <Select
+              aria-label="New owner"
               className="min-w-[16rem] flex-1"
               value={ownershipTargetUserId}
               onChange={(e) => onOwnershipTargetChange(e.target.value)}
@@ -230,7 +229,7 @@ export function OverviewSection({
               ))}
             </Select>
             <Button
-              variant="outline"
+              variant="ghost"
               onClick={onTransferOwnership}
               disabled={transferringOwnership || !ownershipTargetUserId}
               loading={transferringOwnership}
@@ -241,26 +240,28 @@ export function OverviewSection({
         </section>
       )}
 
+      {/* Danger is the danger WELL carrying danger ink (§1.3), never a red fill. */}
       {isOwner && (
-        <section className="rounded-md border border-accent-danger/25 bg-danger-tint p-5">
-          <GroupLabel className="!text-accent-danger">Danger zone</GroupLabel>
+        <section className="rounded-[var(--radius-well)] bg-danger-well p-5 shadow-[var(--shadow-well)]">
+          <GroupLabel className="text-accent-danger">Danger zone</GroupLabel>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="text-label text-text-primary">Delete this space</div>
-              <div className="mt-0.5 text-meta text-text-secondary">
+              <div className="mt-0.5 max-w-prose text-meta leading-relaxed text-text-secondary">
                 Every channel, message, and upload is permanently erased. This cannot be undone.
               </div>
             </div>
-            <Button variant="destructive" onClick={onShowDeleteDialog}>
+            <Button variant="danger" onClick={onShowDeleteDialog}>
               Delete space
             </Button>
           </div>
           {showDeleteGuildDialog && guild && (
-            <div className="mt-4 space-y-3 border-t border-accent-danger/25 pt-4">
-              <div className="text-[13.5px] text-text-secondary">
+            <div className="mt-4 space-y-3 border-t border-border-strong pt-4">
+              <div className="text-body leading-relaxed text-text-secondary">
                 Type <span className="font-semibold text-text-primary">{guild.name}</span> to confirm.
               </div>
               <Input
+                aria-label={`Type ${guild.name} to confirm deletion`}
                 value={deleteGuildConfirmName}
                 onChange={(e) => onDeleteGuildConfirmNameChange(e.target.value)}
                 placeholder={guild.name}
@@ -268,7 +269,7 @@ export function OverviewSection({
               />
               <div className="flex gap-2.5">
                 <Button
-                  variant="destructive"
+                  variant="danger"
                   onClick={onDeleteGuild}
                   disabled={deletingGuild || deleteGuildConfirmName !== guild.name}
                   loading={deletingGuild}
@@ -410,7 +411,7 @@ export function RolesSection({
               type="color"
               value={newRoleColor}
               onChange={(e) => onNewRoleColorChange(e.target.value)}
-              className="h-10 w-10 shrink-0 cursor-pointer rounded-sm border border-border-subtle bg-transparent"
+              className="pc-focusable h-[var(--h-control-phone)] w-[var(--h-control-phone)] shrink-0 cursor-pointer rounded-[var(--radius-control)] border-0 bg-transparent p-1"
               title="Role color"
               aria-label="New role color"
             />
@@ -432,9 +433,9 @@ export function RolesSection({
             description="Everyone starts with @everyone. Add a role to grant colors, hoisting, and finer permissions."
             action={
               canManage ? (
-                <Button onClick={() => newRoleInputRef.current?.focus()}>
-                  <Plus size={15} className="mr-1.5" />
-                  Create role
+                <Button variant="ghost" onClick={() => newRoleInputRef.current?.focus()}>
+                  <Plus size={15} aria-hidden />
+                  Name a role
                 </Button>
               ) : undefined
             }
@@ -450,7 +451,7 @@ export function RolesSection({
                 <li key={role.id}>
                   <div className="group flex flex-wrap items-center gap-3 py-3">
                     <span
-                      className="h-3 w-3 shrink-0 rounded-full ring-1 ring-inset ring-black/20"
+                      className="h-3 w-3 shrink-0 rounded-[var(--radius-full)] ring-1 ring-inset ring-border-strong"
                       style={{ backgroundColor: roleColor }}
                       aria-hidden
                     />
@@ -466,15 +467,11 @@ export function RolesSection({
                       }}
                     />
                     {memberCount != null && (
-                      <span className="shrink-0 rounded-xs bg-bg-mod-strong px-1.5 py-0.5 text-meta font-medium tabular-nums text-text-secondary">
+                      <Chip size="sm">
                         {memberCount} {memberCount === 1 ? 'member' : 'members'}
-                      </span>
+                      </Chip>
                     )}
-                    {role.hoist && (
-                      <span className="rounded-xs bg-bg-mod-strong px-1.5 py-0.5 text-meta font-semibold text-text-secondary">
-                        Hoisted
-                      </span>
-                    )}
+                    {role.hoist && <Chip size="sm">Hoisted</Chip>}
                     {canManage && !isEveryone && (
                       <div className="flex items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
                         <Button
@@ -484,13 +481,13 @@ export function RolesSection({
                         >
                           {isEditing ? 'Close' : 'Edit'}
                         </Button>
-                        <button
-                          className="icon-btn"
+                        <IconButton
+                          label={`Delete role ${role.name}`}
+                          tone="ghost"
                           onClick={() => onDeleteRole(role.id)}
-                          aria-label={`Delete role ${role.name}`}
                         >
                           <Trash2 size={15} />
-                        </button>
+                        </IconButton>
                       </div>
                     )}
                   </div>
@@ -504,13 +501,14 @@ export function RolesSection({
                               type="color"
                               value={editingRoleColor}
                               onChange={(e) => onEditingRoleColorChange(e.target.value)}
-                              className="h-10 w-10 cursor-pointer rounded-sm border border-border-subtle bg-transparent"
+                              className="pc-focusable h-[var(--h-control-phone)] w-[var(--h-control-phone)] cursor-pointer rounded-[var(--radius-control)] border-0 bg-transparent p-1"
                               aria-label="Role color"
                             />
                             <Input
+                              aria-label="Role color hex"
                               value={editingRoleColor}
                               onChange={(e) => onEditingRoleColorChange(e.target.value)}
-                              className="w-28 font-code"
+                              className="w-28 pc-mono"
                               maxLength={7}
                             />
                           </div>
@@ -545,8 +543,13 @@ export function RolesSection({
                           </div>
                         </div>
                       ))}
+                      {/* The section's one emerald is "Create role" (§: one
+                          primary action per screen); an inline row commit is
+                          ghost. */}
                       <div className="flex items-center gap-2.5">
-                        <Button onClick={onSaveRoleEdits}>Save Changes</Button>
+                        <Button variant="ghost" onClick={onSaveRoleEdits}>
+                          Save changes
+                        </Button>
                         <Button variant="ghost" onClick={onCancelRoleEditing}>
                           Cancel
                         </Button>
@@ -630,6 +633,7 @@ export function MembersSection({
       />
       <Input
         type="text"
+        aria-label="Search members by name"
         placeholder="Search members by name"
         value={memberSearch}
         onChange={(e) => onMemberSearchChange(e.target.value)}
@@ -639,11 +643,18 @@ export function MembersSection({
           <EmptyState
             className="!py-8"
             icon={<Users size={20} />}
-            title={memberSearch.trim() ? 'No matches' : 'No members yet'}
+            title={memberSearch.trim() ? 'No member matches that search' : 'Nobody has joined yet'}
             description={
               memberSearch.trim()
-                ? `Nobody here matches "${memberSearch.trim()}". Try a different name.`
-                : 'Invite people and they will show up here.'
+                ? `Nobody in this space matches "${memberSearch.trim()}". Try part of a username instead.`
+                : 'Hand out an invite from the Invites section and the people who accept show up here.'
+            }
+            action={
+              memberSearch.trim() ? (
+                <Button variant="ghost" onClick={() => onMemberSearchChange('')}>
+                  Clear the search
+                </Button>
+              ) : undefined
             }
           />
         ) : (
@@ -651,7 +662,7 @@ export function MembersSection({
             {filteredMembers.map((member) => (
               <li key={member.user.id}>
                 <div className="group flex flex-wrap items-center gap-3 py-3">
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent-tint text-label font-semibold text-accent-primary">
+                  <div className="pc-well flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-full)] text-label font-semibold text-text-secondary">
                     {initialFor(displayName(member.user, member.nick))}
                   </div>
                   <div className="min-w-0 flex-1">
@@ -668,14 +679,14 @@ export function MembersSection({
                           if (!role) return null;
                           const rColor = roleColorHex(role);
                           return (
-                            <span
-                              key={roleId}
-                              className="inline-flex items-center gap-1 rounded-xs bg-bg-mod-strong px-1.5 py-0.5 text-meta font-medium"
-                              style={{ color: rColor }}
-                            >
-                              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: rColor }} />
+                            <Chip key={roleId} size="sm" style={{ color: rColor }}>
+                              <span
+                                className="h-2 w-2 rounded-[var(--radius-full)]"
+                                style={{ backgroundColor: rColor }}
+                                aria-hidden
+                              />
                               {role.name}
-                            </span>
+                            </Chip>
                           );
                         })}
                     </div>
@@ -702,22 +713,20 @@ export function MembersSection({
                       </Button>
                     )}
                     {canBan && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="text-accent-danger hover:bg-danger-tint hover:text-accent-danger"
-                        onClick={() => onShowBanConfirm(member.user.id)}
-                      >
+                      <Button variant="danger" size="sm" onClick={() => onShowBanConfirm(member.user.id)}>
                         Ban
                       </Button>
                     )}
                   </div>
                 </div>
                 {banConfirmUserId === member.user.id && (
-                  <div className="mb-3 ml-12 space-y-2.5 rounded-md border border-accent-danger/30 bg-danger-tint p-3.5">
-                    <p className="text-label text-text-primary">Ban {displayName(member.user, member.nick)}?</p>
+                  <div className="mb-3 ml-12 space-y-2.5 rounded-[var(--radius-well)] bg-danger-well p-4 shadow-[var(--shadow-well)]">
+                    <p className="text-label text-accent-danger">
+                      Ban {displayName(member.user, member.nick)}?
+                    </p>
                     <Input
                       type="text"
+                      aria-label={`Reason for banning ${displayName(member.user, member.nick)}`}
                       placeholder="Reason (optional)"
                       value={banReasonInput}
                       onChange={(e) => onBanReasonChange(e.target.value)}
@@ -728,7 +737,7 @@ export function MembersSection({
                       autoFocus
                     />
                     <div className="flex items-center gap-2">
-                      <Button variant="destructive" size="sm" onClick={() => onBanMember(member.user.id, banReasonInput)}>
+                      <Button variant="danger" size="sm" onClick={() => onBanMember(member.user.id, banReasonInput)}>
                         Confirm ban
                       </Button>
                       <Button variant="ghost" size="sm" onClick={onCancelBanConfirm}>
@@ -742,7 +751,9 @@ export function MembersSection({
                     <GroupLabel>Extra roles</GroupLabel>
                     <p className="text-meta text-text-muted">The base member role is always included.</p>
                     {assignableRoles.length === 0 ? (
-                      <p className="text-[13.5px] text-text-secondary">No assignable roles yet — create one first.</p>
+                      <p className="text-body leading-relaxed text-text-secondary">
+                        There are no roles to assign yet — create one in the Roles section first.
+                      </p>
                     ) : (
                       <div className="grid gap-2 sm:grid-cols-2">
                         {assignableRoles.map((role) => {
@@ -751,19 +762,23 @@ export function MembersSection({
                             <label
                               key={role.id}
                               className={cn(
-                                'flex cursor-pointer items-center gap-2.5 rounded-sm border px-3 py-2 text-label transition-colors',
+                                'flex min-h-[var(--h-list-row)] cursor-pointer items-center gap-2.5 rounded-[var(--radius-control)] px-3 py-2 text-label transition-colors',
                                 checked
-                                  ? 'border-accent-primary/50 bg-accent-tint text-text-primary'
-                                  : 'border-border-subtle text-text-secondary hover:bg-bg-mod-subtle',
+                                  ? 'bg-bg-raised text-text-primary shadow-[var(--shadow-raised)]'
+                                  : 'text-text-secondary hover:bg-bg-mod-subtle',
                               )}
                             >
                               <input
                                 type="checkbox"
                                 checked={checked}
                                 onChange={() => onToggleDraftRoleId(role.id)}
-                                className="h-4 w-4 rounded-sm border-border-subtle accent-accent-primary"
+                                className="pc-focusable h-4 w-4 rounded-[var(--radius-window)] accent-accent-primary"
                               />
-                              <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: roleColorHex(role) }} />
+                              <span
+                                className="h-2.5 w-2.5 rounded-[var(--radius-full)]"
+                                style={{ backgroundColor: roleColorHex(role) }}
+                                aria-hidden
+                              />
                               <span className="truncate">{role.name}</span>
                             </label>
                           );
@@ -807,7 +822,7 @@ export function InvitesSection({ invites, onCreateInvite, onRevokeInvite }: Invi
         description="Share these links to bring people in. Revoke any that leak or outlive their purpose."
         action={
           <Button onClick={onCreateInvite}>
-            <Plus size={15} className="mr-1.5" />
+            <Plus size={15} aria-hidden />
             Create invite
           </Button>
         }
@@ -817,18 +832,18 @@ export function InvitesSection({ invites, onCreateInvite, onRevokeInvite }: Invi
           <EmptyState
             className="!py-8"
             icon={<LinkIcon size={20} />}
-            title="No active invites"
+            title="No invite links yet"
             description="Generate a link and hand it out — you can cap its uses and lifespan later."
             action={
-              <Button onClick={onCreateInvite}>
-                <Plus size={15} className="mr-1.5" />
-                Create invite
+              <Button variant="ghost" onClick={onCreateInvite}>
+                <Plus size={15} aria-hidden />
+                Generate the first link
               </Button>
             }
           />
         ) : (
           <>
-            <div className="hidden items-center gap-3 border-b border-border-subtle pb-2 text-section text-text-muted sm:flex">
+            <div className="hidden items-center gap-3 border-b border-border-subtle pb-2 text-section text-text-faint sm:flex">
               <span className="flex-1">Code</span>
               <span className="w-24">Uses</span>
               <span className="w-28">Expires</span>
@@ -840,17 +855,17 @@ export function InvitesSection({ invites, onCreateInvite, onRevokeInvite }: Invi
                   key={invite.code}
                   className="group flex flex-col items-start gap-1.5 py-3 sm:flex-row sm:items-center sm:gap-3"
                 >
-                  <span className="flex-1 font-code text-label text-text-primary">{invite.code}</span>
-                  <span className="font-code text-meta tabular-nums text-text-muted sm:w-24">
+                  <span className="flex-1 pc-mono text-label text-text-primary">{invite.code}</span>
+                  <span className="pc-mono text-meta text-text-muted sm:w-24">
                     {invite.uses}/{invite.max_uses || '∞'}
                   </span>
-                  <span className="font-code text-meta tabular-nums text-text-muted sm:w-28">
+                  <span className="pc-mono text-meta text-text-muted sm:w-28">
                     {invite.max_age || 'never'}
                   </span>
                   <Button
-                    variant="ghost"
+                    variant="danger"
                     size="sm"
-                    className="text-accent-danger hover:bg-danger-tint hover:text-accent-danger sm:opacity-0 sm:transition-opacity sm:focus-visible:opacity-100 sm:group-hover:opacity-100"
+                    className="sm:opacity-0 sm:transition-opacity sm:focus-visible:opacity-100 sm:group-hover:opacity-100"
                     onClick={() => onRevokeInvite(invite.code)}
                   >
                     Revoke
@@ -904,6 +919,7 @@ export function EmojisSection({
   onCancelEditingEmoji,
   onDeleteEmoji,
 }: EmojisSectionProps) {
+  const newEmojiInputRef = useRef<HTMLInputElement>(null);
   return (
     <SettingsPanel>
       <SectionHeader
@@ -920,17 +936,19 @@ export function EmojisSection({
           <GroupLabel>Add an emoji</GroupLabel>
           <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
             <Input
+              ref={newEmojiInputRef}
               aria-label="New emoji name"
               placeholder="emoji_name"
               value={newEmojiName}
               maxLength={32}
               onChange={(e) => onNewEmojiNameChange(e.target.value)}
             />
-            <label className="inline-flex h-10 cursor-pointer items-center justify-center rounded-sm border border-border-subtle bg-bg-tertiary px-3.5 text-label text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary">
+            <label className="pc-well inline-flex h-[var(--h-control-phone)] cursor-pointer items-center justify-center px-3.5 text-label text-text-secondary transition-colors hover:text-text-primary focus-within:shadow-[var(--shadow-well),var(--focus-ring)]">
               <input
                 type="file"
                 accept="image/png,image/gif"
-                className="hidden"
+                aria-label="Emoji image file"
+                className="sr-only"
                 onChange={(e) => {
                   const file = e.target.files?.[0] ?? null;
                   if (!file) {
@@ -953,11 +971,11 @@ export function EmojisSection({
               <span className="truncate">{newEmojiFile ? newEmojiFile.name : 'Choose PNG/GIF · 256 KB'}</span>
             </label>
             <Button onClick={onCreateEmoji} disabled={!newEmojiName.trim() || !newEmojiFile}>
-              <Upload size={15} className="mr-1.5" />
+              <Upload size={15} aria-hidden />
               Upload
             </Button>
           </div>
-          <p className="mt-3 text-meta text-text-muted">
+          <p className="mt-3 max-w-prose text-meta leading-relaxed text-text-muted">
             Names take letters, numbers, and underscores. Files are validated on the client and the server.
           </p>
         </section>
@@ -971,6 +989,13 @@ export function EmojisSection({
             icon={<Smile size={20} />}
             title="No custom emoji yet"
             description="Upload a PNG or GIF above and it becomes available across every channel in the server."
+            action={
+              canManage ? (
+                <Button variant="ghost" onClick={() => newEmojiInputRef.current?.focus()}>
+                  Add an emoji
+                </Button>
+              ) : undefined
+            }
           />
         ) : (
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -980,11 +1005,11 @@ export function EmojisSection({
               .map((emoji) => {
                 const editing = editingEmojiId === emoji.id;
                 return (
-                  <div key={emoji.id} className="group flex items-start gap-3 rounded-md border border-border-subtle p-3">
+                  <div key={emoji.id} className="pc-well group flex items-start gap-3 p-3">
                     <img
                       src={buildGuildEmojiImageUrl(guildId, emoji.id)}
                       alt={emoji.name}
-                      className="h-11 w-11 shrink-0 rounded-sm bg-bg-tertiary object-contain p-1"
+                      className="h-11 w-11 shrink-0 rounded-[var(--radius-chip)] bg-bg-raised object-contain p-1"
                       loading="lazy"
                     />
                     <div className="min-w-0 flex-1">
@@ -1003,14 +1028,14 @@ export function EmojisSection({
                       ) : (
                         <p className="truncate text-label text-text-primary">{emoji.name}</p>
                       )}
-                      <p className="mt-1 truncate font-code text-meta text-text-muted">
+                      <p className="mt-1 truncate pc-mono text-meta text-text-muted">
                         &lt;{emoji.animated ? 'a' : ''}:{emoji.name}:{emoji.id}&gt;
                       </p>
                       {canManage && (
                         <div className="mt-2.5 flex items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
                           {editing ? (
                             <>
-                              <Button size="sm" onClick={() => onSaveEmojiName(emoji.id)}>
+                              <Button variant="ghost" size="sm" onClick={() => onSaveEmojiName(emoji.id)}>
                                 Save
                               </Button>
                               <Button variant="ghost" size="sm" onClick={onCancelEditingEmoji}>
@@ -1022,12 +1047,7 @@ export function EmojisSection({
                               Rename
                             </Button>
                           )}
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="text-accent-danger hover:bg-danger-tint hover:text-accent-danger"
-                            onClick={() => onDeleteEmoji(emoji.id)}
-                          >
+                          <Button variant="danger" size="sm" onClick={() => onDeleteEmoji(emoji.id)}>
                             Delete
                           </Button>
                         </div>
@@ -1108,6 +1128,7 @@ export function WebhooksSection({
   onExecuteWebhookTest,
   channelNameById,
 }: WebhooksSectionProps) {
+  const newWebhookInputRef = useRef<HTMLInputElement>(null);
   const buildWebhookExecuteUrl = (webhookId: string, token: string) =>
     `${webhookBase}/api/v1/webhooks/${webhookId}/${token}`;
 
@@ -1132,12 +1153,18 @@ export function WebhooksSection({
           <div className="mt-4 flex flex-col gap-4">
             <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_13rem_auto]">
               <Input
+                ref={newWebhookInputRef}
+                aria-label="Webhook name"
                 placeholder="Webhook name"
                 value={newWebhookName}
                 maxLength={80}
                 onChange={(e) => onNewWebhookNameChange(e.target.value)}
               />
-              <Select value={newWebhookChannelId} onChange={(e) => onNewWebhookChannelChange(e.target.value)}>
+              <Select
+                aria-label="Channel the webhook posts into"
+                value={newWebhookChannelId}
+                onChange={(e) => onNewWebhookChannelChange(e.target.value)}
+              >
                 {textChannels.map((channel) => (
                   <option key={channel.id} value={channel.id}>
                     #{channel.name || 'unnamed'}
@@ -1145,12 +1172,12 @@ export function WebhooksSection({
                 ))}
               </Select>
               <Button onClick={onCreateWebhook} disabled={!newWebhookName.trim()}>
-                <Plus size={15} className="mr-1.5" />
+                <Plus size={15} aria-hidden />
                 Create
               </Button>
             </div>
             <label className="flex flex-wrap items-center gap-2 text-meta text-text-muted">
-              <span className="text-section text-text-secondary">Filter</span>
+              <span className="text-section text-text-faint">Filter</span>
               <Select
                 className="w-auto min-w-[12rem]"
                 value={webhookFilterChannelId}
@@ -1176,6 +1203,13 @@ export function WebhooksSection({
             icon={<LinkIcon size={20} />}
             title="No webhooks yet"
             description="Create one above to let an external service post into a channel. You'll get its execute URL once."
+            action={
+              canManage ? (
+                <Button variant="ghost" onClick={() => newWebhookInputRef.current?.focus()}>
+                  Name a webhook
+                </Button>
+              ) : undefined
+            }
           />
         ) : (
           <ul className="mt-2 divide-y divide-border-subtle">
@@ -1192,6 +1226,7 @@ export function WebhooksSection({
                     <div className="flex flex-wrap items-center gap-2.5">
                       {editing ? (
                         <Input
+                          aria-label={`Rename webhook ${webhook.name}`}
                           className="min-w-[14rem] flex-1"
                           value={editingWebhookName}
                           maxLength={80}
@@ -1205,25 +1240,24 @@ export function WebhooksSection({
                       ) : (
                         <span className="text-label text-text-primary">{webhook.name}</span>
                       )}
-                      <span className="rounded-xs bg-bg-mod-strong px-2 py-0.5 text-meta font-semibold text-text-secondary">
-                        #{channelNameById.get(webhook.channel_id) || 'unknown'}
-                      </span>
-                      <span className="font-code text-meta tabular-nums text-text-muted">Created {createdLabel}</span>
+                      <Chip size="sm">#{channelNameById.get(webhook.channel_id) || 'unknown'}</Chip>
+                      <span className="pc-mono text-meta text-text-muted">Created {createdLabel}</span>
                     </div>
 
-                    <div className="rounded-sm border border-border-subtle bg-bg-tertiary px-3 py-2 text-meta">
+                    {/* A read-only readout is a well (§1.1), never a bordered box. */}
+                    <div className="pc-well px-3 py-2 text-meta">
                       {issuedToken ? (
                         <div className="flex flex-wrap items-center gap-2.5">
-                          <span className="min-w-0 flex-1 truncate font-code text-text-secondary">
+                          <span className="min-w-0 flex-1 truncate pc-mono text-text-secondary">
                             {buildWebhookExecuteUrl(webhook.id, issuedToken)}
                           </span>
-                          <Button variant="outline" size="sm" onClick={() => onCopyWebhookUrl(webhook.id)}>
-                            <Copy size={13} className="mr-1.5" />
+                          <Button variant="ghost" size="sm" onClick={() => onCopyWebhookUrl(webhook.id)}>
+                            <Copy size={13} aria-hidden />
                             {copiedWebhookId === webhook.id ? 'Copied' : 'Copy URL'}
                           </Button>
                         </div>
                       ) : (
-                        <span className="text-text-muted">
+                        <span className="leading-relaxed text-text-muted">
                           Token hidden. Recreate this webhook to capture its execute URL.
                         </span>
                       )}
@@ -1232,7 +1266,7 @@ export function WebhooksSection({
                     <div className="flex flex-wrap items-center gap-2">
                       {editing ? (
                         <>
-                          <Button size="sm" onClick={() => onSaveWebhookName(webhook.id)}>
+                          <Button variant="ghost" size="sm" onClick={() => onSaveWebhookName(webhook.id)}>
                             Save
                           </Button>
                           <Button variant="ghost" size="sm" onClick={onCancelEditingWebhook}>
@@ -1252,22 +1286,18 @@ export function WebhooksSection({
                       >
                         {webhookInspectingId === webhook.id ? 'Refreshing…' : 'Refresh'}
                       </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="text-accent-danger hover:bg-danger-tint hover:text-accent-danger"
-                        onClick={() => onDeleteWebhook(webhook.id)}
-                      >
+                      <Button variant="danger" size="sm" onClick={() => onDeleteWebhook(webhook.id)}>
                         Delete
                       </Button>
                     </div>
 
                     {issuedToken && (
-                      <div className="rounded-sm border border-border-subtle bg-bg-tertiary px-3 py-2.5">
+                      <div className="pc-well px-3 py-2.5">
                         <GroupLabel>Test execute</GroupLabel>
                         <div className="mt-2 flex flex-wrap items-center gap-2">
                           <Input
                             className="min-w-[14rem] flex-1"
+                            aria-label={`Test message for ${webhook.name}`}
                             placeholder="Send a test webhook message"
                             value={testMessage}
                             maxLength={2000}
@@ -1280,6 +1310,7 @@ export function WebhooksSection({
                             }}
                           />
                           <Button
+                            variant="ghost"
                             onClick={() => onExecuteWebhookTest(webhook.id)}
                             disabled={webhookExecutingId === webhook.id || !testMessage.trim()}
                             loading={webhookExecutingId === webhook.id}
@@ -1348,7 +1379,11 @@ export function BotsSection({
           <GroupLabel>Add a bot</GroupLabel>
           <div className="mt-4 flex flex-col gap-3">
             <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
-              <Select value={selectedOwnBotId} onChange={(e) => onSelectedOwnBotIdChange(e.target.value)}>
+              <Select
+                aria-label="One of your developer apps"
+                value={selectedOwnBotId}
+                onChange={(e) => onSelectedOwnBotIdChange(e.target.value)}
+              >
                 {userBotApps.length === 0 && <option value="">No developer apps found</option>}
                 {userBotApps.map((app) => (
                   <option key={app.id} value={app.id}>
@@ -1362,6 +1397,7 @@ export function BotsSection({
             </div>
             <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
               <Input
+                aria-label="Third-party application ID"
                 placeholder="Third-party application ID"
                 value={addBotId}
                 onChange={(e) => onAddBotIdChange(e.target.value)}
@@ -1369,7 +1405,7 @@ export function BotsSection({
                   if (e.key === 'Enter' && addBotId.trim()) onAddBotById();
                 }}
               />
-              <Button variant="outline" onClick={onAddBotById} disabled={!addBotId.trim()}>
+              <Button variant="ghost" onClick={onAddBotById} disabled={!addBotId.trim()}>
                 Add by ID
               </Button>
             </div>
@@ -1390,23 +1426,23 @@ export function BotsSection({
           <ul className="mt-2 divide-y divide-border-subtle">
             {guildBots.map((entry) => (
               <li key={entry.application.id} className="group flex flex-wrap items-center gap-3 py-3">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-accent-tint text-accent-primary">
-                  <Bot size={18} />
+                <div className="pc-well flex h-9 w-9 shrink-0 items-center justify-center text-text-secondary">
+                  <Bot size={18} aria-hidden />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-label text-text-primary">{entry.application.name}</p>
+                  <p className="pc-display text-name text-text-primary">{entry.application.name}</p>
                   {entry.application.description && (
                     <p className="truncate text-meta text-text-muted">{entry.application.description}</p>
                   )}
-                  <p className="font-code text-meta tabular-nums text-text-muted">
+                  <p className="pc-mono text-meta text-text-muted">
                     Added {new Date(entry.install.created_at).toLocaleDateString()}
                   </p>
                 </div>
                 {canManage && (
                   <Button
-                    variant="ghost"
+                    variant="danger"
                     size="sm"
-                    className="text-accent-danger hover:bg-danger-tint hover:text-accent-danger opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
+                    className="opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
                     onClick={() => onRemoveBot(entry.application.id)}
                   >
                     Remove
@@ -1416,23 +1452,21 @@ export function BotsSection({
             ))}
             {nativeBotEntries.map((entry) => (
               <li key={`native-${entry.id}`} className="group flex flex-wrap items-center gap-3 py-3">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-success-tint text-accent-success">
-                  <Bot size={18} />
+                <div className="pc-well flex h-9 w-9 shrink-0 items-center justify-center text-text-secondary">
+                  <Bot size={18} aria-hidden />
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <p className="text-label text-text-primary">{entry.name}</p>
-                    <span className="rounded-xs bg-bg-mod-strong px-1.5 py-0.5 text-meta font-semibold uppercase text-text-secondary">
-                      Native
-                    </span>
+                    <p className="pc-display text-name text-text-primary">{entry.name}</p>
+                    <Chip size="sm">Built in</Chip>
                   </div>
                   <p className="truncate text-meta text-text-muted">{entry.description}</p>
                 </div>
                 {canManage && (
                   <Button
-                    variant="ghost"
+                    variant="danger"
                     size="sm"
-                    className="text-accent-danger hover:bg-danger-tint hover:text-accent-danger opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
+                    className="opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
                     onClick={() => onRemoveNativeBot(entry.id)}
                   >
                     Remove
@@ -1468,21 +1502,23 @@ export function BansSection({ bans, onUnban }: BansSectionProps) {
           <EmptyState
             className="!py-8"
             icon={<Gavel size={20} />}
-            title="No one is banned"
-            description="When you ban a member their entry lands here, where you can review the reason or reverse it."
+            title="Nobody is banned"
+            description="When you ban a member their entry lands here, where you can review the reason or lift it."
           />
         ) : (
           <ul className="divide-y divide-border-subtle">
             {bans.map((ban) => (
               <li key={ban.user.id} className="group flex flex-wrap items-center gap-3 py-3">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-danger-tint text-label font-semibold text-accent-danger">
+                <div className="pc-well flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-full)] text-label font-semibold text-text-secondary">
                   {initialFor(displayName(ban.user))}
                 </div>
                 <div className="min-w-0 flex-1">
                   <span className="block text-label text-text-primary">{displayName(ban.user)}</span>
-                  {ban.reason && <span className="text-meta text-text-muted">{ban.reason}</span>}
+                  {ban.reason && (
+                    <span className="text-meta leading-relaxed text-text-muted">{ban.reason}</span>
+                  )}
                 </div>
-                <Button variant="secondary" size="sm" onClick={() => void onUnban(ban.user.id)}>
+                <Button variant="ghost" size="sm" onClick={() => void onUnban(ban.user.id)}>
                   Unban
                 </Button>
               </li>
@@ -1522,6 +1558,7 @@ export function ReportsSection({
         description="Member reports and AutoMod quarantines waiting on a moderator's call."
         action={
           <Select
+            aria-label="Filter reports by status"
             className="w-auto min-w-[11rem]"
             value={reportStatusFilter}
             onChange={(event) => onReportStatusFilterChange(event.target.value as ReportStatusFilter)}
@@ -1543,8 +1580,8 @@ export function ReportsSection({
           <EmptyState
             className="!py-8"
             icon={<MessageSquare size={20} />}
-            title="Nothing to review"
-            description="No reports match this filter. When members flag content, it will queue up here for action."
+            title="The review queue is clear"
+            description="No reports match this filter. When a member flags a message or AutoMod quarantines one, it queues up here for a moderator's call."
           />
         ) : (
           <ul className="divide-y divide-border-subtle">
@@ -1565,28 +1602,33 @@ export function ReportsSection({
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="text-label text-text-primary">
-                        {targetType.toUpperCase()} report on <span className="font-code">{targetId}</span>
+                        <span className="capitalize">{targetType}</span> report on{' '}
+                        <span className="pc-mono">{targetId}</span>
                       </div>
-                      <div className="font-code text-meta tabular-nums text-text-muted">
+                      <div className="pc-mono text-meta text-text-muted">
                         by {reporterName} · {createdLabel}
                       </div>
                       {isQuarantineReport && (
-                        <div className="mt-1 text-section text-text-secondary">AutoMod quarantine review</div>
+                        <div className="mt-1 text-section text-text-faint">AutoMod quarantine review</div>
                       )}
                     </div>
-                    <span className="rounded-xs bg-bg-mod-strong px-2 py-0.5 text-meta font-semibold uppercase text-text-secondary">
+                    <Chip size="sm" className="capitalize">
                       {report.status}
-                    </span>
+                    </Chip>
                   </div>
 
-                  {report.reason && <div className="mt-2 text-[13.5px] text-text-secondary">{report.reason}</div>}
+                  {report.reason && (
+                    <div className="mt-2 max-w-prose text-body leading-relaxed text-text-secondary">
+                      {report.reason}
+                    </div>
+                  )}
 
                   {evidence.length > 0 && (
-                    <div className="mt-2 rounded-sm border border-border-subtle bg-bg-tertiary px-2.5 py-2">
+                    <div className="pc-well mt-2 px-2.5 py-2">
                       <GroupLabel>Evidence</GroupLabel>
                       <div className="mt-1 space-y-1">
                         {evidence.map((item, idx) => (
-                          <div key={`${report.id}-evidence-${idx}`} className="break-all font-code text-meta text-text-muted">
+                          <div key={`${report.id}-evidence-${idx}`} className="break-all pc-mono text-meta text-text-muted">
                             {item}
                           </div>
                         ))}
@@ -1598,27 +1640,27 @@ export function ReportsSection({
                     <div className="mt-3 flex flex-wrap items-center gap-2">
                       {isQuarantineReport ? (
                         <>
-                          <Button size="sm" variant="secondary" onClick={() => void onResolveReport(report.id, 'approve')} disabled={reportResolvingId === report.id}>
+                          <Button size="sm" variant="ghost" onClick={() => void onResolveReport(report.id, 'approve')} disabled={reportResolvingId === report.id}>
                             Approve
                           </Button>
-                          <Button size="sm" variant="secondary" onClick={() => void onResolveReport(report.id, 'reject')} disabled={reportResolvingId === report.id}>
+                          <Button size="sm" variant="ghost" onClick={() => void onResolveReport(report.id, 'reject')} disabled={reportResolvingId === report.id}>
                             Reject
                           </Button>
                         </>
                       ) : (
                         <>
-                          <Button size="sm" variant="secondary" onClick={() => void onResolveReport(report.id, 'dismiss')} disabled={reportResolvingId === report.id}>
+                          <Button size="sm" variant="ghost" onClick={() => void onResolveReport(report.id, 'dismiss')} disabled={reportResolvingId === report.id}>
                             Dismiss
                           </Button>
-                          <Button size="sm" variant="secondary" onClick={() => void onResolveReport(report.id, 'warn')} disabled={reportResolvingId === report.id}>
+                          <Button size="sm" variant="ghost" onClick={() => void onResolveReport(report.id, 'warn')} disabled={reportResolvingId === report.id}>
                             Warn
                           </Button>
-                          <Button size="sm" variant="secondary" onClick={() => void onResolveReport(report.id, 'mute')} disabled={reportResolvingId === report.id}>
+                          <Button size="sm" variant="ghost" onClick={() => void onResolveReport(report.id, 'mute')} disabled={reportResolvingId === report.id}>
                             Mute (15m)
                           </Button>
                         </>
                       )}
-                      <Button size="sm" variant="destructive" onClick={() => void onResolveReport(report.id, 'ban')} disabled={reportResolvingId === report.id}>
+                      <Button size="sm" variant="danger" onClick={() => void onResolveReport(report.id, 'ban')} disabled={reportResolvingId === report.id}>
                         Ban
                       </Button>
                     </div>
@@ -1721,20 +1763,16 @@ export function AuditLogSection({
           )}
         </div>
       )}
-      {loadError && (
-        <div className="mt-4">
-          <GateNotice>{loadError}</GateNotice>
-        </div>
-      )}
+      {loadError && <GateNotice>{loadError}</GateNotice>}
       <section className="max-h-[calc(100dvh-20rem)] overflow-y-auto border-t border-border-subtle pt-2">
         {auditEntries.length === 0 ? (
           <EmptyState
             className="!py-8"
             icon={<ScrollText size={20} />}
-            title={loadError ? 'Could not load audit log' : 'Nothing logged yet'}
+            title={loadError ? 'Could not load the audit log' : 'No admin actions yet'}
             description={
               loadError
-                ? 'You may lack View Audit Log permission, or the request failed. Try again after refreshing.'
+                ? 'You may lack the View Audit Log permission, or the request failed. Refresh and try again.'
                 : 'Role edits, bans, channel changes, and other admin actions will appear here as they happen.'
             }
           />
@@ -1760,7 +1798,7 @@ export function AuditLogSection({
                 <li key={entry.id} className="py-3">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-label text-text-primary">{label}</span>
-                    <span className="shrink-0 font-code text-meta tabular-nums text-text-muted">
+                    <span className="shrink-0 pc-mono text-meta text-text-muted">
                       {new Date(entry.created_at).toLocaleString()}
                     </span>
                   </div>
@@ -1773,7 +1811,11 @@ export function AuditLogSection({
                       </>
                     )}
                   </div>
-                  {entry.reason && <div className="mt-1 text-meta text-text-muted">Reason: {entry.reason}</div>}
+                  {entry.reason && (
+                    <div className="mt-1 text-meta leading-relaxed text-text-muted">
+                      Reason: {entry.reason}
+                    </div>
+                  )}
                 </li>
               );
             })}
@@ -1818,6 +1860,7 @@ export function ModerationTemplatesSection({
     Record<string, { targetUserId: string; reason: string; dmMessage: string }>
   >({});
   const [applyStatus, setApplyStatus] = useState<Record<string, string>>({});
+  const newTemplateInputRef = useRef<HTMLInputElement>(null);
 
   const needsDuration = actionType === 2;
 
@@ -1891,6 +1934,7 @@ export function ModerationTemplatesSection({
         <GroupLabel>New template</GroupLabel>
         <div className="mt-4 grid gap-3">
           <Input
+            ref={newTemplateInputRef}
             aria-label="Template name"
             placeholder="Template name (e.g. Spam Warning)"
             maxLength={100}
@@ -1915,7 +1959,7 @@ export function ModerationTemplatesSection({
                   type="number"
                   min={1}
                   max={43200}
-                  className="font-code tabular-nums"
+                  className="pc-mono"
                   value={durationMinutes}
                   onChange={(e) => setDurationMinutes(Number(e.target.value))}
                 />
@@ -1924,7 +1968,7 @@ export function ModerationTemplatesSection({
           </div>
           <label className="block">
             <FieldLabel>
-              Reason template <span className="normal-case tracking-normal text-text-muted">— {'{target}'}, {'{moderator}'}, {'{reason}'}</span>
+              Reason template <span className="text-text-muted">— {'{target}'}, {'{moderator}'}, {'{reason}'}</span>
             </FieldLabel>
             <Textarea
               className="min-h-[4rem] resize-y"
@@ -1937,7 +1981,7 @@ export function ModerationTemplatesSection({
           </label>
           <label className="block">
             <FieldLabel>
-              DM template <span className="normal-case tracking-normal text-text-muted">— sent to the user</span>
+              DM template <span className="text-text-muted">— sent to the user</span>
             </FieldLabel>
             <Textarea
               className="min-h-[4rem] resize-y"
@@ -1964,37 +2008,48 @@ export function ModerationTemplatesSection({
             icon={<Shield size={20} />}
             title="No templates yet"
             description="Build a template above and moderators can warn, mute, or ban with a consistent reason in a single click."
+            action={
+              <Button variant="ghost" onClick={() => newTemplateInputRef.current?.focus()}>
+                Start a template
+              </Button>
+            }
           />
         ) : (
           <ul className="mt-2 divide-y divide-border-subtle">
             {templates.map((template) => (
               <li key={template.id} className="py-4">
                 <div className="flex flex-wrap items-start gap-3">
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-accent-tint text-accent-primary">
-                    <Shield size={16} />
+                  <div className="pc-well flex h-9 w-9 shrink-0 items-center justify-center text-text-secondary">
+                    <Shield size={16} aria-hidden />
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-label text-text-primary">{template.name}</span>
-                      <span className="rounded-xs bg-bg-mod-strong px-2 py-0.5 text-meta font-semibold text-text-secondary">
+                      <span className="pc-display text-name text-text-primary">{template.name}</span>
+                      <Chip size="sm">
                         {ACTION_TYPE_LABELS[template.action_type] ?? `Type ${template.action_type}`}
-                      </span>
+                      </Chip>
                       {template.action_type === 2 && template.duration_minutes != null && (
-                        <span className="font-code text-meta tabular-nums text-text-muted">{template.duration_minutes}m</span>
+                        <span className="pc-mono text-meta text-text-muted">{template.duration_minutes}m</span>
                       )}
                     </div>
                     {template.reason_template && (
-                      <p className="mt-0.5 text-meta text-text-muted">Reason: {template.reason_template}</p>
+                      <p className="mt-0.5 text-meta leading-relaxed text-text-muted">
+                        Reason: {template.reason_template}
+                      </p>
                     )}
-                    {template.dm_template && <p className="mt-0.5 text-meta text-text-muted">DM: {template.dm_template}</p>}
+                    {template.dm_template && (
+                      <p className="mt-0.5 text-meta leading-relaxed text-text-muted">
+                        DM: {template.dm_template}
+                      </p>
+                    )}
                   </div>
-                  <button
-                    className="icon-btn"
-                    aria-label={`Delete moderation template ${template.name}`}
+                  <IconButton
+                    label={`Delete moderation template ${template.name}`}
+                    tone="ghost"
                     onClick={() => void onDeleteTemplate(template.id)}
                   >
                     <Trash2 size={15} />
-                  </button>
+                  </IconButton>
                 </div>
                 <form
                   className="mt-3 grid gap-2 border-t border-border-subtle pt-3"
@@ -2028,6 +2083,7 @@ export function ModerationTemplatesSection({
                     />
                     <Button
                       type="submit"
+                      variant="ghost"
                       size="sm"
                       disabled={!getApplyDraft(template.id).targetUserId.trim() || applyingTemplateId !== null}
                     >
@@ -2035,7 +2091,7 @@ export function ModerationTemplatesSection({
                     </Button>
                   </div>
                   {applyStatus[template.id] && (
-                    <p className="text-meta text-text-muted" role="status">
+                    <p className="text-meta leading-relaxed text-text-muted" role="status">
                       {applyStatus[template.id]}
                     </p>
                   )}

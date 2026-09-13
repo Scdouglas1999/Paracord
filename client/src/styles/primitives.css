@@ -47,11 +47,34 @@
   box-shadow: var(--shadow-floating);
 }
 
+/* A dialog: a plate that floats over the street (§4). Same fill as a menu, the
+   plate's radius and depth, because it carries content rather than a menu. */
+.pc-dialog {
+  background: var(--bg-floating);
+  border-radius: var(--radius-plate);
+  box-shadow: var(--shadow-floating);
+}
+
+/* §3: on a phone, plates round up. */
+@media (max-width: 640px) {
+  .pc-dialog {
+    border-radius: var(--radius-plate-phone);
+    box-shadow: var(--shadow-plate-phone);
+  }
+}
+
 /* §9 reduced transparency: a floating surface becomes opaque. */
 @media (prefers-reduced-transparency: reduce) {
-  .pc-floating {
+  .pc-floating,
+  .pc-dialog {
     background: var(--bg-plate);
   }
+}
+
+/* §1.7 High contrast: surfaces get a real edge as well as their depth, so a
+   plate still separates from the street when the shadow is not enough. */
+[data-theme='high-contrast'] :where(.pc-plate, .pc-floating, .pc-dialog) {
+  border: 1px solid var(--border-strong);
 }
 
 /* -----------------------------------------------------------------------------
@@ -191,6 +214,20 @@
 .pc-focusable-composed:focus-visible {
   outline: none;
   box-shadow: var(--pc-base-shadow, none), var(--focus-ring);
+}
+
+/* A <select> on the well recipe: the native arrow is suppressed and the chevron
+   comes from --select-chevron, which each theme defines in its own muted ink
+   (a data URI cannot read a custom property, so the literal lives in tokens.css
+   with every other literal). */
+.pc-select {
+  background-image: var(--select-chevron);
+  background-repeat: no-repeat;
+  background-position: right 0.65rem center;
+}
+
+.pc-select::-ms-expand {
+  display: none;
 }
 
 /* -----------------------------------------------------------------------------

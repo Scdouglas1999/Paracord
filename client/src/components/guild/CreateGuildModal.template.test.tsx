@@ -148,7 +148,7 @@ describe('CreateGuildModal template tab', () => {
 
     render(<CreateGuildModal onClose={onClose} />);
 
-    await user.click(screen.getByRole('button', { name: 'Join' }));
+    await user.click(screen.getByRole('tab', { name: 'Join' }));
     await user.type(screen.getByLabelText('Invite Link'), 'https://paracord.gg/launch');
     await user.click(screen.getByRole('button', { name: 'Join space' }));
 
@@ -165,7 +165,7 @@ describe('CreateGuildModal template tab', () => {
 
     render(<CreateGuildModal onClose={onClose} />);
 
-    await user.click(screen.getByRole('button', { name: 'Template' }));
+    await user.click(screen.getByRole('tab', { name: 'Template' }));
 
     expect(await screen.findByRole('button', { name: 'Use template Ops Template' })).toBeInTheDocument();
     expect(apiClient.get).toHaveBeenCalledWith('/templates', { signal: expect.any(AbortSignal) });
@@ -196,7 +196,7 @@ describe('CreateGuildModal template tab', () => {
 
     render(<CreateGuildModal onClose={vi.fn()} />);
 
-    await user.click(screen.getByRole('button', { name: 'Template' }));
+    await user.click(screen.getByRole('tab', { name: 'Template' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Failed to load templates: Template service is offline.',
@@ -207,7 +207,7 @@ describe('CreateGuildModal template tab', () => {
     vi.mocked(apiClient.get).mockReturnValue(new Promise(() => {}));
     const user = userEvent.setup();
     const { unmount } = render(<CreateGuildModal onClose={vi.fn()} />);
-    await user.click(screen.getByRole('button', { name: 'Template' }));
+    await user.click(screen.getByRole('tab', { name: 'Template' }));
     const signal = vi.mocked(apiClient.get).mock.calls[0][1]?.signal;
     expect(signal?.aborted).toBe(false);
     unmount();

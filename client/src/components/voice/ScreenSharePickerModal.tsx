@@ -41,12 +41,12 @@ function ScreenShareSourceCard({
     <button
       type="button"
       onClick={() => onSelect(source)}
-      className="group rounded-md border border-border-subtle bg-bg-secondary p-2.5 text-left outline-none ring-0 ring-accent-primary transition-[border-color,box-shadow,background-color] duration-[140ms] ease-[var(--ease-out)] hover:border-accent-primary hover:bg-accent-tint hover:ring-2 focus-visible:shadow-[var(--focus-ring)]"
+      className="pc-focusable group rounded-[var(--radius-card)] bg-bg-raised p-2.5 text-left shadow-[var(--shadow-raised)] outline-none transition-[background-color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:shadow-[var(--shadow-lifted)]"
     >
       <div className="flex flex-col gap-2.5">
         <div
-          className="relative overflow-hidden rounded-sm border border-border-subtle"
-          style={{ backgroundColor: 'var(--bg-tertiary)', aspectRatio: '16 / 9' }}
+          className="pc-well relative overflow-hidden"
+          style={{ aspectRatio: '16 / 9' }}
         >
           {typeof safeThumbnailUrl === 'string' ? (
             <img
@@ -66,7 +66,7 @@ function ScreenShareSourceCard({
               <span className="text-meta font-medium">Preview unavailable</span>
             </div>
           )}
-          <div className="absolute left-2 top-2 flex h-7 w-7 items-center justify-center rounded-sm border border-white/10 bg-black/65 text-white">
+          <div className="pc-tag absolute left-2 top-2 flex h-7 w-7 items-center justify-center">
             {icon}
           </div>
         </div>
@@ -78,18 +78,18 @@ function ScreenShareSourceCard({
           )}
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
             {source.audioSupported && (
-              <span className="inline-flex items-center gap-1 rounded-xs bg-accent-tint px-1.5 py-0.5 text-meta font-semibold text-accent-primary">
+              <span className="inline-flex items-center gap-1 rounded-[var(--radius-chip)] bg-accent-tint px-1.5 py-0.5 text-meta font-semibold text-accent-primary">
                 <Volume2 size={11} />
                 Audio
               </span>
             )}
             {source.requiresOsPicker && (
-              <span className="inline-flex items-center rounded-xs bg-warning-tint px-1.5 py-0.5 text-meta font-semibold text-accent-warning">
+              <span className="inline-flex items-center rounded-[var(--radius-chip)] bg-warning-tint px-1.5 py-0.5 text-meta font-semibold text-accent-warning">
                 System chooser
               </span>
             )}
             {source.isSelf && (
-              <span className="inline-flex items-center rounded-xs bg-danger-tint px-1.5 py-0.5 text-meta font-semibold text-accent-danger">
+              <span className="inline-flex items-center rounded-[var(--radius-chip)] bg-danger-tint px-1.5 py-0.5 text-meta font-semibold text-accent-danger">
                 Paracord window
               </span>
             )}
@@ -183,7 +183,7 @@ export function ScreenSharePickerModal({
       <div className="flex max-h-[min(88dvh,48rem)] flex-col">
         <div className="flex items-start justify-between gap-4 border-b border-border-subtle px-6 pb-4 pt-6">
           <div className="min-w-0">
-            <h2 id="screen-share-picker-title" className="font-display text-title text-text-primary">
+            <h2 id="screen-share-picker-title" className="pc-display text-title text-text-primary">
               Share your screen
             </h2>
             <p id="screen-share-picker-subtitle" className="mt-1 text-body text-text-secondary">
@@ -195,7 +195,7 @@ export function ScreenSharePickerModal({
               type="button"
               onClick={onRefresh}
               aria-label="Refresh sources"
-              className="flex h-9 w-9 items-center justify-center rounded-sm text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+              className="pc-focusable flex h-9 w-9 items-center justify-center rounded-[var(--radius-control)] text-text-muted transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
             >
               <RefreshCw size={18} className={loading ? 'animate-spin' : undefined} />
             </button>
@@ -203,7 +203,7 @@ export function ScreenSharePickerModal({
               type="button"
               onClick={onClose}
               aria-label="Close"
-              className="flex h-9 w-9 items-center justify-center rounded-sm text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+              className="pc-focusable flex h-9 w-9 items-center justify-center rounded-[var(--radius-control)] text-text-muted transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
             >
               <X size={18} />
             </button>
@@ -212,7 +212,7 @@ export function ScreenSharePickerModal({
 
         {(sources.length > 0 || loading) && (
           <div className="flex items-center gap-1 border-b border-border-subtle px-6 py-3">
-            <div className="inline-flex items-center gap-0.5 rounded-sm bg-bg-tertiary p-0.5">
+            <div className="pc-well inline-flex items-center gap-1 p-1">
               {filters.map((f) => (
                 <button
                   key={f.key}
@@ -220,10 +220,10 @@ export function ScreenSharePickerModal({
                   onClick={() => setFilter(f.key)}
                   disabled={f.count === 0 && f.key !== 'all'}
                   className={cn(
-                    'rounded-xs px-3 py-1.5 text-label outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-40',
+                    'pc-focusable h-[var(--h-control)] rounded-[var(--radius-chip)] px-3 text-label transition-[background-color,color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)] disabled:cursor-not-allowed disabled:opacity-60',
                     filter === f.key
-                      ? 'bg-bg-accent text-text-primary shadow-sm'
-                      : 'text-text-secondary hover:text-text-primary',
+                      ? 'bg-bg-raised font-semibold text-text-primary shadow-[var(--shadow-raised)]'
+                      : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
                   )}
                 >
                   {f.label}
@@ -236,7 +236,7 @@ export function ScreenSharePickerModal({
 
         <div className="min-h-0 flex-1 overflow-auto px-6 py-5">
           {error && (
-            <div className="mb-4 rounded-sm bg-danger-tint px-3 py-2 text-meta font-medium text-accent-danger">
+            <div className="mb-4 rounded-[var(--radius-well)] bg-danger-well px-3.5 py-2.5 text-meta font-medium leading-relaxed text-accent-danger shadow-[var(--shadow-well)]">
               {error}
             </div>
           )}
@@ -252,7 +252,7 @@ export function ScreenSharePickerModal({
               title="No windows available to share yet"
               description="Open an app or bring a screen into view, then refresh to pick what your call sees."
               action={
-                <Button variant="secondary" onClick={onRefresh}>
+                <Button variant="ghost" onClick={onRefresh}>
                   <RefreshCw size={16} className="mr-1.5" />
                   Refresh sources
                 </Button>

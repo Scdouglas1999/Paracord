@@ -441,16 +441,15 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
               )}
               title={`Status: ${statusLight.label}`}
               style={{
-                background: isStreaming
-                  ? 'linear-gradient(135deg, var(--accent-secondary), var(--accent-primary))'
-                  : 'var(--bg-floating)',
+                // Someone sharing their screen is LIT (§1.2), not gradient-framed.
+                background: isStreaming ? 'var(--light-white)' : 'var(--bg-floating)',
               }}
             >
               {avatarSrc ? (
                 <img src={avatarSrc} alt="" className="h-[72px] w-[72px] rounded-full object-cover" />
               ) : (
                 <div
-                  className="flex h-[72px] w-[72px] items-center justify-center rounded-full font-display text-2xl font-bold"
+                  className="pc-display flex h-[72px] w-[72px] items-center justify-center rounded-full text-title"
                   style={{ backgroundColor: 'var(--accent-tint-strong)', color: 'var(--accent-primary)' }}
                 >
                   {user.username.charAt(0).toUpperCase()}
@@ -461,12 +460,12 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
           </div>
 
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <h2 className="font-display text-title leading-none" style={{ color: 'var(--text-primary)' }}>
+            <h2 className="pc-display text-title leading-none" style={{ color: 'var(--text-primary)' }}>
               {displayName}
             </h2>
             {isBotUser && (
               <span
-                className="inline-flex items-center rounded-xs px-1.5 py-0.5 text-meta font-semibold uppercase"
+                className="inline-flex items-center rounded-[var(--radius-chip)] px-1.5 py-0.5 text-meta font-semibold"
                 style={{ background: 'var(--bg-mod-strong)', color: 'var(--text-secondary)' }}
               >
                 Bot
@@ -474,7 +473,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
             )}
             {isStaffUser && (
               <span
-                className="inline-flex items-center gap-1 rounded-xs px-1.5 py-0.5 text-meta font-semibold uppercase"
+                className="inline-flex items-center gap-1 rounded-[var(--radius-chip)] px-1.5 py-0.5 text-meta font-semibold"
                 style={{ background: 'var(--accent-tint)', color: 'var(--accent-primary)' }}
               >
                 <BadgeCheck size={11} />
@@ -828,7 +827,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
               <span className="ml-1 text-text-muted">({user.id})</span>
             </div>
             <label className="mt-4 block">
-              <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Reason</span>
+              <span className="text-section text-text-faint">Reason</span>
               <textarea
                 className="input-field mt-2 min-h-[96px] resize-y"
                 value={reportReason}
@@ -838,7 +837,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
               />
             </label>
             <label className="mt-3 block">
-              <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Evidence (Optional)</span>
+              <span className="text-section text-text-faint">Evidence (optional)</span>
               <textarea
                 className="input-field mt-2 min-h-[72px] resize-y"
                 value={reportEvidence}

@@ -1,4 +1,4 @@
-import { useState, useEffect, type ReactNode } from 'react';
+import { useState, useEffect } from 'react';
 import { Loader2, Plus, RotateCcw, Trash2, Search, ShieldCheck, ShieldAlert, Globe2 } from 'lucide-react';
 import {
   adminApi,
@@ -8,25 +8,38 @@ import {
 } from '../../api/admin';
 import { extractApiError } from '../../api/client';
 import { toast } from '../../stores/toastStore';
-import { Button } from '../../components/ui/Button';
-import { Input } from '../../components/ui/Input';
-import { EmptyState, LoadingSpinner } from '../../components/ui/Feedback';
+import {
+  Button,
+  Chip,
+  Divider,
+  EmptyState,
+  ErrorBanner,
+  LoadingSpinner,
+  SettingsSectionHeader,
+  TextField,
+  ToggleRow,
+  Well,
+} from '../../components/ui';
+import { Select, Textarea } from '../../components/ui/Input';
 import { confirm } from '../../stores/confirmStore';
 
-function Field({ label, htmlFor, className, children }: { label: string; htmlFor: string; className?: string; children: ReactNode }) {
+function DetailRow({
+  label,
+  value,
+  mono,
+  className,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+  className?: string;
+}) {
   return (
     <div className={className}>
-      <label htmlFor={htmlFor} className="mb-2 block text-label font-medium text-text-secondary">{label}</label>
-      {children}
-    </div>
-  );
-}
-
-function DetailRow({ label, value, mono, className }: { label: string; value: string; mono?: boolean; className?: string }) {
-  return (
-    <div className={className}>
-      <dt className="text-section text-text-muted">{label}</dt>
-      <dd className={`mt-0.5 break-all text-body text-text-secondary ${mono ? 'font-code text-meta' : ''}`}>{value}</dd>
+      <dt className="text-section text-text-faint">{label}</dt>
+      <dd className={`mt-0.5 break-all text-label text-text-secondary ${mono ? 'pc-mono text-meta' : ''}`}>
+        {value}
+      </dd>
     </div>
   );
 }
@@ -374,49 +387,54 @@ export function FederationPanel() {
     }
   };
 
+
   return (
-    <div className="space-y-8">
-      <header>
-        <h2 className="font-display text-heading text-text-primary">Federation</h2>
-        <p className="mt-1 text-body text-text-secondary">
-          Manage trusted peer servers and inspect discovered federation metadata.
-        </p>
-      </header>
-
-      <section className="rounded-md border border-border-subtle bg-bg-secondary p-6 shadow-sm">
-        <h3 className="mb-5 text-section text-text-secondary">Add a federated server</h3>
-        <div className="grid gap-4 md:grid-cols-2">
-          <Field label="Server name" htmlFor="fed-name">
-            <Input id="fed-name" aria-label="Server Name" type="text" value={serverName} onChange={(e) => setServerName(e.target.value)} placeholder="example-server" />
-          </Field>
-          <Field label="Domain" htmlFor="fed-domain">
-            <Input id="fed-domain" aria-label="Domain" type="text" value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="example.com" />
-          </Field>
-          <Field label="Federation endpoint" htmlFor="fed-endpoint" className="md:col-span-2">
-            <Input id="fed-endpoint" aria-label="Federation Endpoint" type="url" value={endpoint} onChange={(e) => setEndpoint(e.target.value)} placeholder="https://example.com/_paracord/federation/v1" />
-          </Field>
-          <Field label="Public key (hex)" htmlFor="fed-pubkey">
-            <Input id="fed-pubkey" aria-label="Public Key hex" type="text" value={publicKeyHex} onChange={(e) => setPublicKeyHex(e.target.value)} placeholder="Optional" />
-          </Field>
-          <Field label="Key ID" htmlFor="fed-keyid">
-            <Input id="fed-keyid" aria-label="Key ID" type="text" value={keyId} onChange={(e) => setKeyId(e.target.value)} placeholder="Optional" />
-          </Field>
-        </div>
-
-        <div className="mt-5 flex flex-wrap items-center gap-5 border-t border-border-subtle pt-5">
-          <label className="inline-flex cursor-pointer items-center gap-2 text-body text-text-secondary">
-            <input aria-label="Trusted peer" type="checkbox" checked={trusted} onChange={(e) => setTrusted(e.target.checked)} className="h-4 w-4 rounded-xs border-border-subtle accent-accent-primary" />
-            Trusted peer
-          </label>
-          <label className="inline-flex cursor-pointer items-center gap-2 text-body text-text-secondary">
-            <input aria-label="Discover keys automatically" type="checkbox" checked={discover} onChange={(e) => setDiscover(e.target.checked)} className="h-4 w-4 rounded-xs border-border-subtle accent-accent-primary" />
-            Discover keys automatically
-          </label>
-          <div className="ml-auto flex flex-wrap gap-2">
-            <Button variant="outline" onClick={() => fetchServers(true)} disabled={refreshing} className="gap-2">
-              {refreshing ? <Loader2 size={16} className="animate-spin" /> : <RotateCcw size={16} />}
+    <div className="flex flex-col gap-8">
+      <section>
+        <SettingsSectionHeader
+          title="Federation"
+          description="Manage trusted peer servers and inspect discovered federation metadata."
+          action={
+            <Button
+              variant="ghost"
+              onClick={() => fetchServers(true)}
+              disabled={refreshing}
+              className="gap-2"
+            >
+              {refreshing ? (
+                <Loader2 size={16} className="animate-spin" />
+              ) : (
+                <RotateCcw size={16} />
+              )}
               {refreshing ? 'Refreshing…' : 'Refresh'}
             </Button>
+          }
+        />
+
+        <h3 className="pc-display text-heading text-text-primary">Add a federated server</h3>
+        <div className="mt-3 grid gap-4 md:grid-cols-2">
+          <TextField id="fed-name" label="Server name" type="text" value={serverName} onChange={(e) => setServerName(e.target.value)} placeholder="example-server" />
+          <TextField id="fed-domain" label="Domain" type="text" value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="example.com" />
+          <TextField id="fed-endpoint" label="Federation endpoint" type="url" value={endpoint} onChange={(e) => setEndpoint(e.target.value)} placeholder="https://example.com/_paracord/federation/v1" className="md:col-span-2" />
+          <TextField id="fed-pubkey" label="Public key (hex)" type="text" value={publicKeyHex} onChange={(e) => setPublicKeyHex(e.target.value)} placeholder="Optional" />
+          <TextField id="fed-keyid" label="Key ID" type="text" value={keyId} onChange={(e) => setKeyId(e.target.value)} placeholder="Optional" />
+        </div>
+
+        <div className="mt-4 flex flex-col">
+          <Divider />
+          <ToggleRow
+            label="Trusted peer"
+            description="Accept this server's signed envelopes without a manual review."
+            checked={trusted}
+            onChange={setTrusted}
+          />
+          <ToggleRow
+            label="Discover keys automatically"
+            description="Fetch the peer's signing key from its federation endpoint instead of pasting one."
+            checked={discover}
+            onChange={setDiscover}
+          />
+          <div className="mt-3 flex justify-end">
             <Button onClick={handleCreate} loading={creating} disabled={creating} className="gap-2">
               {!creating && <Plus size={16} />}
               {creating ? 'Adding…' : 'Add server'}
@@ -426,231 +444,264 @@ export function FederationPanel() {
       </section>
 
       <section>
-        <h3 className="mb-3 text-section text-text-secondary">Known servers</h3>
+        <h3 className="pc-display text-heading text-text-primary">Known servers</h3>
         {loading ? (
-          <div className="rounded-md border border-border-subtle bg-bg-secondary px-6 py-10 shadow-sm">
+          <Well className="mt-3 px-6 py-10">
             <LoadingSpinner size="sm" label="Loading federated servers…" />
-          </div>
+          </Well>
         ) : servers.length === 0 ? (
-          <div className="rounded-md border border-border-subtle bg-bg-secondary px-4 shadow-sm">
-            <EmptyState
-              icon={<Globe2 size={20} />}
-              title="No peers configured yet"
-              description="This server isn't federated with anyone. Add a trusted peer above to start exchanging messages and identities across servers."
-            />
-          </div>
+          <EmptyState
+            icon={<Globe2 size={20} />}
+            title="No peers configured yet"
+            description="This server isn't federated with anyone. Add a trusted peer above to start exchanging messages and identities across servers."
+          />
         ) : (
-          <div className="overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
-            {servers.map((server, i) => (
-              <div
+          <ul className="mt-2 flex flex-col">
+            {servers.map((server) => (
+              <li
                 key={server.server_name}
-                className={`group/row flex flex-wrap items-center justify-between gap-4 px-5 py-4 transition-colors hover:bg-bg-mod-subtle ${i > 0 ? 'border-t border-border-subtle/60' : ''}`}
+                className="flex flex-wrap items-center justify-between gap-4 border-t border-border-subtle py-3.5 transition-colors hover:bg-bg-mod-subtle"
               >
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <p className="truncate text-label font-semibold text-text-primary">{server.server_name}</p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="pc-display truncate text-name text-text-primary">
+                      {server.server_name}
+                    </p>
                     {server.trusted ? (
-                      <span className="inline-flex items-center gap-1 rounded-xs bg-success-tint px-2 py-0.5 text-meta font-semibold text-accent-success">
-                        <ShieldCheck size={12} /> Trusted
-                      </span>
+                      <Chip size="sm" tone="accent">
+                        <ShieldCheck size={12} aria-hidden /> Trusted
+                      </Chip>
                     ) : (
-                      <span className="inline-flex items-center gap-1 rounded-xs bg-warning-tint px-2 py-0.5 text-meta font-semibold text-accent-warning">
-                        <ShieldAlert size={12} /> Untrusted
-                      </span>
+                      <Chip size="sm" className="text-accent-warning">
+                        <ShieldAlert size={12} aria-hidden /> Untrusted
+                      </Chip>
                     )}
                   </div>
-                  <p className="mt-0.5 truncate text-body text-text-secondary">{server.domain}</p>
-                  <p className="truncate font-code text-meta text-text-muted">{server.federation_endpoint}</p>
+                  <p className="mt-0.5 truncate text-label text-text-secondary">{server.domain}</p>
+                  <p className="pc-mono truncate text-meta text-text-muted">
+                    {server.federation_endpoint}
+                  </p>
                 </div>
-                <div className="flex items-center gap-2 opacity-100 transition-opacity md:opacity-0 md:focus-within:opacity-100 md:group-hover/row:opacity-100">
-                  <Button variant="secondary" size="sm" onClick={() => handleInspect(server.server_name)} disabled={inspectingName === server.server_name} className="gap-1.5">
-                    {inspectingName === server.server_name ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleInspect(server.server_name)}
+                    disabled={inspectingName === server.server_name}
+                    className="gap-1.5"
+                  >
+                    {inspectingName === server.server_name ? (
+                      <Loader2 size={14} className="animate-spin" />
+                    ) : (
+                      <Search size={14} />
+                    )}
                     Inspect
                   </Button>
-                  <Button variant="destructive" size="sm" onClick={() => handleDelete(server.server_name)} disabled={deletingName === server.server_name} className="gap-1.5">
-                    {deletingName === server.server_name ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    onClick={() => handleDelete(server.server_name)}
+                    disabled={deletingName === server.server_name}
+                    className="gap-1.5"
+                  >
+                    {deletingName === server.server_name ? (
+                      <Loader2 size={14} className="animate-spin" />
+                    ) : (
+                      <Trash2 size={14} />
+                    )}
                     Remove
                   </Button>
                 </div>
-              </div>
+              </li>
             ))}
-          </div>
+          </ul>
         )}
       </section>
 
       {selectedServer && (
-        <section className="rounded-md border border-border-subtle bg-bg-secondary p-6 shadow-sm">
-          <h3 className="mb-4 text-section text-text-secondary">
+        <section>
+          <h3 className="pc-display text-heading text-text-primary">
             Details — {selectedServer.server_name}
           </h3>
-          <dl className="grid gap-4 sm:grid-cols-2">
+          <Well className="mt-3 grid gap-4 px-4 py-4 sm:grid-cols-2">
             <DetailRow label="Domain" value={selectedServer.domain} />
             <DetailRow label="Trusted" value={selectedServer.trusted ? 'Yes' : 'No'} />
             <DetailRow label="Endpoint" value={selectedServer.federation_endpoint} mono className="sm:col-span-2" />
             <DetailRow label="Key ID" value={selectedServer.key_id || 'Not set'} mono />
             <DetailRow label="Last seen" value={selectedServer.last_seen_at || 'Never'} />
             <DetailRow label="Public key" value={selectedServer.public_key_hex || 'Not set'} mono className="sm:col-span-2" />
-          </dl>
+          </Well>
         </section>
       )}
 
-      <header className="border-t border-border-subtle pt-8">
-        <h2 className="font-display text-heading text-text-primary">Federation moderation</h2>
-        <p className="mt-1 text-body text-text-secondary">
-          Block, quarantine, or allow peer servers, and subscribe to remote moderation lists.
-        </p>
-      </header>
+      <Divider />
 
-      <section className="rounded-md border border-border-subtle bg-bg-secondary p-6 shadow-sm">
-        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-          <h3 className="text-section text-text-secondary">Apply action</h3>
-          <Button variant="outline" size="sm" onClick={() => fetchModeration(true)} disabled={modRefreshing} className="gap-2">
-            {modRefreshing ? <Loader2 size={14} className="animate-spin" /> : <RotateCcw size={14} />}
-            Refresh
-          </Button>
-        </div>
-        <div className="grid gap-4 md:grid-cols-2">
-          <Field label="Server name" htmlFor="mod-server">
-            <Input id="mod-server" aria-label="Moderation server name" type="text" value={applyServer} onChange={(e) => setApplyServer(e.target.value)} placeholder="peer.example" />
-          </Field>
-          <Field label="Action" htmlFor="mod-action">
-            <select
+      <section>
+        <SettingsSectionHeader
+          title="Federation moderation"
+          description="Block, quarantine, or allow peer servers, and subscribe to remote moderation lists."
+          action={
+            <Button
+              variant="ghost"
+              onClick={() => fetchModeration(true)}
+              disabled={modRefreshing}
+              className="gap-2"
+            >
+              {modRefreshing ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <RotateCcw size={14} />
+              )}
+              Refresh
+            </Button>
+          }
+        />
+
+        <h3 className="pc-display text-heading text-text-primary">Apply an action</h3>
+        <div className="mt-3 grid gap-4 md:grid-cols-2">
+          <TextField id="mod-server" label="Server name" type="text" value={applyServer} onChange={(e) => setApplyServer(e.target.value)} placeholder="peer.example" />
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="mod-action" className="text-label font-medium text-text-secondary">
+              Action
+            </label>
+            <Select
               id="mod-action"
-              aria-label="Moderation action"
               value={applyAction}
               onChange={(e) => setApplyAction(e.target.value as 'block' | 'quarantine' | 'allow')}
-              className="h-10 w-full rounded-sm border border-border-subtle bg-bg-primary px-3 text-body text-text-primary"
             >
               <option value="block">Block</option>
               <option value="quarantine">Quarantine</option>
               <option value="allow">Allow / unblock</option>
-            </select>
-          </Field>
-          <Field label="Reason" htmlFor="mod-reason">
-            <Input id="mod-reason" aria-label="Moderation reason" type="text" value={applyReason} onChange={(e) => setApplyReason(e.target.value)} placeholder="Optional" />
-          </Field>
+            </Select>
+          </div>
+          <TextField id="mod-reason" label="Reason" type="text" value={applyReason} onChange={(e) => setApplyReason(e.target.value)} placeholder="Optional" />
           {applyAction === 'quarantine' && (
-            <Field label="Quarantine minutes" htmlFor="mod-quarantine">
-              <Input id="mod-quarantine" aria-label="Quarantine minutes" type="number" min={1} value={applyQuarantineMinutes} onChange={(e) => setApplyQuarantineMinutes(e.target.value)} />
-            </Field>
+            <TextField id="mod-quarantine" label="Quarantine minutes" type="number" min={1} value={applyQuarantineMinutes} onChange={(e) => setApplyQuarantineMinutes(e.target.value)} />
           )}
         </div>
-        {applyError && (
-          <p className="mt-3 text-body text-accent-danger" role="alert">
-            {applyError}
-          </p>
-        )}
-        <div className="mt-5 flex justify-end border-t border-border-subtle pt-5">
-          <Button onClick={handleApplyModeration} loading={applying} disabled={applying}>
+        {applyError && <ErrorBanner className="mt-3" message={applyError} multiline />}
+        <div className="mt-4 flex justify-end">
+          <Button
+            variant={applyAction === 'allow' ? 'ghost' : 'danger'}
+            onClick={handleApplyModeration}
+            loading={applying}
+            disabled={applying}
+          >
             {applying ? 'Applying…' : `Apply ${applyAction}`}
           </Button>
         </div>
       </section>
 
-      <section className="rounded-md border border-border-subtle bg-bg-secondary p-6 shadow-sm">
-        <h3 className="mb-2 text-section text-text-secondary">Paste / import list</h3>
-        <p className="mb-4 text-body text-text-muted">
-          One entry per line: <span className="font-code text-meta">server</span>,{' '}
-          <span className="font-code text-meta">server block</span>, or{' '}
-          <span className="font-code text-meta">server quarantine 60 reason</span>. Bare names use the
+      <section>
+        <h3 className="pc-display text-heading text-text-primary">Paste or import a list</h3>
+        <p className="mt-1 max-w-prose text-body text-text-secondary">
+          One entry per line: <span className="pc-mono text-meta">server</span>,{' '}
+          <span className="pc-mono text-meta">server block</span>, or{' '}
+          <span className="pc-mono text-meta">server quarantine 60 reason</span>. Bare names use the
           action selected above.
         </p>
-        <textarea
+        <label htmlFor="mod-import" className="sr-only">
+          Import moderation list
+        </label>
+        <Textarea
           id="mod-import"
-          aria-label="Import moderation list"
           value={importText}
           onChange={(e) => setImportText(e.target.value)}
           rows={5}
           placeholder={'bad.peer\nother.peer quarantine 120 spam\nallowed.peer allow'}
-          className="w-full rounded-sm border border-border-subtle bg-bg-primary px-3 py-2 font-code text-meta text-text-primary placeholder:text-text-muted"
+          className="pc-mono mt-3 text-meta"
         />
-        {importError && (
-          <p className="mt-2 text-body text-accent-danger" role="alert">
-            {importError}
-          </p>
-        )}
+        {importError && <ErrorBanner className="mt-3" message={importError} multiline />}
         <div className="mt-4 flex justify-end">
-          <Button onClick={handleImportList} loading={importing} disabled={importing || !importText.trim()}>
+          <Button
+            variant="ghost"
+            onClick={handleImportList}
+            loading={importing}
+            disabled={importing || !importText.trim()}
+          >
             {importing ? 'Importing…' : 'Import list'}
           </Button>
         </div>
       </section>
 
       <section>
-        <h3 className="mb-3 text-section text-text-secondary">
-          Peer trust state{!modLoading && trustStates.length > 0 ? ` · ${trustStates.length}` : ''}
+        <h3 className="pc-display text-heading text-text-primary">
+          Peer trust state
+          {!modLoading && trustStates.length > 0 && (
+            <span className="pc-mono ml-2 text-meta tabular-nums text-text-faint">
+              {trustStates.length}
+            </span>
+          )}
         </h3>
         {modLoading ? (
-          <div className="rounded-md border border-border-subtle bg-bg-secondary px-6 py-10 shadow-sm">
+          <Well className="mt-3 px-6 py-10">
             <LoadingSpinner size="sm" label="Loading trust state…" />
-          </div>
+          </Well>
         ) : trustStates.length === 0 ? (
-          <div className="rounded-md border border-border-subtle bg-bg-secondary px-4 shadow-sm">
-            <EmptyState
-              icon={<ShieldCheck size={20} />}
-              title="No moderation state yet"
-              description="Apply a block or quarantine above, import a list, or wait for a subscribed list to sync."
-            />
-          </div>
+          <EmptyState
+            icon={<ShieldCheck size={20} />}
+            title="No moderation state yet"
+            description="Apply a block or quarantine above, import a list, or wait for a subscribed list to sync."
+          />
         ) : (
-          <div className="overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
-            {trustStates.map((row, i) => {
+          <ul className="mt-2 flex flex-col">
+            {trustStates.map((row) => {
               const mode = row.mode.toLowerCase();
-              const modeBadge =
+              const modeChip =
                 mode === 'block' ? (
-                  <span className="inline-flex items-center gap-1 rounded-xs bg-danger-tint px-2 py-0.5 text-meta font-semibold text-accent-danger">
-                    <ShieldAlert size={12} /> Blocked
-                  </span>
+                  <Chip size="sm" tone="danger">
+                    <ShieldAlert size={12} aria-hidden /> Blocked
+                  </Chip>
                 ) : mode === 'quarantine' ? (
-                  <span className="inline-flex items-center gap-1 rounded-xs bg-warning-tint px-2 py-0.5 text-meta font-semibold text-accent-warning">
-                    <ShieldAlert size={12} /> Quarantine
-                  </span>
+                  <Chip size="sm" className="text-accent-warning">
+                    <ShieldAlert size={12} aria-hidden /> Quarantined
+                  </Chip>
                 ) : (
-                  <span className="inline-flex items-center gap-1 rounded-xs bg-success-tint px-2 py-0.5 text-meta font-semibold text-accent-success">
-                    <ShieldCheck size={12} /> {row.mode}
-                  </span>
+                  <Chip size="sm" tone="accent">
+                    <ShieldCheck size={12} aria-hidden /> {row.mode}
+                  </Chip>
                 );
               return (
-                <div
+                <li
                   key={row.server_name}
-                  className={`flex flex-wrap items-start justify-between gap-3 px-5 py-4 ${i > 0 ? 'border-t border-border-subtle/60' : ''}`}
+                  className="flex flex-wrap items-start justify-between gap-3 border-t border-border-subtle py-3.5"
                 >
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <p className="truncate text-label font-semibold text-text-primary">{row.server_name}</p>
-                      {modeBadge}
+                      <p className="pc-display truncate text-name text-text-primary">
+                        {row.server_name}
+                      </p>
+                      {modeChip}
                     </div>
                     {row.reason && <p className="mt-0.5 text-meta text-text-muted">{row.reason}</p>}
                   </div>
-                  <p className="font-code text-meta text-text-muted">
+                  <p className="pc-mono text-meta tabular-nums text-text-muted">
                     {row.quarantined_until_ms
                       ? `Until ${new Date(row.quarantined_until_ms).toLocaleString()}`
                       : `Updated ${new Date(row.updated_at_ms).toLocaleString()}`}
                   </p>
-                </div>
+                </li>
               );
             })}
-          </div>
+          </ul>
         )}
       </section>
 
-      <section className="rounded-md border border-border-subtle bg-bg-secondary p-6 shadow-sm">
-        <h3 className="mb-5 text-section text-text-secondary">Moderation list subscriptions</h3>
-        <div className="grid gap-4 md:grid-cols-2">
-          <Field label="Source URL" htmlFor="sub-url" className="md:col-span-2">
-            <Input id="sub-url" aria-label="Subscription source URL" type="url" value={subUrl} onChange={(e) => setSubUrl(e.target.value)} placeholder="https://example.com/moderation.json" />
-          </Field>
-          <Field label="Source server (optional)" htmlFor="sub-server">
-            <Input id="sub-server" aria-label="Subscription source server" type="text" value={subServer} onChange={(e) => setSubServer(e.target.value)} placeholder="list-publisher" />
-          </Field>
+      <section>
+        <h3 className="pc-display text-heading text-text-primary">Moderation list subscriptions</h3>
+        <div className="mt-3 grid gap-4 md:grid-cols-2">
+          <TextField id="sub-url" label="Source URL" type="url" value={subUrl} onChange={(e) => setSubUrl(e.target.value)} placeholder="https://example.com/moderation.json" className="md:col-span-2" />
+          <TextField id="sub-server" label="Source server (optional)" type="text" value={subServer} onChange={(e) => setSubServer(e.target.value)} placeholder="list-publisher" />
         </div>
-        {subError && (
-          <p className="mt-3 text-body text-accent-danger" role="alert">
-            {subError}
-          </p>
-        )}
-        <div className="mt-5 flex justify-end border-t border-border-subtle pt-5">
-          <Button onClick={handleAddSubscription} loading={addingSub} disabled={addingSub} className="gap-2">
+        {subError && <ErrorBanner className="mt-3" message={subError} multiline />}
+        <div className="mt-4 flex justify-end">
+          <Button
+            variant="ghost"
+            onClick={handleAddSubscription}
+            loading={addingSub}
+            disabled={addingSub}
+            className="gap-2"
+          >
             {!addingSub && <Plus size={16} />}
             Add subscription
           </Button>
@@ -658,31 +709,31 @@ export function FederationPanel() {
 
         <div className="mt-6">
           {subscriptions.length === 0 ? (
-            <p className="text-body text-text-muted">No subscriptions configured.</p>
+            <EmptyState
+              icon={<Globe2 size={20} />}
+              title="Not subscribed to any lists"
+              description="Point this server at a published moderation list and its blocks and quarantines will sync automatically."
+            />
           ) : (
-            <div className="overflow-hidden rounded-md border border-border-subtle">
-              {subscriptions.map((sub, i) => (
-                <div
+            <ul className="flex flex-col">
+              {subscriptions.map((sub) => (
+                <li
                   key={String(sub.id)}
-                  className={`flex flex-wrap items-center justify-between gap-3 px-4 py-3 ${i > 0 ? 'border-t border-border-subtle/60' : ''}`}
+                  className="flex flex-wrap items-center justify-between gap-3 border-t border-border-subtle py-3"
                 >
                   <div className="min-w-0 flex-1">
-                    <p className="truncate font-code text-meta text-text-primary">{sub.source_url}</p>
+                    <p className="pc-mono truncate text-meta text-text-primary">{sub.source_url}</p>
                     <div className="mt-1 flex flex-wrap items-center gap-2">
                       {sub.enabled ? (
-                        <span className="rounded-xs bg-success-tint px-2 py-0.5 text-meta font-semibold text-accent-success">
-                          Enabled
-                        </span>
+                        <Chip size="sm" tone="accent">Enabled</Chip>
                       ) : (
-                        <span className="rounded-xs bg-bg-mod-strong px-2 py-0.5 text-meta font-semibold text-text-muted">
-                          Disabled
-                        </span>
+                        <Chip size="sm">Disabled</Chip>
                       )}
                       {sub.source_server && (
                         <span className="text-meta text-text-muted">{sub.source_server}</span>
                       )}
                       {sub.last_fetch_at_ms != null && (
-                        <span className="font-code text-meta text-text-muted">
+                        <span className="pc-mono text-meta tabular-nums text-text-muted">
                           Last fetch {new Date(sub.last_fetch_at_ms).toLocaleString()}
                         </span>
                       )}
@@ -694,18 +745,22 @@ export function FederationPanel() {
                     )}
                   </div>
                   <Button
-                    variant="destructive"
+                    variant="danger"
                     size="sm"
                     onClick={() => handleDeleteSubscription(sub.id)}
                     disabled={deletingSubId === String(sub.id)}
                     className="gap-1.5"
                   >
-                    {deletingSubId === String(sub.id) ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                    {deletingSubId === String(sub.id) ? (
+                      <Loader2 size={14} className="animate-spin" />
+                    ) : (
+                      <Trash2 size={14} />
+                    )}
                     Remove
                   </Button>
-                </div>
+                </li>
               ))}
-            </div>
+            </ul>
           )}
         </div>
       </section>

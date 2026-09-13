@@ -319,10 +319,10 @@ html[data-theme='high-contrast'] #root {
   justify-content: center;
   width: 2.375rem;
   height: 2.375rem;
-  border-radius: 0.75rem;
+  border-radius: var(--radius-control);
   line-height: 1;
-  color: var(--interactive-normal);
-  border: 1px solid transparent;
+  color: var(--text-secondary);
+  border: none;
   background: transparent;
   transition:
     background-color var(--duration-normal) var(--ease-out),
@@ -332,9 +332,13 @@ html[data-theme='high-contrast'] #root {
 }
 
 .command-icon-btn:hover {
-  color: var(--interactive-hover);
+  color: var(--text-primary);
   background: var(--bg-mod-subtle);
-  border-color: var(--border-subtle);
+}
+
+.command-icon-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 .command-icon-btn:active {

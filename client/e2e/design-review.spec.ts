@@ -30,7 +30,7 @@ const DM_CHANNEL_ID = '2004';
 test('capture the design-review screens', async ({ page }) => {
   // Twelve frames for the base set, ~70 more for WP7 — each with a settle
   // pause, so well past the smoke's budget.
-  test.setTimeout(WP === 'wp7' ? 900_000 : 180_000);
+  test.setTimeout(WP === 'wp7' ? 2_400_000 : 180_000);
   await mkdir(OUT_DIR, { recursive: true });
 
   const nowIso = new Date().toISOString();
@@ -408,91 +408,155 @@ test('capture the design-review screens', async ({ page }) => {
   /* Every surface WP7 restyles, at both viewports, so each one can be held  */
   /* against the reference renders. Opt in with                              */
   /*   PARACORD_E2E_DESIGN=1 PARACORD_E2E_DESIGN_WP=wp7 npx playwright test  */
+  /*                                                                        */
+  /* A frame that cannot be reached is recorded and the run carries on, so   */
+  /* one broken screen never costs you the other sixty; the list is asserted */
+  /* empty at the end, so the gate still means something.                    */
   /* ---------------------------------------------------------------------- */
   if (WP !== 'wp7') return;
 
-  const bothViewports = async (name: string, open: () => Promise<unknown>) => {
+  const missed: string[] = [];
+
+  // Settings sections are reached by clicking the index, not by reloading the
+  // app for each one: one boot per viewport, and it exercises the real
+  // interaction rather than nine cold starts.
+  const captureSettingsSections = async (
+    prefix: string,
+    url: string,
+    dialogName: string | null,
+    sections: string[],
+    viewport: { width: number; height: number },
+    label: string,
+  ) => {
+    await page.setViewportSize(viewport);
+    try {
+      await page.goto(url);
+      if (dialogName) {
+        await expect(page.getByRole('dialog', { name: dialogName })).toBeVisible({ timeout: 15_000 });
+      } else {
+        await expect(page.getByRole('main')).toBeVisible({ timeout: 15_000 });
+      }
+    } catch {
+      missed.push(`${prefix} (${label}): never opened`);
+      return;
+    }
+
+    const scope = dialogName ? page.getByRole('dialog', { name: dialogName }) : page;
+    const phone = viewport.width < 700;
+
+    for (const section of sections) {
+      const name = `${prefix}-${section.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${label}`;
+      try {
+        // On a phone the shell is an index/detail pair: step back to the index
+        // before picking the next section.
+        if (phone) {
+          const back = scope.getByRole('button', { name: 'Back to the settings index' });
+          if (await back.count()) await back.first().click({ timeout: 5_000 });
+        }
+        await scope.getByRole('button', { name: section, exact: true }).first().click({ timeout: 10_000 });
+        await page.waitForTimeout(700);
+        await page.screenshot({ path: path.join(OUT_DIR, `${name}.png`), timeout: 20_000 });
+      } catch {
+        missed.push(name);
+      }
+    }
+  };
+
+  const USER_SECTIONS = [
+    'My Account',
+    'Appearance',
+    'Voice & Video',
+    'Notifications',
+    'Activity Privacy',
+    'Keybinds',
+    'Identity',
+    'Server',
+    'About',
+  ];
+
+  for (const [label, viewport] of [
+    ['1440x900', DESKTOP],
+    ['390x844', PHONE],
+  ] as const) {
+    await captureSettingsSections(
+      'settings-user',
+      '/app?settings=account',
+      'User settings',
+      USER_SECTIONS,
+      viewport,
+      label,
+    );
+  }
+
+  // --- space settings, admin, developer ----------------------------------
+  const plainScreens: Array<{ name: string; url: string }> = [
+    { name: 'settings-space', url: `/app/guilds/${GUILD_ID}/settings` },
+    { name: 'settings-admin', url: '/app/admin' },
+    { name: 'settings-developer', url: '/app/developers' },
+    { name: 'lobby', url: `/app/guilds/${GUILD_ID}` },
+  ];
+  for (const { name, url } of plainScreens) {
     for (const [label, viewport] of [
       ['1440x900', DESKTOP],
       ['390x844', PHONE],
     ] as const) {
       await page.setViewportSize(viewport);
-      await open();
-      await shoot(`${name}-${label}`);
+      try {
+        await page.goto(url);
+        await expect(page.getByRole('main')).toBeVisible({ timeout: 15_000 });
+        await page.waitForTimeout(900);
+        await page.screenshot({ path: path.join(OUT_DIR, `${name}-${label}.png`), timeout: 20_000 });
+      } catch {
+        missed.push(`${name}-${label}`);
+      }
     }
-  };
-
-  // --- user settings, one frame per section ------------------------------
-  const userSections = [
-    'account',
-    'appearance',
-    'voice',
-    'notifications',
-    'activity',
-    'keybinds',
-    'identity',
-    'server',
-    'about',
-  ];
-  for (const section of userSections) {
-    await bothViewports(`settings-user-${section}`, async () => {
-      await page.goto(`/app?settings=${section}`);
-      await expect(page.getByRole('dialog', { name: 'User settings' })).toBeVisible();
-      // On a phone the shell opens on its index; step into the section itself.
-      const row = page
-        .getByRole('dialog', { name: 'User settings' })
-        .getByRole('navigation', { name: 'User settings' })
-        .getByRole('button')
-        .first();
-      await row.waitFor({ state: 'visible' }).catch(() => undefined);
-    });
   }
-
-  // --- space settings ----------------------------------------------------
-  for (const section of ['overview', 'roles', 'channels', 'members']) {
-    await bothViewports(`settings-space-${section}`, async () => {
-      await page.goto(`/app/guilds/${GUILD_ID}/settings?section=${section}`);
-      await expect(page.getByRole('main')).toBeVisible();
-    });
-  }
-
-  // --- admin and developer ----------------------------------------------
-  await bothViewports('settings-admin', async () => {
-    await page.goto('/app/admin');
-    await expect(page.getByRole('main')).toBeVisible();
-  });
-  await bothViewports('settings-developer', async () => {
-    await page.goto('/app/developers');
-    await expect(page.getByRole('main')).toBeVisible();
-  });
 
   // --- dialogs -----------------------------------------------------------
-  // 1. The voice connection check, opened from inside the settings overlay —
-  //    the stacking case with an existing z-index regression test.
-  await bothViewports('dialog-voice-check', async () => {
-    await page.goto('/app?settings=voice');
-    await expect(page.getByRole('dialog', { name: 'User settings' })).toBeVisible();
-    const openCheck = page.getByRole('button', { name: /connection check/i }).first();
-    if (await openCheck.count()) await openCheck.click();
-    await page.waitForTimeout(400);
-  });
-
-  // 2. The invite modal, over the Lobby.
-  await bothViewports('dialog-invite', async () => {
-    await page.goto(`/app/guilds/${GUILD_ID}`);
-    await expect(page.getByRole('main')).toBeVisible();
-    const invite = page.getByRole('button', { name: 'Invite people' }).first();
-    if (await invite.count()) await invite.click();
-    await page.waitForTimeout(400);
-  });
-
-  // 3. A destructive confirm, from the primitives page — the dialog shell,
-  //    the danger button and a field, in one frame.
-  await bothViewports('dialog-confirm', async () => {
-    await page.goto('/design-tokens');
-    await page.getByRole('button', { name: 'Open a dialog' }).click();
-    await page.waitForTimeout(300);
-  });
+  const dialogs: Array<{ name: string; url: string; open: () => Promise<unknown> }> = [
+    {
+      // The voice connection check, opened from *inside* the settings overlay —
+      // the stacking case that has its own z-index regression test.
+      name: 'dialog-voice-check',
+      url: '/app?settings=voice',
+      open: async () => {
+        await expect(page.getByRole('dialog', { name: 'User settings' })).toBeVisible({ timeout: 15_000 });
+        const phoneRow = page.getByRole('button', { name: 'Voice & Video', exact: true });
+        if (await phoneRow.count()) await phoneRow.first().click({ timeout: 5_000 }).catch(() => undefined);
+        await page.getByRole('button', { name: /connection check/i }).first().click({ timeout: 10_000 });
+      },
+    },
+    {
+      name: 'dialog-invite',
+      url: `/app/guilds/${GUILD_ID}`,
+      open: async () => {
+        await expect(page.getByRole('main')).toBeVisible({ timeout: 15_000 });
+        await page.getByRole('button', { name: 'Invite people' }).first().click({ timeout: 10_000 });
+      },
+    },
+    {
+      // The dialog shell, the danger button and a field, in one frame.
+      name: 'dialog-confirm',
+      url: '/design-tokens',
+      open: () => page.getByRole('button', { name: 'Open a dialog' }).click({ timeout: 10_000 }),
+    },
+  ];
+  for (const { name, url, open } of dialogs) {
+    for (const [label, viewport] of [
+      ['1440x900', DESKTOP],
+      ['390x844', PHONE],
+    ] as const) {
+      await page.setViewportSize(viewport);
+      try {
+        await page.goto(url);
+        await open();
+        await page.waitForTimeout(700);
+        await page.screenshot({ path: path.join(OUT_DIR, `${name}-${label}.png`), timeout: 20_000 });
+      } catch {
+        missed.push(`${name}-${label}`);
+      }
+    }
+  }
 
   // --- auth and onboarding (signed out) ----------------------------------
   signedOut = true;
@@ -517,9 +581,20 @@ test('capture the design-review screens', async ({ page }) => {
     ['auth-privacy', '/privacy'],
   ];
   for (const [name, url] of entryScreens) {
-    await bothViewports(name, async () => {
-      await page.goto(url);
-      await page.waitForTimeout(500);
-    });
+    for (const [label, viewport] of [
+      ['1440x900', DESKTOP],
+      ['390x844', PHONE],
+    ] as const) {
+      await page.setViewportSize(viewport);
+      try {
+        await page.goto(url);
+        await page.waitForTimeout(700);
+        await page.screenshot({ path: path.join(OUT_DIR, `${name}-${label}.png`), timeout: 20_000 });
+      } catch {
+        missed.push(`${name}-${label}`);
+      }
+    }
   }
+
+  expect(missed, `frames that could not be captured:\n${missed.join('\n')}`).toEqual([]);
 });

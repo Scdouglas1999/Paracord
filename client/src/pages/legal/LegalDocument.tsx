@@ -1,5 +1,6 @@
 import { Link } from 'react-router';
 import { ArrowLeft, type LucideIcon } from 'lucide-react';
+import { Divider } from '../../components/ui/Divider';
 
 export interface LegalSection {
   id: string;
@@ -16,66 +17,72 @@ interface LegalDocumentProps {
   sections: LegalSection[];
 }
 
-// Long-form legal prose (design-spec §2): readable measure, Gabarito headings,
-// Body prose in --text-secondary, section anchors + a table of contents. Not a
-// card, not a sparse marketing page.
+/**
+ * Long-form legal prose on one plate, centred on the street
+ * (docs/lantern-stage-spec.md §2, §4): a comfortable reading measure, Gabarito
+ * headings, Onest body, a mono "last updated" stamp, and a hairline between
+ * sections. Not a marketing page, not a stack of cards.
+ */
 export function LegalDocument({ eyebrow, icon: Icon, title, updated, intro, sections }: LegalDocumentProps) {
   return (
-    <div className="min-h-screen bg-bg-primary">
-      <div className="mx-auto w-full max-w-5xl px-5 py-10 sm:px-8 sm:py-14">
+    <div className="min-h-dvh bg-bg-base">
+      <div className="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6 sm:py-12">
         <Link
           to="/register"
-          className="mb-10 inline-flex items-center gap-2 rounded-sm text-label font-medium text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+          className="pc-focusable mb-6 inline-flex h-[var(--h-control)] items-center gap-2 rounded-[var(--radius-control)] text-label font-medium text-text-secondary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:text-text-primary"
         >
-          <ArrowLeft size={16} />
+          <ArrowLeft size={16} aria-hidden />
           Back to registration
         </Link>
 
-        <header className="border-b border-border-subtle pb-8">
-          <div className="mb-4 inline-flex items-center gap-2 text-section text-accent-primary">
-            <Icon size={15} />
-            {eyebrow}
-          </div>
-          <h1 className="font-display text-display text-text-primary">{title}</h1>
-          <p className="mt-3 max-w-[60ch] text-body text-text-secondary">{intro}</p>
-          <p className="mt-4 font-code text-meta text-text-muted">Last updated {updated}</p>
-        </header>
-
-        <div className="mt-10 gap-12 lg:flex">
-          {/* Table of contents */}
-          <nav aria-label="On this page" className="mb-8 shrink-0 lg:mb-0 lg:w-56">
-            <div className="lg:sticky lg:top-10">
-              <p className="mb-3 text-section text-text-muted">On this page</p>
-              <ul className="space-y-1.5">
-                {sections.map((s) => (
-                  <li key={s.id}>
-                    <a
-                      href={`#${s.id}`}
-                      className="block rounded-sm py-0.5 text-label text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:text-accent-primary focus-visible:shadow-[var(--focus-ring)]"
-                    >
-                      {s.heading}
-                    </a>
-                  </li>
-                ))}
-              </ul>
+        <div className="pc-plate p-7 sm:p-9">
+          <header>
+            <div className="inline-flex items-center gap-2 text-section text-accent-primary">
+              <Icon size={15} aria-hidden />
+              {eyebrow}
             </div>
-          </nav>
+            <h1 className="mt-3 pc-display text-display text-text-primary">{title}</h1>
+            <p className="mt-3 max-w-prose text-body text-text-secondary">{intro}</p>
+            <p className="mt-4 pc-mono text-meta text-text-faint">Last updated {updated}</p>
+          </header>
 
-          {/* Prose */}
-          <article className="min-w-0 max-w-[68ch] flex-1 space-y-10">
-            {sections.map((s) => (
-              <section key={s.id} id={s.id} className="scroll-mt-10">
-                <h2 className="font-display text-heading text-text-primary">{s.heading}</h2>
-                <div className="mt-3 space-y-4">
-                  {s.body.map((para, i) => (
-                    <p key={i} className="text-body leading-relaxed text-text-secondary">
-                      {para}
-                    </p>
+          <div className="mt-8 gap-10 lg:flex">
+            {/* Table of contents */}
+            <nav aria-label="On this page" className="mb-8 shrink-0 lg:mb-0 lg:w-52">
+              <div className="lg:sticky lg:top-8">
+                <p className="mb-2 text-section text-text-faint">On this page</p>
+                <ul className="flex flex-col">
+                  {sections.map((s) => (
+                    <li key={s.id}>
+                      <a
+                        href={`#${s.id}`}
+                        className="pc-focusable block rounded-[var(--radius-chip)] py-1 text-label text-text-secondary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:text-accent-primary"
+                      >
+                        {s.heading}
+                      </a>
+                    </li>
                   ))}
-                </div>
-              </section>
-            ))}
-          </article>
+                </ul>
+              </div>
+            </nav>
+
+            {/* Prose */}
+            <article className="min-w-0 max-w-prose flex-1">
+              {sections.map((s, index) => (
+                <section key={s.id} id={s.id} className="scroll-mt-8">
+                  {index > 0 && <Divider className="my-8" />}
+                  <h2 className="pc-display text-heading text-text-primary">{s.heading}</h2>
+                  <div className="mt-3 flex flex-col gap-4">
+                    {s.body.map((para, i) => (
+                      <p key={i} className="text-body text-text-secondary">
+                        {para}
+                      </p>
+                    ))}
+                  </div>
+                </section>
+              ))}
+            </article>
+          </div>
         </div>
       </div>
     </div>

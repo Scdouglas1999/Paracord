@@ -2,9 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { guildApi } from '../../api/guilds';
 import { extractApiError } from '../../api/client';
 import type { Role } from '../../types';
-import { LoadingSpinner } from '../ui/Feedback';
-import { Button } from '../ui/Button';
-import { Input, Textarea } from '../ui/Input';
+import { Button, Divider, ErrorBanner, Input, LoadingSpinner, Textarea } from '../ui';
 import { toast } from '../../stores/toastStore';
 import { SectionHeader, FieldLabel, GroupLabel } from './SettingsPrimitives';
 import { cn } from '../../lib/utils';
@@ -56,6 +54,7 @@ export function OnboardingSettingsSection({ guildId, roles }: OnboardingSettings
     [roles, guildId],
   );
 
+  // A role's colour is the member's own choice — data, not a theme token.
   const roleColorHex = (role: Role) =>
     role.color ? `#${role.color.toString(16).padStart(6, '0')}` : 'var(--text-muted)';
 
@@ -101,20 +100,24 @@ export function OnboardingSettingsSection({ guildId, roles }: OnboardingSettings
         title="Onboarding"
         description="Shape a member's first minutes — a welcome, a rules gate, self-serve roles, and how quickly channels reveal themselves."
         action={
-          <Button type="button" disabled={saving} loading={saving} onClick={() => void onSave()}>
+          <Button
+            type="button"
+            variant="primary"
+            disabled={saving}
+            loading={saving}
+            onClick={() => void onSave()}
+          >
             Save Onboarding Settings
           </Button>
         }
       />
 
-      {error && (
-        <div className="rounded-md border border-accent-danger/35 bg-danger-tint px-4 py-3 text-label text-accent-danger">
-          {error}
-        </div>
-      )}
+      {error && <ErrorBanner message={error} multiline />}
+
+      <Divider />
 
       {/* Welcome */}
-      <section className="border-t border-border-subtle pt-6">
+      <section>
         <GroupLabel>Welcome</GroupLabel>
         <div className="mt-4 flex flex-col gap-5">
           <label className="block">
@@ -139,8 +142,10 @@ export function OnboardingSettingsSection({ guildId, roles }: OnboardingSettings
         </div>
       </section>
 
+      <Divider />
+
       {/* Rules gate */}
-      <section className="border-t border-border-subtle pt-6">
+      <section>
         <GroupLabel>Rules gate</GroupLabel>
         <div className="mt-4 flex flex-col gap-5">
           <label className="block">
@@ -156,8 +161,10 @@ export function OnboardingSettingsSection({ guildId, roles }: OnboardingSettings
         </div>
       </section>
 
+      <Divider />
+
       {/* Self-serve roles */}
-      <section className="border-t border-border-subtle pt-6">
+      <section>
         <GroupLabel>Self-serve roles</GroupLabel>
         <div className="mt-4 flex flex-col gap-5">
           <label className="block">
@@ -172,7 +179,7 @@ export function OnboardingSettingsSection({ guildId, roles }: OnboardingSettings
           <div>
             <FieldLabel>Role Options</FieldLabel>
             {selectableRoles.length === 0 ? (
-              <p className="text-[13.5px] leading-relaxed text-text-secondary">
+              <p className="text-body leading-relaxed text-text-secondary">
                 Create roles first — they'll appear here as pickable options for new members.
               </p>
             ) : (
@@ -183,15 +190,18 @@ export function OnboardingSettingsSection({ guildId, roles }: OnboardingSettings
                     <label
                       key={role.id}
                       className={cn(
-                        'flex cursor-pointer items-center gap-2.5 rounded-sm border px-3 py-2.5 text-label transition-colors',
+                        // A picked option is a raised row inside the settings
+                        // plate (§4); an unpicked one is bare ground.
+                        'flex cursor-pointer items-center gap-2.5 rounded-[var(--radius-control)] px-3 py-2.5 text-label',
+                        'transition-[background-color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
                         checked
-                          ? 'border-accent-primary/50 bg-accent-tint text-text-primary'
-                          : 'border-border-subtle text-text-secondary hover:bg-bg-mod-subtle',
+                          ? 'bg-bg-raised text-text-primary shadow-[var(--shadow-raised)]'
+                          : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
                       )}
                     >
                       <input
                         type="checkbox"
-                        className="h-4 w-4 rounded-sm border-border-subtle accent-accent-primary"
+                        className="pc-focusable h-4 w-4 rounded-[var(--radius-window)] accent-accent-primary"
                         checked={checked}
                         onChange={(event) => {
                           setSelectedRoleIds((prev) =>
@@ -202,7 +212,7 @@ export function OnboardingSettingsSection({ guildId, roles }: OnboardingSettings
                         }}
                       />
                       <span
-                        className="h-2.5 w-2.5 shrink-0 rounded-full"
+                        className="h-2.5 w-2.5 shrink-0 rounded-[var(--radius-full)]"
                         style={{ backgroundColor: roleColorHex(role) }}
                         aria-hidden
                       />
@@ -216,8 +226,10 @@ export function OnboardingSettingsSection({ guildId, roles }: OnboardingSettings
         </div>
       </section>
 
+      <Divider />
+
       {/* Progressive disclosure */}
-      <section className="border-t border-border-subtle pt-6">
+      <section>
         <GroupLabel>Progressive disclosure</GroupLabel>
         <div className="mt-4">
           <div className="max-w-xs">
@@ -226,14 +238,14 @@ export function OnboardingSettingsSection({ guildId, roles }: OnboardingSettings
               <Input
                 type="number"
                 min={0}
-                className="font-code tabular-nums"
+                className="pc-mono"
                 value={progressiveMinMessages}
                 onChange={(event) =>
                   setProgressiveMinMessages(Number.isFinite(event.target.valueAsNumber) ? event.target.valueAsNumber : 0)
                 }
               />
             </label>
-            <p className="mt-2 text-meta text-text-muted">
+            <p className="mt-2 text-meta leading-relaxed text-text-muted">
               Hide gated channels until a member has sent this many messages. Set to 0 to reveal everything at once.
             </p>
           </div>

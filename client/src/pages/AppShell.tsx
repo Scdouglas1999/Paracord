@@ -190,7 +190,7 @@ export function AppShell() {
         {/* Skip-to-content for keyboard/screen-reader users */}
         <a
           href="#main-content"
-          className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-sm focus:bg-accent-primary focus:px-4 focus:py-2 focus:text-label focus:font-semibold focus:text-text-on-accent focus:outline-none focus:[box-shadow:var(--focus-ring)]"
+          className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-[var(--radius-control)] focus:bg-accent-primary focus:px-4 focus:py-2 focus:text-label focus:font-semibold focus:text-text-on-accent focus:outline-none focus:[box-shadow:var(--focus-ring)]"
         >
           Skip to content
         </a>
@@ -253,7 +253,7 @@ export function AppShell() {
                 aria-modal="true"
                 aria-label="Navigation"
                 tabIndex={-1}
-                className="h-full max-w-[88vw] overflow-hidden shadow-xl outline-none"
+                className="h-full max-w-[88vw] overflow-hidden shadow-[var(--shadow-plate)] outline-none"
                 initial={{ x: -24, opacity: 0 }}
                 animate={{ x: 0, opacity: 1 }}
                 exit={{ x: -24, opacity: 0 }}
@@ -285,7 +285,7 @@ export function AppShell() {
                 aria-modal="true"
                 aria-label="Details"
                 tabIndex={-1}
-                className="context-panel-overlay h-full w-[var(--member-list-width)] max-w-[88vw] overflow-hidden shadow-xl outline-none"
+                className="context-panel-overlay h-full w-[var(--member-list-width)] max-w-[88vw] overflow-hidden shadow-[var(--shadow-plate)] outline-none"
                 initial={{ x: 24, opacity: 0 }}
                 animate={{ x: 0, opacity: 1 }}
                 exit={{ x: 24, opacity: 0 }}
@@ -310,7 +310,7 @@ export function AppShell() {
         <AnimatePresence>
           {userSettingsOpen && (
             <motion.div
-              className="fixed inset-0 z-[150] flex items-center justify-center p-4 sm:p-8 md:p-12 lg:p-20 backdrop-blur-md modal-backdrop"
+              className="fixed inset-0 z-[150] flex items-center justify-center p-4 sm:p-8 md:p-12 lg:p-20 modal-backdrop"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
@@ -327,7 +327,7 @@ export function AppShell() {
                 animate={{ scale: 1, opacity: 1, y: 0 }}
                 exit={{ scale: 0.96, opacity: 0, y: 8 }}
                 transition={modalEnter}
-                className="relative flex h-full max-h-[min(900px,85vh)] w-full max-w-6xl flex-col overflow-hidden rounded-lg shadow-xl"
+                className="relative flex h-full max-h-[min(900px,85vh)] w-full max-w-6xl flex-col overflow-hidden"
                 onClick={(e) => e.stopPropagation()}
               >
                 <SettingsPage />
@@ -337,7 +337,7 @@ export function AppShell() {
 
           {guildSettingsId && (
             <motion.div
-              className="fixed inset-0 z-[150] flex items-center justify-center p-4 sm:p-8 md:p-12 lg:p-20 backdrop-blur-md modal-backdrop"
+              className="fixed inset-0 z-[150] flex items-center justify-center p-4 sm:p-8 md:p-12 lg:p-20 modal-backdrop"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
@@ -354,7 +354,7 @@ export function AppShell() {
                 animate={{ scale: 1, opacity: 1, y: 0 }}
                 exit={{ scale: 0.96, opacity: 0, y: 8 }}
                 transition={modalEnter}
-                className="relative flex h-full max-h-[min(900px,85vh)] w-full max-w-6xl flex-col overflow-hidden rounded-lg shadow-xl"
+                className="relative flex h-full max-h-[min(900px,85vh)] w-full max-w-6xl flex-col overflow-hidden"
                 onClick={(e) => e.stopPropagation()}
               >
                 <GuildSettingsPage />

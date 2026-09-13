@@ -1,13 +1,20 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Bot, RefreshCw, BookOpen } from 'lucide-react';
+import { useState, useEffect, useCallback, type KeyboardEvent } from 'react';
+import { Bot, RefreshCw, BookOpen, Plus } from 'lucide-react';
+import { useNavigate } from 'react-router';
 import { botApi, type BotApplication, type BotGuildInstall } from '../api/bots';
 import { botStoreApi, type BotMetricsResult } from '../api/botStore';
 import { commandApi } from '../api/commands';
 import { extractApiError } from '../api/client';
 import type { ApplicationCommand } from '../types/commands';
 import { confirm } from '../stores/confirmStore';
-import { Button } from '../components/ui/Button';
-import { ErrorBanner, LoadingSpinner, EmptyState } from '../components/ui/Feedback';
+import {
+  ErrorBanner,
+  LoadingSpinner,
+  NavRow,
+  SettingsShell,
+  type SettingsNavGroup,
+} from '../components/ui';
+import { useMobile } from '../hooks/useMobile';
 import { writeClipboardText } from '../lib/clipboard';
 import { CreateBotForm } from './developer/CreateBotForm';
 import { BotAppCard } from './developer/BotAppCard';
@@ -18,6 +25,13 @@ export function DeveloperPage() {
   const [apps, setApps] = useState<BotApplication[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Which section of the portal is open: an application's id, or the create
+  // form when nothing is selected. The index in the shell drives this.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [showIndex, setShowIndex] = useState(true);
+  const navigate = useNavigate();
+  const isMobile = useMobile();
 
   // Create form
   const [newName, setNewName] = useState('');
@@ -76,6 +90,8 @@ export function DeveloperPage() {
       if (data.token) {
         setRevealedTokens((prev) => ({ ...prev, [data.id]: data.token! }));
       }
+      // The token is shown once — open the new app so it is on screen.
+      setSelectedId(data.id);
       setNewName('');
       setNewDescription('');
       await fetchApps();
@@ -248,152 +264,166 @@ export function DeveloperPage() {
     }
   };
 
+
+  const selectedApp = apps.find((app) => app.id === selectedId) ?? null;
+  const active = selectedApp ? selectedApp.id : 'new';
+
+  const groups: SettingsNavGroup[] = [
+    { items: [{ id: 'new', label: 'New application', icon: <Plus size={16} /> }] },
+    ...(apps.length > 0
+      ? [
+          {
+            label: 'Your apps',
+            items: apps.map((app) => ({
+              id: app.id,
+              label: app.name,
+              icon: <Bot size={16} />,
+            })),
+          },
+        ]
+      : []),
+  ];
+
+  const goHome = () => navigate('/app');
+
+  // Escape closes the surface, which is what the shell's Esc hint promises.
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'Escape') return;
+    event.stopPropagation();
+    goHome();
+  };
+
+  const renderApp = (app: BotApplication) => {
+    const isExpanded = expandedId === app.id;
+    const tab = advancedTab[app.id] ?? 'guilds';
+    const appIntents = pendingIntents[app.id] ?? app.intents;
+    const appPermissions = pendingPermissions[app.id] ?? app.permissions;
+    const intentsOrPermsDirty =
+      (pendingIntents[app.id] !== undefined && pendingIntents[app.id] !== app.intents) ||
+      (pendingPermissions[app.id] !== undefined && pendingPermissions[app.id] !== app.permissions);
+
+    return (
+      <BotAppCard
+        app={app}
+        isEditing={editingId === app.id}
+        editName={editName}
+        editDescription={editDescription}
+        onEditNameChange={setEditName}
+        onEditDescriptionChange={setEditDescription}
+        token={revealedTokens[app.id]}
+        copied={copiedId === app.id}
+        copiedInvite={copiedInviteId === app.id}
+        installUrl={buildInstallUrl(app)}
+        isExpanded={isExpanded}
+        onStartEditing={() => startEditing(app)}
+        onCancelEdit={() => setEditingId(null)}
+        onSaveEdit={() => void saveEdit(app.id)}
+        onRegenerateToken={() => void regenerateToken(app.id)}
+        onToggleAdvanced={() => void toggleInstalls(app.id)}
+        onReload={() => void reloadAppDetails(app.id)}
+        onDelete={() => void deleteApp(app.id)}
+        onCopyToken={() => void copyToken(app.id)}
+        onCopyInstallUrl={() => void copyInstallUrl(app)}
+        advanced={
+          <BotAdvancedTabs
+            app={app}
+            tab={tab}
+            installs={expandedInstalls[app.id]}
+            commands={commandsByApp[app.id]}
+            showCommandBuilder={!!showCommandBuilder[app.id]}
+            editingCommand={editingCommand[app.id]}
+            intents={appIntents}
+            permissions={appPermissions}
+            dirty={intentsOrPermsDirty}
+            saving={!!savingSettings[app.id]}
+            onTabChange={(t) => {
+              setAdvancedTab((prev) => ({ ...prev, [app.id]: t }));
+              if (t === 'commands' && !commandsByApp[app.id]) {
+                void loadCommands(app.id);
+              }
+            }}
+            onToggleCommandBuilder={() =>
+              setShowCommandBuilder((prev) => ({ ...prev, [app.id]: !prev[app.id] }))
+            }
+            onCommandSaved={() => {
+              setShowCommandBuilder((prev) => ({ ...prev, [app.id]: false }));
+              setEditingCommand((prev) => ({ ...prev, [app.id]: undefined }));
+              void loadCommands(app.id);
+            }}
+            onCommandCancel={() => {
+              setShowCommandBuilder((prev) => ({ ...prev, [app.id]: false }));
+              setEditingCommand((prev) => ({ ...prev, [app.id]: undefined }));
+            }}
+            onEditCommand={(cmd) => {
+              setEditingCommand((prev) => ({ ...prev, [app.id]: cmd }));
+              setShowCommandBuilder((prev) => ({ ...prev, [app.id]: true }));
+            }}
+            onDeleteCommand={(cmdId) => void deleteCommand(app.id, cmdId)}
+            onIntentsChange={(v) => setPendingIntents((prev) => ({ ...prev, [app.id]: v }))}
+            onPermissionsChange={(v) => setPendingPermissions((prev) => ({ ...prev, [app.id]: v }))}
+            onSaveSettings={() => void saveAppSettings(app.id, app)}
+          />
+        }
+        metrics={
+          <BotMetricsPanel
+            metrics={metricsByApp[app.id]}
+            onRefresh={() => void loadMetrics(app.id)}
+          />
+        }
+      />
+    );
+  };
+
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex-1 overflow-y-auto p-4 sm:p-6 md:p-8">
-      <div className="mx-auto w-full max-w-3xl space-y-8">
-        <header className="flex flex-wrap items-end justify-between gap-4 border-b border-border-subtle pb-6">
-          <div className="flex items-center gap-3">
-            <span className="flex h-11 w-11 items-center justify-center rounded-md bg-accent-tint text-accent-primary">
-              <Bot size={22} />
+    <SettingsShell
+      label="Your applications"
+      title="Developer portal"
+      groups={groups}
+      active={active}
+      onSelect={(id) => {
+        setSelectedId(id === 'new' ? null : id);
+        setShowIndex(false);
+      }}
+      onClose={goHome}
+      closeLabel="Back to home"
+      isMobile={isMobile}
+      showIndex={showIndex}
+      onShowIndex={setShowIndex}
+      onKeyDown={onKeyDown}
+      indexFooter={
+        <>
+          <NavRow icon={<RefreshCw size={16} />} onClick={() => void fetchApps()}>
+            Reload applications
+          </NavRow>
+          {/* The API reference lives outside the SPA, so it opens in its own
+              tab; same row recipe as the index above it. */}
+          <a
+            href="/api/docs"
+            target="_blank"
+            rel="noreferrer"
+            className="pc-focusable flex h-[var(--h-nav-row)] w-full select-none items-center gap-2.5 rounded-[var(--radius-control)] px-2.5 text-label text-text-secondary transition-[background-color,color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary"
+          >
+            <span className="flex h-4 w-4 shrink-0 items-center justify-center" aria-hidden>
+              <BookOpen size={16} />
             </span>
-            <div>
-              <h1 className="font-display text-title text-text-primary">Developer portal</h1>
-              <p className="mt-0.5 text-body text-text-secondary">
-                Build bots and apps that automate and extend your server.
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <a
-              href="/api/docs"
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex h-9 items-center gap-2 rounded-sm border border-border-subtle bg-transparent px-3 text-label font-semibold text-text-primary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
-            >
-              <BookOpen size={15} />
-              API docs
-            </a>
-            <Button variant="outline" onClick={() => void fetchApps()} className="gap-2">
-              <RefreshCw size={15} />
-              Refresh
-            </Button>
-          </div>
-        </header>
-
-        {error && <ErrorBanner message={error} onRetry={() => void fetchApps()} />}
+            <span className="min-w-0 flex-1 truncate">API docs</span>
+          </a>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-6">
+        {error && <ErrorBanner message={error} multiline onRetry={() => void fetchApps()} />}
         {loading && <LoadingSpinner size="sm" label="Loading developer apps..." />}
-
-        {/* Create new bot application */}
-        <CreateBotForm
-          name={newName}
-          description={newDescription}
-          onNameChange={setNewName}
-          onDescriptionChange={setNewDescription}
-          onCreate={() => void createApp()}
-        />
-
-        {/* Application list */}
-        <div className="space-y-4">
-          {apps.map((app) => {
-            const isExpanded = expandedId === app.id;
-            const tab = advancedTab[app.id] ?? 'guilds';
-            const appIntents = pendingIntents[app.id] ?? app.intents;
-            const appPermissions = pendingPermissions[app.id] ?? app.permissions;
-            const intentsOrPermsDirty =
-              (pendingIntents[app.id] !== undefined && pendingIntents[app.id] !== app.intents) ||
-              (pendingPermissions[app.id] !== undefined && pendingPermissions[app.id] !== app.permissions);
-
-            return (
-              <BotAppCard
-                key={app.id}
-                app={app}
-                isEditing={editingId === app.id}
-                editName={editName}
-                editDescription={editDescription}
-                onEditNameChange={setEditName}
-                onEditDescriptionChange={setEditDescription}
-                token={revealedTokens[app.id]}
-                copied={copiedId === app.id}
-                copiedInvite={copiedInviteId === app.id}
-                installUrl={buildInstallUrl(app)}
-                isExpanded={isExpanded}
-                onStartEditing={() => startEditing(app)}
-                onCancelEdit={() => setEditingId(null)}
-                onSaveEdit={() => void saveEdit(app.id)}
-                onRegenerateToken={() => void regenerateToken(app.id)}
-                onToggleAdvanced={() => void toggleInstalls(app.id)}
-                onReload={() => void reloadAppDetails(app.id)}
-                onDelete={() => void deleteApp(app.id)}
-                onCopyToken={() => void copyToken(app.id)}
-                onCopyInstallUrl={() => void copyInstallUrl(app)}
-                advanced={
-                  <BotAdvancedTabs
-                    app={app}
-                    tab={tab}
-                    installs={expandedInstalls[app.id]}
-                    commands={commandsByApp[app.id]}
-                    showCommandBuilder={!!showCommandBuilder[app.id]}
-                    editingCommand={editingCommand[app.id]}
-                    intents={appIntents}
-                    permissions={appPermissions}
-                    dirty={intentsOrPermsDirty}
-                    saving={!!savingSettings[app.id]}
-                    onTabChange={(t) => {
-                      setAdvancedTab((prev) => ({ ...prev, [app.id]: t }));
-                      if (t === 'commands' && !commandsByApp[app.id]) {
-                        void loadCommands(app.id);
-                      }
-                    }}
-                    onToggleCommandBuilder={() =>
-                      setShowCommandBuilder((prev) => ({ ...prev, [app.id]: !prev[app.id] }))
-                    }
-                    onCommandSaved={() => {
-                      setShowCommandBuilder((prev) => ({ ...prev, [app.id]: false }));
-                      setEditingCommand((prev) => ({ ...prev, [app.id]: undefined }));
-                      void loadCommands(app.id);
-                    }}
-                    onCommandCancel={() => {
-                      setShowCommandBuilder((prev) => ({ ...prev, [app.id]: false }));
-                      setEditingCommand((prev) => ({ ...prev, [app.id]: undefined }));
-                    }}
-                    onEditCommand={(cmd) => {
-                      setEditingCommand((prev) => ({ ...prev, [app.id]: cmd }));
-                      setShowCommandBuilder((prev) => ({ ...prev, [app.id]: true }));
-                    }}
-                    onDeleteCommand={(cmdId) => void deleteCommand(app.id, cmdId)}
-                    onIntentsChange={(v) => setPendingIntents((prev) => ({ ...prev, [app.id]: v }))}
-                    onPermissionsChange={(v) => setPendingPermissions((prev) => ({ ...prev, [app.id]: v }))}
-                    onSaveSettings={() => void saveAppSettings(app.id, app)}
-                  />
-                }
-                metrics={
-                  <BotMetricsPanel
-                    metrics={metricsByApp[app.id]}
-                    onRefresh={() => void loadMetrics(app.id)}
-                  />
-                }
-              />
-            );
-          })}
-
-          {!loading && apps.length === 0 && (
-            <div className="rounded-md border border-border-subtle bg-bg-secondary px-4 shadow-sm">
-              <EmptyState
-                icon={<Bot size={20} />}
-                title="You haven't created any apps yet"
-                description="Build a bot to automate moderation, post updates, or add slash commands to your server. Everything starts with an application."
-                action={
-                  <Button onClick={() => document.getElementById('new-bot-name')?.focus()}>
-                    Create application
-                  </Button>
-                }
-              />
-            </div>
-          )}
-        </div>
+        {selectedApp ? renderApp(selectedApp) : (
+          <CreateBotForm
+            name={newName}
+            description={newDescription}
+            onNameChange={setNewName}
+            onDescriptionChange={setNewDescription}
+            onCreate={() => void createApp()}
+          />
+        )}
       </div>
-      </div>
-    </div>
+    </SettingsShell>
   );
 }

@@ -5,7 +5,6 @@ import {
   AtSign,
   Ban,
   Bot,
-  Check,
   ExternalLink,
   Hash,
   type LucideIcon,
@@ -31,6 +30,9 @@ import { Permissions } from '../types/permissions.types';
 import type { Guild } from '../types';
 import { Button } from '../components/ui/Button';
 import { ErrorBanner } from '../components/ui/Feedback';
+import { Divider } from '../components/ui/Divider';
+import { Select, Textarea } from '../components/ui/Input';
+import { AuthCard, SuccessNote } from './authScaffold';
 
 type ScopeRisk = 'high' | 'medium' | 'low';
 
@@ -75,9 +77,9 @@ const SCOPE_CATALOGUE: ScopeDef[] = [
 ];
 
 const RISK_META: Record<ScopeRisk, { label: string; iconWell: string }> = {
-  high: { label: 'Sensitive access', iconWell: 'bg-danger-tint text-accent-danger' },
-  medium: { label: 'Moderation', iconWell: 'bg-warning-tint text-accent-warning' },
-  low: { label: 'Standard access', iconWell: 'bg-accent-tint text-accent-primary' },
+  high: { label: 'Sensitive access', iconWell: 'bg-danger-well text-accent-danger' },
+  medium: { label: 'Moderation', iconWell: 'bg-bg-raised text-accent-warning' },
+  low: { label: 'Standard access', iconWell: 'bg-bg-raised text-text-secondary' },
 };
 
 function decodeScopes(permissions: string): ScopeDef[] {
@@ -283,178 +285,199 @@ export function BotAuthorizePage() {
     }
   };
 
+  // This route lives inside the app shell (/app/oauth2/authorize), so it fills
+  // the shell's outlet rather than claiming the viewport: the street underneath,
+  // one plate for the consent, one for the reviews.
   return (
-    <div className="flex h-full min-h-0 flex-col bg-bg-primary">
-      <div className="flex-1 overflow-y-auto p-4 sm:p-6 md:p-8">
-        <div className="mx-auto w-full max-w-2xl space-y-5">
-          <div>
-            <p className="text-section text-accent-primary">Authorize application</p>
-            <h1 className="mt-1 font-display text-title text-text-primary">Add a bot to your server</h1>
-            <p className="mt-1.5 text-body text-text-secondary">
-              Review what this application can do, then choose where to install it. You stay in control.
-            </p>
-          </div>
-
-          {error && <ErrorBanner message={error} />}
-
-          {loading ? (
-            <div className="flex items-center gap-2.5 rounded-md border border-border-subtle bg-bg-secondary px-5 py-6 text-body text-text-muted shadow-sm">
-              <Bot size={18} className="shrink-0 text-accent-primary" />
-              Loading bot authorization details…
-            </div>
-          ) : (
-            <>
-              <div className="rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
-                {/* Requesting application identity */}
-                <div className="flex items-start gap-4 p-6">
-                  <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-md bg-accent-tint text-accent-primary">
-                    <Bot size={26} />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <h2 className="text-subhead font-semibold text-text-primary">
-                      {application?.name || `Bot App ${applicationId}`}
-                    </h2>
-                    {reviewSummary && (
-                      <p className="mt-1 inline-flex items-center gap-1.5 text-meta text-text-muted">
-                        <Star size={12} className="text-accent-warning" />
-                        {reviewSummary.average_rating.toFixed(1)} average ({reviewSummary.review_count} reviews)
-                      </p>
-                    )}
-                    {application?.description && (
-                      <p className="mt-2 text-body text-text-secondary">{application.description}</p>
-                    )}
-                    <p className="mt-2 font-code text-meta text-text-muted">ID: {applicationId}</p>
-                  </div>
-                </div>
-
-                {/* Install target */}
-                <div className="border-t border-border-subtle p-6">
-                  <label
-                    htmlFor="bot-authorize-server"
-                    className="text-section text-text-secondary"
-                  >
-                    Install on
-                  </label>
-                  <select
-                    id="bot-authorize-server"
-                    className="select-field mt-2 w-full"
-                    aria-label="Select server"
-                    value={selectedGuildId}
-                    onChange={(e) => setSelectedGuildId(e.target.value)}
-                    disabled={guilds.length === 0 || submitting || Boolean(authorizedGuildId)}
-                  >
-                    {guilds.length === 0 && <option value="">No servers available</option>}
-                    {guilds.map((guild) => (
-                      <option key={guild.id} value={guild.id}>
-                        {guild.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Requested scopes, grouped by risk */}
-                <div className="border-t border-border-subtle p-6">
-                  <p className="text-section text-text-secondary">This bot will be able to</p>
-                  {scopeGroups.length === 0 ? (
-                    <p className="mt-3 text-body text-text-secondary">
-                      No special permissions requested — it can only do what any member can.
-                    </p>
-                  ) : (
-                    <div className="mt-3 max-h-72 space-y-5 overflow-y-auto pr-1">
-                      {scopeGroups.map((group) => (
-                        <div key={group.risk}>
-                          <p className="text-section text-text-muted">
-                            {RISK_META[group.risk].label}
-                          </p>
-                          <ul className="mt-2 space-y-2">
-                            {group.items.map((scope) => (
-                              <li key={scope.label} className="flex items-start gap-3">
-                                <span
-                                  className={cn(
-                                    'mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md',
-                                    RISK_META[group.risk].iconWell,
-                                  )}
-                                >
-                                  <scope.icon size={16} />
-                                </span>
-                                <div className="min-w-0">
-                                  <p className="text-label font-semibold text-text-primary">{scope.label}</p>
-                                  <p className="text-meta leading-relaxed text-text-secondary">
-                                    {scope.description}
-                                  </p>
-                                </div>
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <p className="mt-4 font-code text-meta text-text-muted">
-                    Permission bits: {effectivePermissions}
-                  </p>
-                </div>
-
-                {/* Trust / result + actions */}
-                <div className="border-t border-border-subtle p-6">
-                  {authorizedGuildId ? (
-                    <div className="flex items-start gap-2.5 rounded-md border border-accent-success/30 bg-success-tint px-4 py-3 text-label text-accent-success">
-                      <Check size={16} className="mt-px shrink-0" />
-                      <span>Bot authorized successfully for server ID {authorizedGuildId}.</span>
-                    </div>
-                  ) : (
-                    <div className="flex items-start gap-2.5 rounded-md border border-border-subtle bg-bg-tertiary/50 px-4 py-3 text-meta leading-relaxed text-text-secondary">
-                      <ShieldAlert size={15} className="mt-px shrink-0 text-accent-warning" />
-                      <span>
-                        Only continue if you trust this application. You can remove it from your server’s
-                        settings at any time.
-                      </span>
-                    </div>
-                  )}
-
-                  {authorizedGuildId && effectiveRedirectUri && !continueUrl && (
-                    <p className="mt-3 flex items-start gap-1.5 text-meta text-accent-danger">
-                      <ShieldAlert size={13} className="mt-px shrink-0" />
-                      Redirect URL was blocked because it uses an unsafe scheme or does not match the bot's registered URI.
-                    </p>
-                  )}
-
-                  <div className="mt-5 flex flex-wrap items-center justify-end gap-2.5">
-                    {!authorizedGuildId && (
-                      <>
-                        <Button variant="ghost" onClick={() => navigate('/app')}>
-                          Cancel
-                        </Button>
-                        <Button
-                          className="min-w-[9rem]"
-                          onClick={() => void authorize()}
-                          loading={submitting}
-                          disabled={!selectedGuildId || submitting}
-                        >
-                          Authorize
-                        </Button>
-                      </>
-                    )}
-                    {continueUrl && (
-                      <a
-                        href={continueUrl}
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1.5 rounded-sm border border-border-subtle px-3.5 py-2 text-label font-semibold text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"
-                      >
-                        Continue to App
-                        <ExternalLink size={14} />
-                      </a>
-                    )}
-                  </div>
-                </div>
+    <div className="flex h-full min-h-0 flex-col bg-bg-base">
+      <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-6 sm:py-8">
+        <div className="mx-auto flex w-full max-w-2xl flex-col gap-5">
+          <AuthCard>
+            <div className="flex flex-col gap-5 p-7 sm:p-8">
+              <div>
+                <p className="text-section text-accent-primary">Authorize application</p>
+                <h1 className="mt-1 pc-display text-title text-text-primary">
+                  Add a bot to your server
+                </h1>
+                <p className="mt-1.5 max-w-prose text-body text-text-secondary">
+                  Review what this application can do, then choose where to install it. You stay in
+                  control.
+                </p>
               </div>
 
-              {/* Community reviews */}
-              <div className="rounded-md border border-border-subtle bg-bg-secondary p-6 shadow-sm">
+              {error && <ErrorBanner multiline message={error} />}
+
+              {loading ? (
+                <div className="pc-well flex items-center gap-2.5 px-5 py-6 text-body text-text-secondary">
+                  <Bot size={18} className="shrink-0 text-accent-primary" aria-hidden />
+                  Loading bot authorization details…
+                </div>
+              ) : (
+                <>
+                  {/* Requesting application identity */}
+                  <div className="flex items-start gap-4">
+                    <div
+                      className="pc-well flex h-14 w-14 shrink-0 items-center justify-center text-text-secondary"
+                      aria-hidden
+                    >
+                      <Bot size={26} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <h2 className="pc-display text-heading text-text-primary">
+                        {application?.name || `Bot App ${applicationId}`}
+                      </h2>
+                      {reviewSummary && (
+                        <p className="mt-1 inline-flex items-center gap-1.5 text-meta text-text-faint">
+                          <Star size={12} className="text-accent-warning" aria-hidden />
+                          {reviewSummary.average_rating.toFixed(1)} average ({reviewSummary.review_count} reviews)
+                        </p>
+                      )}
+                      {application?.description && (
+                        <p className="mt-2 text-body text-text-secondary">{application.description}</p>
+                      )}
+                      <p className="mt-2 pc-mono text-meta text-text-faint">ID: {applicationId}</p>
+                    </div>
+                  </div>
+
+                  <Divider />
+
+                  {/* Install target */}
+                  <div>
+                    <label htmlFor="bot-authorize-server" className="text-section text-text-secondary">
+                      Install on
+                    </label>
+                    <Select
+                      id="bot-authorize-server"
+                      className="mt-2 w-full"
+                      aria-label="Select server"
+                      value={selectedGuildId}
+                      onChange={(e) => setSelectedGuildId(e.target.value)}
+                      disabled={guilds.length === 0 || submitting || Boolean(authorizedGuildId)}
+                    >
+                      {guilds.length === 0 && <option value="">No servers available</option>}
+                      {guilds.map((guild) => (
+                        <option key={guild.id} value={guild.id}>
+                          {guild.name}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+
+                  <Divider />
+
+                  {/* Requested scopes, grouped by risk */}
+                  <div>
+                    <p className="text-section text-text-secondary">This bot will be able to</p>
+                    {scopeGroups.length === 0 ? (
+                      <p className="mt-3 text-body text-text-secondary">
+                        No special permissions requested — it can only do what any member can.
+                      </p>
+                    ) : (
+                      <div className="mt-3 max-h-72 space-y-5 overflow-y-auto pr-1">
+                        {scopeGroups.map((group) => (
+                          <div key={group.risk}>
+                            <p className="text-section text-text-faint">
+                              {RISK_META[group.risk].label}
+                            </p>
+                            <ul className="mt-2 space-y-2">
+                              {group.items.map((scope) => (
+                                <li key={scope.label} className="flex items-start gap-3">
+                                  <span
+                                    aria-hidden
+                                    className={cn(
+                                      'mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-well)] shadow-[var(--shadow-chip)]',
+                                      RISK_META[group.risk].iconWell,
+                                    )}
+                                  >
+                                    <scope.icon size={16} />
+                                  </span>
+                                  <div className="min-w-0">
+                                    <p className="text-label font-semibold text-text-primary">
+                                      {scope.label}
+                                    </p>
+                                    <p className="text-meta leading-relaxed text-text-secondary">
+                                      {scope.description}
+                                    </p>
+                                  </div>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <p className="mt-4 pc-mono text-meta text-text-faint">
+                      Permission bits: {effectivePermissions}
+                    </p>
+                  </div>
+
+                  <Divider />
+
+                  {/* Trust / result + actions */}
+                  <div>
+                    {authorizedGuildId ? (
+                      <SuccessNote>
+                        Bot authorized successfully for server ID {authorizedGuildId}.
+                      </SuccessNote>
+                    ) : (
+                      <div className="pc-well flex items-start gap-2.5 px-4 py-3 text-meta leading-relaxed text-text-secondary">
+                        <ShieldAlert size={15} className="mt-px shrink-0 text-accent-warning" aria-hidden />
+                        <span>
+                          Only continue if you trust this application. You can remove it from your
+                          server’s settings at any time.
+                        </span>
+                      </div>
+                    )}
+
+                    {authorizedGuildId && effectiveRedirectUri && !continueUrl && (
+                      <p className="mt-3 flex items-start gap-1.5 text-meta leading-relaxed text-accent-danger">
+                        <ShieldAlert size={13} className="mt-px shrink-0" aria-hidden />
+                        Redirect URL was blocked because it uses an unsafe scheme or does not match the bot's registered URI.
+                      </p>
+                    )}
+
+                    <div className="mt-5 flex flex-wrap items-center justify-end gap-2.5">
+                      {!authorizedGuildId && (
+                        <>
+                          <Button variant="ghost" onClick={() => navigate('/app')}>
+                            Cancel
+                          </Button>
+                          <Button
+                            className="min-w-[9rem]"
+                            onClick={() => void authorize()}
+                            loading={submitting}
+                            disabled={!selectedGuildId || submitting}
+                          >
+                            Authorize
+                          </Button>
+                        </>
+                      )}
+                      {continueUrl && (
+                        <a
+                          href={continueUrl}
+                          rel="noopener noreferrer"
+                          className="pc-focusable inline-flex h-[var(--h-control)] items-center gap-1.5 rounded-[var(--radius-control)] bg-bg-raised px-3.5 text-label font-semibold text-text-primary shadow-[var(--shadow-raised)] transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong"
+                        >
+                          Continue to App
+                          <ExternalLink size={14} aria-hidden />
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          </AuthCard>
+
+          {/* Community reviews — a sibling plate on the street, never a plate
+              nested inside the consent plate (spec §4). */}
+          {!loading && (
+            <AuthCard>
+              <div className="p-7 sm:p-8">
                 <p className="text-section text-text-secondary">Rate this bot</p>
-                <div className="mt-3 flex items-center gap-2">
-                  <select
-                    className="select-field"
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <Select
+                    className="w-auto"
                     aria-label="Review rating"
                     value={reviewRating}
                     onChange={(event) => setReviewRating(Number(event.target.value))}
@@ -464,13 +487,13 @@ export function BotAuthorizePage() {
                     <option value={3}>3 - Okay</option>
                     <option value={2}>2 - Poor</option>
                     <option value={1}>1 - Bad</option>
-                  </select>
+                  </Select>
                   <Button type="button" onClick={() => void submitReview()}>
                     Submit Review
                   </Button>
                 </div>
-                <textarea
-                  className="input-field mt-3 min-h-20 resize-y text-body"
+                <Textarea
+                  className="mt-3 min-h-20 resize-y"
                   aria-label="Review body"
                   placeholder="Share your experience (optional)"
                   value={reviewBody}
@@ -482,21 +505,23 @@ export function BotAuthorizePage() {
                     {reviews.slice(0, 5).map((review) => (
                       <li
                         key={review.id}
-                        className="rounded-md border border-border-subtle bg-bg-tertiary/40 px-3.5 py-2.5"
+                        className="pc-well px-3.5 py-2.5"
                       >
                         <div className="inline-flex items-center gap-1 text-meta font-semibold text-text-primary">
-                          <Star size={11} className="text-accent-warning" />
+                          <Star size={11} className="text-accent-warning" aria-hidden />
                           {review.rating}/5
                         </div>
                         {review.body && (
-                          <p className="mt-1 text-meta leading-relaxed text-text-secondary">{review.body}</p>
+                          <p className="mt-1 text-meta leading-relaxed text-text-secondary">
+                            {review.body}
+                          </p>
                         )}
                       </li>
                     ))}
                   </ul>
                 )}
               </div>
-            </>
+            </AuthCard>
           )}
         </div>
       </div>

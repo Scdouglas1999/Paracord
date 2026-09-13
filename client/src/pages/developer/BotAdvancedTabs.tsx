@@ -1,9 +1,14 @@
-import { Server, Shield, Terminal, Trash2, Zap } from 'lucide-react';
+import { Plus, Server, Shield, Terminal, Trash2, Zap } from 'lucide-react';
 import type { BotApplication, BotGuildInstall } from '../../api/bots';
 import type { ApplicationCommand } from '../../types/commands';
-import { cn } from '../../lib/utils';
-import { Button } from '../../components/ui/Button';
-import { LoadingSpinner } from '../../components/ui/Feedback';
+import {
+  Button,
+  EmptyState,
+  IconButton,
+  LoadingSpinner,
+  Tabs,
+  type TabItem,
+} from '../../components/ui';
 import { CommandBuilder } from '../../components/developer/CommandBuilder';
 import { IntentSelector } from '../../components/developer/IntentSelector';
 import { PermissionCalculator } from '../../components/developer/PermissionCalculator';
@@ -32,12 +37,13 @@ interface BotAdvancedTabsProps {
   onSaveSettings: () => void;
 }
 
-const TAB_ICON = {
-  guilds: Server,
-  commands: Terminal,
-  intents: Zap,
-  permissions: Shield,
-} as const;
+// Sentence case, ids unchanged (§6.8).
+const TABS: ReadonlyArray<TabItem<AdvancedTab>> = [
+  { value: 'guilds', label: 'Guilds', icon: <Server size={14} /> },
+  { value: 'commands', label: 'Commands', icon: <Terminal size={14} /> },
+  { value: 'intents', label: 'Intents', icon: <Zap size={14} /> },
+  { value: 'permissions', label: 'Permissions', icon: <Shield size={14} /> },
+];
 
 export function BotAdvancedTabs({
   app,
@@ -61,63 +67,62 @@ export function BotAdvancedTabs({
   onSaveSettings,
 }: BotAdvancedTabsProps) {
   return (
-    <div className="overflow-hidden rounded-sm border border-border-subtle bg-bg-tertiary">
-      {/* Tab bar */}
-      <div className="flex border-b border-border-subtle" role="tablist">
-        {(['guilds', 'commands', 'intents', 'permissions'] as const).map((t) => {
-          const Icon = TAB_ICON[t];
-          const active = tab === t;
-          return (
-            <button
-              type="button"
-              key={t}
-              role="tab"
-              aria-selected={active}
-              className={cn(
-                'relative flex items-center gap-1.5 px-3.5 py-2.5 text-label font-semibold outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
-                active ? 'text-accent-primary' : 'text-text-secondary hover:text-text-primary',
-              )}
-              onClick={() => onTabChange(t)}
-            >
-              <Icon size={14} />
-              {t.charAt(0).toUpperCase() + t.slice(1)}
-              {active && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-accent-primary" />}
-            </button>
-          );
-        })}
-      </div>
+    <div>
+      <Tabs
+        items={TABS}
+        value={tab}
+        onChange={onTabChange}
+        label="Application settings"
+        variant="underline"
+      />
 
-      <div className="p-4">
+      <div className="pt-4">
         {/* Guilds tab */}
         {tab === 'guilds' && (
           <>
-            <p className="mb-3 text-section text-text-secondary">Installed guilds</p>
             {installs && installs.length > 0 ? (
-              <div className="space-y-2">
-                {installs.map((install) => (
-                  <div
-                    key={install.guild_id}
-                    className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-sm border border-border-subtle bg-bg-secondary px-3 py-2 text-body text-text-secondary"
-                  >
-                    <span className="flex-1 font-code text-meta text-text-primary">Guild {install.guild_id}</span>
-                    <span className="text-meta">Perms {install.permissions}</span>
-                    <span className="text-meta text-text-muted">Added {new Date(install.created_at).toLocaleDateString()}</span>
-                  </div>
-                ))}
-              </div>
+              <>
+                <p className="text-section text-text-faint">Installed guilds</p>
+                <ul className="mt-1 flex flex-col">
+                  {installs.map((install) => (
+                    <li
+                      key={install.guild_id}
+                      className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border-subtle py-2.5"
+                    >
+                      <span className="pc-mono flex-1 text-meta text-text-primary">
+                        Guild {install.guild_id}
+                      </span>
+                      <span className="pc-mono text-meta text-text-secondary">
+                        Perms {install.permissions}
+                      </span>
+                      <span className="pc-mono text-meta text-text-muted">
+                        Added {new Date(install.created_at).toLocaleDateString()}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </>
             ) : (
-              <p className="text-body text-text-muted">This bot isn't installed in any guilds yet.</p>
+              <EmptyState
+                icon={<Server size={20} />}
+                title="Not installed anywhere yet"
+                description="Share the install link above and every server that adds this bot will be listed here."
+              />
             )}
           </>
         )}
 
         {/* Commands tab */}
         {tab === 'commands' && (
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <p className="text-section text-text-secondary">Global commands</p>
-              <Button size="sm" variant={showCommandBuilder ? 'secondary' : 'default'} onClick={onToggleCommandBuilder}>
-                {showCommandBuilder ? 'Cancel' : '+ New Command'}
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-section text-text-faint">Global commands</p>
+              <Button
+                size="sm"
+                variant={showCommandBuilder ? 'ghost' : 'primary'}
+                onClick={onToggleCommandBuilder}
+              >
+                {showCommandBuilder ? 'Cancel' : (<><Plus size={13} /> New command</>)}
               </Button>
             </div>
 
@@ -133,61 +138,65 @@ export function BotAdvancedTabs({
             {commands === undefined ? (
               <LoadingSpinner size="sm" label="Loading commands..." />
             ) : commands.length === 0 ? (
-              <p className="text-body text-text-muted">No global commands registered yet.</p>
+              <EmptyState
+                icon={<Terminal size={20} />}
+                title="No commands registered yet"
+                description="A global command is what people type after a slash in any server this bot is in. Create one to give it something to answer."
+              />
             ) : (
-              <div className="space-y-2">
+              <ul className="flex flex-col">
                 {commands.map((cmd) => (
-                  <div
+                  <li
                     key={cmd.id}
-                    className="group/cmd flex items-center gap-3 rounded-sm border border-border-subtle bg-bg-secondary px-3 py-2"
+                    className="flex items-center gap-3 border-t border-border-subtle py-2"
                   >
-                    <code className="font-code text-meta font-semibold text-text-primary">/{cmd.name}</code>
-                    <span className="flex-1 truncate text-body text-text-muted">{cmd.description}</span>
-                    <button
-                      type="button"
-                      className="rounded-sm px-2 py-1 text-label font-semibold text-text-secondary outline-none transition-colors hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
-                      onClick={() => onEditCommand(cmd)}
-                    >
+                    <code className="pc-mono text-meta font-semibold text-text-primary">
+                      /{cmd.name}
+                    </code>
+                    <span className="flex-1 truncate text-label text-text-muted">
+                      {cmd.description}
+                    </span>
+                    <Button variant="ghost" size="sm" onClick={() => onEditCommand(cmd)}>
                       Edit
-                    </button>
-                    <button
-                      type="button"
-                      className="flex h-7 w-7 items-center justify-center rounded-sm text-text-secondary outline-none transition-colors hover:bg-danger-tint hover:text-accent-danger focus-visible:shadow-[var(--focus-ring)]"
+                    </Button>
+                    <IconButton
+                      label={`Delete command ${cmd.name}`}
+                      className="hover:bg-danger-well hover:text-accent-danger"
                       onClick={() => onDeleteCommand(cmd.id)}
-                      aria-label={`Delete command ${cmd.name}`}
-                      title={`Delete command ${cmd.name}`}
                     >
                       <Trash2 size={14} />
-                    </button>
-                  </div>
+                    </IconButton>
+                  </li>
                 ))}
-              </div>
+              </ul>
             )}
           </div>
         )}
 
         {/* Intents tab */}
         {tab === 'intents' && (
-          <div className="space-y-3">
-            <p className="text-section text-text-secondary">Gateway intents</p>
+          <div className="flex flex-col gap-3">
             <IntentSelector value={intents} onChange={onIntentsChange} />
             {dirty && (
-              <Button size="sm" onClick={onSaveSettings} loading={saving} disabled={saving}>
-                {saving ? 'Saving…' : 'Save changes'}
-              </Button>
+              <div>
+                <Button size="sm" onClick={onSaveSettings} loading={saving} disabled={saving}>
+                  {saving ? 'Saving…' : 'Save changes'}
+                </Button>
+              </div>
             )}
           </div>
         )}
 
         {/* Permissions tab */}
         {tab === 'permissions' && (
-          <div className="space-y-3">
-            <p className="text-section text-text-secondary">Default bot permissions</p>
+          <div className="flex flex-col gap-3">
             <PermissionCalculator value={permissions} onChange={onPermissionsChange} />
             {dirty && (
-              <Button size="sm" onClick={onSaveSettings} loading={saving} disabled={saving}>
-                {saving ? 'Saving…' : 'Save changes'}
-              </Button>
+              <div>
+                <Button size="sm" onClick={onSaveSettings} loading={saving} disabled={saving}>
+                  {saving ? 'Saving…' : 'Save changes'}
+                </Button>
+              </div>
             )}
           </div>
         )}

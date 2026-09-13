@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Check, Copy, ShieldAlert } from 'lucide-react';
-import { cn } from '../../lib/utils';
+import { Chip, IconButton, ToggleRow, Well } from '../ui';
 import { Permissions } from '../../types';
 
 interface PermissionCalculatorProps {
@@ -89,66 +89,54 @@ export function PermissionCalculator({ value, onChange }: PermissionCalculatorPr
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <span className="text-section text-text-muted">Permissions</span>
-        <span className="text-meta tabular-nums text-text-muted">{enabledCount} enabled</span>
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-section text-text-faint">Permissions</span>
+        <span className="text-meta tabular-nums text-text-faint">{enabledCount} enabled</span>
       </div>
 
-      <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
+      {/* Rows parted by hairlines, never tiled cards (§6.8). */}
+      <div className="grid gap-x-8 sm:grid-cols-2">
         {PERMISSION_FLAGS.map((perm) => {
           const isAdminRow = perm.mask === ADMIN;
           const disabled = isAdmin && !isAdminRow;
           return (
-            <label
+            <ToggleRow
               key={perm.key}
-              className={cn(
-                'flex items-start gap-2.5 rounded-sm border px-3 py-2 transition-colors duration-[140ms] ease-[var(--ease-out)]',
-                isAdminRow
-                  ? 'border-accent-danger/35 bg-danger-tint hover:bg-accent-danger/20'
-                  : 'border-border-subtle bg-bg-mod-subtle hover:bg-bg-mod-strong',
-                disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
-              )}
-            >
-              <input
-                type="checkbox"
-                checked={isChecked(perm.mask)}
-                onChange={() => toggle(perm.mask)}
-                disabled={disabled}
-                className="mt-0.5 accent-accent-primary disabled:cursor-not-allowed"
-              />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-1.5">
+              className={`border-b border-border-subtle py-2.5 ${disabled ? 'opacity-60' : ''}`}
+              checked={isChecked(perm.mask)}
+              onChange={() => toggle(perm.mask)}
+              disabled={disabled}
+              ariaLabel={isAdminRow ? `${perm.name} (elevated permission)` : perm.name}
+              label={
+                <span className="flex flex-wrap items-center gap-1.5">
                   <span className="text-label text-text-primary">{perm.name}</span>
                   {isAdminRow && (
-                    <span className="inline-flex items-center gap-1 rounded-xs bg-danger-tint px-1.5 py-0.5 text-meta font-semibold text-accent-danger">
-                      <ShieldAlert size={11} />
+                    <Chip size="sm" tone="danger">
+                      <ShieldAlert size={11} aria-hidden />
                       Elevated
-                    </span>
+                    </Chip>
                   )}
-                </div>
-                <p className="mt-0.5 text-meta text-text-muted">{perm.description}</p>
-              </div>
-            </label>
+                </span>
+              }
+              description={
+                disabled ? `${perm.description} — already granted by Administrator` : perm.description
+              }
+            />
           );
         })}
       </div>
 
-      {/* Computed bitfield readout (design-spec §2 code face) with copy. */}
-      <div className="flex items-center gap-3 rounded-md border border-border-subtle bg-bg-tertiary px-3.5 py-2.5">
-        <span className="text-section shrink-0 uppercase text-text-muted">Bitfield</span>
-        <code className="min-w-0 flex-1 truncate font-code text-meta text-text-primary">
+      {/* Computed bitfield readout (spec §2 code face) with copy. */}
+      <Well className="flex items-center gap-3 px-3.5 py-2.5">
+        <span className="shrink-0 text-section text-text-faint">Bitfield</span>
+        <code className="pc-mono min-w-0 flex-1 truncate text-meta text-text-primary">
           {current.toString()}
         </code>
-        <button
-          type="button"
-          onClick={() => void copyValue()}
-          aria-label="Copy permission value"
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-sm text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
-        >
+        <IconButton label="Copy permission value" onClick={() => void copyValue()}>
           {copied ? <Check size={15} className="text-accent-success" /> : <Copy size={15} />}
-        </button>
-      </div>
+        </IconButton>
+      </Well>
     </div>
   );
 }
