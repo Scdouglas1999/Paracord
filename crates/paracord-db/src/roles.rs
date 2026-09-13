@@ -299,6 +299,36 @@ pub async fn get_user_all_roles(pool: &DbPool, user_id: i64) -> Result<Vec<RoleR
     Ok(rows)
 }
 
+/// Only current members of this guild can be notified by one of its roles.
+pub async fn get_role_mention_recipients(
+    pool: &DbPool,
+    guild_id: i64,
+    role_ids: &[i64],
+    can_mention_all: bool,
+) -> Result<Vec<i64>, DbError> {
+    if role_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ids = (0..role_ids.len())
+        .map(|index| format!("${}", index + 3))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT DISTINCT m.user_id FROM roles r JOIN members m ON m.guild_id = r.space_id
+        LEFT JOIN member_roles mr ON mr.role_id = r.id AND mr.user_id = m.user_id
+        WHERE r.space_id = $1 AND (r.mentionable OR $2)
+        AND (mr.user_id IS NOT NULL OR r.id = r.space_id) AND r.id IN ({ids}) ORDER BY m.user_id"
+    );
+    let mut query = sqlx::query_as::<_, (i64,)>(&sql)
+        .bind(guild_id)
+        .bind(can_mention_all);
+    for id in role_ids {
+        query = query.bind(*id);
+    }
+    let rows = query.fetch_all(pool).await?;
+    Ok(rows.into_iter().map(|row| row.0).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -537,34 +567,4 @@ mod tests {
             .unwrap();
         assert_eq!(role.guild_id(), guild_id);
     }
-}
-
-/// Only current members of this guild can be notified by one of its roles.
-pub async fn get_role_mention_recipients(
-    pool: &DbPool,
-    guild_id: i64,
-    role_ids: &[i64],
-    can_mention_all: bool,
-) -> Result<Vec<i64>, DbError> {
-    if role_ids.is_empty() {
-        return Ok(Vec::new());
-    }
-    let ids = (0..role_ids.len())
-        .map(|index| format!("${}", index + 3))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let sql = format!(
-        "SELECT DISTINCT m.user_id FROM roles r JOIN members m ON m.guild_id = r.space_id
-        LEFT JOIN member_roles mr ON mr.role_id = r.id AND mr.user_id = m.user_id
-        WHERE r.space_id = $1 AND (r.mentionable OR $2)
-        AND (mr.user_id IS NOT NULL OR r.id = r.space_id) AND r.id IN ({ids}) ORDER BY m.user_id"
-    );
-    let mut query = sqlx::query_as::<_, (i64,)>(&sql)
-        .bind(guild_id)
-        .bind(can_mention_all);
-    for id in role_ids {
-        query = query.bind(*id);
-    }
-    let rows = query.fetch_all(pool).await?;
-    Ok(rows.into_iter().map(|row| row.0).collect())
 }
