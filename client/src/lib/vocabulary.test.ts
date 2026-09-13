@@ -39,7 +39,7 @@ const ALLOWED = [
   /symbol or space/i,
   /or space\./i,
   /spacebar/i,
-  /no spaces/i, // "Name (lowercase, no spaces)" — the character, not the place
+  /no spaces\)/i, // "Name (lowercase, no spaces)" — the character, not the place
   /^space$/, // the key name, normalised for keybinds — lowercase, exactly
 ];
 

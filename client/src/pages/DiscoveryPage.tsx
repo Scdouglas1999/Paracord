@@ -232,7 +232,7 @@ export function DiscoveryPage() {
         ) : guilds.length === 0 ? (
           <EmptyState
             icon={<Search size={20} />}
-            title={filtersActive ? 'No spaces match your filters' : 'No public buildings yet'}
+            title={filtersActive ? 'No buildings match your filters' : 'No public buildings yet'}
             description={
               filtersActive
                 ? 'Nothing here matches your search and category. Widen the net by clearing filters, or try a different topic.'
