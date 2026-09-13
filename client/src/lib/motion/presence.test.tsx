@@ -52,7 +52,14 @@ afterEach(() => {
 function PresenceBox({ open }: { open: boolean }) {
   const presence = usePresence(open);
   if (!presence.mounted) return null;
-  return <div data-testid="box" className={presence.exiting ? 'pc-exit' : 'pc-enter'} />;
+  return (
+    <div
+      data-testid="box"
+      role="dialog"
+      className={presence.exiting ? 'pc-exit' : 'pc-enter'}
+      {...presence.scenery}
+    />
+  );
 }
 
 describe('usePresence', () => {
@@ -79,6 +86,18 @@ describe('usePresence', () => {
     expect(queryByTestId('box')?.className).toBe('pc-enter');
     act(() => vi.advanceTimersByTime(500));
     expect(queryByTestId('box')).not.toBeNull();
+  });
+
+  it('a leaving surface is scenery — out of the tree that is read and tabbed', () => {
+    const { rerender, queryByTestId, queryByRole } = render(<PresenceBox open />);
+    expect(queryByRole('dialog')).not.toBeNull();
+    rerender(<PresenceBox open={false} />);
+    const box = queryByTestId('box')!;
+    expect(box.getAttribute('aria-hidden')).toBe('true');
+    expect(box.hasAttribute('inert')).toBe(true);
+    // …and a screen reader can no longer reach it, which is the point.
+    expect(queryByRole('dialog')).toBeNull();
+    act(() => vi.advanceTimersByTime(200));
   });
 
   it('unmounts on the spot under reduced motion', () => {
