@@ -553,6 +553,13 @@ test.describe('the motion gate (§5.3)', () => {
       // more than a frame of a 120ms exit, and the strip then has two pictures
       // in it. The strips are for reading motion, not for colour proofing.
       format: 'png' | 'jpeg' = 'png',
+      /**
+       * How many pictures the strip has to end up with. The dialog's 120ms
+       * leave is the one moment this harness cannot picture — it serves about
+       * three frames across it, and the exit is proved numerically instead, by
+       * sampling the panel's own opacity in the dialog test above.
+       */
+      minFrames = 2,
     ) => {
       const frames: Array<{ at: number; data: string }> = [];
       let started = Number.POSITIVE_INFINITY;
@@ -590,7 +597,7 @@ test.describe('the motion gate (§5.3)', () => {
         );
       }
       console.log(`[motion-gate] ${name}: ${frames.length} frames, wrote ${picked.size}`);
-      expect(picked.size, `${name}: no frames captured`).toBeGreaterThan(1);
+      expect(picked.size, `${name}: no frames captured`).toBeGreaterThanOrEqual(minFrames);
     };
 
     // 1 — a button hovered and pressed (item 1). The accent button on the Press
@@ -622,7 +629,7 @@ test.describe('the motion gate (§5.3)', () => {
     await expect(page.getByRole('dialog')).toBeVisible();
     await strip('dialog-close', [0, 20, 40, 60, 80, 100, 120, 160, 240], async () => {
       await page.getByRole('button', { name: 'Keep it' }).click();
-    }, 600, 'jpeg');
+    }, 600, 'jpeg', 1);
 
     // 3 — the toast stack: one, then three, so the stack is seen shifting.
     await strip('toast', [0, 60, 120, 200, 300, 420, 560, 720], async () => {
@@ -658,6 +665,26 @@ test.describe('the motion gate (§5.3)', () => {
         await target.click();
       }, 600);
     }
+
+    // And two stills rather than strips: the surfaces WP9c restructured but
+    // did not animate, where the risk is layout rather than timing — the
+    // crossfade wrapper around a picker's scroll container, and a message row
+    // with its hover toolbar, its reactions and the typing dots.
+    await page.goto(`/app/guilds/${MOTION_GUILD_ID}/channels/${MOTION_TEXT_CHANNEL_ID}`);
+    await expect(page.getByLabel('Message history')).toBeVisible();
+    await page.waitForTimeout(900);
+    const emoji = page.getByRole('button', { name: /emoji/i }).first();
+    if (await emoji.count()) {
+      await emoji.click();
+      await page.waitForTimeout(700);
+      await page.screenshot({ path: path.join(OUT_DIR_C, '_still-emoji-picker.png') });
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(300);
+    }
+    const row = page.getByLabel('Message history').getByText('thermal rig is booked');
+    await row.hover();
+    await page.waitForTimeout(400);
+    await page.screenshot({ path: path.join(OUT_DIR_C, '_still-hover-actions.png') });
 
     console.log(`[motion-gate] WP9c strips written to ${OUT_DIR_C}`);
   });
