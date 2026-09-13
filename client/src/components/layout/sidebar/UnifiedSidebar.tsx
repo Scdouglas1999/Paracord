@@ -1,420 +1,318 @@
-import { activateConversation } from '../../../lib/attention/conversationNavigation';
-import { useCurrentAccountScope, useCurrentUser } from '../../../hooks/useCurrentUser';
-import { useCallback, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
-import { useNavigate, useParams, useLocation } from 'react-router';
-import { Search, Home, Users, MessageCircle, Plus } from 'lucide-react';
+import { useCallback, useMemo, useState, type MouseEvent } from 'react';
+import { useLocation, useNavigate, useParams } from 'react-router';
+import { Bell, BellOff, CheckCheck, LogOut, Settings } from 'lucide-react';
 
-import { useUIStore } from '../../../stores/uiStore';
-import { toast } from '../../../stores/toastStore';
 import { extractApiError } from '../../../api/client';
-import { activateGuild } from '../../../lib/guildNavigation';
-import { entityScopeKey } from '../../../lib/serverScope';
-import { useVoice } from '../../../hooks/useVoice';
+import { useCurrentAccountScope, useCurrentUser } from '../../../hooks/useCurrentUser';
+import { useBuildingLights } from '../../../hooks/useLights';
 import { useMutedGuilds } from '../../../hooks/useMutedGuilds';
 import { useUnifiedConversations } from '../../../hooks/useUnifiedConversations';
-import { conversationKey } from '../../../lib/attention/conversationModel';
-import type { ConversationEntry } from '../../../lib/attention/conversationModel';
-import type { GuildSummary, FriendRequestEntry } from '../../../hooks/useUnifiedConversations';
-import { isAdmin as isGlobalAdmin } from '../../../types';
-import { cn } from '../../../lib/utils';
+import { useVoice } from '../../../hooks/useVoice';
+import { personLight, type BuildingLight, type RoomLight } from '../../../lib/attention/light';
+import { activateGuild } from '../../../lib/guildNavigation';
+import { markGuildRead } from '../../../lib/guildActions';
+import { canAccessGuildSettingsSync } from '../../../lib/guildSettingsAccess';
 import { displayName } from '../../../lib/displayName';
-import { guildInitials, resolveGuildIconUrl } from '../../../lib/guildIcon';
-
-import { SidebarSearch } from './SidebarSearch';
-import { AnchorNav } from './AnchorNav';
-import { NeedsYou } from './NeedsYou';
-import { PinnedRail } from './PinnedRail';
-import { RecentList } from './RecentList';
-import { SpacesList } from './SpacesList';
-import { CallDock } from './CallDock';
-import { UserPanel } from '../UserPanel';
+import { findScopedGuild } from '../../../lib/guildScope';
+import { accountScopeKey, entityScopeKey, LOCAL_SERVER_ID } from '../../../lib/serverScope';
+import { getServerAccountScope } from '../../../lib/serverIdentity';
+import { isAdmin as isGlobalAdmin } from '../../../types';
+import { useAuthStore } from '../../../stores/authStore';
+import { confirm } from '../../../stores/confirmStore';
+import { useGuildStore } from '../../../stores/guildStore';
+import { useServerListStore } from '../../../stores/serverListStore';
+import { toast } from '../../../stores/toastStore';
+import { useUIStore } from '../../../stores/uiStore';
+import { ContextMenu, useContextMenu, type ContextMenuItem } from '../../ui/ContextMenu';
 import { CreateGuildModal } from '../../guild/CreateGuildModal';
-
-const RECENT_COLLAPSED_CAP = 5;
+import { AccountPlate } from './AccountPlate';
+import { BuildingsColumn } from './BuildingsColumn';
+import { CallDock } from './CallDock';
+import { CollapsedRail } from './CollapsedRail';
+import type { RoomAttention } from './RoomRow';
 
 /**
- * The Unified Sidebar (layout-spec §1, §6, §7.7) — the single left rail that
- * REPLACES both the Discord guild rail and the channel column. A ~300px collapsible
- * column on `--bg-secondary` (elevation ramp), fed entirely by the one memoized
- * `useUnifiedConversations` cross-server selector.
+ * The sidebar — a 276px **Buildings column** on the street
+ * (docs/lantern-stage-spec.md §7.1; IA from docs/layout-spec.md §5, §6).
  *
- * Vertical stack (design-spec §7 Nav item / Input / Card, §1.1 elevation, kill-list
- * enforced):
- *   SidebarSearch (⌘K entry) → NeedsYou → PinnedRail → RecentList → SpacesList,
- *   footer pinned to the bottom: CallDock (only when voice connected) → UserPanel.
+ * This module is the container: it reads the stores through WP1's selectors and
+ * hands plain models to the presentational column. `useBuildingLights()` is the
+ * ONLY source of what is lit — nothing here re-derives a light (WP1 §9).
  *
- * Collapse (`uiStore.sidebarCollapsed`, §6): a 64px icon rail — Space avatars with
- * attention dots + a mini CallDock + the user avatar — so navigation survives collapse.
- * Expanded width is the user-resizable `uiStore.sidebarWidth`.
- *
- * Roving-tabindex container attributes are present (`data-roving-container`); rows carry
- * `data-nav-index` in the flat order Needs-you → Pinned → Recent → Spaces. The arrow-key
- * handler lands in SHELL-5 (layout-spec §5).
+ * What it merges on top of the light:
+ *   - the Home and Messages counts, from the cross-server conversation merge
+ *   - unread / mention state per room, keyed the same way a `RoomLight` is
+ *   - the building context menu (mute, mark read, settings, leave) — re-homed
+ *     from the deleted `SpacesList`, which was the only writer of the muted set
  */
-
-function useUserPanelWiring() {
-  const user = useCurrentUser();
-  const { selfMute, selfDeaf, toggleMute, toggleDeaf } = useVoice();
-  const showAdminDashboard = Boolean(user && isGlobalAdmin(user.flags ?? 0));
-  return { user, selfMute, selfDeaf, toggleMute, toggleDeaf, showAdminDashboard };
-}
-
-/** One 40px icon button in the collapsed rail (search / anchor / add-space). */
-function CollapsedIconButton({
-  label,
-  active = false,
-  badge = false,
-  onClick,
-  children,
-}: {
-  label: string;
-  active?: boolean;
-  badge?: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      aria-current={active ? 'page' : undefined}
-      onClick={onClick}
-      className={cn(
-        'relative flex h-10 w-10 items-center justify-center rounded-md outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
-        active
-          ? 'bg-accent-tint text-accent-primary'
-          : 'text-text-muted hover:bg-bg-mod-subtle hover:text-text-primary',
-      )}
-    >
-      {children}
-      {badge && (
-        <span
-          data-testid="anchor-attention-dot"
-          aria-hidden
-          className="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full bg-accent-primary ring-2 ring-bg-secondary"
-        />
-      )}
-    </button>
-  );
-}
-
-/** Collapsed 64px icon rail (§6). Anchors + space avatars + attention dots, mini call dock, user. */
-function CollapsedRail({
-  spaces,
-  attentionGuildKeys,
-  activeGuildKey,
-  friendRequestCount,
-  onAddSpace,
-}: {
-  spaces: GuildSummary[];
-  attentionGuildKeys: Set<string>;
-  activeGuildKey: string | null;
-  friendRequestCount: number;
-  onAddSpace: () => void;
-}) {
-  const navigate = useNavigate();
-  const { pathname } = useLocation();
-  const { user } = useUserPanelWiring();
-
-  const openSpace = (space: GuildSummary) => {
-    activateGuild(space);
-    navigate(`/app/guilds/${space.id}`);
-  };
-
-  // Roving tabindex for the collapsed rail: exactly one space is a Tab stop (the
-  // active one, else the first) and ArrowUp/Down/Home/End move between them via
-  // the shared [data-roving-container]/[data-nav-index] handler — so the collapsed
-  // rail keeps the same single-tab-stop + arrow affordance as the expanded list
-  // instead of making every space icon a Tab stop (layout-spec §5/§6).
-  const activeIdx = Math.max(0, spaces.findIndex((s) => s.key === activeGuildKey));
-
-  return (
-    <div className="flex h-full w-16 flex-col items-center gap-2 bg-bg-secondary py-3">
-      <button
-        type="button"
-        aria-label="Search — open command palette"
-        onClick={() => useUIStore.getState().setCommandPaletteOpen(true)}
-        className="flex h-10 w-10 items-center justify-center rounded-md bg-bg-tertiary text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
-      >
-        <Search size={18} aria-hidden />
-      </button>
-
-      <div className="h-px w-8 shrink-0 bg-border-subtle" />
-
-      {/* Fixed anchors — the always-present Home / Friends / Messages destinations. */}
-      <CollapsedIconButton
-        label="Home"
-        active={pathname === '/app' || pathname === '/app/'}
-        onClick={() => navigate('/app')}
-      >
-        <Home size={18} aria-hidden />
-      </CollapsedIconButton>
-      <CollapsedIconButton
-        label="Friends"
-        active={pathname.startsWith('/app/friends')}
-        badge={friendRequestCount > 0}
-        onClick={() => navigate('/app/friends')}
-      >
-        <Users size={18} aria-hidden />
-      </CollapsedIconButton>
-      <CollapsedIconButton
-        label="Messages"
-        active={pathname.startsWith('/app/dms')}
-        onClick={() => navigate('/app/dms')}
-      >
-        <MessageCircle size={18} aria-hidden />
-      </CollapsedIconButton>
-
-      <div className="h-px w-8 shrink-0 bg-border-subtle" />
-
-      <div
-        data-roving-container=""
-        role="listbox"
-        aria-label="Joined spaces"
-        aria-orientation="vertical"
-        className="flex flex-1 flex-col items-center gap-2 overflow-y-auto scrollbar-none"
-      >
-        {spaces.map((space, i) => {
-          const active = space.key === activeGuildKey;
-          const hasAttention = attentionGuildKeys.has(space.key);
-          const iconSrc = resolveGuildIconUrl({ icon: space.icon });
-          return (
-            <button
-              key={space.key}
-              type="button"
-              role="option"
-              aria-selected={active}
-              aria-label={space.name}
-              title={space.name}
-              data-nav-index={i}
-              tabIndex={i === activeIdx ? 0 : -1}
-              onClick={() => openSpace(space)}
-              className={cn(
-                'group relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full text-meta font-semibold outline-none transition-[border-radius,background-color,color] duration-[180ms] ease-[var(--ease-out)] hover:rounded-md focus-visible:shadow-[var(--focus-ring)] active:scale-[.97]',
-                active
-                  ? 'rounded-md bg-accent-tint text-accent-primary'
-                  : 'bg-bg-mod-strong text-text-secondary hover:bg-accent-tint hover:text-accent-primary',
-              )}
-            >
-              {active && (
-                <span
-                  aria-hidden
-                  className="absolute -left-3 top-1/2 h-6 w-[3px] -translate-y-1/2 rounded-r-full bg-accent-secondary"
-                />
-              )}
-              {iconSrc ? (
-                <img src={iconSrc} alt="" className="h-full w-full object-cover" />
-              ) : (
-                guildInitials(space.name)
-              )}
-              {hasAttention && !active && (
-                <span
-                  data-testid="space-attention-dot"
-                  aria-hidden
-                  className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-accent-primary ring-2 ring-bg-secondary"
-                />
-              )}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Persistent create/join-server entry below the space icons. */}
-      <CollapsedIconButton label="Add a space" onClick={onAddSpace}>
-        <Plus size={18} aria-hidden />
-      </CollapsedIconButton>
-
-      <div className="mt-auto flex flex-col items-center gap-2">
-        <CallDock collapsed />
-        <button
-          type="button"
-          aria-label="Open user settings"
-          onClick={() => useUIStore.getState().setUserSettingsOpen(true)}
-          className="flex h-10 w-10 items-center justify-center rounded-full bg-accent-primary text-label font-semibold text-text-on-accent shadow-sm outline-none transition-transform duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] active:scale-[.97]"
-        >
-          {displayName(user).charAt(0).toUpperCase()}
-        </button>
-      </div>
-    </div>
-  );
-}
 
 export function UnifiedSidebar() {
   const navigate = useNavigate();
   const params = useParams();
   const location = useLocation();
   const sidebarCollapsed = useUIStore((s) => s.sidebarCollapsed);
-  const sidebarWidth = useUIStore((s) => s.sidebarWidth);
   const activeScope = useCurrentAccountScope();
-
-  // The muted-guild set — read live from the shared producer/consumer so muted
-  // guilds carry no attention signal in the merge (§3.2). SpacesList is the writer.
-  const { mutedGuildKeys } = useMutedGuilds();
-  const { needsYou, needsYouOverflowCount, recent, pinned, spaces, requests } =
-    useUnifiedConversations(mutedGuildKeys);
-  const userPanel = useUserPanelWiring();
-
-  // The create/join-server flow reuses the existing CreateGuildModal (Create/Join/
-  // Template tabs), mounted once and opened from the expanded "Add a space" row or the
-  // collapsed "+" button — the same modal HomePage's quick action mounts. Not rebuilt.
+  const user = useCurrentUser();
+  const settings = useAuthStore((s) => s.settings);
+  const { selfMute, selfDeaf, toggleMute: toggleSelfMute, toggleDeaf } = useVoice();
+  const { contextMenu, onContextMenu, closeContextMenu } = useContextMenu();
   const [showCreateGuild, setShowCreateGuild] = useState(false);
-  const [recentExpanded, setRecentExpanded] = useState(false);
-  const openCreateGuild = useCallback(() => setShowCreateGuild(true), []);
 
-  const activeChannelId = params.channelId ?? null;
-  const activeGuildKey = activeScope && params.guildId ? entityScopeKey(activeScope, params.guildId) : null;
-  const activeKey = activeChannelId && activeScope ? conversationKey(activeScope, activeChannelId) : null;
+  const buildings = useBuildingLights();
+  const { mutedGuildKeys, toggleMute, saving } = useMutedGuilds();
+  const { needsYou, needsYouOverflowCount, recent, pinned } = useUnifiedConversations(mutedGuildKeys);
 
-  // Recent is a movement aid, not an archive. Keep five rows visible by default
-  // so Spaces cannot be buried; retain an active older row as a sixth exception.
-  const visibleRecent = useMemo(() => {
-    if (recentExpanded || recent.length <= RECENT_COLLAPSED_CAP) return recent;
-    const first = recent.slice(0, RECENT_COLLAPSED_CAP);
-    if (!activeKey || first.some((entry) => entry.key === activeKey)) return first;
-    const activeEntry = recent.find((entry) => entry.key === activeKey);
-    return activeEntry ? [...first, activeEntry] : first;
-  }, [activeKey, recent, recentExpanded]);
+  const mutedBuildingKeys = useMemo(() => new Set(mutedGuildKeys), [mutedGuildKeys]);
 
-  // Guilds with an attention signal → both collapsed and expanded Space dots.
-  // Attention overflow beyond the Needs-you cap currently continues in Recent,
-  // so inspect both partitions rather than silently dropping those guilds.
-  const attentionGuildKeys = useMemo(() => {
-    const set = new Set<string>();
-    for (const e of [...needsYou, ...recent]) {
-      if (
-        e.guildId &&
-        (e.mentionCount > 0 ||
-          e.isDMUnread ||
-          e.isThreadReply ||
-          e.unread ||
-          e.hasVoiceActivity)
-      ) {
-        set.add(entityScopeKey(e.scope, e.guildId));
-      }
+  /**
+   * Unread / mention state per room. A `ConversationEntry.key` and a
+   * `RoomLight.key` are the same `entityScopeKey(scope, channelId)`, so the two
+   * merges line up without a second resolution pass.
+   */
+  const attention = useMemo(() => {
+    const map = new Map<string, RoomAttention>();
+    for (const entry of [...needsYou, ...pinned, ...recent]) {
+      if (!entry.guildId) continue;
+      map.set(entry.key, { unread: entry.unread, mentionCount: entry.mentionCount });
     }
-    return set;
-  }, [needsYou, recent]);
+    return map;
+  }, [needsYou, pinned, recent]);
 
-  // Stable identity so memoized ConversationRows don't re-render on every parent
-  // pass (the per-message re-render storm fix depends on a stable onClick).
-  const openConversation = useCallback(
-    (entry: ConversationEntry) => {
-      try { navigate(activateConversation(entry)); }
-      catch (error) { toast.error(`Failed to open conversation: ${extractApiError(error)}`); }
+  /**
+   * The Home chip: everything the attention ranking says is waiting on you —
+   * the capped Needs-you list plus the count that continues past the cap. Home
+   * owns the list now (§7.1); the column keeps only the number.
+   */
+  const needsYouCount = needsYou.length + needsYouOverflowCount;
+
+  /** The Messages chip: direct and group conversations carrying unread. */
+  const messagesCount = useMemo(
+    () =>
+      [...needsYou, ...pinned, ...recent].filter(
+        (entry) =>
+          (entry.kind === 'dm' || entry.kind === 'group_dm')
+          && (entry.isDMUnread || entry.unread || entry.mentionCount > 0),
+      ).length,
+    [needsYou, pinned, recent],
+  );
+
+  const pathname = location.pathname;
+  const homeActive = pathname === '/app' || pathname === '/app/';
+  const messagesActive = pathname.startsWith('/app/dms');
+  const activeBuildingKey =
+    activeScope && params.guildId && !params.channelId
+      ? entityScopeKey(activeScope, params.guildId)
+      : null;
+  const activeRoomKey =
+    activeScope && params.channelId ? entityScopeKey(activeScope, params.channelId) : null;
+
+  const account = useMemo(
+    () =>
+      personLight({
+        userId: user?.id ?? '0',
+        name: displayName(user),
+        status: settings?.status === 'invisible' ? 'offline' : (settings?.status ?? 'online'),
+        avatar: user?.avatar_hash ?? null,
+      }),
+    [settings?.status, user],
+  );
+
+  const openCreateGuild = useCallback(() => setShowCreateGuild(true), []);
+  const openHome = useCallback(() => navigate('/app'), [navigate]);
+  const openMessages = useCallback(() => navigate('/app/dms'), [navigate]);
+  const openSearch = useCallback(() => useUIStore.getState().setCommandPaletteOpen(true), []);
+  const openSettings = useCallback(() => useUIStore.getState().setUserSettingsOpen(true), []);
+
+  const openLobby = useCallback(
+    (building: BuildingLight) => {
+      try {
+        activateGuild({ id: building.guildId, scope: building.scope });
+        navigate(`/app/guilds/${building.guildId}`);
+      } catch (error) {
+        toast.error(`Failed to open ${building.name}: ${extractApiError(error)}`);
+      }
     },
     [navigate],
   );
 
-  // Fixed-anchor + zero-state navigation callbacks (stable identities). A friend
-  // request row and the "Add a friend" zero-state action both land on /app/friends.
-  const goFriends = useCallback(() => navigate('/app/friends'), [navigate]);
-  const goDiscovery = useCallback(() => navigate('/app/discovery'), [navigate]);
-  const openRequest = useCallback((_r: FriendRequestEntry) => navigate('/app/friends'), [navigate]);
+  const openRoom = useCallback(
+    (room: RoomLight) => {
+      if (!room.guildId) return;
+      try {
+        activateGuild({ id: room.guildId, scope: room.scope });
+        navigate(`/app/guilds/${room.guildId}/channels/${room.channelId}`);
+      } catch (error) {
+        toast.error(`Failed to open ${room.name}: ${extractApiError(error)}`);
+      }
+    },
+    [navigate],
+  );
 
-  // -- Flat roving-tabindex ordinals (§5). Anchors come FIRST, then Needs-you (its
-  //    friend-request rows before its conversation rows), Pinned, Recent, and Spaces
-  //    (whose trailing "Add a space" row closes out the order). --
-  const ANCHOR_COUNT = 3;
-  const needsYouStart = ANCHOR_COUNT; // request rows occupy [3 .. 3+requests-1]
-  const needsYouConvStart = needsYouStart + requests.length; // conversation rows follow
-  const pinnedStart = needsYouConvStart + needsYou.length;
-  const recentStart = pinnedStart + pinned.length;
-  const spacesStart = recentStart + visibleRecent.length;
+  const leaveBuilding = useCallback(
+    async (building: BuildingLight) => {
+      const ok = await confirm({
+        title: `Leave ${building.name}?`,
+        description: 'You will need an invite to come back to this building.',
+        confirmLabel: 'Leave building',
+        variant: 'danger',
+      });
+      if (!ok) return;
+      try {
+        await useGuildStore.getState().leaveGuild(building.guildId, building.scope);
+        toast.success(`Left ${building.name}.`);
+        const currentScope = getServerAccountScope(
+          useServerListStore.getState().activeServerId ?? LOCAL_SERVER_ID,
+        );
+        if (
+          currentScope
+          && accountScopeKey(currentScope) === accountScopeKey(building.scope)
+          && typeof window !== 'undefined'
+          && window.location.pathname.includes(`/guilds/${building.guildId}`)
+        ) {
+          navigate('/app');
+        }
+      } catch (error) {
+        toast.error(`Failed to leave building: ${extractApiError(error)}`);
+      }
+    },
+    [navigate],
+  );
 
-  const pathname = location.pathname;
-  const homeActive = pathname === '/app' || pathname === '/app/';
-  const friendsActive = pathname.startsWith('/app/friends');
-  const messagesActive = pathname.startsWith('/app/dms');
+  /**
+   * The building context menu, re-homed from `SpacesList` (layout-spec §2). It
+   * is still the only writer of the account-owned muted set that feeds the
+   * attention ranking.
+   */
+  const buildingMenu = useCallback(
+    (building: BuildingLight): ContextMenuItem[] => {
+      const reference = { id: building.guildId, scope: building.scope };
+      const muted = mutedGuildKeys.includes(building.key);
+      const guild = findScopedGuild(useGuildStore.getState().guilds, building.scope, building.guildId);
+      const isOwner = Boolean(building.scope.userId && guild?.owner_id === building.scope.userId);
+      const items: ContextMenuItem[] = [
+        {
+          label: muted ? 'Unmute building' : 'Mute building',
+          icon: muted ? <Bell size={16} /> : <BellOff size={16} />,
+          disabled: saving[building.key] ?? false,
+          action: () => {
+            void toggleMute(reference);
+          },
+        },
+        {
+          label: 'Mark as read',
+          icon: <CheckCheck size={16} />,
+          action: () => {
+            void markGuildRead(reference).catch((error) =>
+              toast.error(`Failed to save read positions: ${extractApiError(error)}`),
+            );
+          },
+        },
+      ];
+      if (canAccessGuildSettingsSync(building.guildId, building.scope)) {
+        items.push({
+          label: 'Building settings',
+          icon: <Settings size={16} />,
+          action: () => {
+            activateGuild(reference);
+            useUIStore.getState().setGuildSettingsId(building.guildId);
+          },
+        });
+      }
+      if (!isOwner) {
+        items.push({
+          label: 'Leave building',
+          icon: <LogOut size={16} />,
+          danger: true,
+          action: () => void leaveBuilding(building),
+        });
+      }
+      return items;
+    },
+    [leaveBuilding, mutedGuildKeys, saving, toggleMute],
+  );
 
-  // Roving tabindex: exactly ONE element is a Tab stop; every other is tabIndex -1 and
-  // reached via the arrow handler's .focus(). Prefer an open conversation/space, else
-  // the active anchor route, else Home (index 0) as the default entry point (§5).
-  let activeNavIndex = 0;
-  const inNeeds = activeKey ? needsYou.findIndex((e) => e.key === activeKey) : -1;
-  const inPinned = activeKey ? pinned.findIndex((e) => e.key === activeKey) : -1;
-  const inRecent = activeKey ? visibleRecent.findIndex((e) => e.key === activeKey) : -1;
-  const inSpaces = activeGuildKey ? spaces.findIndex((s) => s.key === activeGuildKey) : -1;
-  if (inNeeds >= 0) activeNavIndex = needsYouConvStart + inNeeds;
-  else if (inPinned >= 0) activeNavIndex = pinnedStart + inPinned;
-  else if (inRecent >= 0) activeNavIndex = recentStart + inRecent;
-  else if (inSpaces >= 0) activeNavIndex = spacesStart + inSpaces;
-  else if (friendsActive) activeNavIndex = 1;
-  else if (messagesActive) activeNavIndex = 2;
-  else if (homeActive) activeNavIndex = 0;
+  const onBuildingContextMenu = useCallback(
+    (event: MouseEvent, building: BuildingLight) => onContextMenu(event, buildingMenu(building)),
+    [buildingMenu, onContextMenu],
+  );
+
+  const showAdminDashboard = Boolean(user && isGlobalAdmin(user.flags ?? 0));
 
   return (
     <>
       {sidebarCollapsed ? (
-        <aside aria-label="Navigation" data-collapsed="true" className="h-full shrink-0 border-r border-border-subtle">
+        <aside aria-label="Navigation" data-collapsed="true" className="h-full w-16 shrink-0 bg-bg-base py-1">
           <CollapsedRail
-            spaces={spaces}
-            attentionGuildKeys={attentionGuildKeys}
-            activeGuildKey={activeGuildKey}
-            friendRequestCount={requests.length}
-            onAddSpace={openCreateGuild}
+            buildings={buildings}
+            activeBuildingKey={activeBuildingKey ?? (activeRoomKey ? activeGuildKeyOf(buildings, activeRoomKey) : null)}
+            account={account}
+            homeActive={homeActive}
+            messagesActive={messagesActive}
+            onOpenSearch={openSearch}
+            onOpenHome={openHome}
+            onOpenMessages={openMessages}
+            onOpenLobby={openLobby}
+            onAddBuilding={openCreateGuild}
+            onOpenSettings={openSettings}
+            footer={<CallDock collapsed />}
           />
         </aside>
       ) : (
         <aside
           aria-label="Navigation"
           data-collapsed="false"
-          style={{ '--preferred-sidebar-width': `${sidebarWidth}px` } as CSSProperties}
-          className="flex h-full w-[88vw] shrink-0 flex-col border-r border-border-subtle bg-bg-secondary md:w-[min(var(--preferred-sidebar-width),32vw)]"
+          className="h-full w-[88vw] max-w-full shrink-0 bg-bg-base p-3 md:w-[calc(var(--w-buildings-column)+var(--gutter)+var(--gutter))]"
         >
-          <div className="shrink-0 p-2">
-            <SidebarSearch />
-          </div>
-
-          <div
-            data-roving-container=""
-            role="listbox"
-            aria-label="Navigation and conversations"
-            aria-orientation="vertical"
-            className="flex flex-1 flex-col gap-3 overflow-y-auto px-2 pb-2 pt-2 scrollbar-thin"
-          >
-            <AnchorNav friendRequestCount={requests.length} navIndexStart={0} activeNavIndex={activeNavIndex} />
-            <NeedsYou
-              entries={needsYou}
-              overflowCount={needsYouOverflowCount}
-              requests={requests}
-              onOpenRequest={openRequest}
-              activeKey={activeKey}
-              onSelect={openConversation}
-              navIndexStart={needsYouStart}
-              activeNavIndex={activeNavIndex}
-            />
-            <PinnedRail entries={pinned} activeKey={activeKey} onSelect={openConversation} navIndexStart={pinnedStart} activeNavIndex={activeNavIndex} />
-            <RecentList
-              entries={visibleRecent}
-              activeKey={activeKey}
-              onSelect={openConversation}
-              onAddFriend={goFriends}
-              onExploreServers={goDiscovery}
-              totalCount={recent.length}
-              expanded={recentExpanded}
-              onToggleExpanded={() => setRecentExpanded((value) => !value)}
-              navIndexStart={recentStart}
-              activeNavIndex={activeNavIndex}
-            />
-            <SpacesList spaces={spaces} attentionGuildKeys={attentionGuildKeys} activeGuildKey={activeGuildKey} onAddSpace={openCreateGuild} navIndexStart={spacesStart} activeNavIndex={activeNavIndex} />
-          </div>
-
-          <div className="shrink-0">
-            <CallDock />
-            <UserPanel
-              user={userPanel.user}
-              navigate={navigate}
-              muted={userPanel.selfMute}
-              deafened={userPanel.selfDeaf}
-              onToggleMute={userPanel.toggleMute}
-              onToggleDeaf={userPanel.toggleDeaf}
-              showAdminDashboard={userPanel.showAdminDashboard}
-            />
-          </div>
+          <BuildingsColumn
+            buildings={buildings}
+            needsYouCount={needsYouCount}
+            messagesCount={messagesCount}
+            homeActive={homeActive}
+            messagesActive={messagesActive}
+            activeBuildingKey={activeBuildingKey}
+            activeRoomKey={activeRoomKey}
+            attention={attention}
+            mutedBuildingKeys={mutedBuildingKeys}
+            onOpenHome={openHome}
+            onOpenMessages={openMessages}
+            onOpenLobby={openLobby}
+            onOpenRoom={openRoom}
+            onAddBuilding={openCreateGuild}
+            onBuildingContextMenu={onBuildingContextMenu}
+            footer={
+              <div className="flex flex-col gap-2">
+                <CallDock />
+                <AccountPlate
+                  user={user}
+                  navigate={navigate}
+                  muted={selfMute}
+                  deafened={selfDeaf}
+                  onToggleMute={toggleSelfMute}
+                  onToggleDeaf={toggleDeaf}
+                  showAdminDashboard={showAdminDashboard}
+                />
+              </div>
+            }
+          />
         </aside>
+      )}
+
+      {contextMenu.isOpen && (
+        <ContextMenu
+          items={contextMenu.items}
+          position={contextMenu.position}
+          onClose={closeContextMenu}
+        />
       )}
       {showCreateGuild && <CreateGuildModal onClose={() => setShowCreateGuild(false)} />}
     </>
   );
+}
+
+/** The building a room belongs to, so the collapsed rail can mark it. */
+function activeGuildKeyOf(buildings: readonly BuildingLight[], roomKey: string): string | null {
+  for (const building of buildings) {
+    if (building.rooms.some((room) => room.key === roomKey)) return building.key;
+  }
+  return null;
 }

@@ -421,7 +421,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   await page.setViewportSize({ width: 1280, height: 900 });
 
   const lazyRoutes = [
-    { path: '/app', text: /New message/i },
+    { path: '/app', text: /Your buildings/i },
     { path: '/app/friends', text: /Friends/i },
     { path: '/app/dms', text: /Pick up a conversation/i },
     { path: '/app/discovery', text: /Discover spaces/i },
@@ -679,34 +679,38 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   await page.keyboard.press('Enter');
   await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}/channels/${textChannelId}`));
 
-  // The unified sidebar merges every connected server's guilds into "Spaces";
-  // the guild is reachable there as a roving-tabindex option row.
-  // The expanded sidebar is one roving listbox with grouped options; "Spaces" is
-  // the "Joined spaces" group inside it (single-listbox composite, not four).
-  const spacesList = page.getByRole('group', { name: 'Joined spaces' });
-  await expect(spacesList.getByRole('option', { name: /QA Guild/i })).toBeVisible();
+  // The Buildings column merges every connected server's guilds into buildings
+  // (lantern-stage-spec §7.1). The expanded column is one roving listbox whose
+  // grouped options are the buildings and their rooms; a building's window-map
+  // plate is its front door and opens the Lobby.
+  const buildingsColumn = page.getByRole('listbox', { name: 'Buildings and rooms' });
+  const building = buildingsColumn.getByRole('group', { name: /QA Guild/i });
+  await expect(building.getByRole('option', { name: /QA Guild lobby/i })).toBeVisible();
 
   await page.goto(`/app/guilds/${guildId}/channels/999999999`);
   await expect(page.getByRole('heading', { name: 'Channel not found' })).toBeVisible();
-  // Home must prioritize unread work over presence-based quiet copy.
+  // Home must prioritize unread work over presence-based quiet copy (§7.5:
+  // Needs-you is the right column, and it never calls an unknown state quiet).
   headerAttention = 'mentions';
   showHomeFixtures = true;
   await page.goto('/app');
   const home = page.getByRole('main');
+  await expect(home.getByText('Your buildings')).toBeVisible();
   const attention = home.getByRole('region', { name: 'Needs you' });
-  await expect(attention.getByText('3 mentions', { exact: true })).toBeVisible();
+  // The attention preview's author is the reader, so the row keeps the count.
+  await expect(attention.getByText('3 mentions for you', { exact: true })).toBeVisible();
   await expect(attention.getByText(/An update waiting for you/)).toBeVisible();
-  await expect(home.getByText('3 conversations need your attention')).toBeVisible();
-  await expect(attention.getByText('Design', { exact: true })).toBeVisible();
-  await expect(attention.getByText('Support', { exact: true })).toBeVisible();
-  await expect(home.getByText(/is quiet/)).toHaveCount(0);
+  await expect(attention.getByText(/^Design · /)).toBeVisible();
+  await expect(attention.getByText(/^Support · /)).toBeVisible();
+  await expect(home.getByText(/is quiet|No data|Nothing is waiting on you/)).toHaveCount(0);
+  const openAttention = attention.getByRole('button', { name: `Open ${attentionChannel.name}` });
   for (const width of [320, 390, 768, 1280]) {
     await page.setViewportSize({ width, height: 900 });
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
-    await expect(attention.getByRole('button', { name: /Review mentions/ })).toBeVisible();
+    await expect(openAttention).toBeVisible();
     if (width === 320 || width === 1280) await page.screenshot({ path: testInfo.outputPath(`home-needs-you-${width}.png`), fullPage: true });
   }
-  await attention.getByRole('button', { name: /Review mentions/ }).click();
+  await openAttention.click();
   await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}/channels/${attentionChannel.id}`));
   expect(pageErrors).toEqual([]);
 });
