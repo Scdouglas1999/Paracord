@@ -282,7 +282,8 @@ test('real message edits retain readable history after reload', async ({ page, r
     const history = page.getByRole('dialog', { name: 'Edit history', exact: true });
     await expect(history.getByText(original, { exact: true })).toBeVisible();
     await expect(history.getByText('Second version from the real editor', { exact: true })).toBeVisible();
-    await expect(history.getByText(/Version [12] --/)).toHaveCount(2);
+    // WP7 restyled the dialog: each version is "Version N · <time>" in the mono meta face.
+    await expect(history.getByText(/Version [12] ·/)).toHaveCount(2);
     await page.screenshot({ path: testInfo.outputPath('edit-history.png'), fullPage: true });
     await page.keyboard.press('Escape'); await expect(history).not.toBeVisible();
     // Real network loss must report failure, never an empty successful history.
@@ -408,7 +409,14 @@ test('Home follows live mention creation, edits and deletion and opens the survi
     await expect(home.getByRole('heading', { level: 1 })).toBeVisible();
     // Give the live transport an observed authenticated READY before emitting
     // the mention. No reload or mocked gateway event is used for this check.
-    await expect(home.getByRole('region', { name: 'Continue in Attention verification' })).toBeVisible();
+    // §7.5 replaced the per-room "Continue in <room>" region. The building the
+    // member just joined is the landmark that is always there — a dark building
+    // is a `group`, a lit one an `article` — and it is enough to know Home has
+    // rendered before the wire check below.
+    await expect(
+      home.getByRole('group', { name: 'Attention verification' })
+        .or(home.getByRole('article', { name: 'Attention verification' })),
+    ).toBeVisible();
     await page.waitForFunction(id => (window as unknown as { attentionWire: { readyUser: string } }).attentionWire.readyUser === id, member.user.id);
     const sent = await ownerApi.post(`${BASE}/api/v1/channels/${channel.id}/messages`, { data: { content: `<@${member.user.id}> Please review the original design`, nonce: 'real-home-attention' } });
     expect(sent.status()).toBe(201);
@@ -417,7 +425,9 @@ test('Home follows live mention creation, edits and deletion and opens the survi
     expect(tail.status()).toBe(201);
     const attention = home.getByRole('region', { name: 'Needs you' });
     await page.waitForFunction(id => (window as unknown as { attentionWire: { mentions: string[] } }).attentionWire.mentions.includes(id), message.id);
-    await expect(attention.getByText('1 mention', { exact: true })).toBeVisible();
+    // §7.5 names WHO, not how many: "<author> mentioned you", with the count
+    // kept only when the author cannot be named (`needsYouReason`).
+    await expect(attention.getByText(/mentioned you/)).toBeVisible();
     await expect(attention.getByText(/@you Please review the original design/)).toBeVisible();
     await expect(attention.getByText(/Later unrelated chatter/)).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath('home-exact-mention.png'), fullPage: true });
@@ -426,14 +436,16 @@ test('Home follows live mention creation, edits and deletion and opens the survi
     const survivor = await second.json();
     const later = await ownerApi.post(`${BASE}/api/v1/channels/${channel.id}/messages`, { data: { content: 'Still later unrelated chatter', nonce: 'real-home-later' } });
     expect(later.status()).toBe(201);
-    await expect(attention.getByText('2 mentions', { exact: true })).toBeVisible();
+    // A second mention in the same room is the same row, still previewing the
+    // oldest unread mention — the row is one piece of work, not two.
+    await expect(attention.getByRole('listitem')).toHaveCount(1);
     await expect(attention.getByText(/@you Please review the original design/)).toBeVisible();
     const edited = await ownerApi.patch(`${BASE}/api/v1/channels/${channel.id}/messages/${message.id}`, { data: { content: `<@${member.user.id}> Review the revised original design` } });
     expect(edited.ok(), await edited.text()).toBe(true);
     await expect(attention.getByText(/Review the revised original design/)).toBeVisible();
     const deleted = await ownerApi.delete(`${BASE}/api/v1/channels/${channel.id}/messages/${message.id}`);
     expect(deleted.ok(), await deleted.text()).toBe(true);
-    await expect(attention.getByText('1 mention', { exact: true })).toBeVisible();
+    await expect(attention.getByText(/mentioned you/)).toBeVisible();
     await expect(attention.getByText(/The surviving design decision/)).toBeVisible();
     await expect(attention.getByText(/Review the revised original design/)).toHaveCount(0);
     await expect(attention.getByText(/Still later unrelated chatter/)).toHaveCount(0);
@@ -441,7 +453,8 @@ test('Home follows live mention creation, edits and deletion and opens the survi
     if (await homeTour.isVisible()) await homeTour.click();
     await page.screenshot({ path: testInfo.outputPath('home-surviving-mention.png'), fullPage: true });
     const jump = page.waitForURL(new RegExp(`/channels/${channel.id}\\?message=${survivor.id}`));
-    await attention.getByRole('button', { name: /Review mentions/ }).click();
+    // §7.5: a Needs-you row carries one action, labelled for the room it opens.
+    await attention.getByRole('button', { name: 'Open decisions', exact: true }).click();
     await jump;
     const skip = page.getByRole('button', { name: 'Skip tour', exact: true });
     if (await skip.isVisible()) await skip.click();
@@ -454,16 +467,22 @@ test('Home follows live mention creation, edits and deletion and opens the survi
     expect(read.ok(), await read.text()).toBe(true);
     await page.goto('/app');
     await page.waitForFunction(id => (window as unknown as { attentionWire: { readyUser: string } }).attentionWire.readyUser === id, member.user.id);
-    await expect(page.getByRole('main').getByRole('region', { name: 'Needs you' })).toHaveCount(0);
-    await expect(page.getByRole('main').getByText(/Attention verification is quiet/)).toBeVisible();
+    // §7.5 keeps the Needs-you section on the surface and lets it say so:
+    // "Nothing is waiting on you right now." It is no longer removed when
+    // empty, because an absent section cannot tell you it checked.
+    await expect(page.getByRole('main').getByRole('region', { name: 'Needs you' }).getByRole('listitem')).toHaveCount(0);
+    await expect(page.getByRole('main').getByText('Nothing is waiting on you right now.')).toBeVisible();
     const finalSend = await ownerApi.post(`${BASE}/api/v1/channels/${channel.id}/messages`, { data: { content: `<@${member.user.id}> Only unread tail`, nonce: 'real-home-only-tail' } });
     expect(finalSend.status()).toBe(201);
     const finalMessage = await finalSend.json();
     await expect(page.getByRole('main').getByRole('region', { name: 'Needs you' }).getByText(/Only unread tail/)).toBeVisible();
     const finalDelete = await ownerApi.delete(`${BASE}/api/v1/channels/${channel.id}/messages/${finalMessage.id}`);
     expect(finalDelete.ok(), await finalDelete.text()).toBe(true);
-    await expect(page.getByRole('main').getByRole('region', { name: 'Needs you' })).toHaveCount(0);
-    await expect(page.getByRole('main').getByText(/Attention verification is quiet/)).toBeVisible();
+    // §7.5 keeps the Needs-you section on the surface and lets it say so:
+    // "Nothing is waiting on you right now." It is no longer removed when
+    // empty, because an absent section cannot tell you it checked.
+    await expect(page.getByRole('main').getByRole('region', { name: 'Needs you' }).getByRole('listitem')).toHaveCount(0);
+    await expect(page.getByRole('main').getByText('Nothing is waiting on you right now.')).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath('home-deleted-tail-cleared.png'), fullPage: true });
 
   } finally {

@@ -98,8 +98,8 @@ test('two fresh accounts send, receive, edit and delete the first encrypted DM t
     const created = await alice.api.post(`${server}/api/v1/users/@me/dms`, { data: { recipient_id: bob.user.id } }); expect(created.status(), await created.text()).toBe(201);
     const dm = await created.json(); const route = `/app/dms/${dm.id}`;
     await setup(bob.page, bob.user.id, route); await setup(alice.page, alice.user.id, route);
-    const a = alice.page.getByRole('textbox', { name: /Message/ }).last();
-    const b = bob.page.getByRole('textbox', { name: /Message/ }).last();
+    const a = alice.page.getByRole('textbox', { name: /Say something/ }).last();
+    const b = bob.page.getByRole('textbox', { name: /Say something/ }).last();
     await a.fill('First private greeting');
     await expect(alice.page.getByRole('button', { name: 'Send message', exact: true })).toBeEnabled();
     await a.press('Enter');
@@ -145,7 +145,7 @@ test('locked recipient recovers a deleted encryption starter after a real server
     const dm = await created.json(); const route = `/app/dms/${dm.id}`;
     await setup(bob.page, bob.user.id, route); await setup(alice.page, alice.user.id, route);
     await bob.context.setOffline(true); await bob.page.goto('about:blank');
-    const composer = alice.page.getByRole('textbox', { name: /Message/ }).last();
+    const composer = alice.page.getByRole('textbox', { name: /Say something/ }).last();
     const send = async (content: string) => {
       const response = alice.page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith(`/channels/${dm.id}/messages`));
       await composer.fill(content); await expect(alice.page.getByRole('button', { name: 'Send message', exact: true })).toBeEnabled(); await composer.press('Enter');
@@ -211,7 +211,7 @@ test('a delivery whose response is lost across a server restart replays its orig
       try { expect((await control.post('http://127.0.0.1:18161/restart')).status()).toBe(200); } finally { await control.dispose(); }
       await handler.abort('connectionfailed');
     });
-    const composer = alice.page.getByRole('textbox', { name: /Message/ }).last();
+    const composer = alice.page.getByRole('textbox', { name: /Say something/ }).last();
     await composer.fill(content);
     await expect(alice.page.getByRole('button', { name: 'Send message', exact: true })).toBeEnabled();
     await composer.press('Enter');
