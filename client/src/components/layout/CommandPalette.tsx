@@ -361,7 +361,7 @@ export function CommandPalette() {
           aria-controls="command-palette-list"
           aria-activedescendant={activeItemId ? `command-item-${activeItemId}` : undefined}
           aria-label="Search command palette"
-          className="flex-1 bg-transparent px-1 py-0.5 text-body text-text-primary outline-none placeholder:text-text-muted"
+          className="pc-focusable flex-1 rounded-chip bg-transparent px-1 py-0.5 text-body text-text-primary outline-none placeholder:text-text-muted"
           placeholder="Jump to a channel, building, or setting…"
           value={query}
           onChange={(e) => {

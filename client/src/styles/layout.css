@@ -42,23 +42,22 @@ html[data-theme='high-contrast'] #root {
   }
 }
 
-/* Focus styles — the generic fallback for elements outside the pc-focusable
-   recipe. (--accent was never a token; this rule drew nothing until now.) */
-:focus-visible {
-  outline: 2px solid var(--accent-primary);
-  outline-offset: 2px;
-}
+/* Focus styles — the generic fallback for a control that carries no ring of
+   its own (§9: 2px accent outside a 2px base gap).
 
-/* …except where a surface already draws the ring for the control inside it.
-   §9 is one ring per control: the composer plate lights for its text field, so
-   the field must not add a second outline within it.
-
-   This opt-out has to live here, beside the fallback. This file is unlayered,
-   and an unlayered rule beats EVERY rule in a cascade layer whatever its
-   specificity — so Tailwind's `outline-none` on the field (layer utilities)
-   could never win, however the variant was spelled. */
-[data-composer-input]:focus-visible {
-  outline: none;
+   It MUST stay inside @layer base. Unlayered author styles outrank every
+   layered rule whatever the specificity, so an unlayered copy of this rule beat
+   Tailwind's whole `utilities` layer: `outline-none` on a field whose *plate*
+   draws the ring could never win, and every such surface painted a second,
+   square-cornered ring inside the rounded one. In `base` the order is the one
+   the recipes assume — a control's own ring (`.pc-focusable` and friends, in
+   primitives/components.css) and any `outline-*` utility both outrank this, and
+   this still reaches everything neither of them touches. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--accent-primary);
+    outline-offset: 2px;
+  }
 }
 
 /* Transitions */
@@ -110,12 +109,6 @@ html[data-theme='high-contrast'] #root {
 .command-icon-btn:active:not(:disabled) {
   transform: scale(0.96);
   transition: transform 80ms var(--ease-out);
-}
-
-/* Universal fallback for missing bottom margins on text elements before UI components */
-:where(p, h1, h2, h3, h4, h5, h6, label, span, div[class*="text-"]):not([class*="mb-"], [class*="my-"], [class*="m-"], [class*="pb-"], [class*="py-"], [class*="p-"])
-  + :is(button, .btn-primary, .btn-secondary, .input-field, select, input) {
-  margin-top: 1rem;
 }
 
 .modal-backdrop {

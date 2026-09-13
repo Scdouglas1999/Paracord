@@ -135,7 +135,7 @@ export function SearchOverlay({
         <input
           id="topbar-message-search"
           autoFocus
-          className="flex-1 bg-transparent text-body text-text-primary outline-none placeholder:text-text-muted"
+          className="pc-focusable flex-1 rounded-chip bg-transparent text-body text-text-primary outline-none placeholder:text-text-muted"
           placeholder={channelId ? `Search in #${channelName || 'channel'}` : 'Search messages'}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}

@@ -485,7 +485,7 @@ export function RolesSection({
                       aria-hidden
                     />
                     <input
-                      className="min-w-0 flex-1 bg-transparent text-label text-text-primary outline-none disabled:cursor-default"
+                      className="pc-focusable min-w-0 flex-1 rounded-[var(--radius-control)] bg-transparent text-label text-text-primary outline-none disabled:cursor-default"
                       style={{ color: roleColor !== UNSET_ROLE_COLOR ? roleColor : undefined }}
                       defaultValue={role.name}
                       disabled={!canManage || isEveryone}

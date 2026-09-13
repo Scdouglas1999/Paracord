@@ -156,11 +156,6 @@ export default function CodeBlock({ code, language }: CodeBlockProps) {
             display: 'inline-flex',
             alignItems: 'center',
             gap: '5px',
-            // The language label is a <span> directly before this button, which
-            // trips layout.css's vertical-rhythm fallback (1rem top margin on a
-            // button after text). In this centred header row it only pushed
-            // Copy out of line with the label.
-            marginTop: 0,
             background: 'none',
             border: 'none',
             cursor: 'pointer',

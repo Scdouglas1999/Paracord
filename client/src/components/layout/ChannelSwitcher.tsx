@@ -213,7 +213,10 @@ export function ChannelSwitcher({
                 navigate(`/app/guilds/${guildId}`);
                 close();
               }}
-              className="flex h-9 w-full items-center gap-2 rounded-chip px-2 text-left text-label font-medium text-text-secondary outline-none transition-colors hover:bg-bg-mod-subtle hover:text-text-primary focus:bg-accent-tint focus:text-text-primary"
+              // `pc-focusable`: the accent tint alone cannot say where focus
+              // is — the current room wears the same tint — so every row in
+              // this menu carries the §9 ring as well.
+              className="pc-focusable flex h-9 w-full items-center gap-2 rounded-chip px-2 text-left text-label font-medium text-text-secondary outline-none transition-colors hover:bg-bg-mod-subtle hover:text-text-primary focus:bg-accent-tint focus:text-text-primary"
             >
               <LayoutGrid size={17} className="shrink-0 text-channel-icon" aria-hidden />
               <span className="flex-1 truncate">Rooms home</span>
@@ -242,7 +245,7 @@ export function ChannelSwitcher({
                           close();
                         }}
                         className={cn(
-                          'relative flex h-9 w-full items-center gap-2 rounded-chip px-2 text-left outline-none transition-colors',
+                          'pc-focusable relative flex h-9 w-full items-center gap-2 rounded-chip px-2 text-left outline-none transition-colors',
                           active
                             ? 'bg-accent-tint text-text-primary'
                             : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary focus:bg-accent-tint focus:text-text-primary',

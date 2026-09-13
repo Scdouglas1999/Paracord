@@ -237,7 +237,7 @@ export function InboxOverlay({ open, onClose, unreadItems, allChannels, error }:
                 <button
                   type="button"
                   onClick={() => goToChannel(item.channel.id, item.message.id, item.channel.guild_id)}
-                  className="min-w-0 flex-1 text-left outline-none"
+                  className="pc-focusable min-w-0 flex-1 rounded-chip text-left outline-none"
                 >
                   <span className="flex min-w-0 items-center gap-2 text-meta text-text-muted">
                     <Bookmark size={13} className="shrink-0 text-accent-primary" />
@@ -274,7 +274,7 @@ export function InboxOverlay({ open, onClose, unreadItems, allChannels, error }:
                 <button
                   type="button"
                   onClick={() => goToChannel(state.channel_id, preview?.id)}
-                  className="flex min-w-0 flex-1 items-start gap-3 text-left outline-none"
+                  className="pc-focusable flex min-w-0 flex-1 items-start gap-3 rounded-chip text-left outline-none"
                 >
                   <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-chip bg-accent-tint text-accent-primary">
                     {isGuildChannel ? <Hash size={16} /> : <MessageSquare size={16} />}

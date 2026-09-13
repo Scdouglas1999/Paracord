@@ -265,8 +265,10 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
           Archived
         </label>
 
-        {/* Search */}
-        <div className="relative flex items-center rounded-chip border border-border-subtle bg-bg-well transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus-within:border-accent-primary focus-within:shadow-[var(--focus-ring-input)]">
+        {/* Search. The well lights for the field it wraps, not for the Clear
+            button inside it: §9 is one ring per control, and Clear draws its
+            own. */}
+        <div className="relative flex items-center rounded-chip border border-border-subtle bg-bg-well transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] has-[>input:focus-visible]:border-accent-primary has-[>input:focus-visible]:shadow-[var(--focus-ring-input)]">
           <Search size={14} className="pointer-events-none absolute left-2.5 text-text-muted" />
           <input
             type="text"
@@ -282,7 +284,7 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
             <button
               onClick={clearSearch}
               aria-label="Clear forum search"
-              className="absolute right-2 text-text-muted outline-none transition-colors hover:text-text-secondary focus-visible:text-text-primary"
+              className="pc-focusable absolute right-2 rounded-chip text-text-muted outline-none transition-colors hover:text-text-secondary focus-visible:text-text-primary"
             >
               <X size={12} />
             </button>
