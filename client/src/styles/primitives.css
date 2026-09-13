@@ -212,6 +212,39 @@
 }
 
 /* -----------------------------------------------------------------------------
+   §5.1 "The thing you click becomes the thing you look at" — the View
+   Transitions half of `lib/motion/sharedElement.ts`.
+
+   The engine decides WHICH elements travel; these rules decide how fast and on
+   what curve, so the browser-driven path and the Web Animations FLIP fallback
+   are the same choreography rather than two that happen to look similar. The
+   UA default is 250ms `ease`, which is neither of §5.2's two curves.
+
+   Reduced motion never reaches here: `transitionWith` runs the update with no
+   transition at all when the switch says so.
+   -------------------------------------------------------------------------- */
+::view-transition-group(*) {
+  animation-duration: var(--duration-move);
+  animation-timing-function: var(--ease-spring-settle);
+}
+
+::view-transition-old(*),
+::view-transition-new(*) {
+  animation-duration: var(--duration-move);
+  animation-timing-function: var(--ease-out);
+}
+
+/* The page itself is not a thing that moves (§5.1: "nothing else on screen
+   moves"). The root snapshot crosses over at the plain fade speed and no more,
+   so the only thing the eye follows is the element that travelled. */
+::view-transition-group(root),
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: var(--duration-fast);
+  animation-timing-function: var(--ease-out);
+}
+
+/* -----------------------------------------------------------------------------
    §5.1 "A message has mass" — the send control catches the light for one beat.
    The engine (lib/motion/animate.ts `flash`) adds this class for ~80ms and the
    spring-back is a transform; the class itself is the light. This is a LIGHT

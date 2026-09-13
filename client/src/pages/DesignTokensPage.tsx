@@ -70,6 +70,19 @@ import {
   voiceRoomLight,
 } from '../lib/attention/light';
 import { presenceLight } from '../lib/presence';
+import {
+  bloom,
+  dim,
+  flicker,
+  press,
+  RollingNumber,
+  settleIn,
+  springEasing,
+  stagger,
+  supportsLinearEasing,
+  transitionWith,
+  useReducedMotion,
+} from '../lib/motion';
 import { AccountPlate } from '../components/layout/sidebar/AccountPlate';
 import { BuildingsColumn } from '../components/layout/sidebar/BuildingsColumn';
 import { useMobile } from '../hooks/useMobile';
@@ -187,7 +200,13 @@ const TYPE_STEPS: Array<{ cls: string; name: string; face: string; use: string }
 
 const RADII = ['--radius-plate', '--radius-card', '--radius-well', '--radius-control', '--radius-chip', '--radius-stage-control', '--radius-window'];
 const HEIGHTS = ['--h-nav-row', '--h-list-row', '--h-control-sm', '--h-control', '--h-control-phone', '--h-composer', '--h-stage-control', '--h-chip', '--h-search-well'];
-const MOTION = ['--duration-fast', '--duration-normal', '--duration-warm-up', '--duration-dim', '--duration-breathe', '--ease-out', '--ease-in', '--ease-in-out'];
+const MOTION = [
+  '--duration-fast', '--duration-normal', '--duration-slow', '--duration-warm-up', '--duration-dim',
+  '--duration-move', '--duration-roll', '--duration-breathe',
+  '--ease-out', '--ease-in', '--ease-in-out', '--ease-spring-settle',
+  '--stagger-light', '--stagger-chrome',
+  '--spring-stiffness', '--spring-damping', '--spring-mass',
+];
 
 /* -------------------------------------------------------------------------- */
 /* Sections                                                                     */
@@ -1060,6 +1079,228 @@ function BuildingsColumnSection() {
   );
 }
 
+/* -------------------------------------------------------------------------- */
+/* Motion (§5) — the engine, one recipe at a time                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One recipe: what it is for, the tokens it spends, a thing to play it on, and
+ * a button to play it again. A recipe that cannot be replayed cannot be judged.
+ */
+function Recipe({
+  id,
+  name,
+  model,
+  tokens,
+  onPlay,
+  children,
+}: {
+  id: string;
+  name: string;
+  /** The physical model §5.1 gives it. A recipe without one is rejected. */
+  model: string;
+  tokens: string;
+  onPlay: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      id={id}
+      className="flex min-w-0 flex-col gap-3 rounded-[var(--radius-card)] bg-bg-well p-4 shadow-[var(--shadow-well)]"
+    >
+      <div className="flex items-baseline gap-2">
+        <span className="pc-display text-name text-text-primary">{name}</span>
+        <code className="pc-mono ml-auto shrink-0 text-meta text-text-faint">{tokens}</code>
+      </div>
+      <div className="flex min-h-[5.5rem] items-center justify-center">{children}</div>
+      <p className="text-meta leading-relaxed text-text-faint">{model}</p>
+      <Button variant="secondary" size="sm" className="self-start" onClick={onPlay}>
+        Replay
+      </Button>
+    </div>
+  );
+}
+
+function MotionSection() {
+  const reduced = useReducedMotion();
+  const bloomRef = useRef<HTMLSpanElement>(null);
+  const dimRef = useRef<HTMLSpanElement>(null);
+  const flickerRef = useRef<HTMLSpanElement>(null);
+  const settleRef = useRef<HTMLDivElement>(null);
+  const pressRef = useRef<HTMLButtonElement>(null);
+  const staggerRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const [rolled, setRolled] = useState(4);
+  const [walkedIn, setWalkedIn] = useState(false);
+  const [engine, setEngine] = useState<string | null>(null);
+
+  const walk = (force?: 'flip') => {
+    void transitionWith(() => setWalkedIn((value) => !value), {
+      root: stageRef.current ?? undefined,
+      engine: force ?? 'auto',
+    }).then((result) => setEngine(result.engine));
+  };
+
+  return (
+    <Section
+      id="motion"
+      title="Motion"
+      blurb="Only light and the things people do animate. Every recipe below is Web Animations over the tokens beside it — transform and opacity, plus box-shadow on the small light elements. Nothing runs longer than 500ms except breathing."
+    >
+      <p className="max-w-[70ch] text-meta leading-relaxed text-text-faint">
+        The switch is one place: Settings › Appearance › Motion, folded with the
+        OS setting and published as <code className="pc-mono">data-motion</code> on the document.
+        It is currently <span className="text-text-primary">{reduced ? 'reduced — every recipe below lands its end state instantly' : 'on'}</span>.
+        Springs solve <code className="pc-mono">--spring-stiffness</code> 260 /{' '}
+        <code className="pc-mono">--spring-damping</code> 24 and resolve to{' '}
+        <code className="pc-mono">{supportsLinearEasing() ? 'a sampled linear() easing' : '--ease-spring-settle'}</code>:{' '}
+        <code className="pc-mono break-all text-text-faint">{springEasing().slice(0, 96)}</code>
+      </p>
+
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <Recipe
+          id="motion-bloom"
+          name="Bloom"
+          tokens="--duration-warm-up · --ease-out"
+          model="A light coming on goes 20% past its resting glow and settles. The bloom is the element's own recipe turned up — the engine never invents a glow."
+          onPlay={() => bloom(bloomRef.current)}
+        >
+          <span ref={bloomRef} className="pc-window is-reading h-[26px] w-[20px]" aria-hidden />
+        </Recipe>
+
+        <Recipe
+          id="motion-dim"
+          name="Dim"
+          tokens="--duration-dim · --ease-in"
+          model="A light going out lingers a beat, then goes. Slower than the bloom on purpose: rooms empty more gently than they fill."
+          onPlay={() => dim(dimRef.current)}
+        >
+          <span ref={dimRef} className="pc-window is-talking h-[26px] w-[20px]" aria-hidden />
+        </Recipe>
+
+        <Recipe
+          id="motion-flicker"
+          name="Flicker"
+          tokens="two 40ms pulses · --ease-out"
+          model="Reading light flickers once when a message lands. This is the only thing in the product that flickers, and it means one thing."
+          onPlay={() => flicker(flickerRef.current)}
+        >
+          <span ref={flickerRef} className="pc-window is-reading h-[26px] w-[20px]" aria-hidden />
+        </Recipe>
+
+        <Recipe
+          id="motion-settle"
+          name="Settle"
+          tokens="--duration-move · spring-settle"
+          model="A plate entering the street rises 14px with one small overshoot. The same curve carries shared elements and sliding indicators."
+          onPlay={() => settleIn(settleRef.current)}
+        >
+          <div
+            ref={settleRef}
+            className="flex h-16 w-40 items-center justify-center rounded-[var(--radius-card)] bg-bg-raised shadow-[var(--shadow-raised)]"
+          >
+            <span className="text-meta text-text-secondary">A plate</span>
+          </div>
+        </Recipe>
+
+        <Recipe
+          id="motion-press"
+          name="Press"
+          tokens="0.96 · 80ms · spring-settle"
+          model="Controls are tactile: the thing you press gives way under the finger and springs back. It answers on the same frame as the pointer."
+          onPlay={() => press(pressRef.current)}
+        >
+          <button
+            ref={pressRef}
+            type="button"
+            onPointerDown={() => press(pressRef.current)}
+            className="pc-focusable inline-flex h-8 items-center rounded-[var(--radius-control)] bg-accent-primary px-3 text-label font-semibold text-text-on-accent"
+          >
+            Join
+          </button>
+        </Recipe>
+
+        <Recipe
+          id="motion-stagger"
+          name="Stagger"
+          tokens="--stagger-light 30ms"
+          model="Neighbouring lights are 30ms apart, so a building lights up as a sequence rather than a switch."
+          onPlay={() => stagger(staggerRef.current?.querySelectorAll('span') ?? [])}
+        >
+          <div ref={staggerRef} className="flex gap-1.5" aria-hidden>
+            {[0, 1, 2, 3, 4, 5].map((index) => (
+              <span key={index} className="pc-window is-reading h-[26px] w-[20px]" />
+            ))}
+          </div>
+        </Recipe>
+
+        <Recipe
+          id="motion-roll"
+          name="Roll"
+          tokens="--duration-roll 180ms"
+          model="Any count that changes flips: old up and out, new up and in. It only ever moves on a change — a number that is merely rendered has not been caused by anybody."
+          onPlay={() => setRolled((value) => value + 1)}
+        >
+          <span className="pc-display text-title text-text-primary">
+            <RollingNumber value={rolled} format={(count) => `${count} reading`} />
+          </span>
+        </Recipe>
+
+        <div
+          id="motion-shared"
+          className="flex min-w-0 flex-col gap-3 rounded-[var(--radius-card)] bg-bg-well p-4 shadow-[var(--shadow-well)] sm:col-span-2"
+        >
+          <div className="flex items-baseline gap-2">
+            <span className="pc-display text-name text-text-primary">Shared element</span>
+            <code className="pc-mono ml-auto shrink-0 text-meta text-text-faint">
+              --duration-move · spring-settle · --stagger-chrome
+            </code>
+          </div>
+          <div ref={stageRef} className="relative min-h-[9rem] overflow-hidden rounded-[var(--radius-well)] bg-bg-base p-3">
+            {walkedIn ? (
+              <div className="flex flex-col gap-2">
+                <div
+                  data-motion-shared="tokens-room"
+                  className="h-20 w-full rounded-[var(--radius-card)] bg-bg-raised shadow-[var(--ring-lit-plate)]"
+                />
+                <div data-motion-chrome className="flex gap-2">
+                  {[0, 1, 2].map((index) => (
+                    <span key={index} className="h-5 flex-1 rounded-[var(--radius-window)] bg-bg-raised" />
+                  ))}
+                </div>
+                <div data-motion-chrome className="h-7 w-24 self-center rounded-[var(--radius-control)] bg-bg-raised" />
+              </div>
+            ) : (
+              <div className="flex gap-2">
+                <div
+                  data-motion-shared="tokens-room"
+                  className="h-24 w-28 rounded-[var(--radius-card)] bg-bg-raised shadow-[var(--ring-lit-plate)]"
+                />
+                <div className="h-24 flex-1 rounded-[var(--radius-card)] bg-bg-plate" />
+              </div>
+            )}
+          </div>
+          <p className="text-meta leading-relaxed text-text-faint">
+            The thing you click becomes the thing you look at: the lit card moves from the Lobby to
+            the Stage and the supporting chrome rises 80ms later, staggered. View Transitions where
+            the webview has them, a Web Animations FLIP everywhere else — the same choreography on
+            both, which is why both buttons are here.{' '}
+            {engine && <span className="text-text-secondary">Last run: {engine}.</span>}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" size="sm" onClick={() => walk()}>
+              {walkedIn ? 'Back to the Lobby' : 'Walk into the room'}
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => walk('flip')}>
+              {walkedIn ? 'Back to the Lobby (FLIP)' : 'Walk into the room (FLIP)'}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </Section>
+  );
+}
+
 export default function DesignTokensPage() {
   return (
     <div className="h-full overflow-y-auto bg-bg-base">
@@ -1158,6 +1399,8 @@ export default function DesignTokensPage() {
             ))}
           </Row>
         </Section>
+
+        <MotionSection />
 
         <PrimitivesSection />
 

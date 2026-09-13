@@ -370,14 +370,13 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composerShellRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false);
-  /* §5.1 "a message has mass" — see `beginSay` below. `lift` is the words on
-     their way out of the composer; `textLifted` hides the real ones behind
-     them until the draft is cleared (or the send fails and they come back). */
+  /* §5.1 "a message has mass" — see `beginSay` below. The lifting words are a
+     DOM node the engine owns, not React state: the send frame is the one frame
+     in this moment that must not be spent re-rendering a 1,600-line composer,
+     and the ghost has nothing to do with the draft anyway. */
   const sendButtonRef = useRef<HTMLButtonElement>(null);
-  const liftRef = useRef<HTMLSpanElement>(null);
+  const liftNode = useRef<HTMLSpanElement | null>(null);
   const liftTimer = useRef<number | null>(null);
-  const [lift, setLift] = useState<{ id: number; text: string; left: number; top: number; width: number } | null>(null);
-  const [textLifted, setTextLifted] = useState(false);
   const { upload, uploading, maxUploadSize } = useFileUpload(channelId);
   const { triggerTyping } = useTyping(channelId);
   const reduceMotion = useReducedMotion();
@@ -559,20 +558,33 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
     const shell = composerShellRef.current;
     const textarea = textareaRef.current;
     if (shell && textarea) {
+      liftNode.current?.remove();
       const shellBox = shell.getBoundingClientRect();
       const textBox = textarea.getBoundingClientRect();
-      setLift({
-        id: Date.now(),
-        text,
-        left: textBox.left - shellBox.left,
-        top: textBox.top - shellBox.top,
-        width: textBox.width,
-      });
-      setTextLifted(true);
+      const ghost = document.createElement('span');
+      ghost.setAttribute('aria-hidden', 'true');
+      ghost.className =
+        'pointer-events-none absolute z-10 whitespace-pre-wrap break-words px-1.5 py-2 text-body text-text-primary';
+      ghost.textContent = text;
+      ghost.style.left = `${textBox.left - shellBox.left}px`;
+      ghost.style.top = `${textBox.top - shellBox.top}px`;
+      ghost.style.width = `${textBox.width}px`;
+      shell.append(ghost);
+      liftNode.current = ghost;
+      const lifting = liftOut(ghost);
+      const drop = () => {
+        ghost.remove();
+        if (liftNode.current === ghost) liftNode.current = null;
+      };
+      if (lifting) lifting.finished.then(drop, drop);
+      else drop();
+      // The real words hide behind the ghost. Visibility only: the draft is
+      // never touched, so a failed send restores it by doing nothing.
+      textarea.style.opacity = '0';
       if (liftTimer.current) window.clearTimeout(liftTimer.current);
       // A send that neither resolves nor rejects must not leave the draft
       // invisible; the words come back on their own.
-      liftTimer.current = window.setTimeout(() => setTextLifted(false), 4000);
+      liftTimer.current = window.setTimeout(() => { textarea.style.opacity = ''; }, 4000);
     }
     relax(shell);
     flash(sendButtonRef.current, 'pc-flash-light');
@@ -583,7 +595,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
   const endSay = () => {
     if (liftTimer.current) window.clearTimeout(liftTimer.current);
     liftTimer.current = null;
-    setTextLifted(false);
+    if (textareaRef.current) textareaRef.current.style.opacity = '';
   };
 
   const handleSubmit = async () => {
@@ -786,20 +798,12 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
     }
   };
 
-  // The words travel once, then the ghost is gone. 220ms on `--ease-out`, and
-  // the distance is the path toward the timeline (§5.1).
-  useEffect(() => {
-    if (!lift) return;
-    const animation = liftOut(liftRef.current);
-    let cancelled = false;
-    const clear = () => { if (!cancelled) setLift(null); };
-    if (!animation) { clear(); return; }
-    animation.finished.then(clear, () => {});
-    return () => { cancelled = true; animation.cancel(); };
-  }, [lift]);
-
   // Leaving the conversation ends the gesture with it.
-  useEffect(() => () => { if (liftTimer.current) window.clearTimeout(liftTimer.current); }, []);
+  useEffect(() => () => {
+    if (liftTimer.current) window.clearTimeout(liftTimer.current);
+    liftNode.current?.remove();
+    liftNode.current = null;
+  }, []);
 
   /** Detect @mention query and /slash command query from cursor position */
   const detectMentionQuery = useCallback((text: string, cursorPos: number) => {
@@ -1398,21 +1402,6 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
           </span>
         )}
 
-        {/* §5.1: the words on their way out. A ghost, not the textarea — the
-            draft itself is still the source of truth until the server answers,
-            and it comes back untouched if the send fails. */}
-        {lift && (
-          <span
-            ref={liftRef}
-            key={lift.id}
-            aria-hidden
-            className="pointer-events-none absolute z-10 whitespace-pre-wrap break-words px-1.5 py-2 text-body text-text-primary"
-            style={{ left: lift.left, top: lift.top, width: lift.width }}
-          >
-            {lift.text}
-          </span>
-        )}
-
         {/* Upload progress — indeterminate accent sweep while attachments upload. */}
         {uploading && (
           reduceMotion ? (
@@ -1579,10 +1568,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
             + 'placeholder:overflow-hidden placeholder:text-ellipsis placeholder:whitespace-nowrap '
             + 'placeholder:text-text-faint'
           }
-          // §5.1: while the words are lifting out they are the ghost above, not
-          // this box. Visibility only — the value is never touched, so a failed
-          // send restores the draft by doing nothing.
-          style={{ maxHeight: '50vh', opacity: textLifted ? 0 : undefined }}
+          style={{ maxHeight: '50vh' }}
         />
 
         <button

@@ -20,6 +20,12 @@ const REAL_SERVER = process.env.PARACORD_E2E_REAL === '1';
 // smoke, output under output/design-reference/<WP>/. Gated out of the default
 // run so the CI smoke stays fast. See docs/lantern-stage-spec.md §10.
 const DESIGN_REVIEW = !REAL_SERVER && process.env.PARACORD_E2E_DESIGN === '1';
+// The motion gate (motion-gate.spec.ts): opt-in, mocked like the smoke. It
+// samples requestAnimationFrame across each signature moment and fails a frame
+// over 32ms or an animation over 500ms (docs/lantern-stage-spec.md §5.3).
+// Gated out of the default run: it deliberately sits and watches frames, which
+// is the opposite of what a fast CI smoke should do. `npm run test:motion`.
+const MOTION_GATE = !REAL_SERVER && !DESIGN_REVIEW && process.env.PARACORD_E2E_MOTION === '1';
 const REAL_SERVER_PORT = process.env.PARACORD_E2E_PORT ?? '18150';
 
 export default defineConfig({
@@ -41,6 +47,14 @@ export default defineConfig({
         {
           name: 'real-server',
           testMatch: /real-server(?:\.smoke|\.voice-check|\.voice-join|-restore|-setup)\.spec\.ts$/,
+          use: { ...devices['Desktop Chrome'] },
+        },
+      ]
+    : MOTION_GATE
+    ? [
+        {
+          name: 'motion-gate',
+          testMatch: /[\\/]motion-gate\.spec\.ts$/,
           use: { ...devices['Desktop Chrome'] },
         },
       ]

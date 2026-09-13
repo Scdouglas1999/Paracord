@@ -69,6 +69,20 @@ function nextFrame(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
 
+/**
+ * The same wait, for inside a View Transition's update callback — where it must
+ * NOT be a frame.
+ *
+ * The browser suspends rendering for the length of that callback, so a
+ * `requestAnimationFrame` in there never fires and the transition hangs
+ * forever, taking the page's rendering down with it. A macrotask is enough:
+ * React has flushed the update by the time it runs, and `getBoundingClientRect`
+ * forces whatever layout we need.
+ */
+function nextTask(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 /** The chrome rise: 80ms after the move, 30ms apart, 14px (§5.1). */
 function riseChrome(root: ParentNode, duration: number): Animation[] {
   const base = ms('--stagger-chrome');
@@ -125,7 +139,7 @@ export async function transitionWith(
     for (const [name, el] of before) el.style.viewTransitionName = `pc-${name.replace(/[^\w-]/g, '-')}`;
     const transition = doc.startViewTransition(async () => {
       await update();
-      await nextFrame();
+      await nextTask();
       const after = collect(root, options.names);
       for (const [name, el] of after) el.style.viewTransitionName = `pc-${name.replace(/[^\w-]/g, '-')}`;
     });

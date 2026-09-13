@@ -589,12 +589,11 @@ function OwnedMessageList({
   /* ---------------------------------------------------------------------- */
   const awaitingLanding = useRef<{ nonce: string; at: number } | null>(null);
   const seenMessageIds = useRef<Set<string> | null>(null);
-  const [landedMessageId, setLandedMessageId] = useState<string | null>(null);
+  const landingFrame = useRef<number | null>(null);
 
   useEffect(() => {
     seenMessageIds.current = null;
     awaitingLanding.current = null;
-    setLandedMessageId(null);
   }, [channelId]);
 
   useEffect(
@@ -615,30 +614,26 @@ function OwnedMessageList({
     const arrived = messages.find((message) => !seen.has(message.id) && message.author.id === me);
     if (!arrived) return;
     awaitingLanding.current = null;
-    setLandedMessageId(arrived.id);
-  }, [messages, me]);
-
-  useEffect(() => {
-    if (!landedMessageId) return;
-    let cancelled = false;
-    const play = () => {
-      if (cancelled) return;
-      const row = document.getElementById(`msg-${landedMessageId}`);
+    // Deliberately NOT state: a `setState` here would re-render the whole
+    // timeline a second time inside the frame the row already arrived in, and
+    // the frame the row arrives in is the most expensive one in the moment.
+    // The engine only needs the element.
+    if (landingFrame.current !== null) cancelAnimationFrame(landingFrame.current);
+    landingFrame.current = requestAnimationFrame(() => {
+      landingFrame.current = null;
       // 26px, arriving as the typed words leave (§5.1 / the MotionSay study).
-      settleIn(row, { distance: 26 });
+      settleIn(document.getElementById(`msg-${arrived.id}`), { distance: 26 });
       // The receipt is the last thing to arrive: it is the server's answer, and
       // it waits for the row to be on its mark before it fades in.
       fadeIn(scrollRef.current?.querySelector<HTMLElement>('[data-motion-receipt]'), {
         delay: ms('--duration-move'),
       });
-    };
-    // One frame, so the virtualiser has placed the row before it is animated.
-    const frame = requestAnimationFrame(play);
-    return () => {
-      cancelled = true;
-      cancelAnimationFrame(frame);
-    };
-  }, [landedMessageId]);
+    });
+  }, [messages, me]);
+
+  useEffect(() => () => {
+    if (landingFrame.current !== null) cancelAnimationFrame(landingFrame.current);
+  }, []);
 
   /** Your own last message in this room — the only place a receipt belongs. */
   const deliveredReceipt = messages.length > 0 && messages[messages.length - 1].author.id === me;
