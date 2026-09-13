@@ -63,9 +63,10 @@ both `Tabs` variants too.
 
 ### Three new recipes and one new token
 
-- `.pc-dialog` (all three live in `client/src/styles/primitives.css`) — the floating-plate recipe
-  for a dialog, with the phone radius/shadow step and the
-  `prefers-reduced-transparency` opaque fallback.
+All three recipes live in `client/src/styles/primitives.css`.
+
+- `.pc-dialog` — the floating-plate recipe for a dialog, with the phone
+  radius/shadow step and the `prefers-reduced-transparency` opaque fallback.
 - `.pc-select` + `--select-chevron` — a `<select>` on the well recipe with the
   native arrow suppressed. The chevron is a data URI, which cannot read a custom
   property, so the literal lives in `tokens.css` (Night and Daylight each define
@@ -322,7 +323,7 @@ Run from `client/`.
 | `npx vitest run` | **250 files, 2255 tests passed** |
 | `npm run build` | pass |
 | `npx playwright test` (mocked smoke) | **84 passed** |
-| `npm run test:a11y:static` | pass |
+| `npm run test:a11y:static` | pass for WP7's files (it also fixed one: `ChannelManager`'s role toggle had no name) |
 | `npm run test:contrast` | **49 checks × 4 themes passed** |
 
 > **Reading these numbers.** WP7 landed into a worktree where WP1, WP2, WP4,
