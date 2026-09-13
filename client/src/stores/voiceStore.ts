@@ -3173,7 +3173,31 @@ function bindEngine(owner: CallSession, engine: MediaEngine): void {
     for (const [id, dbov] of speakers) levels.set(identify(id), levelFromDbov(dbov));
     publishVoiceLevels('room', levels);
   }));
+  // The mic meter and the "is my microphone working" readout, on the native
+  // path. They used to be written only by `startLocalMicAnalyser`, which reads
+  // LiveKit's `room.localParticipant` — an object the native engines do not
+  // have — so on the shipping transport the bar sat at zero for the whole call
+  // and the readout had nothing behind it.
+  engine.onLocalMicLevel?.(owner.guard((audioLevel, active) => {
+    const now = Date.now();
+    if (now - localMicUiLastUpdateAt < 200) return;
+    localMicUiLastUpdateAt = now;
+    useVoiceStore.setState({
+      micInputActive: active,
+      micInputLevel: active ? levelFromDbov(audioLevel) : 0,
+    });
+  }));
   engine.onTransportLost(owner.guard(reason => { void closeCall(owner, reason); }));
+  // A media connection that has dropped is being dialled back, and until it is
+  // back nobody in the room can hear this client and this client can hear
+  // nobody. The Stage already has words and a dim for that state (§5.1) — it
+  // was simply never told. Without this the call went on presenting itself as
+  // live, timer running and microphone lit, for the whole reconnect budget.
+  engine.onTransportInterrupted?.(owner.guard(interrupted => {
+    if (owner.phase !== 'connected' && owner.phase !== 'reconnecting') return;
+    owner.phase = interrupted ? 'reconnecting' : 'connected';
+    useVoiceStore.setState({ callPhase: interrupted ? 'reconnecting' : 'connected' });
+  }));
   engine.onCameraFailure?.(owner.guard(error => {
     useVoiceStore.setState({ selfVideo: false });
     useToastStore.getState().addToast('error', error.message);

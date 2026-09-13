@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { REFRESHED_PIN_REFUSED, WebTransportManager } from './webTransport';
+import {
+  MEDIA_RECONNECT_WINDOW_MS,
+  REFRESHED_PIN_REFUSED,
+  WebTransportManager,
+} from './webTransport';
 
 // The server's media certificate is short-lived on purpose: a browser accepts a
 // WebTransport `serverCertificateHashes` pin only for a certificate valid at
@@ -251,5 +255,56 @@ describe('media certificate pin freshness across a reconnect', () => {
     expect(refresh).toHaveBeenCalledTimes(2);
     expect(decodedAttempts()).toEqual(['pin-one', 'pin-one', 'pin-two']);
     expect(transport.isConnected).toBe(true);
+  });
+});
+
+describe('a dropped media connection', () => {
+  it('announces the interruption at once, and the restore when it comes back', async () => {
+    vi.useFakeTimers();
+    const transport = manager();
+    await transport.connect('https://media.test/media', 'token', encodePin('pin-one'));
+
+    const interrupted: string[] = [];
+    const restored = vi.fn();
+    const closed = vi.fn();
+    transport.onInterrupt((reason) => interrupted.push(reason));
+    transport.onRestored(restored);
+    transport.onClose(closed);
+
+    (transport as unknown as { handleClose(reason: string): void }).handleClose('Connection lost');
+    // Announced before the first retry has even been attempted: the call is not
+    // carrying anybody's voice from this moment, not from the moment the budget
+    // runs out.
+    expect(interrupted).toEqual(['Connection lost']);
+    expect(closed).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(300);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(transport.isConnected).toBe(true);
+    expect(restored).toHaveBeenCalledTimes(1);
+    expect(closed).not.toHaveBeenCalled();
+  });
+
+  it('ends the call inside the reconnect window instead of pretending for minutes', async () => {
+    vi.useFakeTimers();
+    const transport = manager();
+    await transport.connect('https://media.test/media', 'token', encodePin('pin-one'));
+
+    const closed = vi.fn();
+    transport.onClose(closed);
+
+    // The server goes away — a restart, a crash, a dead route.
+    FakeWebTransport.refuseEverything = true;
+    const started = Date.now();
+    (transport as unknown as { handleClose(reason: string): void }).handleClose('Connection lost');
+
+    // Just inside the window it is still trying, and has not lied about it.
+    await vi.advanceTimersByTimeAsync(MEDIA_RECONNECT_WINDOW_MS - 3_000);
+    expect(closed).not.toHaveBeenCalled();
+
+    // Just past it, the call is declared over — once.
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(closed).toHaveBeenCalledTimes(1);
+    expect(Date.now() - started).toBeLessThan(MEDIA_RECONNECT_WINDOW_MS + 6_000);
   });
 });

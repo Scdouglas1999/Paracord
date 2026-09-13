@@ -19,6 +19,16 @@ export interface StreamControlMessage {
  */
 export type CertHashRefresher = () => Promise<string | undefined>;
 
+/**
+ * How long a dropped media connection is given to come back.
+ *
+ * Long enough to ride out a wifi roam or a base-station handover; short enough
+ * that a call whose server has gone away is declared over while the person is
+ * still wondering why nobody answered.
+ */
+export const MEDIA_RECONNECT_WINDOW_MS = 15_000;
+const MEDIA_RECONNECT_MAX_BACKOFF_MS = 2_000;
+
 /** Surfaced when a rotation is confirmed but the fresh pin is refused too. */
 export const REFRESHED_PIN_REFUSED =
   "The server's media certificate changed and the new one was refused as well";
@@ -40,12 +50,23 @@ export class WebTransportManager {
   private uniStreamCallbacks: Array<(data: Uint8Array) => void> = [];
   private closeCallbacks: Array<(reason: string) => void> = [];
   private restoredCallbacks: Array<() => void> = [];
+  private interruptCallbacks: Array<(reason: string) => void> = [];
 
   private reconnectAttempts = 0;
   private hasConnectedOnce = false;
-  private maxReconnectAttempts = 10;
   private shouldReconnect = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * When retrying stops being worth it.
+   *
+   * A call is a live conversation, and a conversation that has been gone for
+   * longer than this is over: the honest thing is to say so and let the caller
+   * dial back in. The budget used to be ten attempts on a doubling backoff
+   * capped at thirty seconds — over two and a half minutes, during which a
+   * client whose server had been restarted under it went on presenting a live
+   * call, timer running and microphone lit, to a room the relay said was empty.
+   */
+  private reconnectDeadline: number | null = null;
 
   private lastUrl = '';
   private lastToken = '';
@@ -78,6 +99,7 @@ export class WebTransportManager {
     this.certRefreshArmed = true;
     this.shouldReconnect = true;
     this.reconnectAttempts = 0;
+    this.reconnectDeadline = null;
 
     await this.establishConnection(url, token, certHash);
   }
@@ -158,6 +180,7 @@ export class WebTransportManager {
       }
 
       this.reconnectAttempts = 0;
+      this.reconnectDeadline = null;
       this.certRefreshArmed = true;
 
       const isRestore = this.hasConnectedOnce;
@@ -212,9 +235,10 @@ export class WebTransportManager {
       }
 
       const msg = err instanceof Error ? err.message : 'Unknown connection error';
-      if (this.shouldReconnect && this.reconnectAttempts < this.maxReconnectAttempts) {
-        this.scheduleReconnect();
+      if (this.canStillReconnect()) {
+        this.scheduleReconnect(msg);
       } else {
+        this.reconnectDeadline = null;
         this.closeCallbacks.forEach((cb) => cb(msg));
       }
       throw err;
@@ -324,6 +348,14 @@ export class WebTransportManager {
 
   onClose(cb: (reason: string) => void): void {
     this.closeCallbacks.push(cb);
+  }
+
+  /**
+   * Fired when the media connection drops and a reconnect has been scheduled.
+   * A matching `onRestored` follows if it comes back, `onClose` if it does not.
+   */
+  onInterrupt(cb: (reason: string) => void): void {
+    this.interruptCallbacks.push(cb);
   }
 
   onRestored(cb: () => void): void {
@@ -461,21 +493,45 @@ export class WebTransportManager {
     this.releaseDatagramWriter();
     this.transport = null;
 
-    if (this.shouldReconnect && this.reconnectAttempts < this.maxReconnectAttempts) {
-      this.scheduleReconnect();
+    if (this.canStillReconnect()) {
+      this.scheduleReconnect(reason);
     } else {
+      this.reconnectDeadline = null;
       for (const cb of this.closeCallbacks) {
         cb(reason);
       }
     }
   }
 
-  private scheduleReconnect(): void {
+  /**
+   * Whether this transport may try again, and start the clock if it has not.
+   *
+   * The budget is a wall-clock window rather than an attempt count, so the
+   * answer does not depend on how quickly the attempts happen to fail: a
+   * refused port fails in a millisecond and a black hole takes seconds, and
+   * both should give up at the same moment.
+   */
+  private canStillReconnect(): boolean {
+    if (this.disposed || !this.shouldReconnect) return false;
+    if (this.reconnectDeadline == null) {
+      this.reconnectDeadline = Date.now() + MEDIA_RECONNECT_WINDOW_MS;
+      return true;
+    }
+    return Date.now() < this.reconnectDeadline;
+  }
+
+  private scheduleReconnect(reason: string): void {
     if (this.disposed || !this.shouldReconnect || this.reconnectTimer) return;
     const generation = this.generation;
     this.reconnectAttempts++;
-    // Exponential backoff: 500ms, 1s, 2s, 4s... capped at 30s
-    const delayMs = Math.min(500 * Math.pow(2, this.reconnectAttempts - 1), 30_000);
+    if (this.reconnectAttempts === 1) {
+      // The call is not over, but it is not carrying anybody's voice either.
+      // Say so now, rather than letting the room look live until the budget
+      // runs out.
+      for (const cb of this.interruptCallbacks) cb(reason);
+    }
+    // 250ms, 500ms, 1s, 2s, then every 2s until the window closes.
+    const delayMs = Math.min(250 * Math.pow(2, this.reconnectAttempts - 1), MEDIA_RECONNECT_MAX_BACKOFF_MS);
     this.reconnectTimer = setTimeout(async () => {
       this.reconnectTimer = null;
       if (this.disposed || !this.shouldReconnect || generation !== this.generation) return;

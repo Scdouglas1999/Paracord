@@ -65,6 +65,25 @@ const SAMPLE_RATE = 48_000;
 const CHANNELS = 1;
 const BITRATE = 96_000;
 const FRAME_MS = 20;
+/**
+ * Speaking is asserted on a clock, not on packet arrival. Ten times a second is
+ * fast enough that a ring lights with the first syllable and slow enough that a
+ * quiet room costs nothing.
+ */
+const SPEAKING_TICK_MS = 100;
+/**
+ * The RTP audio-level convention: 0..127 as -dBov, so *lower is louder*. 80 is
+ * -80 dBov, the same threshold the packet path has always used.
+ */
+const SPEAKING_DBOV_THRESHOLD = 80;
+/**
+ * The mic is delivering something, even if it is not yet speech. A lower bar
+ * than speaking on purpose: the in-call mic readout answers "is my microphone
+ * working", which a breath should satisfy.
+ */
+const MIC_ACTIVE_DBOV_THRESHOLD = 105;
+/** No audio for this long means not speaking, whatever the last packet said. */
+const SPEAKING_SILENCE_MS = 400;
 const VIDEO_MAX_DATAGRAM_SIZE = 1200;
 const VIDEO_GCM_TAG_SIZE = 16;
 
@@ -174,6 +193,8 @@ interface ParticipantState {
   jitterBuffer: JitterBuffer;
   speaking: boolean;
   audioLevel: number;
+  /** `performance.now()` of the last audio packet from this participant. */
+  lastAudioAt: number;
   /** Per-source playback gain (voice). Created when the shared playback context exists. */
   gainNode: GainNode | null;
 }
@@ -433,6 +454,10 @@ export class BrowserMediaEngine implements MediaEngine {
   private participantJoinCb: ((userId: string) => void) | null = null;
   private participantLeaveCb: ((userId: string) => void) | null = null;
   private transportLostCb: ((reason: string) => void) | null = null;
+  private transportInterruptedCb: ((interrupted: boolean, reason: string) => void) | null = null;
+  private localMicLevelCb: ((audioLevel: number, active: boolean) => void) | null = null;
+  private localSpeaking = false;
+  private speakingInterval: ReturnType<typeof setInterval> | null = null;
   private disconnecting = false;
   private disposed = false;
   private account?: OperationContext;
@@ -516,8 +541,13 @@ export class BrowserMediaEngine implements MediaEngine {
     this.transport.onStreamControl((msg) => { if (!this.disposed) this.handleStreamControlMessage(msg); });
     this.transport.onDatagram((data) => { if (!this.disposed) this.handleDatagram(data); });
     this.transport.onUniStream((data) => { if (!this.disposed) this.handleVideoStreamFrame(data); });
+    this.transport.onInterrupt((reason) => {
+      if (this.disposed || this.disconnecting) return;
+      this.transportInterruptedCb?.(true, reason);
+    });
     this.transport.onRestored(() => {
       if (this.disposed) return;
+      this.transportInterruptedCb?.(false, '');
       void this.restoreTransportSession().catch((err) => {
         console.warn('[BrowserMediaEngine] Failed to restore session after reconnect:', err);
       });
@@ -555,6 +585,7 @@ export class BrowserMediaEngine implements MediaEngine {
 
     // Start playback loop
     this.startPlaybackLoop();
+    this.startSpeakingLoop();
   }
 
   disconnect(): Promise<void> {
@@ -567,11 +598,14 @@ export class BrowserMediaEngine implements MediaEngine {
     this.removeAbortListener = null;
     this.speakingChangeCb = this.participantJoinCb = this.participantLeaveCb = null;
     this.transportLostCb = this.screenShareEndedCb = null;
+    this.transportInterruptedCb = null;
+    this.localMicLevelCb = null;
     // Release capture synchronously, before any network work can block teardown.
     this.cleanupAudio();
     this.cleanupVideo();
     this.cleanupScreenShare();
     this.stopPlaybackLoop();
+    this.stopSpeakingLoop();
     for (const participant of this.participants.values()) participant.decoder.close();
     this.participants.clear();
     this.ssrcToUserId.clear();
@@ -811,6 +845,14 @@ export class BrowserMediaEngine implements MediaEngine {
 
   onTransportLost(cb: (reason: string) => void): void {
     this.transportLostCb = cb;
+  }
+
+  onTransportInterrupted(cb: (interrupted: boolean, reason: string) => void): void {
+    this.transportInterruptedCb = cb;
+  }
+
+  onLocalMicLevel(cb: (audioLevel: number, active: boolean) => void): void {
+    this.localMicLevelCb = cb;
   }
 
   /**
@@ -1955,6 +1997,7 @@ export class BrowserMediaEngine implements MediaEngine {
     aadSource: Uint8Array,
   ): void {
     participant.audioLevel = header.audioLevel;
+    participant.lastAudioAt = performance.now();
     const wasSpeaking = participant.speaking;
     participant.speaking = header.audioLevel < 80; // Lower = louder
     if (wasSpeaking !== participant.speaking) {
@@ -2571,6 +2614,7 @@ export class BrowserMediaEngine implements MediaEngine {
         jitterBuffer,
         speaking: false,
         audioLevel: 127,
+        lastAudioAt: 0,
         gainNode,
       };
       this.participants.set(ssrc, state);
@@ -3173,6 +3217,58 @@ export class BrowserMediaEngine implements MediaEngine {
 
   // ---------- Playback loop ----------
 
+  /**
+   * Keep the speaking rings honest, ten times a second.
+   *
+   * The rings used to be driven from `ingestRemoteAudioPacket` alone, which has
+   * two consequences the Stage showed: in a call with one person in it nothing
+   * could ever call it, so your own ring never breathed however loudly you
+   * talked; and a remote whose audio stopped arriving — muted, dropped, gone —
+   * kept whatever `speaking` its last packet set, because nothing ran to take
+   * it back. A ring asserts something is true *now* (§0), so the assertion is
+   * made on a clock, from the levels the packets and the local worklet carry.
+   */
+  private startSpeakingLoop(): void {
+    if (this.disposed || this.speakingInterval) return;
+    this.speakingInterval = setInterval(() => {
+      if (this.disposed) return;
+      const now = performance.now();
+      let changed = false;
+      let anySpeaking = false;
+      for (const participant of this.participants.values()) {
+        // Nothing heard recently is not speaking, whatever the last packet said.
+        if (participant.speaking && now - participant.lastAudioAt > SPEAKING_SILENCE_MS) {
+          participant.speaking = false;
+          participant.audioLevel = 127;
+          changed = true;
+        }
+        anySpeaking ||= participant.speaking;
+      }
+      const localAudioLevel = this.muted ? 127 : this.localAudioLevel;
+      const localSpeaking = localAudioLevel < SPEAKING_DBOV_THRESHOLD;
+      if (localSpeaking !== this.localSpeaking) {
+        this.localSpeaking = localSpeaking;
+        changed = true;
+      }
+      anySpeaking ||= localSpeaking;
+      // While anybody is speaking the levels themselves are the signal, so they
+      // go out every tick; when the room is quiet only a change is worth a
+      // render.
+      if (changed || anySpeaking) this.emitSpeakingChange();
+      // The mic meter is reported whether or not it crosses a threshold: it is
+      // what somebody looks at when they think they are not being heard, and a
+      // meter that only moves once you are already audible answers nothing.
+      this.localMicLevelCb?.(localAudioLevel, !this.muted && localAudioLevel < MIC_ACTIVE_DBOV_THRESHOLD);
+    }, SPEAKING_TICK_MS);
+  }
+
+  private stopSpeakingLoop(): void {
+    if (this.speakingInterval) {
+      clearInterval(this.speakingInterval);
+      this.speakingInterval = null;
+    }
+  }
+
   private startPlaybackLoop(): void {
     if (this.disposed) return;
     // Pull from jitter buffers and decode at 20ms intervals. Decoded PCM is
@@ -3216,7 +3312,7 @@ export class BrowserMediaEngine implements MediaEngine {
       }
     }
     // Include local user if speaking
-    if (this.localAudioLevel < 80 && !this.muted) {
+    if (this.localSpeaking) {
       speakers.set('local', this.localAudioLevel);
     }
     this.speakingChangeCb(speakers);
