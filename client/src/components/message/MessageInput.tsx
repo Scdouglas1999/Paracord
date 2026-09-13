@@ -9,7 +9,7 @@ import { useState, useRef, useEffect, useMemo, useCallback, lazy, Suspense } fro
 import { motion } from 'framer-motion';
 // §5.3: one reduced-motion switch for the whole app (lib/motion), never
 // framer-motion's own hook — that one cannot see the user's Motion setting.
-import { useReducedMotion } from '../../lib/motion';
+import { emitMotion, flash, liftOut, press, relax, useReducedMotion } from '../../lib/motion';
 import { Plus, Smile, Send, X, FileText, BarChart3, PlusCircle, MinusCircle, Image, Clock3, EyeOff, Type, Loader2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Input, Select } from '../ui/Input';
@@ -370,6 +370,14 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composerShellRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false);
+  /* §5.1 "a message has mass" — see `beginSay` below. `lift` is the words on
+     their way out of the composer; `textLifted` hides the real ones behind
+     them until the draft is cleared (or the send fails and they come back). */
+  const sendButtonRef = useRef<HTMLButtonElement>(null);
+  const liftRef = useRef<HTMLSpanElement>(null);
+  const liftTimer = useRef<number | null>(null);
+  const [lift, setLift] = useState<{ id: number; text: string; left: number; top: number; width: number } | null>(null);
+  const [textLifted, setTextLifted] = useState(false);
   const { upload, uploading, maxUploadSize } = useFileUpload(channelId);
   const { triggerTyping } = useTyping(channelId);
   const reduceMotion = useReducedMotion();
@@ -534,12 +542,71 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
     setCreatingPoll(false);
   };
 
+  /**
+   * "Say something" — §5.1 "a message has mass".
+   *
+   * The typed words lift out of the composer along the path they land in the
+   * timeline; the composer relaxes 0.8% and springs back; the send control
+   * catches the white light for one beat; and the room's amber window flickers,
+   * because reading light just changed in it. `MessageList` picks the gesture
+   * up from the bus and lands the row that arrives from it, so the words
+   * leaving and the row arriving read as one object moving.
+   *
+   * It runs on the SAME frame as the keystroke, before any await: §5.3's
+   * "motion never delays input" is the reason this is not inside the send.
+   */
+  const beginSay = (text: string) => {
+    const shell = composerShellRef.current;
+    const textarea = textareaRef.current;
+    if (shell && textarea) {
+      const shellBox = shell.getBoundingClientRect();
+      const textBox = textarea.getBoundingClientRect();
+      setLift({
+        id: Date.now(),
+        text,
+        left: textBox.left - shellBox.left,
+        top: textBox.top - shellBox.top,
+        width: textBox.width,
+      });
+      setTextLifted(true);
+      if (liftTimer.current) window.clearTimeout(liftTimer.current);
+      // A send that neither resolves nor rejects must not leave the draft
+      // invisible; the words come back on their own.
+      liftTimer.current = window.setTimeout(() => setTextLifted(false), 4000);
+    }
+    relax(shell);
+    flash(sendButtonRef.current, 'pc-flash-light');
+    emitMotion('say:sent', { channelId, nonce: `${channelId}:${Date.now()}` });
+  };
+
+  /** The words are gone (the draft cleared) or they are coming back (it failed). */
+  const endSay = () => {
+    if (liftTimer.current) window.clearTimeout(liftTimer.current);
+    liftTimer.current = null;
+    setTextLifted(false);
+  };
+
   const handleSubmit = async () => {
     if (sendingRef.current || uploading || creatingPoll || schedulingMessage) return;
+    // Only a plain text send has this gesture, and only when it is certainly
+    // going out: a poll, a schedule, an attachment, a slash command, an empty
+    // or over-long draft or a conversation that will refuse it all take the
+    // ordinary path with no motion at all.
+    const saying = content.trim();
+    if (
+      !showPollComposer
+      && !showScheduleComposer
+      && composerAction.allowed
+      && canSendMessages
+      && stagedFiles.length === 0
+      && saying.length > 0
+      && content.length <= MAX_MESSAGE_LENGTH
+      && !/^\/\w/.test(saying)
+    ) beginSay(saying);
     let submittedDraft: Awaited<ReturnType<typeof captureDraft>>;
     sendingRef.current = true;
     try { submittedDraft = await captureDraft(); }
-    catch (error) { setSubmitError(messageInputError(error, 'Save this draft before sending.')); return; }
+    catch (error) { endSay(); setSubmitError(messageInputError(error, 'Save this draft before sending.')); return; }
     finally { sendingRef.current = false; }
     if (!composerAction.allowed) { setSubmitError(composerAction.reason); return; }
 
@@ -705,16 +772,34 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
           : undefined,
       );
       await clearSubmitted(submittedDraft);
+      endSay();
       setStagedFiles(current => current.filter(file => !stagedFiles.includes(file)));
       if (mounted.current) onCancelReply?.();
       if (textareaRef.current) textareaRef.current.style.height = 'auto';
     } catch (err) {
+      // §5.1's failure path: the row never lands and the words come back.
+      endSay();
       setSubmitError(messageInputError(err, 'Failed to send message.'));
     } finally {
       sendingRef.current = false;
       setSending(false);
     }
   };
+
+  // The words travel once, then the ghost is gone. 220ms on `--ease-out`, and
+  // the distance is the path toward the timeline (§5.1).
+  useEffect(() => {
+    if (!lift) return;
+    const animation = liftOut(liftRef.current);
+    let cancelled = false;
+    const clear = () => { if (!cancelled) setLift(null); };
+    if (!animation) { clear(); return; }
+    animation.finished.then(clear, () => {});
+    return () => { cancelled = true; animation.cancel(); };
+  }, [lift]);
+
+  // Leaving the conversation ends the gesture with it.
+  useEffect(() => () => { if (liftTimer.current) window.clearTimeout(liftTimer.current); }, []);
 
   /** Detect @mention query and /slash command query from cursor position */
   const detectMentionQuery = useCallback((text: string, cursorPos: number) => {
@@ -1288,7 +1373,10 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
           // §8 Composer: raised, 50px, radius 12. Depth is the warm top
           // highlight plus a lift — never a border, so the drop state cannot
           // reflow the row.
-          'group relative flex min-h-[var(--h-composer)] items-end gap-2 rounded-[var(--radius-card)] py-1.5 pl-2.5 pr-2',
+          // `origin-bottom`: §5.1's "the composer relaxes 0.8% and springs
+          // back" is a settling, not a shrink — it gives way under the press
+          // and rises from where it sits.
+          'group relative flex min-h-[var(--h-composer)] origin-bottom items-end gap-2 rounded-[var(--radius-card)] py-1.5 pl-2.5 pr-2',
           'transition-[background-color,box-shadow] duration-[140ms] ease-[var(--ease-out)]',
           'focus-within:shadow-[var(--focus-ring-input)]',
           isDragOver ? 'bg-accent-tint' : 'bg-bg-raised shadow-[var(--shadow-composer)]',
@@ -1307,6 +1395,21 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
             )}
           >
             <span className="pc-mono">{content.length}/{MAX_MESSAGE_LENGTH}</span>
+          </span>
+        )}
+
+        {/* §5.1: the words on their way out. A ghost, not the textarea — the
+            draft itself is still the source of truth until the server answers,
+            and it comes back untouched if the send fails. */}
+        {lift && (
+          <span
+            ref={liftRef}
+            key={lift.id}
+            aria-hidden
+            className="pointer-events-none absolute z-10 whitespace-pre-wrap break-words px-1.5 py-2 text-body text-text-primary"
+            style={{ left: lift.left, top: lift.top, width: lift.width }}
+          >
+            {lift.text}
           </span>
         )}
 
@@ -1476,7 +1579,10 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
             + 'placeholder:overflow-hidden placeholder:text-ellipsis placeholder:whitespace-nowrap '
             + 'placeholder:text-text-faint'
           }
-          style={{ maxHeight: '50vh' }}
+          // §5.1: while the words are lifting out they are the ghost above, not
+          // this box. Visibility only — the value is never touched, so a failed
+          // send restores the draft by doing nothing.
+          style={{ maxHeight: '50vh', opacity: textLifted ? 0 : undefined }}
         />
 
         <button
@@ -1623,11 +1729,15 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
           )}
         </div>
 
-        <motion.button
+        <button
+          ref={sendButtonRef}
+          type="button"
           onClick={() => void handleSubmit()}
+          // §5.1 "controls are tactile": 0.96 in 80ms, then springs back. The
+          // send's own beat — the white-light flash — is `beginSay`'s, so a
+          // press that does not send still answers the finger.
+          onPointerDown={() => { if (!sendDisabled) press(sendButtonRef.current); }}
           disabled={sendDisabled}
-          whileTap={reduceMotion || sendDisabled ? undefined : { scale: [1, 1.08, 1] }}
-          transition={{ duration: 0.32, ease: [0.2, 0.9, 0.3, 1.3] }}
           className={cn(
             'pc-focusable inline-flex h-[34px] shrink-0 items-center justify-center gap-1.5 rounded-[var(--radius-control)] px-3',
             'transition-colors duration-[140ms] ease-[var(--ease-out)]',
@@ -1650,7 +1760,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
           ) : (
             <Send size={17} />
           )}
-        </motion.button>
+        </button>
       </div>
 
       {isDragOver && (

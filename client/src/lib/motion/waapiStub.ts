@@ -48,7 +48,7 @@ export function installWaapiStub(): WaapiStub {
     // A rejected `.finished` with no handler is an unhandled rejection in node.
     finishedPromise.catch(() => {});
     const listeners = new Map<string, Set<() => void>>();
-    const animation = {
+    const animation: Record<string, unknown> = {
       id: '',
       playState: 'running',
       currentTime: 0,
@@ -58,12 +58,12 @@ export function installWaapiStub(): WaapiStub {
       finished: finishedPromise,
       finish() {
         record.finished = true;
-        this.playState = 'finished';
+        animation.playState = 'finished';
         settle();
       },
       cancel() {
         record.cancelled = true;
-        this.playState = 'idle';
+        animation.playState = 'idle';
         for (const listener of listeners.get('cancel') ?? []) listener();
         fail(new DOMException('The user aborted a request.', 'AbortError'));
       },
@@ -75,10 +75,10 @@ export function installWaapiStub(): WaapiStub {
       removeEventListener(type: string, listener: () => void) {
         listeners.get(type)?.delete(listener);
       },
-    } as unknown as Animation;
-    record.animation = animation;
+    };
+    record.animation = animation as unknown as Animation;
     played.push(record);
-    return animation;
+    return record.animation;
   }
 
   function getAnimations(this: Element) {

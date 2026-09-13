@@ -33,6 +33,7 @@ import { resolveResourceUrl } from '../../lib/config/apiBaseUrl';
 import { getDownloadTicket } from '../../lib/downloadTicket';
 import { writeClipboardText } from '../../lib/clipboard';
 import { SkeletonMessage } from '../ui/Skeleton';
+import { fadeIn, ms, onMotion, settleIn } from '../../lib/motion';
 import { parseMarkdown } from '../../lib/markdown';
 import { getHighestRoleColor } from '../../lib/colors';
 import { formatFileSize, formatTimestamp, relativeTime } from '../../lib/formatters';
@@ -570,6 +571,78 @@ function OwnedMessageList({
     ),
   );
   const [channelOverwrites, setChannelOverwrites] = useState<ChannelOverwrite[]>([]);
+
+  /* ---------------------------------------------------------------------- */
+  /* §5.1 "a message has mass" — the landing half of the send                */
+  /*                                                                        */
+  /* The composer's words lift out; this row arrives from 26px below on the  */
+  /* spring-settle curve, so the two read as one object moving. Three rules  */
+  /* keep it honest:                                                        */
+  /*   · only a row the person at this keyboard CAUSED lands — the gesture   */
+  /*     arrives on the motion bus, and without one nothing animates (§5.3:  */
+  /*     never animate what the user did not cause);                        */
+  /*   · only the new row animates: it is a transform on the row itself, so  */
+  /*     no neighbour moves and the list never reflow-animates;             */
+  /*   · the row cannot exist before the server has answered for it (the     */
+  /*     runtime only publishes a message the recovery feed has vouched      */
+  /*     for), so the receipt below is structurally "after the ack".         */
+  /* ---------------------------------------------------------------------- */
+  const awaitingLanding = useRef<{ nonce: string; at: number } | null>(null);
+  const seenMessageIds = useRef<Set<string> | null>(null);
+  const [landedMessageId, setLandedMessageId] = useState<string | null>(null);
+
+  useEffect(() => {
+    seenMessageIds.current = null;
+    awaitingLanding.current = null;
+    setLandedMessageId(null);
+  }, [channelId]);
+
+  useEffect(
+    () => onMotion('say:sent', (detail) => {
+      if (detail.channelId === channelId) awaitingLanding.current = { nonce: detail.nonce, at: Date.now() };
+    }),
+    [channelId],
+  );
+
+  useEffect(() => {
+    const seen = seenMessageIds.current;
+    seenMessageIds.current = new Set(messages.map((message) => message.id));
+    // The first list for a conversation is history, not an arrival.
+    if (!seen) return;
+    const waiting = awaitingLanding.current;
+    // A send that never landed stops being this gesture's business.
+    if (!waiting || Date.now() - waiting.at > 30_000) return;
+    const arrived = messages.find((message) => !seen.has(message.id) && message.author.id === me);
+    if (!arrived) return;
+    awaitingLanding.current = null;
+    setLandedMessageId(arrived.id);
+  }, [messages, me]);
+
+  useEffect(() => {
+    if (!landedMessageId) return;
+    let cancelled = false;
+    const play = () => {
+      if (cancelled) return;
+      const row = document.getElementById(`msg-${landedMessageId}`);
+      // 26px, arriving as the typed words leave (§5.1 / the MotionSay study).
+      settleIn(row, { distance: 26 });
+      // The receipt is the last thing to arrive: it is the server's answer, and
+      // it waits for the row to be on its mark before it fades in.
+      fadeIn(scrollRef.current?.querySelector<HTMLElement>('[data-motion-receipt]'), {
+        delay: ms('--duration-move'),
+      });
+    };
+    // One frame, so the virtualiser has placed the row before it is animated.
+    const frame = requestAnimationFrame(play);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+    };
+  }, [landedMessageId]);
+
+  /** Your own last message in this room — the only place a receipt belongs. */
+  const deliveredReceipt = messages.length > 0 && messages[messages.length - 1].author.id === me;
+
   useEffect(() => {
     void useSavedMessageStore.getState().load();
   }, [savedServerScope]);
@@ -2649,27 +2722,44 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
         ) : (
           // §7.4: a room reads from the bottom. `mt-auto` only has room to act
           // when the timeline is shorter than the plate; past that it scrolls.
-          <div className="mt-auto shrink-0 py-6" style={{ height: virtualizer.getTotalSize(), width: '100%', position: 'relative' }}>
-            {virtualItems.map((virtualRow) => {
-              const row = rows[virtualRow.index];
-              return (
-                <div
-                  key={virtualRow.key}
-                  data-index={virtualRow.index}
-                  ref={virtualizer.measureElement}
-                  style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    width: '100%',
-                    transform: `translateY(${virtualRow.start}px)`,
-                  }}
-                >
-                  {renderRow(row)}
-                </div>
-              );
-            })}
-          </div>
+          <>
+            <div className="mt-auto shrink-0 py-6" style={{ height: virtualizer.getTotalSize(), width: '100%', position: 'relative' }}>
+              {virtualItems.map((virtualRow) => {
+                const row = rows[virtualRow.index];
+                return (
+                  <div
+                    key={virtualRow.key}
+                    data-index={virtualRow.index}
+                    ref={virtualizer.measureElement}
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      width: '100%',
+                      transform: `translateY(${virtualRow.start}px)`,
+                    }}
+                  >
+                    {renderRow(row)}
+                  </div>
+                );
+              })}
+            </div>
+            {/* §5.1: "receipts fade in only after the server answers — never
+                before". In this app a row cannot exist any earlier than that:
+                the runtime publishes a message only once the authoritative
+                recovery feed has vouched for it, so this line and the row it
+                belongs to arrive together. It sits under the last row rather
+                than inside it so no message's height ever depends on it. */}
+            {deliveredReceipt && (
+              <div
+                className={cn('-mt-4 shrink-0 pb-6 text-right', TIMELINE_GUTTER, ribbon && 'px-3.5')}
+              >
+                <span data-motion-receipt className="pc-mono text-meta text-text-faint">
+                  Delivered
+                </span>
+              </div>
+            )}
+          </>
         )}
       </div>
 

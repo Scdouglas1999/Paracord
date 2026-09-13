@@ -23,6 +23,7 @@
 export {
   bloom,
   dim,
+  fadeIn,
   flash,
   flicker,
   liftOut,

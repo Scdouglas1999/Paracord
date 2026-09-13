@@ -22,7 +22,11 @@ export interface RollingNumberProps {
   /** How the number reads. Defaults to the plain integer. */
   format?: (value: number) => string;
   className?: string;
-  /** Announce changes to assistive tech. Off for a number already inside a live region. */
+  /**
+   * Announce a change politely. Turn it OFF for one of several numbers in the
+   * same sentence and let the sentence announce itself once — the number stays
+   * in the accessible name either way (§9: light always has words).
+   */
   announce?: boolean;
 }
 
@@ -86,21 +90,20 @@ export function RollingNumber({ value, format, className, announce = true }: Rol
   }, [outgoing]);
 
   return (
-    <span className={cn('relative inline-flex overflow-hidden align-bottom tabular-nums', className)}>
-      {/* The scenery. Two stacked values while the roll runs, one after. */}
-      <span aria-hidden className="relative inline-block">
-        <span ref={incomingRef} className="inline-block">
-          {render(value)}
-        </span>
-        {outgoing !== null && (
-          <span ref={outgoingRef} className="absolute inset-0 inline-block">
-            {render(outgoing)}
-          </span>
-        )}
+    // One accessible text node — the current value — inside a region that
+    // speaks on a change. The value on its way out is `aria-hidden`, so the
+    // roll is scenery and the region's atomic text never changes twice.
+    <span
+      className={cn('relative inline-flex overflow-hidden align-bottom tabular-nums', className)}
+      aria-live={announce ? 'polite' : 'off'}
+      aria-atomic="true"
+    >
+      <span ref={incomingRef} className="inline-block">
+        {render(value)}
       </span>
-      {announce && (
-        <span className="sr-only" aria-live="polite" aria-atomic="true">
-          {render(value)}
+      {outgoing !== null && (
+        <span ref={outgoingRef} aria-hidden className="absolute inset-0 inline-block">
+          {render(outgoing)}
         </span>
       )}
     </span>

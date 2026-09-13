@@ -329,7 +329,7 @@ describe('transitionWith', () => {
       void update();
       return { finished, ready: Promise.resolve() };
     });
-    (document as Document & { startViewTransition?: unknown }).startViewTransition = start;
+    (document as unknown as { startViewTransition?: unknown }).startViewTransition = start;
     try {
       const el = markedElement('room:2004', { left: 0, top: 0 });
       const chrome = document.createElement('div');
@@ -342,7 +342,7 @@ describe('transitionWith', () => {
       expect(waapi.played.map((record) => record.options.delay)).toEqual([80]);
       expect(el.style.viewTransitionName).toBe('');
     } finally {
-      delete (document as Document & { startViewTransition?: unknown }).startViewTransition;
+      delete (document as unknown as { startViewTransition?: unknown }).startViewTransition;
     }
   });
 
@@ -390,9 +390,16 @@ describe('<RollingNumber>', () => {
     const { rerender, container } = render(<RollingNumber value={4} />);
     rerender(<RollingNumber value={5} />);
     const live = container.querySelector('[aria-live="polite"]')!;
-    expect(live.textContent).toBe('5');
+    // One live region, and the value leaving is scenery — so the region's
+    // atomic text is "5" while both numbers are on screen.
     expect(container.querySelectorAll('[aria-live]')).toHaveLength(1);
-    expect(container.querySelector('[aria-hidden="true"]')).not.toBeNull();
+    expect(live.querySelector('[aria-hidden="true"]')?.textContent).toBe('4');
+    expect(
+      [...live.childNodes]
+        .filter((node) => !(node instanceof HTMLElement && node.getAttribute('aria-hidden')))
+        .map((node) => node.textContent)
+        .join(''),
+    ).toBe('5');
   });
 
   it('changes the number with no animation under reduced motion', async () => {
@@ -407,6 +414,14 @@ describe('<RollingNumber>', () => {
   it('takes a format so a count can read in words', () => {
     render(<RollingNumber value={5} format={(n) => `${n} reading`} />);
     expect(screen.getAllByText('5 reading').length).toBeGreaterThan(0);
+  });
+
+  it('keeps the number readable but silent when it is not the one that speaks', () => {
+    // Several numbers in one sentence must not each announce themselves; the
+    // value still has to be in the accessible name (§9).
+    const { container } = render(<RollingNumber value={19} announce={false} />);
+    expect(container.querySelectorAll('[aria-live="polite"]')).toHaveLength(0);
+    expect(container.querySelector('[aria-live="off"]')?.textContent).toBe('19');
   });
 });
 

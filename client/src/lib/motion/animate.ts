@@ -283,6 +283,22 @@ export function liftOut(
   );
 }
 
+/**
+ * Something answering after the fact — a receipt once the server has spoken.
+ * Opacity only, `--ease-out`, and it waits its turn behind the thing it
+ * belongs to (§5.1: "receipts fade in only after the server answers").
+ */
+export function fadeIn(el: Element | null | undefined, options: { delay?: number; duration?: number } = {}): Animation | null {
+  if (!animatable(el)) return null;
+  if (prefersReducedMotion()) return landed(el);
+  return run(el, 'fade', [{ opacity: 0 }, { opacity: 1 }], {
+    duration: options.duration ?? ms('--duration-slow'),
+    delay: options.delay ?? 0,
+    easing: motionToken('--ease-out'),
+    fill: 'backwards',
+  });
+}
+
 /** The composer relaxing 0.8% under the send and springing back (§5.1). */
 export function relax(el: Element | null | undefined): Animation | null {
   if (!animatable(el)) return null;

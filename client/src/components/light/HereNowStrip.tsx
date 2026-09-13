@@ -4,6 +4,7 @@ import { useRef, useState } from 'react';
 import { Popover, Well } from '../ui';
 import { cn } from '../../lib/utils';
 import { HERE_NOW_MAX_FACES, type PersonLight } from '../../lib/attention/light';
+import { RollingNumber } from '../../lib/motion';
 import type { HereNow } from '../../hooks/useLights';
 import { AvatarStack } from './AvatarStack';
 import { LitAvatar } from './LitAvatar';
@@ -65,10 +66,20 @@ export const HereNowStrip = React.forwardRef<HTMLDivElement, HereNowStripProps>(
             />
             <span className="min-w-0 truncate text-label text-text-body">
               {caption ?? (
+                // §5.1 "numbers re-roll": both counts change when somebody
+                // walks into the room or turns their lights on, so both flip.
                 <>
-                  <span className="font-semibold text-text-primary">{hereNow.here} here</span>
+                  <RollingNumber
+                    className="font-semibold text-text-primary"
+                    value={hereNow.here}
+                    format={(count) => `${count} here`}
+                  />
                   {' · '}
-                  {hereNow.lightsOn} lights on
+                  <RollingNumber
+                    value={hereNow.lightsOn}
+                    format={(count) => `${count} lights on`}
+                    announce={false}
+                  />
                 </>
               )}
             </span>

@@ -47,7 +47,7 @@ import { cn } from '../../lib/utils';
 import { HereNowStrip, LitAvatar } from '../light';
 import { Well } from '../ui';
 import { useHereNow, useRoomLight } from '../../hooks/useLights';
-import { readingCaption } from '../../lib/attention/light';
+import { flicker, onMotion, RollingNumber } from '../../lib/motion';
 import {
   isReading,
   peerLightSentence,
@@ -438,6 +438,17 @@ function OwnedTopBar({
   const peerReading = isReading(dm.room, dm.peer?.userId);
   const roomIsLit = isDM ? Boolean(dm.room?.lit) : Boolean(roomLight?.lit);
   const roomIsVoice = Boolean(isVoice);
+  /* §5.1: "reading light flickers once when a message lands". This window IS
+     the room's reading light, and the message that lands is one the person at
+     this keyboard just sent — so the composer says so on the motion bus and the
+     window answers. Nothing else on screen moves. */
+  const roomWindowRef = useRef<HTMLSpanElement>(null);
+  useEffect(
+    () => onMotion('say:sent', (detail) => {
+      if (detail.channelId === conversationId) flicker(roomWindowRef.current);
+    }),
+    [conversationId],
+  );
   // §7.6: the encryption state is a plain label, never a badge or a lock icon
   // standing on its own.
   const encryptionLabel = !encrypted
@@ -587,6 +598,7 @@ function OwnedTopBar({
               <LitAvatar person={dm.peer} size={32} hideLabel className="chat-header-avatar" />
             ) : (
               <span
+                ref={roomWindowRef}
                 className={cn('pc-window h-2.5 w-2.5 shrink-0', roomIsLit && 'is-reading')}
                 aria-hidden
               />
@@ -606,6 +618,7 @@ function OwnedTopBar({
                 when it is a voice room with people in it, dark when nobody is
                 there. The counts beside it are the words that go with it. */}
             <span
+              ref={roomWindowRef}
               className={cn(
                 'pc-window h-2.5 w-2.5 shrink-0',
                 roomIsLit && (roomIsVoice ? 'is-talking' : 'is-reading'),
@@ -682,9 +695,17 @@ function OwnedTopBar({
               className="hidden md:block"
               caption={
                 <>
-                  <span className="font-semibold text-text-primary">{readingCaption(dm.hereNow.here)}</span>
+                  <RollingNumber
+                    className="font-semibold text-text-primary"
+                    value={dm.hereNow.here}
+                    format={(count) => `${count} reading`}
+                  />
                   {' · '}
-                  {dm.hereNow.lightsOn} lights on
+                  <RollingNumber
+                    value={dm.hereNow.lightsOn}
+                    format={(count) => `${count} lights on`}
+                    announce={false}
+                  />
                 </>
               }
             />
@@ -698,10 +719,20 @@ function OwnedTopBar({
               context={`reading ${channelName ?? 'this room'}`}
               className="hidden md:block"
               caption={
+                // §5.1 "numbers re-roll": these two change when somebody starts
+                // or stops reading the room, which is a thing a person did.
                 <>
-                  <span className="font-semibold text-text-primary">{readingCaption(hereNow.here)}</span>
+                  <RollingNumber
+                    className="font-semibold text-text-primary"
+                    value={hereNow.here}
+                    format={(count) => `${count} reading`}
+                  />
                   {' · '}
-                  {hereNow.lightsOn} lights on
+                  <RollingNumber
+                    value={hereNow.lightsOn}
+                    format={(count) => `${count} lights on`}
+                    announce={false}
+                  />
                 </>
               }
             />
