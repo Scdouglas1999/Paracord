@@ -42,6 +42,36 @@ import { SidebarSearch } from './SidebarSearch';
 
 /** Rows a building draws before the rest fold into the expander. */
 export const ROOM_ROWS_VISIBLE = 8;
+
+/**
+ * The rooms a building draws above the fold.
+ *
+ * Rooms arrive ordered by light, which says nothing about whether a room is
+ * waiting on *you*: in a building with more than {@link ROOM_ROWS_VISIBLE}
+ * rooms, a room holding unread mentions could sit behind "N more rooms" with no
+ * badge anywhere to say so — the one row the column exists to show you was the
+ * row it hid. Anything with attention is kept above the fold, in the order the
+ * light gave it; quiet rooms fill whatever space is left.
+ */
+export function roomsWithinFold(
+  rooms: readonly RoomLight[],
+  attention: ReadonlyMap<string, RoomAttention> | undefined,
+  limit: number,
+): readonly RoomLight[] {
+  if (rooms.length <= limit) return rooms;
+  const needsYou = (room: RoomLight): boolean => {
+    const mark = attention?.get(room.key);
+    return !!mark && (mark.mentionCount > 0 || mark.unread);
+  };
+  const hiddenNeedy = rooms.slice(limit).filter(needsYou);
+  if (hiddenNeedy.length === 0) return rooms.slice(0, limit);
+  const keep = new Set<RoomLight>(rooms.filter(needsYou).slice(0, limit));
+  for (const room of rooms) {
+    if (keep.size >= limit) break;
+    keep.add(room);
+  }
+  return rooms.filter((room) => keep.has(room));
+}
 /** Past this many buildings, dark ones fold until asked. */
 export const ACCORDION_THRESHOLD = 8;
 
@@ -127,7 +157,7 @@ export function BuildingsColumn({
         ? building.rooms
         : folded
           ? []
-          : building.rooms.slice(0, ROOM_ROWS_VISIBLE);
+          : roomsWithinFold(building.rooms, attention, ROOM_ROWS_VISIBLE);
       const hiddenRoomCount = building.rooms.length - rooms.length;
       const showExpander = hiddenRoomCount > 0 || expanded;
       const previous = built[built.length - 1];
@@ -137,7 +167,7 @@ export function BuildingsColumn({
       built.push({ building, rooms, hiddenRoomCount, expanded, showExpander, navIndexStart });
     }
     return built;
-  }, [activeBuildingKey, activeRoomKey, buildings, openBuildings]);
+  }, [activeBuildingKey, activeRoomKey, attention, buildings, openBuildings]);
 
   const last = sections[sections.length - 1];
   const addBuildingIndex = last

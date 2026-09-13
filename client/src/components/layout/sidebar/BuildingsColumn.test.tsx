@@ -233,6 +233,36 @@ describe('BuildingsColumn', () => {
     expect(within(section).getAllByRole('option')).toHaveLength(ROOM_ROWS_VISIBLE + 2);
   });
 
+  it('keeps a room with unread mentions above the fold', () => {
+    const many = Array.from({ length: 14 }, (_room, index) =>
+      text({ channelId: `t${index}`, name: `room-${index}`, order: index }),
+    );
+    // room-12 would sit behind "N more rooms" on light alone.
+    const buried = many[12];
+    renderColumn({
+      buildings: [building(many)],
+      attention: new Map([[buried.key, { unread: true, mentionCount: 3 }]]),
+    });
+    const section = screen.getByRole('group', { name: 'Kestrel Robotics' });
+    expect(within(section).getAllByRole('option')).toHaveLength(ROOM_ROWS_VISIBLE + 2);
+    expect(within(section).getByRole('option', { name: /room-12/ })).toBeInTheDocument();
+    // The fold still accounts for every room it hid.
+    expect(within(section).getByRole('option', { name: '6 more rooms' })).toBeInTheDocument();
+  });
+
+  it('leaves the light order alone when nothing behind the fold needs you', () => {
+    const many = Array.from({ length: 14 }, (_room, index) =>
+      text({ channelId: `t${index}`, name: `room-${index}`, order: index }),
+    );
+    renderColumn({
+      buildings: [building(many)],
+      attention: new Map([[many[1].key, { unread: true, mentionCount: 0 }]]),
+    });
+    const section = screen.getByRole('group', { name: 'Kestrel Robotics' });
+    expect(within(section).queryByRole('option', { name: /room-12/ })).toBeNull();
+    expect(within(section).getByRole('option', { name: /room-7/ })).toBeInTheDocument();
+  });
+
   it('turns into an accordion past the building threshold, keeping lit and open buildings open', () => {
     const dark = Array.from({ length: 10 }, (_building, index) =>
       building([text({ channelId: `d${index}`, name: `notes-${index}` })], {
