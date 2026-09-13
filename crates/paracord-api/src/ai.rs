@@ -315,6 +315,11 @@ pub async fn summarize_text(
     Ok((summary, config.provider, config.model))
 }
 
+/// Availability only; this does not contact a provider or expose its configuration.
+pub(crate) fn summaries_configured(state: &AppState) -> bool {
+    ai_config_from_state(state).is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,9 +346,4 @@ mod tests {
         };
         let _ = ai_http_client(&config).expect("AI HTTP client should build");
     }
-}
-
-/// Availability only; this does not contact a provider or expose its configuration.
-pub(crate) fn summaries_configured(state: &AppState) -> bool {
-    ai_config_from_state(state).is_ok()
 }

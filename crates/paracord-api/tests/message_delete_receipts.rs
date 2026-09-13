@@ -173,8 +173,8 @@ async fn overwrite(f: &Fixture, allow: Permissions, deny: Permissions) {
         f.channel,
         f.member_id,
         1,
-        allow.bits() as i64,
-        deny.bits() as i64,
+        allow.bits(),
+        deny.bits(),
     )
     .await
     .unwrap();

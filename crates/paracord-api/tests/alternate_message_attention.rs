@@ -562,7 +562,10 @@ async fn crossposts_keep_source_recipients_without_granting_the_author_destinati
         loop {
             let event = events.recv().await.unwrap();
             if event.event_type == "MESSAGE_MENTION"
-                && event.payload["channel_id"] == target_channel.to_string()
+                && event.payload["channel_id"]
+                    .as_str()
+                    .and_then(|value| value.parse::<i64>().ok())
+                    == Some(target_channel)
             {
                 break id(&event.payload["message_id"]);
             }

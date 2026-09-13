@@ -213,12 +213,12 @@ pub async fn stop_voice_session(
 ) -> Result<(), String> {
     state.calls.cancel(&owner_id);
     let _transition = state.calls.transition.lock().await;
-    if !state
+    if state
         .session
         .lock()
         .await
         .as_ref()
-        .is_some_and(|session| session.owner_id == owner_id)
+        .is_none_or(|session| session.owner_id != owner_id)
     {
         return Ok(());
     }

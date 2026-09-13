@@ -641,26 +641,24 @@ pub async fn prepare_message_edit(
         paracord_util::validation::validate_message_content(content).map_err(|_| {
             CoreError::BadRequest("Content must be between 1 and 2000 characters".into())
         })?;
-    } else {
-        if let Some(payload) = dm_e2ee.as_ref() {
-            payload.validate()?;
-            if !content.trim().is_empty() {
-                return Err(CoreError::BadRequest(
-                    "Plaintext content is not allowed for encrypted DMs".into(),
-                ));
-            }
-            stored_content = payload.ciphertext.clone();
-            nonce = Some(payload.nonce.clone());
-            flags = Some(MESSAGE_FLAG_DM_E2EE);
-        } else if !content.trim().is_empty() {
+    } else if let Some(payload) = dm_e2ee.as_ref() {
+        payload.validate()?;
+        if !content.trim().is_empty() {
             return Err(CoreError::BadRequest(
-                "Plaintext DM messages are disabled; update your client for encrypted DMs".into(),
-            ));
-        } else {
-            return Err(CoreError::BadRequest(
-                "Content must be between 1 and 2000 characters".into(),
+                "Plaintext content is not allowed for encrypted DMs".into(),
             ));
         }
+        stored_content = payload.ciphertext.clone();
+        nonce = Some(payload.nonce.clone());
+        flags = Some(MESSAGE_FLAG_DM_E2EE);
+    } else if !content.trim().is_empty() {
+        return Err(CoreError::BadRequest(
+            "Plaintext DM messages are disabled; update your client for encrypted DMs".into(),
+        ));
+    } else {
+        return Err(CoreError::BadRequest(
+            "Content must be between 1 and 2000 characters".into(),
+        ));
     }
 
     Ok(PreparedMessageEdit {
@@ -722,6 +720,31 @@ pub async fn delete_message_with_receipt(
         }),
         _ => Ok((channel, result)),
     }
+}
+
+/// Attach a single committed channel snapshot to message events. Its revision
+/// orders activity independently of message IDs and event publication order.
+pub async fn prepare_message_event(
+    pool: &DbPool,
+    channel_id: i64,
+    mut payload: serde_json::Value,
+) -> Result<serde_json::Value, CoreError> {
+    let channel = paracord_db::channels::get_channel(pool, channel_id)
+        .await?
+        .ok_or(CoreError::NotFound)?;
+    let object = payload
+        .as_object_mut()
+        .ok_or_else(|| CoreError::Internal("Message event must be an object".into()))?;
+    object.insert(
+        "channel_activity".into(),
+        serde_json::json!({
+            "channel_id": channel_id.to_string(),
+            "last_message_id": channel.last_message_id.map(|id| id.to_string()),
+            "revision": channel.message_revision.to_string(),
+        "guild_id": channel.guild_id().map(|id| id.to_string()),
+        }),
+    );
+    Ok(payload)
 }
 
 #[cfg(test)]
@@ -862,29 +885,4 @@ mod tests {
             .await
             .unwrap();
     }
-}
-
-/// Attach a single committed channel snapshot to message events. Its revision
-/// orders activity independently of message IDs and event publication order.
-pub async fn prepare_message_event(
-    pool: &DbPool,
-    channel_id: i64,
-    mut payload: serde_json::Value,
-) -> Result<serde_json::Value, CoreError> {
-    let channel = paracord_db::channels::get_channel(pool, channel_id)
-        .await?
-        .ok_or(CoreError::NotFound)?;
-    let object = payload
-        .as_object_mut()
-        .ok_or_else(|| CoreError::Internal("Message event must be an object".into()))?;
-    object.insert(
-        "channel_activity".into(),
-        serde_json::json!({
-            "channel_id": channel_id.to_string(),
-            "last_message_id": channel.last_message_id.map(|id| id.to_string()),
-            "revision": channel.message_revision.to_string(),
-        "guild_id": channel.guild_id().map(|id| id.to_string()),
-        }),
-    );
-    Ok(payload)
 }

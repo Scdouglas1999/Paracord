@@ -177,21 +177,17 @@ pub async fn get_channel_capabilities(
                     .then_some("Calls are not configured on this server.")
             });
         let reason = unsupported
-            .or_else(|| {
-                (!permissions.contains(required))
-                    .then_some("You do not have permission to use this action in this channel.")
-            })
-            .or_else(|| {
-                (blocked && action != "summary")
-                    .then_some("Messaging and calls are unavailable between these accounts.")
-            })
-            .or_else(|| {
+            .or((!permissions.contains(required))
+                .then_some("You do not have permission to use this action in this channel."))
+            .or((blocked && action != "summary")
+                .then_some("Messaging and calls are unavailable between these accounts."))
+            .or(
                 if matches!(action, "send" | "poll" | "schedule" | "attach") {
                     write_restriction
                 } else {
                     None
-                }
-            });
+                },
+            );
         actions.insert(
             action,
             ActionCapability {
