@@ -420,6 +420,9 @@
   /* ---- §1.2 Light effects: fixed recipes, never free values ---------------- */
   --glow-window-white: 0 0 6px rgba(243, 234, 216, 0.55);
   --glow-window-amber: 0 0 6px rgba(226, 201, 143, 0.5);
+  /* The amber window's writing pulse peaks here — the speaking ring's breath
+     at half its amplitude (§5.1), so typing is a murmur, not a shout. */
+  --glow-window-amber-breathe: 0 0 9px rgba(226, 201, 143, 0.63);
   /* The larger 12×16 windows on Home carry a proportionally larger glow. */
   --glow-window-white-lg: 0 0 8px rgba(243, 234, 216, 0.55);
   --glow-window-amber-lg: 0 0 8px rgba(226, 201, 143, 0.5);
@@ -624,6 +627,7 @@
   /* Same recipes, ink instead of light, half alpha. */
   --glow-window-white: 0 0 6px rgba(23, 23, 15, 0.28);
   --glow-window-amber: 0 0 6px rgba(133, 94, 48, 0.25);
+  --glow-window-amber-breathe: 0 0 9px rgba(133, 94, 48, 0.31);
   --glow-window-white-lg: 0 0 8px rgba(23, 23, 15, 0.28);
   --glow-window-amber-lg: 0 0 8px rgba(133, 94, 48, 0.25);
   --glow-live-dot: 0 0 6px rgba(23, 23, 15, 0.4);
@@ -737,6 +741,7 @@
   /* Rims 2px, alpha ×1.5 (clamped at 1). */
   --glow-window-white: 0 0 6px rgba(243, 234, 216, 0.82);
   --glow-window-amber: 0 0 6px rgba(226, 201, 143, 0.75);
+  --glow-window-amber-breathe: 0 0 9px rgba(226, 201, 143, 0.85);
   --glow-window-white-lg: 0 0 8px rgba(243, 234, 216, 0.82);
   --glow-window-amber-lg: 0 0 8px rgba(226, 201, 143, 0.75);
   --glow-live-dot: 0 0 6px rgba(243, 234, 216, 1);
