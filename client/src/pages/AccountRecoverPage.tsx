@@ -62,6 +62,13 @@ export function AccountRecoverPage() {
 
           {error && <ErrorBanner multiline message={error} />}
 
+          <p className="text-meta text-text-secondary">
+            The phrase restores your identity — the key everyone you talk to verifies. It does not
+            carry your messages: this device sets up fresh encryption keys, so conversations from
+            before stay as “Encrypted message” here unless you import the account’s encrypted
+            backup from Settings › Identity portability.
+          </p>
+
           <div className="flex flex-col gap-5">
             <Field label="Recovery phrase" required hint="All 24 words, in order, separated by spaces.">
               <Textarea

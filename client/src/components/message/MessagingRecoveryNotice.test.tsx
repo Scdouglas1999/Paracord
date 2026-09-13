@@ -6,6 +6,8 @@ import { createMessagingPanelRuntime } from '../../test/messagingPanelRuntimeMoc
 
 const DEVICE_KEY_LIMITATION =
   'Drafts use a device-bound encryption key. Recovery words alone cannot restore them; recovering this storage requires the complete device profile. Device encryption does not protect messages from code running in this app’s origin.';
+const REENROLLMENT_LIMITATION =
+  'Your recovery phrase restored the identity this account is enrolled under, and that identity is what everyone you talk to verifies. This device can publish fresh keys under it, and your contacts pick them up on their next message. Messages sent before now stay unreadable here: import the account’s encrypted backup from Settings › Identity portability if you need them. Any other device still signed in to this account stops receiving new conversations until it sets up again.';
 const LEGACY_LIMITATION =
   'Older keys are retained because their server ownership cannot be verified. Starting new encryption does not recover historical messages. Restore the original account backup if you need those keys; continue only to start a new session for this account.';
 
@@ -115,8 +117,35 @@ describe('MessagingRecoveryNotice', () => {
     expect(screen.getByText(LEGACY_LIMITATION)).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Keep old keys and start new encryption' }));
     await waitFor(() => expect(actions.enroll).toHaveBeenCalledTimes(1));
-    expect(actions.enroll).toHaveBeenCalledWith(true);
+    expect(actions.enroll).toHaveBeenCalledWith({ initializeWithUnownedLegacy: true });
     expect(actions.reviewLegacySession).not.toHaveBeenCalled();
+  });
+
+  it('offers a phrase-restored device its own keys, and says what that costs', async () => {
+    const user = userEvent.setup();
+    const { runtime, actions } = createMessagingPanelRuntime({
+      encryption: 'recovery',
+      encryptionError: 'This account published encryption keys from another device, and this device holds none of them.',
+      encryptionRecovery: { kind: 'device-reenrollment' },
+    });
+    render(<MessagingRecoveryNotice runtime={runtime} encryptedConversation channelId="chan-1" />);
+    expect(screen.getByText('Set up encryption keys on this device')).toBeInTheDocument();
+    expect(screen.getByText(REENROLLMENT_LIMITATION)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Publish new keys for this device' }));
+    await waitFor(() => expect(actions.enroll).toHaveBeenCalledTimes(1));
+    expect(actions.enroll).toHaveBeenCalledWith({ replacePublishedBundle: true });
+  });
+
+  it('never offers re-enrollment in an unencrypted conversation', () => {
+    const { runtime } = createMessagingPanelRuntime({
+      encryption: 'recovery',
+      encryptionError: 'This account published encryption keys from another device, and this device holds none of them.',
+      encryptionRecovery: { kind: 'device-reenrollment' },
+    });
+    const { container } = render(
+      <MessagingRecoveryNotice runtime={runtime} encryptedConversation={false} channelId="chan-1" />,
+    );
+    expect(container).toBeEmptyDOMElement();
   });
 
   it('routes legacy session review only for the matching conversation', async () => {

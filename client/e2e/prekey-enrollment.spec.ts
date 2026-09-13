@@ -26,6 +26,9 @@ async function service(context: BrowserContext, identity: string) {
     const body = JSON.parse(raw) as UploadKeysRequest;
     let receipt = state.receipts.get(body.request_id!);
     if (!receipt) {
+      if (body.replace_existing) {
+        state.keys.signed_prekey = null; state.keys.one_time_prekeys = []; state.keys.last_resort_prekey = null;
+      }
       if (body.signed_prekey) state.keys.signed_prekey = body.signed_prekey;
       if (body.last_resort_prekey) state.keys.last_resort_prekey = body.last_resort_prekey;
       state.keys.one_time_prekeys.push(...(body.one_time_prekeys ?? []));
@@ -194,5 +197,41 @@ test('inventory HTTP does not lock the vault or misclassify a concurrently consu
   release(); await enrollment;
   expect(reads).toBe(2);
   expect((await page.evaluate(() => window.prekeyTest.inspect())).keys!.oneTimePrekeys).toHaveLength(49);
+  expect(server.requests).toHaveLength(1);
+});
+
+test('a phrase-restored device replaces the lost device\u2019s bundle only on an explicit decision', async ({ page, context }) => {
+  const server = await service(context, await setup(page));
+  // Everything this account published was made on a device that is now gone.
+  server.keys = await page.evaluate(() => window.prekeyTest.publishedFromAnotherDevice());
+  const lost = structuredClone(server.keys);
+
+  const refused = await page.evaluate(() => window.prekeyTest.driver.ensure().then(() => '', error => error.code));
+  expect(refused).toBe('DEVICE_NOT_ENROLLED');
+  expect(await page.evaluate(() => window.prekeyTest.inspect())).toEqual({ keys: null, pending: [] });
+  expect(server.requests).toEqual([]);
+
+  await page.evaluate(() => window.prekeyTest.driver.ensure({ replacePublishedBundle: true }));
+  expect(server.requests).toHaveLength(1);
+  const published = JSON.parse(server.requests[0]) as UploadKeysRequest;
+  expect(published.replace_existing).toBe(true);
+  expect(published.expected_identity_key).toBe(lost.identity_key);
+  expect(published.signed_prekey!.id).not.toBe(lost.signed_prekey!.id);
+  expect(published.one_time_prekeys).toHaveLength(50);
+  // Without a last-resort key in the same request the account would be left
+  // with none at all, because the server discards the lost device's.
+  expect(published.last_resort_prekey).toBeTruthy();
+
+  // The server now offers peers only key material this device can open.
+  expect(server.keys.signed_prekey).toEqual(published.signed_prekey);
+  expect(server.keys.last_resort_prekey).toEqual(published.last_resort_prekey);
+  expect(server.keys.one_time_prekeys.map(key => key.id)).toEqual(published.one_time_prekeys!.map(key => key.id));
+  const state = await page.evaluate(() => window.prekeyTest.inspect());
+  expect(state.keys!.signedPrekey.id).toBe(published.signed_prekey!.id);
+  expect(state.keys!.oneTimePrekeys).toHaveLength(50);
+  expect(state.pending).toEqual([]);
+
+  // Steady state afterwards: no second replacement, no further publication.
+  await page.evaluate(() => window.prekeyTest.driver.ensure());
   expect(server.requests).toHaveLength(1);
 });

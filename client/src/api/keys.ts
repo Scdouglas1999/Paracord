@@ -4,6 +4,13 @@ import type { RestClient } from './restClient';
 export interface UploadKeysRequest {
   request_id?: string;
   expected_identity_key?: string;
+  /**
+   * Discard everything this account has published and replace it with this
+   * bundle. Sent only by a device that holds the account's identity private key
+   * but none of the published bundle's private halves (a device restored from
+   * the recovery phrase); the server requires a complete, identity-bound bundle.
+   */
+  replace_existing?: boolean;
   signed_prekey?: {
     id: number;
     public_key: string;

@@ -450,3 +450,126 @@ async fn publication_receipt_storage_failure_rolls_back_all_keys_before_retry() 
     assert_eq!(status, StatusCode::OK, "{receipt}");
     assert_eq!(receipt["request_id"], body["request_id"]);
 }
+
+/// Re-enrolment for a device that proved the account's enrolled identity but
+/// holds none of the private halves of the published bundle (a recovery-phrase
+/// restore). The published inventory is replaced wholesale, because prekeys
+/// nobody can open would otherwise keep being handed to peers ahead of the new
+/// ones -- `consume_one_time_prekey` serves the oldest first.
+#[tokio::test]
+async fn a_proven_identity_replaces_the_whole_published_bundle() {
+    let (app, token, user_id) = setup().await;
+    let identity = "22".repeat(32);
+    sqlx::query("UPDATE users SET public_key = $1 WHERE id = $2")
+        .bind(&identity)
+        .bind(user_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    // The lost device's publication.
+    assert_eq!(
+        call(&app, Some(&token), Method::PUT, Some(bundle(100)))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let (_, lost) = call(&app, Some(&token), Method::GET, None).await;
+    assert_eq!(lost["one_time_prekeys"][0]["id"], 101);
+
+    let mut replacement = bundle(300);
+    replacement["replace_existing"] = json!(true);
+    replacement["request_id"] = json!("2f2d6f4e-5b1a-4c0e-9c4c-1f4e0f9a7c21");
+    replacement["expected_identity_key"] = json!(identity);
+    let (status, response) = call(&app, Some(&token), Method::PUT, Some(replacement.clone())).await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+
+    let (_, own) = call(&app, Some(&token), Method::GET, None).await;
+    assert_eq!(own["signed_prekey"]["id"], 300);
+    assert_eq!(
+        own["one_time_prekeys"],
+        json!([{ "id": 301, "public_key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=" }]),
+        "every prekey from the lost device must be gone, not merely outnumbered"
+    );
+    assert_eq!(own["last_resort_prekey"]["id"], 302);
+    assert_eq!(
+        paracord_db::prekeys::count_one_time_prekeys(&app.db, user_id)
+            .await
+            .unwrap(),
+        1
+    );
+    // A peer starting a new conversation can only be handed the new device's key.
+    let handed = paracord_db::prekeys::consume_one_time_prekey(&app.db, user_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(handed.id, 301);
+
+    // The publication stays idempotent: a replayed replacement returns its
+    // receipt without deleting the keys it already stored.
+    let (status, replayed) = call(&app, Some(&token), Method::PUT, Some(replacement)).await;
+    assert_eq!(status, StatusCode::OK, "{replayed}");
+    assert_eq!(
+        call(&app, Some(&token), Method::GET, None).await.1["last_resort_prekey"]["id"],
+        302
+    );
+}
+
+#[tokio::test]
+async fn a_replacement_is_refused_unless_it_is_a_complete_identity_bound_bundle() {
+    let (app, token, user_id) = setup().await;
+    let identity = "33".repeat(32);
+    sqlx::query("UPDATE users SET public_key = $1 WHERE id = $2")
+        .bind(&identity)
+        .bind(user_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        call(&app, Some(&token), Method::PUT, Some(bundle(100)))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let (_, original) = call(&app, Some(&token), Method::GET, None).await;
+
+    let identified = |mut body: Value| {
+        body["replace_existing"] = json!(true);
+        body["request_id"] = json!("8c1a1c22-2b7e-4a53-8f37-2cf0a9b50d11");
+        body["expected_identity_key"] = json!(identity);
+        body
+    };
+    // An incremental top-up would leave the account with no last-resort key.
+    for missing in ["signed_prekey", "one_time_prekeys", "last_resort_prekey"] {
+        let mut partial = identified(bundle(300));
+        partial[missing] = Value::Null;
+        let (status, response) = call(&app, Some(&token), Method::PUT, Some(partial)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{missing}: {response}");
+    }
+    // Unidentified replacement: the server's only check that this device speaks
+    // for the enrolled identity is the expected-identity match.
+    let mut anonymous = bundle(300);
+    anonymous["replace_existing"] = json!(true);
+    assert_eq!(
+        call(&app, Some(&token), Method::PUT, Some(anonymous))
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    // A replacement naming a different enrolled identity is refused outright.
+    let mut wrong = identified(bundle(300));
+    wrong["expected_identity_key"] = json!("44".repeat(32));
+    let (status, response) = call(&app, Some(&token), Method::PUT, Some(wrong)).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{response}");
+
+    assert_eq!(
+        call(&app, Some(&token), Method::GET, None).await.1,
+        original,
+        "a refused replacement must leave the published bundle untouched"
+    );
+    assert_eq!(
+        paracord_db::prekeys::count_one_time_prekeys(&app.db, user_id)
+            .await
+            .unwrap(),
+        1
+    );
+}

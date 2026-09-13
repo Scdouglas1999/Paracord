@@ -75,6 +75,7 @@ pub async fn publish_prekeys(
     disposable: &[(i64, String)],
     last_resort: Option<(i64, &str)>,
     identity: Option<PrekeyPublicationIdentity<'_>>,
+    replace_existing: bool,
 ) -> Result<PrekeyPublication, DbError> {
     let mut tx = pool.begin().await?;
     sqlx::query("UPDATE users SET id = id WHERE id = $1")
@@ -105,6 +106,19 @@ pub async fn publish_prekeys(
             return serde_json::from_str(&response)
                 .map_err(|error| DbError::Sqlx(sqlx::Error::Decode(Box::new(error))));
         }
+    }
+    // A device that proved the account's enrolled identity may replace the whole
+    // published bundle (see `upload_keys`). Prekeys published by a device whose
+    // private halves are gone are unusable: `consume_one_time_prekey` hands out
+    // the oldest first, so leaving them would keep steering new X3DH
+    // initiations at key material nobody can open. Peers still verify the
+    // signed prekey against the identity key they have pinned, so replacing the
+    // inventory grants no trust the identity holder did not already have.
+    if replace_existing {
+        sqlx::query("DELETE FROM one_time_prekeys WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
     }
     if let Some((id, key, signature)) = signed {
         sqlx::query(

@@ -44,6 +44,12 @@ pub struct UploadKeysRequest {
     /// Legacy clients may omit both; new clients persist both before sending.
     pub request_id: Option<String>,
     pub expected_identity_key: Option<String>,
+    /// Re-enrolment by a device that holds the account's identity private key
+    /// but none of the private halves of the published bundle (a device
+    /// restored from the recovery phrase). The whole published inventory is
+    /// discarded and replaced by this request, so the account stops handing
+    /// peers key material it can no longer open. A complete bundle is required.
+    pub replace_existing: Option<bool>,
     pub signed_prekey: Option<SignedPrekeyUpload>,
     pub one_time_prekeys: Option<Vec<OneTimePrekeyUpload>>,
     /// Long-lived last-resort one-time prekey. Handed out (without deletion) as
@@ -63,6 +69,28 @@ pub async fn upload_keys(
             && key.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) => {},
         (None, None) => {},
         _ => return Err(ApiError::BadRequest("A valid publication UUID and lowercase hexadecimal enrolled identity key are required together.".into())),
+    }
+    if body.replace_existing == Some(true) {
+        // The account's enrolled identity key is the root of trust: a signed
+        // prekey is only usable by a peer if it verifies under that key, which
+        // peers check against their own pin. Replacing the inventory therefore
+        // grants nothing a holder of the identity key could not already do --
+        // but it does destroy key material, so it is accepted only as a
+        // complete, identity-bound bundle, never as an incremental top-up.
+        if body.request_id.is_none() || body.expected_identity_key.is_none() {
+            return Err(ApiError::BadRequest(
+                "Replacing the published key bundle requires a publication UUID and the enrolled identity key.".into(),
+            ));
+        }
+        let disposable = body.one_time_prekeys.as_deref().unwrap_or_default();
+        if body.signed_prekey.is_none()
+            || body.last_resort_prekey.is_none()
+            || disposable.is_empty()
+        {
+            return Err(ApiError::BadRequest(
+                "Replacing the published key bundle requires a signed prekey, one-time prekeys and a last-resort prekey.".into(),
+            ));
+        }
     }
     let request_hash = format!(
         "{:x}",
@@ -137,6 +165,7 @@ pub async fn upload_keys(
                     request_hash: &request_hash,
                 }
             }),
+        body.replace_existing == Some(true),
     )
     .await?;
 

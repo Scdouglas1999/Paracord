@@ -12,7 +12,7 @@ import { OPK_BATCH_SIZE, OPK_LOW_THRESHOLD, SIGNED_PREKEY_ROTATION_MS, type Loca
 const PUBLICATION_NAMESPACE = 'signal.publications';
 const PENDING_ID = 'pending';
 interface PendingPublication { requestId: string; serializedRequest: string }
-export type PrekeyEnrollmentErrorCode = 'IDENTITY_CHANGED' | 'INVALID_KEYS' | 'RECOVERY_REQUIRED' | 'UNOWNED_LEGACY_KEYS' | 'PUBLICATION_NOT_ACKNOWLEDGED';
+export type PrekeyEnrollmentErrorCode = 'IDENTITY_CHANGED' | 'INVALID_KEYS' | 'RECOVERY_REQUIRED' | 'DEVICE_NOT_ENROLLED' | 'UNOWNED_LEGACY_KEYS' | 'PUBLICATION_NOT_ACKNOWLEDGED';
 export class PrekeyEnrollmentError extends Error {
   constructor(readonly code: PrekeyEnrollmentErrorCode, message: string) { super(message); this.name = 'PrekeyEnrollmentError'; }
 }
@@ -139,7 +139,22 @@ export class PrekeyEnrollment {
     });
   }
 
-  async ensure({ initializeWithUnownedLegacy = false } = {}): Promise<void> {
+  /**
+   * `replacePublishedBundle` is re-enrolment for a device that proved the
+   * account's identity (a recovery-phrase restore) but holds none of the
+   * private halves of the bundle the account published from another device.
+   *
+   * The identity key is the root of trust and prekeys are per device: a peer
+   * only accepts a signed prekey that verifies under the identity key it has
+   * pinned, so a device holding that key can already mint any bundle it likes.
+   * Publishing a fresh one therefore adds no authority -- it only stops the
+   * server handing peers key material this account can no longer open. It is
+   * still destructive (another device signed in to the same account stops
+   * receiving new conversations, and prior history stays unreadable here
+   * without an imported backup), so it is never automatic: the caller passes
+   * this only for an explicit user decision.
+   */
+  async ensure({ initializeWithUnownedLegacy = false, replacePublishedBundle = false } = {}): Promise<void> {
     await navigator.locks.request(`paracord:enrollment:${accountScopeKey(this.options.vault.scope)}`, {
       mode: 'exclusive', signal: this.options.lifetime.signal,
     }, async () => {
@@ -161,13 +176,22 @@ export class PrekeyEnrollment {
           // The network wait never holds the account's vault lock.
           if (fingerprint(store) !== before) return false;
           let fresh = false;
+          let replacing = false;
           if (!store) {
             const legacy = await this.options.readLegacy();
             this.assertCurrent();
             if (published.signed_prekey) {
-              if (!legacy) throw new PrekeyEnrollmentError('RECOVERY_REQUIRED', 'This account has published keys but this device has no matching private keys. Restore its encrypted backup.');
-              assertPrekeyOwnership(legacy, published, this.options.privateKey);
-              store = legacy;
+              if (!legacy) {
+                if (!replacePublishedBundle) {
+                  throw new PrekeyEnrollmentError('DEVICE_NOT_ENROLLED', 'This account published encryption keys from another device, and this device holds none of them.');
+                }
+                store = generatePrekeyBundle(this.options.privateKey);
+                fresh = true;
+                replacing = true;
+              } else {
+                assertPrekeyOwnership(legacy, published, this.options.privateKey);
+                store = legacy;
+              }
             } else {
               if (published.one_time_prekeys.length || published.last_resort_prekey) invalid('The published prekey inventory has no signed prekey.');
               if (legacy && !initializeWithUnownedLegacy) throw new PrekeyEnrollmentError('UNOWNED_LEGACY_KEYS', 'Stored legacy keys have no verifiable owner on this server. Recover them or explicitly initialize new keys for this account.');
@@ -195,9 +219,13 @@ export class PrekeyEnrollment {
             store = generated.store;
             body.one_time_prekeys = generated.newPublicKeys.map(key => ({ id: key.id, public_key: toBase64(key.publicKey) }));
           }
-          if (!published.last_resort_prekey && store.lastResortPrekey) {
+          if ((replacing || !published.last_resort_prekey) && store.lastResortPrekey) {
             body.last_resort_prekey = { id: store.lastResortPrekey.id, public_key: toBase64(store.lastResortPrekey.publicKey) };
           }
+          // The server discards the account's whole published inventory for this
+          // request, so the replacement must be complete in one publication:
+          // a partial top-up would leave the account with no last-resort key.
+          if (replacing) body.replace_existing = true;
           assertLocalPrekeys(store);
           writeSignalPrekeys(tx, store);
           if (body.signed_prekey || body.one_time_prekeys || body.last_resort_prekey) {

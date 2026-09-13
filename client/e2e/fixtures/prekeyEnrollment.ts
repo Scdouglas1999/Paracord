@@ -27,6 +27,17 @@ export async function initializePrekeyFixture() {
       writeSignalPrekeys(tx, { ...store, oneTimePrekeys: store.oneTimePrekeys.slice(1) });
       return id;
     }),
+    /**
+     * The bundle a *different* device published for this same account: correct
+     * signature under the shared identity, but this device never holds its
+     * private halves. This is what a recovery-phrase restore finds waiting.
+     */
+    publishedFromAnotherDevice() {
+      const store = generatePrekeyBundle(key);
+      return { identity_key: identity, signed_prekey: { id: store.signedPrekey.id, public_key: toBase64(store.signedPrekey.publicKey), signature: toBase64(ed25519.sign(store.signedPrekey.publicKey, key)) },
+        one_time_prekeys: store.oneTimePrekeys.map(key => ({ id: key.id, public_key: toBase64(key.publicKey) })),
+        last_resort_prekey: { id: store.lastResortPrekey!.id, public_key: toBase64(store.lastResortPrekey!.publicKey) } };
+    },
     seedLegacy() {
       const store = generatePrekeyBundle(key);
       localStorage.setItem('paracord:signal:prekeys', JSON.stringify(serializePrekeyStore(store)));
