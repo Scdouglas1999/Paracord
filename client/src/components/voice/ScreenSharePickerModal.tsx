@@ -35,7 +35,7 @@ function ScreenShareSourceCard({
     ? safeClientResourceUrl(thumbnailUrl) ?? (isSafeImageDataUrl(thumbnailUrl) ? thumbnailUrl : null)
     : thumbnailUrl;
 
-  // Selectable tile (design-spec §7): resting hairline, hover/focus lifts to an
+  // Selectable tile (lantern-stage-spec §8): resting hairline, hover/focus lifts to an
   // --accent-primary ring over an --accent-tint wash.
   return (
     <button

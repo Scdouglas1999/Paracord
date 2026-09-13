@@ -12,8 +12,8 @@ import {
  * the novel IA introduced in the v1.0 overhaul (layout-spec §1: unified attention
  * sidebar + presence-first guild homes). It is NOT a modal wizard: no full-app
  * dimming overlay — the app stays fully interactive and each step simply anchors a
- * small popover (design-spec §7 Popover) beside an existing landmark and paints a
- * soft emerald focus ring (design-spec §4 `--focus-ring`) over it.
+ * small popover (lantern-stage-spec §8) beside an existing landmark and paints a
+ * soft emerald focus ring (lantern-stage-spec §9 focus ring) over it.
  *
  * Two independent, separately-persisted tours run from this single mount:
  *   • the SHELL tour (steps a + b) fires on the first authenticated shell mount —
@@ -27,7 +27,7 @@ import {
  * silently. Dismissal ("Skip tour", "Done", or Esc) persists via the shared
  * versioned-storage helper so the tour never re-appears.
  *
- * Motion follows design-spec §5 (≤180ms ease-out enter) and inherits AppShell's
+ * Motion follows lantern-stage-spec §5 (≤180ms ease-out enter) and inherits AppShell's
  * `MotionConfig reducedMotion="user"`, so reduced-motion users get the fade only.
  */
 

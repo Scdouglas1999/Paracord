@@ -12,7 +12,7 @@ export interface HomeAddBuildingProps {
  *
  * An outline tile, never a card: it is the one thing in the column that is not
  * a building, and it stays visible whether you have twelve buildings or none —
- * an empty street should still have a door in it (design-spec §6, empty states
+ * an empty street should still have a door in it (lantern-stage-spec §6, empty states
  * are left-aligned with an action).
  */
 export function HomeAddBuilding({ onClick }: HomeAddBuildingProps) {

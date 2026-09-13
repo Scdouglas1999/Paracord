@@ -13,9 +13,11 @@
 > It resolves the three verified research slices (ia-routing, attention/ranking data,
 > rooms/presence surfaces) into one implementable plan. Where a slice and this file
 > disagree, this file wins. Where this file and a component disagree, the component is
-> wrong. Visual law remains `docs/design-spec.md` ("Emerald Commons"): **consume tokens
-> from `client/src/styles/tokens.css`, never hard-code hex.** The anti-AI-slop kill-list
-> stays enforceable.
+> wrong. Visual law is `docs/lantern-stage-spec.md` ("Lantern Stage"), which supersedes
+> the Emerald Commons system this document was written against and amends §7 below:
+> **consume tokens from `client/src/styles/tokens.css`, never hard-code hex** (enforced
+> by `client/scripts/literal-colour-audit.mjs`). The anti-slop kill-list stays
+> enforceable.
 >
 > **Scope guard:** CLIENT-ONLY. No server changes. Every datum the new IA needs (unreads,
 > mentions, voice occupancy/speaking/streams, presence, members, DMs) already flows through
@@ -41,6 +43,14 @@
 ---
 
 ## 1. The new frame + component tree (exact paths)
+
+> **Amended by the v2 overhaul.** The two-zone shell below is still the live
+> frame, but the components hanging off it were replaced between WP1 and WP7 of
+> `docs/lantern-stage-spec.md`: the sidebar body is now the Buildings column,
+> `RoomsView` is the Lobby, the docked `MemberList` is deleted, and
+> `MiniVoiceBar` is the on-air dock. **§7 of this file is the current map.** The
+> tree in this section is kept as the as-built record of the v1.0 overhaul that
+> the rest of §0–§6 describes.
 
 The Discord skeleton (guild rail + channel column + docked member list) is replaced by a
 two-zone shell: **one Unified Sidebar** (left, ~300px, collapsible) and **one full-width
@@ -140,7 +150,7 @@ client/src/stores/pinnedStore.ts                  (zustand+persist — pinned co
 | `components/layout/UserPanel.tsx` | **MOVES** (survives) | `UnifiedSidebar` footer |
 | `components/voice/VoiceControls.tsx` (channel-column footer) | **DIES** | `components/layout/sidebar/CallDock.tsx` (reuses `MiniVoiceBar`; port any richer affordance before deleting) |
 | `components/voice/MiniVoiceBar.tsx` | **SURVIVES / promoted** | shared voice-dock primitive: `CallDock` (desktop sidebar footer) + mobile bottom dock in `AppShell` |
-| `components/layout/MemberList.tsx` | **SURVIVES** | `ContextPanel` `members` mode |
+| `components/layout/MemberList.tsx` | **DELETED (WP8)** | The here-now strip's people sheet; a group message's recipients are `ContextPanel` `recipients` mode |
 | `components/layout/TopBar.tsx` | **REWORKED** (survives) | ChatView topbar: breadcrumb chip + `#channel`/topic + context toggles → `contextPanelMode`; keeps Summary/Follows/Inbox/Help as anchored popovers |
 | `components/guild/GuildEconomyPanel.tsx` | **SURVIVES** | `ContextPanel` `economy` mode |
 | TopBar Search overlay | **MOVES** | `ContextPanel` `search` mode |
@@ -318,7 +328,7 @@ Extend `hooks/useKeyboardNavigation.ts`; add roving-tabindex arrow-nav to the si
 | `Esc` | Precedence: close Command Palette → else close `ContextPanel` (`contextPanelMode=null`) → else (narrow) close the sidebar overlay. Settings overlays keep their own Esc handler. |
 
 `focus-visible` ring (`--focus-ring`) on every interactive element; every hover-revealed
-action also reachable on focus (`focus-within`) — design-spec §8, non-negotiable.
+action also reachable on focus (`focus-within`) — lantern-stage-spec §9, non-negotiable.
 
 ---
 
@@ -328,13 +338,13 @@ Breakpoint via `useMobile()` (≤768px); gestures via `useSwipeGesture`. On moun
 `sidebarCollapsed` is forced true (existing effect preserved).
 
 - **Unified sidebar → left overlay.** Swipe-right from the left edge opens; backdrop tap or `Esc` closes. Desktop-collapsed (64px rail) is *not* used on mobile — it is full overlay or hidden.
-- **ContextPanel → right overlay.** Swipe-left opens it in `members` mode (matches today's `setMemberPanelOpen(true)` gesture); default closed.
-- **Guild Home (`RoomsView`) stacks to one column:** header → live rooms → around-now → text channels.
-- **ChatView topbar compact;** breadcrumb collapses to the channel chip; ContextPanel default closed.
+- **ContextPanel → right overlay.** Default closed. *(Amended in WP8: the swipe-left gesture that opened it in `members` mode is gone with the mode — lantern-stage-spec §6.5. The panel is opened from the header.)*
+- **The Lobby stacks to one column:** header → around now → rooms → coming up → text rooms.
+- **The room header is compact;** the breadcrumb collapses to the room chip; ContextPanel default closed.
 - **`MobileBottomNav` retained** (Home / DMs / Space / Friends / Settings). Space always
   opens the selected guild's Rooms home (or the first joined space as a fallback), never a
   stale last channel and never a no-op when joined spaces exist.
-- **`MiniVoiceBar` mobile dock** stays in `AppShell` main (the sidebar CallDock is unreachable while the overlay sidebar is closed, so the mobile bottom dock remains the persistent call surface).
+- **The on-air dock** stays in `AppShell` main on mobile (the sidebar CallDock is unreachable while the overlay sidebar is closed, so the bottom dock remains the persistent call surface).
 
 Desktop collapse (`Ctrl+B` / footer control): `sidebarCollapsed=true` → 64px **icon rail**
 (Space avatars with attention dots + a mini CallDock + the user avatar) so navigation survives
@@ -342,84 +352,97 @@ collapse; expanded width = `sidebarWidth` (user-resizable within `--sidebar-min`
 
 ---
 
-## 7. Rooms recipes (Emerald Commons tokens)
+## 7. Rooms recipes (Lantern Stage)
 
-All values reference tokens; no hard-coded hex. Kill-list enforced (no gradient hero #1,
-line icons not emoji #3, left-aligned empty states #4, dividers not tiled cards #5).
+> **Rewritten in WP8.** Every component this section used to name was deleted in
+> the v2 overhaul. The recipes themselves now live in
+> `docs/lantern-stage-spec.md` §8, which is the single place they are written
+> down; what follows is the IA-level map — which surface owns which component,
+> and what each one is for — so this document stays navigable.
+>
+> Tokens only, no hard-coded hex. The kill-list that applies is
+> lantern-stage-spec §6: no glow without a source, no gradient wash, light
+> tokens never spent on emphasis, no docked member list, no status-colour dots,
+> no uppercase section labels, no identical-card tiling.
 
-### 7.1 `RoomCard` states (`components/rooms/RoomCard.tsx`)
-Props `{ channel, participants: VoiceState[], speakingUsers: Set<string>, guildId, onJoin, onWatch, compact }`. Derive from `channelParticipants.get(channel.id)`.
+### 7.1 The Lobby — a building seen from the street (`components/rooms/lobby/`)
 
-- **(a) Live** — `bg-bg-secondary`, `border-border-subtle`, `--radius-md`, `--shadow-sm`.
-  `OccupantStack` of occupants; **speaking ring** on `speakingUsers.has(id)`:
-  `ring-2 ring-accent-primary` + glow `shadow-[0_0_8px_rgba(var(--accent-primary-rgb),0.55)]`.
-  Listener count as a `--success-tint`/`--accent-success` badge. One-click **Join** =
-  primary button (§7 Button) → `useVoice().joinChannel(channel.id, guildId)`.
-- **(b) Quiet / empty** — **compact single-line row**, not a dead card: `#`/`Volume2` icon +
-  name + muted `--text-muted` "Empty — start the room" + subtle **Join** (outline). Never an
-  icon-in-a-circle dead tile.
-- **(c) Stage** (`channel.type === 13`) — `Radio` icon, speakers vs audience split (the
-  `suppress` flag), "Live" + listener count. Enter → channel route (`VoiceStageChannel`).
-- **(d) Stream** — per-occupant `--status-streaming` (`#9B7BFF`) dot on the avatar + **Watch**
-  → `voiceStore.setWatchedStreamer(id)` then navigate to the channel route (mirrors
-  `VoiceParticipants` handoff). 
+`Lobby.tsx` composes the whole surface (lantern-stage-spec §7.3) and replaces
+`RoomsView` + `GuildHomeHeader` + `LiveRoomsGrid` + `AroundNowStrip` +
+`TextChannelList` + `SpaceBriefing`, keeping their data:
 
-### 7.2 `OccupantStack` (`components/rooms/OccupantStack.tsx`)
-Overlapping avatar chips, `-8px` overlap, each ringed in the surface color behind it
-(`--bg-secondary`). Speaking ring = teal→emerald duotone per design-spec §Avatar. `+N`
-overflow chip on `--bg-mod-strong` / `--text-secondary`. Mute + streaming badges.
+| Component | Was | Role |
+|---|---|---|
+| `LobbyHeader` | `GuildHomeHeader` | Building mark, name, one line of facts. The operator's welcome line replaces the generated sentence when they wrote one; the generated one stays in the accessibility tree. |
+| `AroundNowWell` | `AroundNowStrip` | Lit avatar stack + one sentence naming who is where. Reads `useAroundNow`; never a presence dot. |
+| `RoomCard` / `AddRoomTile` | `rooms/RoomCard` | The lit card (live thumbnail, duration, occupants, speaking line, white-light Join) and the matte card ("Dark · nobody's in", last lit, Open). |
+| `TextRoomRow` | `TextChannelList` | A text room is a row, never a card: grid `22px 1fr auto`, window dot, name + last author/time, preview, reader stack, mention chip. A featured room sorts first and carries a pin. |
+| `EventCard` | — | The next scheduled event, omitted entirely when there is none. |
+| `MediaStrip` | — | What has been passed around lately, omitted entirely when nothing has. |
+| `hubWelcome.ts` | `SpaceBriefing` | Reads `guild.hub_settings` into the three things the Lobby can show: the welcome line, a thin banner band, and the featured-first ordering. |
+| `lobbyCaptions.ts` / `lobbyTime.ts` | — | This surface's own copy and clocks, as pure functions with their own tests. |
 
-### 7.3 `AroundNowStrip` (`components/rooms/AroundNowStrip.tsx`)
-Presence-first online-member strip: `memberStore.getMembersForGuild(guildId)` filtered by
-`presenceStore.getPresence(id, scope).status !== 'offline'`. Avatar + presence dot
-(`--status-online|idle|dnd|streaming`, ring in the panel surface). **"View all"** opens the
-full member list via `ContextPanel` `members` mode.
+### 7.2 The light primitives (`components/light/`)
 
-### 7.4 `TextChannelList` (`components/rooms/TextChannelList.tsx`)
-Categories via `buildChannelGroups`; unread/mention via `useUnreadCounts(serverId, muted)`.
-Row = **Nav item recipe** (design-spec §7): 34px, `--radius-sm`, text `--text-secondary`,
-icon 18px `--channel-icon`. **Active:** `--accent-tint` + 3px left bar `--accent-secondary`
-(teal) + icon `--accent-primary` (never a full emerald fill). **Unread:** 8px `--accent-primary`
-dot. **Mention badge:** `--accent-primary` bg + `--text-on-accent`. Forum/announcement keep
-their affordances. Click → `guilds/:guildId/channels/:channelId`.
+Shared by the Lobby, Home, the Buildings column, the Stage and the text room.
+Nothing outside this folder derives a light: a surface that needs to know who is
+talking or reading calls a hook in `lib/attention` / `hooks/useLights.ts`.
 
-### 7.5 `GuildHomeHeader` (`components/rooms/GuildHomeHeader.tsx`)
-Solid raised surface (`--bg-secondary` + `--border-subtle` divider — **no gradient hero**).
-Guild name in Fraunces (`font-display`, Title/Display step). "Who's around now" summary
-(online count + live-room count). **Admin/settings entry** (gear) gated by
-`usePermissions(MANAGE_GUILD)` → `setGuildSettingsId(guildId)` — this is where the old
-`GuildChannelList` dropdown entry now lives. Invite affordance alongside.
+`WindowMap` · `BuildingPlate` · `RoomThumbnail` · `LitAvatar` · `AvatarStack` ·
+`HereNowStrip` (the people sheet is the only full list of people in the product)
+· `LiveDot` · `OnAirPill` · `LightCaption`.
 
-### 7.6 `SpaceBriefing` (`components/rooms/SpaceBriefing.tsx`)
-Consumes the existing `guild.hub_settings` on the member-facing Rooms front door so Hub
-configuration is not orphaned in admin. It renders **after live rooms** to preserve the
-presence-first hierarchy and disappears entirely when no safe banner, welcome copy, or
-valid featured text channel is configured. The banner is real community content in a
-bounded panel, never a gradient hero. Featured rooms preserve the admin-authored order,
-filter stale/non-text ids, and route through the normal channel destination.
+### 7.3 The Buildings column (`components/layout/sidebar/`)
 
-### 7.7 Sidebar `ConversationRow` recipe (`components/layout/sidebar/ConversationRow.tsx`)
-Nav-item base (§7). **Active:** `--accent-tint` fill + 3px teal left edge bar + `--text-primary`.
-Heterogeneous leading element by `kind`: guild channel = `#`/type icon + small
-`--text-muted` guild-context label; DM/group = avatar + presence dot; thread = thread icon;
-guild home = guild avatar. **Emerald mention badge** (`--accent-primary` + `--text-on-accent`);
-8px `--accent-primary` unread dot. Voice-active rows show a small live indicator.
+`BuildingsColumn` is one roving listbox (lantern-stage-spec §7.1);
+`BuildingSection` is a building's group inside it, `RoomRow` a room, `AccountPlate`
+the pinned footer, `SidebarSearch` the ⌘K well, `CollapsedRail` the collapsed
+state, `CallDock` the on-air slot. `ConversationRow` and the Needs-you section
+are gone — needs-you lives on Home.
 
-`RecentList` shows at most five rows by default so Spaces remains visible, with an explicit
-in-place “Show N more” control. It never labels the DM-only `/app/dms` route “All
-conversations.” `NeedsYou` shows its overflow count, and expanded Space rows carry the same
-attention dot as the collapsed rail.
+### 7.4 The Stage (`components/voice/stage/`)
+
+`StageLayout` composes `StageHeader` (name, building · duration, here-now strip,
+actions), `SpeakerGrid` + `StageTile`, `StageControlBar`, `StageStatus` and
+`RoomChatRibbon` (lantern-stage-spec §7.2). `/design-stage` renders it from
+fixture models at full size, and `/app/design-stage` renders it inside the real
+shell, with the Buildings column beside it.
+
+### 7.5 Home (`components/home/`)
+
+`HomeBuildingCard`, `HomeNeedsYou`, `HomeComingUp`, `HomeAddBuilding`,
+`HomePickUp` (lantern-stage-spec §7.5). Brightest building first.
+
+### 7.6 The text room and DMs (`components/message/`, `components/layout/TopBar.tsx`)
+
+`TopBar` is the room header: window dot, `ChannelSwitcher`, the building as
+breadcrumb with the topic, the here-now strip, and `ConversationHeaderActions`
+(search, pins, threads, one labelled overflow). `messageLight.ts` drives the
+inline room events ("Shop floor lit up · …"); `TimelineParts` draws the timeline.
+A DM is the same plate (lantern-stage-spec §7.6); the header strip carries the
+peer's light and the encryption state as a plain label.
+
+### 7.7 The context panel (`components/layout/ContextPanel.tsx`)
+
+The toggleable right panel, `--w-context-panel` wide, never docked. Modes:
+`threads`, `pins`, `search`, `economy`, and `recipients` — a group message's
+people, which is editable and is therefore not a member list. **There is no
+`members` mode**: §6.5 of the visual contract removed the docked member list and
+WP8 removed its last door, the mobile left-edge swipe.
 
 ### 7.8 `ChannelSwitcher` (`components/layout/ChannelSwitcher.tsx`)
-The active channel label in guild chat is a compact trigger, not another permanent rail.
-The floating surface provides a filter, category-grouped text/forum/voice/stage destinations,
-the current-channel state, and a first-class “Rooms home” entry. Arrow keys traverse
-destinations; `Escape` closes and restores focus. On narrow layouts it uses the same trigger
-and a viewport-bounded menu rather than a hover-only control.
 
-On narrow screens the TopBar keeps only the local high-frequency actions visible (search and,
-for spaces, members). Summary, pins, threads, follows, economy, settings, Inbox, and help move
-into one labeled overflow menu; they remain keyboard-accessible without crowding the room name.
+The active room name in the header is a compact trigger, not another permanent
+rail. The floating surface provides a filter, grouped destinations (the virtual
+groups are "Text rooms" and "Voice rooms"), the current-room state, and a
+first-class Lobby entry. Arrow keys traverse destinations; `Escape` closes and
+restores focus. On narrow layouts it uses the same trigger and a viewport-bounded
+menu rather than a hover-only control.
+
+On narrow screens the header keeps only the local high-frequency actions visible.
+Summary, pins, threads, follows, economy, settings, Inbox and help move into one
+labelled overflow menu; they remain keyboard-accessible without crowding the room
+name.
 
 ---
 

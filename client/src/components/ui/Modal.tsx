@@ -39,7 +39,7 @@ const PLACEMENT_CLASS: Record<ModalPlacement, string> = {
   top: 'items-start justify-center px-4 pt-[12vh]',
 };
 
-// Modal enter (design-spec §5): 240ms ease-out, scale(.96→1) + translateY(8→0) + fade.
+// Modal enter (lantern-stage-spec §5): 240ms ease-out, scale(.96→1) + translateY(8→0) + fade.
 const PANEL_MOTION = {
   center: {
     initial: { opacity: 0, scale: 0.96, y: 8 },
@@ -53,7 +53,7 @@ const PANEL_MOTION = {
   },
 } as const;
 
-// prefers-reduced-motion (design-spec §5/§8): drop transforms, keep the fade only.
+// prefers-reduced-motion (lantern-stage-spec §5/§9): drop transforms, keep the fade only.
 const PANEL_MOTION_REDUCED = {
   initial: { opacity: 0 },
   animate: { opacity: 1 },

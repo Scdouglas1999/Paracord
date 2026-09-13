@@ -38,7 +38,7 @@ import { ErrorBoundary } from '../components/ErrorBoundary';
  * of truth), and collapses to an overlay on narrow widths (§6).
  *
  * `MotionConfig reducedMotion="user"` drops transform-based enters for users who
- * ask for reduced motion while keeping opacity fades (design-spec §5, §8).
+ * ask for reduced motion while keeping opacity fades (lantern-stage-spec §5, §9).
  */
 export function AppShell() {
   useKeyboardNavigation();
@@ -170,10 +170,10 @@ export function AppShell() {
   useFocusTrap(sidebarOverlayRef, showSidebarOverlay, closeSidebarOverlay);
   useFocusTrap(contextOverlayRef, isMobile && showContextPanel, closeContextOverlay);
 
-  // Emerald Commons elevation ramp (design-spec §1.1, kill-list #7): the whole
-  // authenticated app lives inside a single surface ramp — `--bg-tertiary` base,
-  // the raised `--bg-secondary` sidebar / context panel separated by 1px hairline
-  // dividers, and the `--bg-primary` main canvas.
+  // Three layers, never four (lantern-stage-spec §4): the street
+  // (`--bg-base`) carries the Buildings column and the gutter, a plate
+  // (`--bg-plate`) carries content, and raised/well surfaces live inside a
+  // plate. A plate is never nested in a plate.
   const modalEnter = { duration: 0.24, ease: [0.22, 1, 0.36, 1] as const };
 
   return (

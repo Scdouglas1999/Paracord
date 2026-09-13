@@ -21,7 +21,7 @@ export interface SlashCommandPopupProps {
 
 const MAX_VISIBLE = 10;
 
-// Popover recipe (design-spec §7): --bg-floating, radius-md, 1px --border-subtle,
+// Popover recipe (lantern-stage-spec §8): --bg-floating, radius-md, 1px --border-subtle,
 // --shadow-plate, 180ms rise+fade enter.
 const POPOVER_CLASS =
   'absolute bottom-full left-2 right-2 z-30 mb-2 rounded-well border border-border-subtle bg-bg-floating shadow-[var(--shadow-plate)]';

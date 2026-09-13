@@ -73,7 +73,7 @@ interface MessageInputProps {
   variant?: 'default' | 'ribbon';
 }
 
-// 36px icon control (design-spec §7 Icon button): radius-sm, --interactive-normal →
+// 36px icon control (lantern-stage-spec §8): radius-sm, --interactive-normal →
 // --interactive-hover on a --bg-mod-subtle wash, press = scale(.97), layered focus
 // ring, 44px min touch target on coarse pointers.
 // §8 Composer tool: a quiet 32px ghost control inside the raised bar (§3

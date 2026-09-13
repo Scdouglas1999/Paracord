@@ -2,7 +2,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { RefreshCw } from 'lucide-react';
 import { useUIStore } from '../stores/uiStore';
 
-// App-wide status banner (design-spec §7): an info-toned top bar with a
+// App-wide status banner (lantern-stage-spec §8): an info-toned top bar with a
 // matching lucide icon and --text-label copy, sliding in over --duration-normal.
 export function RestartBanner() {
   const serverRestarting = useUIStore((s) => s.serverRestarting);

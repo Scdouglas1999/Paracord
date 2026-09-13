@@ -27,7 +27,7 @@ function SkeletonMessage({ lines = 2, wide = false }: { lines?: number; wide?: b
 
 /**
  * Loading state — a skeleton of the real channel layout (message stream +
- * composer), never a bare centered spinner (design-spec kill-list #4).
+ * composer), never a bare centered spinner (lantern-stage-spec §6).
  */
 export function GuildLoadingScreen() {
   return (

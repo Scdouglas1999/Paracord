@@ -297,7 +297,7 @@ export function UpdateNotification() {
   const StatusIcon = downloaded ? CheckCircle2 : ArrowDownToLine;
   const statusColor = downloaded ? 'var(--accent-success)' : 'var(--accent-info)';
 
-  // Toast recipe (design-spec §7): bg-accent surface, hairline border, radius-md,
+  // Toast recipe (lantern-stage-spec §8): bg-accent surface, hairline border, radius-md,
   // shadow-[var(--shadow-plate)], a leading semantic state icon, --text-label title and --text-meta body.
   return (
     <motion.div

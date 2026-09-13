@@ -28,7 +28,7 @@ const STATUS_LABEL: Record<string, string> = {
   offline: 'Offline',
 };
 
-// Icon action button (design-spec §7 Icon button). Revealed on row hover AND
+// Icon action button (lantern-stage-spec §8). Revealed on row hover AND
 // keyboard focus so hover-only actions stay reachable (§8).
 function ActionButton({
   label,
@@ -65,7 +65,7 @@ function ActionButton({
   );
 }
 
-// A single person row (design-spec §7 List item): avatar + optional presence dot,
+// A single person row (lantern-stage-spec §8): avatar + optional presence dot,
 // name + subtitle, then row actions supplied by the caller.
 function PersonRow({
   name,

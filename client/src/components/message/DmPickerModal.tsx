@@ -29,7 +29,7 @@ export interface DmPickerModalProps {
  * updates `channelStore`, navigates to `/app/dms/:id`, fires `onCreated`, then
  * closes. A group-DM sub-mode is preserved from the original picker.
  *
- * Reuses the design-spec §7 Modal recipe (`ui/Modal`: bg --bg-accent, --radius-plate,
+ * Reuses the lantern-stage-spec §8 dialog recipe (`ui/Modal`: bg --bg-accent, --radius-plate,
  * --border-strong, --shadow-plate, 240ms enter + focus trap), Button and EmptyState.
  * Consumed by HomePage and the sidebar search "new DM" affordance.
  */

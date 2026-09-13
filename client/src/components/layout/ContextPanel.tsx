@@ -111,7 +111,7 @@ const CLOSE_BUTTON =
  *   economy  → components/guild/GuildEconomyPanel.tsx
  *   null     → nothing
  *
- * Visual law: Card/panel recipe (design-spec §7) — `bg-bg-raised`, a
+ * Visual law: Card/panel recipe (lantern-stage-spec §8) — `bg-bg-raised`, a
  * `border-border-subtle` hairline on the left edge, real elevation, and no
  * gradient hero (kill-list #1). `economy` is wrapped in the shared panel chrome
  * (title + close, focus-visible ring on close). `recipients`, `threads`,

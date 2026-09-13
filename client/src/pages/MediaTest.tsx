@@ -136,7 +136,7 @@ export default function MediaTest() {
   const levelPercent = (level: number) => Math.max(0, 100 - (level / 127) * 100);
 
   // Dev-tool control button. Active (muted/deafened) reads as the danger fill;
-  // idle is a quiet secondary. Consumes Emerald Commons tokens — no ad-hoc hex.
+  // idle is a quiet secondary. Tokens only — no ad-hoc hex.
   const ctrlBtn = (active: boolean) =>
     cn(
       'inline-flex h-9 items-center justify-center rounded-chip px-3.5 text-label font-semibold transition-colors duration-[140ms] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50',

@@ -78,7 +78,7 @@ function notifyComponentError(action: string, err: unknown): void {
 // ---------------------------------------------------------------------------
 
 // Map bot-supplied ButtonStyle onto the shared Button primitive's variants so
-// in-message buttons match the rest of the product exactly (design-spec §7).
+// in-message buttons match the rest of the product exactly (lantern-stage-spec §8).
 // Success has no primitive variant; it gets a token-driven className, keeping the
 // primitive's metrics/motion/focus-ring intact.
 const BUTTON_STYLE_VARIANT: Record<number, ButtonProps['variant']> = {

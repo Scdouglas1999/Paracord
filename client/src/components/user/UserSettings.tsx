@@ -94,7 +94,7 @@ type SettingsSection =
 
 type NavItem = { id: SettingsSection; label: string; icon: LucideIcon; adminOnly?: boolean };
 
-// Sectioned nav (design-spec §7 nav item + section groups). Icons keep the rail
+// Sectioned nav (lantern-stage-spec §8 NavRow). Icons keep the rail
 // legible and consistent; grouping gives rhythm instead of one flat list.
 const NAV_GROUPS: { label?: string; items: NavItem[] }[] = [
   { items: [{ id: 'account', label: 'My account', icon: User }] },

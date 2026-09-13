@@ -30,7 +30,7 @@ const CLOSE_BUTTON =
 
 /**
  * Shared top-anchored floating shell for the TopBar surfaces (search, inbox,
- * pins, help, summary, follows). It renders the design-spec popover recipe
+ * pins, help, summary, follows). It renders the floating-surface recipe
  * (bg --bg-floating, radius-md, --shadow-plate) over the base Modal — one family
  * of chrome for every launcher. Consumers own their own focus trap via
  * `dialogRef`, so this routes through Modal with `manageFocus={false}`.

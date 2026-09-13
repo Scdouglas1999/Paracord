@@ -334,7 +334,7 @@ npx tauri build
 | [Known Limitations](docs/known-limitations.md) | Platform and operational support boundaries |
 | [Bot Development](docs/bot-development.md) | Bots, commands, interactions, and webhooks |
 | [Federation Protocol](docs/federation-protocol.md) | Signed federation envelopes and the trust model |
-| [Design Spec](docs/design-spec.md) | The Emerald Commons visual system |
+| [Design language](docs/lantern-stage-spec.md) | The Lantern Stage visual system — light means people |
 | [Layout Spec](docs/layout-spec.md) | Unified navigation, Home, Rooms, and context panels |
 | [API Contracts](docs/api-contracts.md) | API and realtime interface notes |
 | [Release Notes](RELEASE_NOTES.md) | What changed in the current release |
