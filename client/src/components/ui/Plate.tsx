@@ -49,6 +49,10 @@ export interface LampProps extends React.HTMLAttributes<HTMLSpanElement> {
   height?: number;
 }
 
+/* A caller that needs the lamp sized to its surface rather than in pixels
+   overrides `left/top/width/height` through `style` — the defaults below are
+   merged first, so a percentage box wins (see RoomThumbnail). */
+
 /**
  * The one permitted radial (spec §1.2): a lamp inside a lit building or room
  * card, anchored near its top-left. One per lit card, and never on a surface

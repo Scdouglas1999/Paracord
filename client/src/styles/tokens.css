@@ -241,6 +241,10 @@
   --radius-control: 9px;
   --radius-chip: 7px;
   --radius-window: 2px;
+  /* A room thumbnail is its own step (§8 RoomThumbnail: "8px radius well") —
+     tighter than a well so a 64px sidebar thumbnail does not read as a pill.
+     Added in WP1; §3's radii list does not name it, §8 does. */
+  --radius-thumb: 8px;
   /* Stage controls sit between a control and a card (§8 ControlBar). */
   --radius-stage-control: 13px;
   --radius-stage-control-phone: 16px;
@@ -301,6 +305,16 @@
    a component never re-derives a shadow. Every theme below redefines this same
    set; no theme adds or removes a name.
    ============================================================================= */
+/* Night's literals are declared for `:root` AND for every dark theme's own
+   attribute, so a *nested* `[data-theme]` subtree resolves a complete set
+   rather than inheriting whatever the surrounding theme left behind. AMOLED and
+   High contrast then override their subset in their own blocks below (same
+   specificity, later in the file, so they win). Daylight declares everything
+   itself. Without this, a theme preview rendered while the app is in Daylight
+   would paint paper ink onto a Night ground. */
+[data-theme='dark'],
+[data-theme='amoled'],
+[data-theme='high-contrast'],
 :root {
   color-scheme: dark;
 
@@ -437,6 +451,11 @@
   --dim-filter: saturate(0.35) brightness(0.72);
   /* A name tag over a live tile. */
   --tag-fill: rgba(10, 12, 16, 0.78);
+
+  /* A native <select>'s own arrow is never used; this is the tokenised one
+     (`.pc-select`). The literal lives here, with every other literal, because a
+     data URI cannot read a custom property — it is --text-muted, encoded. */
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238B8D8E' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
   /* ---- §9 Focus: 2px accent outside a 2px base gap ------------------------- */
   --focus-ring-color: var(--accent-primary);
@@ -590,6 +609,7 @@
   --danger-tint: rgba(177, 58, 58, 0.12);
   --info-tint: rgba(64, 96, 143, 0.12);
 
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2357574D' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   --border-subtle: rgba(23, 23, 15, 0.1);
   --border-strong: rgba(23, 23, 15, 0.2);
   --channel-icon: var(--text-muted);

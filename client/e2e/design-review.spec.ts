@@ -16,13 +16,9 @@ import { guildDetailFixture, guildSummaryFixture } from '../src/test/guildContra
  * The API is mocked exactly like `smoke.spec.ts` — this never touches a server.
  */
 
-const OUT_DIR = path.resolve(
-  process.cwd(),
-  '..',
-  'output',
-  'design-reference',
-  process.env.PARACORD_E2E_DESIGN_WP ?? 'wp0',
-);
+const WP = process.env.PARACORD_E2E_DESIGN_WP ?? 'wp0';
+
+const OUT_DIR = path.resolve(process.cwd(), '..', 'output', 'design-reference', WP);
 
 const DESKTOP = { width: 1440, height: 900 } as const;
 const PHONE = { width: 390, height: 844 } as const;
@@ -32,8 +28,9 @@ const TEXT_CHANNEL_ID = '2001';
 const DM_CHANNEL_ID = '2004';
 
 test('capture the design-review screens', async ({ page }) => {
-  // Twelve frames, each with a settle pause — well past the smoke's budget.
-  test.setTimeout(180_000);
+  // Twelve frames for the base set, ~70 more for WP7 — each with a settle
+  // pause, so well past the smoke's budget.
+  test.setTimeout(WP === 'wp7' ? 900_000 : 180_000);
   await mkdir(OUT_DIR, { recursive: true });
 
   const nowIso = new Date().toISOString();
@@ -55,7 +52,9 @@ test('capture the design-review screens', async ({ page }) => {
     linked_accounts: [],
     bot: false,
     system: false,
-    flags: 0,
+    // UserFlags.ADMIN — the admin panel and the Server settings section are
+    // part of WP7's scope, so the fixture operator can actually open them.
+    flags: 1,
     created_at: nowIso,
   };
   const peer = { ...user, id: '43', username: 'mara.okafor', display_name: 'Mara Okafor' };
@@ -122,6 +121,8 @@ test('capture the design-review screens', async ({ page }) => {
     route.fulfill({ status: 200, contentType: 'application/json', body: '{"status":"ok"}' }),
   );
 
+  let signedOut = false;
+
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request();
     const method = request.method();
@@ -134,8 +135,37 @@ test('capture the design-review screens', async ({ page }) => {
         body: JSON.stringify(payload),
       });
 
-    if (pathname === '/api/v1/auth/refresh' && method === 'POST')
+    if (pathname === '/api/v1/auth/refresh' && method === 'POST') {
+      // The entry screens (login, register, setup, connect, invite, legal) only
+      // render for a signed-out visitor; `signedOut` flips the whole mock.
+      if (signedOut) return json(401, { message: 'No session' });
       return json(200, { token: 'design-token', refresh_token: 'design-refresh', user });
+    }
+    if (pathname === '/api/v1/setup/status' && method === 'GET')
+      return json(200, { setup_required: true, instance_name: 'Kestrel Robotics' });
+    if (pathname === '/api/v1/setup/password-requirements' && method === 'GET')
+      return json(200, {
+        min_length: 12,
+        max_length: 128,
+        requires_uppercase: true,
+        requires_lowercase: true,
+        requires_digit: true,
+        requires_symbol: false,
+      });
+    if (pathname === '/api/v1/instance' && method === 'GET')
+      return json(200, { max_upload_size: 26214400, p2p_threshold: 8388608, setup_required: false, instance_name: 'Kestrel Robotics' });
+    if (pathname === '/api/v1/invites/kestrel' && method === 'GET')
+      return json(200, {
+        code: 'kestrel',
+        guild: { id: GUILD_ID, name: 'Kestrel Robotics', icon_hash: null, member_count: 24, description: null },
+        channel: { id: TEXT_CHANNEL_ID, name: 'build-log' },
+        inviter: peer,
+        approximate_member_count: 24,
+        approximate_presence_count: 9,
+        expires_at: null,
+        max_uses: 0,
+        uses: 3,
+      });
     if (pathname === '/api/v1/users/@me' && method === 'GET') return json(200, user);
     if (pathname === '/api/v1/users/@me/settings' && method === 'GET')
       return json(200, {
@@ -274,6 +304,55 @@ test('capture the design-review screens', async ({ page }) => {
     await page.screenshot({ path: path.join(OUT_DIR, `${name}.png`), fullPage: false });
   };
 
+  /* ---------------------------------------------------------------------- */
+  /* WP1 — the light vocabulary.                                             */
+  /*                                                                        */
+  /* The `Light components` section of /design-tokens renders every light    */
+  /* component in every state from real models, so one frame per viewport is */
+  /* the whole package. Opt in with                                          */
+  /*   PARACORD_E2E_DESIGN=1 PARACORD_E2E_DESIGN_WP=wp1 npx playwright test  */
+  /* ---------------------------------------------------------------------- */
+  if (WP === 'wp1') {
+    // The tokens page scrolls inside its own container, so a tall ELEMENT
+    // screenshot comes back clipped to whatever the container had painted.
+    // Shoot the viewport instead, once per anchored block.
+    const blocks = [
+      ['avatars', '#light-avatars'],
+      ['windows', '#light-windows'],
+      ['thumbnails', '#light-thumbnails'],
+      ['herenow', '#light-herenow'],
+    ] as const;
+
+    for (const [label, viewport] of [
+      ['1440x900', DESKTOP],
+      ['390x844', PHONE],
+    ] as const) {
+      await page.setViewportSize(viewport);
+      await page.goto('/design-tokens');
+      await expect(page.getByRole('heading', { name: 'Light components' })).toBeVisible();
+
+      for (const [name, selector] of blocks) {
+        await page.locator(selector).scrollIntoViewIfNeeded();
+        // The shell can briefly swap back to its boot splash while the account
+        // bootstrap settles; re-assert the section before every frame so a shot
+        // can never catch the splash instead of the components.
+        await expect(page.getByRole('heading', { name: 'Light components' })).toBeVisible();
+        await shoot(`light-${name}-${label}`);
+      }
+
+      // The here-now people sheet is the only full list in the product (§6.5),
+      // so it gets its own frame with the floating surface open.
+      const strip = page.locator('#light-herenow').getByRole('button').first();
+      await strip.scrollIntoViewIfNeeded();
+      await strip.click();
+      await expect(page.getByRole('dialog', { name: 'People here now' })).toBeVisible();
+      await page.waitForTimeout(300);
+      await page.screenshot({ path: path.join(OUT_DIR, `light-people-sheet-${label}.png`) });
+      await page.keyboard.press('Escape');
+    }
+    return;
+  }
+
   const screens: Array<{ name: string; url: string; ready: () => Promise<unknown> }> = [
     {
       name: 'tokens',
@@ -322,4 +401,125 @@ test('capture the design-review screens', async ({ page }) => {
   await shoot('tokens-themes-1440x900');
   await page.locator('#primitives').scrollIntoViewIfNeeded();
   await shoot('tokens-primitives-1440x900');
+
+  /* ---------------------------------------------------------------------- */
+  /* WP7 — settings, dialogs, auth and onboarding.                           */
+  /*                                                                        */
+  /* Every surface WP7 restyles, at both viewports, so each one can be held  */
+  /* against the reference renders. Opt in with                              */
+  /*   PARACORD_E2E_DESIGN=1 PARACORD_E2E_DESIGN_WP=wp7 npx playwright test  */
+  /* ---------------------------------------------------------------------- */
+  if (WP !== 'wp7') return;
+
+  const bothViewports = async (name: string, open: () => Promise<unknown>) => {
+    for (const [label, viewport] of [
+      ['1440x900', DESKTOP],
+      ['390x844', PHONE],
+    ] as const) {
+      await page.setViewportSize(viewport);
+      await open();
+      await shoot(`${name}-${label}`);
+    }
+  };
+
+  // --- user settings, one frame per section ------------------------------
+  const userSections = [
+    'account',
+    'appearance',
+    'voice',
+    'notifications',
+    'activity',
+    'keybinds',
+    'identity',
+    'server',
+    'about',
+  ];
+  for (const section of userSections) {
+    await bothViewports(`settings-user-${section}`, async () => {
+      await page.goto(`/app?settings=${section}`);
+      await expect(page.getByRole('dialog', { name: 'User settings' })).toBeVisible();
+      // On a phone the shell opens on its index; step into the section itself.
+      const row = page
+        .getByRole('dialog', { name: 'User settings' })
+        .getByRole('navigation', { name: 'User settings' })
+        .getByRole('button')
+        .first();
+      await row.waitFor({ state: 'visible' }).catch(() => undefined);
+    });
+  }
+
+  // --- space settings ----------------------------------------------------
+  for (const section of ['overview', 'roles', 'channels', 'members']) {
+    await bothViewports(`settings-space-${section}`, async () => {
+      await page.goto(`/app/guilds/${GUILD_ID}/settings?section=${section}`);
+      await expect(page.getByRole('main')).toBeVisible();
+    });
+  }
+
+  // --- admin and developer ----------------------------------------------
+  await bothViewports('settings-admin', async () => {
+    await page.goto('/app/admin');
+    await expect(page.getByRole('main')).toBeVisible();
+  });
+  await bothViewports('settings-developer', async () => {
+    await page.goto('/app/developers');
+    await expect(page.getByRole('main')).toBeVisible();
+  });
+
+  // --- dialogs -----------------------------------------------------------
+  // 1. The voice connection check, opened from inside the settings overlay —
+  //    the stacking case with an existing z-index regression test.
+  await bothViewports('dialog-voice-check', async () => {
+    await page.goto('/app?settings=voice');
+    await expect(page.getByRole('dialog', { name: 'User settings' })).toBeVisible();
+    const openCheck = page.getByRole('button', { name: /connection check/i }).first();
+    if (await openCheck.count()) await openCheck.click();
+    await page.waitForTimeout(400);
+  });
+
+  // 2. The invite modal, over the Lobby.
+  await bothViewports('dialog-invite', async () => {
+    await page.goto(`/app/guilds/${GUILD_ID}`);
+    await expect(page.getByRole('main')).toBeVisible();
+    const invite = page.getByRole('button', { name: 'Invite people' }).first();
+    if (await invite.count()) await invite.click();
+    await page.waitForTimeout(400);
+  });
+
+  // 3. A destructive confirm, from the primitives page — the dialog shell,
+  //    the danger button and a field, in one frame.
+  await bothViewports('dialog-confirm', async () => {
+    await page.goto('/design-tokens');
+    await page.getByRole('button', { name: 'Open a dialog' }).click();
+    await page.waitForTimeout(300);
+  });
+
+  // --- auth and onboarding (signed out) ----------------------------------
+  signedOut = true;
+  await page.addInitScript(() => {
+    try {
+      window.localStorage.clear();
+    } catch {
+      /* storage unavailable */
+    }
+  });
+
+  const entryScreens: Array<[string, string]> = [
+    ['auth-login', '/login'],
+    ['auth-register', '/register'],
+    ['auth-setup-server', '/setup-server'],
+    ['auth-connect', '/connect'],
+    ['auth-account-setup', '/setup'],
+    ['auth-account-unlock', '/unlock'],
+    ['auth-account-recover', '/recover'],
+    ['auth-invite', '/invite/kestrel'],
+    ['auth-terms', '/terms'],
+    ['auth-privacy', '/privacy'],
+  ];
+  for (const [name, url] of entryScreens) {
+    await bothViewports(name, async () => {
+      await page.goto(url);
+      await page.waitForTimeout(500);
+    });
+  }
 });
