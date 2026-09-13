@@ -1780,6 +1780,13 @@ async fn csrf_middleware(req: Request, next: Next) -> Response {
 /// only this — not CSRF or the rate limiter, which must not run twice) to the
 /// UI routes. `HeaderMap::insert` overwrites, so a double application is a
 /// no-op.
+/// Content-Security-Policy for the web UI when it is served over HTTPS.
+const CSP_APP_HTTPS: &str = "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https: wss:; media-src 'self' data: blob: https:";
+
+/// Same policy for a document served over plain HTTP, where `http:`/`ws:` peers
+/// are the only ones reachable at all.
+const CSP_APP_PLAIN_HTTP: &str = "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: http: https:; connect-src 'self' http: https: ws: wss:; media-src 'self' data: blob: http: https:";
+
 pub async fn security_headers_middleware(req: Request, next: Next) -> Response {
     let path = req.uri().path().to_string();
     let is_https = req
@@ -1850,7 +1857,24 @@ pub async fn security_headers_middleware(req: Request, next: Next) -> Response {
                 // set is decided per request by the client's own network, so it
                 // cannot be enumerated in a static header; `img-src` and
                 // `media-src` already admit `https:` on the same reasoning.
-                "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https: wss:; media-src 'self' data: blob: https:",
+                //
+                // When this document is itself served over plain HTTP — the
+                // default self-hosted first run, before an operator has TLS —
+                // `connect-src` must also admit `http:`/`ws:`. Paracord is
+                // multi-server: "Add server" on the connect page probes another
+                // deployment's `/health` and then talks to its API, and a
+                // second self-hosted server on the LAN is `http://…:8090`. With
+                // only `https:` here that fetch was refused by the browser
+                // before it left the page, and the UI reported it as a network
+                // failure, so connecting two plain-HTTP servers could not work
+                // at all. Nothing is weakened for an HTTPS deployment, which
+                // keeps the strict policy (and where a browser would refuse the
+                // mixed-content call regardless).
+                if is_https {
+                    CSP_APP_HTTPS
+                } else {
+                    CSP_APP_PLAIN_HTTP
+                },
             ),
         );
     }
