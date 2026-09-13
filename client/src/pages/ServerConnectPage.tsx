@@ -125,6 +125,32 @@ export function corsBlockedMessage(host: string, origin: string): string {
 }
 
 /**
+ * What to tell someone when the `no-cors` probe could not settle the question
+ * either.
+ *
+ * The probe only works against a server that lets an opaque response through.
+ * Paracord does not: every response carries
+ * `Cross-Origin-Resource-Policy: same-origin`, `/health` included, so the
+ * browser discards the opaque answer after it arrives and the probe rejects
+ * exactly as an unreachable host does. Against another Paracord server — the
+ * only kind this page connects to — the question is therefore unanswerable
+ * from here, and the honest message is both possibilities rather than a
+ * confident "check DNS" for what is usually a one-line setting on the other
+ * end. The allowlist is still named, because the operator cannot act on a
+ * cause nobody mentions.
+ */
+export function unreachableOrCorsBlockedMessage(host: string, origin: string): string {
+  return (
+    `Couldn't reach ${host} from this page. Either it is offline or blocked on ` +
+    `the network, or it is running and does not allow browser connections from ` +
+    `this origin. Its operator allows them with ` +
+    // No sentence-ending punctuation after the origin: this is the value an
+    // operator copies, and a full stop rides along with it.
+    `PARACORD_CORS_ALLOWED_ORIGINS=${origin} — the desktop app is not affected.`
+  );
+}
+
+/**
  * Decide whether a failed `fetch` was a CORS refusal rather than the server
  * being unreachable.
  *
@@ -278,8 +304,13 @@ function looksLikeOpaqueNetworkFailure(err: unknown): boolean {
  */
 export async function explainConnectionFailure(err: unknown, serverUrl?: string): Promise<string> {
   if (err instanceof CorsBlockedError) return err.message;
-  if (serverUrl && looksLikeOpaqueNetworkFailure(err) && (await probeRespondsWithoutCors(serverUrl))) {
-    return corsBlockedMessage(hostOf(serverUrl), currentOrigin());
+  if (serverUrl && looksLikeOpaqueNetworkFailure(err)) {
+    if (await probeRespondsWithoutCors(serverUrl)) {
+      return corsBlockedMessage(hostOf(serverUrl), currentOrigin());
+    }
+    // The probe rejecting proves nothing against a server that sends CORP, so
+    // an opaque failure in a browser keeps both causes on screen.
+    return unreachableOrCorsBlockedMessage(hostOf(serverUrl), currentOrigin());
   }
   return toFriendlyConnectionError(err);
 }

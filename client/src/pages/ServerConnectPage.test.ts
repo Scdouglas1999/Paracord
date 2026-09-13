@@ -10,6 +10,7 @@ import {
   explainConnectionFailure,
   probeRespondsWithoutCors,
   toFriendlyConnectionError,
+  unreachableOrCorsBlockedMessage,
 } from './ServerConnectPage';
 
 const ORIGIN = 'http://127.0.0.1:18240';
@@ -79,11 +80,31 @@ describe('the connect wizard explains a CORS refusal', () => {
     );
   });
 
-  it('leaves a genuinely unreachable server with the network diagnosis', async () => {
+  /**
+   * A Paracord peer sends `Cross-Origin-Resource-Policy: same-origin` on every
+   * response, `/health` included, so the browser blocks the opaque probe after
+   * the answer arrives and it rejects exactly as a dead host does. Verified
+   * live: a no-cors probe of a running peer rejects, while the same probe of a
+   * CORP-less host resolves. A rejecting probe therefore cannot be read as
+   * proof the server is down, and the message keeps both causes.
+   */
+  it('keeps the allowlist on screen when the probe cannot settle the question', async () => {
     globalThis.fetch = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
     const axiosLike = Object.assign(new Error('Network Error'), { code: 'ERR_NETWORK' });
 
     const message = await explainConnectionFailure(axiosLike, 'http://127.0.0.1:18244');
+    expect(message).toBe(unreachableOrCorsBlockedMessage('127.0.0.1:18244', ORIGIN));
+    expect(message).toContain(`PARACORD_CORS_ALLOWED_ORIGINS=${ORIGIN}`);
+    expect(message).toContain('127.0.0.1:18244');
+    // It must not assert a cause it cannot know.
+    expect(message.toLowerCase()).not.toContain('check dns');
+  });
+
+  it('does not reach for the allowlist when there is no server url to name', async () => {
+    globalThis.fetch = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    const axiosLike = Object.assign(new Error('Network Error'), { code: 'ERR_NETWORK' });
+
+    const message = await explainConnectionFailure(axiosLike);
     expect(message).not.toContain('PARACORD_CORS_ALLOWED_ORIGINS');
     expect(message).toContain('Network Error');
   });
