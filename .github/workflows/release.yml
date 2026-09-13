@@ -606,6 +606,11 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          # Releases are created as DRAFTS: every artifact is built and attached,
+          # but nothing is public (and `latest.json` reaches no updater) until a
+          # maintainer has installed and tested the builds and publishes it by
+          # hand from the GitHub Releases page.
+          draft: true
           body_path: artifacts/body.md
           fail_on_unmatched_files: false
           files: |
