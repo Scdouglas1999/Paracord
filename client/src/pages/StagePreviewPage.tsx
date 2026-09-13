@@ -113,7 +113,11 @@ export default function StagePreviewPage() {
   const inShell = pathname.startsWith('/app/');
   const sharing = state === 'share';
 
-  const hasDominant = state !== 'speakers';
+  // A dominant tile exists when there is something to put in it: a share, or
+  // the joining/failed status panel. Reconnecting has neither — the call is a
+  // grid of speakers with a notice above it — and claiming a dominant it cannot
+  // fill would stretch the speaker strip down the whole plate.
+  const hasDominant = sharing || state === 'joining' || state === 'failed';
   const speakers = (
     <SpeakerGrid arrangement={hasDominant ? 'strip' : 'grid'} compact={phone} count={4} className="h-full">
       {[MARA, PRIYA, REN, SAM].map((person, index) => (

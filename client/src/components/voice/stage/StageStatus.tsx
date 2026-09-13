@@ -113,13 +113,17 @@ export const StageNotice = React.forwardRef<HTMLDivElement, StageNoticeProps>(fu
       ref={ref}
       role="status"
       aria-live="polite"
-      className={cn('flex min-w-0 items-baseline gap-2', className)}
+      // One line where there is room for one, two where there is not: a notice
+      // that truncates BOTH halves ("Reconnecting … The call dropped. Nobody
+      // has left …") tells a phone nothing, and §9 asks the state to be
+      // readable, not merely present.
+      className={cn('flex min-w-0 flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-2', className)}
       {...props}
     >
-      <span className="truncate text-label font-semibold text-accent-warning">
+      <span className="shrink-0 text-label font-semibold text-accent-warning">
         {stageStatusMessage(phase, roomName, elapsedMs)}
       </span>
-      <span className="min-w-0 truncate text-meta text-text-secondary">
+      <span className="min-w-0 text-meta text-text-secondary sm:truncate">
         {stageStatusDetail(phase, roomName)}
       </span>
     </div>
