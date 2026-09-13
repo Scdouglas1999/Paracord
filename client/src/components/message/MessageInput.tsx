@@ -567,7 +567,10 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
   const beginSay = (text: string) => {
     const shell = composerShellRef.current;
     const textarea = textareaRef.current;
-    if (shell && textarea) {
+    // Under reduced motion there is nothing to lift: §5.1's reduced form is
+    // "the text clears, the row appears" — so the draft simply stays put until
+    // the server answers and clears it, and no ghost is ever made.
+    if (shell && textarea && !reduceMotion) {
       liftNode.current?.remove();
       const shellBox = shell.getBoundingClientRect();
       const textBox = textarea.getBoundingClientRect();
