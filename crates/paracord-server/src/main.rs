@@ -794,7 +794,11 @@ async fn main() -> Result<()> {
         }
     };
 
-    let listener = tokio::net::TcpListener::bind(&config.server.bind_address).await?;
+    let listener = tokio::net::TcpListener::bind(&config.server.bind_address)
+        .await
+        .map_err(|err| {
+            anyhow::anyhow!(describe_http_bind_error(&err, &config.server.bind_address))
+        })?;
 
     // ── TLS / HTTPS setup ───────────────────────────────────────────────────
     let tls_enabled = config.tls.enabled;
@@ -1403,6 +1407,34 @@ fn describe_media_bind_error(err: &anyhow::Error, media_port: u16) -> String {
         )
     } else {
         format!("failed to bind the native QUIC media endpoint on UDP port {media_port}: {err}")
+    }
+}
+
+/// Turn a failure to bind the HTTP listener into a concrete, operator-actionable
+/// message. A bare `Address already in use (os error 98)` gives an operator
+/// nothing to act on — it names neither the address nor the fix — and this is
+/// the single most likely way a first run fails (a second instance, or the
+/// default port already taken). Mirrors `describe_media_bind_error`.
+fn describe_http_bind_error(err: &std::io::Error, bind_address: &str) -> String {
+    match err.kind() {
+        std::io::ErrorKind::AddrInUse => format!(
+            "Address {bind_address} is already in use, so Paracord could not start \
+             its HTTP listener. Stop whatever is holding it (another server \
+             instance?), or set [server] bind_address to a free port, then \
+             restart. (underlying error: {err})"
+        ),
+        std::io::ErrorKind::PermissionDenied => format!(
+            "Permission denied binding {bind_address}. Ports below 1024 need root \
+             or CAP_NET_BIND_SERVICE; set [server] bind_address to a port above \
+             1024, or run Paracord behind a reverse proxy. (underlying error: {err})"
+        ),
+        std::io::ErrorKind::AddrNotAvailable => format!(
+            "Address {bind_address} is not available on this host — no interface \
+             owns that IP. Set [server] bind_address to an address this machine \
+             has (for example 0.0.0.0:8090 to listen on all of them). \
+             (underlying error: {err})"
+        ),
+        _ => format!("failed to bind the HTTP listener on {bind_address}: {err}"),
     }
 }
 
@@ -3846,14 +3878,42 @@ async fn handle_webtransport_connection(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_at_rest_profile, derive_share_url, ensure_federation_signing_key_file,
-        livekit_credentials_look_insecure, normalize_https_host, parse_detected_public_ip,
+        build_at_rest_profile, derive_share_url, describe_http_bind_error,
+        ensure_federation_signing_key_file, livekit_credentials_look_insecure,
+        normalize_https_host, parse_detected_public_ip,
     };
     use std::sync::{Mutex, OnceLock};
 
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn http_bind_failure_names_the_address_and_the_fix() {
+        // The most common first-run failure. A bare "Address already in use
+        // (os error 98)" names neither the port nor anything to do about it.
+        let message = describe_http_bind_error(
+            &std::io::Error::from(std::io::ErrorKind::AddrInUse),
+            "127.0.0.1:8090",
+        );
+        assert!(message.contains("127.0.0.1:8090"), "{message}");
+        assert!(message.contains("bind_address"), "{message}");
+
+        let denied = describe_http_bind_error(
+            &std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+            "0.0.0.0:443",
+        );
+        assert!(denied.contains("0.0.0.0:443"), "{denied}");
+        assert!(denied.contains("1024"), "{denied}");
+
+        // Anything unexpected still says which address failed rather than only
+        // the errno.
+        let other = describe_http_bind_error(
+            &std::io::Error::from(std::io::ErrorKind::Other),
+            "10.0.0.5:8090",
+        );
+        assert!(other.contains("10.0.0.5:8090"), "{other}");
     }
 
     #[test]
