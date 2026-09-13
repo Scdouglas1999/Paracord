@@ -293,6 +293,15 @@ export function OverviewSection({
 // RolesSection
 // ---------------------------------------------------------------------------
 
+// Mirrors `paracord_models::permissions::Permissions`. Every bit the server
+// enforces has a switch here: a permission the matrix omits is one an admin can
+// neither grant nor revoke, and half of them were missing — a role could not be
+// given Manage Webhooks, Manage Emojis or Manage Nicknames from this screen at
+// all, and View Channel could not be taken away.
+//
+// The highest bit the server defines is 1 << 30, so `number` bitwise maths
+// stays inside int32. A flag above that would need this editor to move to
+// BigInt first.
 const PERMISSION_GROUPS: { group: string; perms: { name: string; flag: number }[] }[] = [
   {
     group: 'General',
@@ -300,9 +309,10 @@ const PERMISSION_GROUPS: { group: string; perms: { name: string; flag: number }[
       { name: 'Manage Channels', flag: 1 << 4 },
       { name: 'Manage Server', flag: 1 << 5 },
       { name: 'Manage Roles', flag: 1 << 28 },
+      { name: 'Manage Webhooks', flag: 1 << 29 },
+      { name: 'Manage Emojis', flag: 1 << 30 },
       { name: 'View Audit log', flag: 1 << 7 },
       { name: 'Create Invite', flag: 1 << 0 },
-      { name: 'Change Nickname', flag: 1 << 26 },
     ],
   },
   {
@@ -310,16 +320,24 @@ const PERMISSION_GROUPS: { group: string; perms: { name: string; flag: number }[
     perms: [
       { name: 'Kick Members', flag: 1 << 1 },
       { name: 'Ban Members', flag: 1 << 2 },
+      { name: 'Change Nickname', flag: 1 << 26 },
+      { name: 'Manage Nicknames', flag: 1 << 27 },
       { name: 'Administrator', flag: 1 << 3 },
     ],
   },
   {
     group: 'Text',
     perms: [
+      { name: 'View Channel', flag: 1 << 10 },
       { name: 'Send Messages', flag: 1 << 11 },
+      { name: 'Read Message History', flag: 1 << 16 },
       { name: 'Manage Messages', flag: 1 << 13 },
       { name: 'Attach Files', flag: 1 << 15 },
+      { name: 'Embed Links', flag: 1 << 14 },
       { name: 'Add reactions', flag: 1 << 6 },
+      { name: 'Use External Emojis', flag: 1 << 18 },
+      { name: 'Mention Everyone', flag: 1 << 17 },
+      { name: 'Send TTS Messages', flag: 1 << 12 },
     ],
   },
   {
@@ -328,6 +346,11 @@ const PERMISSION_GROUPS: { group: string; perms: { name: string; flag: number }[
       { name: 'Connect', flag: 1 << 20 },
       { name: 'Speak', flag: 1 << 21 },
       { name: 'Stream', flag: 1 << 9 },
+      { name: 'Use Voice Activity', flag: 1 << 25 },
+      { name: 'Priority Speaker', flag: 1 << 8 },
+      { name: 'Mute Members', flag: 1 << 22 },
+      { name: 'Deafen Members', flag: 1 << 23 },
+      { name: 'Move Members', flag: 1 << 24 },
     ],
   },
 ];
@@ -386,13 +409,18 @@ export function RolesSection({
   memberCountByRole,
 }: RolesSectionProps) {
   const newRoleInputRef = useRef<HTMLInputElement>(null);
-  const customRoles = roles.filter((role) => role.id !== guildId);
+  // The space's default role carries the id of the space itself. It is the
+  // baseline every member holds, so it is listed and editable like any other —
+  // only its name is fixed and it cannot be deleted.
+  const defaultRole = roles.find((role) => role.id === guildId);
 
   return (
     <SettingsPanel>
       <SectionHeader
         title="Roles"
-        description="Roles bundle a color and a set of permissions. Everyone starts with @everyone; layer more on top."
+        description={`Roles bundle a color and a set of permissions. Everyone holds ${
+          defaultRole?.name ?? 'the default role'
+        }; layer more on top.`}
       />
 
       {!canManage && <GateNotice>Only server admins can create, edit, or assign roles.</GateNotice>}
@@ -425,13 +453,13 @@ export function RolesSection({
       )}
 
       <section className="border-t border-border-subtle pt-6">
-        <GroupLabel>{customRoles.length > 0 ? `Roles · ${roles.length}` : 'Roles'}</GroupLabel>
-        {customRoles.length === 0 ? (
+        <GroupLabel>{roles.length > 0 ? `Roles · ${roles.length}` : 'Roles'}</GroupLabel>
+        {roles.length === 0 ? (
           <EmptyState
             className="!py-8"
             icon={<Shield size={20} />}
-            title="No custom roles yet"
-            description="Everyone starts with @everyone. Add a role to grant colors, hoisting, and finer permissions."
+            title="No roles yet"
+            description="Add a role to grant colors, hoisting, and finer permissions."
             action={
               canManage ? (
                 <Button variant="ghost" onClick={() => newRoleInputRef.current?.focus()}>
@@ -467,13 +495,14 @@ export function RolesSection({
                         if (e.target.value !== role.name) onRenameRole(role.id, e.target.value);
                       }}
                     />
+                    {isEveryone && <Chip size="sm">Everyone</Chip>}
                     {memberCount != null && (
                       <Chip size="sm">
                         {memberCount} {memberCount === 1 ? 'member' : 'members'}
                       </Chip>
                     )}
                     {role.hoist && <Chip size="sm">Hoisted</Chip>}
-                    {canManage && !isEveryone && (
+                    {canManage && (
                       <div className="flex items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
                         <Button
                           variant="ghost"
@@ -482,13 +511,18 @@ export function RolesSection({
                         >
                           {isEditing ? 'Close' : 'Edit'}
                         </Button>
-                        <IconButton
-                          label={`Delete role ${role.name}`}
-                          tone="ghost"
-                          onClick={() => onDeleteRole(role.id)}
-                        >
-                          <Trash2 size={15} />
-                        </IconButton>
+                        {/* The default role cannot be deleted — the server
+                            refuses it — so it does not get a button that only
+                            ever fails. Its name is fixed for the same reason. */}
+                        {!isEveryone && (
+                          <IconButton
+                            label={`Delete role ${role.name}`}
+                            tone="ghost"
+                            onClick={() => onDeleteRole(role.id)}
+                          >
+                            <Trash2 size={15} />
+                          </IconButton>
+                        )}
                       </div>
                     )}
                   </div>

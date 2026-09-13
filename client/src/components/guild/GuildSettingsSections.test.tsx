@@ -1,8 +1,8 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { type Mock, describe, expect, it, vi } from 'vitest';
-import type { Guild, Member } from '../../types';
-import { OverviewSection } from './GuildSettingsSections';
+import type { Guild, Member, Role } from '../../types';
+import { OverviewSection, RolesSection } from './GuildSettingsSections';
 
 const guild: Guild = {
   id: 'guild-1',
@@ -158,5 +158,111 @@ describe('OverviewSection ownership transfer', () => {
   it('disables the transfer button while a transfer is in flight', () => {
     renderOverview({ transferringOwnership: true });
     expect(screen.getByRole('button', { name: 'Transfer' })).toBeDisabled();
+  });
+});
+
+// ── Roles ────────────────────────────────────────────────────────────────────
+//
+// The space's default role carries the id of the space itself. It used to be
+// filtered out of the list entirely whenever it was the only role — which is
+// every brand-new space — and it never got an Edit control even once other
+// roles existed. Between the two, the permission bitmask that governs what
+// every member of a space may do was unreachable from this screen.
+
+const defaultRole: Role = {
+  id: 'guild-1',
+  guild_id: 'guild-1',
+  name: 'Member',
+  color: 0,
+  hoist: false,
+  position: 1,
+  permissions: 104189505,
+  mentionable: false,
+  created_at: '2026-01-01T00:00:00.000Z',
+};
+
+const customRole: Role = {
+  ...defaultRole,
+  id: 'role-2',
+  name: 'Moderators',
+  position: 2,
+  permissions: 8,
+};
+
+function renderRoles(overrides: Partial<React.ComponentProps<typeof RolesSection>> = {}) {
+  const onStartEditingRole = vi.fn<(role: Role) => void>();
+  render(
+    <RolesSection
+      roles={[defaultRole]}
+      canManage
+      guildId="guild-1"
+      newRoleName=""
+      newRoleColor="#5865f2"
+      editingRoleId={null}
+      editingRolePermissions={0}
+      editingRoleColor="#5865f2"
+      editingRoleHoist={false}
+      editingRoleMentionable={false}
+      onNewRoleNameChange={vi.fn()}
+      onNewRoleColorChange={vi.fn()}
+      onEditingRoleColorChange={vi.fn()}
+      onEditingRolePermissionsToggle={vi.fn()}
+      onEditingRoleHoistChange={vi.fn()}
+      onEditingRoleMentionableChange={vi.fn()}
+      onCreateRole={vi.fn()}
+      onRenameRole={vi.fn()}
+      onStartEditingRole={onStartEditingRole}
+      onSaveRoleEdits={vi.fn()}
+      onCancelRoleEditing={vi.fn()}
+      onDeleteRole={vi.fn()}
+      roleColorHex={() => '#99aab5'}
+      {...overrides}
+    />,
+  );
+  return { onStartEditingRole };
+}
+
+describe('RolesSection', () => {
+  it('lists the default role on a space that has no custom roles yet', () => {
+    renderRoles();
+    expect(screen.getByDisplayValue('Member')).toBeTruthy();
+    expect(screen.getByText('Everyone')).toBeTruthy();
+    expect(screen.queryByText('No roles yet')).toBeNull();
+  });
+
+  it('opens the default role for editing and never offers to delete it', async () => {
+    const user = userEvent.setup();
+    const { onStartEditingRole } = renderRoles({ roles: [defaultRole, customRole] });
+
+    const editButtons = screen.getAllByRole('button', { name: 'Edit' });
+    expect(editButtons).toHaveLength(2);
+    await user.click(editButtons[0]);
+    expect(onStartEditingRole).toHaveBeenCalledWith(defaultRole);
+
+    expect(screen.queryByRole('button', { name: 'Delete role Member' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Delete role Moderators' })).toBeTruthy();
+  });
+
+  it('names the real default role rather than a Discord-ism', () => {
+    renderRoles();
+    expect(screen.getByText(/Everyone holds Member/)).toBeTruthy();
+    expect(screen.queryByText(/@everyone/)).toBeNull();
+  });
+
+  it('switches every permission bit the server enforces', () => {
+    renderRoles({ roles: [defaultRole], editingRoleId: 'guild-1' });
+    // Bits 29, 30, 27, 10 and 16 had no switch at all before.
+    for (const label of [
+      'Manage Webhooks',
+      'Manage Emojis',
+      'Manage Nicknames',
+      'View Channel',
+      'Read Message History',
+      'Use External Emojis',
+      'Priority Speaker',
+      'Move Members',
+    ]) {
+      expect(screen.getByText(label)).toBeTruthy();
+    }
   });
 });
