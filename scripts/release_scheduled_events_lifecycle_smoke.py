@@ -384,7 +384,7 @@ def run_smoke(args: argparse.Namespace) -> None:
                 base_url,
                 f"/api/v1/guilds/{guild_id}/events/{event_id}",
                 token=admin_token,
-                body={"location": "onload=alert(1)"},
+                body={"location": "javascript:alert(1)"},
                 expected=400,
                 label="reject unsafe update location",
             )
