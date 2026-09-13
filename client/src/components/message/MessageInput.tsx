@@ -1402,7 +1402,11 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
           // and rises from where it sits.
           'group relative flex min-h-[var(--h-composer)] origin-bottom items-end gap-2 rounded-[var(--radius-card)] py-1.5 pl-2.5 pr-2',
           'transition-[background-color,box-shadow] duration-[140ms] ease-[var(--ease-out)]',
-          'focus-within:shadow-[var(--focus-ring-input)]',
+          // §9: the composer is one control, so it shows one ring. The plate
+          // lights for the TEXT FIELD only — `focus-within` also matched the
+          // plus/poll/emoji/send buttons, which draw their own `pc-focusable`
+          // ring, and the two together read as a double outline.
+          'has-[textarea:focus-visible]:shadow-[var(--focus-ring-input)]',
           isDragOver ? 'bg-accent-tint' : 'bg-bg-raised shadow-[var(--shadow-composer)]',
           '[@media(max-width:640px)]:min-h-[var(--h-composer-phone)]',
           // §8: the ribbon composer is 42px, and it is a well rather than a
@@ -1573,7 +1577,10 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
           // wraps and grows, which is what a draft should do.
           className={
             'min-w-[160px] flex-1 resize-none self-center bg-transparent px-1.5 py-2 text-body '
-            + 'text-text-primary outline-none disabled:cursor-not-allowed disabled:opacity-70 '
+            // The plate carries this field's focus ring (see the shell above), so the
+            // field itself draws none. `outline-none` alone loses to the global
+            // `:focus-visible` fallback in layout.css; the variant outranks it.
+            + 'text-text-primary outline-none focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-70 '
             + 'placeholder:overflow-hidden placeholder:text-ellipsis placeholder:whitespace-nowrap '
             + 'placeholder:text-text-faint'
           }
