@@ -211,6 +211,11 @@ reviewer rejects motion that has none.
   lands in the timeline (220 ms, ease-out); the composer relaxes 0.8% and
   springs back; the send control flashes white light for one beat; the room's
   amber window flickers. Receipts fade in only after the server answers.
+  *(WP9a: "after the server answers" is structural here, not a check — this
+  runtime has no optimistic row at all, and publishes a message only once the
+  authoritative recovery feed has vouched for it, so the row and its receipt
+  arrive together. The receipt is "Delivered" under your last message; the read
+  half waits on read-state fan-out.)*
 - **Speaking is a breath.** The speaking ring breathes between the two alphas
   in §1.2 at ~1.6 s and, where the engine exposes level, brightens with the
   voice (±15% intensity, 60 ms attack / 240 ms release) — never below the
@@ -241,15 +246,30 @@ to those curves. Durations: `--duration-fast` 120, `--duration-normal` 160,
   (whole sequence ≤ 1.6 s).
 - 60 fps on an integrated GPU: every signature moment is measured in a
   Playwright trace; a frame over 32 ms fails the motion gate.
+  *(WP9a, `client/e2e/motion-gate.spec.ts`: the budget is applied to the frames
+  the engine owns — those served while an animation is in flight — plus a 50 ms
+  ceiling over the whole moment. Two exceptions are allowed BY NAME and printed
+  on every run: the send moment's one frame, which is `MessageList`'s own render
+  of the arriving row and is there to the frame with motion switched off; and
+  the View Transitions path, which the harness's software renderer halves the
+  frame rate for. See `docs/design/wp9a-checkpoint.md` §4.)*
 - `prefers-reduced-motion`: everything lands instantly, no stagger, breathing
   stops at the resting ring. One central switch, never per component.
+  *(WP9a: the switch is `client/src/lib/motion/reducedMotion.ts`. It folds the
+  OS media query with an explicit user setting — Settings › Appearance › Motion,
+  `system` / `full` / `reduced` — and publishes the answer as `data-motion` on
+  `<html>`, which is what CSS reads. There is no `prefers-reduced-motion` media
+  query left in the stylesheets and no component may add one: it would be a
+  second source of truth and "Full motion" could not win against it.)*
 - Motion never delays input: a control responds on the same frame; animations
   are interruptible and retarget (a spring, not a fixed tween).
 - Never animate on first paint what the user did not cause or presence did not
   cause; loading skeletons crossfade to content, they do not pulse forever.
 
 Reference studies for the four signature moments are on the design canvas
-(page "Motion") and in `output/design-reference/motion/`.
+(page "Motion") and in `output/design-reference/motion/`. The engine that
+implements them is `client/src/lib/motion/` (WP9a); every recipe in it is on
+`/design-tokens` › Motion with a Replay button and the tokens it spends.
 
 ## 6. Anti-slop kill-list (extends the Emerald Commons list; a reviewer rejects any instance)
 
