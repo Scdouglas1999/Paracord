@@ -119,6 +119,74 @@ fn drain_mentions(
 }
 
 #[tokio::test]
+async fn a_webhook_post_reads_back_as_the_webhook_not_as_its_creator() {
+    let f = setup().await;
+    let (status, webhook) = call(
+        &f.app,
+        &f.owner,
+        Method::POST,
+        &format!("/api/v1/guilds/{}/webhooks", f.guild),
+        Some(json!({"name":"Release Bot","channel_id":f.channel.to_string()})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{webhook}");
+    let webhook_id = webhook["id"].as_str().unwrap().to_string();
+    let (status, posted) = call(
+        &f.app,
+        &f.owner,
+        Method::POST,
+        &format!(
+            "/api/v1/webhooks/{webhook_id}/{}",
+            webhook["token"].as_str().unwrap()
+        ),
+        Some(json!({"content":"build 42 is green"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{posted}");
+    // The live event already said the webhook posted it.
+    assert_eq!(posted["author"]["id"], json!(webhook_id));
+    assert_eq!(posted["author"]["bot"], json!(true));
+
+    // The history has to say the same thing. It used to name the webhook's
+    // creator, bot flag and all, so a webhook post became a human's message on
+    // the next reload.
+    let (status, page) = call(
+        &f.app,
+        &f.owner,
+        Method::GET,
+        &format!("/api/v1/channels/{}/messages", f.channel),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let fetched = page
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == posted["id"])
+        .expect("the webhook message is in the channel history");
+    assert_eq!(fetched["author"]["id"], json!(webhook_id));
+    assert_eq!(fetched["author"]["username"], json!("Release Bot"));
+    assert_eq!(fetched["author"]["bot"], json!(true));
+    assert_eq!(fetched["webhook_id"], json!(webhook_id));
+    assert_ne!(fetched["author"]["id"], json!(f.owner_id.to_string()));
+
+    // A message a person actually typed is untouched by any of this.
+    let (status, human) = call(
+        &f.app,
+        &f.owner,
+        Method::POST,
+        &format!("/api/v1/channels/{}/messages", f.channel),
+        Some(json!({"content":"I typed this one"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{human}");
+    assert_eq!(human["author"]["id"], json!(f.owner_id.to_string()));
+    assert_eq!(human["author"]["bot"], json!(false));
+    assert_eq!(human["webhook_id"], Value::Null);
+}
+
+#[tokio::test]
 async fn webhook_rich_messages_commit_audience_and_target_only_recipients() {
     let f = setup().await;
     let (status, webhook) = call(

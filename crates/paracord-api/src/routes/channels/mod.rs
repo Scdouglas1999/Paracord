@@ -440,6 +440,10 @@ struct MessageJsonBatch {
     viewer_reactions: std::collections::HashSet<(i64, String)>,
     /// Fully assembled polls keyed by message id.
     polls: HashMap<i64, paracord_db::polls::PollWithOptions>,
+    /// `(webhook id, webhook name)` for messages a webhook posted, keyed by
+    /// message id. Such a message is stored under its webhook's *creator*, so
+    /// without this the author reads back as that person.
+    webhooks: HashMap<i64, (i64, String)>,
 }
 
 /// Load every per-message collection for a page of messages using a bounded,
@@ -481,6 +485,15 @@ async fn load_message_json_batch(
             paracord_db::channel_features::get_or_default(&state.db, *channel_id).await
         {
             batch.channel_features.insert(*channel_id, features);
+        }
+    }
+
+    // Webhook identities: one query for the whole page.
+    if let Ok(webhook_rows) =
+        paracord_db::webhooks::get_webhooks_for_message_ids(&state.db, &message_ids).await
+    {
+        for (message_id, webhook_id, name) in webhook_rows {
+            batch.webhooks.insert(message_id, (webhook_id, name));
         }
     }
 
@@ -626,6 +639,24 @@ fn build_message_json(
 
     let mut author = author_json_from_row(msg.author_id, batch.authors.get(&msg.author_id));
 
+    // A webhook post is stored under the webhook's creator, because a webhook
+    // has no user row. The live MESSAGE_CREATE event says the webhook posted
+    // it; the history did not, so the same message changed author on reload —
+    // from "Hook Bot" to the human who created the hook, bot flag and all.
+    let webhook_id = batch.webhooks.get(&msg.id).map(|(id, name)| {
+        author = json!({
+            "id": id.to_string(),
+            "username": name,
+            "discriminator": 0,
+            "avatar_hash": null,
+            "avatar_url": null,
+            "public_key": null,
+            "flags": 0,
+            "bot": true,
+        });
+        *id
+    });
+
     let mut anonymous_json: Option<Value> = None;
     if let Some(anonymous) = batch.anonymous.get(&msg.id) {
         let can_deanonymize = batch.can_deanonymize.get(&msg.id).copied().unwrap_or(false);
@@ -760,6 +791,7 @@ fn build_message_json(
         "components": components_value,
         "anonymous": anonymous_json,
         "expires_at": expires_at,
+        "webhook_id": webhook_id.map(|id| id.to_string()),
     })
 }
 

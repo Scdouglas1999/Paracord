@@ -3,6 +3,9 @@ use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 use sqlx::Row;
 
+/// One page of messages at most; mirrors the messages module's batch cap.
+const MAX_WEBHOOK_MESSAGE_IDS: usize = 500;
+
 #[derive(Debug, Clone)]
 pub struct WebhookRow {
     pub id: i64,
@@ -256,6 +259,49 @@ pub async fn link_webhook_message(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// The webhook identity behind each of `message_ids`, for the pages of message
+/// JSON that have to say who actually posted.
+///
+/// A webhook'"'"'s message is stored under its *creator'"'"'s* user id, because a
+/// webhook is not a user row — so without this join every webhook post reads
+/// back attributed to the person who created the webhook, as if they had typed
+/// it themselves.
+pub async fn get_webhooks_for_message_ids(
+    pool: &DbPool,
+    message_ids: &[i64],
+) -> Result<Vec<(i64, i64, String)>, DbError> {
+    if message_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    if message_ids.len() > MAX_WEBHOOK_MESSAGE_IDS {
+        return Err(DbError::Sqlx(sqlx::Error::Protocol(
+            "too many message ids in webhook lookup".to_string(),
+        )));
+    }
+    let sql = format!(
+        "SELECT wm.message_id AS message_id, w.id AS webhook_id, w.name AS name
+         FROM webhook_messages wm
+         JOIN webhooks w ON w.id = wm.webhook_id
+         WHERE wm.message_id IN ({})",
+        crate::messages::build_placeholders(1, message_ids.len()),
+    );
+    let mut query = sqlx::query(&sql);
+    for message_id in message_ids {
+        query = query.bind(message_id);
+    }
+    let rows = query.fetch_all(pool).await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok((
+                row.try_get::<i64, _>("message_id")?,
+                row.try_get::<i64, _>("webhook_id")?,
+                row.try_get::<String, _>("name")?,
+            ))
+        })
+        .collect::<Result<Vec<_>, sqlx::Error>>()
+        .map_err(DbError::from)
 }
 
 pub async fn webhook_owns_message(
