@@ -6,6 +6,7 @@ import type { LucideIcon } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import type { Channel, Message } from '../../types';
 import { useUIStore } from '../../stores/uiStore';
+import type { ContextPanelMode } from '../../stores/uiStore';
 import { channelApi } from '../../api/channels';
 import { extractApiError } from '../../api/client';
 import { GroupDmMembersPanel } from './GroupDmMembersPanel';
@@ -134,6 +135,13 @@ export function ContextPanel({
 }: ContextPanelProps) {
   const mode = useUIStore((s) => s.contextPanelMode);
   const setContextPanelMode = useUIStore((s) => s.setContextPanelMode);
+  /* While the shell plays this plate's leave, `contextPanelMode` is already
+     null — the panel must keep rendering the surface it was showing or it
+     slides out empty. `shown` is the last real mode; the presence window is
+     --duration-fast, so nothing but the exit ever sees it. */
+  const [lastMode, setLastMode] = useState<ContextPanelMode>(null);
+  if (mode !== null && mode !== lastMode) setLastMode(mode);
+  const shown = mode ?? lastMode;
   const channelActions = useChannelActions();
   const channelsById = useCurrentChannelStore((s) => s.channelsById);
   const navigate = useNavigate();
@@ -155,7 +163,7 @@ export function ContextPanel({
     channelName ?? (channelId ? channelsById[channelId]?.name ?? null : null);
   const activeChannel = channelId ? channelsById[channelId] : undefined;
   const threadListParentId =
-    mode === 'threads' && isThreadableChannel(activeChannel, channelId) ? channelId! : null;
+    shown === 'threads' && isThreadableChannel(activeChannel, channelId) ? channelId! : null;
   const channelThreads = useMemo(
     () =>
       sortThreads(
@@ -255,11 +263,11 @@ export function ContextPanel({
     };
   }, [manageFocus]);
 
-  if (mode === null) return null;
+  if (shown === null) return null;
 
   // Panel-native query surfaces bring their own chrome; their close button is
   // wired to clear the shared panel mode.
-  if (mode === 'pins') {
+  if (shown === 'pins') {
     return (
       <PinnedMessagesOverlay
         open
@@ -275,7 +283,7 @@ export function ContextPanel({
     );
   }
 
-  if (mode === 'search') {
+  if (shown === 'search') {
     return (
       <SearchOverlay
         open
@@ -293,7 +301,7 @@ export function ContextPanel({
   // it is who this conversation is addressed to, and it is editable
   // (lantern-stage-spec §6.5, §7.6). The panel is self-chromed (own header +
   // Add + close), so it short-circuits before the shared chrome below.
-  if (mode === 'recipients') {
+  if (shown === 'recipients') {
     const activeChannel = channelId ? channelsById[channelId] : undefined;
     if (!isGroupDmChannel(activeChannel)) return null;
     return <GroupDmMembersPanel channelId={channelId as string} onClose={close} />;
@@ -303,7 +311,7 @@ export function ContextPanel({
   // the panel width and let its own left hairline serve as the divider. The
   // active thread is supplied by the ChatView or derived from the current
   // (thread) channel.
-  if (mode === 'threads') {
+  if (shown === 'threads') {
     const thread = activeThread ?? deriveActiveThread(channelId, channelsById);
     const threadGuildId = guildId ?? (channelId ? channelsById[channelId]?.guild_id ?? null : null);
     if (!thread && threadListParentId && threadGuildId) {
@@ -411,9 +419,9 @@ export function ContextPanel({
   }
 
   // Economy needs a guild to resolve a leaderboard.
-  if (mode === 'economy' && !guildId) return null;
+  if (shown === 'economy' && !guildId) return null;
 
-  const header = PANEL_HEADERS[mode];
+  const header = PANEL_HEADERS[shown];
 
   return (
     <aside
@@ -423,7 +431,7 @@ export function ContextPanel({
       tabIndex={-1}
       onKeyDown={onAsideKeyDown}
       data-testid="context-panel"
-      data-mode={mode}
+      data-mode={shown}
       className="pc-plate flex h-[calc(100%-var(--gutter)*2)] shrink-0 flex-col overflow-hidden outline-none my-[var(--gutter)] mr-[var(--gutter)]"
       style={{ width: 'var(--w-context-panel)' }}
     >

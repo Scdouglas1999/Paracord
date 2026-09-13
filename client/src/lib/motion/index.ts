@@ -85,7 +85,9 @@ export { recedeAround, roomSharedName, walkIntoRoom, walkOutOfRoom, type WalkOpt
 export { emitMotion, onMotion, resetMotionBusForTests, type MotionEvents } from './bus';
 export { RollingNumber, type RollingNumberProps } from './flipCounter';
 export {
+  FLIP_GLYPH_ATTR,
   FLIP_KEY_ATTR,
+  FLIP_OWN_ATTR,
   flipBetween,
   useFlip,
   useFlipList,

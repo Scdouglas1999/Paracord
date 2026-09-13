@@ -152,7 +152,7 @@ describe('UserProfilePopup action feedback', () => {
   it('keeps the profile surface within the viewport', () => {
     const { container } = renderProfile();
 
-    expect(container.querySelector('.pc-enter')).toHaveClass(
+    expect(container.querySelector('.pc-drawer-in-right')).toHaveClass(
       'w-[min(21.5rem,calc(100vw-1rem))]',
     );
   });

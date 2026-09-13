@@ -183,6 +183,7 @@ export function AppShell() {
   const onAirDockPresence = usePresence(showOnAirDock);
   const sidebarPresence = usePresence(showSidebarOverlay);
   const contextPresence = usePresence(isMobile && showContextPanel);
+  const desktopContextPresence = usePresence(!isMobile && showContextPanel);
   const userSettingsPresence = usePresence(userSettingsOpen);
   const guildSettingsPresence = usePresence(Boolean(guildSettingsId));
 
@@ -239,9 +240,20 @@ export function AppShell() {
             )}
           </main>
 
-          {/* Right rail — ContextPanel (desktop inline; toggleable, not docked). */}
-          {!isMobile && showContextPanel && (
-            <ContextPanel guildId={guildId ?? null} channelId={channelId ?? null} manageFocus />
+          {/* Right rail — ContextPanel (desktop inline; toggleable, not
+              docked). A contextual plate slides in from the edge it opens
+              against on the spring-settle and slides back out on --ease-in —
+              the same choreography the mobile overlay already has (§5.1). */}
+          {!isMobile && desktopContextPresence.mounted && (
+            <div
+              className={cn(
+                'h-full min-h-0 shrink-0',
+                desktopContextPresence.exiting ? 'pc-drawer-out-right' : 'pc-drawer-in-right',
+              )}
+              {...desktopContextPresence.scenery}
+            >
+              <ContextPanel guildId={guildId ?? null} channelId={channelId ?? null} manageFocus />
+            </div>
           )}
         </div>
 

@@ -2987,9 +2987,9 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
         />,
         document.body
       )}
-      {profileUser && createPortal(
+      {createPortal(
         <UserProfilePopup
-          user={{
+          user={profileUser ? {
             id: profileUser.id,
             username: profileUser.username,
             discriminator: profileUser.discriminator,
@@ -2999,7 +2999,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
             system: false,
             flags: profileUser.flags ?? 0,
             created_at: '',
-          }}
+          } : null}
           position={profilePos}
           onClose={() => setProfileUser(null)}
         />,
