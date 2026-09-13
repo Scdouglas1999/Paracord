@@ -28,6 +28,7 @@ import { useAuthStore } from '../../stores/authStore';
 import { useServerListStore } from '../../stores/serverListStore';
 import { useAccountStore } from '../../stores/accountStore';
 import { useChannelStore } from '../../stores/channelStore';
+import { DatabaseHistoryExpiredError } from '../operationContext';
 
 const scope = { serverId: '__local__', userId: '1' };
 const epochs = { first: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', second: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' };
@@ -309,5 +310,26 @@ describe('production authoritative recovery gate', () => {
     expect(fixture.recovery).toHaveBeenCalledTimes(2);
     expect(fixture.recovery.mock.calls[1][0].params).toMatchObject({ after: '0', known_ids: '100' });
     expect(await local.vault.transact(tx => tx.get('messages.deleted', '["10","100"]'))).not.toBeNull();
+  });
+  // Every first login accepts the account's first history epoch from READY,
+  // which cancels the vault open already in flight. The cancellation lands
+  // before the session exists — so before `invalidateLocal` can move the
+  // generation — and the coalesced handshake used to inherit the rejection,
+  // rejecting READY and forcing a full gateway reconnect on every first login.
+  it('retries an open cancelled by the account\'s own first authenticated history instead of failing the handshake', async () => {
+    runtime.dispose();
+    let attempts = 0;
+    fixture.openLocal.mockReset().mockImplementation(async () => {
+      attempts += 1;
+      if (attempts === 1) throw new DatabaseHistoryExpiredError();
+      return session(local.vault);
+    });
+    runtime = new AccountMessagingRuntime(scope);
+    const cancelled = runtime.startLocal();
+    await expect(runtime.acceptHandshake()).resolves.toBeUndefined();
+    await expect(cancelled).rejects.toBeInstanceOf(DatabaseHistoryExpiredError);
+    expect(attempts).toBe(2);
+    expect(runtime.store.getState().storage).toBe('ready');
+    expect(runtime.store.getState().synchronization).toBe('ready');
   });
 });

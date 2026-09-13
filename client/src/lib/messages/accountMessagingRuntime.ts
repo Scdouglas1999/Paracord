@@ -357,8 +357,18 @@ export class AccountMessagingRuntime {
     if (this.localOpening) {
       // An open cancelled by this account's own first authenticated history is
       // not a storage failure: the replacement history owns a fresh open.
+      // The cancellation usually arrives through `invalidateLocal`, which moves
+      // the generation — but that listener is only wired once a session exists,
+      // so a history accepted WHILE the vault is still opening (every first
+      // login, where READY carries the account's first epoch) cancels the open
+      // with the generation untouched. Recognise that cancellation by its own
+      // error too, or the handshake rejects and the gateway reconnects for a
+      // history nothing was holding.
       const pending = this.localOpening; const generation = this.generation;
-      try { await pending; } catch (error) { if (!retry || this.disposed || this.generation === generation) throw error; }
+      try { await pending; } catch (error) {
+        const ownHistory = error instanceof DatabaseHistoryExpiredError;
+        if (!retry || this.disposed || (this.generation === generation && !ownHistory)) throw error;
+      }
       if (this.local && !this.local.session.signal.aborted) return;
       if (!retry || this.disposed) return;
       return this.startLocal(false);
