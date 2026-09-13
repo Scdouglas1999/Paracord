@@ -3698,10 +3698,12 @@ pub fn handle_video_stream_frame(
         let header = &frame.header;
         let metadata = &frame.metadata;
 
-        // Decrypt the whole-frame ciphertext. The AAD is the exact 16 wire header
-        // bytes, so it is byte-identical to what the sender bound at encrypt time.
-        let header_bytes: [u8; HEADER_SIZE] =
+        // Decrypt the whole-frame ciphertext. The AAD is the wire header with
+        // `payload_length` zeroed, which is what every sender binds at encrypt
+        // time — see `MediaHeader::aad`.
+        let wire_header: [u8; HEADER_SIZE] =
             body[..HEADER_SIZE].try_into().expect("header is 16 bytes");
+        let header_bytes = MediaHeader::aad(&wire_header);
         let decrypted = {
             let mut decryptor = match frame_decryptor.lock() {
                 Ok(decryptor) => decryptor,
@@ -3872,9 +3874,9 @@ fn send_encoded_video_frame(
 
         let mut header_buf = BytesMut::with_capacity(HEADER_SIZE);
         header.encode(&mut header_buf);
-        let header_bytes: [u8; HEADER_SIZE] = header_buf[..HEADER_SIZE]
-            .try_into()
-            .expect("header is 16 bytes");
+        let header_bytes = MediaHeader::aad(
+            &<[u8; HEADER_SIZE]>::try_from(&header_buf[..HEADER_SIZE]).expect("header is 16 bytes"),
+        );
 
         let encrypted = encryptor
             .encrypt(&header_bytes, ssrc, key_epoch, *seq, &plaintext)
@@ -3957,9 +3959,9 @@ fn encode_stream_frame_message(
 
     let mut header_buf = BytesMut::with_capacity(HEADER_SIZE);
     header.encode(&mut header_buf);
-    let header_bytes: [u8; HEADER_SIZE] = header_buf[..HEADER_SIZE]
-        .try_into()
-        .expect("header is 16 bytes");
+    let header_bytes = MediaHeader::aad(
+        &<[u8; HEADER_SIZE]>::try_from(&header_buf[..HEADER_SIZE]).expect("header is 16 bytes"),
+    );
 
     let ciphertext = {
         let mut encryptor = frame_encryptor

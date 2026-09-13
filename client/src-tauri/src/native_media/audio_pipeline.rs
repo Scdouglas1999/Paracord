@@ -172,9 +172,10 @@ pub fn spawn_audio_send_task(session: &mut NativeMediaSession) {
                     // Serialize header for AAD
                     let mut header_buf = BytesMut::with_capacity(HEADER_SIZE);
                     header.encode(&mut header_buf);
-                    let header_bytes: [u8; HEADER_SIZE] = header_buf[..HEADER_SIZE]
-                        .try_into()
-                        .expect("header is 16 bytes");
+                    let header_bytes = MediaHeader::aad(
+                        &<[u8; HEADER_SIZE]>::try_from(&header_buf[..HEADER_SIZE])
+                            .expect("header is 16 bytes"),
+                    );
 
                     // Encrypt
                     let encrypted = {
@@ -285,9 +286,10 @@ pub fn spawn_screen_audio_send_task(session: &mut NativeMediaSession) {
 
                     let mut header_buf = BytesMut::with_capacity(HEADER_SIZE);
                     header.encode(&mut header_buf);
-                    let header_bytes: [u8; HEADER_SIZE] = header_buf[..HEADER_SIZE]
-                        .try_into()
-                        .expect("header is 16 bytes");
+                    let header_bytes = MediaHeader::aad(
+                        &<[u8; HEADER_SIZE]>::try_from(&header_buf[..HEADER_SIZE])
+                            .expect("header is 16 bytes"),
+                    );
 
                     let encrypted = {
                         let mut encryptor = match frame_encryptor.lock() {
@@ -363,10 +365,14 @@ pub fn spawn_datagram_recv_task(session: &mut NativeMediaSession, app: super::Ca
 
                     let payload = &data[HEADER_SIZE..];
 
-                    // Decrypt
-                    let header_bytes: [u8; HEADER_SIZE] = data[..HEADER_SIZE]
+                    // Decrypt. The AAD is the wire header with `payload_length`
+                    // zeroed — the sender sealed the frame before it knew the
+                    // ciphertext length, so that is the header it signed. See
+                    // `MediaHeader::aad`.
+                    let wire_header: [u8; HEADER_SIZE] = data[..HEADER_SIZE]
                         .try_into()
                         .expect("header is 16 bytes");
+                    let header_bytes = MediaHeader::aad(&wire_header);
 
                     let decrypted = {
                         let mut decryptor = match frame_decryptor.lock() {

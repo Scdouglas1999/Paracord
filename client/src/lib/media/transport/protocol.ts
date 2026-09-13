@@ -88,6 +88,34 @@ export function decodeHeader(buf: DataView): MediaHeader {
   };
 }
 
+/** Byte offset of the 16-bit `payload_length` field inside the header. */
+const PAYLOAD_LENGTH_OFFSET = 13;
+
+/**
+ * The 16 header bytes as they are bound into AES-GCM as additional
+ * authenticated data.
+ *
+ * `payload_length` is excluded — zeroed — because it is written *after* the
+ * frame is sealed. A sender cannot know the ciphertext length until it has the
+ * ciphertext, so every sender on both engines computes the AAD over a header
+ * whose length field is still zero and then stamps the real length onto the
+ * wire copy. A receiver that authenticated the wire bytes verbatim was
+ * therefore authenticating a header its sender never signed, and rejected every
+ * datagram it was ever sent: a call that connected, exchanged keys, read every
+ * packet and decoded none of them.
+ *
+ * Nothing is weakened by leaving the field out. It is only ever used to slice
+ * the payload out of the datagram, and a tampered length yields a truncated (or
+ * over-long) payload whose authentication tag fails regardless — the desktop
+ * receiver does not even read it, taking everything after the header.
+ */
+export function headerAad(packet: Uint8Array): Uint8Array {
+  const aad = packet.slice(0, HEADER_SIZE);
+  aad[PAYLOAD_LENGTH_OFFSET] = 0;
+  aad[PAYLOAD_LENGTH_OFFSET + 1] = 0;
+  return aad;
+}
+
 /** Create a complete media packet: 16-byte header + payload. */
 export function createPacket(header: MediaHeader, payload: Uint8Array): Uint8Array {
   const headerView = encodeHeader({ ...header, payloadLength: payload.byteLength });

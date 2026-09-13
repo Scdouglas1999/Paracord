@@ -31,6 +31,7 @@ import {
   PROTOCOL_VERSION,
   HEADER_SIZE,
   createPacket,
+  headerAad,
   decodeHeader,
   encodeHeader,
   encodeVideoFrameMetadata,
@@ -1469,7 +1470,7 @@ export class BrowserMediaEngine implements MediaEngine {
     };
 
     // Encode header for AAD (encrypt uses header as additional authenticated data)
-    const headerAAD = createPacket(header, new Uint8Array(0)).slice(0, HEADER_SIZE);
+    const headerAAD = headerAad(createPacket(header, new Uint8Array(0)));
 
     const encrypted = await this.senderKeys.encrypt(
         headerAAD,
@@ -1802,7 +1803,7 @@ export class BrowserMediaEngine implements MediaEngine {
       fragmentPayload.set(metadataBytes, 0);
       fragmentPayload.set(fragment, metadataBytes.byteLength);
 
-      const headerAAD = createPacket(header, new Uint8Array(0)).slice(0, HEADER_SIZE);
+      const headerAAD = headerAad(createPacket(header, new Uint8Array(0)));
       const encrypted = await this.senderKeys.encrypt(
         headerAAD,
         fragmentPayload,
@@ -1854,7 +1855,7 @@ export class BrowserMediaEngine implements MediaEngine {
 
     // The AAD is the exact 16 wire header bytes (payloadLength 0), so it is
     // byte-identical to what the receiver reads off the stream and rebinds.
-    const headerAAD = createPacket(header, new Uint8Array(0)).slice(0, HEADER_SIZE);
+    const headerAAD = headerAad(createPacket(header, new Uint8Array(0)));
     const ciphertext = await this.senderKeys.encrypt(
       headerAAD,
       encodedData,
@@ -1962,7 +1963,7 @@ export class BrowserMediaEngine implements MediaEngine {
 
     this.senderKeys
       .decrypt(
-        aadSource.slice(0, HEADER_SIZE),
+        headerAad(aadSource),
         payload,
         header.keyEpoch,
         header.sequence,
@@ -1989,7 +1990,7 @@ export class BrowserMediaEngine implements MediaEngine {
   ): void {
     // Decrypt the video payload
     this.senderKeys.decrypt(
-      rawData.slice(0, HEADER_SIZE),
+      headerAad(rawData),
       payload,
       header.keyEpoch,
       header.sequence,
@@ -2025,7 +2026,7 @@ export class BrowserMediaEngine implements MediaEngine {
     if (header.trackType !== TrackType.Video) return;
 
     this.senderKeys.decrypt(
-      data.slice(0, HEADER_SIZE),
+      headerAad(data),
       ciphertext,
       header.keyEpoch,
       header.sequence,
@@ -2810,7 +2811,7 @@ export class BrowserMediaEngine implements MediaEngine {
       payloadLength: 0,
       codec: 0,
     };
-    const headerAAD = createPacket(header, new Uint8Array(0)).slice(0, HEADER_SIZE);
+    const headerAAD = headerAad(createPacket(header, new Uint8Array(0)));
     const encrypted = await this.senderKeys.encrypt(
       headerAAD,
       encodedData,
@@ -2836,7 +2837,7 @@ export class BrowserMediaEngine implements MediaEngine {
     }
     subscription.ssrc = header.ssrc;
     this.senderKeys.decrypt(
-      rawData.slice(0, HEADER_SIZE),
+      headerAad(rawData),
       payload,
       header.keyEpoch,
       header.sequence,

@@ -49,6 +49,9 @@ pub struct MediaHeader {
 }
 
 pub const HEADER_SIZE: usize = 16;
+
+/// Byte offset of the 16-bit `payload_length` field inside the header.
+const PAYLOAD_LENGTH_OFFSET: usize = 13;
 pub const PROTOCOL_VERSION: u8 = 1;
 
 /// Longest `stream_id` / `track_id` accepted off the wire.
@@ -276,6 +279,27 @@ impl MediaHeader {
         }
     }
 
+    /// The 16 header bytes as they are bound into AES-GCM as additional
+    /// authenticated data.
+    ///
+    /// `payload_length` is excluded — zeroed — because it is written *after*
+    /// the frame is sealed. A sender cannot know the ciphertext length until it
+    /// has the ciphertext, so every sender on both engines computes the AAD
+    /// over a header whose length field is still zero and then stamps the real
+    /// length onto the wire copy. A receiver that authenticated the wire bytes
+    /// verbatim was therefore authenticating a header its sender never signed,
+    /// and rejected every datagram it was ever sent.
+    ///
+    /// Nothing is weakened by leaving the field out: it is only ever used to
+    /// slice the payload out of the datagram, and a tampered length yields a
+    /// truncated or over-long payload whose authentication tag fails anyway.
+    pub fn aad(wire_header: &[u8; HEADER_SIZE]) -> [u8; HEADER_SIZE] {
+        let mut aad = *wire_header;
+        aad[PAYLOAD_LENGTH_OFFSET] = 0;
+        aad[PAYLOAD_LENGTH_OFFSET + 1] = 0;
+        aad
+    }
+
     /// Serialize header to 16 bytes.
     pub fn encode(&self, buf: &mut BytesMut) {
         // Byte 0: [V:1][T:1][R:2][SimLyr:4]
@@ -373,6 +397,37 @@ pub enum ProtocolError {
 
 #[cfg(test)]
 mod tests {
+
+    /// The AAD is the wire header with `payload_length` zeroed, because that is
+    /// the header a sender can sign: the length is only known once the frame is
+    /// sealed. A receiver that bound the wire bytes verbatim authenticated a
+    /// header nobody had signed and rejected every datagram it was sent.
+    #[test]
+    fn the_aad_ignores_the_length_a_sender_could_not_have_signed() {
+        let mut header = MediaHeader::new(TrackType::Audio, 0xDEAD_BEEF);
+        header.sequence = 7;
+        header.key_epoch = 3;
+        header.audio_level = 42;
+
+        let mut sealed = BytesMut::with_capacity(HEADER_SIZE);
+        header.encode(&mut sealed);
+        let sealed: [u8; HEADER_SIZE] = sealed[..HEADER_SIZE].try_into().unwrap();
+
+        // What actually goes on the wire, once the ciphertext length is known.
+        header.payload_length = 960;
+        let mut wire = BytesMut::with_capacity(HEADER_SIZE);
+        header.encode(&mut wire);
+        let wire: [u8; HEADER_SIZE] = wire[..HEADER_SIZE].try_into().unwrap();
+
+        assert_ne!(sealed, wire, "the length field does change on the wire");
+        assert_eq!(MediaHeader::aad(&wire), MediaHeader::aad(&sealed));
+        assert_eq!(MediaHeader::aad(&wire), sealed);
+
+        // Everything else is still authenticated.
+        let mut tampered = wire;
+        tampered[11] ^= 0xff; // audio_level
+        assert_ne!(MediaHeader::aad(&tampered), MediaHeader::aad(&wire));
+    }
     use super::*;
 
     #[test]

@@ -50,6 +50,111 @@ type PlaywrightFixture = {
 };
 
 /**
+ * Count the three things that have to happen for somebody to actually be heard:
+ * an `AudioDecoder` is built for a remote participant, it emits decoded frames,
+ * and each one is played through an `AudioBufferSourceNode`.
+ *
+ * Installed before the app boots. Headless Chromium has no output device, so
+ * this is the only honest way to assert playback: a call once connected,
+ * counted audio at the relay, read every forwarded datagram and decoded not one
+ * of them, and every relay-side assertion in this file passed while it did.
+ */
+const AUDIO_PROBE = () => {
+  const probe = { decoders: 0, decodedFrames: 0, buffers: 0, starts: 0 };
+  (window as unknown as { __paracordAudioProbe: typeof probe }).__paracordAudioProbe = probe;
+
+  const NativeAudioDecoder = (window as unknown as { AudioDecoder?: typeof AudioDecoder })
+    .AudioDecoder;
+  if (NativeAudioDecoder) {
+    (window as unknown as { AudioDecoder: unknown }).AudioDecoder = class extends (
+      NativeAudioDecoder
+    ) {
+      constructor(init: AudioDecoderInit) {
+        super({
+          ...init,
+          output: (frame: AudioData) => {
+            probe.decodedFrames += 1;
+            init.output(frame);
+          },
+        });
+        probe.decoders += 1;
+      }
+    };
+  }
+
+  const createBuffer = AudioContext.prototype.createBuffer;
+  AudioContext.prototype.createBuffer = function patchedCreateBuffer(
+    this: AudioContext,
+    ...args: Parameters<AudioContext['createBuffer']>
+  ) {
+    probe.buffers += 1;
+    return createBuffer.apply(this, args);
+  };
+
+  const start = AudioBufferSourceNode.prototype.start;
+  AudioBufferSourceNode.prototype.start = function patchedStart(
+    this: AudioBufferSourceNode,
+    ...args: Parameters<AudioBufferSourceNode['start']>
+  ) {
+    probe.starts += 1;
+    return start.apply(this, args);
+  };
+};
+
+interface AudioProbe {
+  decoders: number;
+  decodedFrames: number;
+  buffers: number;
+  starts: number;
+}
+
+async function readAudioProbe(page: Page): Promise<AudioProbe> {
+  return page.evaluate(
+    () =>
+      (window as unknown as { __paracordAudioProbe?: AudioProbe }).__paracordAudioProbe ?? {
+        decoders: 0,
+        decodedFrames: 0,
+        buffers: 0,
+        starts: 0,
+      },
+  );
+}
+
+/** Poll until both pages are audibly playing the other, or fail saying what stalled. */
+async function waitForAudiblePlayback(
+  pages: Array<{ label: string; page: Page }>,
+  minimumFrames: number,
+  timeoutMs = 45_000,
+): Promise<Map<string, AudioProbe>> {
+  const deadline = Date.now() + timeoutMs;
+  let latest = new Map<string, AudioProbe>();
+  for (;;) {
+    latest = new Map(
+      await Promise.all(
+        pages.map(async ({ label, page }) => [label, await readAudioProbe(page)] as const),
+      ),
+    );
+    if (
+      Array.from(latest.values()).every(
+        (probe) => probe.decodedFrames >= minimumFrames && probe.starts >= minimumFrames,
+      )
+    ) {
+      return latest;
+    }
+    if (Date.now() > deadline) {
+      const detail = Array.from(latest.entries())
+        .map(
+          ([label, probe]) =>
+            `${label}: decoders=${probe.decoders} decodedFrames=${probe.decodedFrames} buffers=${probe.buffers} starts=${probe.starts}`,
+        )
+        .join('; ');
+      throw new Error(`remote audio was never decoded and played (${detail})`);
+    }
+    await pages[0].page.waitForTimeout(500);
+  }
+}
+
+/**
  * Playwright refuses per-test `launchOptions`, and these cases need the fake
  * capture device, so each launches its own browser (same shape as
  * real-server.voice-check.spec.ts). `body` receives a factory so a case can
@@ -65,6 +170,7 @@ async function withChromium(
     const newParticipant = async () => {
       const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
       await context.grantPermissions(['microphone', 'camera'], { origin: BASE });
+      await context.addInitScript(AUDIO_PROBE);
       context.setDefaultTimeout(30_000);
       const page = await context.newPage();
       pages.push(page);
@@ -444,6 +550,25 @@ test('two browsers in one room exchange audio through the relay', async ({ playw
       expect(entry.audio_datagrams_received).toBeGreaterThanOrEqual(10);
       expect(entry.datagrams_sent).toBeGreaterThanOrEqual(10);
       expect(entry.bytes_sent).toBeGreaterThan(0);
+    }
+
+    // …and, the only assertion that means anybody was *heard*: each browser
+    // built a decoder for the other, decoded its frames, and played every one
+    // of them. The relay counters above are satisfied by a call that reads
+    // every datagram off the wire and drops it, which is exactly what this
+    // client did before the media control plane and the call keys were fixed.
+    const audible = await waitForAudiblePlayback(
+      [
+        { label: 'host', page: host },
+        { label: 'guest', page: guest },
+      ],
+      50,
+    );
+    for (const [label, probe] of audible) {
+      expect(probe.decoders, `${label} built a decoder for the other participant`).toBeGreaterThanOrEqual(1);
+      expect(probe.decodedFrames, `${label} decoded remote audio`).toBeGreaterThanOrEqual(50);
+      expect(probe.buffers, `${label} built playback buffers`).toBeGreaterThanOrEqual(50);
+      expect(probe.starts, `${label} played remote audio`).toBeGreaterThanOrEqual(50);
     }
 
     await host.screenshot({ path: shotPath('browser-voice-two-party.png') });
