@@ -1577,10 +1577,10 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
           // wraps and grows, which is what a draft should do.
           className={
             'min-w-[160px] flex-1 resize-none self-center bg-transparent px-1.5 py-2 text-body '
-            // The plate carries this field's focus ring (see the shell above), so the
-            // field itself draws none. `outline-none` alone loses to the global
-            // `:focus-visible` fallback in layout.css; the variant outranks it.
-            + 'text-text-primary outline-none focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-70 '
+            // The plate carries this field's focus ring (the shell above), so the
+            // field draws none — see the `[data-composer-input]` opt-out in
+            // layout.css, which is where that override can actually win.
+            + 'text-text-primary outline-none disabled:cursor-not-allowed disabled:opacity-70 '
             + 'placeholder:overflow-hidden placeholder:text-ellipsis placeholder:whitespace-nowrap '
             + 'placeholder:text-text-faint'
           }

@@ -49,6 +49,18 @@ html[data-theme='high-contrast'] #root {
   outline-offset: 2px;
 }
 
+/* …except where a surface already draws the ring for the control inside it.
+   §9 is one ring per control: the composer plate lights for its text field, so
+   the field must not add a second outline within it.
+
+   This opt-out has to live here, beside the fallback. This file is unlayered,
+   and an unlayered rule beats EVERY rule in a cascade layer whatever its
+   specificity — so Tailwind's `outline-none` on the field (layer utilities)
+   could never win, however the variant was spelled. */
+[data-composer-input]:focus-visible {
+  outline: none;
+}
+
 /* Transitions */
 .transition-colors {
   transition:
