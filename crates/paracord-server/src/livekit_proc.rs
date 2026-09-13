@@ -88,6 +88,7 @@ pub fn detect_local_ip() -> Option<String> {
 /// Internal ports (not exposed externally):
 ///   - `livekit_port` (7880) TCP — LiveKit HTTP API + WS (local only)
 ///   - `livekit_port + 1` (7881) TCP — ICE/TCP fallback (local only)
+#[allow(clippy::too_many_arguments)]
 fn write_livekit_config(
     api_key: &str,
     api_secret: &str,
@@ -127,6 +128,7 @@ fn write_livekit_config(
 }
 
 /// The YAML itself, so the port arithmetic can be asserted without a filesystem.
+#[allow(clippy::too_many_arguments)]
 fn build_livekit_config(
     api_key: &str,
     api_secret: &str,
