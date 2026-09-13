@@ -221,6 +221,19 @@ describe('LayoutTour', () => {
     expect(screen.queryByText(/jump into a room or pick a channel/i)).not.toBeInTheDocument();
   });
 
+  it('still runs the Lobby step where the shell tour has no anchor to run on', async () => {
+    // A phone has no docked sidebar, so the shell tour can never finish there.
+    // Waiting for it strictly would hold the Lobby's coach mark back for ever.
+    render(
+      <MemoryRouter initialEntries={['/app/guilds/123']}>
+        <section aria-label="Live rooms">rooms</section>
+        <LayoutTour />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText(/jump into a room or pick a channel/i, undefined, { timeout: 2000 });
+  });
+
   it('places the first step beside the middle of a full-height anchor', async () => {
     render(
       <MemoryRouter initialEntries={['/app']}>

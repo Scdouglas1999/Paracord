@@ -214,13 +214,19 @@ export function LayoutTour() {
   useEffect(() => {
     // The Lobby's coach mark waits for the shell's: one at a time, the next on
     // dismissal of the one before it.
-    if (guildDone || active || !isGuildHome || !shellDone) return undefined;
+    if (guildDone || active || !isGuildHome) return undefined;
     let timer = 0;
     let tries = 0;
     let cancelled = false;
     const attempt = () => {
       if (cancelled) return;
-      if (!modalIsOpen() && findAnchor(GUILD_STEPS[0].selector)) {
+      // "Waits for the shell tour" means waits for it to be FINISHED — or for
+      // it to be unable to run at all. On a phone the sidebar it anchors to is
+      // a drawer that is not on screen, so a strict wait would hold the Lobby's
+      // coach mark back for ever.
+      const shellPending =
+        !shellDone && SHELL_STEPS.some((step) => findAnchor(step.selector));
+      if (!shellPending && !modalIsOpen() && findAnchor(GUILD_STEPS[0].selector)) {
         setActive({ tour: 'guild', index: 0 });
         return;
       }

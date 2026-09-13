@@ -37,7 +37,7 @@ import { SkeletonMessage } from '../ui/Skeleton';
 import { fadeIn, flicker, motionToken, ms, onMotion, prefersReducedMotion, RollingNumber, settleIn, useFlipList, walkIntoRoom } from '../../lib/motion';
 import { parseMarkdown } from '../../lib/markdown';
 import { getHighestRoleColor } from '../../lib/colors';
-import { formatFileSize, formatTimestamp, relativeTime } from '../../lib/formatters';
+import { formatFileSize, formatTimestamp, relativeTime, wallClock } from '../../lib/formatters';
 import { useLightboxStore, type LightboxImage } from '../../stores/lightboxStore';
 import { confirm } from '../../stores/confirmStore';
 import { buildGuildEmojiImageUrl, parseCustomEmojiToken } from '../../lib/customEmoji';
@@ -2353,13 +2353,13 @@ function OwnedMessageList({
         )}
         {isGrouped ? (
           <div className={cn('flex w-9 flex-shrink-0 items-start justify-center pt-0.5', ribbon && 'w-7')}>
-            {/* The gutter is 36px (28 in a ribbon) and "12:31 PM" is wider, so
+            {/* The gutter is 36px (28 in a ribbon) and "12:31 pm" is wider, so
                 without this the hover timestamp broke across two lines and sat
                 lower than the message it belongs to. Let it overflow its column
                 centred instead — the row's own padding and the 14px gap either
                 side leave room. */}
             <span className="pc-mono whitespace-nowrap text-[11px] text-text-faint opacity-0 transition-opacity duration-[140ms] ease-[var(--ease-out)] group-hover:opacity-100">
-              {new Date(getTimestamp(msg)).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+              {wallClock(getTimestamp(msg))}
             </span>
           </div>
         ) : (
