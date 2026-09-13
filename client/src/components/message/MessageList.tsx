@@ -2539,7 +2539,9 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                     return (
                       <div
                         key={att.id}
-                        className="mt-2 inline-flex max-w-full flex-wrap items-center gap-2 rounded-[var(--radius-well)] bg-bg-well px-3 py-2 text-meta shadow-[var(--shadow-chip)]"
+                        // `[&>button]:mt-0`: see AttachmentFrame — the same
+                    // vertical-rhythm fallback would push Download out of line.
+                    className="mt-2 inline-flex max-w-full flex-wrap items-center gap-2 rounded-[var(--radius-well)] bg-bg-well px-3 py-2 text-meta shadow-[var(--shadow-chip)] [&>button]:mt-0"
                       >
                         {federatedBadge}
                         <span className="max-w-[20rem] truncate font-medium text-text-body">
@@ -2805,11 +2807,17 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
               </button>
             )}
             <button
-              className="context-menu-item flex w-full items-center gap-2 text-left"
+              className="context-menu-item w-full text-left"
               onClick={() => void toggleSavedMessage(msg)}
             >
-              {savedIds.has(msg.id) ? <BookmarkCheck size={14} /> : <Bookmark size={14} />}
-              {savedIds.has(msg.id) ? 'Remove from Saved' : 'Save for later'}
+              {/* `.context-menu-item` sets `display:block`, which beats the
+                  `flex` utility — and preflight makes every icon a block — so
+                  the icon and its label used to land on two lines. The inner
+                  span owns the row instead, where nothing outranks it. */}
+              <span className="flex items-center gap-2 whitespace-nowrap">
+                {savedIds.has(msg.id) ? <BookmarkCheck size={14} /> : <Bookmark size={14} />}
+                {savedIds.has(msg.id) ? 'Remove from Saved' : 'Save for later'}
+              </span>
             </button>
             {activeGuildId && msg.author.id !== me && (
               <button className="context-menu-item w-full text-left" onClick={() => openReportDialog(msg)}>
@@ -2905,6 +2913,16 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
             <div className="mt-auto shrink-0 py-6" style={{ height: virtualizer.getTotalSize(), width: '100%', position: 'relative' }}>
               {virtualItems.map((virtualRow) => {
                 const row = rows[virtualRow.index];
+                // Every virtual row is `transform`ed, and a transform opens a
+                // stacking context — so the actions menu's own `z-10` can only
+                // ever rank it inside its own row. Without this, the rows below
+                // (later in DOM order, transparent, full width) paint over the
+                // open menu and swallow its clicks: `document.elementFromPoint`
+                // on "Edit" returns the *next message's* div, and only the
+                // items that happen to hang past the last row are reachable.
+                // Lifting the row that owns the open menu above its siblings is
+                // what makes the menu clickable at all.
+                const ownsOpenMenu = row.type === 'message' && menuMessageId === row.message.id;
                 return (
                   <div
                     key={virtualRow.key}
@@ -2916,6 +2934,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                       left: 0,
                       width: '100%',
                       transform: `translateY(${virtualRow.start}px)`,
+                      ...(ownsOpenMenu ? { zIndex: 20 } : null),
                     }}
                   >
                     {renderRow(row)}
