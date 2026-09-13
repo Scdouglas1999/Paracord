@@ -2,6 +2,18 @@ import { expect, test } from '@playwright/test';
 import { guildDetailFixture, guildSummaryFixture } from '../src/test/guildContractFixtures';
 import { isGuildDetail, isGuildSummaryList } from '../src/api/generated/validators';
 
+/**
+ * The fixture building is deliberately long: the Buildings column has to
+ * truncate it without breaking the layout. Every locator that names it uses
+ * this constant, so an assertion matches the *whole* accessible name rather
+ * than a prefix that silently stops matching.
+ */
+const GUILD_NAME =
+  'QA Guild With A Very Long Name That Should Truncate Instead Of Breaking Layout';
+
+/** `name:` accepts a RegExp; a literal fixture string has to be escaped for it. */
+const literal = (value: string) => new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+
 test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo) => {
   const guildId = '1001';
   const textChannelId = '2001';
@@ -163,7 +175,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
       return json(200, [
         guildSummaryFixture({
           id: guildId,
-          name: 'QA Guild With A Very Long Name That Should Truncate Instead Of Breaking Layout',
+          name: GUILD_NAME,
           server_url: 'https://smoke.paracord.local',
           owner_id: userPayload.id,
           member_count: 4,
@@ -222,7 +234,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
     if (path === `/api/v1/guilds/${guildId}` && method === 'GET') {
       return json(200, guildDetailFixture({
         id: guildId,
-        name: 'QA Guild With A Very Long Name That Should Truncate Instead Of Breaking Layout',
+        name: GUILD_NAME,
         server_url: 'https://smoke.paracord.local',
         owner_id: userPayload.id,
         member_count: 4,
@@ -232,7 +244,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
     if (path === `/api/v1/guilds/${guildId}/onboarding/me` && method === 'GET') {
       return json(200, {
         settings: {
-          welcome_title: 'Welcome to QA Guild With A Very Long Name That Should Truncate Instead Of Breaking Layout',
+          welcome_title: `Welcome to ${GUILD_NAME}`,
           welcome_body: 'Quick start onboarding',
           rules_text: null,
           role_prompt: null,
@@ -694,8 +706,12 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   // grouped options are the buildings and their rooms; a building's window-map
   // plate is its front door and opens the Lobby.
   const buildingsColumn = page.getByRole('listbox', { name: 'Buildings and rooms' });
-  const building = buildingsColumn.getByRole('group', { name: /QA Guild/i });
-  await expect(building.getByRole('option', { name: /QA Guild lobby/i })).toBeVisible();
+  const building = buildingsColumn.getByRole('group', { name: literal(GUILD_NAME) });
+  // The lobby option is labelled "<building> lobby — <caption>", so the name to
+  // match is the building's full name, not a prefix of it.
+  await expect(
+    building.getByRole('option', { name: literal(`${GUILD_NAME} lobby`) }),
+  ).toBeVisible();
 
   await page.goto(`/app/guilds/${guildId}/channels/999999999`);
   await expect(page.getByRole('heading', { name: 'Channel not found' })).toBeVisible();

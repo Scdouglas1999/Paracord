@@ -68,7 +68,7 @@ test('ordinary production composer accepts encrypted local drafts without Signal
     const channelResponse = await owner.api.post(`${server}/api/v1/guilds/${guild.id}/channels`, { data: { name: 'ordinary', channel_type: 0 } }); expect(channelResponse.status()).toBe(201);
     const channel = await channelResponse.json();
     await owner.page.goto(`http://127.0.0.1:4174/app/guilds/${guild.id}/channels/${channel.id}`); await dismiss(owner.page);
-    const composer = owner.page.getByPlaceholder('Message #ordinary', { exact: true });
+    const composer = owner.page.getByPlaceholder('Say something in ordinary', { exact: true });
     await composer.fill('Saved ordinary draft without identity');
     await expect.poll(() => owner.page.evaluate(async () => {
       const module = await import('/src/lib/messages/accountMessagingRuntime.ts');
