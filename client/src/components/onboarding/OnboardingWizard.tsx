@@ -113,9 +113,6 @@ const STEPS = [
             </div>
           </div>
         </div>
-        <p className="text-meta text-text-faint">
-          You'll enter your server address on the next screen.
-        </p>
       </div>
     ),
   },
@@ -210,7 +207,7 @@ export function OnboardingWizard({ onComplete, onTryDemo }: OnboardingWizardProp
               className="flex-1"
               onClick={isLast ? handleComplete : () => setStep(step + 1)}
             >
-              {isLast ? "Let's go" : 'Next'}
+              {isLast ? 'Enter a server address' : 'Next'}
               {!isLast && <ArrowRight size={16} aria-hidden />}
             </Button>
           </div>
