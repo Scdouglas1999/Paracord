@@ -1,5 +1,5 @@
 import { useCurrentChannelStore } from '../hooks/useChannels';
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { Outlet, useLocation, useParams } from 'react-router';
 // §5.1/§5.3: every overlay here rides the shared recipes — backdrops fade
 // (pc-fade), panels enter/exit on pc-enter/pc-exit, drawers slide on the
@@ -79,8 +79,22 @@ export function AppShell() {
 
   // On mount / breakpoint change, collapse the sidebar on mobile so it starts as
   // a hidden overlay rather than eating the viewport (layout-spec §6).
-  useEffect(() => {
+  //
+  // This has to land BEFORE the first paint. `sidebarCollapsed` persists as
+  // `false` (the desktop default), so as a passive effect this ran one frame
+  // too late: a phone opening the app painted the navigation drawer over the
+  // street for ~120ms and then tore it down again — a visible flinch on every
+  // cold start, and long enough for anything measuring the shell (the coach
+  // marks did) to latch onto a landmark that is about to stop existing.
+  // `sidebarMobileSynced` is a ref, not state, because it must be false on the
+  // very first render and true from the layout effect onward without asking for
+  // a render of its own. Ordering alone is not enough: `usePresence` keeps a
+  // surface mounted through its LEAVE, so a first render that says "open" hands
+  // the drawer a full slide-out even when the correction lands before paint.
+  const sidebarMobileSynced = useRef(false);
+  useLayoutEffect(() => {
     setSidebarCollapsed(isMobile);
+    sidebarMobileSynced.current = true;
   }, [isMobile, setSidebarCollapsed]);
 
   useEffect(() => {
@@ -159,7 +173,7 @@ export function AppShell() {
   const showOnAirDock = isMobile && voiceConnected && !isOnVoiceChannel;
 
   const showContextPanel = contextPanelMode !== null && contextPanelRouteValid;
-  const showSidebarOverlay = isMobile && !sidebarCollapsed;
+  const showSidebarOverlay = isMobile && sidebarMobileSynced.current && !sidebarCollapsed;
 
   // When a context overlay opens on mobile, dismiss the sidebar overlay so the
   // two z-[80] surfaces never stack (hamburger / TopBar toggles included).
