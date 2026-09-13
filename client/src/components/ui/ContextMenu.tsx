@@ -35,9 +35,15 @@ export function ContextMenu({ items, position, open = true, onClose, label = 'Co
   const menuRef = useRef<HTMLDivElement>(null);
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const { mounted, exiting, scenery } = usePresence(open);
-  const lastPosition = useRef(position ?? { x: 0, y: 0 });
-  if (position) lastPosition.current = position;
-  const anchor = position ?? lastPosition.current;
+  // The caller drops `position` when it closes the menu, and the menu is still
+  // on screen for the beat its leave takes — so the last one it was opened at
+  // is kept, and the exit plays where the menu actually is. Adjusted during
+  // render rather than in an effect: a menu that placed itself one commit late
+  // would be drawn at the previous spot for a frame.
+  const [anchor, setAnchor] = useState(position ?? { x: 0, y: 0 });
+  if (position && (position.x !== anchor.x || position.y !== anchor.y)) {
+    setAnchor(position);
+  }
   const [adjustedPosition, setAdjustedPosition] = useState(anchor);
 
   // Measure before paint and after content/viewport changes. Explanations can

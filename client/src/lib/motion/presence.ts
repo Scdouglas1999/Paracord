@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 
 import { settleIn, type SettleOptions } from './animate';
-import { prefersReducedMotion, useReducedMotion } from './reducedMotion';
+import { useReducedMotion } from './reducedMotion';
 import { ms } from './tokens';
 
 /**
@@ -53,30 +53,34 @@ export function usePresence(open: boolean): Presence {
   }));
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // React's "adjusting state during render" escape hatch: the element is in
-  // the tree on the same commit that opened it, so a consumer's layout effect
-  // has something to measure. React re-runs this render before touching the
-  // DOM; the guard makes it run exactly once.
-  if (open && (!state.mounted || state.exiting)) {
-    setState({ mounted: true, exiting: false });
+  // React's "adjusting state during render" escape hatch, for BOTH edges.
+  //
+  // Opening: the element is in the tree on the same commit that opened it, so
+  // a consumer's layout effect has something to measure. Closing: the exit
+  // class is on the element on the same commit that closed it, so the leave
+  // starts on that frame rather than one render later. Deciding either in an
+  // effect costs a frame, and a 120ms leave has seven of them. React re-runs
+  // this render before touching the DOM, and each guard clears itself, so each
+  // branch runs exactly once.
+  if (open) {
+    if (!state.mounted || state.exiting) setState({ mounted: true, exiting: false });
+  } else if (reduce) {
+    // Reduced motion has no leave at all: it is gone on the spot.
+    if (state.mounted || state.exiting) setState({ mounted: false, exiting: false });
+  } else if (state.mounted && !state.exiting) {
+    setState({ mounted: true, exiting: true });
   }
 
+  // The only thing left for an effect is the clock: the element is dropped
+  // --duration-fast after the leave began, and re-opening cancels it.
   useEffect(() => {
-    if (open) {
+    if (!state.exiting) {
       if (timer.current !== null) {
         clearTimeout(timer.current);
         timer.current = null;
       }
       return;
     }
-    if (prefersReducedMotion()) {
-      setState((current) =>
-        current.mounted || current.exiting ? { mounted: false, exiting: false } : current,
-      );
-      return;
-    }
-    // The leave runs for --duration-fast, then the element is gone.
-    setState((current) => (current.mounted ? { mounted: true, exiting: true } : current));
     timer.current = setTimeout(() => {
       timer.current = null;
       setState({ mounted: false, exiting: false });
@@ -87,7 +91,7 @@ export function usePresence(open: boolean): Presence {
         timer.current = null;
       }
     };
-  }, [open, reduce]);
+  }, [state.exiting]);
 
   return state.exiting
     ? { mounted: state.mounted, exiting: true, scenery: LEAVING }
