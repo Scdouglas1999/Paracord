@@ -163,6 +163,16 @@ describe('FriendsPage', () => {
     expect(mockChannelState.selectChannel).not.toHaveBeenCalled();
   });
 
+  it('says lights on, never "Online" (§6.9)', async () => {
+    renderFriendsPage();
+    // The filter tab, the section heading and the row's own subtitle all come
+    // from the one presence vocabulary in lib/presence.
+    expect(await screen.findByRole('button', { name: /^Lights on/ })).toBeInTheDocument();
+    expect(screen.getByText(/^Lights on — /)).toBeInTheDocument();
+    expect(screen.queryByText('Online')).not.toBeInTheDocument();
+    expect(screen.queryByText('Offline')).not.toBeInTheDocument();
+  });
+
   it('makes the friend identity row a profile target while keeping Message visible', async () => {
     const user = userEvent.setup();
     renderFriendsPage();

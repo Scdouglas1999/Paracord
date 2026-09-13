@@ -15,18 +15,17 @@ import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { cn } from '../lib/utils';
 import { displayName } from '../lib/displayName';
-import { presenceLight } from '../lib/presence';
+import { presenceLabel, presenceLight } from '../lib/presence';
 import { UserProfilePopup } from '../components/user/UserProfile';
 
 type FriendsTab = 'online' | 'all' | 'requests' | 'blocked';
 
-const STATUS_LABEL: Record<string, string> = {
-  online: 'Online',
-  idle: 'Idle',
-  dnd: 'Do not disturb',
-  streaming: 'Streaming',
-  offline: 'Offline',
-};
+/**
+ * The words for a person's light live in `lib/presence` and nowhere else
+ * (docs/lantern-stage-spec.md §1.5, §6.9). This page used to keep its own copy
+ * of them — "Online", "Offline" — which is the exact vocabulary the kill-list
+ * names, two hundred pixels from an account plate saying "Lights on".
+ */
 
 // Icon action button (lantern-stage-spec §8). Revealed on row hover AND
 // keyboard focus so hover-only actions stay reachable (§8).
@@ -268,7 +267,7 @@ export function FriendsPage() {
   };
 
   const filterTabs: { id: FriendsTab; label: string; count: number }[] = [
-    { id: 'online', label: 'Online', count: onlineCount },
+    { id: 'online', label: 'Lights on', count: onlineCount },
     { id: 'all', label: 'All', count: friends.length },
     { id: 'requests', label: 'Requests', count: requestCount },
     { id: 'blocked', label: 'Blocked', count: blocked.length },
@@ -290,7 +289,13 @@ export function FriendsPage() {
     );
   }, [friendListSource, searchQuery]);
 
-  const sectionLabel = activeTab === 'all' ? 'All' : activeTab === 'blocked' ? 'Blocked' : 'Online';
+  const sectionLabel = activeTab === 'all' ? 'All' : activeTab === 'blocked' ? 'Blocked' : 'Lights on';
+  const searchPlaceholder =
+    activeTab === 'all'
+      ? 'Search your friends'
+      : activeTab === 'blocked'
+        ? 'Search blocked people'
+        : 'Search who has their lights on';
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-bg-plate">
@@ -423,7 +428,7 @@ export function FriendsPage() {
                   <Input
                     id="friends-search"
                     type="text"
-                    placeholder={`Search ${sectionLabel.toLowerCase()}`}
+                    placeholder={searchPlaceholder}
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="pl-9"
@@ -447,7 +452,7 @@ export function FriendsPage() {
                     {filteredList.map((rel) => {
                       const status = getPresence(rel.user.id, scope)?.status || 'offline';
                       const isFriend = rel.type === 1;
-                      const subtitle = rel.type === 2 ? 'Blocked' : STATUS_LABEL[status] ?? 'Offline';
+                      const subtitle = rel.type === 2 ? 'Blocked' : presenceLabel(status);
                       return (
                         <PersonRow
                           key={rel.id}
@@ -632,8 +637,8 @@ function FriendsEmptyState({
       return (
         <EmptyState
           icon={<UserRoundPlus size={20} />}
-          title="Nobody's online right now"
-          description="None of your friends are online at the moment — they'll show up here the second they sign in. In the meantime, add a few more people with the Add friend button up top."
+          title="Nobody has their lights on right now"
+          description="None of your friends have their lights on — they'll show up here the moment one of them does. In the meantime, add a few more people with the Add friend button up top."
           action={
             <Button size="sm" onClick={onAdd}>
               Add a friend

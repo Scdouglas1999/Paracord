@@ -111,7 +111,7 @@ export function CommandPalette() {
     items.push({
       id: 'action-friends',
       label: 'Friends',
-      sublabel: 'Online, pending, and blocked',
+      sublabel: 'Lights on, pending, and blocked',
       icon: <Users size={16} />,
       action: () => navigate('/app/friends'),
       category: 'Actions',

@@ -415,7 +415,7 @@ function DiscoveryPreview({
 
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
           <PreviewFact icon={<Users size={15} />} label="Members" value={guild.member_count.toLocaleString()} />
-          <PreviewFact icon={<span className="h-2 w-2 rounded-full bg-light-amber" />} label="Online now" value={guild.online_count.toLocaleString()} />
+          <PreviewFact icon={<span className="h-2 w-2 rounded-full bg-light-amber" />} label="Lights on now" value={guild.online_count.toLocaleString()} />
           {createdLabel && <PreviewFact icon={<CalendarDays size={15} />} label="Established" value={createdLabel} className="col-span-2 sm:col-span-1" />}
         </div>
 
