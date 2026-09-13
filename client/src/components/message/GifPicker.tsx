@@ -132,7 +132,7 @@ export function GifPicker({ onSelect, onClose }: GifPickerProps) {
   return (
     <div
       ref={pickerRef}
-      className="popup-enter flex w-[min(25rem,calc(100vw-1rem))] max-h-[min(28.75rem,calc(100dvh-1rem))] flex-col overflow-hidden rounded-well border border-border-subtle bg-bg-floating shadow-[var(--shadow-plate)]"
+      className="pc-enter flex w-[min(25rem,calc(100vw-1rem))] max-h-[min(28.75rem,calc(100dvh-1rem))] flex-col overflow-hidden rounded-well border border-border-subtle bg-bg-floating shadow-[var(--shadow-plate)]"
     >
       {/* Inset search */}
       <div className="shrink-0 px-3 pb-1.5 pt-3">

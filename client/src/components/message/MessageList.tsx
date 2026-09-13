@@ -2938,13 +2938,12 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
         />,
         document.body
       )}
-      {contextMenu.isOpen && (
-        <ContextMenu
-          items={contextMenu.items}
-          position={contextMenu.position}
-          onClose={closeContextMenu}
-        />
-      )}
+      <ContextMenu
+        open={contextMenu.isOpen}
+        items={contextMenu.items}
+        position={contextMenu.position}
+        onClose={closeContextMenu}
+      />
       <Modal
         open={deleteConfirmId !== null}
         onClose={() => setDeleteConfirmId(null)}

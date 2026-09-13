@@ -1,9 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
 import { check, type Update } from '@tauri-apps/plugin-updater';
-import { motion } from 'framer-motion';
-// §5.3: one reduced-motion switch for the whole app (lib/motion), never
-// framer-motion's own hook — that one cannot see the user's Motion setting.
-import { useReducedMotion } from '../lib/motion';
 import { ArrowDownToLine, CheckCircle2, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { safeExternalUrl } from '../lib/security';
@@ -138,7 +134,6 @@ function getErrorMessage(error: unknown): string {
 
 export function UpdateNotification() {
   const runningInTauri = useMemo(() => isTauri(), []);
-  const reduceMotion = useReducedMotion();
   const activeUpdateRef = useRef<Update | null>(null);
   const statusRef = useRef<UpdateStatus>('idle');
   const visibleRef = useRef(false);
@@ -303,13 +298,10 @@ export function UpdateNotification() {
   // Toast recipe (lantern-stage-spec §8): bg-accent surface, hairline border, radius-md,
   // shadow-[var(--shadow-plate)], a leading semantic state icon, --text-label title and --text-meta body.
   return (
-    <motion.div
+    <div
       role="status"
       aria-live="polite"
-      initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-      className="fixed bottom-4 right-4 z-[140] w-[min(24rem,calc(100vw-1.5rem))] rounded-well border border-border-subtle bg-bg-raised p-4 shadow-[var(--shadow-plate)]"
+      className="pc-enter fixed bottom-4 right-4 z-[140] w-[min(24rem,calc(100vw-1.5rem))] rounded-well border border-border-subtle bg-bg-raised p-4 shadow-[var(--shadow-plate)]"
     >
       <div className="flex items-start gap-3">
         <StatusIcon size={18} style={{ color: statusColor, flexShrink: 0, marginTop: '1px' }} />
@@ -371,6 +363,6 @@ export function UpdateNotification() {
           {downloaded ? 'Later' : 'Dismiss'}
         </Button>
       </div>
-    </motion.div>
+    </div>
   );
 }

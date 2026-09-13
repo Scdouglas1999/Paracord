@@ -104,7 +104,7 @@ export function StickerPicker({ guildId, onSelect, onClose }: StickerPickerProps
   return (
     <div
       ref={pickerRef}
-      className="popup-enter flex w-[min(21.25rem,calc(100vw-1rem))] max-h-[min(26.25rem,calc(100dvh-1rem))] flex-col overflow-hidden rounded-well border border-border-subtle bg-bg-floating shadow-[var(--shadow-plate)]"
+      className="pc-enter flex w-[min(21.25rem,calc(100vw-1rem))] max-h-[min(26.25rem,calc(100dvh-1rem))] flex-col overflow-hidden rounded-well border border-border-subtle bg-bg-floating shadow-[var(--shadow-plate)]"
     >
       {/* Header */}
       <div className="shrink-0 border-b border-border-subtle px-3 pb-2.5 pt-3">

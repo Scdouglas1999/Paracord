@@ -1,7 +1,11 @@
 import { useCurrentChannelStore } from '../hooks/useChannels';
 import { useCallback, useEffect, useRef } from 'react';
 import { Outlet, useLocation, useParams } from 'react-router';
-import { AnimatePresence, motion, MotionConfig } from 'framer-motion';
+// §5.1/§5.3: every overlay here rides the shared recipes — backdrops fade
+// (pc-fade), panels enter/exit on pc-enter/pc-exit, drawers slide on the
+// pc-drawer set — and usePresence keeps each mounted for its leave. The
+// engine's data-motion switch is the only reduced-motion source of truth.
+import { usePresence } from '../lib/motion';
 import { cn } from '../lib/utils';
 import { UnifiedSidebar } from '../components/layout/sidebar/UnifiedSidebar';
 import { ContextPanel } from '../components/layout/ContextPanel';
@@ -37,8 +41,9 @@ import { ErrorBoundary } from '../components/ErrorBoundary';
  * docked — it mounts only when `uiStore.contextPanelMode` is set (single source
  * of truth), and collapses to an overlay on narrow widths (§6).
  *
- * `MotionConfig reducedMotion="user"` drops transform-based enters for users who
- * ask for reduced motion while keeping opacity fades (lantern-stage-spec §5, §9).
+ * Overlay motion is the shared §5.1 set: drawers slide in from their edge on
+ * the spring-settle and leave on ease-in, dialogs rise on pc-enter, backdrops
+ * fade — all of it instant under `html[data-motion="reduced"]` (§5.3, §9).
  */
 export function AppShell() {
   useKeyboardNavigation();
@@ -174,13 +179,16 @@ export function AppShell() {
   // (`--bg-base`) carries the Buildings column and the gutter, a plate
   // (`--bg-plate`) carries content, and raised/well surfaces live inside a
   // plate. A plate is never nested in a plate.
-  const modalEnter = { duration: 0.24, ease: [0.22, 1, 0.36, 1] as const };
+  const onAirDockPresence = usePresence(showOnAirDock);
+  const sidebarPresence = usePresence(showSidebarOverlay);
+  const contextPresence = usePresence(isMobile && showContextPanel);
+  const userSettingsPresence = usePresence(userSettingsOpen);
+  const guildSettingsPresence = usePresence(Boolean(guildSettingsId));
 
+  // data-native-underlay-clear: while a stream renders on the native GL
+  // underlay (Linux), this wrapper's background goes transparent so the tile
+  // is a real hole down to the video (see layout.css).
   return (
-    <MotionConfig reducedMotion="user">
-      {/* data-native-underlay-clear: while a stream renders on the native GL
-          underlay (Linux), this wrapper's background goes transparent so the
-          tile is a real hole down to the video (see layout.css). */}
       <div
         data-native-underlay-clear=""
         className="flex h-[100dvh] w-full flex-col overflow-hidden bg-bg-base text-text-primary"
@@ -212,19 +220,17 @@ export function AppShell() {
             <div className={cn('min-h-0 w-full flex-1 overflow-hidden', isSettingsRoute && 'p-3')}>
               <Outlet />
             </div>
-            <AnimatePresence>
-              {showOnAirDock && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-                  className="shrink-0 overflow-hidden px-3 py-2"
-                >
-                  <OnAirDock />
-                </motion.div>
-              )}
-            </AnimatePresence>
+            {onAirDockPresence.mounted && (
+              <div
+                className={cn(
+                  'shrink-0 overflow-hidden px-3 py-2',
+                  onAirDockPresence.exiting ? 'pc-sheet-out' : 'pc-sheet-in',
+                )}
+                {...onAirDockPresence.scenery}
+              >
+                <OnAirDock />
+              </div>
+            )}
           </main>
 
           {/* Right rail — ContextPanel (desktop inline; toggleable, not docked). */}
@@ -234,67 +240,62 @@ export function AppShell() {
         </div>
 
         {/* Mobile: Unified Sidebar as a left overlay (§6 — full overlay, never the
-            64px rail on mobile). */}
-        <AnimatePresence>
-          {showSidebarOverlay && (
-            <motion.div
-              className="fixed inset-0 z-[80] flex md:hidden modal-backdrop"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.18 }}
-              onClick={() => setSidebarCollapsed(true)}
+            64px rail on mobile). The backdrop fades while the drawer slides in
+            from its edge on the spring-settle and leaves on ease-in. */}
+        {sidebarPresence.mounted && (
+          <div
+            className={cn(
+              'fixed inset-0 z-[80] flex md:hidden modal-backdrop',
+              sidebarPresence.exiting ? 'pc-fade-out' : 'pc-fade-in',
+            )}
+            onClick={() => setSidebarCollapsed(true)}
+          >
+            <div
+              ref={sidebarOverlayRef}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Navigation"
+              tabIndex={-1}
+              className={cn(
+                'h-full max-w-[88vw] overflow-hidden shadow-[var(--shadow-plate)] outline-none',
+                sidebarPresence.exiting ? 'pc-drawer-out-left' : 'pc-drawer-in-left',
+              )}
+              onClick={(e) => e.stopPropagation()}
+              {...sidebarPresence.scenery}
             >
-              <motion.div
-                ref={sidebarOverlayRef}
-                role="dialog"
-                aria-modal="true"
-                aria-label="Navigation"
-                tabIndex={-1}
-                className="h-full max-w-[88vw] overflow-hidden shadow-[var(--shadow-plate)] outline-none"
-                initial={{ x: -24, opacity: 0 }}
-                animate={{ x: 0, opacity: 1 }}
-                exit={{ x: -24, opacity: 0 }}
-                transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-                onClick={(e) => e.stopPropagation()}
-              >
-                <ErrorBoundary variant="section" label="the sidebar">
-                  <UnifiedSidebar />
-                </ErrorBoundary>
-              </motion.div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+              <ErrorBoundary variant="section" label="the sidebar">
+                <UnifiedSidebar />
+              </ErrorBoundary>
+            </div>
+          </div>
+        )}
 
         {/* Mobile: ContextPanel as a right overlay (§6 — default closed). */}
-        <AnimatePresence>
-          {isMobile && showContextPanel && (
-            <motion.div
-              className="fixed inset-0 z-[80] flex justify-end md:hidden modal-backdrop"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.18 }}
-              onClick={() => setContextPanelMode(null)}
+        {contextPresence.mounted && (
+          <div
+            className={cn(
+              'fixed inset-0 z-[80] flex justify-end md:hidden modal-backdrop',
+              contextPresence.exiting ? 'pc-fade-out' : 'pc-fade-in',
+            )}
+            onClick={() => setContextPanelMode(null)}
+          >
+            <div
+              ref={contextOverlayRef}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Details"
+              tabIndex={-1}
+              className={cn(
+                'context-panel-overlay h-full w-[var(--w-context-panel)] max-w-[88vw] overflow-hidden shadow-[var(--shadow-plate)] outline-none',
+                contextPresence.exiting ? 'pc-drawer-out-right' : 'pc-drawer-in-right',
+              )}
+              onClick={(e) => e.stopPropagation()}
+              {...contextPresence.scenery}
             >
-              <motion.div
-                ref={contextOverlayRef}
-                role="dialog"
-                aria-modal="true"
-                aria-label="Details"
-                tabIndex={-1}
-                className="context-panel-overlay h-full w-[var(--w-context-panel)] max-w-[88vw] overflow-hidden shadow-[var(--shadow-plate)] outline-none"
-                initial={{ x: 24, opacity: 0 }}
-                animate={{ x: 0, opacity: 1 }}
-                exit={{ x: 24, opacity: 0 }}
-                transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-                onClick={(e) => e.stopPropagation()}
-              >
-                <ContextPanel guildId={guildId ?? null} channelId={channelId ?? null} />
-              </motion.div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+              <ContextPanel guildId={guildId ?? null} channelId={channelId ?? null} />
+            </div>
+          </div>
+        )}
 
         {isMobile && <MobileBottomNav />}
 
@@ -303,64 +304,59 @@ export function AppShell() {
         <InteractionModal />
         <LayoutTour />
 
-        {/* Windowed settings overlays — spec modal enter (§4/§5): backdrop fade,
-            surface scale .96→1 + rise, 240ms ease-out. */}
-        <AnimatePresence>
-          {userSettingsOpen && (
-            <motion.div
-              className="fixed inset-0 z-[150] flex items-center justify-center p-3 sm:p-8 md:p-12 lg:p-20 modal-backdrop"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.18 }}
-              onClick={closeUserSettings}
+        {/* Windowed settings overlays — the shared §5.1 recipe: backdrop fades,
+            the surface rises on pc-enter and falls on pc-exit. */}
+        {userSettingsPresence.mounted && (
+          <div
+            className={cn(
+              'fixed inset-0 z-[150] flex items-center justify-center p-3 sm:p-8 md:p-12 lg:p-20 modal-backdrop',
+              userSettingsPresence.exiting ? 'pc-fade-out' : 'pc-fade-in',
+            )}
+            onClick={closeUserSettings}
+          >
+            <div
+              ref={userSettingsDialogRef}
+              role="dialog"
+              aria-modal="true"
+              aria-label="User settings"
+              tabIndex={-1}
+              className={cn(
+                'relative flex h-full max-h-[calc(100dvh-1.5rem)] w-full max-w-6xl flex-col overflow-hidden sm:max-h-[min(900px,85vh)]',
+                userSettingsPresence.exiting ? 'pc-exit' : 'pc-enter',
+              )}
+              onClick={(e) => e.stopPropagation()}
+              {...userSettingsPresence.scenery}
             >
-              <motion.div
-                ref={userSettingsDialogRef}
-                role="dialog"
-                aria-modal="true"
-                aria-label="User settings"
-                tabIndex={-1}
-                initial={{ scale: 0.96, opacity: 0, y: 8 }}
-                animate={{ scale: 1, opacity: 1, y: 0 }}
-                exit={{ scale: 0.96, opacity: 0, y: 8 }}
-                transition={modalEnter}
-                className="relative flex h-full max-h-[calc(100dvh-1.5rem)] w-full max-w-6xl flex-col overflow-hidden sm:max-h-[min(900px,85vh)]"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <SettingsPage />
-              </motion.div>
-            </motion.div>
-          )}
+              <SettingsPage />
+            </div>
+          </div>
+        )}
 
-          {guildSettingsId && (
-            <motion.div
-              className="fixed inset-0 z-[150] flex items-center justify-center p-3 sm:p-8 md:p-12 lg:p-20 modal-backdrop"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.18 }}
-              onClick={closeGuildSettings}
+        {guildSettingsPresence.mounted && (
+          <div
+            className={cn(
+              'fixed inset-0 z-[150] flex items-center justify-center p-3 sm:p-8 md:p-12 lg:p-20 modal-backdrop',
+              guildSettingsPresence.exiting ? 'pc-fade-out' : 'pc-fade-in',
+            )}
+            onClick={closeGuildSettings}
+          >
+            <div
+              ref={guildSettingsDialogRef}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Space settings"
+              tabIndex={-1}
+              className={cn(
+                'relative flex h-full max-h-[calc(100dvh-1.5rem)] w-full max-w-6xl flex-col overflow-hidden sm:max-h-[min(900px,85vh)]',
+                guildSettingsPresence.exiting ? 'pc-exit' : 'pc-enter',
+              )}
+              onClick={(e) => e.stopPropagation()}
+              {...guildSettingsPresence.scenery}
             >
-              <motion.div
-                ref={guildSettingsDialogRef}
-                role="dialog"
-                aria-modal="true"
-                aria-label="Space settings"
-                tabIndex={-1}
-                initial={{ scale: 0.96, opacity: 0, y: 8 }}
-                animate={{ scale: 1, opacity: 1, y: 0 }}
-                exit={{ scale: 0.96, opacity: 0, y: 8 }}
-                transition={modalEnter}
-                className="relative flex h-full max-h-[calc(100dvh-1.5rem)] w-full max-w-6xl flex-col overflow-hidden sm:max-h-[min(900px,85vh)]"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <GuildSettingsPage />
-              </motion.div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+              <GuildSettingsPage />
+            </div>
+          </div>
+        )}
       </div>
-    </MotionConfig>
   );
 }

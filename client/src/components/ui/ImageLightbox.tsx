@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { X, ChevronLeft, ChevronRight, Download, ZoomIn, ZoomOut } from 'lucide-react';
 import { useLightboxStore } from '../../stores/lightboxStore';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { usePresence } from '../../lib/motion';
 import { safeClientResourceUrl } from '../../lib/security';
 import { cn } from '../../lib/utils';
 
@@ -20,6 +21,7 @@ export function ImageLightbox() {
 
   const [zoom, setZoom] = useState(1);
   const backdropRef = useRef<HTMLDivElement>(null);
+  const { mounted, exiting, scenery } = usePresence(isOpen);
 
   const currentImage = images[currentIndex];
   const safeImageSrc = currentImage ? safeClientResourceUrl(currentImage.src) : null;
@@ -88,7 +90,7 @@ export function ImageLightbox() {
     a.click();
   }, [currentImage, safeImageSrc]);
 
-  if (!isOpen || !currentImage || !safeImageSrc) return null;
+  if (!mounted || !currentImage || !safeImageSrc) return null;
 
   // A control over arbitrary imagery is a name tag (spec §8 `pc-tag`): the tag
   // fill plus the primary ink. That is the system's answer to "ink over a
@@ -99,16 +101,19 @@ export function ImageLightbox() {
   return createPortal(
     <div
       ref={backdropRef}
-      className="fixed inset-0 z-[10000] flex items-center justify-center"
+      className={cn(
+        'fixed inset-0 z-[10000] flex items-center justify-center',
+        exiting ? 'pc-fade-out' : 'pc-fade-in',
+      )}
       role="dialog"
       aria-modal="true"
       aria-label="Image viewer"
       tabIndex={-1}
       style={{
         backgroundColor: 'var(--overlay-backdrop)',
-        animation: 'overlay-enter 0.15s ease-out',
       }}
       onClick={handleBackdropClick}
+      {...scenery}
     >
       {/* Top bar */}
       <div className="absolute left-0 right-0 top-0 z-10 flex items-center justify-between gap-3 p-3">
@@ -195,7 +200,7 @@ export function ImageLightbox() {
           draggable={false}
           style={{
             transform: `scale(${zoom})`,
-            transition: 'transform 0.15s ease-out',
+            transition: 'transform var(--duration-fast) var(--ease-out)',
             maxWidth: '90vw',
             maxHeight: '85vh',
             objectFit: 'contain',

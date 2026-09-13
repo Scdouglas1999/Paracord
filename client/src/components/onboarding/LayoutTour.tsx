@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { motion } from 'framer-motion';
 import { useLocation } from 'react-router';
 import {
   getVersionedStorageItem,
@@ -27,8 +26,8 @@ import {
  * silently. Dismissal ("Skip tour", "Done", or Esc) persists via the shared
  * versioned-storage helper so the tour never re-appears.
  *
- * Motion follows lantern-stage-spec §5 (≤180ms ease-out enter) and inherits AppShell's
- * `MotionConfig reducedMotion="user"`, so reduced-motion users get the fade only.
+ * Motion is the shared §5.1 pc-enter recipe; the app's one reduced-motion
+ * switch (utilities.css's `data-motion` rule) stills it.
  */
 
 type TourName = 'shell' | 'guild';
@@ -275,15 +274,12 @@ export function LayoutTour() {
         }}
       />
 
-      <motion.div
+      <div
         ref={tooltipRef}
         role="dialog"
         aria-label="Get to know your workspace"
         aria-describedby={BODY_ID}
         tabIndex={-1}
-        initial={{ opacity: 0, y: 6 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
         onKeyDown={(e) => {
           if (e.key === 'Escape') {
             e.stopPropagation();
@@ -291,7 +287,7 @@ export function LayoutTour() {
           }
         }}
         style={{ position: 'fixed', top: pos.top, left: pos.left, width: TOOLTIP_W }}
-        className="pc-floating z-[120] p-3 outline-none"
+        className="pc-enter pc-floating z-[120] p-3 outline-none"
       >
         <p id={BODY_ID} className="text-label leading-relaxed text-text-primary">
           {step.body}
@@ -319,7 +315,7 @@ export function LayoutTour() {
             </button>
           </div>
         </div>
-      </motion.div>
+      </div>
     </>,
     document.body,
   );

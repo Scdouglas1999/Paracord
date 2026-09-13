@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
-// §5.3: one reduced-motion switch for the whole app (lib/motion), never
-// framer-motion's own hook — that one cannot see the user's Motion setting.
-import { useReducedMotion } from '../lib/motion';
+// §5.1/§5.3: the shared banner recipe (pc-banner-in / pc-banner-out) and the
+// ONE reduced-motion switch — the presence hook keeps the bar mounted for its
+// --duration-fast leave.
+import { usePresence } from '../lib/motion';
 import { Loader2, Wifi, WifiOff } from 'lucide-react';
 import { gateway } from '../gateway/manager';
 import { useUIStore } from '../stores/uiStore';
 import { useServerListStore } from '../stores/serverListStore';
 import { useVoiceStore } from '../stores/voiceStore';
+import { cn } from '../lib/utils';
 
 type BannerTone = 'warning' | 'danger' | 'success';
 
@@ -48,7 +49,6 @@ export function ConnectionStatusBar() {
     s.activeServerId ? s.servers.find((server) => server.id === s.activeServerId) : undefined
   );
   const voiceConnected = useVoiceStore((s) => s.connected);
-  const reduceMotion = useReducedMotion();
 
   const hasConnected = useRef(false);
   const [showBanner, setShowBanner] = useState(false);
@@ -94,47 +94,46 @@ export function ConnectionStatusBar() {
       ? TONE[info.tone]
       : TONE.danger;
   const message = showConnected ? 'Back online' : info?.text ?? '';
+  const { mounted, exiting, scenery } = usePresence(visible && Boolean(message));
+
+  if (!mounted) return null;
 
   return (
-    <AnimatePresence>
-      {visible && message && (
-        <motion.div
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-          initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -20 }}
-          transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-          className="fixed inset-x-0 top-0 z-[9999] flex items-center justify-center gap-2 px-4 py-2"
-          style={{
-            backgroundColor: tone.surface,
-            borderBottom: `1px solid ${tone.edge}`,
-            boxShadow: 'var(--shadow-lifted)',
-          }}
-        >
-          {showConnected ? (
-            <Wifi size={15} style={{ color: tone.fg }} />
-          ) : reconnecting ? (
-            <Loader2 size={15} className="animate-spin" style={{ color: tone.fg }} />
-          ) : (
-            <WifiOff size={15} style={{ color: tone.fg }} />
-          )}
-          <span className="text-label" style={{ color: tone.fg }}>
-            {message}
-          </span>
-          {!showConnected && status === 'disconnected' && (
-            <button
-              type="button"
-              className={RETRY_BUTTON}
-              style={{ color: tone.fg }}
-              onClick={() => void gateway.connectAll()}
-            >
-              Retry
-            </button>
-          )}
-        </motion.div>
+    <div
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+      className={cn(
+        'fixed inset-x-0 top-0 z-[9999] flex items-center justify-center gap-2 px-4 py-2',
+        exiting ? 'pc-banner-out' : 'pc-banner-in',
       )}
-    </AnimatePresence>
+      style={{
+        backgroundColor: tone.surface,
+        borderBottom: `1px solid ${tone.edge}`,
+        boxShadow: 'var(--shadow-lifted)',
+      }}
+      {...scenery}
+    >
+      {showConnected ? (
+        <Wifi size={15} style={{ color: tone.fg }} />
+      ) : reconnecting ? (
+        <Loader2 size={15} className="animate-spin" style={{ color: tone.fg }} />
+      ) : (
+        <WifiOff size={15} style={{ color: tone.fg }} />
+      )}
+      <span className="text-label" style={{ color: tone.fg }}>
+        {message}
+      </span>
+      {!showConnected && status === 'disconnected' && (
+        <button
+          type="button"
+          className={RETRY_BUTTON}
+          style={{ color: tone.fg }}
+          onClick={() => void gateway.connectAll()}
+        >
+          Retry
+        </button>
+      )}
+    </div>
   );
 }

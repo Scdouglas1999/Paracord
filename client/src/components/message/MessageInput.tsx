@@ -6,9 +6,9 @@ import { runtimeAttachDecision, runtimeSendDecision } from '../../lib/messages/m
 import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
 import { entityScopeKey as memberScopeKey, type AccountScope } from '../../lib/serverScope';
 import { useState, useRef, useEffect, useMemo, useCallback, lazy, Suspense } from 'react';
-import { motion } from 'framer-motion';
-// §5.3: one reduced-motion switch for the whole app (lib/motion), never
-// framer-motion's own hook — that one cannot see the user's Motion setting.
+
+// §5.3: one reduced-motion switch for the whole app — lib/motion is the only
+// JavaScript motion engine; the composer's enter/exit surfaces are CSS.
 import { emitMotion, flash, liftOut, press, relax, useReducedMotion } from '../../lib/motion';
 import { Plus, Smile, Send, X, FileText, BarChart3, PlusCircle, MinusCircle, Image, Clock3, EyeOff, Type, Loader2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
@@ -1147,11 +1147,6 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
       : !showPollComposer && !content.trim() && stagedFiles.length === 0);
   const nearLimit = content.length > MAX_MESSAGE_LENGTH * 0.9;
   const overLimit = content.length > MAX_MESSAGE_LENGTH;
-  const popoverEnter = reduceMotion
-    ? { initial: { opacity: 0 }, animate: { opacity: 1 } }
-    : { initial: { opacity: 0, y: 6 }, animate: { opacity: 1, y: 0 } };
-  const popoverTransition = { duration: 0.18, ease: [0.22, 1, 0.36, 1] as const };
-
   return (
     <div
       className={cn(
@@ -1433,23 +1428,15 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
             <span className="pointer-events-none absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-accent-primary/70" />
           ) : (
             <span className="pointer-events-none absolute inset-x-2 bottom-0 h-0.5 overflow-hidden rounded-full">
-              <motion.span
-                className="block h-full w-1/3 rounded-full bg-accent-primary"
-                animate={{ x: ['-120%', '360%'] }}
-                transition={{ duration: 1.1, repeat: Infinity, ease: 'linear' }}
-              />
+              <span className="pc-sweep block h-full w-1/3 rounded-full bg-accent-primary" />
             </span>
           )
         )}
 
         {showFormattingTools && (
-          <motion.div
-            {...popoverEnter}
-            transition={popoverTransition}
-            className="pc-floating absolute bottom-full left-2 right-2 z-10 mb-2 p-1"
-          >
+          <div className="pc-enter pc-floating absolute bottom-full left-2 right-2 z-10 mb-2 p-1">
             <MarkdownToolbar textareaRef={textareaRef} onContentChange={setContent} />
-          </motion.div>
+          </div>
         )}
 
         {/* Slash command popup */}
@@ -1482,11 +1469,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
 
         {/* @mention autocomplete */}
         {mentionQuery !== null && mentionResults.length > 0 && (
-          <motion.div
-            {...popoverEnter}
-            transition={popoverTransition}
-            className="pc-floating absolute bottom-full left-2 right-2 z-20 mb-2 max-h-64 overflow-y-auto p-1"
-          >
+          <div className="pc-enter pc-floating absolute bottom-full left-2 right-2 z-20 mb-2 max-h-64 overflow-y-auto p-1">
             {mentionResults.map((member, i) => (
               <button
                 key={member.user.id}
@@ -1515,7 +1498,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
                 </span>
               </button>
             ))}
-          </motion.div>
+          </div>
         )}
 
         <button
@@ -1532,15 +1515,16 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
         >
           <Plus size={18} />
         </button>
-        {toolsPosition && <ContextMenu
+        <ContextMenu
           label="Message tools"
-          position={toolsPosition}
+          open={toolsPosition != null}
+          position={toolsPosition ?? undefined}
           items={composerTools}
           onClose={() => {
             setToolsPosition(null);
             toolsButtonRef.current?.focus();
           }}
-        />}
+        />
 
         <button
           onClick={attachFiles}

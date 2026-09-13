@@ -196,6 +196,188 @@
   transition-timing-function: var(--ease-out);
 }
 
+/* -----------------------------------------------------------------------------
+   §5.1 The shared choreography — the ONLY enter/exit set in the product.
+
+   Every overlay surface (dialog, popover, menu, tooltip, toast) enters on
+   opacity + a 6px rise on the spring-settle over --duration-slow, and leaves on
+   opacity + a 4px fall on --ease-in over --duration-fast. Backdrops fade.
+   Drawers and sheets travel on --duration-move. The old ad-hoc keyframes
+   (modal-enter, overlay-enter, popup-enter, scale-in, toast-slide-in) are gone;
+   this is what replaced them.
+
+   Each keyframe declares only its OFF state, so the same pair works forwards
+   and backwards and an element that stays mounted animates exactly once.
+   -------------------------------------------------------------------------- */
+@keyframes pc-fade {
+  from { opacity: 0; }
+}
+
+@keyframes pc-enter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 6px, 0);
+  }
+}
+
+@keyframes pc-exit {
+  to {
+    opacity: 0;
+    transform: translate3d(0, 4px, 0);
+  }
+}
+
+@keyframes pc-drawer-in-left {
+  from {
+    opacity: 0;
+    transform: translate3d(-24px, 0, 0);
+  }
+}
+
+@keyframes pc-drawer-in-right {
+  from {
+    opacity: 0;
+    transform: translate3d(24px, 0, 0);
+  }
+}
+
+@keyframes pc-drawer-out-left {
+  to {
+    opacity: 0;
+    transform: translate3d(-12px, 0, 0);
+  }
+}
+
+@keyframes pc-drawer-out-right {
+  to {
+    opacity: 0;
+    transform: translate3d(12px, 0, 0);
+  }
+}
+
+@keyframes pc-sheet-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 24px, 0);
+  }
+}
+
+@keyframes pc-sheet-out {
+  to {
+    opacity: 0;
+    transform: translate3d(0, 16px, 0);
+  }
+}
+
+@keyframes pc-banner-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, -12px, 0);
+  }
+}
+
+@keyframes pc-banner-out {
+  to {
+    opacity: 0;
+    transform: translate3d(0, -8px, 0);
+  }
+}
+
+/* The boot/fallback mark breathing — a real loading moment, not a spinner.
+   The reduced-motion rule in utilities.css stills it to a static mark. */
+@keyframes pc-mark-breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.035);
+  }
+}
+
+.pc-fade-in {
+  animation: pc-fade var(--duration-normal) var(--ease-out) backwards;
+}
+
+.pc-fade-out {
+  animation: pc-fade var(--duration-fast) var(--ease-in) reverse forwards;
+}
+
+.pc-enter {
+  animation: pc-enter var(--duration-slow) var(--ease-spring-settle) backwards;
+}
+
+/* Everything that is leaving is scenery for the beat it takes: the pointer
+   goes through it, and `usePresence`'s `scenery` props take it out of the
+   accessibility tree and the tab order at the same moment. A dismissed
+   surface must not still be clickable on its way out. */
+.pc-exit,
+.pc-fade-out,
+.pc-sheet-out,
+.pc-banner-out,
+.pc-drawer-out-left,
+.pc-drawer-out-right {
+  pointer-events: none;
+}
+
+.pc-exit {
+  animation: pc-exit var(--duration-fast) var(--ease-in) forwards;
+}
+
+.pc-drawer-in-left {
+  animation: pc-drawer-in-left var(--duration-move) var(--ease-spring-settle) backwards;
+}
+
+.pc-drawer-in-right {
+  animation: pc-drawer-in-right var(--duration-move) var(--ease-spring-settle) backwards;
+}
+
+.pc-drawer-out-left {
+  animation: pc-drawer-out-left var(--duration-fast) var(--ease-in) forwards;
+}
+
+.pc-drawer-out-right {
+  animation: pc-drawer-out-right var(--duration-fast) var(--ease-in) forwards;
+}
+
+.pc-sheet-in {
+  animation: pc-sheet-in var(--duration-move) var(--ease-spring-settle) backwards;
+}
+
+.pc-sheet-out {
+  animation: pc-sheet-out var(--duration-fast) var(--ease-in) forwards;
+}
+
+/* A status banner pinned to the top edge drops in rather than rising — the
+   directional variant of the same recipe (spring-settle in, ease-in out). */
+.pc-banner-in {
+  animation: pc-banner-in var(--duration-normal) var(--ease-spring-settle) backwards;
+}
+
+.pc-banner-out {
+  animation: pc-banner-out var(--duration-fast) var(--ease-in) forwards;
+}
+
+.pc-mark-breathe {
+  animation: pc-mark-breathe var(--duration-breathe) var(--ease-in-out) infinite;
+}
+
+/* An indeterminate progress sweep — a third of a track crossing, looping. */
+@keyframes pc-sweep {
+  from {
+    transform: translate3d(-120%, 0, 0);
+  }
+  to {
+    transform: translate3d(360%, 0, 0);
+  }
+}
+
+.pc-sweep {
+  animation: pc-sweep var(--duration-breathe) linear infinite;
+}
+
 /* Reduced motion is the `data-motion` attribute, never a media query — see the
    header of utilities.css. Warm-up and dim become instant; breathing stops with
    the ring at its resting alpha. */

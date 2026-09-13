@@ -1,9 +1,5 @@
 import { useState, useEffect, lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router';
-import { motion } from 'framer-motion';
-// §5.3: one reduced-motion switch for the whole app (lib/motion), never
-// framer-motion's own hook — that one cannot see the user's Motion setting.
-import { useReducedMotion } from './lib/motion';
 import { AppMark } from './pages/authScaffold';
 import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
@@ -221,18 +217,15 @@ export function AuthRoute({ children }: { children: React.ReactNode }) {
  * loading moment (app mark on the deepest `--bg-base` street, Gabarito
  * wordmark, muted status line) rather than a bare spinner — and it matches the
  * document's first-paint surface so there is no flash while the app hydrates.
- * The mark breathes gently; `useReducedMotion` collapses it to a static mark.
+ * The mark breathes on `pc-mark-breathe`; the shared reduced-motion rule in
+ * utilities.css stills it — no second switch needed here.
  */
 function BrandedSplash({ label }: { label: string }) {
-  const reduce = useReducedMotion();
   return (
     <div className="flex min-h-screen w-full flex-col items-center justify-center gap-5 bg-bg-base px-6">
-      <motion.div
-        animate={reduce ? { opacity: 1 } : { opacity: [0.6, 1, 0.6], scale: [1, 1.04, 1] }}
-        transition={reduce ? undefined : { duration: 2.2, ease: 'easeInOut', repeat: Infinity }}
-      >
+      <div className="pc-mark-breathe">
         <AppMark size={52} />
-      </motion.div>
+      </div>
       <div className="flex flex-col items-center gap-1.5">
         <span className="font-display text-heading text-text-primary">Paracord</span>
         <p className="text-meta text-text-muted" role="status" aria-live="polite">
@@ -248,15 +241,11 @@ function BrandedSplash({ label }: { label: string }) {
  * the already-painted frame, so it stays quiet: just the mark, gently fading.
  */
 function LazyFallback() {
-  const reduce = useReducedMotion();
   return (
     <div className="flex h-full w-full items-center justify-center">
-      <motion.div
-        animate={reduce ? { opacity: 0.85 } : { opacity: [0.4, 0.9, 0.4] }}
-        transition={reduce ? undefined : { duration: 1.6, ease: 'easeInOut', repeat: Infinity }}
-      >
+      <div className="pc-mark-breathe">
         <AppMark size={32} />
-      </motion.div>
+      </div>
     </div>
   );
 }

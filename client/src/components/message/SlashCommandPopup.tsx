@@ -1,8 +1,4 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { motion } from 'framer-motion';
-// §5.3: one reduced-motion switch for the whole app (lib/motion), never
-// framer-motion's own hook — that one cannot see the user's Motion setting.
-import { useReducedMotion } from '../../lib/motion';
 import { Slash, User, MessageSquare, ListFilter } from 'lucide-react';
 import { useCommandStore } from '../../stores/commandStore';
 import type { ApplicationCommand } from '../../types/commands';
@@ -25,7 +21,7 @@ export interface SlashCommandPopupProps {
 const MAX_VISIBLE = 10;
 
 // Popover recipe (lantern-stage-spec §8): --bg-floating, radius-md, 1px --border-subtle,
-// --shadow-plate, 180ms rise+fade enter.
+// --shadow-plate, the shared pc-enter rise+fade.
 const POPOVER_CLASS =
   'absolute bottom-full left-2 right-2 z-30 mb-2 rounded-well border border-border-subtle bg-bg-floating shadow-[var(--shadow-plate)]';
 
@@ -41,7 +37,6 @@ export function SlashCommandPopup({
 }: SlashCommandPopupProps) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
-  const reduceMotion = useReducedMotion();
   const guildCommands = useCommandStore((s) => s.guildCommands);
   const loading = useCommandStore((s) => s.loading);
   const fetchGuildCommands = useCommandStore((s) => s.fetchGuildCommands);
@@ -137,31 +132,24 @@ export function SlashCommandPopup({
 
   if (!visible) return null;
 
-  const enter = reduceMotion
-    ? { initial: { opacity: 0 }, animate: { opacity: 1 } }
-    : { initial: { opacity: 0, y: 6 }, animate: { opacity: 1, y: 0 } };
-  const transition = { duration: 0.18, ease: [0.22, 1, 0.36, 1] as const };
-
   if (showingChoices) {
     if (autocompleteLoading && visibleChoices.length === 0) {
       return (
-        <motion.div {...enter} transition={transition} className={`${POPOVER_CLASS} p-3`}>
+        <div className={`pc-enter ${POPOVER_CLASS} p-3`}>
           <LoadingSpinner size="sm" label="Loading suggestions…" />
-        </motion.div>
+        </div>
       );
     }
     if (visibleChoices.length === 0) {
       return (
-        <motion.div {...enter} transition={transition} className={`${POPOVER_CLASS} px-3 py-2.5`}>
+        <div className={`pc-enter ${POPOVER_CLASS} px-3 py-2.5`}>
           <p className="text-meta text-text-secondary">No suggestions for this option.</p>
-        </motion.div>
+        </div>
       );
     }
     return (
-      <motion.div
-        {...enter}
-        transition={transition}
-        className={`${POPOVER_CLASS} max-h-80 overflow-y-auto p-1`}
+      <div
+        className={`pc-enter ${POPOVER_CLASS} max-h-80 overflow-y-auto p-1`}
       >
         <div ref={listRef} className="flex flex-col gap-0.5">
           {visibleChoices.map((choice, i) => {
@@ -198,35 +186,33 @@ export function SlashCommandPopup({
             );
           })}
         </div>
-      </motion.div>
+      </div>
     );
   }
 
   if (loading && !guildCommands.get(guildId)?.length) {
     return (
-      <motion.div {...enter} transition={transition} className={`${POPOVER_CLASS} p-3`}>
+      <div className={`pc-enter ${POPOVER_CLASS} p-3`}>
         <LoadingSpinner size="sm" label="Loading commands…" />
-      </motion.div>
+      </div>
     );
   }
 
   if (filteredCommands.length === 0) {
     return (
-      <motion.div {...enter} transition={transition} className={`${POPOVER_CLASS} px-3 py-2.5`}>
+      <div className={`pc-enter ${POPOVER_CLASS} px-3 py-2.5`}>
         <p className="text-meta text-text-secondary">
           No commands match{' '}
           <span className="font-semibold text-text-primary">/{query}</span> — check the spelling or
           browse this space&rsquo;s apps.
         </p>
-      </motion.div>
+      </div>
     );
   }
 
   return (
-    <motion.div
-      {...enter}
-      transition={transition}
-      className={`${POPOVER_CLASS} max-h-80 overflow-y-auto p-1`}
+    <div
+      className={`pc-enter ${POPOVER_CLASS} max-h-80 overflow-y-auto p-1`}
     >
       <div ref={listRef} className="flex flex-col gap-0.5">
         {filteredCommands.map((cmd, i) => {
@@ -263,7 +249,7 @@ export function SlashCommandPopup({
           );
         })}
       </div>
-    </motion.div>
+    </div>
   );
 }
 
