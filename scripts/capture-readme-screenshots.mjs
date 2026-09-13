@@ -192,19 +192,32 @@ const keepAlive = setInterval(() => {
   for (const s of held) s.page.evaluate(() => void document.hasFocus()).catch(() => {});
 }, 5000);
 
-await sleep(4000);
+// A room's duration counts from the moment THIS PAGE first saw it lit — the
+// gateway sends membership, not call start times, and the client refuses to
+// invent one (`lib/attention/litHistory.ts`). So the lobby is opened FIRST and
+// the rooms are left to run while it watches; a reload here would restart every
+// clock at zero and the cards would read "0:03".
 await page.goto(`${BASE}/app/guilds/${G}`, { waitUntil: 'domcontentloaded' });
 await sleep(3000);
 await clearOverlays(page);
+const DWELL_MS = Number(process.env.PARACORD_SHOTS_DWELL_MS ?? 95_000);
+log(`watching the rooms for ${Math.round(DWELL_MS / 1000)}s so the durations are real`);
+await sleep(DWELL_MS);
 
+// The Lobby says what it sees in the light vocabulary
+// (docs/lantern-stage-spec.md §7.3), and a capture with nothing lit is a
+// capture of the wrong product — so the run says so out loud.
 const seen = await page.evaluate(() => {
   const t = document.body.innerText;
   return {
-    live: (t.match(/(\d+)\s+live rooms?/i) || [])[1],
-    around: (t.match(/(\d+)\s+(?:person|people) around/i) || [])[1],
+    lit: (t.match(/(\d+)\s+rooms?\s+lit/i) || [])[1],
+    on: (t.match(/(\d+)(?:\s+of\s+\d+)?\s+have their lights on/i) || [])[1],
   };
 });
-log(`space shows: ${seen.live} live rooms, ${seen.around} around`);
+log(`the building shows: ${seen.lit ?? 0} rooms lit, ${seen.on ?? 0} with their lights on`);
+if (!seen.lit || seen.lit === '0') {
+  console.error('  !! nothing is lit — the screenshots would show a dark building');
+}
 
 const captured = [];
 async function shot(name, ms = 900) {
@@ -216,7 +229,7 @@ async function shot(name, ms = 900) {
   log('captured', name);
 }
 
-await shot('rooms', 1200);
+await shot('lobby', 1200);
 
 await page.goto(`${BASE}/app`, { waitUntil: 'domcontentloaded' });
 await sleep(2500);
@@ -228,17 +241,17 @@ await sleep(2500);
 await clearOverlays(page);
 await shot('messaging', 1200);
 
-let opened = false;
-for (const name of [/^members$/i, /member list/i]) {
-  const b = page.getByRole('button', { name }).first();
-  if (await b.isVisible().catch(() => false)) { await b.click(); opened = true; break; }
-}
-if (opened) {
+// There is no docked member list (§6.5). The people who are here now are the
+// header's lit strip, and its sheet is the only full list in the product. Scope
+// to the room header: the account plate in the column also says "Lights on".
+const strip = page.locator('.chat-header').getByRole('button', { name: /reading/i }).first();
+if (await strip.isVisible().catch(() => false)) {
+  await strip.click();
   await sleep(1600);
-  await shot('members', 900);
-  await page.getByRole('button', { name: /^close$/i }).first().click().catch(() => {});
+  await shot('people', 900);
+  await page.keyboard.press('Escape');
   await sleep(600);
-} else console.error('  !! members toggle not found');
+} else console.error('  !! the here-now strip was not on the header');
 
 await page.goto(`${BASE}/app/guilds/${G}/channels/${seed.engineering}`, { waitUntil: 'domcontentloaded' });
 await sleep(2500);
@@ -285,8 +298,9 @@ await writeFile(
     folder: path.relative(ROOT, OUT).split(path.sep).join('/'),
     viewport: { ...VIEWPORT, device_scale_factor: 2 },
     output_width: OUTPUT_WIDTH,
-    theme: 'dark',
+    theme: 'night',
     accent: 'emerald',
+    design: 'lantern-stage',
     files: captured.map((n) => `${n}.jpg`),
   }, null, 2)}\n`,
 );
