@@ -239,8 +239,17 @@ export async function installMotionMocks(page: Page): Promise<void> {
   ];
 
   // The first-run tour and the welcome sheet would sit on top of the composer.
+  //
+  // `paracord:auth:session-seen` is the marker a returning browser carries. The
+  // gate never signs in through the form — it opens /app directly and lets the
+  // mocked POST /auth/refresh hand it a session — and since `685a6bf` the
+  // client does not make that request on a cold load unless this origin has
+  // held a session before (an anonymous visitor used to spend a 401 and a
+  // console error on every page view). Without the marker every gate case lands
+  // on /login. See `src/lib/authToken.ts`.
   await page.addInitScript(() => {
     try {
+      window.localStorage.setItem('paracord:auth:session-seen', '1');
       window.localStorage.setItem('paracord:v2:layout-tour-shell', 'done');
       window.localStorage.setItem('paracord:v2:layout-tour-guild-home', 'done');
       window.localStorage.setItem('paracord:v2:onboarding-complete', '1');

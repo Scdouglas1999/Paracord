@@ -28,6 +28,23 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   let headerAttention: 'read' | 'unread' | 'mentions' = 'read';
   const attentionChannel = { id: '2003', guild_id: guildId, name: 'updates', type: 0, channel_type: 0, position: 2, nsfw: false, created_at: nowIso, last_message_id: '4000' };
 
+  // This spec never signs in through the form: it opens /app directly and lets
+  // the mocked POST /auth/refresh hand it a session, the way a returning
+  // browser with a refresh cookie does. Since `685a6bf` the client no longer
+  // makes that request on a cold load unless this origin has held a session
+  // before — an anonymous visitor used to spend a 401 and a console error on
+  // every page view — so the browser has to carry the same marker a real
+  // returning browser would (`src/lib/authToken.ts`, `noteSessionEstablished`).
+  // Without it the app is correctly anonymous and the whole flow lands on
+  // /login.
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem('paracord:auth:session-seen', '1');
+    } catch {
+      // A browser refusing storage keeps the old ask-and-see behaviour anyway.
+    }
+  });
+
   page.on('pageerror', (error) => {
     pageErrors.push(error.message);
   });
@@ -436,7 +453,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
     { path: '/app', text: /Your buildings/i },
     { path: '/app/friends', text: /Friends/i },
     { path: '/app/dms', text: /Pick up a conversation/i },
-    { path: '/app/discovery', text: /Discover spaces/i },
+    { path: '/app/discovery', text: /Discover buildings/i },
     { path: '/app/templates', text: /Template Gallery/i },
     { path: '/app/developers', text: /Developer portal/i },
   ];
@@ -507,7 +524,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
     await page.keyboard.press('ArrowDown');
     const actionMenu = page.getByRole('menu', { name: 'Channel actions' });
     await expect(actionMenu).toBeFocused();
-    await expect(actionMenu.getByRole('menuitem', { name: 'Space leaderboard' })).toBeVisible();
+    await expect(actionMenu.getByRole('menuitem', { name: 'Building leaderboard' })).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(moreActions).toBeFocused();
     await moreActions.click();
@@ -660,7 +677,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   await composer.press('Tab');
   await expect(composer).not.toBeFocused();
   await page.keyboard.press('Control+K');
-  const commandPaletteInput = page.getByPlaceholder(/Jump to a channel, space, or setting/i);
+  const commandPaletteInput = page.getByPlaceholder(/Jump to a channel, building, or setting/i);
   await expect(commandPaletteInput).toBeVisible();
   await expect(commandPaletteInput).toBeFocused();
   await page.keyboard.press('Escape');
@@ -684,10 +701,10 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   const textChannelsRegion = page.getByRole('region', { name: 'Text rooms' });
   await expect(textChannelsRegion).toBeVisible();
 
-  // Space settings now open from the guild-home header (MANAGE_GUILD-gated),
+  // Building settings now open from the guild-home header (MANAGE_GUILD-gated),
   // not the deleted channel-column dropdown.
-  await page.getByRole('button', { name: 'Space settings' }).click();
-  const serverSettingsDialog = page.getByRole('dialog', { name: 'Space settings' });
+  await page.getByRole('button', { name: 'Building settings' }).click();
+  const serverSettingsDialog = page.getByRole('dialog', { name: 'Building settings' });
   await expect(serverSettingsDialog).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(serverSettingsDialog).toBeHidden();
