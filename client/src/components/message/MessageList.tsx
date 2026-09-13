@@ -636,6 +636,10 @@ function OwnedMessageList({
   const unpinMessage = useCurrentMessageStore((s) => s.unpinMessage);
   const setMessages = useCurrentMessageStore((s) => s.setMessages);
   const decryptingIds = useCurrentMessageStore((s) => s.decryptingIds);
+  // A parent this client watched be deleted is a different absence from a
+  // parent that is merely older than the loaded window (§6.9: say the true
+  // thing). Without this both read "Message not loaded", forever.
+  const deletedMessageIds = useCurrentMessageStore((s) => s.deletedMessageIds);
   const channelActions = useChannelActions();
   const activeChannel = useCurrentChannelStore((s) => s.channelsById[channelId]);
   const typingUsers = useTypingStore((s) => s.typingByChannel[channelId] ?? EMPTY_TYPING);
@@ -2396,7 +2400,11 @@ function OwnedMessageList({
                   : 'Original message'
               }
               preview={
-                replyParentMessage ? getReplyPreviewText(replyParentMessage) : 'Message not loaded'
+                replyParentMessage
+                  ? getReplyPreviewText(replyParentMessage)
+                  : deletedMessageIds.has(replyParentId)
+                    ? 'This message was deleted'
+                    : 'Message not loaded'
               }
               onJump={() => scrollToMessage(replyParentId)}
             />
@@ -3109,7 +3117,17 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                 than inside it so no message's height ever depends on it. */}
             {deliveredReceipt && (
               <div
-                className={cn('-mt-4 shrink-0 pb-6 text-right', TIMELINE_GUTTER, ribbon && 'px-3.5')}
+                // `relative`, and no longer pulled a whole line up into the row
+                // above it. The timeline's rows are absolutely positioned, so
+                // they paint *over* any static element after them: with the old
+                // `-mt-4` the receipt was drawn behind the last row, and when
+                // that row ended in an attachment card the card's own background
+                // took the top 5px of the word, which read as "Jelivered".
+                className={cn(
+                  'relative -mt-1 shrink-0 pb-5 text-right',
+                  TIMELINE_GUTTER,
+                  ribbon && 'px-3.5',
+                )}
               >
                 <span data-motion-receipt className="pc-mono text-meta text-text-faint">
                   Delivered
