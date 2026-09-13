@@ -842,8 +842,18 @@ test('capture the design-review screens', async ({ page }) => {
       deaf: false,
       mute: false,
     });
-    const KESTREL_MEMBERS = [...CAST, ...extras].map(member);
+    // The reader has to be a member of the building before the room can show
+    // them reading it (the reading definition is scoped to the building's own
+    // people, `lib/attention/roomLight.ts`).
+    const KESTREL_MEMBERS = [user, ...CAST, ...extras].map(member);
     const SALT_MEMBERS = CAST.slice(2, 7).map(member);
+
+    // Paracord snowflakes are `(ms - epoch) << 22`, so a believable "2m ago"
+    // has to be minted from the scenario's own clock rather than a literal.
+    const EPOCH_MS = 1704067200000;
+    const snowflakeAt = (iso: string) => (BigInt(Date.parse(iso) - EPOCH_MS) << 22n).toString();
+    const tail = snowflakeAt('2026-09-12T21:28:00');
+    const read = snowflakeAt('2026-09-12T21:20:00');
 
     const channel = (
       id: string,
@@ -859,7 +869,7 @@ test('capture the design-review screens', async ({ page }) => {
       type,
       channel_type: type,
       position,
-      last_message_id: type === 0 ? '3010' : null,
+      last_message_id: type === 0 ? String(tail) : null,
     });
 
     const kestrelChannels = [
@@ -969,7 +979,15 @@ test('capture the design-review screens', async ({ page }) => {
 
     const realtimeBody = () => {
       const everyone = [...CAST, ...extras];
-      let body = frame('READY', {
+      let body = '';
+      // Everything the scenario needs rides INSIDE READY. A dispatch that
+      // arrives before a READY has taught the connection its history epoch is
+      // not merely ignored — `connectionManager` treats it as a failed
+      // dispatch and tears the transport down, so a frame placed ahead of
+      // READY costs the whole connection. READY's own guild payload is the
+      // sanctioned carrier for a session's voice states and presences
+      // (`gateway/dispatch.ts`, READY: `loadVoiceStates` + `updatePresence`).
+      body += frame('READY', {
         session_id: 'design-session',
         database_history_epoch: historyEpoch,
         user: { id: user.id },
@@ -992,27 +1010,18 @@ test('capture the design-review screens', async ({ page }) => {
           ),
         ],
       });
-      if (scenario === 'lit') {
-        for (const [channelId, ids] of [
-          ['2001', ['104', '105']],
-          ['2005', ['106']],
-          ['2101', ['103']],
-        ] as const) {
-          for (const id of ids) {
-            body += frame('TYPING_START', { channel_id: channelId, user_id: id });
-          }
-        }
-      }
       return body;
     };
 
-    await page.route('**/api/v2/rt/events**', (route) =>
-      route.fulfill({
-        status: 200,
-        headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
-        body: realtimeBody(),
-      }),
-    );
+    const routeRealtime = () =>
+      page.route('**/api/v2/rt/events**', (route) =>
+        route.fulfill({
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
+          body: realtimeBody(),
+        }),
+      );
+    await routeRealtime();
 
     // Scenario-specific REST, added last so it wins over the base handler.
     await page.route('**/api/v1/**', async (route) => {
@@ -1067,15 +1076,18 @@ test('capture the design-review screens', async ({ page }) => {
       if (pathname === `/api/v1/guilds/${SALT_ID}/members`) return json(SALT_MEMBERS);
       if (pathname === `/api/v1/guilds/${GUILD_ID}/events`)
         return json(scenario === 'lit' ? [eventToday] : []);
-      if (pathname === '/api/v1/users/@me/read-states')
+      if (pathname === '/api/v1/users/@me/read-states') {
+        // Everything is read except build-log, which holds the one mention —
+        // Needs-you is a shortlist, not a list of every channel with a tail.
+        const caughtUp = [...KESTREL_TEXT, ...SALT_TEXT]
+          .filter((id) => id !== '2001')
+          .map((channel_id) => ({ channel_id, last_message_id: tail, mention_count: 0 }));
         return json(
           scenario === 'lit'
-            ? [
-                { channel_id: '2001', last_message_id: '3000', mention_count: 1 },
-                { channel_id: '2101', last_message_id: '3000', mention_count: 0 },
-              ]
-            : [],
+            ? [{ channel_id: '2001', last_message_id: read, mention_count: 1 }, ...caughtUp]
+            : [{ channel_id: '2001', last_message_id: tail, mention_count: 0 }, ...caughtUp],
         );
+      }
       if (pathname === '/api/v1/users/@me/relationships')
         return json(
           scenario === 'lit'
@@ -1105,7 +1117,7 @@ test('capture the design-review screens', async ({ page }) => {
           user_id: user.id,
           kind: new URL(route.request().url()).searchParams.get('kind'),
           message: {
-            id: '3010',
+            id: tail,
             channel_id: channelId,
             author: CAST[1],
             content: 'thermal rig is booked 1–3 pm',
@@ -1140,14 +1152,30 @@ test('capture the design-review screens', async ({ page }) => {
         const main = page.getByRole('main');
         await expect(main).toBeVisible();
         await expect(main.getByText('Your buildings')).toBeVisible();
-        // Wait for the light itself, not just the frame: the scenario's voice
-        // and presence frames land on the first reconnect after READY.
+        // Wait for the light itself, not just the frame.
         if (scenario === 'lit') {
-          await expect(main.getByText('Mara is sharing a screen')).toBeVisible({ timeout: 30_000 });
+          await expect(main.getByText(/is sharing a screen/).first()).toBeVisible({ timeout: 30_000 });
+          // NOTE: amber "reading" light cannot be staged here. It is derived
+          // from a typing / authored / self-viewing signal, and this harness's
+          // realtime stream is a finite body: only the frames carried INSIDE
+          // READY (voice states and presences) survive. The reading line is
+          // covered by `components/home/home.test.tsx` instead.
         } else {
           await expect(main.getByText(/Dark · nobody in/).first()).toBeVisible({ timeout: 30_000 });
         }
+        await page
+          .getByText('Reconnecting to the server')
+          .waitFor({ state: 'hidden', timeout: 10_000 })
+          .catch(() => undefined);
         await shoot(`home-${label}-${size}`);
+        // The phone frame is taller than its viewport; keep a full-page copy so
+        // the buildings below the fold can be reviewed too.
+        if (size === '390x844') {
+          await page.screenshot({
+            path: path.join(OUT_DIR, `home-${label}-${size}-full.png`),
+            fullPage: true,
+          });
+        }
       }
     }
     return;
