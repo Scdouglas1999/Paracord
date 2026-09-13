@@ -108,6 +108,12 @@ def run_smoke(args: argparse.Namespace) -> None:
         env.update(
             {
                 "PARACORD_BIND_ADDRESS": f"127.0.0.1:{args.port}",
+                # Native voice binds UDP 8443 by default — the product port, not
+                # a test one — so every smoke that left it alone fought every
+                # other smoke and anything real on the host for it, and two
+                # could never run at once. Derive it from this smoke's own HTTP
+                # port unless the caller named one.
+                "PARACORD_VOICE_PORT": env.get("PARACORD_VOICE_PORT", str(args.port + 1000)),
                 "PARACORD_DATABASE_ENGINE": "sqlite",
                 "PARACORD_DATABASE_URL": f"sqlite://{(data / 'paracord.db').as_posix()}?mode=rwc",
                 "PARACORD_JWT_SECRET": "channel-feature-smoke-secret-0123456789abcdef",
