@@ -81,7 +81,7 @@ export function InvitePage() {
           {/* Who is inviting you — one identity row, no gradient banner and no
               floating circle (spec §6.1, §6.2). */}
           <div>
-            <p className="text-section text-accent-primary">You’re invited</p>
+            <p className="text-section text-text-faint">You’re invited</p>
             <div className="mt-4 flex items-center gap-4">
               <div className="pc-well flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-[var(--radius-card)]">
                 {iconSrc ? (
@@ -140,7 +140,7 @@ export function InvitePage() {
                   type="checkbox"
                   checked={verificationAck}
                   onChange={(e) => setVerificationAck(e.target.checked)}
-                  className="mt-0.5 h-4 w-4 accent-[var(--accent-primary)]"
+                  className="pc-checkbox mt-0.5"
                 />
                 I acknowledge this space’s rules and verification requirements.
               </label>

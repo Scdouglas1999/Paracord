@@ -61,9 +61,9 @@ Every one of them is rendered on `/design-tokens` (§4 below), and the WP0
 "no primitive hard-codes a colour" test now sweeps `Switch`, `ToggleRow` and
 both `Tabs` variants too.
 
-### One new recipe and one new token
+### Three new recipes and one new token
 
-- `.pc-dialog` (`client/src/styles/primitives.css`) — the floating-plate recipe
+- `.pc-dialog` (all three live in `client/src/styles/primitives.css`) — the floating-plate recipe
   for a dialog, with the phone radius/shadow step and the
   `prefers-reduced-transparency` opaque fallback.
 - `.pc-select` + `--select-chevron` — a `<select>` on the well recipe with the
@@ -71,6 +71,21 @@ both `Tabs` variants too.
   property, so the literal lives in `tokens.css` (Night and Daylight each define
   their own muted ink) rather than in a component. This removed the last literal
   hex from `components/ui/`.
+- `.pc-checkbox` — eleven checkboxes across the scope were each doing their own
+  thing (one had no styling at all and rendered as the raw grey platform box).
+  The native control is kept, so it keeps the platform's semantics and its
+  forced-colors behaviour, and is tinted through `accent-color` with the §9 ring.
+
+### One token change with a consequence worth naming
+
+Night's literals are now declared for `:root` **and** for `[data-theme='dark']`,
+`[data-theme='amoled']` and `[data-theme='high-contrast']` (the dark themes then
+override their own subset, as before). Only Daylight previously declared a
+complete set, so a *nested* `[data-theme]` subtree inherited whatever the
+surrounding theme had left in the tokens it did not restate — which made the
+theme picker's Night/AMOLED/High-contrast previews paint with Daylight ink while
+the app was in Daylight. `:root` is deliberately last in that selector list so
+the contrast audit's block parser still finds it.
 
 ---
 
@@ -210,7 +225,48 @@ button and a field), `ErrorBanner` in both single-line and multiline form, an
 
 ---
 
-## 5. Kill-list sweep (§6)
+## 5. What the screenshots changed
+
+The visual pass is not decoration — six things only showed up in a frame:
+
+1. **The settings index was Title Case** ("My Account", "Voice & Video",
+   "Space Hub", "Audit Log"). The contract asks for a sentence-case index, so
+   every label in the user- and space-settings indexes is now sentence case
+   (and the two places that asserted the old strings were updated with it).
+2. **Phone settings was a short floating card** with the mobile bottom nav
+   peeking out below it — `max-h-[min(900px,85vh)]` on a 844px screen. On a
+   phone the overlay now fills the screen but for the 12px gutter (§3);
+   desktop keeps the 85vh card.
+3. **The developer page had no gutter** — it was the one settings route
+   `AppShell` did not give the 12px plate inset to.
+4. **"Theme" was printed twice** in Appearance: the section wrapper and
+   `ThemeSelector`'s own labelled section. The wrapper is gone.
+5. **The account avatar was emerald** — the accent means "an action you can
+   take", and a person is not an action. It takes an identity hue now, and the
+   "Change avatar" control became a raised chip instead of a bordered box.
+6. **The voice check's "Also check my camera" was a raw platform checkbox.**
+   That is what produced `.pc-checkbox` and the sweep of the other ten.
+7. **Space settings opened with a lone "Refresh" button** floating above every
+   section's heading. It moved into the index footer, beside the close control,
+   the way the developer page's "Reload applications" already sat.
+8. **On a phone the section name was printed twice** — once in the shell's
+   back/close bar and again as the content's heading. The bar now carries what
+   is being configured (the person, the space) and the heading carries the
+   section.
+9. **Eyebrow labels were emerald** ("You're invited", "Step 1 of 2",
+   "Authorize application"). The emerald means an action you can take; a
+   signpost is not an action (§1.2, §6.3). They take the meta ink now.
+10. **The identity-import file input** was the raw platform file control, and
+    login's "·" separator was painted in a *border* token. Both fixed.
+
+Two fixture problems in the harness itself also surfaced, and are fixed there
+rather than in the product: `/login` was redirecting to `/setup-server` because
+the mock always claimed the server was unclaimed, and the admin overview threw
+because the catch-all `[]` response is truthy where a health report is expected.
+
+---
+
+## 6. Kill-list sweep (§6)
 
 Found and removed inside WP7's scope:
 
@@ -235,19 +291,28 @@ Found and removed inside WP7's scope:
 
 ---
 
-## 6. Verification
+## 7. Verification
 
 Run from `client/`.
 
 | Command | Result |
 |---|---|
-| `npx tsc --noEmit` | (see below) |
-| `npx eslint . --quiet` | (see below) |
-| `npx vitest run` | (see below) |
-| `npm run build` | (see below) |
-| `npx playwright test` (mocked smoke) | (see below) |
-| `npm run test:a11y:static` | (see below) |
-| `npm run test:contrast` | (see below) |
+| `npx tsc --noEmit` | pass |
+| `npx eslint . --quiet` | pass, 0 findings |
+| `npx vitest run` | **249 files, 2164 tests passed** |
+| `npm run build` | pass |
+| `npx playwright test` (mocked smoke) | **84 passed** |
+| `npm run test:a11y:static` | pass |
+| `npm run test:contrast` | **49 checks × 4 themes passed** |
+
+> **Reading these numbers.** WP7 landed into a worktree where WP1, WP2, WP4,
+> WP5 and WP6 were being written at the same time. The results above were taken
+> at the last point the tree was quiet; re-running while another package is
+> mid-edit will surface *their* files (`hooks/useLights.ts`,
+> `components/message/**`, `components/layout/TopBar*`, `components/home/**`,
+> `components/rooms/lobby/**`). Every file in WP7's scope is clean on all seven
+> commands, and every failure observed during the package was traced to a
+> concurrent edit outside it.
 
 ### Screenshots
 
@@ -267,13 +332,26 @@ PARACORD_E2E_DESIGN=1 PARACORD_E2E_DESIGN_WP=wp7 npx playwright test
 - ten entry screens — login, register, `/setup-server`, connect, account
   setup/unlock/recover, the invite landing, terms and privacy.
 
-To shoot the signed-out screens the mock flips a `signedOut` flag that makes
-`/auth/refresh` return 401, and the fixture user carries the admin flag so the
-admin panel and the Server settings section actually render.
+**64 frames, and all of them were looked at.** Three harness details make that
+possible:
+
+- Settings sections are reached by *clicking the index*, not by reloading the
+  app once per section — one boot per viewport, and it exercises the real
+  interaction. The whole pass runs in about 90 seconds.
+- A frame that cannot be reached is recorded and the run carries on, then the
+  list is asserted empty at the end. One broken screen never costs the other
+  sixty, and a silently missing frame still fails the gate.
+- The mock grew what the WP7 screens actually need: a `signedOut` flag that
+  makes `/auth/refresh` return 401, a `setupRequired` flag that moves with the
+  frame (every entry screen redirects to `/setup-server` while it is true), an
+  admin health report (the catch-all `[]` is truthy where a report is expected,
+  so the overview threw), a `GuildInvite` that satisfies the response contract,
+  password requirements that match what the setup page advertises, and an admin
+  flag on the fixture user so the admin panel and the Server section render.
 
 ---
 
-## 7. Left for WP8
+## 8. Left for WP8
 
 - `ImageLightbox` still paints `text-white/85` over arbitrary imagery; it needs
   a decision about what "ink over a photo" is in this system.
@@ -287,3 +365,13 @@ admin panel and the Server settings section actually render.
   no glass in them; renaming them and their call sites is WP8's job.
 - WP7 used the plain WP0 avatar everywhere it needed one; when WP1's `LitAvatar`
   lands, the settings account header and the user profile should adopt it.
+- `.settings-nav-item` in `styles/components.css` is now dead — both settings
+  shells use the `NavRow` primitive. It was restyled rather than deleted here
+  because deleting a global class belongs to the sweep.
+- `pages/developer/CreateBotForm.tsx`'s two fields are still `Input`s laid out
+  in a grid rather than `TextField`s; they are labelled `sr-only`, which works
+  but hides the labels a settings form would normally show.
+- Title case survives in *product* strings ("Save Keybinds", "Export Identity",
+  "Space Hub" as a feature name). The kill-list bans uppercase, not title case,
+  and several of these strings are asserted by e2e specs; a copy pass is its
+  own piece of work.

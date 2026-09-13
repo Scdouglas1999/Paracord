@@ -70,6 +70,8 @@ import {
   voiceRoomLight,
 } from '../lib/attention/light';
 import { presenceLight } from '../lib/presence';
+import { AccountPlate } from '../components/layout/sidebar/AccountPlate';
+import { BuildingsColumn } from '../components/layout/sidebar/BuildingsColumn';
 import { useMobile } from '../hooks/useMobile';
 
 /**
@@ -932,6 +934,132 @@ function LightComponentsSection() {
   );
 }
 
+/* -------------------------------------------------------------------------- */
+/* WP2 — the Buildings column                                                  */
+/* -------------------------------------------------------------------------- */
+
+/** The lit room with you in it, so the caption reads "you're here" (§7.1). */
+const DEMO_YOUR_ROOM = demoVoice({
+  channelId: 'v1',
+  occupants: [
+    { person: DEMO_SPEAKER, speaking: true, sharingScreen: true },
+    { person: DEMO_PRIYA },
+    { person: DEMO_REN },
+    { person: demoPerson('viewer', 'Sam Douglas', { inRoom: true, roomName: 'Shop floor' }) },
+  ],
+  selfUserId: 'viewer',
+  startedAtMs: LIGHT_NOW - 34 * 60_000 - 12_000,
+});
+
+const DEMO_IN_CALL_BUILDING = buildingLight({
+  scope: LIGHT_SCOPE,
+  guildId: 'g1',
+  name: 'Kestrel Robotics',
+  rooms: [
+    DEMO_YOUR_ROOM,
+    DEMO_DARK_ROOM,
+    DEMO_READ_ROOM,
+    DEMO_QUIET_ROOM,
+    ...DEMO_QUIET_ROOMS,
+  ],
+  members: [DEMO_MARA, DEMO_PRIYA, DEMO_REN, DEMO_TOMAS, DEMO_AISHA, DEMO_DEVON],
+  memberCount: 61,
+});
+
+const DEMO_ACCOUNT = {
+  user: { id: 'viewer', username: 'sam.douglas', display_name: null, avatar_hash: null, flags: 0 },
+  navigate: () => undefined,
+  muted: false,
+  deafened: false,
+  onToggleMute: () => undefined,
+  onToggleDeaf: () => undefined,
+  showAdminDashboard: false,
+};
+
+const DEMO_COLUMN_HANDLERS = {
+  onOpenHome: () => undefined,
+  onOpenMessages: () => undefined,
+  onOpenLobby: () => undefined,
+  onOpenRoom: () => undefined,
+  onAddBuilding: () => undefined,
+};
+
+function ColumnFrame({
+  id,
+  label,
+  children,
+}: {
+  id: string;
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div id={id} className="flex flex-col gap-2">
+      <SectionLabel>{label}</SectionLabel>
+      <div className="h-[44rem] w-[calc(var(--w-buildings-column)+var(--gutter)+var(--gutter))] max-w-full shrink-0 bg-bg-base p-3">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function BuildingsColumnSection() {
+  return (
+    <Section
+      id="buildings-column"
+      title="Buildings column"
+      blurb="The sidebar, in the three states worth reviewing: a Lobby open, a text room open, and you in a call. Every building, room and caption below is a real model from lib/attention — the column only draws them."
+    >
+      <div className="flex flex-wrap items-start gap-6">
+        <ColumnFrame id="column-lobby" label="A Lobby is open">
+          <BuildingsColumn
+            buildings={[DEMO_BUILDING, DEMO_DARK_BUILDING]}
+            needsYouCount={3}
+            messagesCount={2}
+            activeBuildingKey={DEMO_BUILDING.key}
+            {...DEMO_COLUMN_HANDLERS}
+            footer={<AccountPlate {...DEMO_ACCOUNT} />}
+          />
+        </ColumnFrame>
+
+        <ColumnFrame id="column-room" label="A text room is open">
+          <BuildingsColumn
+            buildings={[DEMO_BUILDING, DEMO_DARK_BUILDING]}
+            needsYouCount={3}
+            messagesCount={2}
+            activeRoomKey={DEMO_READ_ROOM.key}
+            attention={new Map([[DEMO_QUIET_ROOM.key, { unread: true, mentionCount: 2 }]])}
+            {...DEMO_COLUMN_HANDLERS}
+            footer={<AccountPlate {...DEMO_ACCOUNT} />}
+          />
+        </ColumnFrame>
+
+        <ColumnFrame id="column-call" label="You are in a call">
+          <BuildingsColumn
+            buildings={[DEMO_IN_CALL_BUILDING, DEMO_DARK_BUILDING]}
+            needsYouCount={3}
+            messagesCount={2}
+            activeRoomKey={DEMO_YOUR_ROOM.key}
+            {...DEMO_COLUMN_HANDLERS}
+            footer={<AccountPlate {...DEMO_ACCOUNT} />}
+          />
+        </ColumnFrame>
+
+        <ColumnFrame id="column-empty" label="No buildings yet">
+          <BuildingsColumn
+            buildings={[]}
+            needsYouCount={0}
+            messagesCount={0}
+            homeActive
+            {...DEMO_COLUMN_HANDLERS}
+            footer={<AccountPlate {...DEMO_ACCOUNT} />}
+          />
+        </ColumnFrame>
+      </div>
+    </Section>
+  );
+}
+
 export default function DesignTokensPage() {
   return (
     <div className="h-full overflow-y-auto bg-bg-base">
@@ -1034,6 +1162,8 @@ export default function DesignTokensPage() {
         <PrimitivesSection />
 
         <LightComponentsSection />
+
+        <BuildingsColumnSection />
 
         <Section
           id="themes"

@@ -95,14 +95,14 @@ type NavItem = { id: SettingsSection; label: string; icon: LucideIcon; adminOnly
 // Sectioned nav (design-spec §7 nav item + section groups). Icons keep the rail
 // legible and consistent; grouping gives rhythm instead of one flat list.
 const NAV_GROUPS: { label?: string; items: NavItem[] }[] = [
-  { items: [{ id: 'account', label: 'My Account', icon: User }] },
+  { items: [{ id: 'account', label: 'My account', icon: User }] },
   {
     label: 'Preferences',
     items: [
       { id: 'appearance', label: 'Appearance', icon: Palette },
-      { id: 'voice', label: 'Voice & Video', icon: Mic },
+      { id: 'voice', label: 'Voice & video', icon: Mic },
       { id: 'notifications', label: 'Notifications', icon: Bell },
-      { id: 'activity', label: 'Activity Privacy', icon: Eye },
+      { id: 'activity', label: 'Activity privacy', icon: Eye },
       { id: 'keybinds', label: 'Keybinds', icon: Keyboard },
     ],
   },
@@ -968,7 +968,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
               navigate('/app/developers');
             }}
           >
-            Developer Portal
+            Developer portal
           </NavRow>
           <NavRow
             icon={<LogOut size={16} />}
@@ -978,7 +978,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
               onClose();
             }}
           >
-            Log Out
+            Log out
           </NavRow>
         </>
       }
@@ -1955,7 +1955,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                       type="file"
                       accept=".json"
                       onChange={handleImportFileSelect}
-                      className="mt-2.5 block w-full max-w-md text-body text-text-muted file:mr-3 file:rounded-[var(--radius-control)] file:border file:border-border-subtle file:bg-bg-secondary file:px-3 file:py-2 file:text-body file:font-medium file:text-text-primary hover:file:bg-bg-mod-subtle"
+                      className="mt-2.5 block w-full max-w-md text-meta text-text-faint file:mr-3 file:h-[var(--h-control)] file:cursor-pointer file:rounded-[var(--radius-control)] file:border-0 file:bg-bg-raised file:px-3 file:text-label file:font-medium file:text-text-primary file:shadow-[var(--shadow-chip)] hover:file:bg-bg-mod-strong"
                     />
                     {importFile && (
                       <p className="mt-2 text-meta text-text-secondary">Selected: {importFile.name}</p>

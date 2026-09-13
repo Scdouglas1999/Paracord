@@ -37,7 +37,7 @@ export function LegalDocument({ eyebrow, icon: Icon, title, updated, intro, sect
 
         <div className="pc-plate p-7 sm:p-9">
           <header>
-            <div className="inline-flex items-center gap-2 text-section text-accent-primary">
+            <div className="inline-flex items-center gap-2 text-section text-text-faint">
               <Icon size={15} aria-hidden />
               {eyebrow}
             </div>

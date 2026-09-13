@@ -144,7 +144,7 @@ async function openConnectionCheck(page: Page): Promise<void> {
   } else {
     await phoneEntry.click();
   }
-  await page.getByRole('button', { name: 'Voice & Video', exact: true }).click();
+  await page.getByRole('button', { name: 'Voice & video', exact: true }).click();
   await page.getByRole('button', { name: /Run connection check/i }).click();
   await expect(page.getByRole('dialog').filter({ hasText: 'Voice connection check' })).toBeVisible();
 }

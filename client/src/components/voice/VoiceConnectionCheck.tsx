@@ -327,6 +327,7 @@ function ConnectionCheckPanel({
         <label className="mt-3 flex items-center gap-2 text-meta text-text-secondary">
           <input
             type="checkbox"
+            className="pc-checkbox"
             checked={includeCamera}
             disabled={running}
             onChange={(event) => setIncludeCamera(event.target.checked)}

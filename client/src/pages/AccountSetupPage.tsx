@@ -172,7 +172,7 @@ function OwnedAccountSetupPage() {
         <AuthCard className="max-w-lg">
           <div className="flex flex-col gap-6 p-7 sm:p-8">
             <div>
-              <p className="text-section text-accent-primary">Step 2 of 2</p>
+              <p className="text-section text-text-faint">Step 2 of 2</p>
               <AuthHeading
                 mark={false}
                 title="Recovery Phrase"
@@ -224,7 +224,7 @@ function OwnedAccountSetupPage() {
                 type="checkbox"
                 checked={savedPhrase}
                 onChange={(e) => setSavedPhrase(e.target.checked)}
-                className="mt-0.5 h-4 w-4 accent-[var(--accent-primary)]"
+                className="pc-checkbox mt-0.5"
               />
               <span className="text-label leading-relaxed text-text-secondary">
                 I’ve written down my recovery phrase and stored it somewhere safe.
@@ -245,7 +245,7 @@ function OwnedAccountSetupPage() {
       <AuthCard className="max-w-md">
         <form onSubmit={handleCreate} className="flex flex-col gap-6 p-7 sm:p-8">
           <div>
-            <p className="text-section text-accent-primary">Step 1 of 2</p>
+            <p className="text-section text-text-faint">Step 1 of 2</p>
             <AuthHeading
               mark={false}
               title={isMigration ? 'Secure your account' : 'Set up a local identity'}

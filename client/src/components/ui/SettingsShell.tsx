@@ -137,9 +137,11 @@ export function SettingsShell({
               >
                 <ArrowLeft size={18} />
               </IconButton>
-              <h1 className="pc-display min-w-0 flex-1 truncate text-heading text-text-primary">
-                {activeLabel}
-              </h1>
+              {/* The section's own name is the first thing in the content
+                  below, so this bar carries what is being configured instead —
+                  context without saying the same word twice. */}
+              <p className="min-w-0 flex-1 truncate text-section text-text-faint">{title}</p>
+              <span className="sr-only">{activeLabel}</span>
               <IconButton label={closeLabel} size="lg" tone="raised" onClick={onClose}>
                 <X size={18} />
               </IconButton>

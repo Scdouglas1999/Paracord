@@ -194,7 +194,7 @@ export function RegisterPage() {
                 type="checkbox"
                 checked={agreed}
                 onChange={(e) => setAgreed(e.target.checked)}
-                className="mt-0.5 h-4 w-4 accent-[var(--accent-primary)]"
+                className="pc-checkbox mt-0.5"
               />
               <span className="text-meta leading-relaxed text-text-secondary">
                 I have read and agree to the{' '}

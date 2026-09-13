@@ -772,7 +772,7 @@ export function MembersSection({
                                 type="checkbox"
                                 checked={checked}
                                 onChange={() => onToggleDraftRoleId(role.id)}
-                                className="pc-focusable h-4 w-4 rounded-[var(--radius-window)] accent-accent-primary"
+                                className="pc-checkbox"
                               />
                               <span
                                 className="h-2.5 w-2.5 rounded-[var(--radius-full)]"

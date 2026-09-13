@@ -547,7 +547,7 @@ export function LoginPage() {
               >
                 Forgot your password?
               </button>
-              <span className="text-border-strong" aria-hidden="true">
+              <span className="text-text-faint" aria-hidden="true">
                 &middot;
               </span>
               <button
@@ -582,7 +582,7 @@ export function LoginPage() {
               <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border-subtle pt-5 text-meta text-text-muted">
                 <span>Connected to</span>
                 <span className="font-code text-text-secondary">{serverUrl}</span>
-                <span className="text-border-strong" aria-hidden="true">
+                <span className="text-text-faint" aria-hidden="true">
                   &middot;
                 </span>
                 <button

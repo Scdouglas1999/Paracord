@@ -295,7 +295,7 @@ export function BotAuthorizePage() {
           <AuthCard>
             <div className="flex flex-col gap-5 p-7 sm:p-8">
               <div>
-                <p className="text-section text-accent-primary">Authorize application</p>
+                <p className="text-section text-text-faint">Authorize application</p>
                 <h1 className="mt-1 pc-display text-title text-text-primary">
                   Add a bot to your server
                 </h1>

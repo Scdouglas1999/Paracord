@@ -239,7 +239,7 @@ export function ServerHubSettings({ guild, channels, roles = [], onUpdate, setEr
                                                 type="checkbox"
                                                 checked={selected}
                                                 onChange={() => toggleAllowedRole(role.id)}
-                                                className="pc-focusable h-4 w-4 rounded-[var(--radius-window)] accent-accent-primary"
+                                                className="pc-checkbox"
                                             />
                                             <span
                                                 className="h-3 w-3 shrink-0 rounded-[var(--radius-full)]"
@@ -298,7 +298,7 @@ export function ServerHubSettings({ guild, channels, roles = [], onUpdate, setEr
                                         type="checkbox"
                                         checked={isPinned}
                                         onChange={() => togglePinnedChannel(channel.id)}
-                                        className="pc-focusable h-4 w-4 rounded-[var(--radius-window)] accent-accent-primary"
+                                        className="pc-checkbox"
                                     />
                                     <Hash size={15} className="shrink-0 text-channel-icon" aria-hidden />
                                     <span className="truncate">{channel.name}</span>

@@ -44,9 +44,9 @@ import {
 import { moderationTemplateApi } from '../../api/moderationTemplates';
 import type { ModerationTemplate } from '../../api/moderationTemplates';
 import {
-  Button,
   ErrorBanner,
   LoadingSpinner,
+  NavRow,
   SettingsShell,
   type SettingsNavGroup,
 } from '../ui';
@@ -80,24 +80,24 @@ const NAV_GROUP_ORDER: NavGroupKey[] = ['', 'The space', 'People', 'Automation',
 
 const NAV_ITEMS: { id: SettingsSection; label: string; icon: ReactNode; group: NavGroupKey }[] = [
   { id: 'overview', label: 'Overview', icon: <Hash size={16} />, group: '' },
-  { id: 'server-hub', label: 'Space Hub', icon: <LayoutTemplate size={16} />, group: 'The space' },
+  { id: 'server-hub', label: 'Space hub', icon: <LayoutTemplate size={16} />, group: 'The space' },
   { id: 'channels', label: 'Channels', icon: <Hash size={16} />, group: 'The space' },
   { id: 'emojis', label: 'Emojis', icon: <Smile size={16} />, group: 'The space' },
   { id: 'events', label: 'Events', icon: <Calendar size={16} />, group: 'The space' },
-  { id: 'file-storage', label: 'File Storage', icon: <HardDrive size={16} />, group: 'The space' },
+  { id: 'file-storage', label: 'File storage', icon: <HardDrive size={16} />, group: 'The space' },
   { id: 'roles', label: 'Roles', icon: <Shield size={16} />, group: 'People' },
   { id: 'members', label: 'Members', icon: <Users size={16} />, group: 'People' },
   { id: 'invites', label: 'Invites', icon: <Link size={16} />, group: 'People' },
   { id: 'onboarding', label: 'Onboarding', icon: <Users size={16} />, group: 'People' },
   { id: 'economy', label: 'Economy', icon: <TrendingUp size={16} />, group: 'People' },
-  { id: 'bot-store', label: 'Bot Store', icon: <Bot size={16} />, group: 'Automation' },
+  { id: 'bot-store', label: 'Bot store', icon: <Bot size={16} />, group: 'Automation' },
   { id: 'bots', label: 'Bots', icon: <Bot size={16} />, group: 'Automation' },
   { id: 'webhooks', label: 'Webhooks', icon: <Link size={16} />, group: 'Automation' },
   { id: 'bans', label: 'Bans', icon: <Gavel size={16} />, group: 'Moderation' },
   { id: 'automod', label: 'AutoMod', icon: <ShieldAlert size={16} />, group: 'Moderation' },
-  { id: 'mod-templates', label: 'Mod Templates', icon: <Shield size={16} />, group: 'Moderation' },
+  { id: 'mod-templates', label: 'Mod templates', icon: <Shield size={16} />, group: 'Moderation' },
   { id: 'reports', label: 'Reports', icon: <MessageSquare size={16} />, group: 'Moderation' },
-  { id: 'audit-log', label: 'Audit Log', icon: <ScrollText size={16} />, group: 'Moderation' },
+  { id: 'audit-log', label: 'Audit log', icon: <ScrollText size={16} />, group: 'Moderation' },
 ];
 
 function isSettingsSection(value: string | null | undefined): value is SettingsSection {
@@ -1126,16 +1126,20 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
       showIndex={mobileShowNav}
       onShowIndex={setMobileShowNav}
       onKeyDown={handleKeyDown}
+      indexFooter={
+        <>
+          <NavRow icon={<RefreshCw size={16} />} onClick={() => void refreshAll()}>
+            Reload this space
+          </NavRow>
+          {loading && (
+            <div className="px-2.5 pt-1">
+              <LoadingSpinner size="sm" label="Reloading this space" />
+            </div>
+          )}
+        </>
+      }
     >
       <div className="flex flex-col gap-8">
-        <div className="flex flex-wrap items-center gap-3">
-          <Button variant="ghost" size="sm" onClick={() => void refreshAll()}>
-            <RefreshCw size={14} aria-hidden />
-            Refresh
-          </Button>
-          {loading && <LoadingSpinner size="sm" label="Reloading this space" />}
-        </div>
-
         {error && <ErrorBanner message={error} multiline onRetry={() => void refreshAll()} />}
 
         {activeSection === 'overview' && (

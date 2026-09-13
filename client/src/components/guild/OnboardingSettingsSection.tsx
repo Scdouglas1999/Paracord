@@ -201,7 +201,7 @@ export function OnboardingSettingsSection({ guildId, roles }: OnboardingSettings
                     >
                       <input
                         type="checkbox"
-                        className="pc-focusable h-4 w-4 rounded-[var(--radius-window)] accent-accent-primary"
+                        className="pc-checkbox"
                         checked={checked}
                         onChange={(event) => {
                           setSelectedRoleIds((prev) =>

@@ -340,7 +340,7 @@ export function FileStorageSection({ guildId, canManage }: FileStorageSectionPro
                       {canManage && (
                         <input
                           type="checkbox"
-                          className="pc-focusable h-4 w-4 shrink-0 rounded-[var(--radius-window)] accent-accent-primary"
+                          className="pc-checkbox"
                           checked={selectedFileIds.includes(file.id)}
                           onChange={() => toggleFileSelection(file.id)}
                           aria-label={`Select ${file.filename}`}

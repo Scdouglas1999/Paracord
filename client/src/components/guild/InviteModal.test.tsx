@@ -66,8 +66,8 @@ describe('InviteModal', () => {
     await waitFor(() => expect(inviteApi.create).toHaveBeenCalledTimes(1));
 
     // Toggling options must NOT auto-regenerate — that would orphan live invites.
-    await user.selectOptions(screen.getByLabelText('Expire After'), 'never');
-    await user.selectOptions(screen.getByLabelText('Max Uses'), 'unlimited');
+    await user.selectOptions(screen.getByLabelText('Expire after'), 'never');
+    await user.selectOptions(screen.getByLabelText('Max uses'), 'unlimited');
     expect(inviteApi.create).toHaveBeenCalledTimes(1);
 
     // Explicit regenerate applies the new options to a fresh invite...

@@ -7,7 +7,7 @@ import { UnifiedSidebar } from '../components/layout/sidebar/UnifiedSidebar';
 import { ContextPanel } from '../components/layout/ContextPanel';
 import { CommandPalette } from '../components/layout/CommandPalette';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
-import { MiniVoiceBar } from '../components/voice/MiniVoiceBar';
+import { OnAirDock } from '../components/voice/OnAirDock';
 import { MobileBottomNav } from '../components/layout/MobileBottomNav';
 import { useUIStore } from '../stores/uiStore';
 import { useVoiceStore } from '../stores/voiceStore';
@@ -127,6 +127,7 @@ export function AppShell() {
   // the Unified Sidebar is now universal navigation.
   const isSettingsRoute =
     location.pathname === '/app/admin'
+    || location.pathname === '/app/developers'
     || /^\/app\/guilds\/[^/]+\/settings$/.test(location.pathname);
 
   const isDmConversationRoute = /^\/app\/dms\/[^/]+$/.test(location.pathname);
@@ -152,7 +153,7 @@ export function AppShell() {
   const isOnVoiceChannel = voiceChannelId
     ? location.pathname.includes(`/channels/${voiceChannelId}`)
     : false;
-  const showMiniVoiceBar = isMobile && voiceConnected && !isOnVoiceChannel;
+  const showOnAirDock = isMobile && voiceConnected && !isOnVoiceChannel;
 
   const showContextPanel = contextPanelMode !== null && contextPanelRouteValid;
   const showSidebarOverlay = isMobile && !sidebarCollapsed;
@@ -215,15 +216,15 @@ export function AppShell() {
               <Outlet />
             </div>
             <AnimatePresence>
-              {showMiniVoiceBar && (
+              {showOnAirDock && (
                 <motion.div
                   initial={{ height: 0, opacity: 0 }}
                   animate={{ height: 'auto', opacity: 1 }}
                   exit={{ height: 0, opacity: 0 }}
                   transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-                  className="shrink-0 overflow-hidden border-t border-border-subtle"
+                  className="shrink-0 overflow-hidden px-3 py-2"
                 >
-                  <MiniVoiceBar />
+                  <OnAirDock />
                 </motion.div>
               )}
             </AnimatePresence>
@@ -310,7 +311,7 @@ export function AppShell() {
         <AnimatePresence>
           {userSettingsOpen && (
             <motion.div
-              className="fixed inset-0 z-[150] flex items-center justify-center p-4 sm:p-8 md:p-12 lg:p-20 modal-backdrop"
+              className="fixed inset-0 z-[150] flex items-center justify-center p-3 sm:p-8 md:p-12 lg:p-20 modal-backdrop"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
@@ -327,7 +328,7 @@ export function AppShell() {
                 animate={{ scale: 1, opacity: 1, y: 0 }}
                 exit={{ scale: 0.96, opacity: 0, y: 8 }}
                 transition={modalEnter}
-                className="relative flex h-full max-h-[min(900px,85vh)] w-full max-w-6xl flex-col overflow-hidden"
+                className="relative flex h-full max-h-[calc(100dvh-1.5rem)] w-full max-w-6xl flex-col overflow-hidden sm:max-h-[min(900px,85vh)]"
                 onClick={(e) => e.stopPropagation()}
               >
                 <SettingsPage />
@@ -337,7 +338,7 @@ export function AppShell() {
 
           {guildSettingsId && (
             <motion.div
-              className="fixed inset-0 z-[150] flex items-center justify-center p-4 sm:p-8 md:p-12 lg:p-20 modal-backdrop"
+              className="fixed inset-0 z-[150] flex items-center justify-center p-3 sm:p-8 md:p-12 lg:p-20 modal-backdrop"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
@@ -354,7 +355,7 @@ export function AppShell() {
                 animate={{ scale: 1, opacity: 1, y: 0 }}
                 exit={{ scale: 0.96, opacity: 0, y: 8 }}
                 transition={modalEnter}
-                className="relative flex h-full max-h-[min(900px,85vh)] w-full max-w-6xl flex-col overflow-hidden"
+                className="relative flex h-full max-h-[calc(100dvh-1.5rem)] w-full max-w-6xl flex-col overflow-hidden sm:max-h-[min(900px,85vh)]"
                 onClick={(e) => e.stopPropagation()}
               >
                 <GuildSettingsPage />

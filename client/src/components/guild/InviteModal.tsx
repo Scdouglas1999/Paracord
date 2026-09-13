@@ -260,7 +260,7 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
           {/* Options */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <label className="block">
-              <FieldLabel>Expire After</FieldLabel>
+              <FieldLabel>Expire after</FieldLabel>
               <Select
                 value={expiration}
                 onChange={(e) => {
@@ -278,7 +278,7 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
               </Select>
             </label>
             <label className="block">
-              <FieldLabel>Max Uses</FieldLabel>
+              <FieldLabel>Max uses</FieldLabel>
               <Select
                 value={maxUses}
                 onChange={(e) => {
