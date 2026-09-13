@@ -250,6 +250,32 @@ for (const kind of ['ws', 'sse'] as const) describe(`${kind} durable dispatch ow
     expect([conn.sequence, conn.realtimeCursor, conn.sessionId]).toEqual([null, null, null]);
     expect(dispatch).toHaveBeenCalledOnce(); expect(transport.close).toHaveBeenCalledOnce();
   });
+  it('reports a replaced session as one, and does not count it against backoff', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    reconnectAsTestTransport();
+    const conn = makeConnection(); manager.connections.set(conn.serverId, conn);
+    conn.sessionToken = 'token';
+    const transport = await start(conn, kind);
+    transport.frame(lifecycle('READY'));
+    // Attaching a device identity mints a new bearer token and revokes the old
+    // session; the dispatch in flight is aborted by that, not by storage.
+    useServerListStore.setState(state => ({ servers: state.servers.map(server => ({ ...server, token: 'attached-token' })) }));
+    dispatch.mockReturnValueOnce(Promise.reject(new Error('operation aborted')));
+    transport.frame(message()); await settle();
+
+    expect(console.error).not.toHaveBeenCalled();
+    expect(vi.mocked(console.info).mock.calls.at(-1)?.[1]).toMatchObject({ reason: 'session replaced' });
+
+    // No durable failure was recorded, so the replacement session's READY
+    // clears the backoff instead of carrying a penalty this connection did not
+    // earn. A real persistence failure holds its count through READY — that is
+    // the test directly below.
+    await vi.advanceTimersByTimeAsync(1000); await settle();
+    const next = kind === 'ws' ? Socket.instances.at(-1)! : Stream.instances.at(-1)!;
+    expect(next).not.toBe(transport);
+    next.open(); next.frame(lifecycle('READY')); await settle();
+    expect(conn.reconnectAttempts).toBe(0);
+  });
   it('retains increasing persistence failure backoff through successful READY', async () => {
     reconnectAsTestTransport();
     const conn = makeConnection(); manager.connections.set(conn.serverId, conn);

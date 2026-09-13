@@ -404,13 +404,24 @@ class ConnectionManager {
 
   private failDispatch(conn: ServerConnection, lane: DispatchLane, reason: string, event?: string): void {
     if (!this.ownsTransport(conn, lane)) return;
-    const failures = (this.durableFailures.get(conn) ?? 0) + 1;
-    this.durableFailures.set(conn, failures);
-    conn.reconnectAttempts = Math.max(conn.reconnectAttempts, failures);
+    // Attaching a device identity mints a new bearer token and revokes the old
+    // session, which disposes the account runtime under whatever dispatch is in
+    // flight. The reconnect is legitimate — the session really was replaced —
+    // but it is not a storage failure and it is not this connection's fault, so
+    // it is neither reported as one nor counted against reconnect backoff.
+    const replaced = this.tokenChanged(conn);
+    if (!replaced) {
+      const failures = (this.durableFailures.get(conn) ?? 0) + 1;
+      this.durableFailures.set(conn, failures);
+      conn.reconnectAttempts = Math.max(conn.reconnectAttempts, failures);
+    }
     // Payloads, storage exception messages, tokens, and URLs must never enter diagnostics.
-    console.error('[gateway] Cannot complete gateway delivery; reconnecting from the last completed checkpoint.', {
-      reason, event: event && /^[A-Z_]{1,64}$/.test(event) ? event : 'unknown',
-    });
+    const diagnostic = {
+      reason: replaced ? 'session replaced' : reason,
+      event: event && /^[A-Z_]{1,64}$/.test(event) ? event : 'unknown',
+    };
+    if (replaced) console.info('[gateway] Reconnecting: this account session was replaced.', diagnostic);
+    else console.error('[gateway] Cannot complete gateway delivery; reconnecting from the last completed checkpoint.', diagnostic);
     const ws = conn.ws; const es = conn.eventSource;
     conn.ws = null; conn.eventSource = null;
     conn.connected = false; conn.connecting = false;
@@ -426,6 +437,13 @@ class ConnectionManager {
    * resume checkpoint belongs to the old session too, so a fresh authenticated
    * READY must re-establish the account's state.
    */
+  /** Pure form of {@link sessionReplaced}: does this session's token still stand? */
+  private tokenChanged(conn: ServerConnection): boolean {
+    if (conn.sessionToken === undefined) return false;
+    const token = this.tokenForConnection(conn);
+    return Boolean(token) && token !== conn.sessionToken;
+  }
+
   private sessionReplaced(conn: ServerConnection): boolean {
     if (conn.sessionToken === undefined) return false;
     const token = this.tokenForConnection(conn);
