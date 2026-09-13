@@ -34,6 +34,7 @@ const mocks = vi.hoisted(() => ({
     saveReadPosition: vi.fn().mockResolvedValue(undefined),
   },
   scrollToIndex: vi.fn(),
+  typingByChannel: {} as Record<string, string[]>,
   savedMessageStoreState: {
     serverId: 'srv-a',
     savedIds: new Set<string>(),
@@ -109,10 +110,17 @@ vi.mock('../../stores/channelStore', () => {
         { id: 'ch1', guild_id: 'g1', type: 0, channel_type: 0, name: 'general', position: 0 },
         { id: 'ch2', guild_id: 'g1', type: 0, channel_type: 0, name: 'random', position: 1 },
       ],
+      // A direct message has no guild, so it has no member list to name from.
+      '': [
+        { id: 'dm1', guild_id: null, type: 1, channel_type: 1, position: 0,
+          recipient: { id: 'author-1', username: 'Alice', discriminator: '0001' } },
+      ],
     },
     channelsById: {
       ch1: { id: 'ch1', guild_id: 'g1', type: 0, channel_type: 0, name: 'general', position: 0 },
       ch2: { id: 'ch2', guild_id: 'g1', type: 0, channel_type: 0, name: 'random', position: 1 },
+      dm1: { id: 'dm1', guild_id: null, type: 1, channel_type: 1, position: 0,
+        recipient: { id: 'author-1', username: 'Alice', discriminator: '0001' } },
     },
     addChannel: vi.fn(),
     updateChannel: vi.fn(),
@@ -165,7 +173,7 @@ vi.mock('../../stores/savedMessageStore', () => ({
 
 vi.mock('../../stores/typingStore', () => ({
   useTypingStore: (selector: (s: { typingByChannel: Record<string, string[]> }) => unknown) =>
-    selector({ typingByChannel: {} }),
+    selector({ typingByChannel: mocks.typingByChannel }),
 }));
 
 vi.mock('../../stores/uiStore', () => ({
@@ -366,6 +374,22 @@ describe('MessageList keyboard accessibility and error state', () => {
     await waitFor(() => {
       expect(mocks.readStateStoreState.markRead).toHaveBeenCalledWith({ serverId: 'srv-a', userId: 'viewer' }, 'ch2', 'msg-2');
     });
+  });
+
+  // The typing row resolved names from the guild's member list only. A DM has
+  // no guild, so the one person in the conversation — already named in the
+  // header — was announced as "Someone is typing".
+  it('names the person typing in a direct message', async () => {
+    mocks.useMessagesReturn.messages = [makeMessage({ id: 'dm-msg', channel_id: 'dm1' })];
+    mocks.typingByChannel = { dm1: ['author-1'] };
+    render(
+      <MemoryRouter>
+        <MessageList channelId="dm1" />
+      </MemoryRouter>,
+    );
+    const typing = await waitFor(() => screen.getByText(/is typing/));
+    expect(typing.parentElement?.textContent).toContain('Alice');
+    expect(typing.parentElement?.textContent).not.toContain('Someone');
   });
 });
 

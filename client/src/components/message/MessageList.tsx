@@ -2201,6 +2201,13 @@ function OwnedMessageList({
           const member = guildMembers.find((m) => m.user.id === userId);
           if (member) return displayName(member.user, member.nick);
         }
+        // A DM has no guild and therefore no member list, so this fell through
+        // to "Someone" for the one person in the conversation — whose name is
+        // already in the header two lines above. The channel carries them.
+        const recipients = activeChannel?.recipients
+          ?? (activeChannel?.recipient ? [activeChannel.recipient] : []);
+        const recipient = recipients.find((person) => person.id === userId);
+        if (recipient) return displayName(recipient);
         return 'Someone';
       };
 
@@ -2330,7 +2337,12 @@ function OwnedMessageList({
         )}
         {isGrouped ? (
           <div className={cn('flex w-9 flex-shrink-0 items-start justify-center pt-0.5', ribbon && 'w-7')}>
-            <span className="pc-mono text-[11px] text-text-faint opacity-0 transition-opacity duration-[140ms] ease-[var(--ease-out)] group-hover:opacity-100">
+            {/* The gutter is 36px (28 in a ribbon) and "12:31 PM" is wider, so
+                without this the hover timestamp broke across two lines and sat
+                lower than the message it belongs to. Let it overflow its column
+                centred instead — the row's own padding and the 14px gap either
+                side leave room. */}
+            <span className="pc-mono whitespace-nowrap text-[11px] text-text-faint opacity-0 transition-opacity duration-[140ms] ease-[var(--ease-out)] group-hover:opacity-100">
               {new Date(getTimestamp(msg)).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
             </span>
           </div>
