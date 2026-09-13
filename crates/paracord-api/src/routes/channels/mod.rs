@@ -128,12 +128,21 @@ fn parse_optional_datetime_param(
     ))
 }
 
+/// A category channel; `parent_id` may point at nothing else.
+const CHANNEL_TYPE_CATEGORY: i16 = 4;
+
 #[derive(Deserialize)]
 pub struct CreateChannelRequest {
     pub name: String,
     #[serde(default)]
     pub channel_type: i16,
-    pub parent_id: Option<i64>,
+    /// A snowflake, as a decimal string — every other id on this API, including
+    /// `required_role_ids` in this same body and `parent_id` on the sibling
+    /// channel-positions route, travels that way. It was typed `i64` here, which
+    /// meant the client's string was a 422 (so a room could not be created
+    /// inside a category at all) and a raw JSON number lost precision above
+    /// 2^53 in every JavaScript caller.
+    pub parent_id: Option<String>,
     pub required_role_ids: Option<Vec<String>>,
 }
 
@@ -903,6 +912,40 @@ pub async fn get_visible_channels(
     Ok(Json(json!({ "channel_ids": channel_ids })))
 }
 
+/// Resolve and vet the category a new room is being created inside.
+///
+/// The sibling channel-positions route learned this the hard way: `parent_id` is
+/// an access-control input, because `resolve_permission_gate` reads a room's
+/// overwrites and required roles through its parent. This route wrote the value
+/// straight into the row unchecked, so a category in *another* space, or a plain
+/// text room, or an id belonging to nothing at all, all went in — the last of
+/// those as a foreign-key error the caller saw as a 500.
+async fn resolve_new_channel_parent(
+    state: &AppState,
+    guild_id: i64,
+    raw: Option<&str>,
+) -> Result<Option<i64>, ApiError> {
+    let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let parent_id = raw
+        .parse::<i64>()
+        .map_err(|_| ApiError::BadRequest("Invalid parent_id".into()))?;
+    let parent = paracord_db::channels::get_channel(&state.db, parent_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or_else(|| ApiError::BadRequest("Invalid parent_id".into()))?;
+    if parent.guild_id() != Some(guild_id) {
+        return Err(ApiError::BadRequest(
+            "parent_id must be a category in this space".into(),
+        ));
+    }
+    if parent.channel_type != CHANNEL_TYPE_CATEGORY {
+        return Err(ApiError::BadRequest("parent_id must be a category".into()));
+    }
+    Ok(Some(parent_id))
+}
+
 pub async fn create_channel(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -925,6 +968,7 @@ pub async fn create_channel(
     // breaks every single-line surface that renders it.
     validate_visible_label(&body.name)
         .map_err(|_| ApiError::BadRequest("name must be readable text".into()))?;
+    let parent_id = resolve_new_channel_parent(&state, guild_id, body.parent_id.as_deref()).await?;
     let channel_id = paracord_util::snowflake::generate(1);
     let required_role_ids = match body.required_role_ids.as_deref() {
         Some(raw_role_ids) => {
@@ -940,7 +984,7 @@ pub async fn create_channel(
         channel_id,
         &body.name,
         body.channel_type,
-        body.parent_id,
+        parent_id,
         required_role_ids.as_deref(),
     )
     .await?;
