@@ -46,6 +46,7 @@ const DURATION_BUDGET_MS = 500;
 const SEQUENCE_BUDGET_MS = 1600;
 
 const OUT_DIR = path.resolve(process.cwd(), '..', 'output', 'design-reference', 'motion', 'frames-wp9a');
+const OUT_DIR_C = path.resolve(process.cwd(), '..', 'output', 'design-reference', 'motion', 'frames-wp9c');
 
 interface MomentSample {
   /** Per frame: when, and what the engine had in flight when it was served. */
@@ -352,6 +353,28 @@ test.describe('the motion gate (§5.3)', () => {
     await expect(dialog).toBeVisible();
     expectBudget('overlay (dialog enter)', opening);
 
+    // Watch the panel's own opacity across the leave. A screencast cannot
+    // prove this — the harness serves three frames across a 120ms exit — and
+    // "it was there, then it was not" is exactly what an exit that silently
+    // stopped playing would look like.
+    await page.evaluate(() => {
+      const panel = document.querySelector('[role="dialog"]');
+      const samples: Array<{ at: number; opacity: number; hidden: string | null }> = [];
+      (window as unknown as { __exit: typeof samples }).__exit = samples;
+      const started = performance.now();
+      const tick = () => {
+        const live = document.querySelector('[role="dialog"]') ?? panel;
+        if (!live || !live.isConnected) return;
+        samples.push({
+          at: performance.now() - started,
+          opacity: Number(getComputedStyle(live).opacity),
+          hidden: live.getAttribute('aria-hidden'),
+        });
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+
     const closing = await measureMoment(page, async () => {
       await page.getByRole('button', { name: 'Keep it' }).click();
     }, 800);
@@ -359,6 +382,22 @@ test.describe('the motion gate (§5.3)', () => {
     // taken out of the accessibility tree for that beat, and is then gone.
     await expect(dialog).toHaveCount(0);
     expectBudget('overlay (dialog exit)', closing);
+
+    const exit = await page.evaluate(
+      () => (window as unknown as { __exit: Array<{ at: number; opacity: number; hidden: string | null }> }).__exit,
+    );
+    const leaving = exit.filter((sample) => sample.opacity < 0.98);
+    console.log(
+      `[motion-gate] overlay (dialog exit): ${exit.length} sampled frames, `
+      + `${leaving.length} below full opacity, floor=${Math.min(...exit.map((s) => s.opacity)).toFixed(2)}, `
+      + `aria-hidden while leaving=${leaving.every((s) => s.hidden === 'true')}`,
+    );
+    // It faded rather than vanished, and it was scenery the whole way out.
+    expect(leaving.length, 'the panel never dropped below full opacity — the exit did not play').toBeGreaterThan(2);
+    expect(
+      leaving.every((sample) => sample.hidden === 'true'),
+      'the leaving panel was still in the accessibility tree',
+    ).toBe(true);
   });
 
   test('a list reordering holds the budget', async ({ page }) => {
@@ -482,6 +521,145 @@ test.describe('the motion gate (§5.3)', () => {
       );
     }
     console.log(`[motion-gate] captured ${lit.length} flicker frames`);
+  });
+
+  /**
+   * WP9c's frame strips (§10: "no package is done without inspected
+   * screenshots"). Same method as WP9a's: a CDP screencast, because
+   * `page.screenshot` costs more than a frame of a 220ms moment.
+   *
+   *   PARACORD_E2E_MOTION=1 PARACORD_E2E_MOTION_FRAMES=1 npx playwright test
+   */
+  test('capture the WP9c moments as frame strips', async ({ page }) => {
+    test.skip(process.env.PARACORD_E2E_MOTION_FRAMES !== '1', 'frame capture is opt-in');
+    test.setTimeout(240_000);
+    await mkdir(OUT_DIR_C, { recursive: true });
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto('/design-tokens');
+    await expect(page.getByRole('heading', { name: 'Motion', exact: true })).toBeVisible();
+    await page.evaluate(() => document.fonts.ready);
+    await page.waitForTimeout(800);
+
+    const { writeFile } = await import('node:fs/promises');
+    const client = await page.context().newCDPSession(page);
+
+    /** Screencast `act`, then write the frames nearest each `wanted` offset. */
+    const strip = async (
+      name: string,
+      wanted: number[],
+      act: () => Promise<void>,
+      settleMs = 900,
+      // JPEG for the short moments: PNG encoding of a 1280x900 frame costs
+      // more than a frame of a 120ms exit, and the strip then has two pictures
+      // in it. The strips are for reading motion, not for colour proofing.
+      format: 'png' | 'jpeg' = 'png',
+    ) => {
+      const frames: Array<{ at: number; data: string }> = [];
+      let started = Number.POSITIVE_INFINITY;
+      const onFrame = async (frame: { data: string; sessionId: number }) => {
+        frames.push({ at: Date.now() - started, data: frame.data });
+        await client.send('Page.screencastFrameAck', { sessionId: frame.sessionId }).catch(() => {});
+      };
+      client.on('Page.screencastFrame', onFrame);
+      await client.send('Page.startScreencast',
+        format === 'jpeg' ? { format, quality: 80, everyNthFrame: 1 } : { format, everyNthFrame: 1 });
+      await page.waitForTimeout(300);
+      started = Date.now();
+      await act();
+      await page.waitForTimeout(settleMs);
+      await client.send('Page.stopScreencast');
+      client.off('Page.screencastFrame', onFrame);
+
+      const picked = new Set<number>();
+      for (const target of wanted) {
+        let best = -1;
+        let distance = Number.POSITIVE_INFINITY;
+        for (let i = 0; i < frames.length; i += 1) {
+          if (frames[i].at < -8) continue;
+          const delta = Math.abs(frames[i].at - target);
+          if (delta < distance && !picked.has(i)) {
+            distance = delta;
+            best = i;
+          }
+        }
+        if (best < 0) continue;
+        picked.add(best);
+        await writeFile(
+          path.join(OUT_DIR_C, `${name}-${String(target).padStart(4, '0')}ms.${format === 'jpeg' ? 'jpg' : 'png'}`),
+          Buffer.from(frames[best].data, 'base64'),
+        );
+      }
+      console.log(`[motion-gate] ${name}: ${frames.length} frames, wrote ${picked.size}`);
+      expect(picked.size, `${name}: no frames captured`).toBeGreaterThan(1);
+    };
+
+    // 1 — a button hovered and pressed (item 1). The accent button on the Press
+    // recipe: the 1px lift and the wash, then 0.96 and the beat of light.
+    const pressCard = page.locator('#motion-press');
+    await pressCard.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(400);
+    // The `.pc-pressable` one — the recipe every Button in the product carries.
+    const join = pressCard.locator('[data-motion-pressable]');
+    await strip('button-hover', [0, 40, 80, 120, 200], async () => {
+      await join.hover();
+    }, 500);
+    await strip('button-press', [0, 40, 80, 120, 200, 300], async () => {
+      const box = (await join.boundingBox())!;
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.waitForTimeout(90);
+      await page.mouse.up();
+    }, 600);
+    await page.mouse.move(10, 10);
+
+    // 2 — the shared overlay enter and exit (item 3).
+    const openDialog = page.getByRole('button', { name: 'Open a dialog' });
+    await openDialog.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(400);
+    await strip('dialog-open', [0, 40, 80, 120, 160, 220, 320], async () => {
+      await openDialog.click();
+    }, 700);
+    await expect(page.getByRole('dialog')).toBeVisible();
+    await strip('dialog-close', [0, 20, 40, 60, 80, 100, 120, 160, 240], async () => {
+      await page.getByRole('button', { name: 'Keep it' }).click();
+    }, 600, 'jpeg');
+
+    // 3 — the toast stack: one, then three, so the stack is seen shifting.
+    await strip('toast', [0, 60, 120, 200, 300, 420, 560, 720], async () => {
+      await page.getByRole('button', { name: 'Raise a toast' }).click();
+      await page.waitForTimeout(200);
+      await page.getByRole('button', { name: 'Raise three' }).click();
+    }, 1200);
+    await page.waitForTimeout(6000);
+
+    // 4 — the sidebar's own recipe: a list that re-sorts (item 5).
+    const reorder = page.locator('#motion-reorder');
+    await reorder.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(400);
+    await strip('reorder', [0, 40, 80, 140, 200, 280, 380, 500], async () => {
+      await reorder.getByRole('button', { name: 'Replay' }).click();
+    }, 800);
+
+    // 5 — a count changing (item 6).
+    const roll = page.locator('#motion-roll');
+    await roll.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(400);
+    await strip('roll', [0, 30, 60, 90, 120, 180, 260], async () => {
+      await roll.getByRole('button', { name: 'Replay' }).click();
+    }, 600);
+
+    // 6 — the tab indicator sliding (item 2).
+    const tabs = page.getByRole('tablist', { name: 'Space settings', exact: true }).first();
+    if (await tabs.count()) {
+      await tabs.scrollIntoViewIfNeeded();
+      await page.waitForTimeout(400);
+      const target = tabs.getByRole('tab').last();
+      await strip('tabs', [0, 40, 80, 120, 160, 240], async () => {
+        await target.click();
+      }, 600);
+    }
+
+    console.log(`[motion-gate] WP9c strips written to ${OUT_DIR_C}`);
   });
 
   test('reduced motion runs no animations at all', async ({ page }) => {

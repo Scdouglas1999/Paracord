@@ -70,6 +70,7 @@ import {
   voiceRoomLight,
 } from '../lib/attention/light';
 import { presenceLight } from '../lib/presence';
+import { toast } from '../stores/toastStore';
 import {
   bloom,
   dim,
@@ -458,10 +459,27 @@ function PrimitivesSection() {
         />
       </div>
 
-      <SectionLabel>Dialog, banner, empty state</SectionLabel>
+      <SectionLabel>Dialog, toast, banner, empty state</SectionLabel>
       <Row>
         <Button variant="ghost" onClick={() => setDialogOpen(true)}>
           Open a dialog
+        </Button>
+        {/* The stack is one FLIP'd list (§5.1): a new toast rises into the
+            bottom-right, a dismissed one falls away, and the toasts still on
+            screen slide to their new spots on the spring. Three buttons,
+            because one toast cannot show you a stack behaving. */}
+        <Button variant="ghost" onClick={() => toast.success('The invite is live.')}>
+          Raise a toast
+        </Button>
+        <Button
+          variant="ghost"
+          onClick={() => {
+            toast.info('Recovering this room’s history…');
+            window.setTimeout(() => toast.warning('Two attachments are still uploading.'), 220);
+            window.setTimeout(() => toast.error('The thermal rig stopped answering.'), 440);
+          }}
+        >
+          Raise three
         </Button>
       </Row>
       <Modal
@@ -1213,18 +1231,23 @@ function MotionSection() {
         <Recipe
           id="motion-press"
           name="Press"
-          tokens="0.96 · 80ms · spring-settle"
-          model="Controls are tactile: the thing you press gives way under the finger and springs back. It answers on the same frame as the pointer."
+          tokens="0.96 · 80ms · spring-settle · --bg-mod-subtle"
+          model="Controls are tactile: hover lifts 1px and takes a faint wash, and the thing you press gives way under the finger and springs back. It answers on the same frame as the pointer. The left one is the engine's recipe, called by hand — the composer's send control uses it. The right one is `.pc-pressable`, which every Button, IconButton, NavRow and Chip in the product carries: hover it and press it rather than replaying it."
           onPlay={() => press(pressRef.current)}
         >
-          <button
-            ref={pressRef}
-            type="button"
-            onPointerDown={() => press(pressRef.current)}
-            className="pc-focusable inline-flex h-8 items-center rounded-[var(--radius-control)] bg-accent-primary px-3 text-label font-semibold text-text-on-accent"
-          >
-            Join
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              ref={pressRef}
+              type="button"
+              onPointerDown={() => press(pressRef.current)}
+              className="pc-focusable inline-flex h-8 items-center rounded-[var(--radius-control)] bg-accent-primary px-3 text-label font-semibold text-text-on-accent"
+            >
+              Join
+            </button>
+            <Button variant="primary" size="sm" data-motion-pressable>
+              Join
+            </Button>
+          </div>
         </Recipe>
 
         <Recipe
