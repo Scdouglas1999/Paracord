@@ -555,7 +555,8 @@ async fn basic_route_flow_uses_postgres_when_configured() -> anyhow::Result<()> 
         &test_app.app,
         &token,
         Method::PUT,
-        &format!("/api/v1/channels/{channel_id}/messages/{message_id}/reactions/thumbsup/@me"),
+        // 👍, percent-encoded: a reaction has to be a real emoji.
+        &format!("/api/v1/channels/{channel_id}/messages/{message_id}/reactions/%F0%9F%91%8D/@me"),
         None,
     )
     .await?;
@@ -585,7 +586,7 @@ async fn basic_route_flow_uses_postgres_when_configured() -> anyhow::Result<()> 
             .as_array()
             .is_some_and(|reactions| reactions
                 .iter()
-                .any(|reaction| reaction["emoji"] == "thumbsup"
+                .any(|reaction| reaction["emoji"] == "\u{1F44D}"
                     && reaction["count"].as_i64().unwrap_or_default() == 1
                     && reaction["me"] == true)),
         "added reaction should be visible in message listing: {reacted_message}"
@@ -595,7 +596,8 @@ async fn basic_route_flow_uses_postgres_when_configured() -> anyhow::Result<()> 
         &test_app.app,
         &token,
         Method::DELETE,
-        &format!("/api/v1/channels/{channel_id}/messages/{message_id}/reactions/thumbsup/@me"),
+        // 👍, percent-encoded: a reaction has to be a real emoji.
+        &format!("/api/v1/channels/{channel_id}/messages/{message_id}/reactions/%F0%9F%91%8D/@me"),
         None,
     )
     .await?;
