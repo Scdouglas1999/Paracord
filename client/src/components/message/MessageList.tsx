@@ -2334,6 +2334,13 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                   if (el) {
                     el.style.height = 'auto';
                     el.style.height = Math.min(el.scrollHeight, window.innerHeight * 0.5) + 'px';
+                    // `autoFocus` lands the caret at offset 0, so the first
+                    // thing typed after "Edit" went in front of the message.
+                    // Put it after the last character, once per edit session.
+                    if (!el.dataset.caretPlaced) {
+                      el.dataset.caretPlaced = 'yes';
+                      el.setSelectionRange(el.value.length, el.value.length);
+                    }
                   }
                 }}
               />
