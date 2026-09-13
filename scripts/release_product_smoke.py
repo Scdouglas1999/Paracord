@@ -42,6 +42,28 @@ def current_totp_code(secret_base32: str, *, for_time: int | None = None) -> str
     return f"{value % 1_000_000:06d}"
 
 
+def totp_step(for_time: int | None = None) -> int:
+    """The RFC 6238 time step a code belongs to (30-second granularity)."""
+    return int(time.time() if for_time is None else for_time) // 30
+
+
+def totp_code_from_unspent_step(secret_base32: str, spent_step: int) -> str:
+    """Wait out `spent_step` and return a code from a later one.
+
+    The server enforces RFC 6238 §5.2 single use: once a step is accepted it is
+    burned, so the code that enabled MFA cannot also complete a login inside the
+    same 30-second window. A real authenticator app behaves exactly this way —
+    the person waits for the next code — and so does this smoke, instead of
+    replaying a code the server has already spent.
+    """
+    deadline = time.time() + 75
+    while time.time() < deadline:
+        if totp_step() > spent_step:
+            return current_totp_code(secret_base32)
+        time.sleep(0.5)
+    raise AssertionError("TOTP step never advanced past the one already spent")
+
+
 def release_server_path() -> Path:
     name = "paracord-server.exe" if os.name == "nt" else "paracord-server"
     return ROOT / "target" / "release" / name
@@ -489,6 +511,7 @@ def run_smoke(args: argparse.Namespace) -> None:
                 expected=400,
                 label="reject invalid mfa setup code",
             )
+            mfa_setup_step = totp_step()
             mfa_code = current_totp_code(mfa_setup["secret"])
             mfa_enabled = request_json(
                 "POST",
@@ -520,11 +543,25 @@ def run_smoke(args: argparse.Namespace) -> None:
             mfa_ticket = (mfa_challenge.get("user") or {}).get("mfa_ticket")
             if mfa_challenge.get("token") != "" or not (mfa_challenge.get("user") or {}).get("mfa_required") or not mfa_ticket:
                 raise AssertionError(f"login did not require MFA as expected: {mfa_challenge}")
+            # The step spent enabling MFA is burned; replaying it must not log
+            # anyone in. One failure does not invalidate the ticket (the server
+            # only drops it after five), so the real login below still runs.
+            request_json(
+                "POST",
+                base_url,
+                "/api/v1/auth/mfa/login",
+                body={"ticket": mfa_ticket, "code": mfa_code},
+                expected=400,
+                label="reject replayed mfa code",
+            )
             mfa_login = request_json(
                 "POST",
                 base_url,
                 "/api/v1/auth/mfa/login",
-                body={"ticket": mfa_ticket, "code": current_totp_code(mfa_setup["secret"])},
+                body={
+                    "ticket": mfa_ticket,
+                    "code": totp_code_from_unspent_step(mfa_setup["secret"], mfa_setup_step),
+                },
                 label="mfa login",
             )
             if not mfa_login.get("token") or not mfa_login.get("refresh_token"):
