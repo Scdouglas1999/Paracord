@@ -139,7 +139,13 @@ export function ChannelSwitcher({
           // filling a block parent, so without it the trigger keeps its natural
           // width while the wrapper shrinks, and the channel name spills out
           // over the topic instead of ellipsizing.
-          'pc-focusable -ml-1 flex h-8 w-full min-w-0 max-w-[18rem] items-center gap-1.5 rounded-[var(--radius-control)] px-1 text-left outline-none',
+          //
+          // The 4px optical inset is a TRANSFORM, not `-ml-1`. A negative margin
+          // is subtracted from the width the wrapper reserves, but `w-full` then
+          // hands the button only that reduced width — so the trigger came up 4px
+          // short of its own content and EVERY room name ellipsized ("shop-fl…"),
+          // at every viewport, however much free header space there was.
+          'pc-focusable -translate-x-1 flex h-8 w-full min-w-0 max-w-[18rem] items-center gap-1.5 rounded-[var(--radius-control)] px-1 text-left outline-none',
           'text-text-primary transition-colors duration-[140ms] ease-[var(--ease-out)]',
           'hover:bg-bg-mod-subtle',
           open && 'bg-bg-mod-subtle',
