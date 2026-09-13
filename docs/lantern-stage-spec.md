@@ -246,6 +246,32 @@ reviewer rejects motion that has none.
   in §1.2 at ~1.6 s and, where the engine exposes level, brightens with the
   voice (±15% intensity, 60 ms attack / 240 ms release) — never below the
   resting ring.
+  *(WP9d: the level comes from the media engine that is actually running — the
+  native engines' RTP audio-level header, LiveKit's own 0–1, and the local mic
+  analyser for your own ring, which knows before the server does. ONE
+  `requestAnimationFrame` loop writes `--voice-level` for every tile on screen
+  and exits when the last voice releases; never a loop per tile and never React
+  state, because a level is fifty updates a second. The ring is multiplied, not
+  replaced, so "never below the resting ring" is arithmetic — which is why
+  `tokens.css` now writes the three ring recipes in parts: a custom property is
+  substituted where it is DECLARED, so a recipe composed on `:root` could only
+  ever read the root's level. Where an engine reports speaking but no level, the
+  ring simply breathes. See `docs/design/wp9d-checkpoint.md`.)*
+- **The lights change.** Changing the theme crosses the whole shell over
+  `--duration-dim` — View Transitions where the webview has them, a dip through
+  the street's own colour everywhere else — and the light elements re-bloom once
+  the new ground has settled. The gateway being away is drawn on the building
+  rather than beside it: it dims 30% and holds there until it is back, and
+  **never a spinner on the street**. Coming back replays "lights on" for the
+  plates that actually went dark, and they do not travel — a plate rises when it
+  ENTERS the street.
+  *(WP9d: `lib/motion/lights.ts`, with the edge in `lib/attention/outage.ts`.
+  The outage waits out a 600 ms grace, because a gateway blips several times an
+  hour and a building that dims for 80 ms is a flashing blocker. The theme is
+  applied INSIDE the crossfade by `useTheme`'s own effect, so the engine is told
+  how to recognise that it landed rather than guessing at frames; and nothing
+  else may be a transition for the length of the one that matters — a theme swap
+  otherwise starts several hundred colour transitions underneath it.)*
 - **Controls are tactile.** Hover: 1 px lift + faint bloom (`--bg-mod-subtle`
   wash, 120 ms). Press: 0.96 scale, 80 ms, then spring back. Toggles, tabs and
   segmented controls slide their indicator on the spring-settle curve.
@@ -283,6 +309,11 @@ to those curves. Durations: `--duration-fast` 120, `--duration-normal` 160,
   Web Animations path may drop the frame on which the room's own surface mounts,
   at one. Measured again with the engine's ghosts removed entirely, the same
   frame is still 33 ms in the same place. See `wp9b-checkpoint.md` §9.)*
+  *(WP9d adds the third and last: the theme crossfade may drop the frame the
+  theme is applied on, at one. With the engine switched off entirely the same
+  click costs a 150 ms frame — the app's own restyle of every surface — and the
+  crossfade exists partly to hide it, which is the same service the View
+  Transitions path gets from holding a snapshot. See `wp9d-checkpoint.md` §4.)*
 - `prefers-reduced-motion`: everything lands instantly, no stagger, breathing
   stops at the resting ring. One central switch, never per component.
   *(WP9a: the switch is `client/src/lib/motion/reducedMotion.ts`. It folds the
