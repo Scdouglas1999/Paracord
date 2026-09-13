@@ -181,6 +181,13 @@ storage_path = "./{base_rel}/{node.key}/files"
 max_file_size = 10485760
 p2p_threshold = 10485760
 
+[voice]
+# Each node needs its own native-media UDP port. Left unset they all take the
+# product default (8443), so the first node bound it and the other two refused
+# to boot ("Native QUIC voice ... failed to start"), which stalled every run of
+# this validation on a machine where all three share a host.
+port = {node.port + 1000}
+
 [livekit]
 api_key = "{LIVEKIT_KEY}"
 api_secret = "{LIVEKIT_SECRET}"
