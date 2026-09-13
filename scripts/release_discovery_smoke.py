@@ -76,8 +76,14 @@ def register(base_url: str, email: str, username: str) -> dict[str, Any]:
     )
 
 
-def discovery_contains(base_url: str, guild_id: str, query: str = "") -> bool:
-    payload = request_json("GET", base_url, f"/api/v1/discovery/guilds{query}", expected=200)
+def discovery_contains(base_url: str, token: str, guild_id: str, query: str = "") -> bool:
+    # `/api/v1/discovery/guilds` requires an authenticated caller: it was an
+    # anonymous N+1 amplification vector and is now behind AuthUser. The smoke
+    # asks as an ordinary non-member account, which is the interesting subject —
+    # a private guild must stay invisible to it, a published one must appear.
+    payload = request_json(
+        "GET", base_url, f"/api/v1/discovery/guilds{query}", token=token, expected=200
+    )
     guilds = payload.get("guilds", [])
     if not isinstance(guilds, list):
         raise AssertionError(f"discovery payload missing guild list: {payload}")
@@ -138,7 +144,7 @@ def run_smoke(args: argparse.Namespace) -> None:
             guild_id = guild["id"]
             if guild.get("visibility") != "private":
                 raise AssertionError(f"new guild should be private by default: {guild}")
-            if discovery_contains(base_url, guild_id):
+            if discovery_contains(base_url, user_token, guild_id):
                 raise AssertionError("private guild appeared in public discovery")
 
             request_json(
@@ -167,11 +173,11 @@ def run_smoke(args: argparse.Namespace) -> None:
             if published.get("discovery_tags") != ["release", "open_source"]:
                 raise AssertionError(f"discovery tags were not normalized/deduped: {published}")
 
-            if not discovery_contains(base_url, guild_id):
+            if not discovery_contains(base_url, user_token, guild_id):
                 raise AssertionError("published guild did not appear in public discovery")
-            if not discovery_contains(base_url, guild_id, "?search=smoke"):
+            if not discovery_contains(base_url, user_token, guild_id, "?search=smoke"):
                 raise AssertionError("published guild did not match discovery search")
-            if not discovery_contains(base_url, guild_id, "?tag=open_source"):
+            if not discovery_contains(base_url, user_token, guild_id, "?tag=open_source"):
                 raise AssertionError("published guild did not match discovery tag")
 
             request_json(
@@ -182,7 +188,7 @@ def run_smoke(args: argparse.Namespace) -> None:
                 body={"visibility": "private"},
                 expected=200,
             )
-            if discovery_contains(base_url, guild_id):
+            if discovery_contains(base_url, user_token, guild_id):
                 raise AssertionError("private guild still appeared in public discovery after unpublish")
 
             request_json(
