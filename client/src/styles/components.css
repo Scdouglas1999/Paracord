@@ -290,6 +290,18 @@
   }
 }
 
+/* The composer's own surface draws the focus ring (`focus-within:shadow-[…]`,
+   rounded to the composer's radius), so the field inside it must not draw a
+   second one. The field already asks for `outline-none`, but that utility is
+   in Tailwind's `utilities` layer and layout.css's generic `:focus-visible`
+   fallback is UNLAYERED — an unlayered declaration outranks every layer, so
+   the utility could never win and tapping the composer on a phone painted a
+   hard, square-cornered ring inside the rounded one. This rule is unlayered
+   too, and later, so it lands. */
+.message-composer-surface textarea:focus-visible {
+  outline: none;
+}
+
 /* Chat header: navigation and frequent actions first, one labeled secondary menu. */
 .chat-header { container-type: inline-size; }
 
