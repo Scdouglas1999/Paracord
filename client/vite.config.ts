@@ -112,7 +112,6 @@ export default defineConfig(({ mode }) => {
             if (normalized.includes("/livekit-client/")) return "vendor-livekit";
             if (normalized.includes("/@noble/")) return "vendor-crypto";
             if (normalized.includes("/lucide-react/")) return "vendor-icons";
-            if (normalized.includes("/framer-motion/")) return "vendor-motion";
             if (normalized.includes("/highlight.js/") || normalized.includes("/dompurify/")) {
               return "vendor-markdown";
             }

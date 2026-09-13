@@ -19,22 +19,6 @@ vi.mock('../message/DmPickerModal', () => ({
     open ? <div data-testid="dm-picker">DM picker</div> : null,
 }));
 
-vi.mock('framer-motion', async () => {
-  const React = await import('react');
-  return {
-    AnimatePresence: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-    motion: {
-      div: React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
-        ({ children, ...props }, ref) => (
-          <div ref={ref} {...props}>
-            {children}
-          </div>
-        ),
-      ),
-    },
-  };
-});
-
 describe('CommandPalette accessibility', () => {
   beforeEach(() => {
     window.HTMLElement.prototype.scrollIntoView = vi.fn();

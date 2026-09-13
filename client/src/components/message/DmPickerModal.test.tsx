@@ -6,30 +6,7 @@ import { dmApi } from '../../api/dms';
 import { DmPickerModal } from './DmPickerModal';
 import type { Relationship } from '../../api/relationships';
 
-// Render framer-motion's Modal shell synchronously in jsdom.
-vi.mock('framer-motion', async () => {
-  const React = await import('react');
-  return {
-    AnimatePresence: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-    useReducedMotion: () => true,
-    motion: {
-      div: React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
-        ({ children, ...props }, ref) => (
-          <div ref={ref} {...props}>
-            {children}
-          </div>
-        ),
-      ),
-      button: React.forwardRef<HTMLButtonElement, React.ButtonHTMLAttributes<HTMLButtonElement>>(
-        ({ children, ...props }, ref) => (
-          <button ref={ref} {...props}>
-            {children}
-          </button>
-        ),
-      ),
-    },
-  };
-});
+// Render the Modal shell synchronously in jsdom (no presence hold).
 
 vi.mock('../../api/dms', () => ({
   dmApi: {

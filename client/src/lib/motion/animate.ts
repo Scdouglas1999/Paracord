@@ -6,7 +6,7 @@ import { motionToken, ms, rawToken as motionRawToken } from './tokens';
  * The engine's recipes (docs/lantern-stage-spec.md §5.1).
  *
  * Every one of these is Web Animations over the §5 tokens — no framework, no
- * `framer-motion`, nothing that owns the render loop. They obey three rules:
+ * a motion framework, nothing that owns the render loop. They obey three rules:
  *
  *   1. **Budget (§5.3).** `transform` and `opacity` only, plus `box-shadow` and
  *      `background` on the small light elements — a window, a rim, a dot — and

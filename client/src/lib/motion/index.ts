@@ -25,9 +25,9 @@
  *                   indicator slides to its mark
  *   bus ........... gestures that cross a pane boundary
  *
- * There is no framework here on purpose: Web Animations plus the tokens. The
- * repo has `framer-motion` for a handful of legacy popovers; nothing new is
- * built on it.
+ * There is no framework here on purpose: Web Animations plus the tokens.
+ * framer-motion was removed in WP9c; every popover, drawer and banner runs on
+ * `usePresence` and the shared CSS recipes.
  */
 
 export {

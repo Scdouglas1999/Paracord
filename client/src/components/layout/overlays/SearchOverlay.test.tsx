@@ -5,22 +5,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { channelApi } from '../../../api/channels';
 import { SearchOverlay } from './SearchOverlay';
 
-vi.mock('framer-motion', async () => {
-  const React = await import('react');
-  return {
-    AnimatePresence: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-    motion: {
-      div: React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
-        ({ children, ...props }, ref) => (
-          <div ref={ref} {...props}>
-            {children}
-          </div>
-        ),
-      ),
-    },
-  };
-});
-
 vi.mock('../../../api/channels', () => ({
   channelApi: {
     searchMessages: vi.fn(),

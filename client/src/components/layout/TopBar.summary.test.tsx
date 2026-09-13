@@ -9,22 +9,6 @@ import { TopBar } from './TopBar';
 // itself is covered in components/message/TextRoom.test.tsx.
 vi.mock('../message/messageLight', () => import('../../test/messageLightMock'));
 vi.mock('../../hooks/useLights', () => import('../../test/messageLightMock'));
-vi.mock('framer-motion', async () => {
-  const React = await import('react');
-  return {
-    AnimatePresence: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-    useReducedMotion: () => false,
-    motion: {
-      div: React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
-        ({ children, ...props }, ref) => (
-          <div ref={ref} {...props}>
-            {children}
-          </div>
-        ),
-      ),
-    },
-  };
-});
 
 const mockUIState = vi.hoisted(() => ({
   contextPanelMode: null as string | null,
