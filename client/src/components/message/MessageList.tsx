@@ -1146,6 +1146,47 @@ function OwnedMessageList({
     requestAnimationFrame(drive);
   }, []);
 
+  /**
+   * Where the reader was standing when a page of older messages was asked for,
+   * so the prepend can be put underneath them instead of moving them.
+   */
+  const prependAnchorRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
+
+  /**
+   * Keep the reader on the message they were looking at when older history
+   * arrives above it.
+   *
+   * Without this the prepended page lands on top and the scroll position stays
+   * at 0 — which reads as "nothing happened", and, worse, ends pagination: the
+   * element is already at the top, so no further scroll event can fire, so
+   * `handleScroll` never asks for the next page. A channel with six hundred
+   * messages dead-ended at a hundred, with the rest unreachable by scrolling.
+   */
+  const restorePrependAnchor = useCallback(() => {
+    const anchor = prependAnchorRef.current;
+    const element = scrollRef.current;
+    prependAnchorRef.current = null;
+    if (!anchor || !element) return;
+    let frames = 0;
+    let settled = 0;
+    let applied = element.scrollTop;
+    const drive = () => {
+      // The reader moved under us; their position wins over the restore.
+      if (Math.abs(element.scrollTop - applied) > 2) return;
+      const grown = Math.max(0, element.scrollHeight - anchor.scrollHeight);
+      const target = anchor.scrollTop + grown;
+      if (Math.abs(element.scrollTop - target) <= 1) {
+        if (++settled >= 2) return;
+      } else {
+        settled = 0;
+        element.scrollTop = target;
+      }
+      applied = element.scrollTop;
+      if (++frames < 30) requestAnimationFrame(drive);
+    };
+    requestAnimationFrame(drive);
+  }, []);
+
   // Roving-tabindex bookkeeping for the message feed. Only one message row is a
   // tab stop at a time; ArrowUp/Down/Home/End move focus (and the tab stop)
   // between rows so a keyboard user is not forced to tab through every loaded
@@ -1298,17 +1339,33 @@ function OwnedMessageList({
   }, [isLoading]);
 
   // Latest scroll machinery, refreshed every render for the effect below.
-  const scrollDepsRef = useRef({ virtualizer, rows, markLatestRead, isNearBottom, scrollToEnd });
-  scrollDepsRef.current = { virtualizer, rows, markLatestRead, isNearBottom, scrollToEnd };
+  const scrollDepsRef = useRef({
+    virtualizer,
+    rows,
+    markLatestRead,
+    isNearBottom,
+    scrollToEnd,
+    restorePrependAnchor,
+  });
+  scrollDepsRef.current = {
+    virtualizer,
+    rows,
+    markLatestRead,
+    isNearBottom,
+    scrollToEnd,
+    restorePrependAnchor,
+  };
 
   // Scroll to bottom on new messages / initial load
   useEffect(() => {
     if (!messages.length) return;
 
-    // If we just loaded older messages (prepend), don't scroll
+    // If we just loaded older messages (prepend), hold the reader's place
+    // rather than scrolling anywhere.
     if (isLoadingMoreRef.current) {
       isLoadingMoreRef.current = false;
       prevMessagesLenRef.current = messages.length;
+      scrollDepsRef.current.restorePrependAnchor();
       return;
     }
 
@@ -1600,6 +1657,7 @@ function OwnedMessageList({
     // Load older messages when scrolled near top
     if (scrollTop < 200 && hasMore && !isLoading) {
       isLoadingMoreRef.current = true;
+      prependAnchorRef.current = { scrollHeight, scrollTop };
       loadMore();
     }
   }, [hasMore, isLoading, loadMore, markLatestRead]);
