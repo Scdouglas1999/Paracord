@@ -277,6 +277,29 @@ def add_trusted_peer(admin_token: str, source: Node, peer: Node) -> None:
     )
 
 
+def origin_event_id_for_message(message_id: int) -> str:
+    """Resolve the federation event id node A actually minted for a message.
+
+    The id is the product's to choose, not the test's: `build_custom_envelope`
+    mints ``$m_message:<message id>:<origin ts>:<domain>``. This was hard-coded
+    here as ``$<message id>:<server name>`` — an older scheme — so once real
+    delivery started working the relay-evidence queries matched no rows and the
+    validation failed on a relay that had in fact succeeded. Read the id back
+    instead of predicting it.
+    """
+    with db_connect("a") as conn:
+        row = conn.execute(
+            "SELECT event_id FROM federation_events"
+            " WHERE event_id LIKE ? ORDER BY origin_ts DESC LIMIT 1",
+            (f"$m_message:{message_id}:%",),
+        ).fetchone()
+    if row is None:
+        raise AssertionError(
+            f"node A minted no m.message federation event for message {message_id}"
+        )
+    return str(row["event_id"])
+
+
 def main() -> int:
     procs: list[subprocess.Popen[str]] = []
     log_files: list[Any] = []
@@ -435,7 +458,6 @@ def main() -> int:
             expected=(201,),
         )
         message_id = int(created_msg["id"])
-        origin_event_id = f"${message_id}:{NODES['a'].server_name}"
 
         def mapped_message_content(node_key: str) -> str | None:
             with db_connect(node_key) as conn:
@@ -453,6 +475,8 @@ def main() -> int:
 
         wait_until("message replicated to B", lambda: mapped_message_content("b") == message_text, 30.0)
         wait_until("message relayed to C", lambda: mapped_message_content("c") == message_text, 30.0)
+
+        origin_event_id = origin_event_id_for_message(message_id)
 
         with db_connect("a") as a_db, db_connect("b") as b_db, db_connect("c") as c_db:
             a_to_c = a_db.execute(

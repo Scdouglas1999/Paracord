@@ -244,6 +244,12 @@ impl FakePeer {
     fn endpoint(&self) -> String {
         format!("http://127.0.0.1:{}/_paracord/federation/v1", self.port)
     }
+
+    /// The fake peer addressed by its federation identity, the way a real
+    /// caller addresses one.
+    fn target<'a>(&self, endpoint: &'a str) -> paracord_federation::client::FederationTarget<'a> {
+        paracord_federation::client::FederationTarget::new(endpoint, "peer.example")
+    }
 }
 
 impl Drop for FakePeer {
@@ -281,8 +287,9 @@ async fn outbound_events_read_is_bounded_by_a_response_size_cap() -> anyhow::Res
     let peer = FakePeer::serving(oversized).await?;
     let client = paracord_federation::client::FederationClient::new()?;
 
+    let peer_endpoint = peer.endpoint();
     let err = client
-        .fetch_messages(&peer.endpoint(), "!1:peer.example", 0, 50)
+        .fetch_messages(peer.target(&peer_endpoint), "!1:peer.example", 0, 50)
         .await
         .expect_err("a 12 MiB /events body must be refused, not buffered");
     let message = err.to_string();
@@ -302,8 +309,9 @@ async fn outbound_events_read_is_bounded_by_a_response_size_cap() -> anyhow::Res
         .to_string(),
     )
     .await?;
+    let small_endpoint = small.endpoint();
     let events = client
-        .fetch_messages(&small.endpoint(), "!1:peer.example", 0, 50)
+        .fetch_messages(small.target(&small_endpoint), "!1:peer.example", 0, 50)
         .await
         .expect("a normally-sized /events body must still be accepted");
     assert!(events.is_empty());

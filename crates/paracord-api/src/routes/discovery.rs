@@ -69,9 +69,13 @@ async fn fetch_federated_discoverable_guilds(
 
     let mut results = Vec::new();
     for peer in peers {
+        let target = paracord_federation::client::FederationTarget::new(
+            &peer.federation_endpoint,
+            &peer.server_name,
+        );
         let guilds = match client
             .fetch_peer_discoverable_guilds(
-                &peer.federation_endpoint,
+                target,
                 params.search.as_deref(),
                 params.tag.as_deref(),
                 limit,

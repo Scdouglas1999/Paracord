@@ -27,11 +27,20 @@ pub fn request_path_from_url(url: &str) -> String {
     }
 }
 
-/// Extract the destination authority (host, lowercased, without port) that a
-/// request URL targets. This is the stable identity the receiving server is
-/// expected to recognize as itself (its `server_name`/`domain`), and is folded
-/// into the transport signature so a request signed for one server cannot be
-/// replayed/forwarded to a different trusting server.
+/// Extract the authority (host, lowercased, without port) of a URL.
+///
+/// This is NOT the destination binding a federation request presents. A URL
+/// host is *where* a request is sent; the destination binding is *who* it is
+/// addressed to — the peer's `server_name`, which the receiver compares against
+/// its own configured identity. Deriving the binding from the URL host made
+/// delivery fail on every deployment whose `server_name` was not spelled
+/// identically to the hostname its peers dial. See
+/// [`crate::client::FederationTarget`].
+///
+/// It survives for the two places where a URL's authority genuinely is the
+/// question: `.well-known` discovery, which runs before any identity is known
+/// and against an endpoint that does not verify the transport signature, and
+/// the receiver's own `public_url` equivalence.
 pub fn destination_from_url(url: &str) -> String {
     reqwest::Url::parse(url)
         .ok()

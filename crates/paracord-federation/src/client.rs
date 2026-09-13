@@ -92,6 +92,54 @@ async fn read_json_capped<T: serde::de::DeserializeOwned>(
         .map_err(|e| FederationError::RemoteError(format!("invalid {what}: {e}")))
 }
 
+/// A peer that a federation request is addressed to.
+///
+/// Two different things used to be conflated here. `endpoint` is where the
+/// request is *sent* — a URL, possibly an IP literal, a private hostname, or a
+/// reverse proxy in front of the real server. `server_name` is who the request
+/// is *addressed to*: the peer's federation identity, exactly as it is
+/// registered locally in `federated_servers.server_name` (or advertised by the
+/// peer's own `.well-known/paracord/server` discovery document).
+///
+/// The destination binding folded into the transport signature is derived from
+/// `server_name` and never from the endpoint's host, because the receiver
+/// checks the presented destination against *its own configured identity*
+/// (`server_name` / `[federation] domain`). Deriving it from the URL host made
+/// the check vacuous-or-broken rather than meaningful: it only passed when a
+/// deployment's `server_name` happened to be spelled identically to the
+/// hostname its peers dial, which the shipped default (`server_name =
+/// "localhost"` behind any real endpoint) is not.
+#[derive(Debug, Clone, Copy)]
+pub struct FederationTarget<'a> {
+    /// Base URL of the peer's federation transport, e.g.
+    /// `https://chat.example.com/_paracord/federation/v1`.
+    pub endpoint: &'a str,
+    /// The peer's federation identity (`server_name`).
+    pub server_name: &'a str,
+}
+
+impl<'a> FederationTarget<'a> {
+    pub fn new(endpoint: &'a str, server_name: &'a str) -> Self {
+        Self {
+            endpoint,
+            server_name,
+        }
+    }
+
+    fn base(&self) -> &str {
+        self.endpoint.trim_end_matches('/')
+    }
+
+    /// The value presented as `X-Paracord-Destination` and folded into the
+    /// signed canonical bytes: the peer's identity, lowercased.
+    ///
+    /// Lowercasing matches `canonical_transport_bytes_with_destination`, which
+    /// lowercases before hashing, and the receiver's case-insensitive compare.
+    fn destination(&self) -> String {
+        self.server_name.trim().to_ascii_lowercase()
+    }
+}
+
 #[derive(Debug, Clone)]
 struct TransportSigner {
     origin: String,
@@ -171,35 +219,45 @@ impl FederationClient {
     }
 
     /// Discover a remote server's federation info via its `.well-known` endpoint.
+    ///
+    /// This is the one request that legitimately cannot present the peer's
+    /// identity as its destination, because the whole point of the call is to
+    /// *learn* that identity. It is also the one request that never needs to:
+    /// `/.well-known/paracord/server` is unauthenticated and does not run
+    /// `verify_transport_request`, so the destination binding is not consulted.
+    /// The URL authority is presented so the header is never empty.
     pub async fn fetch_server_info(&self, base_url: &str) -> Result<ServerInfo, FederationError> {
         let url = format!(
             "{}/.well-known/paracord/server",
             base_url.trim_end_matches('/')
         );
-        let resp = self.get_with_retry(&url).await?;
+        let destination = transport::destination_from_url(&url);
+        let resp = self.get_with_retry(&url, &destination).await?;
         read_json_capped(resp, MAX_CONTROL_RESPONSE_BYTES, "server info").await
     }
 
     /// Fetch the public keys of a remote server.
     pub async fn fetch_server_keys(
         &self,
-        federation_endpoint: &str,
+        target: FederationTarget<'_>,
     ) -> Result<FederationKeysResponse, FederationError> {
-        let url = format!("{}/keys", federation_endpoint.trim_end_matches('/'));
-        let resp = self.get_with_retry(&url).await?;
+        let url = format!("{}/keys", target.base());
+        let resp = self.get_with_retry(&url, &target.destination()).await?;
         read_json_capped(resp, MAX_CONTROL_RESPONSE_BYTES, "keys response").await
     }
 
     /// Send a federation event envelope to a remote server.
     pub async fn post_event(
         &self,
-        federation_endpoint: &str,
+        target: FederationTarget<'_>,
         envelope: &FederationEventEnvelope,
     ) -> Result<PostEventResponse, FederationError> {
-        let url = format!("{}/event", federation_endpoint.trim_end_matches('/'));
+        let url = format!("{}/event", target.base());
         let body_bytes =
             serde_json::to_vec(envelope).map_err(|e| FederationError::Http(e.to_string()))?;
-        let resp = self.post_with_retry(&url, body_bytes).await?;
+        let resp = self
+            .post_with_retry(&url, &target.destination(), body_bytes)
+            .await?;
         read_json_capped(resp, MAX_CONTROL_RESPONSE_BYTES, "event response").await
     }
 
@@ -207,7 +265,7 @@ impl FederationClient {
     /// converting it into the envelope format expected by the ingest endpoint.
     pub async fn send_event(
         &self,
-        federation_endpoint: &str,
+        target: FederationTarget<'_>,
         event: &FederatedEvent,
     ) -> Result<PostEventResponse, FederationError> {
         let envelope = FederationEventEnvelope {
@@ -222,27 +280,23 @@ impl FederationClient {
             state_key: None,
             signatures: event.signatures.clone(),
         };
-        self.post_event(federation_endpoint, &envelope).await
+        self.post_event(target, &envelope).await
     }
 
     /// Fetch a specific event by ID from a remote server.
     pub async fn fetch_event(
         &self,
-        federation_endpoint: &str,
+        target: FederationTarget<'_>,
         event_id: &str,
         read_token: Option<&str>,
     ) -> Result<FederationEventEnvelope, FederationError> {
-        let url = format!(
-            "{}/event/{}",
-            federation_endpoint.trim_end_matches('/'),
-            event_id
-        );
+        let url = format!("{}/event/{}", target.base(), event_id);
         let mut extra_headers: Vec<(&str, String)> = Vec::new();
         if let Some(token) = read_token {
             extra_headers.push(("x-paracord-federation-token", token.to_string()));
         }
         let resp = self
-            .get_with_retry_with_headers(&url, &extra_headers)
+            .get_with_retry_with_headers(&url, &target.destination(), &extra_headers)
             .await?;
         read_json_capped(resp, MAX_EVENT_RESPONSE_BYTES, "event response").await
     }
@@ -250,19 +304,21 @@ impl FederationClient {
     /// Fetch messages/events from a remote server for a given room, paginated.
     pub async fn fetch_messages(
         &self,
-        federation_endpoint: &str,
+        target: FederationTarget<'_>,
         room_id: &str,
         since_depth: i64,
         limit: i64,
     ) -> Result<Vec<FederationEventEnvelope>, FederationError> {
         let url = format!(
             "{}/events?room_id={}&since_depth={}&limit={}",
-            federation_endpoint.trim_end_matches('/'),
+            target.base(),
             room_id,
             since_depth,
             limit
         );
-        let resp = self.get_with_retry_with_headers(&url, &[]).await?;
+        let resp = self
+            .get_with_retry_with_headers(&url, &target.destination(), &[])
+            .await?;
         let events: FederationEventsResponse =
             read_json_capped(resp, MAX_EVENTS_RESPONSE_BYTES, "events response").await?;
         // `limit` in the query string is a request, not a constraint the peer is
@@ -275,67 +331,79 @@ impl FederationClient {
 
     pub async fn send_invite(
         &self,
-        federation_endpoint: &str,
+        target: FederationTarget<'_>,
         payload: &FederationInviteRequest,
     ) -> Result<FederationInviteResponse, FederationError> {
-        let url = format!("{}/invite", federation_endpoint.trim_end_matches('/'));
+        let url = format!("{}/invite", target.base());
         let body = serde_json::to_vec(payload).map_err(|e| FederationError::Http(e.to_string()))?;
-        let resp = self.post_with_retry(&url, body).await?;
+        let resp = self
+            .post_with_retry(&url, &target.destination(), body)
+            .await?;
         read_json_capped(resp, MAX_CONTROL_RESPONSE_BYTES, "invite response").await
     }
 
     pub async fn send_join(
         &self,
-        federation_endpoint: &str,
+        target: FederationTarget<'_>,
         payload: &FederationJoinRequest,
     ) -> Result<FederationJoinResponse, FederationError> {
-        let url = format!("{}/join", federation_endpoint.trim_end_matches('/'));
+        let url = format!("{}/join", target.base());
         let body = serde_json::to_vec(payload).map_err(|e| FederationError::Http(e.to_string()))?;
-        let resp = self.post_with_retry(&url, body).await?;
+        let resp = self
+            .post_with_retry(&url, &target.destination(), body)
+            .await?;
         read_json_capped(resp, MAX_CONTROL_RESPONSE_BYTES, "join response").await
     }
 
     pub async fn send_leave(
         &self,
-        federation_endpoint: &str,
+        target: FederationTarget<'_>,
         payload: &FederationLeaveRequest,
     ) -> Result<FederationLeaveResponse, FederationError> {
-        let url = format!("{}/leave", federation_endpoint.trim_end_matches('/'));
+        let url = format!("{}/leave", target.base());
         let body = serde_json::to_vec(payload).map_err(|e| FederationError::Http(e.to_string()))?;
-        let resp = self.post_with_retry(&url, body).await?;
+        let resp = self
+            .post_with_retry(&url, &target.destination(), body)
+            .await?;
         read_json_capped(resp, MAX_CONTROL_RESPONSE_BYTES, "leave response").await
     }
 
     pub async fn request_media_token(
         &self,
-        federation_endpoint: &str,
+        target: FederationTarget<'_>,
         payload: &FederationMediaTokenRequest,
     ) -> Result<FederationMediaTokenResponse, FederationError> {
-        let url = format!("{}/media/token", federation_endpoint.trim_end_matches('/'));
+        let url = format!("{}/media/token", target.base());
         let body = serde_json::to_vec(payload).map_err(|e| FederationError::Http(e.to_string()))?;
-        let resp = self.post_with_retry(&url, body).await?;
+        let resp = self
+            .post_with_retry(&url, &target.destination(), body)
+            .await?;
         read_json_capped(resp, MAX_CONTROL_RESPONSE_BYTES, "media token response").await
     }
 
     pub async fn relay_media_action(
         &self,
-        federation_endpoint: &str,
+        target: FederationTarget<'_>,
         payload: &FederationMediaRelayRequest,
     ) -> Result<FederationMediaRelayResponse, FederationError> {
-        let url = format!("{}/media/relay", federation_endpoint.trim_end_matches('/'));
+        let url = format!("{}/media/relay", target.base());
         let body = serde_json::to_vec(payload).map_err(|e| FederationError::Http(e.to_string()))?;
-        let resp = self.post_with_retry(&url, body).await?;
+        let resp = self
+            .post_with_retry(&url, &target.destination(), body)
+            .await?;
         read_json_capped(resp, MAX_CONTROL_RESPONSE_BYTES, "media relay response").await
     }
 
     pub async fn request_file_token(
         &self,
-        federation_endpoint: &str,
+        target: FederationTarget<'_>,
         payload: &FederationFileTokenRequest,
     ) -> Result<FederationFileTokenResponse, FederationError> {
-        let url = format!("{}/file/token", federation_endpoint.trim_end_matches('/'));
+        let url = format!("{}/file/token", target.base());
         let body = serde_json::to_vec(payload).map_err(|e| FederationError::Http(e.to_string()))?;
-        let resp = self.post_with_retry(&url, body).await?;
+        let resp = self
+            .post_with_retry(&url, &target.destination(), body)
+            .await?;
         read_json_capped(resp, MAX_CONTROL_RESPONSE_BYTES, "file token response").await
     }
 
@@ -351,14 +419,14 @@ impl FederationClient {
     /// Returns the raw `guilds` array; the caller maps it into its own shape.
     pub async fn fetch_peer_discoverable_guilds(
         &self,
-        federation_endpoint: &str,
+        target: FederationTarget<'_>,
         search: Option<&str>,
         tag: Option<&str>,
         limit: i64,
     ) -> Result<Vec<serde_json::Value>, FederationError> {
         let mut url = format!(
             "{}/discovery/guilds?limit={}",
-            federation_endpoint.trim_end_matches('/'),
+            target.base(),
             limit.clamp(1, 50)
         );
         // The query string is part of the signed canonical path, so it must be
@@ -373,7 +441,9 @@ impl FederationClient {
             url.push_str(&urlencode(tag));
         }
 
-        let resp = self.get_with_retry_with_headers(&url, &[]).await?;
+        let resp = self
+            .get_with_retry_with_headers(&url, &target.destination(), &[])
+            .await?;
         let payload: serde_json::Value =
             read_json_capped(resp, MAX_CONTROL_RESPONSE_BYTES, "peer discovery response").await?;
         Ok(payload
@@ -520,13 +590,19 @@ impl FederationClient {
     }
 
     /// GET request with exponential backoff retry.
-    async fn get_with_retry(&self, url: &str) -> Result<reqwest::Response, FederationError> {
-        self.get_with_retry_with_headers(url, &[]).await
+    async fn get_with_retry(
+        &self,
+        url: &str,
+        destination: &str,
+    ) -> Result<reqwest::Response, FederationError> {
+        self.get_with_retry_with_headers(url, destination, &[])
+            .await
     }
 
     async fn get_with_retry_with_headers(
         &self,
         url: &str,
+        destination: &str,
         extra_headers: &[(&str, String)],
     ) -> Result<reqwest::Response, FederationError> {
         let pinned_addrs = resolve_public_federation_addrs(url).await?;
@@ -534,14 +610,13 @@ impl FederationClient {
         let mut last_err = FederationError::Http("no attempts made".to_string());
         for attempt in 0..MAX_RETRIES {
             let path = transport::request_path_from_url(url);
-            let destination = transport::destination_from_url(url);
             for protocol_version in [FEDERATION_PROTOCOL_DEFAULT, FEDERATION_PROTOCOL_VERSION_V1] {
                 let mut request = client.get(url);
                 request = self.with_transport_signature_headers(
                     request,
                     "GET",
                     &path,
-                    &destination,
+                    destination,
                     &[],
                     protocol_version,
                 );
@@ -590,6 +665,7 @@ impl FederationClient {
     async fn post_with_retry(
         &self,
         url: &str,
+        destination: &str,
         body_bytes: Vec<u8>,
     ) -> Result<reqwest::Response, FederationError> {
         let pinned_addrs = resolve_public_federation_addrs(url).await?;
@@ -597,7 +673,6 @@ impl FederationClient {
         let mut last_err = FederationError::Http("no attempts made".to_string());
         for attempt in 0..MAX_RETRIES {
             let path = transport::request_path_from_url(url);
-            let destination = transport::destination_from_url(url);
             for protocol_version in [FEDERATION_PROTOCOL_DEFAULT, FEDERATION_PROTOCOL_VERSION_V1] {
                 // Sign and send the exact same bytes: `body_bytes` is serialized
                 // once by the caller, signed as-is below, and transmitted
@@ -611,7 +686,7 @@ impl FederationClient {
                     request,
                     "POST",
                     &path,
-                    &destination,
+                    destination,
                     &body_bytes,
                     protocol_version,
                 );
@@ -1156,6 +1231,50 @@ fn is_private_ip(ip: &IpAddr) -> bool {
             // :: unspecified
             || v6.is_unspecified()
         }
+    }
+}
+
+#[cfg(test)]
+mod target_tests {
+    use super::FederationTarget;
+
+    /// The regression this type exists for: the destination a request presents
+    /// is the peer's identity, not the host of the URL it is dialled on. Those
+    /// two differ on every deployment reached through a proxy, an IP literal,
+    /// or a non-standard port — and on the shipped default, where
+    /// `server_name = "localhost"` sits behind a real endpoint.
+    #[test]
+    fn destination_is_the_peer_identity_not_the_url_host() {
+        let target = FederationTarget::new(
+            "https://chat.example.com:8443/_paracord/federation/v1",
+            "node-b.test",
+        );
+        assert_eq!(target.destination(), "node-b.test");
+
+        let behind_ip = FederationTarget::new(
+            "http://127.0.0.1:18082/_paracord/federation/v1",
+            "node-b.test",
+        );
+        assert_eq!(behind_ip.destination(), "node-b.test");
+    }
+
+    /// Lowercased to match `canonical_transport_bytes_with_destination`, which
+    /// lowercases before hashing: a peer registered as `Node-B.Test` must
+    /// produce the same signed bytes as one registered as `node-b.test`.
+    #[test]
+    fn destination_is_lowercased_and_trimmed() {
+        let target = FederationTarget::new("https://example.org/fed", "  Node-B.Test  ");
+        assert_eq!(target.destination(), "node-b.test");
+    }
+
+    /// A trailing slash on a stored endpoint must not produce `//event`: the
+    /// path is part of the signed canonical bytes, so a doubled slash would
+    /// sign one path and (after the peer's router normalizes it) be verified
+    /// against another.
+    #[test]
+    fn base_strips_trailing_slashes() {
+        let target = FederationTarget::new("https://example.org/_paracord/federation/v1/", "b");
+        assert_eq!(target.base(), "https://example.org/_paracord/federation/v1");
     }
 }
 

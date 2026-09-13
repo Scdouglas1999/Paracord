@@ -1486,7 +1486,10 @@ pub async fn download_federated_file(
 
     let token_resp = client
         .request_file_token(
-            &server.federation_endpoint,
+            paracord_federation::client::FederationTarget::new(
+                &server.federation_endpoint,
+                &server.server_name,
+            ),
             &paracord_federation::client::FederationFileTokenRequest {
                 origin_server: service.server_name().to_string(),
                 attachment_id: attachment_id.clone(),

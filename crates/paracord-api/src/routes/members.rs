@@ -687,7 +687,11 @@ pub(crate) async fn federation_send_leave_rpc_for_mirrored_guild(
         room_id: outbound.room_id,
         user_id: local_identity,
     };
-    if let Err(err) = client.send_leave(&peer.federation_endpoint, &payload).await {
+    let target = paracord_federation::client::FederationTarget::new(
+        &peer.federation_endpoint,
+        &peer.server_name,
+    );
+    if let Err(err) = client.send_leave(target, &payload).await {
         tracing::warn!(
             "federation: leave rpc failed for mirrored guild {} -> {} ({}): {}",
             guild_id,

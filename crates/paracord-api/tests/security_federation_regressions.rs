@@ -41,8 +41,16 @@ struct TestHarness {
 
 impl TestHarness {
     async fn new(run_migrations: bool) -> anyhow::Result<Self> {
+        Self::with_public_url(run_migrations, None).await
+    }
+
+    async fn with_public_url(
+        run_migrations: bool,
+        public_url: Option<&str>,
+    ) -> anyhow::Result<Self> {
         let test_app = build_test_app(TestAppOptions {
             run_migrations,
+            public_url: public_url.map(str::to_string),
             ..Default::default()
         })
         .await?;
@@ -690,6 +698,178 @@ async fn federation_transport_binds_destination_server() -> anyhow::Result<()> {
     let (status, body) = harness.request(good_request).await?;
     assert_eq!(status, StatusCode::ACCEPTED);
     assert_eq!(body.get("inserted").and_then(|v| v.as_bool()), Some(true));
+
+    std::env::remove_var("PARACORD_FEDERATION_ENABLED");
+    std::env::remove_var("PARACORD_SERVER_NAME");
+    std::env::remove_var("PARACORD_FEDERATION_DOMAIN");
+    Ok(())
+}
+
+/// The 3.0.0 destination-binding fix, from the receiving side.
+///
+/// Senders now address a peer by its registered `server_name`, so the check
+/// against our own identity is finally meaningful. Two things must hold at the
+/// same time:
+///
+///   * the canonical identity is accepted (that is the whole protocol), and
+///   * the host of our own `public_url` is accepted as an alias, because every
+///     sender built before this change derived the destination from the host of
+///     the endpoint URL it dialled. Without that alias a rolling upgrade would
+///     break in the old-sender/new-receiver direction for exactly the
+///     deployments the fix is meant to rescue.
+///
+/// The alias widens the accepted set only by names this operator configured for
+/// this server, never by anything the peer asserts — a destination nobody
+/// declared is still refused, which is what keeps the binding a misdirection
+/// defence.
+#[tokio::test]
+async fn federation_transport_accepts_own_public_url_host_as_destination() -> anyhow::Result<()> {
+    let _guard = env_lock().lock().await;
+    std::env::set_var("PARACORD_FEDERATION_ENABLED", "true");
+    std::env::set_var("PARACORD_SERVER_NAME", "node-b.test");
+    std::env::set_var("PARACORD_FEDERATION_DOMAIN", "node-b.test");
+
+    // The identity and the hostname peers dial deliberately differ — the exact
+    // shape that made every delivery 403 before the fix.
+    let harness = TestHarness::with_public_url(true, Some("https://chat.example.com:8443")).await?;
+    let origin_server = "remote.example";
+    let key_id = "ed25519:test";
+    let (signing_key, public_key_hex) = paracord_federation::signing::generate_keypair();
+
+    paracord_db::federation::upsert_federated_server(
+        &harness.db,
+        9402,
+        origin_server,
+        origin_server,
+        "https://remote.example/_paracord/federation/v1",
+        Some(&public_key_hex),
+        Some(key_id),
+        true,
+    )
+    .await?;
+
+    let service =
+        paracord_federation::FederationService::new(paracord_federation::FederationConfig {
+            enabled: true,
+            server_name: "node-b.test".to_string(),
+            domain: "node-b.test".to_string(),
+            key_id: "ed25519:local".to_string(),
+            signing_key: None,
+            allow_discovery: false,
+        });
+    service
+        .upsert_server_key(
+            &harness.db,
+            &paracord_federation::FederationServerKey {
+                server_name: origin_server.to_string(),
+                key_id: key_id.to_string(),
+                public_key: public_key_hex.to_string(),
+                valid_until: chrono::Utc::now().timestamp_millis() + 600_000,
+            },
+        )
+        .await?;
+
+    let build_envelope = |event_id: &str, message_id: &str| {
+        let mut envelope = paracord_federation::FederationEventEnvelope {
+            event_id: event_id.to_string(),
+            room_id: "!7411:remote.example".to_string(),
+            event_type: "m.message".to_string(),
+            sender: "@alice:remote.example".to_string(),
+            origin_server: origin_server.to_string(),
+            origin_ts: chrono::Utc::now().timestamp_millis(),
+            content: json!({
+                "body": "hello from remote",
+                "msgtype": "m.text",
+                "guild_id": "7411",
+                "guild_name": "Remote Guild",
+                "channel_id": "7421",
+                "channel_name": "general",
+                "channel_type": 0,
+                "message_id": message_id,
+            }),
+            depth: chrono::Utc::now().timestamp_millis(),
+            state_key: None,
+            signatures: json!({}),
+        };
+        let payload_sig = paracord_federation::signing::sign(
+            &signing_key,
+            &paracord_federation::canonical_envelope_bytes(&envelope),
+        );
+        envelope.signatures = json!({ origin_server: { key_id: payload_sig } });
+        envelope
+    };
+
+    let post_bound_to =
+        |destination: &'static str, event_id: &'static str, message_id: &'static str| {
+            let envelope = build_envelope(event_id, message_id);
+            let bytes = serde_json::to_vec(&envelope).expect("envelope serializes");
+            let ts = chrono::Utc::now().timestamp_millis();
+            let canonical =
+                paracord_federation::transport::canonical_transport_bytes_with_body_and_destination(
+                    "POST",
+                    "/_paracord/federation/v1/event",
+                    ts,
+                    &bytes,
+                    destination,
+                );
+            let sig = paracord_federation::signing::sign(&signing_key, &canonical);
+            Request::builder()
+                .method("POST")
+                .uri("/_paracord/federation/v1/event")
+                .header("content-type", "application/json")
+                .header("x-paracord-origin", origin_server)
+                .header("x-paracord-key-id", key_id)
+                .header("x-paracord-timestamp", ts.to_string())
+                .header("x-paracord-signature", sig)
+                .header("x-paracord-destination", destination)
+                .body(Body::from(bytes))
+                .expect("request builds")
+        };
+
+    // A current sender: addresses us by the identity it has registered for us.
+    let (status, body) = harness
+        .request(post_bound_to(
+            "node-b.test",
+            "$byname:remote.example",
+            "94021",
+        ))
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::ACCEPTED,
+        "a request addressed to our server_name must be accepted"
+    );
+    assert_eq!(body.get("inserted").and_then(|v| v.as_bool()), Some(true));
+
+    // A pre-3.0.0 sender: addresses us by the host of the endpoint it dials.
+    let (status, body) = harness
+        .request(post_bound_to(
+            "chat.example.com",
+            "$byhost:remote.example",
+            "94022",
+        ))
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::ACCEPTED,
+        "a request addressed to our own public_url host must be accepted so an \
+         old sender can still reach a new receiver during a rolling upgrade"
+    );
+    assert_eq!(body.get("inserted").and_then(|v| v.as_bool()), Some(true));
+
+    // Anything else is still a misdirected request.
+    let (status, _) = harness
+        .request(post_bound_to(
+            "someone-else.example",
+            "$foreign:remote.example",
+            "94023",
+        ))
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "a destination this operator never declared must still be refused"
+    );
 
     std::env::remove_var("PARACORD_FEDERATION_ENABLED");
     std::env::remove_var("PARACORD_SERVER_NAME");

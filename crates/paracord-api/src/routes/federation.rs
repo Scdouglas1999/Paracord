@@ -712,9 +712,46 @@ async fn verify_transport_request(
         .destination
         .as_deref()
         .ok_or(ApiError::Unauthorized)?;
+    // The three spellings of "us" a peer may legitimately address:
+    //
+    //   * `server_name` — the canonical identity, and what a current sender
+    //     presents (it reads the peer's registered `server_name`, never the
+    //     host of the URL it dials);
+    //   * `[federation] domain` — the long-standing alias;
+    //   * the host of our own `public_url` — a DELIBERATE equivalence for the
+    //     sender that addressed us by the endpoint it dials. Senders before
+    //     this release derived the destination from the peer URL's host, so
+    //     without this an old sender could never reach a new receiver. It is
+    //     safe because `public_url` is *our own* configuration, not peer input:
+    //     the set of accepted destinations stays a fixed, operator-declared set
+    //     of names for this server, which is exactly what makes the binding a
+    //     misdirection defence. See docs/known-limitations.md ("Federation").
+    let endpoint_host = state
+        .config
+        .public_url
+        .as_deref()
+        .map(paracord_federation::transport::destination_from_url)
+        .filter(|host| !host.is_empty());
     let is_self = destination.eq_ignore_ascii_case(service.server_name())
-        || destination.eq_ignore_ascii_case(service.domain());
+        || destination.eq_ignore_ascii_case(service.domain())
+        || endpoint_host
+            .as_deref()
+            .is_some_and(|host| destination.eq_ignore_ascii_case(host));
     if !is_self {
+        // This 403 used to be entirely silent, which made a misconfigured
+        // `server_name` undiagnosable from the server side: the operator saw a
+        // bare `status=403` in the access log and `returned 403 Forbidden` in
+        // the sender's outbound queue, and nothing anywhere named the values
+        // that disagreed.
+        tracing::warn!(
+            presented_destination = %destination,
+            presented_origin = %transport.presented_origin,
+            expected_server_name = %service.server_name(),
+            expected_domain = %service.domain(),
+            expected_endpoint_host = endpoint_host.as_deref().unwrap_or("<public_url unset>"),
+            %path,
+            "federation: refusing request addressed to another server (destination binding mismatch)"
+        );
         return Err(ApiError::Forbidden);
     }
 
@@ -736,6 +773,12 @@ async fn verify_transport_request(
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     if !trusted {
+        tracing::warn!(
+            presented_origin = %transport.presented_origin,
+            canonical_origin = %canonical_origin,
+            %path,
+            "federation: refusing request from a peer that is not trusted (unknown, blocked, or expired)"
+        );
         return Err(ApiError::Forbidden);
     }
 
@@ -743,10 +786,24 @@ async fn verify_transport_request(
         .list_server_keys(&state.db, &canonical_origin)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    let trusted_key = keys
+    let Some(trusted_key) = keys
         .iter()
         .find(|k| k.key_id == transport.key_id && k.valid_until >= now_ms)
-        .ok_or(ApiError::Forbidden)?;
+    else {
+        tracing::warn!(
+            presented_origin = %transport.presented_origin,
+            canonical_origin = %canonical_origin,
+            presented_key_id = %transport.key_id,
+            known_key_ids = %keys
+                .iter()
+                .map(|k| k.key_id.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
+            %path,
+            "federation: refusing request signed with a key that is not registered or has expired"
+        );
+        return Err(ApiError::Forbidden);
+    };
 
     let canonical =
         paracord_federation::transport::canonical_transport_bytes_with_body_and_destination(
@@ -762,7 +819,18 @@ async fn verify_transport_request(
             &transport.signature_hex,
             &trusted_key.public_key,
         )
-        .map_err(|_| ApiError::Forbidden)?;
+        .map_err(|err| {
+            tracing::warn!(
+                presented_origin = %transport.presented_origin,
+                canonical_origin = %canonical_origin,
+                presented_key_id = %transport.key_id,
+                presented_destination = %destination,
+                %path,
+                error = %err,
+                "federation: refusing request whose transport signature did not verify"
+            );
+            ApiError::Forbidden
+        })?;
 
     if enforce_replay_protection {
         // Keyed on `canonical_origin`, never the raw header (see above).
@@ -2845,7 +2913,10 @@ pub async fn run_federation_catchup_once(
 
                 let events = match client
                     .fetch_messages(
-                        &peer.federation_endpoint,
+                        paracord_federation::client::FederationTarget::new(
+                            &peer.federation_endpoint,
+                            &peer.server_name,
+                        ),
                         &room_id,
                         since_depth,
                         per_room_limit.clamp(1, 500),
@@ -3556,7 +3627,10 @@ pub async fn add_server(
         let client = paracord_federation::client::FederationClient::new()
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
         let keys_resp = client
-            .fetch_server_keys(&body.federation_endpoint)
+            .fetch_server_keys(paracord_federation::client::FederationTarget::new(
+                &body.federation_endpoint,
+                &server_name,
+            ))
             .await
             .map_err(|e| {
                 ApiError::BadRequest(format!(

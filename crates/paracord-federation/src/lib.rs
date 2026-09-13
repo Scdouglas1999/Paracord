@@ -655,7 +655,12 @@ impl FederationService {
             }
 
             let attempt_started = std::time::Instant::now();
-            match client.post_event(&peer.federation_endpoint, envelope).await {
+            // Address the request to the peer's IDENTITY, not to the host in
+            // its endpoint URL: the receiver checks the destination against its
+            // own `server_name`/`domain`.
+            let target =
+                client::FederationTarget::new(&peer.federation_endpoint, &peer.server_name);
+            match client.post_event(target, envelope).await {
                 Ok(resp) => {
                     let latency_ms = attempt_started.elapsed().as_millis() as i64;
                     let attempt_ts = chrono::Utc::now().timestamp_millis();
@@ -825,7 +830,9 @@ impl FederationService {
             };
 
             let started = std::time::Instant::now();
-            let delivered = client.post_event(&row.federation_endpoint, &envelope).await;
+            let target =
+                client::FederationTarget::new(&row.federation_endpoint, &row.destination_server);
+            let delivered = client.post_event(target, &envelope).await;
             let attempt_ts = chrono::Utc::now().timestamp_millis();
             let latency_ms = started.elapsed().as_millis() as i64;
 

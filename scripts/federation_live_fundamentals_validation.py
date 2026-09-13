@@ -121,8 +121,14 @@ def locate_livekit_binary() -> Path:
         ROOT / "dist" / "paracord-server" / LIVEKIT_BINARY_NAME,
         ROOT / "dist" / "paracord-server-win-0.2.2" / LIVEKIT_BINARY_NAME,
         ROOT / "dist" / "verify-win" / LIVEKIT_BINARY_NAME,
-        ROOT / "livekit-extracted" / LIVEKIT_BINARY_NAME,
-        ROOT / "livekit-extracted-win" / LIVEKIT_BINARY_NAME,
+        # Every `livekit-extracted*` sibling, sorted for a stable order. The
+        # list used to name `livekit-extracted` and `livekit-extracted-win`
+        # literally, which on Linux found only the two Windows extractions
+        # (holding `livekit-server.exe`, a name this never looks for) and
+        # missed `livekit-extracted-linux/` sitting beside them — so the
+        # validation refused to start on the platform it had just been ported
+        # to.
+        *sorted(ROOT.glob("livekit-extracted*/" + LIVEKIT_BINARY_NAME)),
         ROOT / "target" / "release" / LIVEKIT_BINARY_NAME,
         ROOT / "target-rebuild" / "release" / LIVEKIT_BINARY_NAME,
     ]
@@ -182,10 +188,20 @@ max_file_size = 10485760
 p2p_threshold = 10485760
 
 [voice]
-# Each node needs its own native-media UDP port. Left unset they all take the
-# product default (8443), so the first node bound it and the other two refused
-# to boot ("Native QUIC voice ... failed to start"), which stalled every run of
-# this validation on a machine where all three share a host.
+# The voice cases assert a LiveKit join token (`token` + `room_name`), and only
+# node A is ever joined. `native_media` defaults to true — the 3.0 product
+# default — under which `/voice/{{id}}/join` answers with a native transport
+# descriptor and no token at all, so A has to opt out to exercise LiveKit.
+#
+# B and C stay on the native default deliberately. Opting all three out made
+# all three try to manage their own LiveKit on the single shared port, and the
+# losers died on "could not listen on TURN UDP port ... address already in
+# use", taking A's LiveKit down with them.
+native_media = {"false" if node.key == "a" else "true"}
+# Each node still needs its own native-media UDP port. Left unset they all take
+# the product default (8443), so the first node bound it and the other two
+# refused to boot ("Native QUIC voice ... failed to start"), which stalled every
+# run of this validation on a machine where all three share a host.
 port = {node.port + 1000}
 
 [livekit]
@@ -278,6 +294,42 @@ def db_connect(node_key: str) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
     return conn
+
+
+def room_id_for(guild_id: int, origin: Node) -> str:
+    """The federation room id the server derives for a local guild."""
+    return f"!{guild_id}:{origin.server_name}"
+
+
+def record_room_membership(
+    node_key: str,
+    guild_id: int,
+    remote_user_id: str,
+    local_user_id: int,
+) -> None:
+    """Record a remote participant of the shared room on `node_key`.
+
+    Content envelopes fan out ONLY to servers with a recorded participant in the
+    room (`federation_room_memberships`), and fail closed on an empty set — a
+    deliberate security property: without it, trusting one peer shipped that
+    peer every message in every purely-local guild.
+
+    This validation stands the shared guild up by cloning rows rather than by
+    driving real cross-server joins, and the one real join it does drive is a
+    LOCAL guest on node A. A local join records nothing in
+    `federation_room_memberships` on its own server, so A's participant set for
+    the shared room stayed empty and every content envelope was correctly
+    withheld — the message/edit/reaction cases then timed out on a scoping rule
+    that was doing its job. Record the membership a real remote join would have
+    written, exactly as `federation_e2e_validation.py` does.
+    """
+    with db_connect(node_key) as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO federation_room_memberships "
+            "(room_id, remote_user_id, local_user_id, guild_id) VALUES (?, ?, ?, ?)",
+            (room_id_for(guild_id, NODES["a"]), remote_user_id, local_user_id, guild_id),
+        )
+        conn.commit()
 
 
 def insert_row(conn: sqlite3.Connection, table: str, row: dict[str, Any]) -> None:
@@ -595,6 +647,29 @@ def assert_member_list_contains(
         )
 
 
+def origin_event_id_for_message(message_id: int) -> str:
+    """Resolve the federation event id node A actually minted for a message.
+
+    The id is the product's to choose, not the test's: `build_custom_envelope`
+    mints ``$m_message:<message id>:<origin ts>:<domain>``. This was hard-coded
+    here as ``$<message id>:<server name>`` — an older scheme — so once real
+    delivery started working the relay-evidence queries matched no rows and the
+    validation failed on a relay that had in fact succeeded. Read the id back
+    instead of predicting it.
+    """
+    with db_connect("a") as conn:
+        row = conn.execute(
+            "SELECT event_id FROM federation_events"
+            " WHERE event_id LIKE ? ORDER BY origin_ts DESC LIMIT 1",
+            (f"$m_message:{message_id}:%",),
+        ).fetchone()
+    if row is None:
+        raise AssertionError(
+            f"node A minted no m.message federation event for message {message_id}"
+        )
+    return str(row["event_id"])
+
+
 def main() -> int:
     procs: list[subprocess.Popen[str]] = []
     log_files: list[Any] = []
@@ -762,6 +837,21 @@ def main() -> int:
             target_node_key="c",
         )
 
+        # Make the shared room an actually-federated room: every node records the
+        # other two nodes' admins as participants, exactly as a real cross-server
+        # join would. Without this A has no recorded participant for the room and
+        # the (deliberate, fail-closed) content scoping withholds every message.
+        for holder in ("a", "b", "c"):
+            for participant in ("a", "b", "c"):
+                if participant == holder:
+                    continue
+                record_room_membership(
+                    holder,
+                    guild_id,
+                    f"@admin_{participant}:{NODES[participant].server_name}",
+                    admin_ids[holder],
+                )
+
         # Reconnect after guild creation so this session is subscribed to the
         # new guild and receives member/channel/message realtime events.
         admin_a_ws = GatewayClient("admin-a", NODES["a"].gateway_url, admin_tokens["a"])
@@ -823,7 +913,6 @@ def main() -> int:
             expected=(201,),
         )
         message_id = parse_int_id(created_msg["id"], "message id")
-        origin_event_id = f"${message_id}:{NODES['a'].server_name}"
 
         guest1_ws.wait_dispatch(
             "MESSAGE_CREATE",
@@ -842,6 +931,8 @@ def main() -> int:
             lambda: mapped_message_content("c", NODES["a"].server_name, message_id)
             == "federation live message",
         )
+
+        origin_event_id = origin_event_id_for_message(message_id)
 
         with db_connect("a") as a_db, db_connect("b") as b_db, db_connect("c") as c_db:
             a_to_c = a_db.execute(

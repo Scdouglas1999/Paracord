@@ -94,6 +94,11 @@ async fn federation_send_join_rpc_for_mirrored_guild(
         return;
     };
 
+    let target = paracord_federation::client::FederationTarget::new(
+        &peer.federation_endpoint,
+        &peer.server_name,
+    );
+
     let mut room_id = outbound.room_id.clone();
     let invite_payload = FederationInviteRequest {
         origin_server: service.server_name().to_string(),
@@ -101,10 +106,7 @@ async fn federation_send_join_rpc_for_mirrored_guild(
         sender: local_identity.clone(),
         max_age_seconds,
     };
-    match client
-        .send_invite(&peer.federation_endpoint, &invite_payload)
-        .await
-    {
+    match client.send_invite(target, &invite_payload).await {
         Ok(resp) if resp.accepted => {
             if !resp.room_id.trim().is_empty() {
                 room_id = resp.room_id;
@@ -133,10 +135,7 @@ async fn federation_send_join_rpc_for_mirrored_guild(
         room_id,
         user_id: local_identity,
     };
-    if let Err(err) = client
-        .send_join(&peer.federation_endpoint, &join_payload)
-        .await
-    {
+    if let Err(err) = client.send_join(target, &join_payload).await {
         tracing::warn!(
             "federation: join rpc failed for mirrored guild {} -> {} ({}): {}",
             guild_id,

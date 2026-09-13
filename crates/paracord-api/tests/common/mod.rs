@@ -50,6 +50,11 @@ pub struct TestAppOptions {
     /// than an unclaimed one, so the harness completes setup by default and the
     /// setup tests opt back into `false`.
     pub instance_setup_complete: bool,
+    /// The deployment's externally reachable base URL, mirroring
+    /// `[server] public_url`. Federation's destination binding accepts this
+    /// URL's host as an alias for the server's own identity, so tests that
+    /// exercise that equivalence set it.
+    pub public_url: Option<String>,
 }
 
 impl Default for TestAppOptions {
@@ -74,6 +79,7 @@ impl Default for TestAppOptions {
             ai_model: None,
             ai_timeout_seconds: 20,
             instance_setup_complete: true,
+            public_url: None,
         }
     }
 }
@@ -404,7 +410,7 @@ pub async fn build_test_app(options: TestAppOptions) -> anyhow::Result<TestApp> 
             livekit_http_url: livekit.http_url.clone(),
             livekit_public_url: livekit.url.clone(),
             livekit_available: options.livekit_available,
-            public_url: None,
+            public_url: options.public_url.clone(),
             media_storage_path: media_dir.path().to_string_lossy().into_owned(),
             media_max_file_size: 10 * 1024 * 1024,
             media_p2p_threshold: 1024 * 1024,

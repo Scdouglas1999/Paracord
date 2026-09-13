@@ -529,10 +529,11 @@ pub async fn join_voice(
                     channel_id: remote_channel_id,
                     user_id: local_identity,
                 };
-                match client
-                    .request_media_token(&peer.federation_endpoint, &payload)
-                    .await
-                {
+                let target = paracord_federation::client::FederationTarget::new(
+                    &peer.federation_endpoint,
+                    &peer.server_name,
+                );
+                match client.request_media_token(target, &payload).await {
                     Ok(remote) => {
                         paracord_db::voice_states::begin_voice_state_transition(
                             &state.db,
@@ -919,10 +920,11 @@ pub async fn start_stream(
                     action: "start_stream".to_string(),
                     title: stream_title.map(ToOwned::to_owned),
                 };
-                match client
-                    .relay_media_action(&peer.federation_endpoint, &payload)
-                    .await
-                {
+                let target = paracord_federation::client::FederationTarget::new(
+                    &peer.federation_endpoint,
+                    &peer.server_name,
+                );
+                match client.relay_media_action(target, &payload).await {
                     Ok(remote) => {
                         if let (Some(token), Some(room_name)) = (remote.token, remote.room_name) {
                             let _ = paracord_db::voice_states::update_voice_state(
@@ -1190,10 +1192,11 @@ pub async fn stop_stream(
                         action: "stop_stream".to_string(),
                         title: None,
                     };
-                    if let Err(err) = client
-                        .relay_media_action(&peer.federation_endpoint, &payload)
-                        .await
-                    {
+                    let target = paracord_federation::client::FederationTarget::new(
+                        &peer.federation_endpoint,
+                        &peer.server_name,
+                    );
+                    if let Err(err) = client.relay_media_action(target, &payload).await {
                         tracing::warn!(
                             "federation: stop_stream rpc failed for channel {} -> {} ({}): {}",
                             channel_id,
