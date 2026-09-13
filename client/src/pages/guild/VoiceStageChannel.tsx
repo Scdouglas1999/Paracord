@@ -858,8 +858,14 @@ export function VoiceStageChannel({
     ) : null;
 
   const speakersArrangement = (dominant: boolean) => (dominant ? 'strip' : 'grid');
+  // `h-full`, because on a phone the speakers region is a plain block that hands
+  // this wrapper the whole remaining plate — and a flex column with no height of
+  // its own shrank to its content instead, leaving ~390px of empty plate between
+  // a single speaker tile and the control bar (§7.2: the room fills the Stage).
+  // The desktop grid cell stretches its child either way, so this is the same
+  // height there as before.
   const renderSpeakers = (withDominant: boolean) => (
-    <div className="flex min-h-0 flex-col gap-[var(--gutter)]" data-motion-chrome="">
+    <div className="flex h-full min-h-0 flex-col gap-[var(--gutter)]" data-motion-chrome="">
       {requestsRow}
       <StageSpeakers
         className="min-h-0 flex-1"
