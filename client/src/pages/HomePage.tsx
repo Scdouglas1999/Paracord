@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 
 import { SectionLabel } from '../components/ui';
@@ -15,6 +15,7 @@ import { CreateGuildModal } from '../components/guild/CreateGuildModal';
 
 import { useAvailableAccountScopes } from '../hooks/useAvailableAccountScopes';
 import { useAvailableGuilds } from '../hooks/useGuilds';
+import { useBuildingRosters } from '../hooks/useBuildingRosters';
 import {
   useAroundNow,
   useBuildingLights,
@@ -34,7 +35,6 @@ import { cn } from '../lib/utils';
 import type { BuildingLight, RoomLight } from '../lib/attention/light';
 import type { ConversationEntry } from '../lib/attention/conversationModel';
 import { useChannelStore } from '../stores/channelStore';
-import { useMemberStore } from '../stores/memberStore';
 import { useReadStateStore } from '../stores/readStateStore';
 import { useRelationshipStore } from '../stores/relationshipStore';
 import { toast } from '../stores/toastStore';
@@ -64,10 +64,8 @@ export function HomePage() {
   const guilds = useAvailableGuilds();
   const availableScopes = useAvailableAccountScopes();
   const fetchChannels = useChannelStore((state) => state.fetchChannels);
-  const fetchMembers = useMemberStore((state) => state.fetchMembers);
   const fetchRelationships = useRelationshipStore((state) => state.fetchRelationships);
   const acceptFriend = useRelationshipStore((state) => state.acceptFriend);
-  const loadedGuildsRef = useRef<Set<string>>(new Set());
 
   const [showCreateModal, setShowCreateModal] = useState(false);
 
@@ -75,17 +73,10 @@ export function HomePage() {
     void fetchRelationships();
   }, [fetchRelationships]);
 
-  useEffect(() => {
-    // Once per building, ever. A new `guilds` array identity (a presence tick,
-    // say) must not refetch every guild — and the light on Home is only honest
-    // once the rooms AND the people behind them are loaded.
-    guilds.forEach((guild) => {
-      if (loadedGuildsRef.current.has(guild.key)) return;
-      loadedGuildsRef.current.add(guild.key);
-      void fetchChannels(guild.id, guild.scope);
-      void fetchMembers(guild.id, guild.scope);
-    });
-  }, [guilds, fetchChannels, fetchMembers]);
+  // The light on Home is only honest once every building's rooms AND the people
+  // behind them are loaded. The sidebar needs exactly the same thing, so the
+  // loading lives in one hook that both surfaces mount and neither duplicates.
+  useBuildingRosters();
 
   // ---- light ------------------------------------------------------------
   const buildings = useBuildingLights();

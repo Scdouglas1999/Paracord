@@ -4,6 +4,7 @@ import { Bell, BellOff, CheckCheck, LogOut, Settings } from 'lucide-react';
 
 import { extractApiError } from '../../../api/client';
 import { useCurrentAccountScope, useCurrentUser } from '../../../hooks/useCurrentUser';
+import { useBuildingRosters } from '../../../hooks/useBuildingRosters';
 import { useBuildingLights } from '../../../hooks/useLights';
 import { useMutedGuilds } from '../../../hooks/useMutedGuilds';
 import { useUnifiedConversations } from '../../../hooks/useUnifiedConversations';
@@ -59,6 +60,9 @@ export function UnifiedSidebar() {
   const { contextMenu, onContextMenu, closeContextMenu } = useContextMenu();
   const [showCreateGuild, setShowCreateGuild] = useState(false);
 
+  // Every building's rooms and members, not just the open one — the column
+  // draws them all, so it is the column's job to have them (§7.1).
+  useBuildingRosters();
   const buildings = useBuildingLights();
   const { mutedGuildKeys, toggleMute, saving } = useMutedGuilds();
   const { needsYou, needsYouOverflowCount, recent, pinned } = useUnifiedConversations(mutedGuildKeys);

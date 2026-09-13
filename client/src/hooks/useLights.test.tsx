@@ -291,6 +291,27 @@ describe('useBuildingLights across servers', () => {
     expect(result.current).toBe('Every building is dark');
   });
 
+  it('says it has not looked rather than claiming a building is empty', () => {
+    // Harbour Lights is a building you are not standing in: nobody has fetched
+    // its rooms or its members. "0 in · Dark · nobody in" would be two claims
+    // and both would be false.
+    act(() => {
+      useGuildStore.getState().setGuilds(
+        [
+          { id: GUILD, name: 'Kestrel Robotics', owner_id: 'viewer', member_count: 61, created_at: '' },
+          { id: 'g2', name: 'Harbour Lights', owner_id: 'viewer', member_count: 12, created_at: '' },
+        ],
+        SCOPE,
+      );
+    });
+    const { result } = renderHook(() => useBuildingLights());
+    const harbour = result.current.find((building) => building.name === 'Harbour Lights');
+    expect(harbour?.rosterKnown).toBe(false);
+    expect(harbour?.caption).toBe('Open to see rooms');
+    const kestrel = result.current.find((building) => building.name === 'Kestrel Robotics');
+    expect(kestrel?.rosterKnown).toBe(true);
+  });
+
   it('counts a person in two buildings on one server once', () => {
     act(() => {
       useGuildStore.getState().setGuilds(
@@ -310,6 +331,7 @@ describe('useBuildingLights across servers', () => {
           [entityScopeKey(SCOPE, 'g2')]: true,
         },
       });
+      useChannelStore.getState().setChannels('g2', [], SCOPE);
     });
     const { result } = renderHook(() => useLightsOnAcrossBuildings(useBuildingLights()));
     expect(result.current).toBe(1);

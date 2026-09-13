@@ -33,6 +33,12 @@ export interface BuildingLightInput {
   members: readonly PersonLight[];
   /** Total members, including the ones whose lights are off. */
   memberCount?: number;
+  /**
+   * Whether this building's rooms and members have been loaded. False means
+   * "we have not looked yet" — NOT "there is nothing there" (§6.9: the app
+   * does not assert a fact it has not got).
+   */
+  rosterKnown?: boolean;
 }
 
 /**
@@ -94,8 +100,12 @@ export function brightnessOf(building: {
   );
 }
 
+/** What a building says while nobody has looked inside it yet (§6.9). */
+export const UNKNOWN_ROSTER_CAPTION = 'Open to see rooms';
+
 /** Build the light for one building. */
 export function buildingLight(input: BuildingLightInput): BuildingLight {
+  const rosterKnown = input.rosterKnown ?? true;
   const rooms = [...input.rooms];
   const ordered = orderRoomsForWindows(rooms);
   const windows = windowsFor(ordered);
@@ -138,7 +148,8 @@ export function buildingLight(input: BuildingLightInput): BuildingLight {
     people,
     memberCount: input.memberCount ?? input.members.length,
     brightness: brightnessOf({ talkingCount, roomsLit, readingCount, lightsOn }),
-    caption: buildingCaption(roomsLit, readingCount),
+    caption: rosterKnown ? buildingCaption(roomsLit, readingCount) : UNKNOWN_ROSTER_CAPTION,
+    rosterKnown,
   };
 }
 

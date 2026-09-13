@@ -193,6 +193,13 @@ export interface BuildingLight {
   brightness: number;
   /** "2 rooms lit · 3 reading", "1 reading", "Dark · nobody in". */
   caption: string;
+  /**
+   * Do we actually know what is in this building? A building whose rooms and
+   * members have not been fetched has no light to report, and must say so
+   * rather than assert an empty map, "0 in" and "Dark · nobody in" — all three
+   * of which are claims, and all three of which would be false.
+   */
+  rosterKnown: boolean;
 }
 
 /** The window map is one window per room, ≤ 8 per row, ≤ 2 rows (§3). */

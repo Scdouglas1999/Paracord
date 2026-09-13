@@ -79,10 +79,13 @@ export const WindowMap = React.forwardRef<HTMLDivElement, WindowMapProps>(functi
       )}
       <span className="sr-only">
         {windows.length === 0
-          ? 'No rooms yet'
-          : `${lit.length} of ${windows.length + overflowCount} rooms lit`}
-        {overflowCount > 0 ? `, ${overflowCount} more not shown` : ''}
-        {caption ? `. ${caption}` : ''}
+          ? // With no windows the caption is the only honest thing to say —
+            // "No rooms yet" is a claim, and a building whose rooms have not
+            // been fetched has not earned it.
+            (caption ?? 'No rooms yet')
+          : `${lit.length} of ${windows.length + overflowCount} rooms lit${
+              overflowCount > 0 ? `, ${overflowCount} more not shown` : ''
+            }${caption ? `. ${caption}` : ''}`}
       </span>
     </div>
   );

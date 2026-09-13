@@ -67,6 +67,12 @@ export interface GuildLightInput {
   nowMs: number;
   /** Injected so tests get a clean observation log. */
   litHistory?: LitHistory;
+  /**
+   * Whether this building's channels AND members have arrived. A building you
+   * are not currently in must not claim "0 in · Dark · nobody in" because
+   * nobody has fetched it yet.
+   */
+  rosterKnown?: boolean;
 }
 
 function isVoice(type: ChannelType): boolean {
@@ -220,5 +226,6 @@ export function guildLight(input: GuildLightInput): BuildingLight {
     rooms,
     members: people,
     memberCount: input.memberCount ?? people.length,
+    rosterKnown: input.rosterKnown,
   });
 }

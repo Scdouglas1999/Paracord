@@ -161,6 +161,18 @@ function statusLookup(serverId: string) {
   return (userId: string) => getPresence(userId, serverId)?.status ?? 'offline';
 }
 
+/**
+ * Has anybody actually fetched this building's rooms and members?
+ *
+ * Subscribed as two booleans rather than the whole record, so a fetch for a
+ * different building does not re-render this one.
+ */
+function useRosterKnown(key: string | null): boolean {
+  const channels = useChannelStore((state) => (key ? Boolean(state.guildChannelsLoaded[key]) : false));
+  const members = useMemberStore((state) => (key ? Boolean(state.membersLoaded[key]) : false));
+  return channels && members;
+}
+
 /** One building's light: window map, counts, rooms, caption. */
 export function useBuildingLight(guildId: string | null | undefined): BuildingLight | null {
   const scope = useCurrentAccountScope();
@@ -175,6 +187,7 @@ export function useBuildingLight(guildId: string | null | undefined): BuildingLi
   const members = useMemberStore((state) =>
     scope && guildId ? state.members.get(entityScopeKey(scope, guildId)) : undefined,
   );
+  const rosterKnown = useRosterKnown(scope && guildId ? entityScopeKey(scope, guildId) : null);
   const sources = useLightSources();
 
   return useMemo(() => {
@@ -203,8 +216,9 @@ export function useBuildingLight(guildId: string | null | undefined): BuildingLi
       selectedChannelId: selected,
       windowVisible: sources.windowVisible,
       nowMs: sources.nowMs,
+      rosterKnown,
     });
-  }, [scope, guildId, guild, channels, members, sources]);
+  }, [scope, guildId, guild, channels, members, rosterKnown, sources]);
 }
 
 /** Every room in one building. */
@@ -248,7 +262,9 @@ export function useBuildingPeople(guildId: string | null | undefined): PersonLig
 export function useBuildingLights(): BuildingLight[] {
   const guilds = useAvailableGuilds();
   const channelsByGuild = useChannelStore((state) => state.channelsByGuild);
+  const channelsLoaded = useChannelStore((state) => state.guildChannelsLoaded);
   const members = useMemberStore((state) => state.members);
+  const membersLoaded = useMemberStore((state) => state.membersLoaded);
   const sources = useLightSources();
 
   return useMemo(() => {
@@ -280,10 +296,11 @@ export function useBuildingLights(): BuildingLight[] {
         selectedChannelId: selected,
         windowVisible: sources.windowVisible,
         nowMs: sources.nowMs,
+        rosterKnown: Boolean(channelsLoaded[key]) && Boolean(membersLoaded[key]),
       });
     });
     return orderBuildingsByBrightness(built);
-  }, [guilds, channelsByGuild, members, sources]);
+  }, [guilds, channelsByGuild, channelsLoaded, members, membersLoaded, sources]);
 }
 
 /**

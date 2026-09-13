@@ -76,12 +76,16 @@ export function BuildingSection({
           <span className="flex items-center gap-1.5">
             {muted && <BellOff size={12} aria-label="Muted" className="shrink-0" />}
             {/* "24 in" — §5.1's re-roll; the section label is read as a
-                whole, so the number does not announce itself twice. */}
-            <RollingNumber
-              value={building.lightsOn}
-              format={litMembersCaption}
-              announce={false}
-            />
+                whole, so the number does not announce itself twice. A building
+                whose roster has not arrived shows no count at all: "0 in" would
+                be a claim, and it would be the wrong one. */}
+            {building.rosterKnown && (
+              <RollingNumber
+                value={building.lightsOn}
+                format={litMembersCaption}
+                announce={false}
+              />
+            )}
           </span>
         }
         className={cn(active && 'text-text-primary')}
