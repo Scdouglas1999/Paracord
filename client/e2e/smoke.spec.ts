@@ -649,17 +649,16 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   await page.keyboard.press('Enter');
   await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}/channels/${voiceChannelId}`));
 
-  // Guild Home = Rooms view — the presence-first map that replaces the old
-  // channel column (layout-spec §1/§2). Voice/stage channels render as room
-  // cards; text channels group below; the server-settings entry lives in the
-  // guild-home header.
+  // Guild Home = the Lobby, the building seen from the street
+  // (lantern-stage-spec §7.3). Voice/stage channels render as room cards in the
+  // "Rooms" grid; text rooms are rows below; the space-settings entry lives in
+  // the Lobby header.
   await page.goto(`/app/guilds/${guildId}`);
   await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}$`));
   await expect(page.getByRole('heading', { name: /QA Guild/i })).toBeVisible();
-  // Quiet guild → the section reserves "Live rooms" for occupied rooms and
-  // reads "Rooms" while every voice room is empty (layout-spec §1.2).
-  await expect(page.getByRole('region', { name: 'Rooms' })).toBeVisible();
-  const textChannelsRegion = page.getByRole('region', { name: 'Text channels' });
+  // `exact` because "Text rooms" is the landmark right below it.
+  await expect(page.getByRole('region', { name: 'Rooms', exact: true })).toBeVisible();
+  const textChannelsRegion = page.getByRole('region', { name: 'Text rooms' });
   await expect(textChannelsRegion).toBeVisible();
 
   // Space settings now open from the guild-home header (MANAGE_GUILD-gated),
@@ -670,7 +669,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   await page.keyboard.press('Escape');
   await expect(serverSettingsDialog).toBeHidden();
 
-  // Text-channel navigation + keyboard activation from the Rooms view.
+  // Text-room navigation + keyboard activation from the Lobby.
   const textChannelButton = textChannelsRegion.getByRole('button', {
     name: /qa-general-channel/i,
   });

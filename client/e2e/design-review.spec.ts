@@ -951,13 +951,15 @@ test('capture the design-review screens', async ({ page }) => {
     };
 
     if (!process.env.PARACORD_WP6_NO_RT)
-    await page.route('**/api/v2/rt/events**', (route) =>
-      route.fulfill({
+    await page.route('**/api/v2/rt/events**', (route) => {
+      const body = realtimeBody();
+      console.log('[rt] serving', route.request().url(), body.length, 'bytes');
+      return route.fulfill({
         status: 200,
         headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
-        body: realtimeBody(),
-      }),
-    );
+        body,
+      });
+    });
 
     // Scenario-specific REST, added last so it wins over the base handler.
     await page.route('**/api/v1/**', async (route) => {
@@ -1063,6 +1065,20 @@ test('capture the design-review screens', async ({ page }) => {
       return route.fallback();
     });
 
+    await page.addInitScript(() => {
+      const Orig = window.EventSource;
+      // @ts-expect-error debug shim
+      window.EventSource = class extends Orig {
+        constructor(...args: unknown[]) {
+          // @ts-expect-error debug shim
+          super(...args);
+          this.addEventListener('open', () => console.log('[es] open'));
+          this.addEventListener('error', () => console.log('[es] error'));
+          this.addEventListener('gateway', (e) => console.log('[es]', (e as MessageEvent<string>).data.slice(0, 140)));
+        }
+      };
+    });
+
     // The very first load of a fresh profile learns the database-history epoch
     // from the first response header. Learning it EXPIRES every operation
     // captured before it was known — including the one-shot guild fetch, which
@@ -1076,7 +1092,7 @@ test('capture the design-review screens', async ({ page }) => {
     ] as const) {
       scenario = when as Scenario;
       await page.clock.setFixedTime(new Date(clock));
-      page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') console.log('[browser]', m.text()); });
+      page.on('console', (m) => console.log('[browser]', m.type(), m.text().slice(0, 400)));
       page.on('requestfailed', (r) => console.log('[failed]', r.url(), r.failure()?.errorText));
       page.on('response', async (r) => {
         if (r.url().includes('/users/@me/guilds')) {

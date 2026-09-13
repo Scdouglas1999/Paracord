@@ -1,3 +1,8 @@
+/**
+ * @deprecated Emerald Commons occupant stack. The Lantern Stage equivalent is
+ * `components/light/AvatarStack.tsx` (WP1). Kept only for the deprecated
+ * `RoomCard` above it in `pages/HomePage.tsx`; WP6 retires both.
+ */
 import { MicOff } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { safeStoredImageDataUrl } from '../../lib/security';

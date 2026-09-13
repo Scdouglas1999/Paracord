@@ -1,3 +1,10 @@
+/**
+ * @deprecated Emerald Commons room card. WP4 replaced the Lobby's card with
+ * `components/rooms/lobby/RoomCard.tsx` (docs/lantern-stage-spec.md §7.3, §8);
+ * this file survives only because `pages/HomePage.tsx` still renders it, and
+ * HomePage belongs to WP6 (§7.5), which retires it along with `OccupantStack`.
+ * Do not build anything new on it.
+ */
 import { useNavigate } from 'react-router';
 import { Hash, Play, Radio, Users, Volume2 } from 'lucide-react';
 import { useVoice } from '../../hooks/useVoice';

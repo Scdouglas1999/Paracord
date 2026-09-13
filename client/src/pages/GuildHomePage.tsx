@@ -1,12 +1,14 @@
 import { useParams } from 'react-router';
-import { RoomsView } from '../components/rooms/RoomsView';
+import { Lobby } from '../components/rooms/lobby';
 
 /**
- * Route element for `guilds/:guildId` — the guild's home is the presence-first
- * Rooms view (formerly the server hub). All content lives in RoomsView so
- * the page is a thin router adapter.
+ * Route element for `guilds/:guildId` — the building's front door.
+ *
+ * The guild's home is the **Lobby** (docs/lantern-stage-spec.md §7.3): the
+ * building seen from the street, with a window for every room. All of it lives
+ * in `components/rooms/lobby/`, so this page stays a thin router adapter.
  */
 export function GuildHomePage() {
   const { guildId } = useParams();
-  return <RoomsView guildId={guildId || ''} />;
+  return <Lobby guildId={guildId || ''} />;
 }
