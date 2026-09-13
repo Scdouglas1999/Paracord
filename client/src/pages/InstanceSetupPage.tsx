@@ -39,6 +39,27 @@ export function passwordRulesMismatch(requirements: PasswordRequirements | null)
 }
 
 /**
+ * What went wrong with a claim, said in words an operator can act on.
+ *
+ * `POST /setup/claim` answers a token that does not match with a bare 401, and
+ * `ApiError::Unauthorized` carries no message — so `extractApiError` yields the
+ * raw wire string "unauthorized". Rendering that as the error on the very first
+ * screen of the product tells the operator nothing and reads like a crash.
+ * A 401 from this endpoint has exactly one cause, so name it. Every other
+ * status already carries an operator-authored sentence from the server
+ * (no token provisioned, already claimed, username taken, password rules) and
+ * is passed through untouched.
+ */
+function claimFailureMessage(err: unknown): string {
+  const status = (err as { response?: { status?: number } })?.response?.status;
+  const message = extractApiError(err);
+  if (status === 401 || message === 'unauthorized') {
+    return 'That claim token is not the one this server printed. Copy it again from the server’s terminal or from first-owner-claim.txt — it is case-sensitive, and whitespace counts.';
+  }
+  return message || 'Setup failed. Check the claim token and try again.';
+}
+
+/**
  * Numbered section, so the four things being asked for read as steps.
  *
  * A well inside the page's one plate (spec §4): depth is the inset shadow, not
@@ -241,9 +262,7 @@ export function InstanceSetupPage() {
       await useAuthStore.getState().fetchUser();
       navigate(`/app/guilds/${data.space.id}`, { replace: true });
     } catch (err: unknown) {
-      rejectWith(
-        extractApiError(err) || 'Setup failed. Check the claim token and try again.',
-      );
+      rejectWith(claimFailureMessage(err));
       setLoading(false);
     }
   };

@@ -244,17 +244,44 @@ describe('InstanceSetupPage', () => {
     expect(await screen.findByText('Space shell')).toBeInTheDocument();
   });
 
-  it('surfaces a rejected token and keeps the form usable for a retry', async () => {
+  it('says a rejected token is the wrong token, not "unauthorized", and keeps the form usable', async () => {
     const user = userEvent.setup();
-    mockClaimInstance.mockRejectedValue(new Error('unauthorized'));
+    // What the server actually answers: a bare 401 whose body message is the
+    // wire string "unauthorized". Putting that on screen told the operator
+    // nothing about the one thing that went wrong.
+    const rejection = Object.assign(new Error('unauthorized'), {
+      response: { status: 401, data: { message: 'unauthorized' } },
+    });
+    mockClaimInstance.mockRejectedValue(rejection);
 
     renderPage();
     await screen.findByLabelText(/Claim token/);
     await fillClaimForm(user);
     await user.click(screen.getByRole('button', { name: 'Claim this server' }));
 
-    expect(await screen.findByText('unauthorized')).toBeInTheDocument();
+    expect(
+      await screen.findByText(/not the one this server printed/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('unauthorized')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Claim this server' })).toBeEnabled();
+  });
+
+  it('passes through the operator-authored message the server sends for other failures', async () => {
+    const user = userEvent.setup();
+    mockClaimInstance.mockRejectedValue(
+      Object.assign(new Error('conflict: This server has already been set up.'), {
+        response: { status: 409, data: { message: 'conflict: This server has already been set up.' } },
+      }),
+    );
+
+    renderPage();
+    await screen.findByLabelText(/Claim token/);
+    await fillClaimForm(user);
+    await user.click(screen.getByRole('button', { name: 'Claim this server' }));
+
+    expect(
+      await screen.findByText(/This server has already been set up/),
+    ).toBeInTheDocument();
   });
 });
 
