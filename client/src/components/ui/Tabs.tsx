@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useIndicator } from '../../lib/motion';
 import { cn } from '../../lib/utils';
 
 export interface TabItem<T extends string = string> {
@@ -33,8 +34,11 @@ export interface TabsProps<T extends string = string>
  * (spec §3 control heights, §6.8 no uppercase, §9 focus + roving keyboard).
  *
  * Selection is a **raised** surface inside a well, exactly like a selected row
- * anywhere else — never an accent bar, never a light token. Arrow keys move
- * between tabs; Home/End jump to the ends (WAI-ARIA tabs pattern).
+ * anywhere else — never an accent bar on the segmented pill, never a light
+ * token. That surface is ONE element the engine slides between the tabs on the
+ * spring-settle (`useIndicator`): the mark moves, the pill travels to it — it
+ * never jumps (§5.1). Arrow keys move between tabs; Home/End jump to the ends
+ * (WAI-ARIA tabs pattern).
  *
  * The panel each tab controls stays the caller's job: give the panel
  * `role="tabpanel"` and `aria-labelledby` the tab's id if you need the full
@@ -52,6 +56,12 @@ export function Tabs<T extends string = string>({
   ...props
 }: TabsProps<T>) {
   const refs = React.useRef(new Map<T, HTMLButtonElement | null>());
+  const listRef = React.useRef<HTMLDivElement>(null);
+  const indicatorRef = useIndicator(
+    listRef,
+    [value, variant, size, fill, items.length],
+    variant === 'underline' ? { thickness: 2, insetX: 8 } : {},
+  );
 
   const move = (from: number, delta: number) => {
     const enabled = items.filter((i) => !i.disabled);
@@ -88,10 +98,11 @@ export function Tabs<T extends string = string>({
 
   return (
     <div
+      ref={listRef}
       role="tablist"
       aria-label={label}
       className={cn(
-        'flex items-center',
+        'relative flex items-center',
         variant === 'segmented'
           ? 'pc-well gap-1 p-1'
           : 'gap-1 border-b border-border-subtle',
@@ -100,6 +111,19 @@ export function Tabs<T extends string = string>({
       )}
       {...props}
     >
+      {/* The ONE selected surface — the engine slides it between the marked
+          tab's bounds. Segmented gets the raised pill; underline gets the 2px
+          accent bar. Buttons stay `relative` so their labels paint above it. */}
+      <span
+        ref={indicatorRef}
+        aria-hidden
+        className={cn(
+          'pointer-events-none absolute left-0 top-0 opacity-0',
+          variant === 'segmented'
+            ? 'rounded-[var(--radius-chip)] bg-bg-raised shadow-[var(--shadow-raised)]'
+            : 'rounded-[var(--radius-full)] bg-accent-primary',
+        )}
+      />
       {items.map((item, index) => {
         const selected = item.value === value;
         return (
@@ -111,12 +135,13 @@ export function Tabs<T extends string = string>({
             type="button"
             role="tab"
             aria-selected={selected}
+            data-indicator-target={selected ? '' : undefined}
             disabled={item.disabled}
             tabIndex={selected ? 0 : -1}
             onClick={() => onChange(item.value)}
             onKeyDown={(event) => onKeyDown(event, index)}
             className={cn(
-              'pc-focusable inline-flex shrink-0 select-none items-center justify-center gap-2 whitespace-nowrap',
+              'pc-focusable relative inline-flex shrink-0 select-none items-center justify-center gap-2 whitespace-nowrap',
               'text-label transition-[background-color,color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
               'disabled:pointer-events-none disabled:opacity-60',
               size === 'sm' ? 'h-[var(--h-control-sm)] px-2.5' : 'h-[var(--h-control)] px-3',
@@ -125,13 +150,13 @@ export function Tabs<T extends string = string>({
                 ? cn(
                     'rounded-[var(--radius-chip)]',
                     selected
-                      ? 'bg-bg-raised font-semibold text-text-primary shadow-[var(--shadow-raised)]'
+                      ? 'font-semibold text-text-primary'
                       : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
                   )
                 : cn(
-                    'relative rounded-t-[var(--radius-chip)] px-3',
+                    'rounded-t-[var(--radius-chip)] px-3',
                     selected
-                      ? 'font-semibold text-text-primary after:absolute after:inset-x-2 after:-bottom-px after:h-[2px] after:rounded-[var(--radius-full)] after:bg-accent-primary after:content-[""]'
+                      ? 'font-semibold text-text-primary'
                       : 'text-text-secondary hover:text-text-primary',
                   ),
             )}

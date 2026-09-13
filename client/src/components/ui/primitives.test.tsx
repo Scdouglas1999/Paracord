@@ -394,7 +394,21 @@ describe('Tabs', () => {
 
   it('selection is a raised surface, never an accent bar', () => {
     render(<Tabs items={TAB_ITEMS} value="general" onChange={() => {}} label="Space settings" />);
-    expect(screen.getByRole('tab', { name: 'General' })).toHaveClass('bg-bg-raised');
+    // The raised surface is ONE element the engine slides between the tabs
+    // (§5.1 "the indicator slides, never jumps"), so it is the indicator that
+    // carries the raised recipe — and no tab carries a fill of its own.
+    const list = screen.getByRole('tablist', { name: 'Space settings' });
+    const indicator = list.querySelector('[aria-hidden="true"]');
+    expect(indicator).toHaveClass('bg-bg-raised');
+    expect(screen.getByRole('tab', { name: 'General' })).not.toHaveClass('bg-accent-primary');
+  });
+
+  it('the sliding indicator is marked on the selected tab only', () => {
+    render(<Tabs items={TAB_ITEMS} value="roles" onChange={() => {}} label="Space settings" />);
+    expect(screen.getByRole('tab', { name: /Roles/ })).toHaveAttribute('data-indicator-target');
+    expect(screen.getByRole('tab', { name: 'General' })).not.toHaveAttribute(
+      'data-indicator-target',
+    );
   });
 
   it('moves between tabs with the arrow keys (WAI-ARIA tabs pattern)', async () => {
