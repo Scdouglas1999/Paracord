@@ -137,6 +137,14 @@ function UserProfileCard({
     ? Math.max(8, position.x - popupWidth - 12)
     : Math.min(position.x + 12, window.innerWidth - popupWidth - 8);
   const top = Math.max(8, Math.min(position.y, window.innerHeight - estimatedHeight - 8));
+  // `top` is clamped against an ESTIMATE of the card's height, so a card that
+  // outgrows it — every profile carrying an identity fingerprint does — used to
+  // hang past the bottom of the window with its actions (Message, Add friend,
+  // Block, Report) off-screen and unreachable: the card's own max-height was an
+  // absolute `100dvh - 1rem` that ignored where the card actually starts. Cap it
+  // by the room left BELOW `top` instead, so the overflow scrolls inside the
+  // card rather than off the screen.
+  const maxHeight = `calc(100dvh - ${Math.round(top) + 8}px)`;
   const [note, setNote] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
   const [showReportDialog, setShowReportDialog] = useState(false);
@@ -475,7 +483,7 @@ function UserProfileCard({
         style={{
           left,
           top,
-          maxHeight: 'calc(100dvh - 1rem)',
+          maxHeight,
           overflowY: 'auto',
         }}
         {...scenery}

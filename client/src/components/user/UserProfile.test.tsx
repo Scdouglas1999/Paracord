@@ -157,6 +157,23 @@ describe('UserProfilePopup action feedback', () => {
     );
   });
 
+  // The card's own height cap used to be an absolute `100dvh - 1rem`, which
+  // ignores where the card starts: a profile taller than the layout estimate
+  // (every enrolled account's, once the identity fingerprint section renders)
+  // hung past the bottom of the window with Block and Report unreachable.
+  it('caps its height by the room left below where it opens', () => {
+    const { container } = render(
+      <MemoryRouter>
+        <UserProfilePopup user={targetUser} position={{ x: 400, y: 500 }} onClose={vi.fn()} />
+      </MemoryRouter>,
+    );
+
+    const card = container.querySelector('.pc-drawer-in-right') as HTMLElement;
+    const top = Number.parseFloat(card.style.top);
+    expect(card.style.maxHeight).toBe(`calc(100dvh - ${Math.round(top) + 8}px)`);
+    expect(card.style.overflowY).toBe('auto');
+  });
+
   it('shows API detail when starting a DM fails', async () => {
     const user = userEvent.setup();
     vi.mocked(dmApi.create).mockRejectedValue(apiError('Direct messages are disabled.'));
