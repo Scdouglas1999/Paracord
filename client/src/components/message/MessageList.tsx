@@ -2672,10 +2672,13 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                     </AttachmentFrame>
                   );
                 }
+                // `[&>button]:mt-0`: see AttachmentFrame — layout.css's
+                // vertical-rhythm fallback would otherwise push Download 1rem
+                // down, out of line with the rest of this row.
                 return (
                   <div
                     key={att.id}
-                    className="mt-2 inline-flex max-w-full flex-wrap items-center gap-2 rounded-[var(--radius-well)] bg-bg-well px-3 py-2 text-meta shadow-[var(--shadow-chip)]"
+                    className="mt-2 inline-flex max-w-full flex-wrap items-center gap-2 rounded-[var(--radius-well)] bg-bg-well px-3 py-2 text-meta shadow-[var(--shadow-chip)] [&>button]:mt-0"
                   >
                     {federatedBadge}
                     <button
