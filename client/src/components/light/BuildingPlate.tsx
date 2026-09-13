@@ -3,6 +3,7 @@ import * as React from 'react';
 import { Lamp, Plate } from '../ui';
 import { cn } from '../../lib/utils';
 import type { BuildingLight } from '../../lib/attention/light';
+import { LAMP_MARK, PLATE_MARK } from '../../lib/motion';
 import { WindowMap } from './WindowMap';
 
 export interface BuildingPlateProps extends Omit<React.HTMLAttributes<HTMLElement>, 'children'> {
@@ -33,6 +34,9 @@ export const BuildingPlate = React.forwardRef<HTMLElement, BuildingPlateProps>(
         ref={ref}
         bare
         lit={lit}
+        // A plate settles when the street first renders, and its lamp fades in
+        // behind its own first lit window (§5.1).
+        {...{ [PLATE_MARK]: '' }}
         className={cn(
           'relative flex min-w-0 items-center gap-3 overflow-hidden rounded-[var(--radius-card)] px-3 py-2.5',
           !lit && 'shadow-[var(--shadow-tile)]',
@@ -40,7 +44,7 @@ export const BuildingPlate = React.forwardRef<HTMLElement, BuildingPlateProps>(
         )}
         {...props}
       >
-        {lit && <Lamp />}
+        {lit && <Lamp {...{ [LAMP_MARK]: '' }} />}
         {children}
         <WindowMap
           windows={building.windows}

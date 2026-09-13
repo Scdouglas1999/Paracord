@@ -33,7 +33,7 @@ import { resolveResourceUrl } from '../../lib/config/apiBaseUrl';
 import { getDownloadTicket } from '../../lib/downloadTicket';
 import { writeClipboardText } from '../../lib/clipboard';
 import { SkeletonMessage } from '../ui/Skeleton';
-import { fadeIn, ms, onMotion, settleIn } from '../../lib/motion';
+import { fadeIn, ms, onMotion, settleIn, walkIntoRoom } from '../../lib/motion';
 import { parseMarkdown } from '../../lib/markdown';
 import { getHighestRoleColor } from '../../lib/colors';
 import { formatFileSize, formatTimestamp, relativeTime } from '../../lib/formatters';
@@ -702,10 +702,18 @@ function OwnedMessageList({
   // from WP1 — this file never decides who is lit.
   const authorLight = useAuthorLights(activeGuildId, channelServerId);
   const roomLitEvents = useRoomLitEvents(activeGuildId);
+  // §5.1: the inline event is a door like any other, so walking through it is
+  // the same journey — the line you clicked becomes the Stage's dominant tile.
   const joinLitRoom = useCallback(
-    (event: RoomLitEvent) => {
-      void useVoiceStore.getState().joinChannel(event.channelId, event.guildId ?? undefined);
-      if (event.guildId) navigate(`/app/guilds/${event.guildId}/channels/${event.channelId}`);
+    (event: RoomLitEvent, origin?: Element | null) => {
+      void walkIntoRoom({
+        channelId: event.channelId,
+        origin,
+        go: () => {
+          void useVoiceStore.getState().joinChannel(event.channelId, event.guildId ?? undefined);
+          if (event.guildId) navigate(`/app/guilds/${event.guildId}/channels/${event.channelId}`);
+        },
+      });
     },
     [navigate],
   );

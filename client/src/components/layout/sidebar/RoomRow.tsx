@@ -5,6 +5,7 @@ import { Chip, NavRow } from '../../ui';
 import { LightCaption, RoomThumbnail, roomCaptionFor } from '../../light';
 import { useRoomThumbnail } from '../../../hooks/useRoomThumbnail';
 import type { RoomLight } from '../../../lib/attention/light';
+import { LIT_MARK, WINDOW_MARK, roomSharedName } from '../../../lib/motion';
 
 /**
  * The three room rows of the Buildings column (docs/lantern-stage-spec.md §7.1).
@@ -36,7 +37,8 @@ export interface RoomRowProps {
   navIndex: number;
   /** True when this row is the column's single Tab stop. */
   tabStop: boolean;
-  onOpen: (room: RoomLight) => void;
+  /** The row hands back the element clicked, as the shared element's origin. */
+  onOpen: (room: RoomLight, origin?: Element | null) => void;
 }
 
 /** The 8px window dot that stands in for the room's window on a row. */
@@ -44,6 +46,8 @@ function WindowDot({ room }: { room: RoomLight }) {
   return (
     <span
       aria-hidden
+      {...{ [WINDOW_MARK]: room.channelId }}
+      {...(room.lit ? { [LIT_MARK]: '' } : null)}
       className={cn(
         'pc-window',
         room.level === 'white' && 'is-talking',
@@ -116,11 +120,12 @@ export const QuietRoomRow = memo(function QuietRoomRow({
   return (
     <NavRow
       {...rowProps({ navIndex, tabStop, active })}
+      data-motion-shared={roomSharedName(room.channelId)}
       active={active}
       display={room.kind === 'voice'}
       icon={<WindowDot room={room} />}
       trailing={<RoomTrailing room={room} attention={attention} />}
-      onClick={() => onOpen(room)}
+      onClick={(event) => onOpen(room, event.currentTarget.closest('[data-motion-shared]'))}
       className={cn('group', unread && 'text-text-primary')}
     >
       {room.name}
@@ -149,7 +154,8 @@ export const LiveRoomRowView = memo(function LiveRoomRowView({
     <button
       type="button"
       {...rowProps({ navIndex, tabStop, active })}
-      onClick={() => onOpen(room)}
+      data-motion-shared={roomSharedName(room.channelId)}
+      onClick={(event) => onOpen(room, event.currentTarget)}
       className={cn(
         'pc-focusable flex w-full flex-col items-stretch gap-2 p-2 text-left',
         'rounded-[var(--radius-control)]',

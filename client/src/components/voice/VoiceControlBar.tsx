@@ -5,6 +5,7 @@ import { useStream } from '../../hooks/useStream';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { useAuthStore } from '../../stores/authStore';
 import { cn } from '../../lib/utils';
+import { walkOutOfRoom } from '../../lib/motion';
 import { IconButton } from '../ui';
 import { Tooltip } from '../ui/Tooltip';
 import { StageControlBar } from './stage';
@@ -86,6 +87,7 @@ export function VoiceControlBar({
         toggleDeaf,
         toggleVideo,
         leaveChannel,
+        channelId,
     } = useVoice();
     const { selfStream, startStream, stopStream } = useStream();
     const streamAudioWarning = useVoiceStore((s) => s.streamAudioWarning);
@@ -216,7 +218,9 @@ export function VoiceControlBar({
         {/* The Stage lays the bar out in flow and centres it (§7.2); the
             controls are 46px (50 on a phone) on the 13px stage radius, mic-on
             is white light and leave is danger. */}
-        <StageControlBar>
+        {/* §5.1: the control bar is chrome — it rises 80ms behind the tile
+            you walked into, never with it. */}
+        <StageControlBar data-motion-chrome="">
             {listenOnly ? (
                 <Tooltip
                     content={requestToSpeakPending ? 'Cancel request to speak' : 'Ask the stage moderators to invite you'}
@@ -457,7 +461,17 @@ export function VoiceControlBar({
                     label="Disconnect from voice"
                     size="stage"
                     tone="danger"
-                    onClick={() => void leaveChannel()}
+                    // §5.1: leaving reverses the journey. There is no on-air
+                    // pill to fold into when you are leaving the room
+                    // altogether, so the tile dims out with the page rather
+                    // than travelling to a destination that is not there.
+                    onClick={() => {
+                        if (!channelId) {
+                            void leaveChannel();
+                            return;
+                        }
+                        void walkOutOfRoom({ channelId, go: () => void leaveChannel() });
+                    }}
                     className="w-[72px] sm:w-16"
                 >
                     <PhoneOff size={20} />

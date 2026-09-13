@@ -10,6 +10,7 @@ import { VoiceConnectionCheckButton } from '../../components/voice/VoiceConnecti
 import { getIdentityColor } from '../../lib/colors';
 import { cn } from '../../lib/utils';
 import { displayName } from '../../lib/displayName';
+import { RECEDE_MARK, roomSharedName, walkIntoRoom } from '../../lib/motion';
 
 interface VoiceLobbyProps {
   channelName: string;
@@ -161,11 +162,27 @@ export function VoiceLobby({
     </SectionLabel>
   );
 
+  /**
+   * §5.1: this plate is the room seen from outside, and it becomes the Stage's
+   * dominant tile when you walk in. The route does not change — you are already
+   * on the room's page — so the journey is the plate growing into the Stage the
+   * join renders, and everything else on the plate recedes behind it.
+   */
+  const walkIn = (origin: Element | null) => {
+    if (!channelId) {
+      onJoin();
+      return;
+    }
+    void walkIntoRoom({ channelId, origin, go: onJoin });
+  };
+
   return (
     <Plate
       as="section"
       bare
       lit={lit}
+      data-motion-shared={channelId ? roomSharedName(channelId) : undefined}
+      {...{ [RECEDE_MARK]: '' }}
       className="relative m-[var(--gutter)] flex flex-col gap-4 overflow-hidden p-5"
     >
       {/* The room, and the door into it. */}
@@ -202,7 +219,7 @@ export function VoiceLobby({
               variant={lit ? 'light' : 'primary'}
               loading={voiceJoinPending}
               disabled={voiceJoinPending || !channelId || !guildId || (isStage && !stageInstance)}
-              onClick={onJoin}
+              onClick={(event) => walkIn(event.currentTarget.closest('[data-motion-shared]'))}
             >
               {!voiceJoinPending && <Headphones size={16} className="mr-1.5" />}
               {voiceJoinPending ? `Joining ${channelName}` : isStage ? 'Join the stage' : 'Join the room'}
@@ -307,7 +324,12 @@ export function VoiceLobby({
         </Well>
       ) : (
         <Well bare className="flex items-center gap-3 px-4 py-3.5">
-          <IconButton label={isStage ? `Open the stage ${channelName}` : `Join ${channelName}`} size="md" tone="raised" onClick={onJoin}>
+          <IconButton
+            label={isStage ? `Open the stage ${channelName}` : `Join ${channelName}`}
+            size="md"
+            tone="raised"
+            onClick={(event) => walkIn(event.currentTarget.closest('[data-motion-shared]'))}
+          >
             {isStage ? <Mic size={16} /> : <Headphones size={16} />}
           </IconButton>
           <p className="text-label text-text-secondary">

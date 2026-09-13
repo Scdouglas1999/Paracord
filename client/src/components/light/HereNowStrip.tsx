@@ -26,6 +26,8 @@ export interface HereNowStripProps extends Omit<React.HTMLAttributes<HTMLDivElem
    * equivalent (§9), so it still has to say the count in words.
    */
   caption?: React.ReactNode;
+  /** The room these faces are in — a motion mark, so a rim knows its window. */
+  room?: string | null;
 }
 
 /**
@@ -38,7 +40,10 @@ export interface HereNowStripProps extends Omit<React.HTMLAttributes<HTMLDivElem
  * member list anywhere.
  */
 export const HereNowStrip = React.forwardRef<HTMLDivElement, HereNowStripProps>(
-  function HereNowStrip({ hereNow, context, everyone, size = 24, caption, className, ...props }, ref) {
+  function HereNowStrip(
+    { hereNow, context, everyone, size = 24, caption, room = null, className, ...props },
+    ref,
+  ) {
     const anchor = useRef<HTMLButtonElement>(null);
     const [open, setOpen] = useState(false);
     const people = everyone && everyone.length > 0 ? everyone : hereNow.people;
@@ -63,6 +68,7 @@ export const HereNowStrip = React.forwardRef<HTMLDivElement, HereNowStripProps>(
               size={size}
               max={HERE_NOW_MAX_FACES}
               context={context}
+              room={room}
             />
             <span className="min-w-0 truncate text-label text-text-body">
               {caption ?? (

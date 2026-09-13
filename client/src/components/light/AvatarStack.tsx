@@ -2,6 +2,7 @@ import * as React from 'react';
 
 import { cn } from '../../lib/utils';
 import { nameList, type PersonLight } from '../../lib/attention/light';
+import { STRIP_MARK } from '../../lib/motion';
 import { LitAvatar } from './LitAvatar';
 
 export interface AvatarStackProps extends Omit<React.HTMLAttributes<HTMLSpanElement>, 'children'> {
@@ -14,6 +15,8 @@ export interface AvatarStackProps extends Omit<React.HTMLAttributes<HTMLSpanElem
   overlap?: number;
   /** What the group is — "in Shop floor", "reading build-log". */
   context?: string;
+  /** The room these faces are in, when the surface knows it — a motion mark. */
+  room?: string | null;
 }
 
 /**
@@ -27,7 +30,7 @@ export interface AvatarStackProps extends Omit<React.HTMLAttributes<HTMLSpanElem
  */
 export const AvatarStack = React.forwardRef<HTMLSpanElement, AvatarStackProps>(
   function AvatarStack(
-    { people, size = 24, max = 5, overlap, context, className, ...props },
+    { people, size = 24, max = 5, overlap, context, room = null, className, ...props },
     ref,
   ) {
     const shown = people.slice(0, max);
@@ -38,12 +41,19 @@ export const AvatarStack = React.forwardRef<HTMLSpanElement, AvatarStackProps>(
       : '';
 
     return (
-      <span ref={ref} className={cn('inline-flex shrink-0 items-center', className)} {...props}>
+      <span
+        ref={ref}
+        // A stack is where a face springs in from and slides out of (§5.1).
+        {...{ [STRIP_MARK]: '' }}
+        className={cn('inline-flex shrink-0 items-center', className)}
+        {...props}
+      >
         {shown.map((person, index) => (
           <LitAvatar
             key={person.userId}
             person={person}
             size={size}
+            room={room}
             hideLabel
             style={index === 0 ? undefined : { marginLeft: -step }}
           />

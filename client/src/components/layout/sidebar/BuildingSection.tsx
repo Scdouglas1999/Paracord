@@ -36,7 +36,7 @@ export interface BuildingSectionProps {
   expanded: boolean;
   onToggleRooms: (building: BuildingLight) => void;
   onOpenLobby: (building: BuildingLight) => void;
-  onOpenRoom: (room: RoomLight) => void;
+  onOpenRoom: (room: RoomLight, origin?: Element | null) => void;
   onContextMenu?: (event: MouseEvent, building: BuildingLight) => void;
   /** Flat roving-tabindex ordinal of this section's first row (the plate). */
   navIndexStart: number;

@@ -5,6 +5,7 @@ import { Button } from '../../ui';
 import { AvatarStack, RoomDuration, RoomThumbnail } from '../../light';
 import { lastLitCaption, type RoomLight } from '../../../lib/attention/light';
 import type { RoomFrame } from '../../../lib/media/roomFrameTap';
+import { roomSharedName } from '../../../lib/motion';
 import { cn } from '../../../lib/utils';
 import { OPEN_A_NEW_ROOM, TURN_THE_LIGHTS_ON, speakingCaption } from './lobbyCaptions';
 
@@ -16,9 +17,15 @@ export interface RoomCardProps {
    * Open the room's own surface — watch the share, step onto the stage. Only a
    * lit room offers it: there is nothing to look at in a dark one.
    */
-  onEnter?: () => void;
-  /** Turn the lights on: join the call. */
-  onJoin: () => void;
+  onEnter?: (origin?: Element | null) => void;
+  /**
+   * Turn the lights on: join the call.
+   *
+   * The card hands back the element that was clicked, because §5.1's shared
+   * element needs an origin and a room's name is on its card, its sidebar row
+   * and the inline "lit up" event at the same time. Only the click knows which.
+   */
+  onJoin: (origin?: Element | null) => void;
   /** "Join" in a lit room, "Open" in a dark one, "Enter" for a stage. */
   joinLabel?: string;
   /** Injected clock, so "last lit 2 h ago" is testable. */
@@ -53,6 +60,9 @@ export const RoomCard = React.forwardRef<HTMLElement, RoomCardProps>(function Ro
   return (
     <article
       ref={ref}
+      // §5.1: the thing you click becomes the thing you look at. This card and
+      // the Stage's dominant tile travel under the same name.
+      data-motion-shared={roomSharedName(room.channelId)}
       className={cn(
         'relative flex flex-col overflow-hidden rounded-[var(--radius-plate)] bg-bg-well',
         room.lit
@@ -63,7 +73,7 @@ export const RoomCard = React.forwardRef<HTMLElement, RoomCardProps>(function Ro
       {room.lit && onEnter ? (
         <button
           type="button"
-          onClick={onEnter}
+          onClick={(event) => onEnter(originOf(event.currentTarget))}
           aria-label={`Look into ${room.name}`}
           className="pc-focusable-composed block w-full text-left"
         >
@@ -121,7 +131,7 @@ export const RoomCard = React.forwardRef<HTMLElement, RoomCardProps>(function Ro
               <Button
                 variant="light"
                 size="sm"
-                onClick={onJoin}
+                onClick={(event) => onJoin(originOf(event.currentTarget))}
                 className="shrink-0"
                 aria-label={`${label} ${room.name}`}
               >
@@ -136,7 +146,7 @@ export const RoomCard = React.forwardRef<HTMLElement, RoomCardProps>(function Ro
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={onJoin}
+                onClick={(event) => onJoin(originOf(event.currentTarget))}
                 className="shrink-0 shadow-[inset_0_0_0_1px_var(--border-strong)]"
                 aria-label={`${label} ${room.name}`}
               >
@@ -149,6 +159,11 @@ export const RoomCard = React.forwardRef<HTMLElement, RoomCardProps>(function Ro
     </article>
   );
 });
+
+/** The card a control sits in — the thing that travels (§5.1). */
+function originOf(el: Element): Element | null {
+  return el.closest('[data-motion-shared]');
+}
 
 export interface AddRoomTileProps {
   onClick: () => void;

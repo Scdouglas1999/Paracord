@@ -2,12 +2,13 @@ import * as React from 'react';
 
 import { cn } from '../../lib/utils';
 import { callDuration } from '../../lib/attention/light';
+import { roomSharedName } from '../../lib/motion';
 import type { OnAir } from '../../hooks/useLights';
 
 export interface OnAirPillProps extends Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, 'children'> {
   onAir: OnAir;
-  /** Return to the Stage. */
-  onReturn?: () => void;
+  /** Return to the Stage. The pill hands itself over as the shared element. */
+  onReturn?: (origin?: Element | null) => void;
 }
 
 /**
@@ -27,9 +28,12 @@ export const OnAirPill = React.forwardRef<HTMLButtonElement, OnAirPillProps>(fun
     <button
       ref={ref}
       type="button"
+      // Leaving the Stage folds the dominant tile into this pill, and tapping
+      // it unfolds it again — the same shared element, both ways (§5.1).
+      data-motion-shared={onAir.room ? roomSharedName(onAir.room.channelId) : undefined}
       onClick={(event) => {
         onClick?.(event);
-        if (!event.defaultPrevented) onReturn?.();
+        if (!event.defaultPrevented) onReturn?.(event.currentTarget);
       }}
       className={cn(
         'pc-focusable inline-flex h-[var(--h-control)] min-w-0 shrink-0 items-center gap-2',

@@ -26,6 +26,18 @@ export interface StageLayoutProps extends Omit<React.HTMLAttributes<HTMLDivEleme
   ribbon?: React.ReactNode;
   /** 390×844 arrangement: share on top, 2×2 speakers, controls, chat sheet. */
   phone?: boolean;
+  /**
+   * The shared-element name for the room this Stage is
+   * (`lib/motion` → `roomSharedName`).
+   *
+   * §5.1: the card you clicked in the Lobby becomes the thing you look at. The
+   * thing you look at is this region — everything between the header and the
+   * controls — so the name goes on the region rather than on whatever happens
+   * to be inside it, which is a screen share on one call and four faces on the
+   * next. The chrome around it is marked `data-motion-chrome` by the Stage and
+   * rises 80ms behind the tile landing.
+   */
+  sharedName?: string | null;
 }
 
 /**
@@ -40,7 +52,18 @@ export interface StageLayoutProps extends Omit<React.HTMLAttributes<HTMLDivEleme
  */
 export const StageLayout = React.forwardRef<HTMLDivElement, StageLayoutProps>(
   function StageLayout(
-    { header, dominant, speakers, notice, controls, ribbon, phone = false, className, ...props },
+    {
+      header,
+      dominant,
+      speakers,
+      notice,
+      controls,
+      ribbon,
+      phone = false,
+      sharedName = null,
+      className,
+      ...props
+    },
     ref,
   ) {
     if (phone) {
@@ -57,11 +80,22 @@ export const StageLayout = React.forwardRef<HTMLDivElement, StageLayoutProps>(
           {header}
           {notice}
           {dominant && (
-            <div className="shrink-0" style={{ height: PHONE_DOMINANT_HEIGHT }}>
+            <div
+              className="shrink-0"
+              data-motion-shared={sharedName ?? undefined}
+              style={{ height: PHONE_DOMINANT_HEIGHT }}
+            >
               {dominant}
             </div>
           )}
-          {speakers && <div className={cn(dominant ? 'shrink-0' : 'min-h-0 flex-1')}>{speakers}</div>}
+          {speakers && (
+            <div
+              className={cn(dominant ? 'shrink-0' : 'min-h-0 flex-1')}
+              data-motion-shared={dominant ? undefined : (sharedName ?? undefined)}
+            >
+              {speakers}
+            </div>
+          )}
           {controls && <div className="shrink-0 pb-0.5 pt-1.5">{controls}</div>}
           {ribbon}
         </div>
@@ -85,6 +119,7 @@ export const StageLayout = React.forwardRef<HTMLDivElement, StageLayoutProps>(
           {notice}
           <div
             className="grid min-h-0 flex-1 gap-[var(--gutter)]"
+            data-motion-shared={sharedName ?? undefined}
             style={{
               gridTemplateRows: speakers && dominant
                 ? `minmax(0, 1fr) ${SPEAKER_STRIP_HEIGHT}px`

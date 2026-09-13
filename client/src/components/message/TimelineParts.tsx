@@ -5,6 +5,7 @@ import { Chip } from '../ui';
 import { AvatarStack } from '../light';
 import { cn } from '../../lib/utils';
 import type { PersonLight } from '../../lib/attention/light';
+import { roomSharedName } from '../../lib/motion';
 import type { RoomLitEvent } from './messageLight';
 
 /**
@@ -152,12 +153,15 @@ export function RoomLitEventRow({
   onJoin,
 }: {
   event: RoomLitEvent;
-  onJoin: (event: RoomLitEvent) => void;
+  onJoin: (event: RoomLitEvent, origin?: Element | null) => void;
 }) {
   return (
     <div
       role="status"
       data-testid="room-lit-event"
+      // Last in the arrival's path: it fades in behind the face that caused it.
+      data-motion-event={event.channelId}
+      data-motion-shared={roomSharedName(event.channelId)}
       className={cn(
         'flex flex-wrap items-center gap-x-2.5 gap-y-1 pt-2 text-meta text-text-faint',
         TIMELINE_GUTTER,
@@ -170,7 +174,9 @@ export function RoomLitEventRow({
       </span>
       <button
         type="button"
-        onClick={() => onJoin(event)}
+        onClick={(clicked) =>
+          onJoin(event, clicked.currentTarget.closest('[data-motion-shared]'))
+        }
         className="pc-focusable rounded-[var(--radius-chip)] px-1 font-semibold text-accent-primary hover:underline"
       >
         Join

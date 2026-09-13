@@ -21,6 +21,7 @@ import { useUIStore } from '../../../stores/uiStore';
 import { useVoiceStore } from '../../../stores/voiceStore';
 import { ChannelType, Permissions, hasPermission, type Channel } from '../../../types';
 import type { RoomLight } from '../../../lib/attention/light';
+import { RECEDE_MARK, walkIntoRoom } from '../../../lib/motion';
 import { InviteModal } from '../../guild/InviteModal';
 import { Plate } from '../../ui';
 import { AroundNowWell } from './AroundNowWell';
@@ -215,10 +216,22 @@ export function Lobby({ guildId }: LobbyProps) {
   const openChannel = (channelId: string) =>
     navigate(`/app/guilds/${guildId}/channels/${channelId}`);
 
-  const enterRoom = (room: RoomLight) => {
+  /**
+   * You do not teleport into a room, you walk in (§5.1).
+   *
+   * The route changes inside the transition's update callback with nothing
+   * awaited in front of it, so navigation is never behind an animation; the
+   * card you clicked becomes the Stage's dominant tile and the rest of the
+   * Lobby recedes behind it.
+   */
+  const walkIn = (room: RoomLight, origin: Element | null | undefined, go: () => void) => {
+    void walkIntoRoom({ channelId: room.channelId, origin, go });
+  };
+
+  const enterRoom = (room: RoomLight, origin?: Element | null) => {
     const sharer = room.screenSharer ?? room.cameraSharer;
     if (sharer) useVoiceStore.getState().setWatchedStreamer(sharer.person.userId);
-    openChannel(room.channelId);
+    walkIn(room, origin, () => openChannel(room.channelId));
   };
 
   if (!guild) {
@@ -236,6 +249,10 @@ export function Lobby({ guildId }: LobbyProps) {
         as="section"
         aria-label="Lobby"
         bare
+        // §5.1: the rest of the Lobby steps back while the card you clicked
+        // travels. `recedeAround` recedes every branch except the one the
+        // origin is on.
+        {...{ [RECEDE_MARK]: '' }}
         className="flex h-full flex-col gap-[18px] overflow-y-auto scrollbar-thin px-4 py-5 sm:px-6 sm:py-[22px]"
       >
         {/* The building's own picture, as a band and nothing more: no gradient,
@@ -281,13 +298,18 @@ export function Lobby({ guildId }: LobbyProps) {
                   key={room.key}
                   room={room}
                   isStage={stageChannelIds.has(room.channelId)}
-                  onEnter={() => enterRoom(room)}
-                  onJoin={() => {
-                    if (stageChannelIds.has(room.channelId)) {
+                  onEnter={(origin) => enterRoom(room, origin)}
+                  onJoin={(origin) => {
+                    // Joining takes you into the room — the Stage is where the
+                    // room is (§7.2). Before WP9b the Lobby joined the call and
+                    // left you standing in the street, which is the one thing
+                    // "walk into a room" cannot mean.
+                    walkIn(room, origin, () => {
                       openChannel(room.channelId);
-                      return;
-                    }
-                    void joinChannel(room.channelId, guildId);
+                      if (!stageChannelIds.has(room.channelId)) {
+                        void joinChannel(room.channelId, guildId);
+                      }
+                    });
                   }}
                 />
               ))}
@@ -397,8 +419,8 @@ function LobbyRoomCard({
 }: {
   room: RoomLight;
   isStage: boolean;
-  onEnter: () => void;
-  onJoin: () => void;
+  onEnter: (origin?: Element | null) => void;
+  onJoin: (origin?: Element | null) => void;
 }) {
   const { frame } = useRoomThumbnail(room);
   return (

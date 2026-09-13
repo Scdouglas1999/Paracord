@@ -5,6 +5,7 @@ import {
   WINDOWS_PER_ROW,
   type BuildingWindow,
 } from '../../lib/attention/light';
+import { LIT_MARK, WINDOW_MARK } from '../../lib/motion';
 
 export interface WindowMapProps extends Omit<React.HTMLAttributes<HTMLDivElement>, 'children'> {
   windows: readonly BuildingWindow[];
@@ -57,6 +58,10 @@ export const WindowMap = React.forwardRef<HTMLDivElement, WindowMapProps>(functi
           <span
             key={window.key}
             title={window.label}
+            // The engine's marks (§5.1): which room this window is, and whether
+            // it is lit. "Lights on" and an arrival both bloom exactly these.
+            {...{ [WINDOW_MARK]: window.channelId }}
+            {...(window.state !== 'dark' ? { [LIT_MARK]: '' } : null)}
             className={cn(
               'pc-window',
               cell.large && 'is-large',

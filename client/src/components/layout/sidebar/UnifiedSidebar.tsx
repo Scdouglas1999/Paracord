@@ -14,6 +14,7 @@ import { markGuildRead } from '../../../lib/guildActions';
 import { canAccessGuildSettingsSync } from '../../../lib/guildSettingsAccess';
 import { displayName } from '../../../lib/displayName';
 import { findScopedGuild } from '../../../lib/guildScope';
+import { walkIntoRoom } from '../../../lib/motion';
 import { accountScopeKey, entityScopeKey, LOCAL_SERVER_ID } from '../../../lib/serverScope';
 import { getServerAccountScope } from '../../../lib/serverIdentity';
 import { isAdmin as isGlobalAdmin } from '../../../types';
@@ -135,15 +136,28 @@ export function UnifiedSidebar() {
     [navigate],
   );
 
+  /**
+   * A room row is a door into the room, and §5.1 says you walk through a door:
+   * the row you clicked becomes the Stage's dominant tile. The route changes
+   * inside the transition's update with nothing awaited in front of it, so the
+   * navigation is never behind the animation.
+   */
   const openRoom = useCallback(
-    (room: RoomLight) => {
+    (room: RoomLight, origin?: Element | null) => {
       if (!room.guildId) return;
-      try {
-        activateGuild({ id: room.guildId, scope: room.scope });
-        navigate(`/app/guilds/${room.guildId}/channels/${room.channelId}`);
-      } catch (error) {
-        toast.error(`Failed to open ${room.name}: ${extractApiError(error)}`);
-      }
+      const guildId = room.guildId;
+      void walkIntoRoom({
+        channelId: room.channelId,
+        origin,
+        go: () => {
+          try {
+            activateGuild({ id: guildId, scope: room.scope });
+            navigate(`/app/guilds/${guildId}/channels/${room.channelId}`);
+          } catch (error) {
+            toast.error(`Failed to open ${room.name}: ${extractApiError(error)}`);
+          }
+        },
+      });
     },
     [navigate],
   );

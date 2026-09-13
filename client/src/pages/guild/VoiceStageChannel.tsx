@@ -43,6 +43,7 @@ import { extractApiError } from '../../api/client';
 import { VoiceLobby } from './VoiceLobby';
 import { RoomChat } from './RoomChat';
 import { displayName } from '../../lib/displayName';
+import { roomSharedName, walkOutOfRoom } from '../../lib/motion';
 import { ErrorBoundary } from '../../components/ErrorBoundary';
 
 type VideoLayout = 'top' | 'side' | 'pip' | 'hidden';
@@ -662,6 +663,9 @@ export function VoiceStageChannel({
 
   const header = (
     <StageHeader
+      // §5.1: the header is chrome. It rises 80ms behind the tile you walked
+      // into, staggered with the speaker strip and the control bar.
+      data-motion-chrome=""
       compact={isPhoneLayout}
       roomName={roomLight?.name ?? channelName}
       buildingName={building?.name ?? null}
@@ -672,7 +676,20 @@ export function VoiceStageChannel({
             label="Back to the building"
             size="md"
             tone="ghost"
-            onClick={() => navigate(guildId ? `/app/guilds/${guildId}` : '/app')}
+            onClick={(event) => {
+              const go = () => navigate(guildId ? `/app/guilds/${guildId}` : '/app');
+              if (!channelId) {
+                go();
+                return;
+              }
+              // Leaving folds the dominant tile into the on-air pill, which is
+              // the same shared element the other way round (§5.1).
+              void walkOutOfRoom({
+                channelId,
+                origin: event.currentTarget.closest('[data-motion-shared]'),
+                go,
+              });
+            }}
           >
             <ChevronLeft size={20} />
           </IconButton>
@@ -686,9 +703,14 @@ export function VoiceStageChannel({
             size={26}
             max={3}
             context={`in ${roomLight?.name ?? channelName}`}
+            room={channelId ?? null}
           />
         ) : (
-          <HereNowStrip hereNow={hereNow} context={`in ${roomLight?.name ?? channelName}`} />
+          <HereNowStrip
+            hereNow={hereNow}
+            context={`in ${roomLight?.name ?? channelName}`}
+            room={channelId ?? null}
+          />
         )
       }
       actions={
@@ -837,7 +859,7 @@ export function VoiceStageChannel({
 
   const speakersArrangement = (dominant: boolean) => (dominant ? 'strip' : 'grid');
   const renderSpeakers = (withDominant: boolean) => (
-    <div className="flex min-h-0 flex-col gap-[var(--gutter)]">
+    <div className="flex min-h-0 flex-col gap-[var(--gutter)]" data-motion-chrome="">
       {requestsRow}
       <StageSpeakers
         className="min-h-0 flex-1"
@@ -909,6 +931,7 @@ export function VoiceStageChannel({
         <div data-native-underlay-clear="" className="flex min-h-0 flex-1 flex-col bg-bg-base p-[var(--gutter)]">
           <StageLayout
             phone={isPhoneLayout}
+            sharedName={channelId ? roomSharedName(channelId) : null}
             header={header}
             dominant={
               <StageStatus
@@ -993,6 +1016,7 @@ export function VoiceStageChannel({
     <div data-native-underlay-clear="" className="flex min-h-0 flex-1 flex-col bg-bg-base p-[var(--gutter)]">
       <StageLayout
         phone={isPhoneLayout}
+        sharedName={channelId ? roomSharedName(channelId) : null}
         header={header}
         notice={reconnectNotice}
         dominant={dominant}

@@ -87,6 +87,7 @@ export const RoomThumbnail = React.forwardRef<HTMLDivElement, RoomThumbnailProps
                 size={compact ? 18 : 22}
                 max={compact ? 3 : 4}
                 context={`in ${room.name}`}
+                room={room.channelId}
                 className="absolute"
                 style={compact ? { right: pad, bottom: pad } : { left: pad, bottom: pad }}
               />
