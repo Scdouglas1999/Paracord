@@ -20,6 +20,7 @@ import { roleColorToHex } from '../../lib/colors';
 import { LoadingSpinner } from '../ui/Feedback';
 import { Button, type ButtonProps } from '../ui/Button';
 import { displayName } from '../../lib/displayName';
+import { buildGuildEmojiImageUrl } from '../../lib/customEmoji';
 
 interface MessageComponentsProps {
   components: Component[];
@@ -144,11 +145,14 @@ function ComponentButton({
   };
 
   const emoji = component.emoji;
+  // A custom emoji lives behind the guild's authenticated image route, reached
+  // with a download ticket — `/emojis/<id>.png` is not a path this server ever
+  // served, so a button decorated with one used to render a broken image.
   const emojiRender = emoji ? (
     <span className="text-base leading-none">
-      {emoji.id ? (
+      {emoji.id && guildId ? (
         <img
-          src={`/emojis/${emoji.id}.${emoji.animated ? 'gif' : 'png'}`}
+          src={buildGuildEmojiImageUrl(guildId, emoji.id)}
           alt={emoji.name || ''}
           className="inline-block h-4 w-4"
         />
