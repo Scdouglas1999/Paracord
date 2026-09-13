@@ -33,7 +33,7 @@ import { resolveResourceUrl } from '../../lib/config/apiBaseUrl';
 import { getDownloadTicket } from '../../lib/downloadTicket';
 import { writeClipboardText } from '../../lib/clipboard';
 import { SkeletonMessage } from '../ui/Skeleton';
-import { fadeIn, ms, onMotion, settleIn } from '../../lib/motion';
+import { fadeIn, ms, onMotion, RollingNumber, settleIn, useFlipList } from '../../lib/motion';
 import { parseMarkdown } from '../../lib/markdown';
 import { getHighestRoleColor } from '../../lib/colors';
 import { formatFileSize, formatTimestamp, relativeTime } from '../../lib/formatters';
@@ -71,6 +71,72 @@ import { cn } from '../../lib/utils';
 import { fetchChannelOverwrites, fetchGuildRoles } from '../../lib/permissionDataCache';
 
 const EMPTY_TYPING: string[] = [];
+
+interface ReactionTally {
+  emoji: string;
+  count: number;
+  me: boolean;
+}
+
+/**
+ * The reactions under a message (§5.1: "a reaction pops").
+ *
+ * A reaction is something somebody put there, so it lands rather than slides:
+ * 0.6 to 1 on the spring-settle. It is its own component because that is the
+ * only way the engine's list hook can watch the row — and the hook is what
+ * keeps the pop honest: nothing plays on the first commit, so a message
+ * scrolling into view with six reactions on it is still, and only a reaction
+ * that ARRIVES while you are looking pops.
+ */
+function ReactionRow({
+  reactions,
+  guildId,
+  onToggle,
+}: {
+  reactions: readonly ReactionTally[];
+  guildId: string | null | undefined;
+  onToggle: (reaction: ReactionTally) => void;
+}) {
+  const rowRef = useFlipList<HTMLDivElement>({ enter: 'pop' });
+  return (
+    <div ref={rowRef} className="mt-1 flex flex-wrap gap-1">
+      {reactions.map((r, reactionIndex) => {
+        const parsedCustomEmoji = guildId ? parseCustomEmojiToken(r.emoji) : null;
+        return (
+          <Chip
+            as="button"
+            key={`${r.emoji}-${reactionIndex}`}
+            data-flip-key={r.emoji}
+            onClick={() => onToggle(r)}
+            className={cn(
+              'gap-1.5 px-2.5',
+              r.me && 'bg-accent-tint text-accent-primary shadow-none hover:bg-accent-tint-strong hover:text-accent-primary',
+            )}
+          >
+            <span>
+              {parsedCustomEmoji && guildId ? (
+                <img
+                  src={buildGuildEmojiImageUrl(guildId, parsedCustomEmoji.id)}
+                  alt={parsedCustomEmoji.name}
+                  title={`:${parsedCustomEmoji.name}:`}
+                  style={{ width: 18, height: 18, objectFit: 'contain' }}
+                  loading="lazy"
+                />
+              ) : (
+                r.emoji
+              )}
+            </span>
+            {/* The tally re-rolls like every other count (§5.1). */}
+            <span className="font-medium">
+              <RollingNumber value={r.count} announce={false} />
+            </span>
+          </Chip>
+        );
+      })}
+    </div>
+  );
+}
+
 const EMPTY_CHANNELS: Channel[] = [];
 const EMPTY_MEMBERS: Member[] = [];
 const EMPTY_SAVED_IDS = new Set<string>();
@@ -2270,36 +2336,11 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
           )}
           {/* Reactions */}
           {msg.reactions && Array.isArray(msg.reactions) && msg.reactions.length > 0 && (
-            <div className="mt-1 flex flex-wrap gap-1">
-              {(msg.reactions as Array<{emoji: string; count: number; me: boolean}>).map((r, reactionIndex) => {
-                const parsedCustomEmoji = activeGuildId ? parseCustomEmojiToken(r.emoji) : null;
-                return (
-                <Chip
-                  as="button"
-                  key={`${r.emoji}-${reactionIndex}`}
-                  onClick={() => void toggleReaction(msg.id, r)}
-                  className={cn(
-                    'gap-1.5 px-2.5',
-                    r.me && 'bg-accent-tint text-accent-primary shadow-none hover:bg-accent-tint-strong hover:text-accent-primary',
-                  )}
-                >
-                  <span>
-                    {parsedCustomEmoji && activeGuildId ? (
-                      <img
-                        src={buildGuildEmojiImageUrl(activeGuildId, parsedCustomEmoji.id)}
-                        alt={parsedCustomEmoji.name}
-                        title={`:${parsedCustomEmoji.name}:`}
-                        style={{ width: 18, height: 18, objectFit: 'contain' }}
-                        loading="lazy"
-                      />
-                    ) : (
-                      r.emoji
-                    )}
-                  </span>
-                  <span className="font-medium">{r.count}</span>
-                </Chip>
-              )})}
-            </div>
+            <ReactionRow
+              reactions={msg.reactions as ReactionTally[]}
+              guildId={activeGuildId}
+              onToggle={(reaction) => void toggleReaction(msg.id, reaction)}
+            />
           )}
           {msg.stickers && msg.stickers.length > 0 && (
             <div className="mt-1.5 flex flex-wrap items-center gap-2">
@@ -2541,7 +2582,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
         )}
 
         {(hoveredMessageId === msg.id || focusedMessageId === msg.id) && !isCoarsePointer && (
-          <div className="pc-floating absolute -top-3.5 right-4 flex items-center gap-0.5 overflow-hidden p-0.5 sm:right-8">
+          <div className="pc-hover-in pc-floating absolute -top-3.5 right-4 flex items-center gap-0.5 overflow-hidden p-0.5 sm:right-8">
             {canAddReactions && (
               <button className="hover-action-btn rounded-chip" title="Add reaction" aria-label="Add reaction" onClick={(e) => openReactionPicker(e, msg.id)}>
                 <Smile size={16} />

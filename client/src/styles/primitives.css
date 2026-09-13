@@ -283,6 +283,14 @@
   }
 }
 
+/* A hover toolbar or a small control arriving under the pointer: 4px, fast. */
+@keyframes pc-hover-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 4px, 0);
+  }
+}
+
 /* The boot/fallback mark breathing — a real loading moment, not a spinner.
    The reduced-motion rule in utilities.css stills it to a static mark. */
 @keyframes pc-mark-breathe {
@@ -358,6 +366,10 @@
 
 .pc-banner-out {
   animation: pc-banner-out var(--duration-fast) var(--ease-in) forwards;
+}
+
+.pc-hover-in {
+  animation: pc-hover-in var(--duration-fast) var(--ease-out) backwards;
 }
 
 .pc-mark-breathe {

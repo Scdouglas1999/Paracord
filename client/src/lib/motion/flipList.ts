@@ -168,6 +168,13 @@ export interface FlipListOptions {
   attribute?: string;
   /** Pixels a new row rises as it fades in. 6 matches the shared enter. */
   enterDistance?: number;
+  /**
+   * How a new row arrives. `rise` is the shared surface enter — a row joining
+   * a list. `pop` is §5.1's reaction: it lands rather than slides, 0.6 to 1 on
+   * the spring, because a reaction is a thing somebody put there, not a row
+   * that was always going to be there.
+   */
+  enter?: 'rise' | 'pop';
 }
 
 /**
@@ -180,6 +187,7 @@ export function useFlipList<T extends HTMLElement = HTMLElement>(
 ): RefObject<T | null> {
   const attribute = options.attribute ?? FLIP_KEY_ATTR;
   const enterDistance = options.enterDistance ?? 6;
+  const enterStyle = options.enter ?? 'rise';
   const ref = useRef<T | null>(null);
   const boxes = useRef(new Map<string, Box>());
   const elements = useRef(new Map<string, HTMLElement>());
@@ -249,10 +257,15 @@ export function useFlipList<T extends HTMLElement = HTMLElement>(
           }
           if (typeof el.animate !== 'function') continue;
           el.animate(
-            [
-              { opacity: 0, transform: `translate3d(0, ${enterDistance}px, 0)` },
-              { opacity: 1, transform: 'translate3d(0, 0, 0)' },
-            ],
+            enterStyle === 'pop'
+              ? [
+                  { opacity: 0, transform: 'scale(0.6)' },
+                  { opacity: 1, transform: 'scale(1)' },
+                ]
+              : [
+                  { opacity: 0, transform: `translate3d(0, ${enterDistance}px, 0)` },
+                  { opacity: 1, transform: 'translate3d(0, 0, 0)' },
+                ],
             {
               duration: enterDuration,
               easing: springEasing(spring, { durationMs: enterDuration }),

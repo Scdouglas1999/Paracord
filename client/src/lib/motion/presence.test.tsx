@@ -147,8 +147,8 @@ function stubRects() {
   };
 }
 
-function Rows({ keys }: { keys: string[] }) {
-  const ref = useFlipList<HTMLDivElement>();
+function Rows({ keys, enter }: { keys: string[]; enter?: 'rise' | 'pop' }) {
+  const ref = useFlipList<HTMLDivElement>({ enter });
   return (
     <div ref={ref}>
       {keys.map((key) => (
@@ -215,6 +215,16 @@ describe('useFlipList', () => {
     leaving.animation.finish();
     await leaving.animation.finished;
     expect(document.body.contains(clone)).toBe(false);
+  });
+
+  it('pops a reaction rather than sliding it in', () => {
+    tops.set('a', 0);
+    const { rerender } = render(<Rows keys={['a']} enter="pop" />);
+    tops.set('c', 0);
+    rerender(<Rows keys={['a', 'c']} enter="pop" />);
+    const arrived = waapi.played.find((record) => (record.target as HTMLElement).dataset.flipKey === 'c')!;
+    expect(arrived.keyframes[0].transform).toBe('scale(0.6)');
+    expect(arrived.keyframes[1].transform).toBe('scale(1)');
   });
 
   it('leaves a row that scrolled out of view alone — no clone over the chrome', () => {
