@@ -272,7 +272,7 @@ describe('the rooms grid', () => {
     const rooms = screen.getByRole('region', { name: 'Rooms' });
     await waitFor(() => expect(within(rooms).getByText('LIVE')).toBeInTheDocument());
     expect(within(rooms).getByRole('button', { name: 'Join Shop floor' })).toBeInTheDocument();
-    expect(within(rooms).getByText("Dark · nobody's in")).toBeInTheDocument();
+    expect(within(rooms).getByText(/Dark · nobody's in/)).toBeInTheDocument();
     expect(within(rooms).getByRole('button', { name: 'Open Lounge' })).toBeInTheDocument();
   });
 

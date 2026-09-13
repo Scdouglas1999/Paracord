@@ -163,6 +163,13 @@ export function Lobby({ guildId }: LobbyProps) {
     () => featuredFirst(orderVoiceRooms(rooms.filter((room) => room.kind === 'voice')), featuredIds),
     [rooms, featuredIds],
   );
+  // Two grids, because the two cards are two different shapes (§7.3): a lit
+  // card is 250px tall because it is carrying a picture of people, and a dark
+  // one is the height of its own words. In one grid CSS would stretch every
+  // dark card in a row up to the lit card beside it, which is the empty
+  // rectangle this surface is trying to stop drawing.
+  const litRooms = useMemo(() => voiceRooms.filter((room) => room.lit), [voiceRooms]);
+  const darkRooms = useMemo(() => voiceRooms.filter((room) => !room.lit), [voiceRooms]);
   const textRooms = useMemo(
     () =>
       featuredFirst(
@@ -239,6 +246,20 @@ export function Lobby({ guildId }: LobbyProps) {
     walkIn(room, origin, () => openChannel(room.channelId));
   };
 
+  /**
+   * Joining takes you into the room — the Stage is where the room is (§7.2).
+   * Before WP9b the Lobby joined the call and left you standing in the street,
+   * which is the one thing "walk into a room" cannot mean.
+   */
+  const joinRoom = (room: RoomLight, origin?: Element | null) => {
+    walkIn(room, origin, () => {
+      openChannel(room.channelId);
+      if (!stageChannelIds.has(room.channelId)) {
+        void joinChannel(room.channelId, guildId);
+      }
+    });
+  };
+
   if (!guild && denied) return <BuildingNotFound onGoHome={() => navigate('/app')} />;
 
   if (!guild) {
@@ -299,31 +320,37 @@ export function Lobby({ guildId }: LobbyProps) {
               This building has no rooms yet — its text rooms are below.
             </p>
           ) : (
-            <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 xl:grid-cols-3">
-              {voiceRooms.map((room) => (
-                <LobbyRoomCard
-                  key={room.key}
-                  room={room}
-                  isStage={stageChannelIds.has(room.channelId)}
-                  onEnter={(origin) => enterRoom(room, origin)}
-                  onJoin={(origin) => {
-                    // Joining takes you into the room — the Stage is where the
-                    // room is (§7.2). Before WP9b the Lobby joined the call and
-                    // left you standing in the street, which is the one thing
-                    // "walk into a room" cannot mean.
-                    walkIn(room, origin, () => {
-                      openChannel(room.channelId);
-                      if (!stageChannelIds.has(room.channelId)) {
-                        void joinChannel(room.channelId, guildId);
-                      }
-                    });
-                  }}
-                />
-              ))}
-              {canOpenRoom && (
-                <AddRoomTile onClick={() => openGuildSettings(guildId, 'channels')} />
+            <>
+              {litRooms.length > 0 && (
+                <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 xl:grid-cols-3">
+                  {litRooms.map((room) => (
+                    <LobbyRoomCard
+                      key={room.key}
+                      room={room}
+                      isStage={stageChannelIds.has(room.channelId)}
+                      onEnter={(origin) => enterRoom(room, origin)}
+                      onJoin={(origin) => joinRoom(room, origin)}
+                    />
+                  ))}
+                </div>
               )}
-            </div>
+              {(darkRooms.length > 0 || canOpenRoom) && (
+                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
+                  {darkRooms.map((room) => (
+                    <LobbyRoomCard
+                      key={room.key}
+                      room={room}
+                      isStage={stageChannelIds.has(room.channelId)}
+                      onEnter={(origin) => enterRoom(room, origin)}
+                      onJoin={(origin) => joinRoom(room, origin)}
+                    />
+                  ))}
+                  {canOpenRoom && (
+                    <AddRoomTile onClick={() => openGuildSettings(guildId, 'channels')} />
+                  )}
+                </div>
+              )}
+            </>
           )}
         </section>
 

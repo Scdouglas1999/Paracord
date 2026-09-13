@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
   OPEN_A_NEW_ROOM,
-  TURN_THE_LIGHTS_ON,
   goingCaption,
   headerLine,
   hostingCaption,
@@ -70,8 +69,7 @@ describe('the room cards', () => {
     expect(speakingCaption([])).toBe('');
   });
 
-  it('keeps the dark card an invitation, never a void', () => {
-    expect(TURN_THE_LIGHTS_ON).toBe('Turn the lights on — friends see it instantly');
+  it('offers a way to open one more, never a void', () => {
     expect(OPEN_A_NEW_ROOM).toBe('Open a new room');
   });
 });
@@ -120,8 +118,7 @@ describe('the kill-list', () => {
       roomsLitCaption(0),
       roomsLitCaption(3),
       speakingCaption([]),
-      TURN_THE_LIGHTS_ON,
-      OPEN_A_NEW_ROOM,
+          OPEN_A_NEW_ROOM,
       recentlyInCaption(''),
       photosThisWeekCaption(0),
       goingCaption(0),

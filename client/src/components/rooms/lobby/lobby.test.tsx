@@ -10,6 +10,7 @@ import { LobbyHeader } from './LobbyHeader';
 import { featuredFirst, readHubWelcome } from './hubWelcome';
 import { nextEventOf, toLobbyEvent, type LobbyEvent } from './useNextEvent';
 import { selectRecentMedia } from './useRecentMedia';
+import { toPreview } from './useRoomPreviews';
 import { personLight, textRoomLight, voiceRoomLight } from '../../../lib/attention/light';
 import type { Attachment, Message } from '../../../types';
 
@@ -117,9 +118,7 @@ describe('RoomCard — dark', () => {
     const { container } = render(<RoomCard room={darkRoom()} onJoin={onJoin} nowMs={NOW} />);
 
     expect(container.querySelector('article')?.className).not.toContain('--ring-lit-plate');
-    expect(screen.getByText("Dark · nobody's in")).toBeInTheDocument();
-    expect(screen.getByText('last lit 2 h ago')).toBeInTheDocument();
-    expect(screen.getByText('Turn the lights on — friends see it instantly')).toBeInTheDocument();
+    expect(screen.getByText("Dark · nobody's in · last lit 2 h ago")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Open Lounge' }));
     expect(onJoin).toHaveBeenCalledTimes(1);
@@ -127,7 +126,24 @@ describe('RoomCard — dark', () => {
 
   it('says "never lit" rather than inventing an hour it has not seen', () => {
     render(<RoomCard room={darkRoom(null)} onJoin={vi.fn()} nowMs={NOW} />);
-    expect(screen.getByText('never lit')).toBeInTheDocument();
+    expect(screen.getByText("Dark · nobody's in · never lit")).toBeInTheDocument();
+  });
+
+  it('reserves no window well for a picture that does not exist', () => {
+    // The defect this replaces: a never-lit room drew the lit card's full
+    // 168px RoomThumbnail and filled it with nothing, so a quiet building's
+    // Lobby was a column of empty black rectangles (§7.3, §6.4, §6.8).
+    const { container } = render(<RoomCard room={darkRoom()} onJoin={vi.fn()} nowMs={NOW} />);
+    const boxes = [...container.querySelectorAll<HTMLElement>('[style]')].map(
+      (node) => node.style.height,
+    );
+    expect(boxes).not.toContain('168px');
+    // The room is still marked with the window vocabulary, all panes unlit.
+    const panes = container.querySelectorAll('.pc-window');
+    expect(panes.length).toBeGreaterThan(0);
+    for (const pane of panes) {
+      expect(pane.className).not.toMatch(/is-(talking|reading|writing)/);
+    }
   });
 
   it('has nothing to look into', () => {
@@ -172,6 +188,11 @@ describe('TextRoomRow', () => {
     const { container } = render(<TextRoomRow room={textRoom(false)} onOpen={vi.fn()} />);
     expect(container.querySelector('.pc-window')?.className).not.toContain('is-reading');
     expect(screen.queryByText(/reading/)).not.toBeInTheDocument();
+  });
+
+  it('says a room nobody has written in is empty, rather than drawing three blanks', () => {
+    render(<TextRoomRow room={textRoom(false)} silent onOpen={vi.fn()} />);
+    expect(screen.getByText('Nothing said here yet')).toBeInTheDocument();
   });
 
   it('shows no preview for a room this client has never opened', () => {
@@ -289,6 +310,22 @@ describe('MediaStrip', () => {
 /* -------------------------------------------------------------------------- */
 
 describe('AroundNowWell', () => {
+  it('draws a face for every lit person beside the sentence', () => {
+    // The defect this replaces: the well was fed only people who were *in a
+    // room*, so a building where somebody had the app open but was in no room
+    // drew an empty strip beside a bare "+1 lights on" chip.
+    render(
+      <AroundNowWell
+        people={[person('1', 'Mara'), person('2', 'Priya')]}
+        sentence="Mara has their lights on"
+        lightsOn={2}
+      />,
+    );
+    const well = screen.getByRole('region', { name: 'Around now' });
+    expect(within(well).getByText('Mara and Priya around now')).toBeInTheDocument();
+    expect(within(well).queryByText(/^\+\d+ lights on$/)).toBeNull();
+  });
+
   it('shows the faces, the sentence and everybody else who is on', () => {
     render(
       <AroundNowWell
@@ -583,5 +620,32 @@ describe('no Lobby component hard-codes a colour', () => {
     const markup = container.innerHTML;
     expect(markup).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
     expect(markup).not.toMatch(/\brgba?\(\s*\d/);
+  });
+});
+
+describe('the text rooms\' last line', () => {
+  const author = { id: '9', username: 'priya', display_name: 'Priya', discriminator: '0' };
+
+  it('names the author and flattens the markdown', () => {
+    const preview = toPreview({
+      id: '357000000000000000',
+      content: 'Pushed the **revised** `bracket` drawings',
+      author,
+      timestamp: '2026-09-13T15:00:00.000Z',
+    } as unknown as Message);
+    expect(preview).not.toBeNull();
+    expect(preview?.author).toBe('Priya');
+    expect(preview?.preview).toBe('Pushed the revised bracket drawings');
+    expect(preview?.atMs).toBe(Date.parse('2026-09-13T15:00:00.000Z'));
+  });
+
+  it('refuses to preview ciphertext', () => {
+    expect(
+      toPreview({ id: '1', content: 'AAAA', author, e2ee: true } as unknown as Message),
+    ).toBeNull();
+  });
+
+  it('has nothing to say about a room with no messages', () => {
+    expect(toPreview(undefined)).toBeNull();
   });
 });

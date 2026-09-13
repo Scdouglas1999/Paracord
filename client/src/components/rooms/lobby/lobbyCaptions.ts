@@ -64,9 +64,6 @@ export function speakingCaption(names: readonly string[]): string {
  */
 export const NOBODY_IN_A_ROOM = "Nobody's in a room right now";
 
-/** The dark card's invitation (§7.3). An empty room is an offer, not a void. */
-export const TURN_THE_LIGHTS_ON = 'Turn the lights on — friends see it instantly';
-
 /** The add tile (§7.3), shown only to somebody who can actually open one. */
 export const OPEN_A_NEW_ROOM = 'Open a new room';
 
@@ -103,6 +100,16 @@ export function lastAuthorCaption(
 ): string {
   return headerLine([author?.trim() || null, time?.trim() || null]);
 }
+
+/**
+ * A text room nobody has written in yet (§6.9, §7.3).
+ *
+ * Its row has no author, no line and no stamp, and drawn as three blanks beside
+ * neighbours that have all three it reads as a row that failed to load. This
+ * says the true thing instead — and it is the room's own invitation, so it
+ * never appears next to a preview.
+ */
+export const NOTHING_SAID_YET = 'Nothing said here yet';
 
 /** "1 mention" / "3 mentions" — the chip on a text room row (§7.3). */
 export function mentionCaption(count: number): string {
