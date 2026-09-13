@@ -254,8 +254,29 @@ def run_smoke(args: argparse.Namespace) -> None:
             )
             if not any(item.get("id") == emoji_id for item in listed):
                 raise AssertionError(f"created emoji missing from list: {listed}")
+            # Guild emoji images are member-gated, and an <img> tag cannot carry
+            # a bearer header — so the client reaches them with a short-lived
+            # download ticket, and so does this smoke. An anonymous fetch here
+            # is expected to be refused; that refusal is the point of the route.
+            ticket = request_json(
+                "POST",
+                base_url,
+                "/api/v1/download/ticket",
+                token=admin_token,
+                body={},
+                expected=200,
+            )["ticket"]
+            anonymous = requests.get(
+                f"{base_url}/api/v1/guilds/{guild_id}/emojis/{emoji_id}/image",
+                timeout=20,
+            )
+            if anonymous.status_code != 401:
+                raise AssertionError(
+                    f"emoji image served without a credential: {anonymous.status_code}"
+                )
             image = requests.get(
                 f"{base_url}/api/v1/guilds/{guild_id}/emojis/{emoji_id}/image",
+                params={"ticket": ticket},
                 timeout=20,
             )
             if image.status_code != 200 or image.content != TINY_PNG:
@@ -283,6 +304,7 @@ def run_smoke(args: argparse.Namespace) -> None:
                 raise AssertionError(f"GIF emoji returned animated=false: {animated}")
             animated_image = requests.get(
                 f"{base_url}/api/v1/guilds/{guild_id}/emojis/{animated_id}/image",
+                params={"ticket": ticket},
                 timeout=20,
             )
             if animated_image.status_code != 200 or animated_image.content != TINY_GIF:
