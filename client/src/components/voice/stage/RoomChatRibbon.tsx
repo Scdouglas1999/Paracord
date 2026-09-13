@@ -1,7 +1,11 @@
 import * as React from 'react';
 
 import { Plate } from '../../ui';
-import { cn } from '../../../lib/utils';
+// §5.1/§7.2: the phone sheet changes size when it opens, and a size change is
+// the one thing §5.3 will not let a keyframe touch. The engine measures the
+// two layouts and plays the difference back as a transform.
+import { motionToken, ms, useFlip } from '../../../lib/motion';
+import { cn, mergeRefs } from '../../../lib/utils';
 
 export interface RoomChatRibbonProps extends Omit<React.HTMLAttributes<HTMLElement>, 'children'> {
   /** The text channel this room talks in — "build-log". */
@@ -52,6 +56,14 @@ export const RoomChatRibbon = React.forwardRef<HTMLElement, RoomChatRibbonProps>
     },
     ref,
   ) {
+    // Opening travels on the spring over --duration-move; closing is the dim
+    // curve at the fade speed, because a sheet going away is not an arrival.
+    const sheetRef = useFlip<HTMLElement>(
+      [expanded, surface],
+      expanded
+        ? { scale: false }
+        : { scale: false, duration: ms('--duration-fast'), easing: motionToken('--ease-in') },
+    );
     const heading = (
       <div className="flex min-w-0 items-center gap-2">
         <span
@@ -69,7 +81,7 @@ export const RoomChatRibbon = React.forwardRef<HTMLElement, RoomChatRibbonProps>
         <Plate
           as="aside"
           bare
-          ref={ref}
+          ref={mergeRefs(ref, sheetRef)}
           aria-label={`${roomName} — room chat`}
           className={cn(
             'flex min-h-0 flex-col overflow-hidden rounded-b-none',
@@ -91,12 +103,14 @@ export const RoomChatRibbon = React.forwardRef<HTMLElement, RoomChatRibbonProps>
           </button>
           <div className="shrink-0 px-4 pb-2">{heading}</div>
           {expanded && (
-            <>
+            /* The sheet's body arrives the way every other sheet in the
+               product does — the plate's own travel is the FLIP above. */
+            <div className="pc-sheet-in flex min-h-0 flex-1 flex-col overflow-hidden">
               <div className="flex min-h-0 flex-1 flex-col justify-end overflow-hidden">
                 {children}
               </div>
               {composer && <div className="shrink-0 px-3 pb-3">{composer}</div>}
-            </>
+            </div>
           )}
         </Plate>
       );
