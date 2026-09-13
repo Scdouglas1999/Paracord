@@ -1397,7 +1397,10 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
           <Button variant="ghost" onClick={() => void retrySave().catch(() => {})}>Retry saving draft</Button>
         </div>
       )}
-      {submitError && (
+      {/* The blocker row above already carries the reason a send was refused —
+          for a blocked sender, word for word. Printing it again underneath said
+          the same sentence twice, stacked, which reads as two problems. */}
+      {submitError && submitError !== composerAction.reason && (
         <div
           className="rounded-[var(--radius-control)] bg-danger-well px-3 py-2 text-meta font-semibold text-accent-danger"
           role="alert"

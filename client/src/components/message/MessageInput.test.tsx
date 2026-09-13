@@ -445,6 +445,24 @@ describe('MessageInput', () => {
     expect(await screen.findByText('Slowmode active. Try again in 10 seconds.')).toBeInTheDocument();
   });
 
+  it('says a refusal once, not twice stacked', async () => {
+    // A blocked sender's send is refused with the same sentence the blocker row
+    // above the composer already carries. Printing it again underneath read as
+    // two separate problems.
+    const user = userEvent.setup();
+    const refusal = 'Messaging and calls are unavailable between these accounts.';
+    mockSendMessage.mockRejectedValue({ response: { data: { message: refusal } } });
+    const view = render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
+    await user.type(screen.getByPlaceholderText('Say something in general'), 'after the block');
+    await user.keyboard('{Enter}');
+    expect(await screen.findByText(refusal)).toBeInTheDocument();
+
+    mockActionOverrides.send = { supported: true, allowed: false, reason: refusal };
+    view.rerender(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
+    expect(await screen.findByRole('status')).toHaveTextContent(refusal);
+    await waitFor(() => expect(screen.getAllByText(refusal)).toHaveLength(1));
+  });
+
   it('previews selected files, uploads them, and sends attachment ids', async () => {
     const user = userEvent.setup();
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
