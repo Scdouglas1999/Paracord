@@ -34,6 +34,19 @@ import { motionToken, ms } from './tokens';
 export const FLIP_KEY_ATTR = 'data-flip-key';
 
 /**
+ * On a `pop` row: the person looking at this screen put this here — the chip
+ * takes the full pop (0.6 up, glyph over-rotating) rather than the smaller
+ * 0.8 pop a reaction arriving from somebody else gets.
+ */
+export const FLIP_OWN_ATTR = 'data-flip-own';
+
+/**
+ * Inside an own `pop` row: the mark that over-rotates ±8° while the row
+ * itself scales — the emoji on a reaction chip.
+ */
+export const FLIP_GLYPH_ATTR = 'data-flip-glyph';
+
+/**
  * Every animation this module creates carries the same id convention
  * `flip.ts` uses — `data-motion-recipe:<name>` — so the frame gate can say
  * which recipe a dropped frame belongs to instead of reporting `anonymous`.
@@ -130,8 +143,11 @@ function stackingIndex(container: HTMLElement): string {
  * 4px fall as scenery — but only where the row was actually visible: a row
  * scrolled out of its container has no leave to show, and a `fixed` clone
  * would escape the container's clip and fall across the chrome above it.
+ *
+ * `shrink` is the pop list's exit: a reaction chip does not fall, it fades
+ * back out the way it popped in.
  */
-function playDeparture(el: HTMLElement, box: Box, frame: Frame, zIndex: string): void {
+function playDeparture(el: HTMLElement, box: Box, frame: Frame, zIndex: string, style: 'fall' | 'shrink'): void {
   if (typeof el.cloneNode !== 'function') return;
   const left = box.left + frame.left - frame.scrollLeft;
   const top = box.top + frame.top - frame.scrollTop;
@@ -159,10 +175,15 @@ function playDeparture(el: HTMLElement, box: Box, frame: Frame, zIndex: string):
   if (typeof clone.animate === 'function') {
     const animation = tag(
       clone.animate(
-        [
-          { opacity: 1, transform: 'translate3d(0, 0, 0)' },
-          { opacity: 0, transform: 'translate3d(0, 4px, 0)' },
-        ],
+        style === 'shrink'
+          ? [
+              { opacity: 1, transform: 'scale(1)' },
+              { opacity: 0, transform: 'scale(0.6)' },
+            ]
+          : [
+              { opacity: 1, transform: 'translate3d(0, 0, 0)' },
+              { opacity: 0, transform: 'translate3d(0, 4px, 0)' },
+            ],
         {
           duration: ms('--duration-fast'),
           easing: motionToken('--ease-in'),
@@ -185,11 +206,18 @@ export interface FlipListOptions {
   enterDistance?: number;
   /**
    * How a new row arrives. `rise` is the shared surface enter — a row joining
-   * a list. `pop` is §5.1's reaction: it lands rather than slides, 0.6 to 1 on
-   * the spring, because a reaction is a thing somebody put there, not a row
-   * that was always going to be there.
+   * a list. `pop` is §5.1's reaction: it lands rather than slides — 0.6 to 1
+   * on the spring when it's yours, 0.8 when it arrives from somebody else —
+   * because a reaction is a thing somebody put there, not a row that was
+   * always going to be there.
    */
   enter?: 'rise' | 'pop';
+  /**
+   * How a removed row leaves. `fall` is the shared surface leave — a 4px drop
+   * as it fades. `shrink` is the pop list's exit — the chip fades back out the
+   * way it came. Defaults to `shrink` for `pop` rows, `fall` otherwise.
+   */
+  exit?: 'fall' | 'shrink';
 }
 
 /**
@@ -203,6 +231,7 @@ export function useFlipList<T extends HTMLElement = HTMLElement>(
   const attribute = options.attribute ?? FLIP_KEY_ATTR;
   const enterDistance = options.enterDistance ?? 6;
   const enterStyle = options.enter ?? 'rise';
+  const exitStyle = options.exit ?? (enterStyle === 'pop' ? 'shrink' : 'fall');
   const ref = useRef<T | null>(null);
   const boxes = useRef(new Map<string, Box>());
   const elements = useRef(new Map<string, HTMLElement>());
@@ -252,7 +281,7 @@ export function useFlipList<T extends HTMLElement = HTMLElement>(
       for (const [key, oldEl] of prevEls) {
         if (now.has(key)) continue;
         const box = prev.get(key);
-        if (box) playDeparture(oldEl, box, frame, zIndex);
+        if (box) playDeparture(oldEl, box, frame, zIndex, exitStyle);
       }
 
       const spring = springTokens();
@@ -271,11 +300,12 @@ export function useFlipList<T extends HTMLElement = HTMLElement>(
             continue;
           }
           if (typeof el.animate !== 'function') continue;
+          const own = el.hasAttribute(FLIP_OWN_ATTR);
           tag(
             el.animate(
               enterStyle === 'pop'
                 ? [
-                    { opacity: 0, transform: 'scale(0.6)' },
+                    { opacity: 0, transform: `scale(${own ? 0.6 : 0.8})` },
                     { opacity: 1, transform: 'scale(1)' },
                   ]
                 : [
@@ -290,6 +320,24 @@ export function useFlipList<T extends HTMLElement = HTMLElement>(
             ),
             enterStyle === 'pop' ? 'pop' : 'enter',
           );
+          // The emoji itself over-rotates ±8° on your own reaction — the row
+          // lands and the mark inside it settles a beat behind (§5.1).
+          if (enterStyle === 'pop' && own) {
+            const glyph = el.querySelector<HTMLElement>(`[${FLIP_GLYPH_ATTR}]`);
+            if (glyph && typeof glyph.animate === 'function') {
+              tag(
+                glyph.animate(
+                  [{ transform: 'rotate(-8deg)' }, { transform: 'rotate(0deg)' }],
+                  {
+                    duration: enterDuration,
+                    easing: springEasing(spring, { durationMs: enterDuration }),
+                    fill: 'backwards',
+                  },
+                ),
+                'pop',
+              );
+            }
+          }
           continue;
         }
         // The ancestor moved the same way — the parent carries this row.

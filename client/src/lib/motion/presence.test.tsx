@@ -203,13 +203,13 @@ function stubRects() {
   };
 }
 
-function Rows({ keys, enter }: { keys: string[]; enter?: 'rise' | 'pop' }) {
+function Rows({ keys, enter, own = [] }: { keys: string[]; enter?: 'rise' | 'pop'; own?: string[] }) {
   const ref = useFlipList<HTMLDivElement>({ enter });
   return (
     <div ref={ref}>
       {keys.map((key) => (
-        <div key={key} data-flip-key={key}>
-          {key}
+        <div key={key} data-flip-key={key} data-flip-own={own.includes(key) || undefined}>
+          <span data-flip-glyph>{key}</span>
         </div>
       ))}
     </div>
@@ -273,14 +273,62 @@ describe('useFlipList', () => {
     expect(document.body.contains(clone)).toBe(false);
   });
 
-  it('pops a reaction rather than sliding it in', () => {
+  it('pops an incoming reaction smaller — 0.8 to 1, no glyph flourish', () => {
     tops.set('a', 0);
     const { rerender } = render(<Rows keys={['a']} enter="pop" />);
     tops.set('c', 0);
     rerender(<Rows keys={['a', 'c']} enter="pop" />);
     const arrived = waapi.played.find((record) => (record.target as HTMLElement).dataset.flipKey === 'c')!;
+    expect(arrived.keyframes[0].transform).toBe('scale(0.8)');
+    expect(arrived.keyframes[1].transform).toBe('scale(1)');
+    expect(arrived.animation.id).toBe('data-motion-recipe:pop');
+    // Somebody else's: the row pops, the emoji does not over-rotate.
+    expect(
+      waapi.played.filter(
+        (record) => (record.target as HTMLElement).dataset.flipGlyph !== undefined,
+      ),
+    ).toHaveLength(0);
+  });
+
+  it('pops your own reaction the full 0.6 and over-rotates the emoji', () => {
+    tops.set('a', 0);
+    const { rerender } = render(<Rows keys={['a']} enter="pop" />);
+    tops.set('c', 0);
+    rerender(<Rows keys={['a', 'c']} enter="pop" own={['c']} />);
+    const arrived = waapi.played.find((record) => (record.target as HTMLElement).dataset.flipKey === 'c')!;
     expect(arrived.keyframes[0].transform).toBe('scale(0.6)');
     expect(arrived.keyframes[1].transform).toBe('scale(1)');
+    const glyph = waapi.played.find((record) => (record.target as HTMLElement).dataset.flipGlyph !== undefined)!;
+    expect(glyph.keyframes[0].transform).toBe('rotate(-8deg)');
+    expect(glyph.keyframes[1].transform).toBe('rotate(0deg)');
+    expect(glyph.animation.id).toBe('data-motion-recipe:pop');
+  });
+
+  it('shrinks a leaving pop row back out rather than dropping it', () => {
+    tops.set('a', 0);
+    tops.set('b', 0);
+    const { rerender } = render(<Rows keys={['a', 'b']} enter="pop" />);
+    rerender(<Rows keys={['a']} enter="pop" />);
+    const clone = document.body.querySelector('[aria-hidden="true"]') as HTMLElement | null;
+    expect(clone).not.toBeNull();
+    const leaving = waapi.played.find((record) => record.target === clone)!;
+    expect(leaving.keyframes[1].opacity).toBe(0);
+    expect(leaving.keyframes[1].transform).toBe('scale(0.6)');
+    expect(leaving.animation.id).toBe('data-motion-recipe:exit');
+  });
+
+  it('names every animation it plays, so the frame gate can blame a recipe', () => {
+    tops.set('a', 0);
+    tops.set('b', 10);
+    const { rerender } = render(<Rows keys={['a', 'b']} />);
+    tops.set('b', 0);
+    tops.set('a', 10);
+    tops.set('c', 20);
+    rerender(<Rows keys={['b', 'a', 'c']} />);
+    expect(waapi.played.length).toBeGreaterThan(0);
+    for (const record of waapi.played) {
+      expect(record.animation.id).toMatch(/^data-motion-recipe:/);
+    }
   });
 
   it('leaves a row that scrolled out of view alone — no clone over the chrome', () => {

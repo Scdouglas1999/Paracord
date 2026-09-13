@@ -82,11 +82,13 @@ interface ReactionTally {
  * The reactions under a message (§5.1: "a reaction pops").
  *
  * A reaction is something somebody put there, so it lands rather than slides:
- * 0.6 to 1 on the spring-settle. It is its own component because that is the
- * only way the engine's list hook can watch the row — and the hook is what
- * keeps the pop honest: nothing plays on the first commit, so a message
- * scrolling into view with six reactions on it is still, and only a reaction
- * that ARRIVES while you are looking pops.
+ * 0.6 to 1 on the spring-settle when it's yours — and the emoji itself
+ * over-rotates ±8° on the way — 0.8 to 1 when it arrives from somebody else.
+ * Removing fades and shrinks the chip back out the way it came. It is its own
+ * component because that is the only way the engine's list hook can watch the
+ * row — and the hook is what keeps the pop honest: nothing plays on the first
+ * commit, so a message scrolling into view with six reactions on it is still,
+ * and only a reaction that ARRIVES while you are looking pops.
  */
 function ReactionRow({
   reactions,
@@ -107,13 +109,14 @@ function ReactionRow({
             as="button"
             key={`${r.emoji}-${reactionIndex}`}
             data-flip-key={r.emoji}
+            data-flip-own={r.me || undefined}
             onClick={() => onToggle(r)}
             className={cn(
               'gap-1.5 px-2.5',
               r.me && 'bg-accent-tint text-accent-primary shadow-none hover:bg-accent-tint-strong hover:text-accent-primary',
             )}
           >
-            <span>
+            <span data-flip-glyph>
               {parsedCustomEmoji && guildId ? (
                 <img
                   src={buildGuildEmojiImageUrl(guildId, parsedCustomEmoji.id)}
