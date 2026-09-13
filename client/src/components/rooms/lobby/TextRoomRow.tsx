@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { Pin } from 'lucide-react';
 
 import { Chip } from '../../ui';
 import { AvatarStack } from '../../light';
@@ -19,6 +20,8 @@ export interface TextRoomRowProps {
   lastAt?: string | null;
   /** The last line itself. Absent for a room this client has never opened. */
   preview?: string | null;
+  /** The building's operator pinned this room, so it sorts first and says so. */
+  featured?: boolean;
   onOpen: () => void;
 }
 
@@ -30,10 +33,24 @@ export interface TextRoomRowProps {
  * the reader stack and "5 reading" say the same thing in words (§9). The preview
  * is whatever this client has actually loaded — an unopened room shows its name
  * and nothing else rather than a guessed last line.
+ *
+ * A featured room — one the building's operator pinned in its hub settings —
+ * sorts first and carries a small pin. It is not a badge and spends no light
+ * token (§6.3): being chosen by an operator is not somebody being present.
  */
 export const TextRoomRow = React.forwardRef<HTMLButtonElement, TextRoomRowProps>(
   function TextRoomRow(
-    { room, active = false, unread = false, mentionCount = 0, lastAuthor, lastAt, preview, onOpen },
+    {
+      room,
+      active = false,
+      unread = false,
+      mentionCount = 0,
+      lastAuthor,
+      lastAt,
+      preview,
+      featured = false,
+      onOpen,
+    },
     ref,
   ) {
     const readers = room.readers.map((reader) => reader.person);
@@ -70,6 +87,12 @@ export const TextRoomRow = React.forwardRef<HTMLButtonElement, TextRoomRowProps>
             >
               {room.name}
             </span>
+            {featured && (
+              <>
+                <Pin size={12} aria-hidden className="shrink-0 text-text-faint" />
+                <span className="sr-only">Featured by this building</span>
+              </>
+            )}
             {byline && <span className="shrink-0 truncate text-meta text-text-faint">{byline}</span>}
           </span>
           {preview && (

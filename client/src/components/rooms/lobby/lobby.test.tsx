@@ -7,6 +7,7 @@ import { EventCard } from './EventCard';
 import { MediaStrip } from './MediaStrip';
 import { AroundNowWell } from './AroundNowWell';
 import { LobbyHeader } from './LobbyHeader';
+import { featuredFirst, readHubWelcome } from './hubWelcome';
 import { nextEventOf, toLobbyEvent, type LobbyEvent } from './useNextEvent';
 import { selectRecentMedia } from './useRecentMedia';
 import { personLight, textRoomLight, voiceRoomLight } from '../../../lib/attention/light';
@@ -337,6 +338,95 @@ describe('LobbyHeader', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Space settings' }));
     expect(onInvite).toHaveBeenCalledTimes(1);
     expect(onSettings).toHaveBeenCalledTimes(1);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* What the building's operator wrote about it (§7.3, hubWelcome.ts)           */
+/* -------------------------------------------------------------------------- */
+
+describe('the operator’s welcome line', () => {
+  it('is the header’s sentence when they wrote one, and the generated one stays for a screen reader', () => {
+    render(
+      <LobbyHeader
+        guildId="g1"
+        name="Kestrel Robotics"
+        summary="24 of 61 have their lights on · 2 rooms lit"
+        welcome="Bring a part, leave with a part."
+      />,
+    );
+    const written = screen.getByText('Bring a part, leave with a part.');
+    expect(written).toBeVisible();
+    expect(written.className).not.toContain('sr-only');
+    // §9: the light's words are not lost with it.
+    expect(screen.getByText('24 of 61 have their lights on · 2 rooms lit').className).toContain('sr-only');
+  });
+
+  it('leaves the generated sentence alone when the operator wrote nothing', () => {
+    render(
+      <LobbyHeader guildId="g1" name="Kestrel Robotics" summary="2 rooms lit" welcome="   " />,
+    );
+    const generated = screen.getByText('2 rooms lit');
+    expect(generated).toBeVisible();
+    expect(generated.className).not.toContain('sr-only');
+  });
+});
+
+describe('readHubWelcome', () => {
+  it('reads nothing out of nothing', () => {
+    expect(readHubWelcome(null)).toEqual({ welcome: '', bannerSrc: null, featuredChannelIds: [] });
+    expect(readHubWelcome(undefined).welcome).toBe('');
+  });
+
+  it('prefers the greeting over the blurb and collapses it to one line', () => {
+    expect(
+      readHubWelcome({ welcome_text: '  Bring a part,\n leave  with a part. ', description: 'A workshop' })
+        .welcome,
+    ).toBe('Bring a part, leave with a part.');
+    expect(readHubWelcome({ description: 'A workshop' }).welcome).toBe('A workshop');
+  });
+
+  it('refuses a banner that is not a picture it can prove is safe', () => {
+    expect(readHubWelcome({ banner_hash: 'javascript:alert(1)' }).bannerSrc).toBeNull();
+    expect(readHubWelcome({ banner_hash: 42 as unknown as string }).bannerSrc).toBeNull();
+  });
+
+  it('keeps only the channel ids that are strings', () => {
+    expect(
+      readHubWelcome({ pinned_channels: ['t2', 7 as unknown as string, 't1'] }).featuredChannelIds,
+    ).toEqual(['t2', 't1']);
+  });
+});
+
+describe('featuredFirst', () => {
+  const rooms = [{ channelId: 'a' }, { channelId: 'b' }, { channelId: 'c' }];
+
+  it('leaves the order alone when nothing is featured', () => {
+    expect(featuredFirst(rooms, []).map((room) => room.channelId)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('puts featured rooms first, in the order the operator chose them', () => {
+    expect(featuredFirst(rooms, ['c', 'b']).map((room) => room.channelId)).toEqual(['c', 'b', 'a']);
+  });
+
+  it('ignores a featured id for a room that is not here', () => {
+    expect(featuredFirst(rooms, ['zz', 'b']).map((room) => room.channelId)).toEqual(['b', 'a', 'c']);
+  });
+});
+
+describe('a featured text room', () => {
+  it('says it is featured without spending a light token on it', () => {
+    const { container } = render(
+      <TextRoomRow room={textRoom(false)} featured onOpen={() => {}} />,
+    );
+    expect(screen.getByText('Featured by this building')).toBeInTheDocument();
+    expect(container.innerHTML).not.toContain('light-white');
+    expect(container.innerHTML).not.toContain('light-amber');
+  });
+
+  it('says nothing when it is an ordinary room', () => {
+    render(<TextRoomRow room={textRoom(false)} onOpen={() => {}} />);
+    expect(screen.queryByText('Featured by this building')).not.toBeInTheDocument();
   });
 });
 

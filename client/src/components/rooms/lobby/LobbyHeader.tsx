@@ -13,6 +13,14 @@ export interface LobbyHeaderProps {
   iconSrc?: string | null;
   /** "24 of 61 have their lights on · 2 rooms lit · thermal test at 1 pm". */
   summary: string;
+  /**
+   * What the building's operator wrote about it (`hub_settings.welcome_text`).
+   * When they wrote one it IS the secondary sentence: a building gets one line,
+   * and the person who runs it outranks the generated one. The generated line
+   * stays in the accessibility tree so §9's text equivalent for the light does
+   * not go with it.
+   */
+  welcome?: string | null;
   /** Invite is offered only when there is a room to invite somebody into. */
   onInvite?: () => void;
   /** Space settings — permission-gated by the caller. */
@@ -26,12 +34,15 @@ export interface LobbyHeaderProps {
  *
  * The summary line is the §9 text equivalent for everything the window maps and
  * lit cards below say in light: how many people are here, how many rooms are
- * lit, what is coming up.
+ * lit, what is coming up. When the operator has written a welcome line, that
+ * line is shown instead and the summary moves into the accessibility tree — the
+ * words are still there, the band is still one line deep.
  */
 export const LobbyHeader = React.forwardRef<HTMLElement, LobbyHeaderProps>(function LobbyHeader(
-  { guildId, name, iconSrc, summary, onInvite, onSettings },
+  { guildId, name, iconSrc, summary, welcome, onInvite, onSettings },
   ref,
 ) {
+  const written = welcome?.trim() ?? '';
   return (
     <header ref={ref} className="flex flex-wrap items-end gap-x-4 gap-y-3">
       <span
@@ -55,7 +66,14 @@ export const LobbyHeader = React.forwardRef<HTMLElement, LobbyHeaderProps>(funct
         <h1 className="pc-display text-display break-words text-text-primary sm:truncate">
           {name}
         </h1>
-        <p className="truncate text-meta text-text-faint">{summary}</p>
+        {written ? (
+          <>
+            <p className="truncate text-meta text-text-body">{written}</p>
+            <p className="sr-only">{summary}</p>
+          </>
+        ) : (
+          <p className="truncate text-meta text-text-faint">{summary}</p>
+        )}
       </div>
 
       <div className="flex shrink-0 items-center gap-1.5">

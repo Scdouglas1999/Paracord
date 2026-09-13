@@ -36,6 +36,7 @@ import {
   nextEventCaption,
   roomsLitCaption,
 } from './lobbyCaptions';
+import { featuredFirst, readHubWelcome } from './hubWelcome';
 import { shortClock, trafficStamp } from './lobbyTime';
 import { useNextEvent } from './useNextEvent';
 import { messageTimeMs, useRecentMedia } from './useRecentMedia';
@@ -78,6 +79,11 @@ function orderVoiceRooms(rooms: readonly RoomLight[]): RoomLight[] {
  *
  * Two sections are **omitted entirely** when they are empty rather than drawn as
  * a placeholder: the event card and the media strip (§7.3).
+ *
+ * The building's hub settings land here too, each in the place it is already
+ * true of the Lobby rather than in a briefing block of their own: the operator's
+ * welcome line becomes the header's sentence, the banner a thin band above it,
+ * and the rooms they featured come first. See `hubWelcome.ts`.
  */
 export function Lobby({ guildId }: LobbyProps) {
   const navigate = useNavigate();
@@ -140,21 +146,30 @@ export function Lobby({ guildId }: LobbyProps) {
     [channels],
   );
 
+  // What the building's operator wrote about it: one welcome line, a thin
+  // banner, and the rooms they chose to put first (§7.3, `hubWelcome.ts`).
+  const hub = useMemo(() => readHubWelcome(guild?.hub_settings), [guild?.hub_settings]);
+
   const rooms = useMemo(() => building?.rooms ?? NO_ROOMS, [building]);
+  const featuredIds = hub.featuredChannelIds;
+  const featuredSet = useMemo(() => new Set(featuredIds), [featuredIds]);
   const voiceRooms = useMemo(
-    () => orderVoiceRooms(rooms.filter((room) => room.kind === 'voice')),
-    [rooms],
+    () => featuredFirst(orderVoiceRooms(rooms.filter((room) => room.kind === 'voice')), featuredIds),
+    [rooms, featuredIds],
   );
   const textRooms = useMemo(
     () =>
-      [...rooms.filter((room) => room.kind === 'text')].sort(
-        (a, b) =>
-          Number(b.lit) - Number(a.lit) ||
-          b.readingCount - a.readingCount ||
-          a.order - b.order ||
-          a.name.localeCompare(b.name),
+      featuredFirst(
+        [...rooms.filter((room) => room.kind === 'text')].sort(
+          (a, b) =>
+            Number(b.lit) - Number(a.lit) ||
+            b.readingCount - a.readingCount ||
+            a.order - b.order ||
+            a.name.localeCompare(b.name),
+        ),
+        featuredIds,
       ),
-    [rooms],
+    [rooms, featuredIds],
   );
   const textChannelIds = useMemo(
     () => channels.filter(isTextDestination).map((channel) => channel.id),
@@ -223,11 +238,27 @@ export function Lobby({ guildId }: LobbyProps) {
         bare
         className="flex h-full flex-col gap-[18px] overflow-y-auto scrollbar-thin px-4 py-5 sm:px-6 sm:py-[22px]"
       >
+        {/* The building's own picture, as a band and nothing more: no gradient,
+            no text over it, no hero (§6.1, §6.2). It is 64px tall so the rooms
+            below stay on screen. */}
+        {hub.bannerSrc && (
+          <img
+            src={hub.bannerSrc}
+            alt=""
+            draggable={false}
+            className={
+              '-mx-4 -mt-5 h-16 w-full shrink-0 object-cover sm:-mx-6 sm:-mt-[22px] '
+              + 'rounded-t-[var(--radius-plate)]'
+            }
+          />
+        )}
+
         <LobbyHeader
           guildId={guildId}
           name={guild.name}
           iconSrc={resolveGuildIconUrl(guild)}
           summary={summary}
+          welcome={hub.welcome}
           onInvite={inviteChannelId ? () => setShowInvite(true) : undefined}
           onSettings={canManage ? () => openGuildSettings(guildId) : undefined}
         />
@@ -319,6 +350,7 @@ export function Lobby({ guildId }: LobbyProps) {
                     }
                     lastAt={atMs != null ? trafficStamp(atMs, Date.now()) : null}
                     preview={last?.content ?? null}
+                    featured={featuredSet.has(room.channelId)}
                     onOpen={() => openChannel(room.channelId)}
                   />
                 );
