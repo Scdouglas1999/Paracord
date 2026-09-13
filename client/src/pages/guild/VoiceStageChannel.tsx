@@ -837,7 +837,7 @@ export function VoiceStageChannel({
                 disabled={stageBusy || stageRequestBusy}
                 onClick={() => { void inviteSpeaker(participant.user_id); }}
               >
-                <Check size={14} className="mr-1" /> Invite
+                <Check size={14} className="mr-1" /> Let them speak
               </Button>
               <IconButton
                 label={`Dismiss ${displayName(participant)}'s request`}
