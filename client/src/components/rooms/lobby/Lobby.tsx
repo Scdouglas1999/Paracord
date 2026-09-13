@@ -42,6 +42,7 @@ import { featuredFirst, readHubWelcome } from './hubWelcome';
 import { shortClock, trafficStamp } from './lobbyTime';
 import { useNextEvent } from './useNextEvent';
 import { messageTimeMs, useRecentMedia } from './useRecentMedia';
+import { useRoomPreviews, type PreviewRequest } from './useRoomPreviews';
 
 export interface LobbyProps {
   guildId: string;
@@ -191,6 +192,22 @@ export function Lobby({ guildId }: LobbyProps) {
 
   const { event, toggleRsvp } = useNextEvent(guildId);
   const media = useRecentMedia(textChannelIds);
+
+  // §7.3 asks each text room for its last author, time and line. The rooms this
+  // client has opened already have one in the message store; the rest are asked
+  // for it once, through a read-only door that cannot disturb the open room's
+  // own history (see `useRoomPreviews`).
+  const previewRequests = useMemo<PreviewRequest[]>(
+    () =>
+      textRooms
+        .filter((room) => (messagesByChannel[room.channelId] ?? []).length === 0)
+        .map((room) => ({
+          channelId: room.channelId,
+          lastMessageId: lastMessageIds.get(room.channelId) ?? null,
+        })),
+    [textRooms, messagesByChannel, lastMessageIds],
+  );
+  const previews = useRoomPreviews(previewRequests);
 
   const litPeople = useMemo(
     () =>
@@ -386,14 +403,24 @@ export function Lobby({ guildId }: LobbyProps) {
               {textRooms.map((room) => {
                 const loaded = messagesByChannel[room.channelId] ?? [];
                 const last = loaded.length > 0 ? loaded[loaded.length - 1] : null;
-                // A loaded message carries its own stamp; an unopened room has
-                // only the channel's last snowflake to go on.
+                const fetched = previews.get(room.channelId) ?? null;
+                // A loaded message carries its own stamp; a fetched line carries
+                // its own; an unopened room we could not read has only the
+                // channel's last snowflake to go on.
                 const fallbackId = lastMessageIds.get(room.channelId) ?? null;
                 const atMs = last
                   ? messageTimeMs(last)
-                  : fallbackId
-                    ? snowflakeMs(fallbackId)
-                    : null;
+                  : fetched
+                    ? fetched.atMs
+                    : fallbackId
+                      ? snowflakeMs(fallbackId)
+                      : null;
+                const author = last?.author ? displayName(last.author) : fetched?.author ?? null;
+                const preview = last ? last.content ?? null : fetched?.preview || null;
+                // Nothing loaded, nothing fetched and no snowflake: the room has
+                // genuinely never been written in, and says so rather than
+                // rendering as three blanks (§6.9).
+                const silent = !last && !fetched && !fallbackId;
                 return (
                   <TextRoomRow
                     key={room.key}
@@ -401,11 +428,10 @@ export function Lobby({ guildId }: LobbyProps) {
                     active={selectedChannelId === room.channelId}
                     unread={isChannelUnread.has(room.channelId)}
                     mentionCount={channelMentionCounts.get(room.channelId) ?? 0}
-                    lastAuthor={
-                      last?.author ? displayName(last.author) : null
-                    }
+                    lastAuthor={author}
                     lastAt={atMs != null ? trafficStamp(atMs, Date.now()) : null}
-                    preview={last?.content ?? null}
+                    preview={preview}
+                    silent={silent}
                     featured={featuredSet.has(room.channelId)}
                     onOpen={() => openChannel(room.channelId)}
                   />

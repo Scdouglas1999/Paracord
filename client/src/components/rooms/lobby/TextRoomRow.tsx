@@ -5,7 +5,7 @@ import { Chip } from '../../ui';
 import { AvatarStack } from '../../light';
 import { readingCaption, type RoomLight } from '../../../lib/attention/light';
 import { cn } from '../../../lib/utils';
-import { lastAuthorCaption, mentionCaption } from './lobbyCaptions';
+import { NOTHING_SAID_YET, lastAuthorCaption, mentionCaption } from './lobbyCaptions';
 
 export interface TextRoomRowProps {
   room: RoomLight;
@@ -20,6 +20,11 @@ export interface TextRoomRowProps {
   lastAt?: string | null;
   /** The last line itself. Absent for a room this client has never opened. */
   preview?: string | null;
+  /**
+   * Nobody has written in this room yet — there is no author, no line and no
+   * stamp to show, and three blanks read as a row that failed to load.
+   */
+  silent?: boolean;
   /** The building's operator pinned this room, so it sorts first and says so. */
   featured?: boolean;
   onOpen: () => void;
@@ -48,6 +53,7 @@ export const TextRoomRow = React.forwardRef<HTMLButtonElement, TextRoomRowProps>
       lastAuthor,
       lastAt,
       preview,
+      silent = false,
       featured = false,
       onOpen,
     },
@@ -55,7 +61,7 @@ export const TextRoomRow = React.forwardRef<HTMLButtonElement, TextRoomRowProps>
   ) {
     const readers = room.readers.map((reader) => reader.person);
     const mentions = mentionCaption(mentionCount);
-    const byline = lastAuthorCaption(lastAuthor, lastAt);
+    const byline = silent ? NOTHING_SAID_YET : lastAuthorCaption(lastAuthor, lastAt);
 
     return (
       <button
