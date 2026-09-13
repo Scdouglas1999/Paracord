@@ -380,6 +380,11 @@ test('capture the design-review screens', async ({ page }) => {
   await page.route('**/api/v2/voice/**', (route) => route.fulfill({ status: 204, body: '' }));
 
   const shoot = async (name: string) => {
+    // Park the pointer somewhere inert first: a cursor left over a control
+    // after a click opens its tooltip, and a frame under review should show the
+    // surface rather than a hover state nobody asked about.
+    const size = page.viewportSize();
+    if (size) await page.mouse.move(size.width - 3, size.height - 3);
     // Let the message runtime finish its first reconciliation and the fonts
     // load, so a shot never captures skeletons or a fallback face. `networkidle`
     // is no use here: the app holds an open realtime stream for its whole life.
@@ -568,8 +573,11 @@ test('capture the design-review screens', async ({ page }) => {
       url: '/attachments/9001',
       content_type: 'image/png',
     };
+    // A 16x10 near-black gradient rather than a single bright pixel: the strip
+    // scales what it is given to fill a tile, and a swatch of pure colour there
+    // reads as a design decision instead of as somebody's photograph.
     const pixel = Buffer.from(
-      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+      'iVBORw0KGgoAAAANSUhEUgAAABAAAAAKCAIAAAAy3EnLAAAAIUlEQVR42mOUkpFlRAJMTEz4uSh8YsCoBppoYCEYU2hcAIqrAluPM/lLAAAAAElFTkSuQmCC',
       'base64',
     );
 

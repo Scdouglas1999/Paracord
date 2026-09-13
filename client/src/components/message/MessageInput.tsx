@@ -1463,7 +1463,16 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
           maxLength={MAX_MESSAGE_LENGTH}
           disabled={showPollComposer}
           data-composer-input=""
-          className="min-w-[160px] flex-1 resize-none self-center bg-transparent px-1.5 py-2 text-body text-text-primary outline-none placeholder:text-text-faint disabled:cursor-not-allowed disabled:opacity-70"
+          // The invitation names the people who will read it (§7.4), which on a
+          // phone is longer than the composer is wide. Clipping the PLACEHOLDER
+          // to one line keeps the composer at its §3 height; a real draft still
+          // wraps and grows, which is what a draft should do.
+          className={
+            'min-w-[160px] flex-1 resize-none self-center bg-transparent px-1.5 py-2 text-body '
+            + 'text-text-primary outline-none disabled:cursor-not-allowed disabled:opacity-70 '
+            + 'placeholder:overflow-hidden placeholder:text-ellipsis placeholder:whitespace-nowrap '
+            + 'placeholder:text-text-faint'
+          }
           style={{ maxHeight: '50vh' }}
         />
 
