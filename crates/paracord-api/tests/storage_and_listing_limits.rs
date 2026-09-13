@@ -442,13 +442,29 @@ async fn distinct_reactions_per_message_are_capped() -> anyhow::Result<()> {
     );
     let message_id = message["id"].as_str().context("message id")?.to_string();
 
+    // Real emoji, one per slot: a reaction that is not an emoji is refused by
+    // the route before the cap is ever consulted.
+    let emoji_at = |index: usize| -> String {
+        let mut encoded = String::new();
+        let mut buffer = [0u8; 4];
+        for byte in char::from_u32(0x1F600 + index as u32)
+            .expect("the emoticons block is contiguous here")
+            .encode_utf8(&mut buffer)
+            .as_bytes()
+        {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+        encoded
+    };
+
     let cap = paracord_db::reactions::MAX_REACTIONS_PER_MESSAGE as usize;
     for index in 0..cap {
+        let emoji = emoji_at(index);
         let (status, payload) = ctx
             .request_json(
                 Method::PUT,
                 &format!(
-                    "/api/v1/channels/{channel_id}/messages/{message_id}/reactions/react{index}/@me"
+                    "/api/v1/channels/{channel_id}/messages/{message_id}/reactions/{emoji}/@me"
                 ),
                 None,
             )
@@ -460,10 +476,13 @@ async fn distinct_reactions_per_message_are_capped() -> anyhow::Result<()> {
         );
     }
 
+    let one_too_many = emoji_at(cap);
     let (status, payload) = ctx
         .request_json(
             Method::PUT,
-            &format!("/api/v1/channels/{channel_id}/messages/{message_id}/reactions/toomany/@me"),
+            &format!(
+                "/api/v1/channels/{channel_id}/messages/{message_id}/reactions/{one_too_many}/@me"
+            ),
             None,
         )
         .await?;
@@ -476,10 +495,13 @@ async fn distinct_reactions_per_message_are_capped() -> anyhow::Result<()> {
 
     // An emoji the message already carries never widens the aggregate, so it
     // stays reactable at the cap.
+    let already_there = emoji_at(0);
     let (status, payload) = ctx
         .request_json(
             Method::PUT,
-            &format!("/api/v1/channels/{channel_id}/messages/{message_id}/reactions/react0/@me"),
+            &format!(
+                "/api/v1/channels/{channel_id}/messages/{message_id}/reactions/{already_there}/@me"
+            ),
             None,
         )
         .await?;

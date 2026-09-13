@@ -436,7 +436,12 @@ async fn message_list_page_shape_with_reactions_is_stable() -> anyhow::Result<()
     // React to the first message with two emoji, and the second with one.
     let first = &message_ids[0];
     let second = &message_ids[1];
-    for (message_id, emoji) in [(first, "thumbsup"), (first, "heart"), (second, "thumbsup")] {
+    // Percent-encoded in the path, stored verbatim: 👍 and ❤️. A reaction has
+    // to be a real emoji or a custom emoji from this space — `thumbsup`, which
+    // these cases used to send, is neither.
+    const THUMBS_UP: &str = "%F0%9F%91%8D";
+    const HEART: &str = "%E2%9D%A4%EF%B8%8F";
+    for (message_id, emoji) in [(first, THUMBS_UP), (first, HEART), (second, THUMBS_UP)] {
         let (status, _) = ctx
             .request_json(
                 Method::PUT,
@@ -505,7 +510,7 @@ async fn message_list_page_shape_with_reactions_is_stable() -> anyhow::Result<()
         .map(|r| r["emoji"].as_str().unwrap_or_default())
         .collect();
     first_emojis.sort_unstable();
-    assert_eq!(first_emojis, vec!["heart", "thumbsup"]);
+    assert_eq!(first_emojis, vec!["\u{2764}\u{FE0F}", "\u{1F44D}"]);
     for reaction in first_reactions {
         assert_eq!(reaction["count"], json!(1));
         assert_eq!(reaction["me"], json!(true));
@@ -517,7 +522,7 @@ async fn message_list_page_shape_with_reactions_is_stable() -> anyhow::Result<()
         .and_then(Value::as_array)
         .context("second message reactions array")?;
     assert_eq!(second_reactions.len(), 1);
-    assert_eq!(second_reactions[0]["emoji"], "thumbsup");
+    assert_eq!(second_reactions[0]["emoji"], "\u{1F44D}");
     assert_eq!(second_reactions[0]["count"], json!(1));
     assert_eq!(second_reactions[0]["me"], json!(true));
 
@@ -718,7 +723,9 @@ async fn add_reaction_without_add_reactions_permission_is_forbidden() -> anyhow:
     let (status, payload) = ctx
         .request_json_as(
             Method::PUT,
-            &format!("/api/v1/channels/{channel_id}/messages/{message_id}/reactions/thumbsup/@me"),
+            &format!(
+                "/api/v1/channels/{channel_id}/messages/{message_id}/reactions/%F0%9F%91%8D/@me"
+            ),
             None,
             &member_token,
         )
@@ -984,7 +991,7 @@ async fn cross_channel_reaction_write_is_rejected() -> anyhow::Result<()> {
         .request_json(
             Method::PUT,
             &format!(
-                "/api/v1/channels/{visible_channel_id}/messages/{message_id}/reactions/thumbsup/@me"
+                "/api/v1/channels/{visible_channel_id}/messages/{message_id}/reactions/%F0%9F%91%8D/@me"
             ),
             None,
         )
@@ -1000,7 +1007,7 @@ async fn cross_channel_reaction_write_is_rejected() -> anyhow::Result<()> {
         .request_json(
             Method::DELETE,
             &format!(
-                "/api/v1/channels/{visible_channel_id}/messages/{message_id}/reactions/thumbsup/@me"
+                "/api/v1/channels/{visible_channel_id}/messages/{message_id}/reactions/%F0%9F%91%8D/@me"
             ),
             None,
         )

@@ -794,3 +794,186 @@ mod message_token_markup_tests {
         }
     }
 }
+
+// ── Reaction emoji ──────────────────────────────────────────────────────────
+
+/// The longest reaction a client can send, in Unicode scalar values.
+///
+/// A single grapheme can legitimately be long — a family ZWJ sequence with skin
+/// tones runs to eleven scalars, a subdivision flag to fourteen — but nothing
+/// real approaches this, and the column is 64 characters wide.
+const MAX_REACTION_EMOJI_SCALARS: usize = 24;
+
+/// What a reaction path segment turned out to be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReactionEmoji {
+    /// A Unicode emoji, stored verbatim.
+    Unicode,
+    /// A custom emoji token, `<:name:id>` or `<a:name:id>`. The caller must
+    /// still check that the id names an emoji this channel may use.
+    Custom { id: i64, animated: bool },
+}
+
+/// Whether a scalar may appear in a Unicode emoji sequence.
+///
+/// Deliberately a range check rather than a full Unicode emoji property table:
+/// the point is to refuse text, markup and arbitrary identifiers, not to
+/// adjudicate every future codepoint. Anything outside these blocks is not an
+/// emoji in any Unicode version this codebase will see, and the blocks are
+/// generous enough that a new emoji in an existing block keeps working.
+fn is_emoji_scalar(c: char) -> bool {
+    matches!(u32::from(c),
+        0x00A9 | 0x00AE                 // © ®
+        | 0x200D                        // zero-width joiner
+        | 0x203C | 0x2049               // ‼ ⁉
+        | 0x20E3                        // combining enclosing keycap
+        | 0x2122 | 0x2139               // ™ ℹ
+        | 0x2194..=0x21AA               // arrows used as emoji
+        | 0x231A..=0x231B | 0x2328
+        | 0x23CF..=0x23FA
+        | 0x24C2
+        | 0x25AA..=0x25FE
+        | 0x2600..=0x27BF               // misc symbols + dingbats
+        | 0x2934..=0x2935
+        | 0x2B00..=0x2BFF
+        | 0x3030 | 0x303D | 0x3297 | 0x3299
+        | 0xFE0E..=0xFE0F               // variation selectors
+        | 0x1F000..=0x1FAFF             // the emoji planes
+        | 0xE0020..=0xE007F             // tag characters (subdivision flags)
+    )
+}
+
+/// `#`, `*` and the digits are emoji only as the base of a keycap sequence.
+fn is_keycap_base(c: char) -> bool {
+    c == '#' || c == '*' || c.is_ascii_digit()
+}
+
+/// Classify a reaction path segment, refusing anything that is not an emoji.
+///
+/// Every string was accepted before this: `notanemoji`, `<script>`, and custom
+/// emoji ids for emoji that do not exist all stored fine and came back on the
+/// message forever.
+pub fn validate_reaction_emoji(value: &str) -> Result<ReactionEmoji, ValidationError> {
+    if value.is_empty() {
+        return Err(ValidationError::TooShort { min: 1, got: 0 });
+    }
+
+    if let Some(rest) = value.strip_prefix('<') {
+        let rest = rest
+            .strip_suffix('>')
+            .ok_or(ValidationError::InvalidFormat)?;
+        let (animated, rest) = match rest.strip_prefix('a') {
+            Some(after) => (true, after),
+            None => (false, rest),
+        };
+        let rest = rest
+            .strip_prefix(':')
+            .ok_or(ValidationError::InvalidFormat)?;
+        let (name, id) = rest
+            .rsplit_once(':')
+            .ok_or(ValidationError::InvalidFormat)?;
+        if name.is_empty()
+            || name.chars().count() > 32
+            || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            return Err(ValidationError::InvalidFormat);
+        }
+        if id.is_empty() || id.len() > 20 || !id.chars().all(|c| c.is_ascii_digit()) {
+            return Err(ValidationError::InvalidFormat);
+        }
+        let id: i64 = id.parse().map_err(|_| ValidationError::InvalidFormat)?;
+        if id <= 0 {
+            return Err(ValidationError::InvalidFormat);
+        }
+        return Ok(ReactionEmoji::Custom { id, animated });
+    }
+
+    // A custom token bounds itself through its name and id above; only a
+    // Unicode sequence needs a scalar ceiling of its own.
+    let scalars = value.chars().count();
+    if scalars > MAX_REACTION_EMOJI_SCALARS {
+        return Err(ValidationError::TooLong {
+            max: MAX_REACTION_EMOJI_SCALARS,
+            got: scalars,
+        });
+    }
+
+    // A keycap sequence is the one place ASCII belongs, and only as the base.
+    let keycap = value.chars().any(|c| u32::from(c) == 0x20E3);
+    if value
+        .chars()
+        .all(|c| is_emoji_scalar(c) || (keycap && is_keycap_base(c)))
+    {
+        Ok(ReactionEmoji::Unicode)
+    } else {
+        Err(ValidationError::InvalidCharacters)
+    }
+}
+
+#[cfg(test)]
+mod reaction_emoji_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_the_shapes_a_client_can_actually_send() {
+        for value in [
+            "\u{1F600}",                  // 😀
+            "\u{2620}\u{FE0F}",           // ☠️ with a variation selector
+            "\u{1F469}\u{200D}\u{1F4BB}", // 👩‍💻, a ZWJ sequence
+            "\u{1F44D}\u{1F3FF}",         // 👍🏿, a skin tone modifier
+            "\u{1F1EC}\u{1F1E7}",         // 🇬🇧, regional indicators
+            "1\u{FE0F}\u{20E3}",          // 1️⃣, a keycap sequence
+            "\u{00A9}\u{FE0F}",           // ©️
+        ] {
+            assert_eq!(
+                validate_reaction_emoji(value).unwrap(),
+                ReactionEmoji::Unicode,
+                "{value:?} should be a unicode emoji"
+            );
+        }
+        assert_eq!(
+            validate_reaction_emoji("<:shipit:123>").unwrap(),
+            ReactionEmoji::Custom {
+                id: 123,
+                animated: false
+            }
+        );
+        assert_eq!(
+            validate_reaction_emoji("<a:party_parrot:9876543210>").unwrap(),
+            ReactionEmoji::Custom {
+                id: 9876543210,
+                animated: true
+            }
+        );
+    }
+
+    #[test]
+    fn refuses_everything_that_is_not_an_emoji() {
+        for value in [
+            "",
+            "notanemoji",
+            "<script>",
+            "a",
+            "1",        // a bare digit is not a keycap
+            ":shipit:", // a shortcode is not a reaction
+            "<:shipit:>",
+            "<::123>",
+            "<:ship it:123>",
+            "<:shipit:abc>",
+            "<:shipit:123",
+            "\u{1F600} and text",
+            "\u{202E}\u{1F600}", // right-to-left override smuggled alongside
+        ] {
+            assert!(
+                validate_reaction_emoji(value).is_err(),
+                "{value:?} should be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn refuses_a_sequence_longer_than_any_real_grapheme() {
+        let too_long: String = std::iter::repeat_n('\u{1F600}', 25).collect();
+        assert!(validate_reaction_emoji(&too_long).is_err());
+    }
+}

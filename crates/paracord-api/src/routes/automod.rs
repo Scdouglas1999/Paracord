@@ -6,6 +6,7 @@
 
 use axum::{
     extract::{Path, Query, State},
+    http::StatusCode,
     Json,
 };
 use paracord_core::automod::{RuleAction, RuleConfig, TriggerKind, MAX_RULES_PER_GUILD};
@@ -196,7 +197,7 @@ pub async fn create_rule(
     auth: AuthUser,
     Path(guild_id): Path<i64>,
     Json(body): Json<CreateRuleBody>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<(StatusCode, Json<Value>), ApiError> {
     let user_id = auth.user_id;
     ensure_manage_guild(&state, guild_id, user_id).await?;
 
@@ -251,7 +252,9 @@ pub async fn create_rule(
     )
     .await;
 
-    Ok(Json(rule_to_json(&row)))
+    // Creating a rule creates a resource; every sibling create route on this
+    // server answers 201 and this one answered 200.
+    Ok((StatusCode::CREATED, Json(rule_to_json(&row))))
 }
 
 #[derive(Deserialize)]

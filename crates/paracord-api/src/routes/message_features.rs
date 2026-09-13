@@ -18,6 +18,29 @@ fn parse_datetime(value: &str) -> Result<DateTime<Utc>, ApiError> {
     Ok(parsed.with_timezone(&Utc))
 }
 
+/// The furthest ahead a message may be scheduled.
+///
+/// There was a floor and no ceiling, so a message scheduled for the year 9999
+/// was accepted and sat in the queue forever — while a poll, the neighbouring
+/// timed feature, is capped at 14 days. A year is generous for "send this on
+/// their birthday" and still a bound.
+const MAX_SCHEDULE_AHEAD_DAYS: i64 = 365;
+
+fn ensure_schedulable(send_at: chrono::DateTime<Utc>) -> Result<(), ApiError> {
+    let now = Utc::now();
+    if send_at < now + chrono::Duration::seconds(5) {
+        return Err(ApiError::BadRequest(
+            "send_at must be at least 5 seconds in the future".into(),
+        ));
+    }
+    if send_at > now + chrono::Duration::days(MAX_SCHEDULE_AHEAD_DAYS) {
+        return Err(ApiError::BadRequest(format!(
+            "send_at must be within {MAX_SCHEDULE_AHEAD_DAYS} days"
+        )));
+    }
+    Ok(())
+}
+
 fn parse_optional_i64(raw: Option<&str>, field: &str) -> Result<Option<i64>, ApiError> {
     raw.map(|v| {
         v.parse::<i64>()
@@ -250,12 +273,7 @@ pub async fn create_scheduled_message(
     }
 
     let send_at = parse_datetime(&body.send_at)?;
-    let min_send_at = Utc::now() + chrono::Duration::seconds(5);
-    if send_at < min_send_at {
-        return Err(ApiError::BadRequest(
-            "send_at must be at least 5 seconds in the future".into(),
-        ));
-    }
+    ensure_schedulable(send_at)?;
 
     let content = body.content.unwrap_or_default();
     let content_trimmed = content.trim();
@@ -410,12 +428,7 @@ pub async fn update_scheduled_message(
     }
 
     let send_at = parse_datetime(&body.send_at)?;
-    let min_send_at = Utc::now() + chrono::Duration::seconds(5);
-    if send_at < min_send_at {
-        return Err(ApiError::BadRequest(
-            "send_at must be at least 5 seconds in the future".into(),
-        ));
-    }
+    ensure_schedulable(send_at)?;
 
     let content = body.content.unwrap_or_default();
     let content_trimmed = content.trim();

@@ -13,6 +13,14 @@ pub async fn add_reaction(
     if emoji.chars().count() > MAX_REACTION_EMOJI_LEN {
         return Err(ApiError::BadRequest("emoji is too long".into()));
     }
+    // Anything at all used to be accepted here and pinned to the message
+    // forever: `notanemoji`, `<script>`, a custom emoji id for an emoji that
+    // does not exist. A reaction is one of two things or it is nothing.
+    let kind = paracord_util::validation::validate_reaction_emoji(&emoji).map_err(|_| {
+        ApiError::BadRequest(
+            "emoji must be a Unicode emoji or a custom emoji from this space".into(),
+        )
+    })?;
     let channel = paracord_db::channels::get_channel(&state.db, channel_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
@@ -29,6 +37,27 @@ pub async fn add_reaction(
     )
     .await?;
 
+    // A custom emoji has to exist, and in a space it has to be that space's:
+    // the reaction is rendered from the space's authenticated emoji route, so a
+    // foreign or dangling id is a permanently broken image on the message.
+    let custom_emoji_id = match kind {
+        paracord_util::validation::ReactionEmoji::Unicode => None,
+        paracord_util::validation::ReactionEmoji::Custom { id, .. } => {
+            let emoji_row = paracord_db::emojis::get_emoji(&state.db, id)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+                .ok_or_else(|| ApiError::BadRequest("that custom emoji does not exist".into()))?;
+            if let Some(guild_id) = channel.guild_id() {
+                if emoji_row.guild_id != guild_id {
+                    return Err(ApiError::BadRequest(
+                        "that custom emoji belongs to another space".into(),
+                    ));
+                }
+            }
+            Some(id)
+        }
+    };
+
     let message = paracord_db::messages::get_message(&state.db, message_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
@@ -41,9 +70,15 @@ pub async fn add_reaction(
     // the From<DbError> impl maps to 409 Conflict. Without it one member could
     // pin an unbounded set of emoji to a message and tax every later read of
     // the channel page it sits on.
-    paracord_db::reactions::add_reaction(&state.db, message_id, auth.user_id, &emoji, None)
-        .await
-        .map_err(ApiError::from)?;
+    paracord_db::reactions::add_reaction(
+        &state.db,
+        message_id,
+        auth.user_id,
+        &emoji,
+        custom_emoji_id,
+    )
+    .await
+    .map_err(ApiError::from)?;
 
     let emoji_for_federation = emoji.clone();
     let guild_id = channel.guild_id();

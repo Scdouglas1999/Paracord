@@ -16,6 +16,22 @@ use crate::routes::mod_log;
 /// clean insert on SQLite and a 500 on PostgreSQL.
 const MAX_ROLE_NAME_LEN: usize = 100;
 
+/// The highest 24-bit RGB value a role colour can carry.
+///
+/// Every consumer — the client's swatch, the member list, the role editor —
+/// reads this as `#RRGGBB`. `999999999` and `-1` stored and echoed back fine
+/// and rendered as whatever the truncation happened to produce.
+const MAX_ROLE_COLOR: i32 = 0xFF_FF_FF;
+
+fn validate_role_color(color: i32) -> Result<(), ApiError> {
+    if !(0..=MAX_ROLE_COLOR).contains(&color) {
+        return Err(ApiError::BadRequest(
+            "color must be between 0x000000 and 0xFFFFFF".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_role_name(name: &str) -> Result<(), ApiError> {
     if name.len() > MAX_ROLE_NAME_LEN {
         return Err(ApiError::BadRequest("Role name is too long".into()));
@@ -103,6 +119,7 @@ pub async fn create_role(
     Json(body): Json<CreateRoleRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     validate_role_name(&body.name)?;
+    validate_role_color(body.color)?;
     let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
@@ -214,6 +231,9 @@ pub async fn update_role(
 ) -> Result<Json<Value>, ApiError> {
     if let Some(name) = body.name.as_deref() {
         validate_role_name(name)?;
+    }
+    if let Some(color) = body.color {
+        validate_role_color(color)?;
     }
     let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
         .await
