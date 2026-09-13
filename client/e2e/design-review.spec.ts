@@ -18,7 +18,23 @@ import { guildDetailFixture, guildSummaryFixture } from '../src/test/guildContra
 
 const WP = process.env.PARACORD_E2E_DESIGN_WP ?? 'wp0';
 
-const OUT_DIR = path.resolve(process.cwd(), '..', 'output', 'design-reference', WP);
+/**
+ * Where the frames land. Defaults to the package's own folder; set
+ * `PARACORD_E2E_DESIGN_OUT` to gather several packages' frames into one, which
+ * is how the complete set is captured:
+ *
+ *   for wp in wp0 wp1 wp2 wp3 wp4 wp5 wp6 wp7; do
+ *     PARACORD_E2E_DESIGN=1 PARACORD_E2E_DESIGN_WP=$wp \
+ *     PARACORD_E2E_DESIGN_OUT=final npx playwright test e2e/design-review.spec.ts
+ *   done
+ */
+const OUT_DIR = path.resolve(
+  process.cwd(),
+  '..',
+  'output',
+  'design-reference',
+  process.env.PARACORD_E2E_DESIGN_OUT || WP,
+);
 
 const DESKTOP = { width: 1440, height: 900 } as const;
 const PHONE = { width: 390, height: 844 } as const;
@@ -1228,6 +1244,218 @@ test('capture the design-review screens', async ({ page }) => {
   /*   PARACORD_E2E_DESIGN=1 PARACORD_E2E_DESIGN_WP=wp5 npx playwright test   */
   /* ---------------------------------------------------------------------- */
   if (WP === 'wp5') {
+    /*
+     * A text room is worth looking at only when its lights say something, so
+     * the fixture is a BUILDING with people in it rather than the base set's
+     * lone operator: a cast who are members of the guild (the reading
+     * definition is scoped to a building's own people), three of them in the
+     * voice room next door, two typing in this one, and a topic on the room so
+     * §7.4's "Kestrel Robotics · <topic>" breadcrumb has both halves.
+     *
+     * Light comes from the gateway, not REST, so the realtime stream is served
+     * as a finite SSE body carrying one READY. Everything rides INSIDE READY:
+     * a dispatch that arrives before READY has taught the connection its
+     * history epoch costs the whole transport (`gateway/connectionManager`).
+     */
+    const person = (id: number, username: string, display: string) => ({
+      ...user,
+      id: String(id),
+      username,
+      display_name: display,
+      email: `${username}@example.test`,
+    });
+    const CAST = [
+      person(101, 'mara.okafor', 'Mara Okafor'),
+      person(102, 'priya.raman', 'Priya Raman'),
+      person(103, 'ren.ishikawa', 'Ren Ishikawa'),
+      person(104, 'tomas.lindqvist', 'Tomas Lindqvist'),
+      person(105, 'aisha.kone', 'Aisha Kone'),
+      person(106, 'jonas.berg', 'Jonas Berg'),
+      person(107, 'devon.park', 'Devon Park'),
+    ];
+    const extras = Array.from({ length: 17 }, (_, i) =>
+      person(200 + i, `member.${i}`, `Member ${i + 1}`),
+    );
+    const everyone = [...CAST, ...extras];
+    const MEMBERS = [user, ...everyone].map((u) => ({
+      user: u,
+      user_id: u.id,
+      roles: [],
+      joined_at: nowIso,
+      deaf: false,
+      mute: false,
+    }));
+
+    const roomWithTopic = { ...textChannel, topic: 'Hardware bring-up' };
+    const roomChannels = [
+      roomWithTopic,
+      voiceChannel,
+      { ...textChannel, id: '2005', name: 'general', position: 2 },
+      { ...textChannel, id: '2006', name: 'parts-orders', position: 3 },
+    ];
+
+    // Messages from the cast, so the timeline shows lit authors rather than
+    // two people talking to themselves.
+    const roomMessages = [
+      { who: CAST[0], body: 'The thermal soak finished — channel 7 held at 61° the whole run.' },
+      { who: CAST[2], body: 'Nice. Did the mounting holes move? The v2 bracket was 0.4 mm off.' },
+      { who: CAST[0], body: 'Same footprint — I only touched the copper pour.' },
+      { who: CAST[1], body: 'Thermal rig is booked 1–3 pm. I will be in the shop if anyone wants to watch it cook.' },
+      { who: user, body: 'I will pull the trace into the review doc.' },
+    ].map((m, i) => ({
+      id: String(3200 + i),
+      channel_id: TEXT_CHANNEL_ID,
+      author: m.who,
+      content: m.body,
+      created_at: nowIso,
+      attachments: [],
+      reactions: [],
+    }));
+
+    const voiceStateFor = (who: typeof user, sharing: boolean) => ({
+      user_id: who.id,
+      channel_id: voiceChannel.id,
+      guild_id: GUILD_ID,
+      session_id: `s-${who.id}`,
+      username: who.username,
+      display_name: who.display_name,
+      avatar_hash: null,
+      deaf: false,
+      mute: false,
+      self_deaf: false,
+      self_mute: false,
+      self_stream: sharing,
+      self_video: false,
+      suppress: false,
+    });
+
+    /*
+     * The stream has to STAY OPEN. A finite `text/event-stream` body reaches
+     * EOF, the browser's EventSource reconnects, and every reconnect delivers
+     * another READY — which restarts the durable runtime's recovery fence and
+     * leaves the room permanently "waiting for authenticated recovery". So the
+     * stream is a `window.EventSource` replacement that emits once and then
+     * holds, which is exactly what `connectionManager` asks the platform for.
+     */
+    await page.addInitScript(() => {
+      const globalWindow = window as unknown as {
+        __pcStream?: unknown[];
+        EventSource: unknown;
+      };
+      class DesignEventSource {
+        static readonly CONNECTING = 0;
+        static readonly OPEN = 1;
+        static readonly CLOSED = 2;
+        readyState = 1;
+        withCredentials = true;
+        onopen: ((event: Event) => void) | null = null;
+        onmessage: ((event: MessageEvent<string>) => void) | null = null;
+        onerror: ((event: Event) => void) | null = null;
+        constructor(readonly url: string) {
+          setTimeout(() => {
+            if (this.readyState !== 1) return;
+            this.onopen?.(new Event('open'));
+            for (const f of globalWindow.__pcStream ?? []) {
+              if (this.readyState !== 1) return;
+              this.onmessage?.(new MessageEvent('message', { data: JSON.stringify(f) }));
+            }
+          }, 120);
+        }
+        addEventListener() {}
+        removeEventListener() {}
+        dispatchEvent() { return true; }
+        close() { this.readyState = 2; }
+      }
+      globalWindow.EventSource = DesignEventSource;
+    });
+
+    const frame = (t: string, d: unknown) => ({ op: 0, t, d });
+    const realtimeFrames = () => [
+      frame('READY', {
+        session_id: 'design-session',
+        database_history_epoch: historyEpoch,
+        user: { id: user.id },
+        guilds: [
+          {
+            id: GUILD_ID,
+            owner_id: user.id,
+            name: 'Kestrel Robotics',
+            icon_hash: null,
+            created_at: nowIso,
+            member_count: 61,
+            channels: roomChannels,
+            voice_states: [
+              voiceStateFor(CAST[0], true),
+              voiceStateFor(CAST[1], false),
+              voiceStateFor(CAST[2], false),
+            ],
+            presences: everyone.slice(0, 19).map((who) => ({
+              user_id: who.id,
+              status: who.id === '107' ? 'idle' : 'online',
+              activities: [],
+            })),
+          },
+        ],
+      }),
+      // Typing is one of the reading signals (`lib/attention/roomLight.ts`),
+      // and it is what makes the strip count people who have not posted.
+      frame('TYPING_START', { channel_id: TEXT_CHANNEL_ID, user_id: CAST[3].id, guild_id: GUILD_ID }),
+      frame('TYPING_START', { channel_id: TEXT_CHANNEL_ID, user_id: CAST[4].id, guild_id: GUILD_ID }),
+      frame('TYPING_START', { channel_id: TEXT_CHANNEL_ID, user_id: CAST[5].id, guild_id: GUILD_ID }),
+    ];
+
+    await page.addInitScript(
+      (frames) => {
+        (window as unknown as { __pcStream: unknown }).__pcStream = frames;
+      },
+      realtimeFrames(),
+    );
+
+    // Scenario REST, added last so it wins over the base handler.
+    await page.route('**/api/v1/**', async (route) => {
+      const { pathname } = new URL(route.request().url());
+      const json = (payload: unknown) =>
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          headers: { 'X-Paracord-History-Epoch': historyEpoch },
+          body: JSON.stringify(payload),
+        });
+      if (pathname === `/api/v1/guilds/${GUILD_ID}/channels`) return json(roomChannels);
+      if (pathname === `/api/v1/guilds/${GUILD_ID}/channels/visible`) {
+        return json({ channel_ids: roomChannels.map((c) => c.id) });
+      }
+      if (pathname === `/api/v1/guilds/${GUILD_ID}/members`) return json(MEMBERS);
+      if (pathname === `/api/v1/channels/${TEXT_CHANNEL_ID}`) return json(roomWithTopic);
+      if (pathname === `/api/v1/channels/${TEXT_CHANNEL_ID}/messages`) return json(roomMessages);
+      if (pathname === `/api/v1/channels/${TEXT_CHANNEL_ID}/messages/recovery`) {
+        const requested = new URL(route.request().url());
+        const after = requested.searchParams.get('after') ?? '0';
+        const knownIds = (requested.searchParams.get('known_ids') ?? '').split(',').filter(Boolean);
+        return json({
+          database_history_epoch: historyEpoch,
+          channel_id: TEXT_CHANNEL_ID,
+          after,
+          through: after,
+          floor: '0',
+          next: after,
+          complete: true,
+          projection_head: after,
+          changes: [],
+          states: knownIds.map((id) => ({
+            message_id: id,
+            state: 'present',
+            revision: after,
+            message: { ...roomMessages.find((m) => m.id === id), message_revision: after },
+          })),
+        });
+      }
+      if (pathname === `/api/v1/channels/${TEXT_CHANNEL_ID}/pins`) {
+        return json([roomMessages[0], roomMessages[3]]);
+      }
+      return route.fallback();
+    });
+
     const bothSizes = async (name: string, open: () => Promise<unknown>) => {
       for (const [label, viewport] of [
         ['1440x900', DESKTOP],
