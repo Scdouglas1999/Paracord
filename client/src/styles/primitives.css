@@ -105,18 +105,34 @@
    (`.voice-connected-pulse` borrows these keyframes and has no level of its
    own), so the layer costs nothing where nobody is speaking. */
 .pc-speaking {
-  --ring-voice: 0 0 18px rgba(var(--light-ring-rgb), calc(var(--ring-voice-a) * var(--voice-level)));
-  box-shadow: var(--ring-speaking), var(--ring-voice);
+  --voice-gain: calc(1 + 0.15 * var(--voice-level));
+  --ring-lit-voice: 0 0 0 var(--ring-edge)
+      rgba(var(--light-ring-rgb), min(1, calc(var(--ring-a-lit-edge) * var(--voice-gain)))),
+    0 0 var(--ring-glow-lit)
+      rgba(var(--light-ring-rgb), min(1, calc(var(--ring-a-lit-glow) * var(--voice-gain))));
+  --ring-speaking-voice: 0 0 0 var(--ring-edge)
+      rgba(var(--light-ring-rgb), min(1, calc(var(--ring-a-speaking-edge) * var(--voice-gain)))),
+    0 0 var(--ring-glow-speaking)
+      rgba(var(--light-ring-rgb), min(1, calc(var(--ring-a-speaking-glow) * var(--voice-gain))));
+  --ring-peak-voice: 0 0 0 var(--ring-edge)
+      rgba(var(--light-ring-rgb), min(1, calc(var(--ring-a-peak-edge) * var(--voice-gain)))),
+    0 0 var(--ring-glow-speaking)
+      rgba(var(--light-ring-rgb), min(1, calc(var(--ring-a-speaking-glow) * var(--voice-gain))));
+  box-shadow: var(--ring-speaking-voice);
   animation: pc-breathe var(--duration-breathe) var(--ease-in-out) infinite;
 }
 
+/* The two ends of the breath, each at whatever the voice is doing to the ring
+   right now. The fallbacks are for `.voice-connected-pulse`, which borrows
+   these keyframes for the on-air dot and has no voice of its own — at
+   `--voice-level: 0` the two are the same value anyway. */
 @keyframes pc-breathe {
   0%,
   100% {
-    box-shadow: var(--ring-lit), var(--ring-voice);
+    box-shadow: var(--ring-lit-voice, var(--ring-lit));
   }
   50% {
-    box-shadow: var(--ring-speaking-peak), var(--ring-voice);
+    box-shadow: var(--ring-peak-voice, var(--ring-speaking-peak));
   }
 }
 
@@ -223,6 +239,8 @@
 
 :root[data-motion='reduced'] .pc-speaking {
   animation: none;
+  /* The resting ring, with no voice in it: the level driver does not run under
+     reduced motion either (`lib/motion/voiceLevel.ts`). */
   box-shadow: var(--ring-speaking);
 }
 
@@ -265,6 +283,26 @@
    browser-driven path dresses its root snapshot exactly as the Web Animations
    path dresses the live DOM (`walk.ts` → `recedeAround`) — one choreography,
    two engines. */
+/* While the lights are changing, the shell crosses over as ONE thing.
+
+   Nearly every surface in the app carries a colour transition for its own hover
+   state (`.pc-transition` alone is background-color, color, box-shadow,
+   border-color and opacity), and swapping the theme restyles all of them at
+   once — several hundred 160ms property transitions running underneath a 400ms
+   crossfade. The motion gate found it as a dropped frame; §5 rejects it for a
+   better reason, which is that the base does not animate and only light and the
+   things people do move. The crossfade IS the transition, so for the length of
+   it nothing else is allowed to be one.
+
+   Scoped to the stamp `lib/motion/lights.ts` puts on <html> and removed with
+   it, so the properties are already at their new values by the time anything
+   can transition again and nothing jumps. */
+:root[data-motion-transition='lights-change'] *,
+:root[data-motion-transition='lights-change'] *::before,
+:root[data-motion-transition='lights-change'] *::after {
+  transition: none !important;
+}
+
 /* WP9d — "theme change as the lights changing" (§5.1, `lib/motion/lights.ts`).
    The one moment where the BASE is the thing that changes, so the root snapshot
    is the whole of it: it crosses over `--duration-dim` rather than the plain

@@ -32,6 +32,16 @@ let standing = [];
  * gate needs to be able to set it before the page loads.
  */
 let world = {};
+/**
+ * While this is on, the stream endpoint refuses and every open stream is cut.
+ *
+ * `__drop` is a gateway BLIP — the client's first retry is deliberately 0ms, so
+ * it is back before anybody could see it, which is exactly what WP9b's "lights
+ * on" wanted. WP9d's other half needs the opposite: a gateway that is really
+ * away, long enough for §5.1's outage to be worth drawing on the building. The
+ * only honest way to drive that is to stop answering.
+ */
+let offline = false;
 
 /** Write one gateway frame to every open stream. */
 function broadcast(frame) {
@@ -70,6 +80,22 @@ const server = createServer((request, response) => {
     response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ dropped }));
     return;
   }
+  if (url.pathname === '/__offline' && request.method === 'POST') {
+    let body = '';
+    request.on('data', (chunk) => { body += chunk; });
+    request.on('end', () => {
+      try {
+        const payload = JSON.parse(body || '{}');
+        offline = payload.offline !== false;
+      } catch {
+        response.writeHead(400).end('{"error":"bad offline"}');
+        return;
+      }
+      if (offline) { for (const stream of streams) stream.end(); streams.clear(); }
+      response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ offline }));
+    });
+    return;
+  }
   if (url.pathname === '/__emit' && request.method === 'POST') {
     let body = '';
     request.on('data', (chunk) => { body += chunk; });
@@ -89,6 +115,7 @@ const server = createServer((request, response) => {
     return;
   }
   if (url.pathname !== '/api/v2/rt/events') { response.writeHead(404).end(); return; }
+  if (offline) { response.writeHead(503, { 'Content-Type': 'application/json' }).end('{"error":"offline"}'); return; }
   response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
   const ready = { op: 0, t: 'READY', d: { session_id: url.searchParams.get('session_id') ?? 'mocked-session', database_history_epoch: epoch, user: { id: userId }, guilds: [], ...world } };
   response.write(`event: gateway\ndata: ${JSON.stringify(ready)}\n\n`);

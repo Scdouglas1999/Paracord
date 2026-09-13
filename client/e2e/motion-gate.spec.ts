@@ -12,6 +12,7 @@ import {
   MOTION_TEXT_CHANNEL_ID,
   MOTION_VOICE_CHANNEL_ID,
   MOTION_VOICE_CHANNEL_NAME,
+  setGatewayOffline,
   setStandingWorld,
   voiceFrame,
 } from './fixtures/motionFixture';
@@ -54,6 +55,7 @@ const SEQUENCE_BUDGET_MS = 1600;
 
 const OUT_DIR = path.resolve(process.cwd(), '..', 'output', 'design-reference', 'motion', 'frames-wp9a');
 const OUT_DIR_B = path.resolve(process.cwd(), '..', 'output', 'design-reference', 'motion', 'frames-wp9b');
+const OUT_DIR_D = path.resolve(process.cwd(), '..', 'output', 'design-reference', 'motion', 'frames-wp9d');
 
 interface MomentSample {
   /** Per frame: when, and what the engine had in flight when it was served. */
@@ -261,6 +263,9 @@ test.describe('the motion gate (§5.3)', () => {
   });
 
   test.afterEach(async () => {
+    // A spec that leaves the gateway offline takes every later one down with
+    // it, so the switch is put back whatever happened.
+    await setGatewayOffline(false);
     await setStandingWorld();
   });
 
@@ -806,6 +811,421 @@ test.describe('the motion gate (§5.3)', () => {
     );
   });
 
+  /* ------------------------------------------------------------------ */
+  /* WP9d — the ring takes the voice                                      */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * The level driver is the one part of the engine that runs on EVERY frame for
+   * as long as somebody is talking, so it is measured differently from every
+   * other moment here: not "did an animation stay inside its budget" but "what
+   * does the loop itself cost, frame after frame, and does it grow".
+   *
+   * The demo on `/design-tokens` drives it through the real `publishVoiceLevels`
+   * at the cadence the media engines actually report at — what is made up is
+   * the voice, and nothing else.
+   */
+  test('the speaking-ring level driver holds 60fps and grows nothing', async ({ page }) => {
+    test.setTimeout(180_000);
+    await page.setViewportSize({ width: 1440, height: 1200 });
+    await page.goto('/design-tokens');
+    await expect(page.getByRole('heading', { name: 'Motion', exact: true })).toBeVisible();
+    const card = page.locator('#motion-voice');
+    await card.scrollIntoViewIfNeeded();
+    const ring = card.locator('[data-motion-speaking="tokens-speaker"]');
+    await expect(ring).toBeVisible();
+
+    // 1. The ring is at rest before anybody speaks, and the property it reads
+    //    resolves to the value tokens.css declares.
+    expect(await ring.evaluate((el) => getComputedStyle(el).getPropertyValue('--voice-level').trim()))
+      .toBe('0');
+
+    // 2. The loop, sampled. §5.3's frame budget applies to the whole window:
+    //    nothing here is an "animation" the sampler can see (the breathe is
+    //    infinite and exempt), so the frames are judged on their own.
+    const run = await page.evaluate(async () => {
+      const frames: number[] = [];
+      const levels: number[] = [];
+      const target = document.querySelector<HTMLElement>('[data-motion-speaking="tokens-speaker"]')!;
+      let last = performance.now();
+      let stop = false;
+      const tick = (now: number) => {
+        frames.push(now - last);
+        last = now;
+        levels.push(Number(getComputedStyle(target).getPropertyValue('--voice-level')) || 0);
+        if (!stop) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+      document.querySelector<HTMLButtonElement>('#motion-voice button')!.click();
+      await new Promise((resolve) => setTimeout(resolve, 2_600));
+      stop = true;
+      return { frames: frames.slice(2), peak: Math.max(...levels), rest: levels[levels.length - 1] };
+    });
+
+    const sorted = [...run.frames].sort((a, b) => a - b);
+    const p95 = sorted[Math.floor(sorted.length * 0.95)];
+    const worst = sorted[sorted.length - 1];
+    const overBudget = run.frames.filter((delta) => delta > FRAME_BUDGET_MS);
+    console.log(
+      `[motion-gate] voice-level: frames=${run.frames.length} p95=${p95.toFixed(1)}ms `
+      + `worst=${worst.toFixed(1)}ms over-32ms=${overBudget.length} peak-level=${run.peak.toFixed(3)} `
+      + `at-rest=${run.rest.toFixed(3)}`,
+    );
+    // 2b. …and the ring really is brighter for it. The breathe swings the same
+    //     shadow over 1.6s, so a photograph cannot separate the two; the
+    //     composed value can. Every alpha in the ring is 15% higher at full
+    //     voice, and the geometry is untouched — §5.1 asks for intensity, not
+    //     for a ring that grows.
+    const composed = await ring.evaluate((el) => {
+      // The computed BOX-SHADOW, not the custom property: an unregistered
+      // custom property reports the token stream it was written with (`calc(…)`
+      // and all), and it is the shadow that says what is actually painted.
+      const shadowAt = (level: string) => {
+        el.style.setProperty('--voice-level', level);
+        const value = getComputedStyle(el).boxShadow;
+        el.style.removeProperty('--voice-level');
+        return value;
+      };
+      return { rest: shadowAt('0'), loud: shadowAt('1') };
+    });
+    const alphas = (shadow: string) =>
+      [...shadow.matchAll(/rgba?\([^)]*?(?:,\s*([\d.]+))?\)/g)].map((match) => Number(match[1] ?? 1));
+    const restAlphas = alphas(composed.rest);
+    const loudAlphas = alphas(composed.loud);
+    console.log(
+      `[motion-gate] voice-level: ring alphas at rest [${restAlphas.join(', ')}] `
+      + `· at full voice [${loudAlphas.join(', ')}]`,
+    );
+    // The ring at full voice is the ring at rest, 15% up — every alpha, and no
+    // extra layer, so "never below the resting ring" is arithmetic rather than
+    // a promise. (The absolute numbers are the BREATHE's interpolated value at
+    // the instant of the read, not the resting token: the voice rides on top of
+    // the breath rather than replacing it, which is exactly §5.1.)
+    expect(restAlphas).toHaveLength(loudAlphas.length);
+    expect(loudAlphas.length, 'the ring lost a layer').toBeGreaterThan(1);
+    for (let i = 0; i < restAlphas.length; i += 1) {
+      // 2dp throughout: a shadow's alpha is quantised to 8 bits.
+      expect(loudAlphas[i], `ring layer ${i} did not take the voice`).toBeGreaterThanOrEqual(restAlphas[i]);
+      expect(loudAlphas[i]).toBeCloseTo(Math.min(1, restAlphas[i] * 1.15), 2);
+    }
+    expect(loudAlphas.some((alpha, i) => alpha > restAlphas[i]), 'the ring never brightened').toBe(true);
+
+    expect(run.frames.length, 'the sampler saw no frames').toBeGreaterThan(60);
+    // §5.1: the ring actually took the voice, and gave it back.
+    expect(run.peak, 'the ring never brightened').toBeGreaterThan(0.6);
+    expect(run.rest, 'the ring never went back to resting').toBeLessThanOrEqual(0.05);
+    expect(p95, `the 95th-percentile frame is over ${FRAME_BUDGET_MS}ms`).toBeLessThanOrEqual(FRAME_BUDGET_MS);
+    expect(overBudget.map((delta) => `${delta.toFixed(1)}ms`)).toHaveLength(0);
+
+    // 3. And it must not GROW. The loop is written to allocate nothing per
+    //    frame — the elements are collected when the engine reports, and the
+    //    level is quantised into a table of strings built once — so 300 frames
+    //    of somebody talking must not move the heap.
+    const growth = await page.evaluate(async () => {
+      const memory = (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory;
+      if (!memory) return null;
+      const button = document.querySelector<HTMLButtonElement>('#motion-voice button')!;
+      button.click();
+      // Settle whatever the click itself allocated before the baseline.
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      const before = memory.usedJSHeapSize;
+      let frames = 0;
+      await new Promise<void>((resolve) => {
+        const tick = () => {
+          frames += 1;
+          // The phrase is ~2s; keep somebody talking for the whole window, so
+          // all 300 frames are frames the loop actually served.
+          if (frames % 90 === 0) button.click();
+          if (frames >= 300) resolve();
+          else requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      });
+      return { before, after: memory.usedJSHeapSize, frames };
+    });
+
+    if (growth == null) {
+      console.log('[motion-gate] voice-level: performance.memory is unavailable here — growth not measured');
+    } else {
+      const delta = growth.after - growth.before;
+      console.log(
+        `[motion-gate] voice-level: heap ${(growth.before / 1024).toFixed(0)}KiB → `
+        + `${(growth.after / 1024).toFixed(0)}KiB over ${growth.frames} frames (${(delta / 1024).toFixed(1)}KiB)`,
+      );
+      // The phrase itself is 2s long, so ~120 of these frames also carry the
+      // demo's own 90ms interval and the page's React tree. A megabyte over 300
+      // frames would mean the loop is allocating; 256KiB is the noise floor of
+      // a dev-server page with a garbage collector we do not control.
+      expect(delta, 'the level loop grew the heap across 300 frames').toBeLessThan(256 * 1024);
+    }
+  });
+
+  /* ------------------------------------------------------------------ */
+  /* WP9d — the lights change                                             */
+  /* ------------------------------------------------------------------ */
+
+  /** Play the theme change on `/design-tokens` and report what ran. */
+  async function changeTheme(page: Page, button: RegExp) {
+    const card = page.locator('#motion-lights-change');
+    await card.scrollIntoViewIfNeeded();
+    const before = await page.locator('html').getAttribute('data-theme');
+    const sample = await measureMoment(page, async () => {
+      await card.getByRole('button', { name: button }).click();
+    }, 2_000);
+    const after = await page.locator('html').getAttribute('data-theme');
+    expect(after, 'the theme never changed').not.toBe(before);
+    return sample;
+  }
+
+  test('theme change: the whole shell crosses over, and the lights re-bloom', async ({ page }) => {
+    test.setTimeout(180_000);
+    await page.setViewportSize({ width: 1440, height: 1200 });
+    await instrumentViewTransitions(page, { disable: true });
+    await page.goto('/design-tokens');
+    await expect(page.getByRole('heading', { name: 'Motion', exact: true })).toBeVisible();
+
+    const sample = await changeTheme(page, /^Change the lights \(crossfade\)$/);
+    await expect(page.getByText('Last run: crossfade.')).toBeVisible();
+    // The base goes down on --ease-in and comes back up on --ease-out, and the
+    // light elements re-bloom behind it — the whole of §5.1's "lights change".
+    expectRecipes('lights-change (crossfade)', sample, ['lights-out', 'lights-in', 'bloom']);
+    // One dropped frame, allowed BY NAME at one — the second fails. It is the
+    // frame the theme is actually applied on: `data-theme` changes, React
+    // re-renders this page and the browser restyles every surface under it.
+    // It is the app's restyle and not the engine's — with motion switched off
+    // entirely the same click costs the same frame in the same place (the
+    // reduced-motion case below measures and prints it) — and the dip exists
+    // precisely so that it happens where nobody can see it, which is the same
+    // thing the View Transitions path gets from holding a snapshot.
+    expectBudget('lights-change (crossfade)', sample, { droppedFrames: 1 });
+  });
+
+  test('theme change: the View Transitions path is the same moment', async ({ page }) => {
+    test.setTimeout(180_000);
+    await page.setViewportSize({ width: 1440, height: 1200 });
+    await instrumentViewTransitions(page, { disable: false });
+    await page.goto('/design-tokens');
+    await expect(page.getByRole('heading', { name: 'Motion', exact: true })).toBeVisible();
+
+    const sample = await changeTheme(page, /^Change the lights$/);
+    await expect(page.getByText('Last run: view-transition.')).toBeVisible();
+    expect(
+      await page.evaluate(() => (window as unknown as { __vtCalls: number }).__vtCalls),
+      'the browser-driven path did not run',
+    ).toBeGreaterThan(0);
+    // The lights still re-bloom, after the base has settled. Frames are not
+    // gated here for the reason WP9a recorded: the browser snapshots the whole
+    // viewport and this harness has no GPU.
+    expectRecipes('lights-change (view transitions)', sample, ['bloom']);
+    expectBudget('lights-change (view transitions)', sample, { frames: false });
+  });
+
+  /* ------------------------------------------------------------------ */
+  /* WP9d — the power goes                                                */
+  /* ------------------------------------------------------------------ */
+
+  test('the gateway goes away: the building dims, and relights when it is back', async ({ page }) => {
+    test.setTimeout(180_000);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openLitLobby(page);
+
+    const scrim = page.locator('#pc-motion-lights');
+    await expect(scrim, 'the building was already dark').toHaveCount(0);
+
+    // A real outage, not a blip: the stream endpoint stops answering, so the
+    // client reconnects and keeps failing. §5.1's grace has to elapse first.
+    const going = await measureMoment(page, async () => {
+      await setGatewayOffline(true);
+      await expect(scrim).toHaveCount(1, { timeout: 20_000 });
+    }, 1_200);
+    expectRecipes('outage', going, ['outage-dim']);
+    expectBudget('outage (the lights go down)', going);
+    // 30%, held — an outage is not a pulse, and the app is still usable under
+    // it (the scrim never takes a pointer event).
+    expect(await scrim.evaluate((el) => Number(getComputedStyle(el).opacity).toFixed(2))).toBe('0.30');
+    expect(await scrim.evaluate((el) => getComputedStyle(el).pointerEvents)).toBe('none');
+    // Never a spinner on the street.
+    await expect(page.locator('.animate-spin')).toHaveCount(0);
+
+    const coming = await measureMoment(page, async () => {
+      await setGatewayOffline(false);
+      await expect(scrim).toHaveCount(0, { timeout: 20_000 });
+    }, 3_200);
+    // The scrim lifts, and WP9b's "lights on" replays over the plates that went
+    // dark — windows blooming, and NOT a street arriving: a plate rises when it
+    // enters the street, and these never left it.
+    expectRecipes('relight', coming, ['outage-relight', 'bloom']);
+    expect(
+      [...recipesIn(coming)].filter((name) => name === 'data-motion-recipe:settle'),
+      'the plates travelled for a reconnect',
+    ).toEqual([]);
+    expectBudget('outage (the lights come back)', coming);
+  });
+
+  /**
+   * The visual half of WP9d (§10: "no package is done without inspected
+   * screenshots").
+   *
+   *   PARACORD_E2E_MOTION=1 PARACORD_E2E_MOTION_FRAMES=1 npx playwright test
+   */
+  test('capture the WP9d moments as frame strips', async ({ page }) => {
+    test.skip(process.env.PARACORD_E2E_MOTION_FRAMES !== '1', 'frame capture is opt-in');
+    test.setTimeout(300_000);
+    await mkdir(OUT_DIR_D, { recursive: true });
+    await page.setViewportSize({ width: 1280, height: 800 });
+    const { writeFile } = await import('node:fs/promises');
+    const client = await page.context().newCDPSession(page);
+
+    /**
+     * Record the wall clock of the first frame the ENGINE moved on — WP9b's
+     * convention, and the outage needs it more than anything measured there: a
+     * gateway has to be away for the whole 600ms grace, on top of however long
+     * the client takes to notice, so a strip labelled from the request would be
+     * most of a second of a building sitting still.
+     */
+    const armStartProbe = () =>
+      page.evaluate(() => {
+        const target = window as unknown as { __momentStart: number | null };
+        target.__momentStart = null;
+        const tick = () => {
+          if (target.__momentStart == null) {
+            const moving = document
+              .getAnimations()
+              .some((animation) => ((animation as Animation & { id?: string }).id ?? '').startsWith('data-motion-recipe:'));
+            if (moving) target.__momentStart = Date.now();
+          }
+          requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      });
+
+    async function capture(
+      name: string,
+      act: () => Promise<void>,
+      wanted: number[],
+      holdMs: number,
+      zeroOnEngine = false,
+    ) {
+      if (zeroOnEngine) await armStartProbe();
+      const frames: Array<{ at: number; data: string }> = [];
+      const onFrame = async (frame: { data: string; sessionId: number }) => {
+        frames.push({ at: Date.now(), data: frame.data });
+        await client.send('Page.screencastFrameAck', { sessionId: frame.sessionId }).catch(() => {});
+      };
+      client.on('Page.screencastFrame', onFrame);
+      await client.send('Page.startScreencast', { format: 'png', everyNthFrame: 1 });
+      await page.waitForTimeout(300);
+      const acted = Date.now();
+      await act();
+      await page.waitForTimeout(holdMs);
+      await client.send('Page.stopScreencast');
+      client.off('Page.screencastFrame', onFrame);
+      const zero = zeroOnEngine
+        ? (await page.evaluate(() => (window as unknown as { __momentStart: number | null }).__momentStart)) ?? acted
+        : acted;
+
+      let written = 0;
+      const picked = new Set<number>();
+      for (const target of wanted) {
+        let best = -1;
+        let distance = Number.POSITIVE_INFINITY;
+        for (let i = 0; i < frames.length; i += 1) {
+          const at = frames[i].at - zero;
+          if (at < -8) continue;
+          const delta = Math.abs(at - target);
+          if (delta < distance && !picked.has(i)) {
+            distance = delta;
+            best = i;
+          }
+        }
+        if (best < 0) continue;
+        picked.add(best);
+        written += 1;
+        await writeFile(
+          path.join(OUT_DIR_D, `${name}-${String(target).padStart(4, '0')}ms.png`),
+          Buffer.from(frames[best].data, 'base64'),
+        );
+      }
+      console.log(`[motion-gate] ${name}: ${frames.length} frames, wrote ${written} to ${OUT_DIR_D}`);
+      expect(written, `${name}: too few frames captured`).toBeGreaterThan(4);
+    }
+
+    // 1. The ring takes the voice. Captured on /design-tokens, which is where a
+    //    level exists outside a call — the ring itself is the product's own.
+    await instrumentViewTransitions(page, { disable: true });
+    await page.goto('/design-tokens');
+    await expect(page.getByRole('heading', { name: 'Motion', exact: true })).toBeVisible();
+    const voice = page.locator('#motion-voice');
+    await voice.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(400);
+    await capture(
+      'voice',
+      async () => { await voice.getByRole('button', { name: 'Replay' }).click(); },
+      [0, 60, 120, 200, 300, 420, 560, 700, 900, 1200, 1600, 2100],
+      2_600,
+    );
+
+    // 1b. …and a calibration strip beside it, because a photograph of the
+    //     moment cannot separate the voice from the breath: the same shadow is
+    //     also swinging over 1.6s. Here the breathe is held and only the level
+    //     moves, which is the one frame-by-frame view of "+15% at full voice,
+    //     never below the resting ring" there is.
+    const ring = voice.locator('[data-motion-speaking="tokens-speaker"]');
+    await ring.evaluate((el) => { el.style.animationPlayState = 'paused'; el.style.animationDelay = '-800ms'; });
+    for (const level of [0, 0.25, 0.5, 0.75, 1]) {
+      await ring.evaluate((el, value) => el.style.setProperty('--voice-level', String(value)), level);
+      await page.waitForTimeout(120);
+      await writeFile(
+        path.join(OUT_DIR_D, `_voice-level-${String(Math.round(level * 100)).padStart(3, '0')}.png`),
+        await voice.screenshot(),
+      );
+    }
+    await ring.evaluate((el) => {
+      el.style.removeProperty('--voice-level');
+      el.style.removeProperty('animation-play-state');
+      el.style.removeProperty('animation-delay');
+    });
+
+    // 2. The lights change. The crossfade path: the View Transitions one
+    //    composites its snapshots off the main thread, and a screencast of it on
+    //    a software-rendered headless Chromium is a black rectangle (WP9a §4).
+    const lights = page.locator('#motion-lights-change');
+    await lights.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(400);
+    await capture(
+      'lights-change',
+      async () => {
+        await lights.getByRole('button', { name: /^Change the lights \(crossfade\)$/ }).click();
+      },
+      [0, 60, 120, 200, 280, 360, 440, 560, 700, 900],
+      2_000,
+    );
+
+    // 3. The power goes, over a real building.
+    await page.goto('/app');
+    await openLitLobby(page);
+    await capture(
+      'outage',
+      async () => {
+        await setGatewayOffline(true);
+        await expect(page.locator('#pc-motion-lights')).toHaveCount(1, { timeout: 20_000 });
+      },
+      [0, 100, 200, 300, 400, 600, 900, 1400],
+      2_500,
+      true,
+    );
+    await capture(
+      'relight',
+      async () => {
+        await setGatewayOffline(false);
+        await expect(page.locator('#pc-motion-lights')).toHaveCount(0, { timeout: 20_000 });
+      },
+      [0, 100, 200, 300, 400, 600, 900, 1400, 2000],
+      3_000,
+      true,
+    );
+  });
+
   test('reduced motion runs no animations at all', async ({ page }) => {
     test.setTimeout(120_000);
     await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -856,12 +1276,65 @@ test.describe('the motion gate (§5.3)', () => {
     const stillRunning = await page.evaluate(() => document.getAnimations().length);
     expect(stillRunning, 'the engine animated under reduced motion').toBe(0);
 
+    // WP9d: the gateway going away does not dim anything either. §5.3 —
+    // "everything lands instantly" — so the building is simply dark-free and
+    // the banner says the words.
+    await setGatewayOffline(true);
+    await page.waitForTimeout(2_000);
+    await expect(page.locator('#pc-motion-lights'), 'the scrim appeared under reduced motion').toHaveCount(0);
+    await setGatewayOffline(false);
+    await page.waitForTimeout(800);
+
     // And the recipes on /design-tokens land their end state instead of playing.
     await page.goto('/design-tokens');
     await expect(page.getByRole('heading', { name: 'Motion', exact: true })).toBeVisible();
     await page.locator('#motion-settle').scrollIntoViewIfNeeded();
     await page.locator('#motion-settle').getByRole('button', { name: 'Replay' }).click();
     await page.waitForTimeout(120);
+    expect(await page.evaluate(() => document.getAnimations().length)).toBe(0);
+
+    // WP9d's other two, on the same page: the theme changes with no crossfade
+    // and no relight, and the ring takes no voice at all.
+    const lights = page.locator('#motion-lights-change');
+    await lights.scrollIntoViewIfNeeded();
+    const beforeTheme = await page.locator('html').getAttribute('data-theme');
+    // Measured, not asserted: this is where the crossfade's one allowed dropped
+    // frame comes from. With the engine switched off entirely the same click
+    // costs the same frame, which is what makes it the page's restyle.
+    const silentTheme = await measureMoment(page, async () => {
+      await lights.getByRole('button', { name: /^Change the lights$/ }).click();
+    }, 900);
+    report('lights-change (reduced motion — the app alone)', silentTheme);
+    await expect(page.locator('html')).not.toHaveAttribute('data-theme', beforeTheme ?? 'dark');
+    await expect(lights.getByText('Last run: none.')).toBeVisible();
+    // A longer settle than the other cases, and for a reason worth writing
+    // down: restyling this particular page is enormous — it is nine hundred
+    // table rows of live token values — and Chromium creates a 0.01ms
+    // `scrollbar-color` transition per row as it works through them. They are
+    // reduced-motion transitions doing exactly what the switch asks (0.01ms, no
+    // travel), but they trickle in for over a second, so a snapshot taken too
+    // early catches the tail of a repaint rather than motion.
+    await page.waitForTimeout(1_800);
+    const afterTheme = await page.evaluate(() =>
+      document.getAnimations().map((animation) => {
+        const named = animation as Animation & { animationName?: string; transitionProperty?: string; id?: string };
+        return named.id || named.animationName || named.transitionProperty || 'anonymous';
+      }),
+    );
+    expect(
+      afterTheme,
+      `the lights changed with motion running: ${[...new Set(afterTheme)].join(', ')}`,
+    ).toHaveLength(0);
+
+    const voice = page.locator('#motion-voice');
+    await voice.scrollIntoViewIfNeeded();
+    await voice.getByRole('button', { name: 'Replay' }).click();
+    await page.waitForTimeout(600);
+    const ring = voice.locator('[data-motion-speaking="tokens-speaker"]');
+    expect(
+      await ring.evaluate((el) => getComputedStyle(el).getPropertyValue('--voice-level').trim()),
+      'the level driver ran under reduced motion',
+    ).toBe('0');
     expect(await page.evaluate(() => document.getAnimations().length)).toBe(0);
     expect(MOTION_CHANNEL_NAME).toBe('build-log');
   });

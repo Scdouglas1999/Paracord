@@ -82,6 +82,18 @@ export function dropStreams(): Promise<void> {
 }
 
 /**
+ * Take the gateway away, and bring it back (WP9d).
+ *
+ * `dropStreams` is a blip: the client's first retry is 0ms, so it is back
+ * before anybody could see it. An OUTAGE is a gateway that is really away —
+ * long enough for the building's lights to go down and stay down — and the only
+ * honest way to drive one is to stop answering the stream at all.
+ */
+export function setGatewayOffline(offline: boolean): Promise<void> {
+  return stub('/__offline', { offline });
+}
+
+/**
  * A lit building, as READY delivers one.
  *
  * Everybody's lights are on; whoever `inRoom` names is in Shop floor. The rest

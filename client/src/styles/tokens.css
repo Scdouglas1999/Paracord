@@ -428,27 +428,37 @@
   --glow-light-fill: 0 0 16px rgba(243, 234, 216, 0.25);
   --glow-control-on: 0 0 18px rgba(243, 234, 216, 0.35);
   /* §5.1 "speaking is a breath": where the media engine exposes a level, the
-     speaking ring brightens with the voice. `lib/motion/voiceLevel.ts` writes
+     speaking ring brightens with the voice (+15% of its own intensity at full
+     voice, and never below where it rests). `lib/motion/voiceLevel.ts` writes
      `--voice-level` (0-1) onto the marked elements from ONE rAF loop for every
-     tile on screen, and `primitives.css` composes `--ring-voice` from it — a
-     second glow layer at 15% of the resting one's alpha, so the ring can rise
-     with the voice and can never fall below where it rests (§5.1).
-     `--ring-voice` is declared inert HERE and re-declared on `.pc-speaking`,
-     because a custom property is substituted where it is DECLARED: composed on
-     `:root` it would read the root's level and never a person's. A build with
-     no level source resolves every ring below to exactly its old value. */
+     tile on screen; `primitives.css` composes the speaking ring out of the
+     parts below and multiplies its alphas by it.
+
+     The ring is written in PARTS rather than whole because of how custom
+     properties resolve: a property is substituted where it is DECLARED, so a
+     recipe composed on `:root` would read the root's level and never a
+     person's. The parts are the one source of these numbers — the three whole
+     recipes underneath are composed from them, so `.pc-lit` and the glow table
+     on /design-tokens are unchanged and there is still exactly one place a
+     colour is written down (§1). */
   --voice-level: 0;
-  --ring-voice: 0 0 0 transparent;
-  /* The light's own rgb, for the one recipe that has to be composed at the
-     point of use rather than written whole. */
   --light-ring-rgb: 243, 234, 216;
-  /* 15% of --ring-speaking's outer alpha (0.25). */
-  --ring-voice-a: 0.0375;
+  --ring-edge: 1.5px;
+  --ring-glow-lit: 12px;
+  --ring-glow-speaking: 18px;
+  --ring-a-lit-edge: 0.55;
+  --ring-a-lit-glow: 0.22;
+  --ring-a-speaking-edge: 0.7;
+  --ring-a-speaking-glow: 0.25;
+  --ring-a-peak-edge: 0.8;
 
   /* A lit avatar rim; `speaking` breathes between these two (see primitives.css). */
-  --ring-lit: 0 0 0 1.5px rgba(243, 234, 216, 0.55), 0 0 12px rgba(243, 234, 216, 0.22);
-  --ring-speaking: 0 0 0 1.5px rgba(243, 234, 216, 0.7), 0 0 18px rgba(243, 234, 216, 0.25);
-  --ring-speaking-peak: 0 0 0 1.5px rgba(243, 234, 216, 0.8), 0 0 18px rgba(243, 234, 216, 0.25);
+  --ring-lit: 0 0 0 var(--ring-edge) rgba(var(--light-ring-rgb), var(--ring-a-lit-edge)),
+    0 0 var(--ring-glow-lit) rgba(var(--light-ring-rgb), var(--ring-a-lit-glow));
+  --ring-speaking: 0 0 0 var(--ring-edge) rgba(var(--light-ring-rgb), var(--ring-a-speaking-edge)),
+    0 0 var(--ring-glow-speaking) rgba(var(--light-ring-rgb), var(--ring-a-speaking-glow));
+  --ring-speaking-peak: 0 0 0 var(--ring-edge) rgba(var(--light-ring-rgb), var(--ring-a-peak-edge)),
+    0 0 var(--ring-glow-speaking) rgba(var(--light-ring-rgb), var(--ring-a-speaking-glow));
   /* A plate whose room is live — layered ON TOP of --shadow-plate. */
   --ring-lit-plate: 0 0 0 1px rgba(243, 234, 216, 0.16), 0 0 34px rgba(243, 234, 216, 0.1);
   /* The one permitted radial: one lamp per lit building/room card. */
@@ -647,12 +657,21 @@
   --glow-live-dot: 0 0 6px rgba(23, 23, 15, 0.4);
   --glow-light-fill: 0 0 16px rgba(23, 23, 15, 0.13);
   --glow-control-on: 0 0 18px rgba(23, 23, 15, 0.18);
+  /* The ring's parts, ink instead of light. The three recipes under them are
+     the same composition as Night's, re-declared so a NESTED [data-theme]
+     subtree (a theme preview) resolves a complete set of its own. */
   --light-ring-rgb: 23, 23, 15;
-  /* 15% of Daylight's own --ring-speaking outer alpha (0.13). */
-  --ring-voice-a: 0.0195;
-  --ring-lit: 0 0 0 1.5px rgba(23, 23, 15, 0.28), 0 0 12px rgba(23, 23, 15, 0.11);
-  --ring-speaking: 0 0 0 1.5px rgba(23, 23, 15, 0.35), 0 0 18px rgba(23, 23, 15, 0.13);
-  --ring-speaking-peak: 0 0 0 1.5px rgba(23, 23, 15, 0.4), 0 0 18px rgba(23, 23, 15, 0.13);
+  --ring-a-lit-edge: 0.28;
+  --ring-a-lit-glow: 0.11;
+  --ring-a-speaking-edge: 0.35;
+  --ring-a-speaking-glow: 0.13;
+  --ring-a-peak-edge: 0.4;
+  --ring-lit: 0 0 0 var(--ring-edge) rgba(var(--light-ring-rgb), var(--ring-a-lit-edge)),
+    0 0 var(--ring-glow-lit) rgba(var(--light-ring-rgb), var(--ring-a-lit-glow));
+  --ring-speaking: 0 0 0 var(--ring-edge) rgba(var(--light-ring-rgb), var(--ring-a-speaking-edge)),
+    0 0 var(--ring-glow-speaking) rgba(var(--light-ring-rgb), var(--ring-a-speaking-glow));
+  --ring-speaking-peak: 0 0 0 var(--ring-edge) rgba(var(--light-ring-rgb), var(--ring-a-peak-edge)),
+    0 0 var(--ring-glow-speaking) rgba(var(--light-ring-rgb), var(--ring-a-speaking-glow));
   --ring-lit-plate: 0 0 0 1px rgba(23, 23, 15, 0.16), 0 0 34px rgba(23, 23, 15, 0.05);
   --lamp-radial: radial-gradient(closest-side, rgba(133, 94, 48, 0.14), rgba(133, 94, 48, 0));
   --thumb-frame-lit: #e4e8e1;
@@ -763,11 +782,20 @@
   --glow-live-dot: 0 0 6px rgba(243, 234, 216, 1);
   --glow-light-fill: 0 0 16px rgba(243, 234, 216, 0.37);
   --glow-control-on: 0 0 18px rgba(243, 234, 216, 0.52);
-  /* 15% of High contrast's own --ring-speaking outer alpha (0.37). */
-  --ring-voice-a: 0.0555;
-  --ring-lit: 0 0 0 2px rgba(243, 234, 216, 0.82), 0 0 12px rgba(243, 234, 216, 0.33);
-  --ring-speaking: 0 0 0 2px rgba(243, 234, 216, 1), 0 0 18px rgba(243, 234, 216, 0.37);
-  --ring-speaking-peak: 0 0 0 2px rgba(243, 234, 216, 1), 0 0 18px rgba(243, 234, 216, 0.37);
+  /* A thicker rim, and alphas that already run to 1 — the voice gain is clamped
+     at full, so a ring that is already as bright as it can be simply stays. */
+  --ring-edge: 2px;
+  --ring-a-lit-edge: 0.82;
+  --ring-a-lit-glow: 0.33;
+  --ring-a-speaking-edge: 1;
+  --ring-a-speaking-glow: 0.37;
+  --ring-a-peak-edge: 1;
+  --ring-lit: 0 0 0 var(--ring-edge) rgba(var(--light-ring-rgb), var(--ring-a-lit-edge)),
+    0 0 var(--ring-glow-lit) rgba(var(--light-ring-rgb), var(--ring-a-lit-glow));
+  --ring-speaking: 0 0 0 var(--ring-edge) rgba(var(--light-ring-rgb), var(--ring-a-speaking-edge)),
+    0 0 var(--ring-glow-speaking) rgba(var(--light-ring-rgb), var(--ring-a-speaking-glow));
+  --ring-speaking-peak: 0 0 0 var(--ring-edge) rgba(var(--light-ring-rgb), var(--ring-a-peak-edge)),
+    0 0 var(--ring-glow-speaking) rgba(var(--light-ring-rgb), var(--ring-a-speaking-glow));
   --ring-lit-plate: 0 0 0 2px rgba(243, 234, 216, 0.24), 0 0 34px rgba(243, 234, 216, 0.15);
   --lamp-radial: radial-gradient(closest-side, rgba(243, 234, 216, 0.24), rgba(243, 234, 216, 0));
   --thumb-frame-lit: #0b1210;
