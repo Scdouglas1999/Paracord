@@ -1,7 +1,8 @@
 import * as React from 'react';
 import { useEffect, useRef } from 'react';
 
-import { cn } from '../../lib/utils';
+import { useSettleIn } from '../../lib/motion';
+import { cn, mergeRefs } from '../../lib/utils';
 import { darkRoomCaption, type RoomLight } from '../../lib/attention/light';
 import type { RoomFrame } from '../../lib/media/roomFrameTap';
 import { AvatarStack } from './AvatarStack';
@@ -48,10 +49,12 @@ export const RoomThumbnail = React.forwardRef<HTMLDivElement, RoomThumbnailProps
     const occupants = room.occupants.map((occupant) => occupant.person);
     const compact = height < 120;
     const pad = compact ? 8 : 12;
+    // §5.1: a thumbnail arriving in a painted street settles 14px onto it.
+    const settleRef = useSettleIn<HTMLDivElement>();
 
     return (
       <div
-        ref={ref}
+        ref={mergeRefs(ref, settleRef)}
         className={cn(
           'relative w-full shrink-0 overflow-hidden shadow-[var(--shadow-tile)]',
           'rounded-[var(--radius-thumb)]',
