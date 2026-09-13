@@ -64,7 +64,12 @@ export function BuildingSection({
   const showExpander = hiddenRoomCount > 0 || expanded;
 
   return (
-    <div role="group" aria-label={building.name} className="flex flex-col gap-0.5">
+    <div
+      role="group"
+      aria-label={building.name}
+      data-flip-key={building.key}
+      className="flex flex-col gap-0.5"
+    >
       <SectionLabel
         meta={
           <span className="flex items-center gap-1.5">

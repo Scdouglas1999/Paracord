@@ -90,11 +90,12 @@ function RoomTrailing({ room, attention }: { room: RoomLight; attention?: RoomAt
   );
 }
 
-function rowProps({ navIndex, tabStop, active }: Pick<RoomRowProps, 'navIndex' | 'tabStop'> & { active: boolean }) {
+function rowProps({ navIndex, tabStop, active, room }: Pick<RoomRowProps, 'navIndex' | 'tabStop' | 'room'> & { active: boolean }) {
   return {
     role: 'option' as const,
     'aria-selected': active,
     'data-nav-index': navIndex,
+    'data-flip-key': room.key,
     tabIndex: tabStop ? 0 : -1,
   };
 }
@@ -115,7 +116,7 @@ export const QuietRoomRow = memo(function QuietRoomRow({
   const unread = Boolean(attention?.unread) && !active;
   return (
     <NavRow
-      {...rowProps({ navIndex, tabStop, active })}
+      {...rowProps({ navIndex, tabStop, active, room })}
       active={active}
       display={room.kind === 'voice'}
       icon={<WindowDot room={room} />}
@@ -148,7 +149,7 @@ export const LiveRoomRowView = memo(function LiveRoomRowView({
   return (
     <button
       type="button"
-      {...rowProps({ navIndex, tabStop, active })}
+      {...rowProps({ navIndex, tabStop, active, room })}
       onClick={() => onOpen(room)}
       className={cn(
         'pc-focusable flex w-full flex-col items-stretch gap-2 p-2 text-left',

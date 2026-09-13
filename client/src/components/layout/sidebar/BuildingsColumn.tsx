@@ -1,6 +1,10 @@
 import { useCallback, useMemo, useState, type MouseEvent, type ReactNode } from 'react';
 import { Home, MessageSquare, Plus } from 'lucide-react';
 
+// §5.1: a column that changes order glides — buildings ride the spring-settle
+// FLIP as the attention ranking re-sorts them, new rows fade+rise, removed
+// rows fall away as ghosts. First mount only measures; reduced motion lands.
+import { useFlipList } from '../../../lib/motion';
 import { Button, Chip, NavRow, Well } from '../../ui';
 import type { BuildingLight, RoomLight } from '../../../lib/attention/light';
 import { BuildingSection } from './BuildingSection';
@@ -93,6 +97,9 @@ export function BuildingsColumn({
   footer,
 }: BuildingsColumnProps) {
   const [openBuildings, setOpenBuildings] = useState<ReadonlySet<string>>(() => new Set<string>());
+  // Every reorder the light merge produces — a building rising as its rooms
+  // light, a conversation leaving Needs-you — plays back through the engine.
+  const listRef = useFlipList<HTMLDivElement>();
 
   const toggleRooms = useCallback((building: BuildingLight) => {
     setOpenBuildings((current) => {
@@ -157,6 +164,7 @@ export function BuildingsColumn({
       </div>
 
       <div
+        ref={listRef}
         data-roving-container=""
         role="listbox"
         aria-label="Buildings and rooms"
@@ -166,6 +174,7 @@ export function BuildingsColumn({
         <NavRow
           role="option"
           aria-selected={homeActive}
+          data-flip-key="home"
           data-nav-index={0}
           tabIndex={activeNavIndex === 0 ? 0 : -1}
           active={homeActive}
@@ -191,6 +200,7 @@ export function BuildingsColumn({
         <NavRow
           role="option"
           aria-selected={messagesActive}
+          data-flip-key="messages"
           data-nav-index={1}
           tabIndex={activeNavIndex === 1 ? 0 : -1}
           active={messagesActive}
@@ -244,6 +254,7 @@ export function BuildingsColumn({
           <NavRow
             role="option"
             aria-selected={false}
+            data-flip-key="add-building"
             data-nav-index={addBuildingIndex}
             tabIndex={addBuildingIndex === activeNavIndex ? 0 : -1}
             icon={<Plus size={16} />}
