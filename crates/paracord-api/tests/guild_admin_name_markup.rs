@@ -28,7 +28,8 @@ mod common;
 
 use anyhow::Context;
 use axum::{
-    http::{Method, StatusCode},
+    body::Body,
+    http::{header, Method, Request, StatusCode},
     Router,
 };
 use common::{
@@ -36,6 +37,7 @@ use common::{
     TestAppOptions,
 };
 use serde_json::{json, Value};
+use tower::ServiceExt;
 
 const MARKUP: &str = "<img src=x onerror=alert(1)>";
 
@@ -70,6 +72,49 @@ impl Ctx {
     ) -> anyhow::Result<(StatusCode, Value)> {
         let request = build_json_request(method, path, body, Some(&self.token))?;
         dispatch_json(&self.app, request).await
+    }
+
+    /// An emoji upload: the `name` field plus a one-pixel PNG.
+    async fn upload_emoji(
+        &self,
+        guild_id: &str,
+        name: &str,
+    ) -> anyhow::Result<(StatusCode, Value)> {
+        const PNG_1X1: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+            0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
+            0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ];
+        let boundary = "----paracord-emoji-name-boundary";
+        let mut body = Vec::new();
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        body.extend_from_slice(b"Content-Disposition: form-data; name=\"name\"\r\n\r\n");
+        body.extend_from_slice(format!("{name}\r\n").as_bytes());
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        body.extend_from_slice(
+            b"Content-Disposition: form-data; name=\"image\"; filename=\"e.png\"\r\n",
+        );
+        body.extend_from_slice(b"Content-Type: image/png\r\n\r\n");
+        body.extend_from_slice(PNG_1X1);
+        body.extend_from_slice(b"\r\n");
+        body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/api/v1/guilds/{guild_id}/emojis"))
+            .header(
+                header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .header(header::AUTHORIZATION, format!("Bearer {}", self.token))
+            .body(Body::from(body))?;
+        let response = self.app.clone().oneshot(request).await?;
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024).await?;
+        let payload: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+        Ok((status, payload))
     }
 
     async fn me(&self) -> anyhow::Result<String> {
@@ -374,5 +419,54 @@ async fn moderation_surfaces_reject_markup_in_their_labels() -> anyhow::Result<(
         )
         .await?;
     assert_eq!(status, StatusCode::OK, "prose rules refused: {payload}");
+    Ok(())
+}
+
+/// An emoji's name has to be typeable as `<:name:id>`.
+///
+/// The client's token pattern and its formatter both hold the name to
+/// `[A-Za-z0-9_]{1,32}`; the upload route only bounded the length. `"bad
+/// name!"` uploaded happily and then appeared in chat as `bad_name_` — the same
+/// emoji under two names, and nothing anyone could type from the picker.
+#[tokio::test]
+async fn emoji_name_matches_the_wire_token_it_has_to_fit() -> anyhow::Result<()> {
+    let ctx = Ctx::new().await?;
+    let guild_id = ctx.guild().await?;
+
+    for rejected in ["bad name!", "spaces here", "emoji-dash", "colon:name"] {
+        let (status, payload) = ctx.upload_emoji(&guild_id, rejected).await?;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "{rejected:?} should be refused: {payload}"
+        );
+        assert!(
+            message(&payload).contains("letters, numbers, and underscores"),
+            "{rejected:?} refused for the wrong reason: {payload}"
+        );
+    }
+
+    let (status, payload) = ctx.upload_emoji(&guild_id, "party_parrot2").await?;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "typeable name refused: {payload}"
+    );
+    assert_eq!(payload["name"], json!("party_parrot2"));
+
+    // A rename has to hold the same line, or the door closes and the window
+    // stays open.
+    let emoji_id = payload["id"]
+        .as_str()
+        .context("emoji id should be a string")?
+        .to_string();
+    let (status, payload) = ctx
+        .call(
+            Method::PATCH,
+            &format!("/api/v1/guilds/{guild_id}/emojis/{emoji_id}"),
+            Some(json!({ "name": "bad name!" })),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "rename: {payload}");
     Ok(())
 }

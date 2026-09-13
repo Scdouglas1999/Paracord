@@ -22,6 +22,30 @@ const MAX_EMOJI_IMAGE_SIZE: usize = 256 * 1024; // 256 KB
 /// per-IP write budget. 250 x 256 KB caps a space at roughly 62 MB of emoji.
 const MAX_EMOJIS_PER_GUILD: usize = 250;
 
+/// The exact character set the custom-emoji wire token allows.
+///
+/// A message references an emoji as `<:name:id>` and both the client's parser
+/// and its formatter hold the name to `[A-Za-z0-9_]{1,32}`. The upload route
+/// only bounded the length, so `"bad name!"` uploaded fine and then rendered in
+/// chat as `bad_name_` — one emoji with two names, and nothing typeable from
+/// the picker. Reject at the door instead.
+fn validate_emoji_name(name: &str) -> Result<(), ApiError> {
+    if name.is_empty() || name.chars().count() > MAX_EMOJI_NAME_LEN {
+        return Err(ApiError::BadRequest(
+            "Emoji name must be between 1 and 32 characters".into(),
+        ));
+    }
+    if !name
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        return Err(ApiError::BadRequest(
+            "Emoji name may only contain letters, numbers, and underscores".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn emoji_to_json(e: &paracord_db::emojis::EmojiRow) -> GuildEmoji {
     GuildEmoji {
         id: e.id.to_string(),
@@ -129,11 +153,7 @@ pub async fn create_emoji(
     let image_data =
         image_data.ok_or_else(|| ApiError::BadRequest("Missing emoji image".into()))?;
 
-    if name.is_empty() || name.len() > MAX_EMOJI_NAME_LEN {
-        return Err(ApiError::BadRequest(
-            "Emoji name must be between 1 and 32 characters".into(),
-        ));
-    }
+    validate_emoji_name(&name)?;
 
     if image_data.is_empty() {
         return Err(ApiError::BadRequest("Empty emoji image".into()));
@@ -228,11 +248,7 @@ pub async fn update_emoji(
 ) -> Result<Json<GuildEmoji>, ApiError> {
     ensure_emoji_permission(&state, guild_id, auth.user_id).await?;
 
-    if body.name.is_empty() || body.name.len() > MAX_EMOJI_NAME_LEN {
-        return Err(ApiError::BadRequest(
-            "Emoji name must be between 1 and 32 characters".into(),
-        ));
-    }
+    validate_emoji_name(&body.name)?;
 
     // Verify emoji belongs to guild
     let existing = paracord_db::emojis::get_emoji(&state.db, emoji_id)
