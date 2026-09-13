@@ -375,7 +375,9 @@ export function FriendsPage() {
                 onClick={() => { setActiveTab(tab.id); setSearchQuery(''); }}
                 aria-pressed={active}
                 className={cn(
-                  'inline-flex h-8 items-center gap-2 rounded-full px-3.5 text-label font-medium outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
+                  // pc-touch (§9): the chip stays 32px so the filter row is not
+                  // a row of buttons; the hit area is 44px on a coarse pointer.
+                  'pc-touch inline-flex h-8 items-center gap-2 rounded-full px-3.5 text-label font-medium outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
                   active
                     ? 'bg-accent-tint text-accent-primary'
                     : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',

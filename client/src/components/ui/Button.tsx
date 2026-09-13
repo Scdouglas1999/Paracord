@@ -61,8 +61,14 @@ const buttonVariants = cva(
                 link: "px-1 py-0 text-text-link underline-offset-4 hover:underline",
             },
             size: {
-                sm: "h-[var(--h-control-sm)] px-2.5 text-meta",
-                md: "h-[var(--h-control)] px-[11px]",
+                // pc-touch (§9, primitives.css): on a coarse pointer the hit
+                // area is carried out to 44px around the control without
+                // changing the control. `sm` is 28px everywhere, and an
+                // icon-only `md` is ~38px wide however tall it is — both were
+                // targets a thumb had to aim at. A control already 44px in a
+                // dimension keeps that dimension (`max(100%, 44px)`).
+                sm: "pc-touch h-[var(--h-control-sm)] px-2.5 text-meta",
+                md: "pc-touch h-[var(--h-control)] px-[11px]",
                 lg: "h-[var(--h-control-phone)] px-4",
                 icon: "h-[var(--h-control)] w-[var(--h-control)] p-0",
                 "icon-lg": "h-[var(--h-control-phone)] w-[var(--h-control-phone)] p-0",

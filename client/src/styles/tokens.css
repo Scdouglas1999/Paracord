@@ -507,6 +507,11 @@
   --sidebar-bg: var(--bg-base);
   --sidebar-border: var(--border-subtle);
   --sidebar-active-indicator: var(--accent-primary);
+  /* The phone's bottom tab bar, while it is on screen. `MobileBottomNav`
+     measures itself into this; anything that floats above the fold (toasts)
+     adds it so it never lands on top of the navigation. 0 everywhere else. */
+  --h-mobile-nav: 0px;
+
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-right: env(safe-area-inset-right, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -844,6 +849,10 @@
     --radius-plate: var(--radius-plate-phone);
     --radius-control: var(--radius-control-phone);
     --h-control: var(--h-control-phone);
+    /* §9: a nav row is a target a thumb has to hit, and a *stacked* one cannot
+       borrow the space around it the way a lone control can (`pc-touch`) — its
+       neighbours are there. On a phone the row itself grows to 44px. */
+    --h-nav-row: var(--h-control-phone);
     --h-composer: var(--h-composer-phone);
     --h-stage-control: var(--h-stage-control-phone);
     --radius-stage-control: var(--radius-stage-control-phone);

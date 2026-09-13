@@ -70,7 +70,10 @@ export const TextRoomRow = React.forwardRef<HTMLButtonElement, TextRoomRowProps>
         onClick={onOpen}
         aria-current={active ? 'page' : undefined}
         className={cn(
-          'pc-focusable grid w-full grid-cols-[22px_minmax(0,1fr)_auto] items-center gap-x-3',
+          // §9: the row is the biggest target on this surface and a thumb has
+          // to be able to hit it. `pc-touch` carries the hit area to 44px on a
+          // coarse pointer without changing the row's own density.
+          'pc-touch pc-focusable grid w-full grid-cols-[22px_minmax(0,1fr)_auto] items-center gap-x-3',
           'rounded-[var(--radius-well)] px-3 py-2.5 text-left',
           'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
           active
