@@ -265,6 +265,35 @@ fn parse_event_datetime(raw: &str) -> Option<DateTime<Utc>> {
         .map(|dt| dt.with_timezone(&Utc))
 }
 
+/// An event's start and end are stored as text and every consumer parses them
+/// back. `create_event` wrote whichever string arrived straight into the
+/// column: `"not-a-date"` and `""` both produced a scheduled event with no
+/// scheduled time. Nothing then failed loudly — `GET /events` hands the
+/// unparseable string back as the start time, and the guild `.ics` feed simply
+/// omits the row, so the event exists in the list and is absent from the
+/// calendar with nothing said. The single-event `.ical` route has always had to
+/// carry a defensive 400 for exactly this state ("event has an invalid
+/// scheduled_start value"); that branch describes a row the front door should
+/// never have created.
+fn require_event_datetime(raw: &str, field: &str) -> Result<DateTime<Utc>, ApiError> {
+    parse_event_datetime(raw)
+        .ok_or_else(|| ApiError::BadRequest(format!("{field} must be an RFC3339 timestamp")))
+}
+
+/// An event may not finish before it starts. The pair went in unchecked, so
+/// `scheduled_end` a year before `scheduled_start` stored fine and rendered as
+/// a negative-length event in every surface that shows a duration.
+fn ensure_event_window(start: DateTime<Utc>, end: Option<DateTime<Utc>>) -> Result<(), ApiError> {
+    if let Some(end) = end {
+        if end < start {
+            return Err(ApiError::BadRequest(
+                "scheduled_end must not be before scheduled_start".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn to_ical_datetime(raw: &str) -> Option<String> {
     parse_event_datetime(raw).map(|dt| dt.format("%Y%m%dT%H%M%SZ").to_string())
 }
@@ -444,6 +473,15 @@ pub async fn create_event(
     if body.entity_type != 1 && body.entity_type != 2 {
         return Err(ApiError::BadRequest("Invalid entity type".into()));
     }
+    let scheduled_start = require_event_datetime(&body.scheduled_start, "scheduled_start")?;
+    let scheduled_end = body
+        .scheduled_end
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| require_event_datetime(value, "scheduled_end"))
+        .transpose()?;
+    ensure_event_window(scheduled_start, scheduled_end)?;
 
     let channel_id = parse_optional_id(body.channel_id.as_deref(), "channel_id")?;
     let event_channel_id = parse_optional_id(body.event_channel_id.as_deref(), "event_channel_id")?;
@@ -594,6 +632,35 @@ pub async fn update_event(
     let location =
         normalize_optional_text_patch(&body.location, MAX_EVENT_LOCATION_LEN, "Location")?;
     let scheduled_end = normalize_optional_datetime_patch(&body.scheduled_end);
+    // Whatever this patch *supplies* has to be a timestamp. Values it leaves
+    // alone are read but not re-validated: a row written before this bound
+    // existed may hold an unparseable start, and refusing to patch it would
+    // leave the only broken events on an instance permanently unfixable —
+    // including by the edit that would repair them.
+    let patched_start = body
+        .scheduled_start
+        .as_deref()
+        .map(|raw| require_event_datetime(raw, "scheduled_start"))
+        .transpose()?;
+    let patched_end = match scheduled_end.as_ref() {
+        Some(Some(raw)) => Some(require_event_datetime(raw, "scheduled_end")?),
+        _ => None,
+    };
+    // The window is checked against the values the row will *have* afterwards:
+    // either half may be the one being changed, so a patch that moves only the
+    // end still has to clear the start already stored.
+    let effective_start = patched_start.or_else(|| parse_event_datetime(&existing.scheduled_start));
+    let effective_end = match scheduled_end.as_ref() {
+        Some(Some(_)) => patched_end,
+        Some(None) => None,
+        None => existing
+            .scheduled_end
+            .as_deref()
+            .and_then(parse_event_datetime),
+    };
+    if let Some(start) = effective_start {
+        ensure_event_window(start, effective_end)?;
+    }
     let channel_id = parse_optional_id_patch(&body.channel_id, "channel_id")?;
     let event_channel_id = parse_optional_id_patch(&body.event_channel_id, "event_channel_id")?;
     ensure_channel_patch_in_guild(&state, guild_id, channel_id, "channel_id").await?;
