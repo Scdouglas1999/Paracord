@@ -322,7 +322,7 @@ Run from `client/`.
 | `npx eslint . --quiet` | pass, 0 findings |
 | `npx vitest run` | **250 files, 2255 tests passed** |
 | `npm run build` | pass |
-| `npx playwright test` (mocked smoke) | **84 passed** |
+| `npx playwright test` (mocked smoke) | **82 of 84** — see below |
 | `npm run test:a11y:static` | pass for WP7's files (it also fixed one: `ChannelManager`'s role toggle had no name) |
 | `npm run test:contrast` | **49 checks × 4 themes passed** |
 
@@ -334,6 +334,15 @@ Run from `client/`.
 > `components/rooms/lobby/**`). Every file in WP7's scope is clean on all seven
 > commands, and every failure observed during the package was traced to a
 > concurrent edit outside it.
+>
+> The two smoke failures at the time of writing are one flow, run twice
+> (desktop and touch), failing on
+> `getByPlaceholder(/Message #qa-general-channel/)` at `e2e/smoke.spec.ts:398`,
+> `:414` and `:561`. WP5 replaced that placeholder with the spec's §7.4 copy
+> ("Say something to the 5 people reading", falling back to "Say something in
+> <room>"), which is correct and is not WP7's to revert — the three assertions
+> belong with that change. Left for WP5 rather than patched here, so the copy
+> and its test move together.
 
 ### Screenshots
 
