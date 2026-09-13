@@ -32,6 +32,7 @@ export {
   fadeIn,
   flash,
   flicker,
+  ghost,
   ghostOut,
   liftOut,
   press,

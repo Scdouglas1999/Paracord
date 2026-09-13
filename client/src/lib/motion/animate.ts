@@ -469,6 +469,32 @@ function ghostLayer(): HTMLElement | null {
   return layer;
 }
 
+/** Clone `el` where it stands and park the copy in the ghost layer. */
+export function ghost(el: Element | null | undefined): HTMLElement | null {
+  if (!animatable(el) || prefersReducedMotion()) return null;
+  const layer = ghostLayer();
+  if (!layer) return null;
+  const box = el.getBoundingClientRect();
+  if (box.width === 0 && box.height === 0) return null;
+  const copy = el.cloneNode(true) as HTMLElement;
+  copy.removeAttribute('id');
+  copy.style.position = 'fixed';
+  copy.style.left = `${box.left}px`;
+  copy.style.top = `${box.top}px`;
+  copy.style.width = `${box.width}px`;
+  copy.style.height = `${box.height}px`;
+  copy.style.margin = '0';
+  copy.style.pointerEvents = 'none';
+  // A ghost is a picture, and the only thing that will ever happen to it is a
+  // transform and an opacity. Saying so gives it its own compositor layer, so
+  // receding a copy of a whole surface costs the compositor rather than the
+  // main thread.
+  copy.style.willChange = 'transform, opacity';
+  copy.style.contain = 'layout paint';
+  layer.append(copy);
+  return copy;
+}
+
 /**
  * Clone `el` where it stands and hand the copy to `play`. The ghost is removed
  * when the animation finishes or is cancelled — and immediately if nothing
@@ -476,25 +502,12 @@ function ghostLayer(): HTMLElement | null {
  */
 export function ghostOut(
   el: Element | null | undefined,
-  play: (ghost: HTMLElement) => Animation | null,
+  play: (copy: HTMLElement) => Animation | null,
 ): Animation | null {
-  if (!animatable(el) || prefersReducedMotion()) return null;
-  const layer = ghostLayer();
-  if (!layer) return null;
-  const box = el.getBoundingClientRect();
-  if (box.width === 0 && box.height === 0) return null;
-  const ghost = el.cloneNode(true) as HTMLElement;
-  ghost.removeAttribute('id');
-  ghost.style.position = 'fixed';
-  ghost.style.left = `${box.left}px`;
-  ghost.style.top = `${box.top}px`;
-  ghost.style.width = `${box.width}px`;
-  ghost.style.height = `${box.height}px`;
-  ghost.style.margin = '0';
-  ghost.style.pointerEvents = 'none';
-  layer.append(ghost);
-  const remove = () => ghost.remove();
-  const animation = play(ghost);
+  const copy = ghost(el);
+  if (!copy) return null;
+  const remove = () => copy.remove();
+  const animation = play(copy);
   if (!animation) {
     remove();
     return null;

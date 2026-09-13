@@ -766,30 +766,58 @@ describe('walking into a room', () => {
     expect(roomSharedName('2001')).toBe('room-2001');
   });
 
-  it('recedes every branch except the one the origin is on', () => {
+  it('recedes a ghost of the surface, with the travelling branch hidden in it', () => {
     document.body.innerHTML = `
-      <section data-motion-recede="">
+      <section id="lobby" data-motion-recede="">
         <header id="header"></header>
         <div id="grid">
           <article id="other"></article>
           <article id="clicked"><button id="join"></button></article>
         </div>
-        <footer id="footer"></footer>
       </section>
       <aside id="sidebar" data-motion-recede=""></aside>
     `;
+    // The ghost is cut from a live element, so it needs a live box.
+    for (const el of document.querySelectorAll<HTMLElement>('*')) {
+      el.getBoundingClientRect = () => ({ left: 0, top: 0, width: 100, height: 100 }) as DOMRect;
+    }
     const clicked = document.getElementById('clicked')!;
     recedeAround(clicked);
-    const receded = waapi.played.map((record) => (record.target as HTMLElement).id).sort();
-    // The clicked card travels; its neighbour, the header, the footer and the
-    // whole sidebar step back.
-    expect(receded).toEqual(['footer', 'header', 'other', 'sidebar']);
+
+    // One recede per marked region, and it is played on a COPY — the real
+    // Lobby is unmounted by the route change on the same tick, which is why
+    // animating it directly showed nothing at all.
+    const receded = waapi.played.filter((record) => record.animation.id === 'data-motion-recipe:recede');
+    expect(receded).toHaveLength(2);
+    for (const record of receded) {
+      expect(record.target.isConnected).toBe(true);
+      expect(document.body.contains(record.target) && record.target.closest('#pc-motion-ghosts')).toBeTruthy();
+    }
+
+    // The branch that is travelling is not receding: it is hidden in the copy
+    // so the real one can fly over the top of it.
+    // Queried by attribute, not by id: jsdom resolves a duplicated id through
+    // the document's own map, and the ghost is a copy of something still in it.
+    const ghosts = document.getElementById('pc-motion-ghosts')!;
+    const hidden = ghosts.querySelector<HTMLElement>('[data-motion-travelling]');
+    expect(hidden?.style.visibility).toBe('hidden');
+    expect(ghosts.querySelectorAll('[style*="visibility: hidden"]')).toHaveLength(1);
+    // And the marker it used to find that branch is not left on the real one.
+    expect(clicked.hasAttribute('data-motion-travelling')).toBe(false);
   });
 
   it('recedes a region whole when the origin is somewhere else', () => {
     document.body.innerHTML = `<aside id="sidebar" data-motion-recede=""><span id="row"></span></aside>`;
+    for (const el of document.querySelectorAll<HTMLElement>('*')) {
+      el.getBoundingClientRect = () => ({ left: 0, top: 0, width: 100, height: 100 }) as DOMRect;
+    }
     recedeAround(null);
-    expect(waapi.played.map((record) => (record.target as HTMLElement).id)).toEqual(['sidebar']);
+    const receded = waapi.played.filter((record) => record.animation.id === 'data-motion-recipe:recede');
+    expect(receded).toHaveLength(1);
+    // Nothing is travelling, so nothing in the copy is hidden.
+    expect(
+      document.getElementById('pc-motion-ghosts')?.querySelectorAll('[style*="visibility"]'),
+    ).toHaveLength(0);
   });
 
   it('lets the caller say which element is the origin when a name is on three surfaces', async () => {

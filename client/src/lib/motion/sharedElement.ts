@@ -48,6 +48,17 @@ export interface SharedTransitionOptions {
    */
   origin?: Element | null;
   /**
+   * Where the journey is GOING, as a selector — the same problem as `origin`,
+   * at the other end.
+   *
+   * A room's name is on its sidebar row as well as on the Stage, and after the
+   * update both are in the document, so "first in the document wins" made the
+   * card you clicked fly into the sidebar instead of into the room. The frame
+   * strip showed it; nothing else would have. Walking into a room lands in the
+   * main content area, so that is what the caller names.
+   */
+  destinationRoot?: string;
+  /**
    * What kind of journey this is, stamped on `<html>` as
    * `data-motion-transition` for the length of it. Both engines read it: the
    * FLIP path through `beforeUpdate`, the View Transitions path through CSS
@@ -79,6 +90,16 @@ function collect(
   root: ParentNode,
   names: readonly string[] | undefined,
   origin?: Element | null,
+  /**
+   * Never the destination.
+   *
+   * The route change does not take the old surface out of the document on the
+   * frame it happens — React unmounts it a tick later — so an "after" pass that
+   * accepted the element it had just left found the card still sitting where it
+   * was, measured a delta of zero, and played nothing at all. A journey's
+   * destination is never its origin.
+   */
+  exclude?: Element | null,
 ): Map<string, HTMLElement> {
   const found = new Map<string, HTMLElement>();
   // The origin is put in first, so it wins its own name.
@@ -87,6 +108,7 @@ function collect(
     if (name && (!names || names.includes(name))) found.set(name, origin);
   }
   for (const el of root.querySelectorAll<HTMLElement>(selectorFor(names))) {
+    if (exclude && el === exclude) continue;
     const name = el.getAttribute(SHARED_ATTR);
     // First wins: a name is meant to identify ONE thing on each side.
     if (name && !found.has(name)) found.set(name, el);
@@ -120,6 +142,51 @@ function nextFrame(): Promise<void> {
  */
 function nextTask(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/**
+ * How long a journey will wait for the place it is going to.
+ *
+ * Every room, thread and settings surface is behind a lazy route chunk and a
+ * React render, so the destination is not in the document on the frame the
+ * route changed — and a shared element with nothing to arrive at is a page that
+ * goes blank and then fills in. Waiting is what makes it a journey: on the View
+ * Transitions path the browser is still holding the old frame while we do it,
+ * so the room you left stays on screen until the room you are entering is ready
+ * to be looked at.
+ *
+ * Bounded, because a destination that never comes must not hang the page: the
+ * transition then plays with whatever is there, which is the same fade the
+ * route change would have had on its own.
+ */
+const DESTINATION_WAIT_MS = 700;
+
+/** Where a journey's destination is looked for. */
+function destinationOf(root: ParentNode, selector: string | undefined): ParentNode {
+  if (!selector || typeof document === 'undefined') return root;
+  return document.querySelector(selector) ?? root;
+}
+
+/** Poll (in macrotasks — see `nextTask`) until every name has landed. */
+async function waitForDestination(
+  root: ParentNode,
+  names: readonly string[] | undefined,
+  exclude: Element | null | undefined,
+  /**
+   * How to wait between looks. Inside a View Transition it MUST be a macrotask
+   * (rendering is suspended, so a frame never comes — WP9a's hang); outside one
+   * it must be a frame, because polling on a macrotask while the route's chunk
+   * mounts starves the very frame the travel is about to start on.
+   */
+  wait: () => Promise<void>,
+): Promise<void> {
+  if (!names || names.length === 0) return;
+  const deadline = Date.now() + DESTINATION_WAIT_MS;
+  while (Date.now() < deadline) {
+    const found = collect(root, names, null, exclude);
+    if (names.every((name) => found.has(name))) return;
+    await wait();
+  }
 }
 
 /** The chrome rise: 80ms after the move, 30ms apart, 14px (§5.1). */
@@ -208,7 +275,9 @@ export async function transitionWith(
     const transition = doc.startViewTransition(async () => {
       await update();
       await nextTask();
-      const after = collect(root, options.names);
+      const into = destinationOf(root, options.destinationRoot);
+      await waitForDestination(into, options.names, options.origin, nextTask);
+      const after = collect(into, options.names, null, options.origin);
       for (const [name, el] of after) el.style.viewTransitionName = `pc-${name.replace(/[^\w-]/g, '-')}`;
     });
     // **Both of these promises reject in ordinary use**, and neither rejection
@@ -240,10 +309,12 @@ export async function transitionWith(
   options.beforeUpdate?.('flip');
   await update();
   await nextFrame();
+  const into = destinationOf(root, options.destinationRoot);
+  await waitForDestination(into, options.names, options.origin, nextFrame);
 
   const easing = springEasing(springTokens(), { durationMs: duration });
   const animations: Animation[] = [];
-  for (const [name, el] of collect(root, options.names)) {
+  for (const [name, el] of collect(into, options.names, null, options.origin)) {
     const from = first.get(name);
     if (!from || typeof el.animate !== 'function') continue;
     const to = el.getBoundingClientRect();
