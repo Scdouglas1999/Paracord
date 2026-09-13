@@ -2,6 +2,39 @@ import { useRef, useState } from 'react';
 import { useStore } from 'zustand';
 import type { AccountMessagingRuntime, RuntimeQueueRow } from '../../lib/messages/accountMessagingRuntime';
 import { isPreparedSend } from '../../lib/messages/durableOutbox';
+import { Button } from '../ui';
+import { cn } from '../../lib/utils';
+
+/**
+ * Delivery and recovery, above the composer (docs/lantern-stage-spec.md §7.4).
+ *
+ * Every row here is something the app is still holding on the user's behalf: a
+ * send that has not landed, an edit or delete that has not been accepted, text
+ * recovered from a history that is gone. They are **raised rows inside the text
+ * room's plate** — near the composer because that is where you decide what to
+ * do about them, and raised because they are waiting on you.
+ *
+ * The behaviour is untouched: retry, copy, edit, discard and restore all go
+ * through the messaging runtime exactly as before.
+ */
+
+/** One raised row. The shape is shared by queued sends, mutations and recovery. */
+function DeliveryRow({ className, children }: { className?: string; children: React.ReactNode }) {
+  return (
+    <li
+      className={cn(
+        'min-w-0 rounded-[var(--radius-well)] bg-bg-raised p-3 shadow-[var(--shadow-raised)]',
+        className,
+      )}
+    >
+      {children}
+    </li>
+  );
+}
+
+function RowTitle({ children }: { children: React.ReactNode }) {
+  return <p className="pc-display text-name text-text-primary">{children}</p>;
+}
 
 function QueueEntry({ runtime, row, copy }: { runtime: AccountMessagingRuntime; row: RuntimeQueueRow; copy: (content: string) => void }) {
   const [editing, setEditing] = useState(false);
@@ -17,27 +50,33 @@ function QueueEntry({ runtime, row, copy }: { runtime: AccountMessagingRuntime; 
     catch (error) { setError(error instanceof Error ? error.message : 'The queued message could not be changed.'); }
     finally { setBusy(false); }
   }
-  return <li className="min-w-0 rounded-lg border border-[var(--border-subtle)] p-3">
-    <p className="text-sm font-medium">{discarding ? 'Resolving discard' : row.record.status === 'failed' ? 'Delivery needs attention' : 'Queued message'}</p>
-    <p className="mt-1 whitespace-pre-wrap break-words text-sm">{row.record.draft.content || 'Attachment or sticker message'}</p>
-    {row.record.error && <p className="mt-2 break-words text-sm text-[var(--text-muted)]">{row.record.error}</p>}
-    {prepared && <p className="mt-1 text-xs text-[var(--text-muted)]">Delivery may already have committed. Editing or discarding resolves the original request first.</p>}
-    {editing && <label className="mt-2 block text-sm">Replacement text
-      <textarea className="input-field mt-1 w-full" value={content} onChange={event => setContent(event.target.value)} disabled={busy} rows={3} />
+  return <DeliveryRow>
+    <RowTitle>{discarding ? 'Resolving discard' : row.record.status === 'failed' ? 'Delivery needs attention' : 'Queued message'}</RowTitle>
+    <p className="mt-1 whitespace-pre-wrap break-words text-body text-text-body">{row.record.draft.content || 'Attachment or sticker message'}</p>
+    {row.record.error && <p className="mt-2 break-words text-meta text-text-muted">{row.record.error}</p>}
+    {prepared && <p className="mt-1 break-words text-meta text-text-faint">Delivery may already have committed. Editing or discarding resolves the original request first.</p>}
+    {editing && <label className="mt-2 block text-meta text-text-secondary">Replacement text
+      <textarea
+        className="mt-1 w-full resize-y rounded-[var(--radius-well)] bg-bg-well px-3 py-2 text-body text-text-primary shadow-[var(--shadow-well)] outline-none focus-visible:shadow-[var(--focus-ring-input)]"
+        value={content}
+        onChange={event => setContent(event.target.value)}
+        disabled={busy}
+        rows={3}
+      />
     </label>}
     <div className="mt-2 flex flex-wrap gap-2">
       {editing ? <>
-        <button className="btn-primary" disabled={busy || !content.trim()} onClick={() => void act('edit')}>Save queued edit</button>
-        <button className="btn-ghost" disabled={busy} onClick={() => setEditing(false)}>Cancel edit</button>
+        <Button size="sm" disabled={busy || !content.trim()} onClick={() => void act('edit')}>Save queued edit</Button>
+        <Button variant="ghost" size="sm" disabled={busy} onClick={() => setEditing(false)}>Cancel edit</Button>
       </> : <>
-        <button className="btn-ghost" disabled={busy} onClick={() => void act('retry')}>Retry delivery</button>
-        <button className="btn-ghost" disabled={!row.record.draft.content} onClick={() => copy(row.record.draft.content)}>Copy text</button>
-        <button className="btn-ghost" disabled={busy || discarding} onClick={() => { editRow.current = row; setContent(row.record.draft.content); setEditing(true); }}>Edit queued text</button>
-        <button className="btn-ghost" disabled={busy || discarding} onClick={() => void act('discard')}>{prepared ? 'Resolve and discard' : 'Discard draft'}</button>
+        <Button variant="ghost" size="sm" disabled={busy} onClick={() => void act('retry')}>Retry delivery</Button>
+        <Button variant="ghost" size="sm" disabled={!row.record.draft.content} onClick={() => copy(row.record.draft.content)}>Copy text</Button>
+        <Button variant="ghost" size="sm" disabled={busy || discarding} onClick={() => { editRow.current = row; setContent(row.record.draft.content); setEditing(true); }}>Edit queued text</Button>
+        <Button variant="ghost" size="sm" disabled={busy || discarding} onClick={() => void act('discard')}>{prepared ? 'Resolve and discard' : 'Discard draft'}</Button>
       </>}
     </div>
-    {error && <p role="alert" className="mt-2 break-words text-sm text-[var(--text-danger)]">{error}</p>}
-  </li>;
+    {error && <p role="alert" className="mt-2 break-words text-meta text-accent-danger">{error}</p>}
+  </DeliveryRow>;
 }
 
 /** Delivery and recovery belong to the visible account and conversation. */
@@ -64,29 +103,29 @@ export function MessagingQueuePanel({ runtime, channelId }: { runtime: AccountMe
     try { await controller.capture(); setError(null); }
     catch (error) { setError(error instanceof Error ? error.message : 'The recovered text could not be saved as a draft.'); }
   };
-  return <details className="min-w-0 border-t border-[var(--border-subtle)] p-3" open>
-    <summary className="cursor-pointer text-sm font-medium">Saved delivery and recovery ({rows.length + mutations.length + recovery.length})</summary>
-    <ul className="mt-3 space-y-2">
+  return <details className="min-w-0" open>
+    <summary className="cursor-pointer text-section text-text-secondary">Saved delivery and recovery ({rows.length + mutations.length + recovery.length})</summary>
+    <ul className="mt-2 flex flex-col gap-2">
       {rows.map(row => <QueueEntry key={`${row.source}:${row.record.id}`} runtime={runtime} row={row} copy={content => void copy(content)} />)}
-      {mutations.map(row => <li key={`${row.source}:${row.record.id}`} className="min-w-0 rounded-lg border border-[var(--border-subtle)] p-3">
-        <p className="text-sm font-medium">{row.record.intent.kind === 'delete' ? 'Saved deletion' : 'Saved message edit'}</p>
-        {row.record.draft && <p className="mt-1 whitespace-pre-wrap break-words text-sm">{row.record.draft.content}</p>}
-        {row.record.error && <p className="mt-2 break-words text-sm text-[var(--text-muted)]">{row.record.error}</p>}
+      {mutations.map(row => <DeliveryRow key={`${row.source}:${row.record.id}`}>
+        <RowTitle>{row.record.intent.kind === 'delete' ? 'Saved deletion' : 'Saved message edit'}</RowTitle>
+        {row.record.draft && <p className="mt-1 whitespace-pre-wrap break-words text-body text-text-body">{row.record.draft.content}</p>}
+        {row.record.error && <p className="mt-2 break-words text-meta text-text-muted">{row.record.error}</p>}
         <div className="mt-2 flex flex-wrap gap-2">
-          {!row.record.targetDeleted && <button className="btn-ghost" onClick={() => void runtime.retryMutation(row).catch(error => setError(error instanceof Error ? error.message : 'Retry failed.'))}>Retry saved change</button>}
-          {row.record.draft && <button className="btn-ghost" onClick={() => void copy(row.record.draft!.content)}>Copy retained text</button>}
+          {!row.record.targetDeleted && <Button variant="ghost" size="sm" onClick={() => void runtime.retryMutation(row).catch(error => setError(error instanceof Error ? error.message : 'Retry failed.'))}>Retry saved change</Button>}
+          {row.record.draft && <Button variant="ghost" size="sm" onClick={() => void copy(row.record.draft!.content)}>Copy retained text</Button>}
         </div>
-      </li>)}
-      {recovery.map(row => <li key={row.id} className="min-w-0 rounded-lg border border-[var(--border-subtle)] p-3">
-        <p className="text-sm font-medium">Recovery draft</p>
-        <p className="mt-1 whitespace-pre-wrap break-words text-sm">{row.content}</p>
-        <p className="mt-2 break-words text-xs text-[var(--text-muted)]">{row.reason}</p>
+      </DeliveryRow>)}
+      {recovery.map(row => <DeliveryRow key={row.id}>
+        <RowTitle>Recovery draft</RowTitle>
+        <p className="mt-1 whitespace-pre-wrap break-words text-body text-text-body">{row.content}</p>
+        <p className="mt-2 break-words text-meta text-text-faint">{row.reason}</p>
         <div className="mt-2 flex flex-wrap gap-2">
-          <button className="btn-ghost" onClick={() => void restore(row.content)}>Restore into the composer</button>
-          <button className="btn-ghost" onClick={() => void copy(row.content)}>Copy recovery text</button>
+          <Button variant="ghost" size="sm" onClick={() => void restore(row.content)}>Restore into the composer</Button>
+          <Button variant="ghost" size="sm" onClick={() => void copy(row.content)}>Copy recovery text</Button>
         </div>
-      </li>)}
+      </DeliveryRow>)}
     </ul>
-    {error && <p role="alert" className="mt-2 break-words text-sm text-[var(--text-danger)]">{error}</p>}
+    {error && <p role="alert" className="mt-2 break-words text-meta text-accent-danger">{error}</p>}
   </details>;
 }

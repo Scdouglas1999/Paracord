@@ -5,6 +5,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { channelApi } from '../../api/channels';
 import { TopBar } from './TopBar';
 
+// The light seam is stubbed here: this suite mocks the stores down to the
+// fields the header's menus need, and light reads half a dozen more. Light
+// itself is covered in components/message/TextRoom.test.tsx.
+vi.mock('../message/messageLight', () => import('../../test/messageLightMock'));
+vi.mock('../../hooks/useLights', () => import('../../test/messageLightMock'));
 vi.mock('framer-motion', async () => {
   const React = await import('react');
   return {
@@ -133,7 +138,7 @@ vi.mock('../../api/auth', () => ({
 
 vi.mock('../../api/channels', () => ({
   channelApi: {
-    getPins: vi.fn(),
+    getPins: vi.fn().mockResolvedValue({ data: [] }),
     summarizeChannel: vi.fn(),
     getFollowers: vi.fn(),
     addFollower: vi.fn(),

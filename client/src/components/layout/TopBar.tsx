@@ -9,13 +9,11 @@ import type { RefObject } from 'react';
 import {
   AlertTriangle,
   ChevronLeft,
-  ChevronRight,
   Hash,
   Search,
   Sparkles,
   Pin,
   Share2,
-  Users,
   Inbox,
   HelpCircle,
   Volume2,
@@ -45,7 +43,15 @@ import type { ReadState } from '../../types';
 import { canAccessGuildSettings } from '../../lib/guildSettingsAccess';
 import { Tooltip } from '../ui/Tooltip';
 import { cn } from '../../lib/utils';
-import { getIdentityColor } from '../../lib/colors';
+import { HereNowStrip, LitAvatar } from '../light';
+import { Well } from '../ui';
+import { useHereNow, useRoomLight } from '../../hooks/useLights';
+import { readingCaption } from '../../lib/attention/light';
+import {
+  isReading,
+  peerLightSentence,
+  useDmLight,
+} from '../message/messageLight';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { useMutedGuilds } from '../../hooks/useMutedGuilds';
 import { entityScopeKey } from '../../lib/serverScope';
@@ -69,12 +75,23 @@ interface TopBarProps {
   guildName?: string;
 }
 
+/**
+ * Pinned-message counts, remembered per channel for a few minutes.
+ *
+ * §7.4 puts a count on the header's pins control, and the server has no count
+ * endpoint — only the list. Caching it keeps a room switch from re-asking for
+ * something that changes rarely, and a failure simply leaves the control
+ * countless rather than showing a number nobody can trust.
+ */
+const PIN_COUNT_TTL_MS = 5 * 60_000;
+const pinCountCache = new Map<string, { count: number; atMs: number }>();
+
 /** Isolated so connectionLatency ticks don't re-render the full TopBar. */
 function ConnectionLatencyBadge() {
   const connectionLatency = useUIStore((s) => s.connectionLatency);
   return (
     <Tooltip content={`Latency: ${connectionLatency}ms`} side="bottom">
-      <div className="chat-header-connection ml-1 items-center gap-1.5 rounded-sm bg-bg-mod-subtle px-2 py-1">
+      <div className="chat-header-connection ml-1 items-center gap-1.5 rounded-[var(--radius-chip)] bg-bg-raised px-2 py-1 shadow-[var(--shadow-chip)]">
         <Wifi size={12} className={cn(
           connectionLatency < 100
             ? 'text-accent-success'
@@ -83,7 +100,7 @@ function ConnectionLatencyBadge() {
               : 'text-accent-danger'
         )} />
         <span className={cn(
-          'font-mono text-[10px] font-semibold tabular-nums',
+          'pc-mono text-[10px] font-semibold',
           connectionLatency < 100
             ? 'text-accent-success'
             : connectionLatency < 300
@@ -118,7 +135,7 @@ function OwnedTopBar({
   const navigate = useNavigate();
   const { guildId: paramGuildId, channelId } = useParams();
   const resolvedGuildId = guildId ?? paramGuildId;
-  const { actions } = useConversationActions(dmChannelId ?? channelId);
+  const { actions, encrypted, encryption } = useConversationActions(dmChannelId ?? channelId);
 
   // contextPanelMode is the single source of truth for the right panel.
   const contextPanelMode = useUIStore((s) => s.contextPanelMode);
@@ -410,6 +427,69 @@ function OwnedTopBar({
     toggleContextPanelMode(mode);
   };
 
+  /* --- The room, as light (§7.4 / §7.6) ---------------------------------- */
+  const conversationId = dmChannelId ?? channelId;
+  // A guild room is lit by its building; a DM is a text room in its own right.
+  // Both hooks run unconditionally — only one of them has anything to say.
+  const roomLight = useRoomLight(isDM ? null : resolvedGuildId, isDM ? null : channelId);
+  const hereNow = useHereNow(isDM ? null : resolvedGuildId, isDM ? null : channelId);
+  const dm = useDmLight(isDM ? conversationId : undefined, readScope);
+  const peerReading = isReading(dm.room, dm.peer?.userId);
+  const roomIsLit = isDM ? Boolean(dm.room?.lit) : Boolean(roomLight?.lit);
+  const roomIsVoice = Boolean(isVoice);
+  // §7.6: the encryption state is a plain label, never a badge or a lock icon
+  // standing on its own.
+  const encryptionLabel = !encrypted
+    ? 'Not encrypted'
+    : encryption === 'ready'
+      ? 'End-to-end encrypted'
+      : encryption === 'unlock'
+        ? 'Encryption locked on this device'
+        : encryption === 'identity_mismatch'
+          ? 'Encryption keys do not match'
+          : 'Encryption needs setup';
+  const roomSubtitle = [guildName, channelTopic].filter(Boolean).join(' · ');
+
+  // Threads are already in the channel list — counting them costs nothing.
+  const threadCount = useMemo(() => {
+    if (isDM || !resolvedGuildId || !channelId) return 0;
+    return (channelsByGuild[resolvedGuildId] ?? []).filter(
+      (entry) =>
+        (entry.channel_type ?? entry.type) === 6 && entry.parent_id === channelId,
+    ).length;
+  }, [channelId, channelsByGuild, isDM, resolvedGuildId]);
+
+  const pinScopeKey = readScope && conversationId ? entityScopeKey(readScope, conversationId) : null;
+  const [pinCount, setPinCount] = useState<number | null>(() =>
+    pinScopeKey ? (pinCountCache.get(pinScopeKey)?.count ?? null) : null,
+  );
+  useEffect(() => {
+    if (!pinScopeKey || !conversationId) {
+      setPinCount(null);
+      return;
+    }
+    const cached = pinCountCache.get(pinScopeKey);
+    if (cached && Date.now() - cached.atMs < PIN_COUNT_TTL_MS) {
+      setPinCount(cached.count);
+      return;
+    }
+    let cancelled = false;
+    channelApi
+      .getPins(conversationId)
+      .then(({ data }) => {
+        if (cancelled) return;
+        pinCountCache.set(pinScopeKey, { count: data.length, atMs: Date.now() });
+        setPinCount(data.length);
+      })
+      .catch(() => {
+        // A count is decoration; the pins panel reports its own failure.
+        if (!cancelled) setPinCount(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [conversationId, pinScopeKey]);
+
   const primaryActions: HeaderAction[] = [
     ...(isDM && (dmChannelId || channelId) ? [{
       label: isInDmCall ? 'End direct message call' : 'Start direct message voice call',
@@ -422,8 +502,15 @@ function OwnedTopBar({
     { label: 'Search Messages', icon: Search, onClick: panelToggle('search'),
       active: contextPanelMode === 'search', controlsPanel: true, disabled: !channelId,
       reason: channelId ? null : 'Select a channel to search' },
-    ...(!isDM || isGroupDm ? [{ label: 'Member List', icon: Users, onClick: panelToggle('members'),
-      active: contextPanelMode === 'members', controlsPanel: true }] : []),
+    // §7.4: pins and threads sit in the header with their counts. Below the
+    // small breakpoint they fold into the overflow menu (layout-spec §7.8),
+    // which lists them at every width.
+    { label: 'Pinned messages', icon: Pin, onClick: panelToggle('pins'),
+      active: contextPanelMode === 'pins', controlsPanel: true, disabled: !channelId,
+      count: pinCount, overflowWhenNarrow: true },
+    ...(!isDM && !isVoice ? [{ label: 'Threads', icon: MessagesSquare, onClick: panelToggle('threads'),
+      active: contextPanelMode === 'threads', controlsPanel: true,
+      count: threadCount, overflowWhenNarrow: true }] : []),
   ];
   const secondaryActions: ContextMenuItem[] = [
     { label: 'Catch up summary', icon: <Sparkles size={17} />, action: () => void openSummary(),
@@ -452,11 +539,10 @@ function OwnedTopBar({
   const ChannelIcon = isVoice ? Volume2 : isForum ? MessageSquare : Hash;
   const showBreadcrumb = !isDM && Boolean(resolvedGuildId) && Boolean(guildName);
 
+
   return (
-    <div className={cn("chat-header relative z-10 w-full shrink-0 border-b border-border-subtle bg-bg-secondary", isGroupDm && "chat-header-group-dm")}>
-      <div className="chat-header-grid">
-      {/* Left: breadcrumb + channel info */}
-      <div className="relative flex min-w-0 flex-1 items-center gap-2">
+    <div className={cn('chat-header relative z-10 w-full shrink-0 border-b border-border-subtle', isGroupDm && 'chat-header-group-dm')}>
+      <div className="flex min-h-[3.5rem] flex-wrap items-center gap-x-3.5 gap-y-2 px-3 py-2.5 sm:px-6 sm:py-3.5">
         <button
           type="button"
           onClick={() => {
@@ -470,89 +556,164 @@ function OwnedTopBar({
             }
             ui.setSidebarCollapsed(true);
           }}
-          className="chat-header-navigation inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-interactive-normal outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-interactive-hover focus-visible:shadow-[var(--focus-ring)]"
+          className="chat-header-navigation pc-focusable inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary"
           title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >
           {sidebarCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
         </button>
+
         {isDM ? (
+          /* §7.6: a DM is a text room between two people. The peer's own light
+             is the window dot, so the header opens with their face. */
           <div className="flex min-w-0 items-center gap-2.5">
             <button
               type="button"
               onClick={() => navigate('/app/dms')}
-              className="chat-header-navigation inline-flex h-8 shrink-0 items-center gap-1 rounded-sm px-1.5 text-label font-medium text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)] sm:px-2"
+              className="pc-focusable inline-flex h-8 shrink-0 items-center gap-1 rounded-[var(--radius-control)] px-1.5 text-label font-medium text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary sm:px-2"
               aria-label="Back to Messages"
               title="Back to Messages"
             >
               <ChevronLeft size={16} aria-hidden />
               <span className="hidden sm:inline">Messages</span>
             </button>
-            <span
-              className="chat-header-avatar flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-label font-semibold text-text-on-light"
-              style={{ backgroundColor: getIdentityColor(dmChannelId || channelId || recipientName || '0') }}
-            >
-              {recipientName?.charAt(0).toUpperCase() || '?'}
-            </span>
-            <span className="chat-header-dm-name truncate text-[15px] font-semibold text-text-primary">
-              {recipientName || 'Direct Message'}
-            </span>
-            <span className="chat-header-detail h-4 w-px shrink-0 bg-border-strong" aria-hidden />
-            <span className="chat-header-detail truncate text-label text-text-secondary">Direct message</span>
+            {dm.peer ? (
+              <LitAvatar person={dm.peer} size={32} hideLabel className="chat-header-avatar" />
+            ) : (
+              <span
+                className={cn('pc-window h-2.5 w-2.5 shrink-0', roomIsLit && 'is-reading')}
+                aria-hidden
+              />
+            )}
+            <div className="flex min-w-0 flex-col">
+              <span className="chat-header-dm-name pc-display truncate text-[20px] font-bold leading-tight tracking-[-0.01em] text-text-primary">
+                {recipientName || 'Direct message'}
+              </span>
+              <span className="hidden truncate text-meta text-text-faint lg:block">
+                {encryptionLabel}
+              </span>
+            </div>
           </div>
         ) : (
-          <div className="flex min-w-0 items-center gap-1.5">
-            {showBreadcrumb && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => navigate(`/app/guilds/${resolvedGuildId}`)}
-                  className="chat-header-breadcrumb max-w-[10rem] shrink-0 items-center gap-1 rounded-sm px-1.5 py-1 text-label font-medium text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
-                  aria-label={`Go to ${guildName} home`}
-                  title={`Go to ${guildName} home`}
-                >
-                  <span className="truncate">{guildName}</span>
-                </button>
-                <ChevronRight size={14} className="chat-header-breadcrumb shrink-0 text-text-muted" aria-hidden />
-              </>
-            )}
-            {resolvedGuildId ? (
-              <ChannelSwitcher
-                guildId={resolvedGuildId}
-                guildName={guildName}
-                channelId={channelId}
-                channelName={channelName || 'channel'}
-                channelType={selectedChannel?.type ?? selectedChannel?.channel_type}
-                channels={channelsByGuild[resolvedGuildId] || []}
-              />
-            ) : (
-              <>
-                <ChannelIcon size={18} className="shrink-0 text-channel-icon" />
-                <span className="truncate text-[15px] font-semibold text-text-primary">
-                  {channelName || 'channel'}
+          <div className="flex min-w-0 items-center gap-2.5">
+            {/* The room's own window: amber when people are reading it, white
+                when it is a voice room with people in it, dark when nobody is
+                there. The counts beside it are the words that go with it. */}
+            <span
+              className={cn(
+                'pc-window h-2.5 w-2.5 shrink-0',
+                roomIsLit && (roomIsVoice ? 'is-talking' : 'is-reading'),
+              )}
+              aria-hidden
+            />
+            <div className="flex min-w-0 flex-col">
+              {resolvedGuildId ? (
+                <ChannelSwitcher
+                  guildId={resolvedGuildId}
+                  guildName={guildName}
+                  channelId={channelId}
+                  channelName={channelName || 'channel'}
+                  channelType={selectedChannel?.type ?? selectedChannel?.channel_type}
+                  channels={channelsByGuild[resolvedGuildId] || []}
+                />
+              ) : (
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <ChannelIcon size={18} className="shrink-0 text-channel-icon" />
+                  <span className="pc-display truncate text-[20px] font-bold leading-tight tracking-[-0.01em] text-text-primary">
+                    {channelName || 'channel'}
+                  </span>
                 </span>
-              </>
-            )}
-            {channelTopic && (
-              <>
-                <span className="hidden h-4 w-px shrink-0 bg-border-strong lg:block" aria-hidden />
-                <span className="hidden min-w-0 truncate text-label text-text-secondary lg:block">
-                  {channelTopic}
+              )}
+              {/* §7.4: "Kestrel Robotics · Hardware bring-up" — the building is
+                  the way back to its Lobby, so it is the only breadcrumb the
+                  header needs. */}
+              {roomSubtitle && (
+                <span className="hidden min-w-0 truncate text-meta text-text-faint lg:block">
+                  {showBreadcrumb ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/app/guilds/${resolvedGuildId}`)}
+                        className="pc-focusable rounded-[var(--radius-window)] transition-colors duration-[140ms] ease-[var(--ease-out)] hover:text-text-secondary hover:underline"
+                        aria-label={`Go to ${guildName} home`}
+                        title={`Go to ${guildName} home`}
+                      >
+                        {guildName}
+                      </button>
+                      {channelTopic ? ` · ${channelTopic}` : ''}
+                    </>
+                  ) : (
+                    roomSubtitle
+                  )}
                 </span>
-              </>
-            )}
+              )}
+            </div>
           </div>
         )}
-      </div>
 
-      {isGroupDm && <div className="chat-header-mobile-dm-title">{recipientName || 'Group message'}</div>}
-      <ConversationHeaderActions primary={primaryActions} items={secondaryActions}
-        activeSurface={activeSurface} unread={unreadItems.length} mentions={inboxMentions}
-        indicator={connectionStatus === 'connected' ? <ConnectionLatencyBadge /> : undefined} />
-      {systemAudioCaptureActive && <div role="status" aria-label="System audio capture is active" className="chat-header-capture-status">
-        <AlertTriangle size={16} aria-hidden className="shrink-0" />
-        <span>System audio capture is active</span>
-      </div>}
+        {/* §6.5: the people who are here now are a lit strip in the header, and
+            its sheet is the only full list of people in the product. */}
+        {isDM ? (
+          // A one-to-one DM's "full list" is one person, so the strip simply
+          // states their light; a group is a room and gets the people sheet.
+          !isGroupDm && dm.peer ? (
+            <Well
+              bare
+              as="div"
+              className="hidden min-w-0 items-center gap-2.5 rounded-[var(--radius-card)] py-[5px] pl-[7px] pr-3 md:flex"
+            >
+              <LitAvatar person={dm.peer} size={24} hideLabel />
+              <span className="min-w-0 truncate text-label text-text-body">
+                <span className="font-semibold text-text-primary">{dm.peer.name}</span>
+                {peerLightSentence(dm.peer, peerReading).slice(dm.peer.name.length)}
+              </span>
+            </Well>
+          ) : (
+            <HereNowStrip
+              hereNow={dm.hereNow}
+              everyone={dm.people}
+              context={`reading ${dm.name}`}
+              className="hidden md:block"
+              caption={
+                <>
+                  <span className="font-semibold text-text-primary">{readingCaption(dm.hereNow.here)}</span>
+                  {' · '}
+                  {dm.hereNow.lightsOn} lights on
+                </>
+              }
+            />
+          )
+        ) : (
+          !isVoice && (
+            // §7.4: a text room's strip says what being there means — "5
+            // reading · 19 lights on" — not the Stage's "N here".
+            <HereNowStrip
+              hereNow={hereNow}
+              context={`reading ${channelName ?? 'this room'}`}
+              className="hidden md:block"
+              caption={
+                <>
+                  <span className="font-semibold text-text-primary">{readingCaption(hereNow.here)}</span>
+                  {' · '}
+                  {hereNow.lightsOn} lights on
+                </>
+              }
+            />
+          )
+        )}
+
+        {isGroupDm && <div className="chat-header-mobile-dm-title w-full">{recipientName || 'Group message'}</div>}
+
+        <div className="ml-auto flex min-w-0 items-center gap-2">
+          <ConversationHeaderActions primary={primaryActions} items={secondaryActions}
+            activeSurface={activeSurface} unread={unreadItems.length} mentions={inboxMentions}
+            indicator={connectionStatus === 'connected' ? <ConnectionLatencyBadge /> : undefined} />
+        </div>
+
+        {systemAudioCaptureActive && <div role="status" aria-label="System audio capture is active" className="chat-header-capture-status w-full">
+          <AlertTriangle size={16} aria-hidden className="shrink-0" />
+          <span>System audio capture is active</span>
+        </div>}
       </div>
 
       {/* Summary overlay */}

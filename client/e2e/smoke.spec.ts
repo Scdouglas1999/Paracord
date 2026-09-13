@@ -395,7 +395,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   for (const width of responsiveWidths) {
     await page.setViewportSize({ width, height: 900 });
     await expect(page.getByRole('main')).toBeVisible();
-    await expect(page.getByPlaceholder(/Message #qa-general-channel/)).toBeVisible();
+    await expect(page.getByPlaceholder(/Say something (in qa-general-channel|to the)/)).toBeVisible();
     await expect
       .poll(async () =>
         page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
@@ -411,7 +411,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   for (const viewport of desktopViewports) {
     await page.setViewportSize(viewport);
     await expect(page.getByRole('main')).toBeVisible();
-    await expect(page.getByPlaceholder(/Message #qa-general-channel/)).toBeVisible();
+    await expect(page.getByPlaceholder(/Say something (in qa-general-channel|to the)/)).toBeVisible();
     await expect
       .poll(async () =>
         page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
@@ -480,8 +480,16 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   for (const width of [320, 390, 767, 768, 1280]) {
     await page.setViewportSize({ width, height: 800 });
     await expect(conversationHeader.getByRole('button', { name: 'Search Messages' })).toBeVisible();
-    await expect(conversationHeader.getByRole('button', { name: 'Member List' })).toBeVisible();
-    await expect(conversationHeader.locator('.chat-header-actions button')).toHaveCount(3);
+    // lantern-stage-spec §6.5: no docked member list anywhere — the people who
+    // are here now are the header's lit strip, and its sheet is the only full
+    // list. §7.4 puts search, pins and threads in the header; below the small
+    // breakpoint pins and threads fold into the overflow menu (layout-spec §7.8).
+    await expect(conversationHeader.getByRole('button', { name: 'Member List' })).toHaveCount(0);
+    // Search, pins, threads and the overflow menu. Pins and threads are in the
+    // DOM at every width and hidden below the small breakpoint, where the
+    // overflow menu carries them (layout-spec §7.8).
+    await expect(conversationHeader.locator('.chat-header-actions button')).toHaveCount(4);
+    await expect(conversationHeader.getByRole('button', { name: 'Threads' })).toBeVisible({ visible: width >= 640 });
     const moreActions = conversationHeader.getByRole('button', { name: 'More channel actions' });
     await moreActions.focus();
     await page.keyboard.press('ArrowDown');
@@ -541,24 +549,27 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
       await page.setViewportSize({ width, height: 800 });
       await expect(dmHeader.getByRole('button', { name: 'Search Messages' })).toBeInViewport();
       await expect(dmHeader.getByRole('button', { name: 'Start direct message voice call' })).toBeInViewport();
-      if (dm.type === 3) {
-        await expect(dmHeader.getByRole('button', { name: 'Member List' })).toBeInViewport();
-        if (width < 480) await expect(dmHeader.locator('.chat-header-mobile-dm-title')).toBeInViewport();
+      // A group DM is a room too (§7.6): its people live in the header's strip
+      // and its sheet, never in a docked list.
+      await expect(dmHeader.getByRole('button', { name: 'Member List' })).toHaveCount(0);
+      if (dm.type === 3 && width < 480) {
+        await expect(dmHeader.locator('.chat-header-mobile-dm-title')).toBeInViewport();
       }
-      else await expect(dmHeader.getByRole('button', { name: 'Member List' })).toHaveCount(0);
       await expect.poll(async () => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
       if (width === 390) await page.screenshot({ path: testInfo.outputPath(`header-dm-${dm.type}-mobile.png`), fullPage: true });
     }
     if (dm.type === 3) {
-      await dmHeader.getByRole('button', { name: 'Member List' }).click();
-      await expect(page.getByRole('button', { name: /Close.*members.*panel/i })).toBeVisible();
+      await page.setViewportSize({ width: 1280, height: 800 });
+      // The strip's sheet is the only full list of people in the product.
+      await dmHeader.getByRole('button', { name: /reading/ }).click();
+      await expect(page.getByRole('dialog', { name: 'People here now' })).toBeVisible();
       await page.keyboard.press('Escape');
     }
   }
   showDmFixtures = false;
   await page.goto(`/app/guilds/${guildId}/channels/${textChannelId}`);
 
-  const composer = page.getByPlaceholder(/Message #qa-general-channel/);
+  const composer = page.getByPlaceholder(/Say something (in qa-general-channel|to the)/);
   for (const width of [320, 390, 768]) {
     await page.setViewportSize({ width, height: 800 });
     await expect(composer).toBeVisible();

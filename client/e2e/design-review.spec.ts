@@ -122,6 +122,10 @@ test('capture the design-review screens', async ({ page }) => {
   );
 
   let signedOut = false;
+  // WP5 §7.6: the first-DM setup state. Flipping this makes the DM's
+  // capabilities report an encrypted conversation this device has no identity
+  // for, which is exactly what puts the composer into "Set up encryption".
+  let dmNeedsSetup = false;
   let setupRequired = false;
 
   await page.route('**/api/v1/**', async (route) => {
@@ -282,20 +286,23 @@ test('capture the design-review screens', async ({ page }) => {
     if (pathname === `/api/v1/channels/${DM_CHANNEL_ID}` && method === 'GET') return json(200, dmChannel);
     if (pathname === `/api/v1/channels/${DM_CHANNEL_ID}/recipients` && method === 'GET')
       return json(200, [peer]);
-    if (pathname.endsWith('/capabilities') && pathname.startsWith('/api/v1/channels/'))
+    if (pathname.endsWith('/capabilities') && pathname.startsWith('/api/v1/channels/')) {
+      const capChannelId = pathname.split('/')[4];
+      const needsSetup = dmNeedsSetup && capChannelId === DM_CHANNEL_ID;
       return json(200, {
         version: 1,
-        channel_id: pathname.split('/')[4],
+        channel_id: capChannelId,
         user_id: user.id,
-        encrypted: false,
+        encrypted: needsSetup,
         own_identity_enrolled: false,
-        peers_ready: true,
+        peers_ready: !needsSetup,
         actions: Object.fromEntries(
           ['send', 'poll', 'schedule', 'attach', 'summary', 'voice', 'video', 'screen_share'].map(
             (action) => [action, { supported: true, allowed: true, reason: null }],
           ),
         ),
       });
+    }
     // The durable-delivery runtime will not surface a message until the
     // authoritative recovery feed has confirmed it, exactly as against a real
     // server — without this the timeline stays on skeletons.
@@ -1212,6 +1219,70 @@ test('capture the design-review screens', async ({ page }) => {
       await expect(page.getByRole('main')).toBeVisible();
       await shoot(`stage-lobby-${label}`);
     }
+    return;
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* WP5 — the text room and the DM (§7.4, §7.6).                             */
+  /*                                                                         */
+  /*   PARACORD_E2E_DESIGN=1 PARACORD_E2E_DESIGN_WP=wp5 npx playwright test   */
+  /* ---------------------------------------------------------------------- */
+  if (WP === 'wp5') {
+    const bothSizes = async (name: string, open: () => Promise<unknown>) => {
+      for (const [label, viewport] of [
+        ['1440x900', DESKTOP],
+        ['390x844', PHONE],
+      ] as const) {
+        await page.setViewportSize(viewport);
+        await open();
+        await shoot(`${name}-${label}`);
+      }
+    };
+
+    // The text room: header strip, timeline, composer — the whole plate.
+    await bothSizes('text-room', async () => {
+      await page.goto(`/app/guilds/${GUILD_ID}/channels/${TEXT_CHANNEL_ID}`);
+      await expect(page.getByRole('main')).toBeVisible();
+    });
+
+    // The header's people sheet is the only full list of people (§6.5).
+    await bothSizes('text-room-people', async () => {
+      await page.goto(`/app/guilds/${GUILD_ID}/channels/${TEXT_CHANNEL_ID}`);
+      await expect(page.getByRole('main')).toBeVisible();
+      const strip = page.locator('.chat-header').getByRole('button', { name: /reading/ });
+      if (await strip.count()) await strip.first().click();
+      await page.waitForTimeout(300);
+    });
+
+    // Pins as a contextual plate, not a docked panel.
+    await bothSizes('text-room-pins', async () => {
+      await page.goto(`/app/guilds/${GUILD_ID}/channels/${TEXT_CHANNEL_ID}`);
+      await expect(page.getByRole('main')).toBeVisible();
+      const pins = page.locator('.chat-header').getByRole('button', { name: 'Pinned messages' });
+      if (await pins.count()) await pins.first().click();
+      await page.waitForTimeout(300);
+    });
+
+    // A DM is the same plate between two people (§7.6).
+    await bothSizes('dm', async () => {
+      await page.goto(`/app/dms/${DM_CHANNEL_ID}`);
+      await expect(page.getByRole('main')).toBeVisible();
+    });
+
+    // The Messages index: conversations as rooms.
+    await bothSizes('dm-index', async () => {
+      await page.goto('/app/dms');
+      await expect(page.getByRole('main')).toBeVisible();
+    });
+
+    // And the first-DM setup state, restyled but word for word the same.
+    dmNeedsSetup = true;
+    await bothSizes('dm-needs-setup', async () => {
+      await page.goto(`/app/dms/${DM_CHANNEL_ID}`);
+      await expect(page.getByRole('main')).toBeVisible();
+      await page.waitForTimeout(400);
+    });
+    dmNeedsSetup = false;
     return;
   }
 

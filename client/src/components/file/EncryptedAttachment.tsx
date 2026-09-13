@@ -8,6 +8,7 @@ import {
   type EncryptedAttachment as EncryptedAttachmentModel,
 } from '../../lib/messages/attachments/attachmentDecryption';
 import { FilePreview } from './FilePreview';
+import { Button, Chip } from '../ui';
 
 /**
  * An attachment of an end-to-end encrypted conversation.
@@ -42,11 +43,11 @@ function UnencryptedAttachmentNotice({ attachment }: { attachment: Attachment })
   return (
     <div
       role="note"
-      className="inline-flex max-w-fit flex-wrap items-center gap-2 rounded-md border border-accent-warning/40 bg-bg-mod-subtle px-3 py-2 text-sm"
+      className="mt-2 inline-flex max-w-full flex-wrap items-center gap-2 rounded-[var(--radius-well)] bg-bg-well px-3 py-2 text-meta shadow-[var(--shadow-well)]"
     >
       <ShieldAlert size={16} className="shrink-0 text-accent-warning" />
-      <span className="max-w-[20rem] truncate text-text-secondary">{attachment.filename}</span>
-      <span className="text-meta text-text-muted">
+      <span className="max-w-[20rem] truncate font-medium text-text-body">{attachment.filename}</span>
+      <span className="text-meta text-text-faint">
         No key for this file arrived in the encrypted message. If it was sent without
         end-to-end encryption, the server can read it.
       </span>
@@ -100,38 +101,27 @@ function DecryptingAttachment({ attachment }: { attachment: EncryptedAttachmentM
           resolveObjectUrl={resolveObjectUrl}
         />
       ) : (
-        <div className="inline-flex max-w-fit flex-wrap items-center gap-2 rounded-md border border-border-subtle bg-bg-mod-subtle px-3 py-2 text-sm">
+        <div className="mt-2 inline-flex max-w-full flex-wrap items-center gap-2 rounded-[var(--radius-well)] bg-bg-well px-3 py-2 text-meta shadow-[var(--shadow-well)]">
           <EncryptedThumbnail attachment={attachment} />
-          <Lock size={14} className="shrink-0 text-text-muted" />
-          <span className="max-w-[20rem] truncate text-text-primary">{descriptor.filename}</span>
-          <span className="tabular-nums text-meta text-text-muted">{formatFileSize(descriptor.size)}</span>
-          <span className="text-meta">
-            <button
-              type="button"
-              className="rounded-sm border border-border-subtle px-2 py-1 font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
-              onClick={() => setRequested(true)}
-            >
-              Decrypt and open
-            </button>
-          </span>
+          <Lock size={14} className="shrink-0 text-text-muted" aria-hidden />
+          <span className="max-w-[20rem] truncate font-medium text-text-body">{descriptor.filename}</span>
+          <span className="pc-mono text-meta text-text-faint">{formatFileSize(descriptor.size)}</span>
+          <Button variant="ghost" size="sm" onClick={() => setRequested(true)}>
+            Decrypt and open
+          </Button>
         </div>
       )}
       {/* The project's unlayered `button { font: inherit }` base rule outranks any
           Tailwind text-size utility on a button, so the size is set on the row
           the buttons inherit from. */}
       <div className="flex flex-wrap items-center gap-2 text-meta">
-        <span className="inline-flex items-center gap-1 rounded-xs border border-border-subtle px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-          <Lock size={10} /> End-to-end encrypted
-        </span>
-        <button
-          type="button"
-          className="rounded-sm border border-border-subtle bg-bg-mod-subtle px-2.5 py-1 text-meta font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
-          onClick={() => void save()}
-          disabled={saving}
-        >
+        <Chip size="sm" className="text-text-faint">
+          <Lock size={10} aria-hidden /> End-to-end encrypted
+        </Chip>
+        <Button variant="ghost" size="sm" onClick={() => void save()} disabled={saving}>
           {saving ? 'Decrypting…' : 'Download'}
-          <Download size={12} className="ml-1 inline align-[-1px]" aria-hidden="true" />
-        </button>
+          <Download size={12} aria-hidden />
+        </Button>
       </div>
       {error && (
         <p role="alert" className="inline-flex items-center gap-1.5 text-meta text-accent-danger">
@@ -172,7 +162,7 @@ function EncryptedThumbnail({ attachment }: { attachment: EncryptedAttachmentMod
       alt={`Preview of ${attachment.encryption.filename}`}
       width={thumbnail.width}
       height={thumbnail.height}
-      className="max-h-16 w-auto rounded-sm border border-border-subtle"
+      className="max-h-16 w-auto rounded-[var(--radius-chip)]"
     />
   );
 }

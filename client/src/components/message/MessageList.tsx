@@ -49,6 +49,7 @@ import {
   AuthorMeta,
   DayDivider,
   dayDividerLabel,
+  timelineTime,
   ReplyChip,
   RoomLitEventRow,
   ThreadRow,
@@ -853,7 +854,11 @@ function OwnedMessageList({
         currDepth === 0 &&
         prevDepth === 0 &&
         shouldGroup(prevMsg, msg);
-      const showDateSep = prevMsg && isDifferentDay(getTimestamp(prevMsg), getTimestamp(msg));
+      // The first message of a channel gets a divider too: the reference render
+      // opens with a "Today" chip, and a timeline with no day on it is a list.
+      const showDateSep = prevMsg
+        ? isDifferentDay(getTimestamp(prevMsg), getTimestamp(msg))
+        : Boolean(getTimestamp(msg));
 
       if (showDateSep) {
         result.push({ type: 'date-separator', date: getTimestamp(msg) });
@@ -2023,7 +2028,8 @@ function OwnedMessageList({
               )}
               <AuthorMeta
                 person={authorPerson}
-                timestamp={formatTimestamp(getTimestamp(msg))}
+                timestamp={timelineTime(getTimestamp(msg))}
+                title={formatTimestamp(getTimestamp(msg))}
               />
               {(msg.edited_timestamp || msg.edited_at) && (
                 <button
@@ -2594,7 +2600,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
       </div>
       <div
         ref={scrollRef}
-        className="h-full overflow-y-auto"
+        className="flex h-full flex-col overflow-y-auto"
         onScroll={handleScroll}
         style={{ overscrollBehavior: 'contain' }}
         role="feed"
@@ -2641,7 +2647,9 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
             </Button>
           </div>
         ) : (
-          <div className="py-6" style={{ height: virtualizer.getTotalSize(), width: '100%', position: 'relative' }}>
+          // §7.4: a room reads from the bottom. `mt-auto` only has room to act
+          // when the timeline is shorter than the plate; past that it scrolls.
+          <div className="mt-auto shrink-0 py-6" style={{ height: virtualizer.getTotalSize(), width: '100%', position: 'relative' }}>
             {virtualItems.map((virtualRow) => {
               const row = rows[virtualRow.index];
               return (

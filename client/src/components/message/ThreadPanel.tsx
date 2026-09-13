@@ -94,7 +94,7 @@ export function ThreadPanel({
   };
 
   return (
-    <div className={`flex min-h-0 min-w-0 flex-1 flex-col border-l border-border-subtle bg-bg-secondary/40 ${className}`}>
+    <div className={`pc-plate flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${className}`}>
       <div className="panel-divider flex shrink-0 items-center justify-between gap-3 border-b border-border-subtle px-4 py-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-label font-semibold text-text-primary">

@@ -29,6 +29,11 @@ const mockPermissions = vi.hoisted(() => ({
   isLoading: false,
 }));
 
+// The light seam is stubbed here: this suite mocks the stores down to the
+// fields the header's menus need, and light reads half a dozen more. Light
+// itself is covered in components/message/TextRoom.test.tsx.
+vi.mock('../message/messageLight', () => import('../../test/messageLightMock'));
+vi.mock('../../hooks/useLights', () => import('../../test/messageLightMock'));
 vi.mock('../../stores/uiStore', () => ({
   useUIStore: (selector: (state: typeof mockUIState) => unknown) => selector(mockUIState),
 }));
@@ -66,6 +71,7 @@ vi.mock('../../api/auth', () => ({
 
 vi.mock('../../api/channels', () => ({
   channelApi: {
+    getPins: vi.fn().mockResolvedValue({ data: [] }),
     summarizeChannel: vi.fn(),
     getFollowers: vi.fn(),
     addFollower: vi.fn(),
@@ -98,23 +104,24 @@ describe('TopBar context-panel toggles', () => {
   it('drives the shell ContextPanel mode from each right-cluster toggle', () => {
     renderChannelTopBar();
 
-    fireEvent.click(screen.getByRole('button', { name: 'More channel actions' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: /^Pinned messages/ }));
+    // §7.4: search, pins and threads are the header's own controls; the
+    // overflow menu keeps them for the narrow layout (layout-spec §7.8).
+    fireEvent.click(screen.getAllByRole('button', { name: 'Pinned messages' })[0]);
     expect(mockUIState.toggleContextPanelMode).toHaveBeenCalledWith('pins');
 
     fireEvent.click(screen.getByRole('button', { name: 'Search Messages' }));
     expect(mockUIState.toggleContextPanelMode).toHaveBeenCalledWith('search');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Member List' }));
-    expect(mockUIState.toggleContextPanelMode).toHaveBeenCalledWith('members');
+    fireEvent.click(screen.getByRole('button', { name: 'Threads' }));
+    expect(mockUIState.toggleContextPanelMode).toHaveBeenCalledWith('threads');
 
     fireEvent.click(screen.getByRole('button', { name: 'More channel actions' }));
     fireEvent.click(screen.getByRole('menuitem', { name: /^Space leaderboard/ }));
     expect(mockUIState.toggleContextPanelMode).toHaveBeenCalledWith('economy');
 
     fireEvent.click(screen.getByRole('button', { name: 'More channel actions' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: /^Threads/ }));
-    expect(mockUIState.toggleContextPanelMode).toHaveBeenCalledWith('threads');
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Pinned messages/ }));
+    expect(mockUIState.toggleContextPanelMode).toHaveBeenCalledWith('pins');
   });
 
   it('reflects the active ContextPanel mode as the pressed toggle', () => {
@@ -125,7 +132,7 @@ describe('TopBar context-panel toggles', () => {
       'aria-expanded',
       'true',
     );
-    expect(screen.getByRole('button', { name: 'Member List' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: 'Search Messages' })).toHaveAttribute(
       'aria-pressed',
       'false',
     );

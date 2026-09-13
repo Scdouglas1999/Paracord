@@ -67,6 +67,11 @@ function makeMessage(over: Partial<Message> = {}): Message {
   };
 }
 
+// The light seam is stubbed here: this suite mocks the stores down to the
+// fields its subject needs, and light reads half a dozen more. Light itself is
+// covered in messageLight.test.tsx and TextRoom.test.tsx.
+vi.mock('./messageLight', () => import('../../test/messageLightMock'));
+vi.mock('../../hooks/useLights', () => import('../../test/messageLightMock'));
 vi.mock('@tanstack/react-virtual', () => ({
   useVirtualizer: (options: { count: number }) => ({
     getVirtualItems: () =>
@@ -313,7 +318,7 @@ describe('MessageList keyboard accessibility and error state', () => {
 
     const banner = await screen.findByRole('alert');
     expect(banner).toHaveTextContent('Failed to load messages.');
-    expect(screen.queryByText('#general is ready when you are')).toBeNull();
+    expect(screen.queryByText('general is dark')).toBeNull();
 
     const retry = screen.getByRole('button', { name: /retry/i });
     fireEvent.click(retry);
@@ -331,7 +336,7 @@ describe('MessageList keyboard accessibility and error state', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('#general is ready when you are')).toBeInTheDocument();
+    expect(await screen.findByText('general is dark')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
   });
 

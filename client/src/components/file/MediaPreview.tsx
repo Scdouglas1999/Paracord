@@ -54,7 +54,7 @@ export function MediaPreview({ src, filename, kind }: MediaPreviewProps) {
       {kind === 'video' ? (
         // Caption tracks are attached below when the user supplies a file; this rule cannot inspect conditional children.
         // eslint-disable-next-line jsx-a11y/media-has-caption
-        <video src={src} controls aria-label={filename} className="max-h-72 rounded-md border border-border-subtle">
+        <video src={src} controls aria-label={filename} className="max-h-72 w-full rounded-[var(--radius-thumb)] bg-bg-base">
           {captions && <track key={captions.url} kind="captions" label={captions.name} src={captions.url} default />}
         </video>
       ) : (
@@ -71,9 +71,9 @@ export function MediaPreview({ src, filename, kind }: MediaPreviewProps) {
           />}
         </audio>
       )}
-      {kind === 'audio' && captions && <p aria-live="polite" aria-atomic="true" className="mt-2 whitespace-pre-line text-body">{cueText}</p>}
-      <div className="mt-2 flex flex-wrap items-center gap-2 text-meta text-text-muted">
-        <label htmlFor={inputId} className="cursor-pointer underline">Load captions (.vtt)</label>
+      {kind === 'audio' && captions && <p aria-live="polite" aria-atomic="true" className="mt-2 whitespace-pre-line text-body text-text-body">{cueText}</p>}
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-meta text-text-faint">
+        <label htmlFor={inputId} className="cursor-pointer font-medium text-text-link underline">Load captions (.vtt)</label>
         <input
           id={inputId}
           type="file"
@@ -85,7 +85,7 @@ export function MediaPreview({ src, filename, kind }: MediaPreviewProps) {
           }}
         />
         <span>{captions ? `${captions.name} · local only` : 'No captions supplied.'}</span>
-        {captions && <button type="button" className="underline" onClick={() => {
+        {captions && <button type="button" className="pc-focusable rounded-[var(--radius-chip)] font-medium text-text-link underline" onClick={() => {
           selection.current += 1;
           setCaptions(null);
           setCueText('');

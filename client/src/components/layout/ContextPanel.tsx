@@ -323,7 +323,7 @@ export function ContextPanel({
           onKeyDown={onAsideKeyDown}
           data-testid="context-panel"
           data-mode="threads"
-          className="flex h-full shrink-0 flex-col overflow-hidden border-l border-border-subtle bg-bg-secondary shadow-sm outline-none"
+          className="pc-plate flex h-[calc(100%-var(--gutter)*2)] shrink-0 flex-col overflow-hidden outline-none my-[var(--gutter)] mr-[var(--gutter)]"
           style={{ width: 'var(--member-list-width)' }}
         >
           <header className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-4 py-3">
@@ -396,7 +396,7 @@ export function ContextPanel({
     if (!thread || !threadGuildId) return null;
     return (
       <div
-        className="flex h-full shrink-0 flex-col"
+        className="flex h-[calc(100%-var(--gutter)*2)] shrink-0 flex-col my-[var(--gutter)] mr-[var(--gutter)]"
         style={{ width: 'var(--member-list-width)' }}
         data-testid="context-panel"
         data-mode="threads"
@@ -426,7 +426,7 @@ export function ContextPanel({
       onKeyDown={onAsideKeyDown}
       data-testid="context-panel"
       data-mode={mode}
-      className="flex h-full shrink-0 flex-col overflow-hidden border-l border-border-subtle bg-bg-secondary shadow-sm outline-none"
+      className="pc-plate flex h-[calc(100%-var(--gutter)*2)] shrink-0 flex-col overflow-hidden outline-none my-[var(--gutter)] mr-[var(--gutter)]"
       style={{ width: 'var(--member-list-width)' }}
     >
       <header className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-4 py-3">

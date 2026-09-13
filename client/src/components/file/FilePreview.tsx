@@ -63,7 +63,7 @@ export function FilePreview({ url, filename, mimeType, size, resolveObjectUrl }:
 
   if (!safeRawUrl) {
     return (
-      <div className="mt-1 flex max-w-sm items-center gap-2.5 rounded-md border border-border-subtle bg-bg-secondary px-3.5 py-3 text-meta text-text-muted">
+      <div className="mt-2 flex max-w-sm items-center gap-2.5 rounded-[var(--radius-well)] bg-bg-well px-3.5 py-3 text-meta text-text-muted shadow-[var(--shadow-well)]">
         <FileWarning size={16} className="shrink-0 text-accent-warning" />
         Attachment link blocked.
       </div>
@@ -72,7 +72,7 @@ export function FilePreview({ url, filename, mimeType, size, resolveObjectUrl }:
 
   if (error) {
     return (
-      <div role="alert" className="mt-1 flex max-w-sm items-center gap-2.5 rounded-md border border-accent-danger/40 bg-bg-secondary px-3.5 py-3 text-meta text-accent-danger">
+      <div role="alert" className="mt-2 flex max-w-sm items-center gap-2.5 rounded-[var(--radius-well)] bg-danger-well px-3.5 py-3 text-meta text-accent-danger">
         <FileWarning size={16} className="shrink-0" />
         <span className="min-w-0">{filename}: {error}</span>
       </div>
@@ -81,7 +81,7 @@ export function FilePreview({ url, filename, mimeType, size, resolveObjectUrl }:
 
   if (!resolvedSrc) {
     return (
-      <div className="mt-1 max-w-sm rounded-md border border-border-subtle bg-bg-secondary px-3.5 py-3 text-meta text-text-muted">
+      <div className="mt-2 max-w-sm rounded-[var(--radius-well)] bg-bg-well px-3.5 py-3 text-meta text-text-faint shadow-[var(--shadow-well)]">
         Loading attachment…
       </div>
     );
@@ -91,22 +91,22 @@ export function FilePreview({ url, filename, mimeType, size, resolveObjectUrl }:
   if (isAllowedImageMimeType(mimeType)) {
     return (
       <>
-        <div className="mt-1 max-w-md">
+        <div className="mt-2 max-w-md overflow-hidden rounded-[var(--radius-well)] bg-bg-well shadow-[var(--shadow-chip)]">
           <button
             type="button"
             aria-label={`Open image preview: ${filename}`}
-            className="block max-w-full overflow-hidden rounded-md border border-border-subtle p-0 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:border-border-strong focus-visible:shadow-[var(--focus-ring)]"
+            className="pc-focusable block w-full p-0 text-left outline-none"
             onClick={() => setLightbox(true)}
           >
             <img
               src={resolvedSrc}
               alt={filename}
-              className="max-h-72 object-contain"
+              className="max-h-72 w-full object-contain"
             />
           </button>
-          <div className="mt-1.5 flex items-center gap-2 text-meta text-text-muted">
-            <span className="truncate">{filename}</span>
-            <span className="tabular-nums">{formatFileSize(size)}</span>
+          <div className="flex items-center gap-2 px-3 py-2 text-meta text-text-muted">
+            <span className="min-w-0 truncate font-medium text-text-body">{filename}</span>
+            <span className="pc-mono ml-auto shrink-0">{formatFileSize(size)}</span>
           </div>
         </div>
 
@@ -125,7 +125,7 @@ export function FilePreview({ url, filename, mimeType, size, resolveObjectUrl }:
             <button
               type="button"
               aria-label="Close image preview"
-              className="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-sm border border-border-subtle bg-bg-accent text-text-primary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong focus-visible:shadow-[var(--focus-ring)]"
+              className="pc-focusable absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-[var(--radius-control)] bg-bg-raised text-text-primary shadow-[var(--shadow-lifted)] outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong"
               onClick={closeLightbox}
             >
               <X size={18} />
@@ -140,11 +140,11 @@ export function FilePreview({ url, filename, mimeType, size, resolveObjectUrl }:
   // Video preview
   if (mimeType.startsWith('video/')) {
     return (
-      <div className="mt-1 max-w-md">
+      <div className="mt-2 max-w-md overflow-hidden rounded-[var(--radius-well)] bg-bg-well shadow-[var(--shadow-chip)]">
         <MediaPreview key={resolvedSrc} src={resolvedSrc} filename={filename} kind="video" />
-        <div className="mt-1.5 flex items-center gap-2 text-meta text-text-muted">
-          <span className="truncate">{filename}</span>
-          <span className="tabular-nums">{formatFileSize(size)}</span>
+        <div className="flex items-center gap-2 px-3 py-2 text-meta text-text-muted">
+          <span className="min-w-0 truncate font-medium text-text-body">{filename}</span>
+          <span className="pc-mono ml-auto shrink-0">{formatFileSize(size)}</span>
         </div>
       </div>
     );
@@ -153,13 +153,13 @@ export function FilePreview({ url, filename, mimeType, size, resolveObjectUrl }:
   // Audio preview
   if (mimeType.startsWith('audio/')) {
     return (
-      <div className="mt-1 max-w-md">
-        <div className="flex items-center gap-3 rounded-md border border-border-subtle bg-bg-secondary p-3.5">
+      <div className="mt-2 max-w-md overflow-hidden rounded-[var(--radius-well)] bg-bg-well shadow-[var(--shadow-chip)]">
+        <div className="flex items-center gap-3 p-3.5">
           <MediaPreview key={resolvedSrc} src={resolvedSrc} filename={filename} kind="audio" />
         </div>
-        <div className="mt-1.5 flex items-center gap-2 text-meta text-text-muted">
-          <span className="truncate">{filename}</span>
-          <span className="tabular-nums">{formatFileSize(size)}</span>
+        <div className="flex items-center gap-2 px-3 pb-2 text-meta text-text-muted">
+          <span className="min-w-0 truncate font-medium text-text-body">{filename}</span>
+          <span className="pc-mono ml-auto shrink-0">{formatFileSize(size)}</span>
         </div>
       </div>
     );
@@ -168,18 +168,18 @@ export function FilePreview({ url, filename, mimeType, size, resolveObjectUrl }:
   // Generic / unknown-type file card — framed, with a lucide file icon and a
   // download affordance (no emoji chrome, kill-list #3).
   return (
-    <div className="mt-1 max-w-sm">
+    <div className="mt-2 max-w-sm">
       <a
         href={resolvedSrc}
         download={filename}
-        className="group flex items-center gap-3 rounded-md border border-border-subtle bg-bg-secondary p-3 no-underline outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:border-border-strong hover:bg-bg-accent focus-visible:shadow-[var(--focus-ring)]"
+        className="pc-focusable group flex items-center gap-3 rounded-[var(--radius-well)] bg-bg-well p-3 no-underline shadow-[var(--shadow-well)] outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle"
       >
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-sm bg-bg-tertiary text-text-secondary">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-chip)] bg-bg-mod-strong text-text-secondary">
           <FileText size={20} />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-label text-text-primary">{filename}</div>
-          <div className="text-meta tabular-nums text-text-muted">{formatFileSize(size)}</div>
+          <div className="truncate text-label font-medium text-text-primary">{filename}</div>
+          <div className="pc-mono text-meta text-text-faint">{formatFileSize(size)}</div>
         </div>
         <Download
           size={18}

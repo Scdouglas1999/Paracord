@@ -53,7 +53,7 @@ export function FileUpload({ onFilesSelected, stagedFiles, onRemoveFile }: FileU
           an --accent-tint fill with an --accent-primary border. */}
       <button
         type="button"
-        className="w-full cursor-pointer rounded-md border border-dashed px-6 py-7 text-center outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]"
+        className="pc-focusable w-full cursor-pointer rounded-[var(--radius-well)] border border-dashed px-6 py-7 text-center outline-none transition-colors duration-[140ms] ease-[var(--ease-out)]"
         style={{
           borderColor: isDragOver ? 'var(--accent-primary)' : 'var(--border-strong)',
           backgroundColor: isDragOver ? 'var(--accent-tint)' : 'transparent',
@@ -70,7 +70,7 @@ export function FileUpload({ onFilesSelected, stagedFiles, onRemoveFile }: FileU
           style={{ color: isDragOver ? 'var(--accent-primary)' : 'var(--text-muted)' }}
         />
         <div className="text-label text-text-primary">Drop files to attach</div>
-        <div className="mt-1 text-meta text-text-muted">or click to browse your device</div>
+        <div className="mt-1 text-meta text-text-faint">or click to browse your device</div>
       </button>
       <input
         ref={fileInputRef}
@@ -88,25 +88,25 @@ export function FileUpload({ onFilesSelected, stagedFiles, onRemoveFile }: FileU
             return (
               <div
                 key={i}
-                className="group flex items-center gap-3 rounded-sm bg-bg-mod-subtle px-3 py-2 transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong"
+                className="group flex items-center gap-3 rounded-[var(--radius-well)] bg-bg-raised px-3 py-2 shadow-[var(--shadow-raised)] transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong"
               >
                 {canPreviewImage(file) ? (
                   <img
                     src={stagedImagePreviews[i] || ''}
                     alt={file.name}
-                    className="h-10 w-10 shrink-0 rounded-sm object-cover"
+                    className="h-10 w-10 shrink-0 rounded-[var(--radius-chip)] object-cover"
                   />
                 ) : (
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-sm bg-bg-tertiary text-text-muted">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-chip)] bg-bg-well text-text-muted">
                     <FileText size={18} />
                   </div>
                 )}
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-label text-text-primary">{file.name}</div>
-                  <div className="text-meta tabular-nums text-text-muted">{formatFileSize(file.size)}</div>
+                  <div className="pc-mono text-meta text-text-faint">{formatFileSize(file.size)}</div>
                 </div>
                 {oversize && (
-                  <span className="inline-flex shrink-0 items-center gap-1 rounded-xs bg-warning-tint px-2 py-0.5 text-meta font-semibold text-accent-warning">
+                  <span className="inline-flex shrink-0 items-center gap-1 rounded-[var(--radius-chip)] bg-warning-tint px-2 py-0.5 text-meta font-semibold text-accent-warning">
                     <AlertTriangle size={12} />
                     P2P transfer
                   </span>
@@ -114,7 +114,7 @@ export function FileUpload({ onFilesSelected, stagedFiles, onRemoveFile }: FileU
                 <button
                   type="button"
                   onClick={() => onRemoveFile(i)}
-                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-sm text-text-muted opacity-0 outline-none transition-[color,background-color,opacity] duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-text-primary focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] group-hover:opacity-100"
+                  className="pc-focusable flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-chip)] text-text-muted opacity-0 outline-none transition-[color,background-color,opacity] duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-text-primary focus-visible:opacity-100 group-hover:opacity-100"
                   aria-label={`Remove ${file.name}`}
                   title={`Remove ${file.name}`}
                 >

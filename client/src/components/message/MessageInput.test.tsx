@@ -1,3 +1,8 @@
+// The light seam is stubbed here: this suite mocks the stores down to the
+// fields its subject needs, and light reads half a dozen more. Light itself is
+// covered in messageLight.test.tsx and TextRoom.test.tsx.
+vi.mock('./messageLight', () => import('../../test/messageLightMock'));
+vi.mock('../../hooks/useLights', () => import('../../test/messageLightMock'));
 vi.mock('../../lib/channelView', () => ({ getAccountChannelView: (_scope: unknown, state: unknown) => state }));
 import { MemoryRouter } from 'react-router';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -171,22 +176,22 @@ describe('MessageInput', () => {
     expect(mockSendMessage).not.toHaveBeenCalled();
   });
 
-  it('renders a textarea with channel placeholder', () => {
+  it('invites the reader by name rather than labelling the channel', () => {
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
-    const textarea = screen.getByPlaceholderText('Message #general');
+    const textarea = screen.getByPlaceholderText('Say something in general');
     expect(textarea).toBeInTheDocument();
     expect(textarea.tagName).toBe('TEXTAREA');
   });
 
   it('renders with default placeholder when no channel name', () => {
     render(<MessageInput channelId="ch1" guildId="g1" />);
-    expect(screen.getByPlaceholderText('Message this channel')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Say something here')).toBeInTheDocument();
   });
 
   it('allows typing in the textarea', async () => {
     const user = userEvent.setup();
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
-    const textarea = screen.getByPlaceholderText('Message #general');
+    const textarea = screen.getByPlaceholderText('Say something in general');
 
     await user.type(textarea, 'Hello world');
     expect(textarea).toHaveValue('Hello world');
@@ -195,7 +200,7 @@ describe('MessageInput', () => {
   it('sends message on Enter key', async () => {
     const user = userEvent.setup();
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
-    const textarea = screen.getByPlaceholderText('Message #general');
+    const textarea = screen.getByPlaceholderText('Say something in general');
 
     await user.type(textarea, 'Hello');
     await user.keyboard('{Enter}');
@@ -209,7 +214,7 @@ describe('MessageInput', () => {
   it('does not send on Shift+Enter (allows newline)', async () => {
     const user = userEvent.setup();
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
-    const textarea = screen.getByPlaceholderText('Message #general');
+    const textarea = screen.getByPlaceholderText('Say something in general');
 
     await user.type(textarea, 'Line 1');
     await user.keyboard('{Shift>}{Enter}{/Shift}');
@@ -220,7 +225,7 @@ describe('MessageInput', () => {
   it('does not send empty message', async () => {
     const user = userEvent.setup();
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
-    const textarea = screen.getByPlaceholderText('Message #general');
+    const textarea = screen.getByPlaceholderText('Say something in general');
 
     await user.click(textarea);
     await user.keyboard('{Enter}');
@@ -231,7 +236,7 @@ describe('MessageInput', () => {
   it('clears textarea after successful send', async () => {
     const user = userEvent.setup();
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
-    const textarea = screen.getByPlaceholderText('Message #general');
+    const textarea = screen.getByPlaceholderText('Say something in general');
 
     await user.type(textarea, 'Test message');
     await user.keyboard('{Enter}');
@@ -250,7 +255,7 @@ describe('MessageInput', () => {
     );
 
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
-    const textarea = screen.getByPlaceholderText('Message #general');
+    const textarea = screen.getByPlaceholderText('Say something in general');
     await user.type(textarea, 'once');
     await user.keyboard('{Enter}');
     await user.keyboard('{Enter}');
@@ -263,19 +268,19 @@ describe('MessageInput', () => {
   it('isolates colliding accounts and keeps typing across an immediate server switch', async () => {
     const user = userEvent.setup();
     const view = render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
-    await user.type(screen.getByPlaceholderText('Message #general'), 'private A');
+    await user.type(screen.getByPlaceholderText('Say something in general'), 'private A');
     await user.click(screen.getByRole('button', { name: 'Create a poll' }));
     mockOwner.serverId = 'b';
     view.rerender(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
-    expect(screen.getByPlaceholderText('Message #general')).toHaveValue('');
+    expect(screen.getByPlaceholderText('Say something in general')).toHaveValue('');
     expect(screen.queryByRole('button', { name: 'Poll composer enabled' })).not.toBeInTheDocument();
-    await user.type(screen.getByPlaceholderText('Message #general'), 'private B');
+    await user.type(screen.getByPlaceholderText('Say something in general'), 'private B');
     mockOwner.serverId = '__local__';
     view.rerender(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
-    expect(screen.getByPlaceholderText('Message #general')).toHaveValue('private A');
+    expect(screen.getByPlaceholderText('Say something in general')).toHaveValue('private A');
     mockOwner.serverId = 'b';
     view.rerender(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
-    expect(screen.getByPlaceholderText('Message #general')).toHaveValue('private B');
+    expect(screen.getByPlaceholderText('Say something in general')).toHaveValue('private B');
   });
 
   it('preserves typing during delivery and does not cancel another composer reply', async () => {
@@ -284,16 +289,16 @@ describe('MessageInput', () => {
     mockSendMessage.mockImplementation(() => new Promise<void>(done => { resolve = done; }));
     const cancelReply = vi.fn();
     const view = render(<MessageInput channelId="ch1" channelName="general" onCancelReply={cancelReply} />);
-    await user.type(screen.getByPlaceholderText('Message #general'), 'first');
+    await user.type(screen.getByPlaceholderText('Say something in general'), 'first');
     await user.keyboard('{Enter}');
-    await user.type(screen.getByPlaceholderText('Message #general'), ' second');
+    await user.type(screen.getByPlaceholderText('Say something in general'), ' second');
     view.rerender(<MessageInput channelId="ch2" channelName="next" onCancelReply={cancelReply} />);
-    await user.type(screen.getByPlaceholderText('Message #next'), 'other channel');
+    await user.type(screen.getByPlaceholderText('Say something in next'), 'other channel');
     await act(async () => resolve());
-    expect(screen.getByPlaceholderText('Message #next')).toHaveValue('other channel');
+    expect(screen.getByPlaceholderText('Say something in next')).toHaveValue('other channel');
     expect(cancelReply).not.toHaveBeenCalled();
     view.rerender(<MessageInput channelId="ch1" channelName="general" onCancelReply={cancelReply} />);
-    expect(screen.getByPlaceholderText('Message #general')).toHaveValue('first second');
+    expect(screen.getByPlaceholderText('Say something in general')).toHaveValue('first second');
   });
 
   it('clears staged attachments when switching channels', async () => {
@@ -313,7 +318,7 @@ describe('MessageInput', () => {
   it('restores draft text when disabling the poll composer', async () => {
     const user = userEvent.setup();
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
-    const textarea = screen.getByPlaceholderText('Message #general');
+    const textarea = screen.getByPlaceholderText('Say something in general');
     await user.type(textarea, 'Should we ship?');
     await user.click(screen.getByRole('button', { name: 'Create a poll' }));
     expect(textarea).toHaveValue('');
@@ -402,7 +407,7 @@ describe('MessageInput', () => {
   it('shows send button when content is typed', async () => {
     const user = userEvent.setup();
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
-    const textarea = screen.getByPlaceholderText('Message #general');
+    const textarea = screen.getByPlaceholderText('Say something in general');
 
     await user.type(textarea, 'Some text');
 
@@ -428,7 +433,7 @@ describe('MessageInput', () => {
 
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
 
-    await user.type(screen.getByPlaceholderText('Message #general'), 'Too fast');
+    await user.type(screen.getByPlaceholderText('Say something in general'), 'Too fast');
     await user.keyboard('{Enter}');
 
     expect(await screen.findByText('Slowmode active. Try again in 10 seconds.')).toBeInTheDocument();
@@ -445,7 +450,7 @@ describe('MessageInput', () => {
     expect(screen.getByAltText('release.png')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Remove release.png' })).toBeInTheDocument();
 
-    await user.type(screen.getByPlaceholderText('Message #general'), 'with upload');
+    await user.type(screen.getByPlaceholderText('Say something in general'), 'with upload');
     await user.keyboard('{Enter}');
 
     await waitFor(() => {
@@ -466,7 +471,7 @@ describe('MessageInput', () => {
     render(<MemoryRouter><MessageInput channelId="ch1" guildId="g1" channelName="general" /></MemoryRouter>);
     const file = new File(['private bytes'], 'secret.txt', { type: 'text/plain' });
     await user.upload(document.querySelector('input[type="file"]') as HTMLInputElement, file);
-    await user.type(screen.getByPlaceholderText('Message #general'), 'private file');
+    await user.type(screen.getByPlaceholderText('Say something in general'), 'private file');
     await user.keyboard('{Enter}');
 
     await waitFor(() => expect(mockSendMessage).toHaveBeenCalled());
@@ -496,8 +501,8 @@ describe('MessageInput', () => {
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
 
     await user.click(screen.getByRole('button', { name: 'Schedule message' }));
-    await user.type(screen.getByPlaceholderText('Schedule message for #general'), 'Standup reminder');
-    await user.type(screen.getByLabelText(/Send At/), scheduledAt);
+    await user.type(screen.getByPlaceholderText('Schedule a message for general'), 'Standup reminder');
+    await user.type(screen.getByLabelText(/Send at/), scheduledAt);
 
     const scheduleButton = screen.getByRole('button', { name: 'Schedule message' });
     expect(scheduleButton).toHaveAttribute('title', 'Schedule message');
@@ -525,14 +530,14 @@ describe('MessageInput', () => {
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
 
     await user.click(screen.getByRole('button', { name: 'Schedule message' }));
-    const textarea = screen.getByPlaceholderText('Schedule message for #general');
+    const textarea = screen.getByPlaceholderText('Schedule a message for general');
     await user.type(textarea, 'Too soon');
-    await user.type(screen.getByLabelText(/Send At/), scheduledAt);
+    await user.type(screen.getByLabelText(/Send at/), scheduledAt);
     await user.click(screen.getByRole('button', { name: 'Schedule message' }));
 
     expect(await screen.findByText('Scheduled time must be in the future.')).toBeInTheDocument();
     expect(textarea).toHaveValue('Too soon');
-    expect(screen.getByLabelText(/Send At/)).toHaveValue(scheduledAt);
+    expect(screen.getByLabelText(/Send at/)).toHaveValue(scheduledAt);
   });
 
   it('validates scheduled messages use a future datetime before calling the API', async () => {
@@ -554,8 +559,8 @@ describe('MessageInput', () => {
     render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
 
     await user.click(screen.getByRole('button', { name: 'Schedule message' }));
-    await user.type(screen.getByPlaceholderText('Schedule message for #general'), 'Too late');
-    await user.type(screen.getByLabelText(/Send At/), pastScheduledAt);
+    await user.type(screen.getByPlaceholderText('Schedule a message for general'), 'Too late');
+    await user.type(screen.getByLabelText(/Send at/), pastScheduledAt);
     await user.click(screen.getByRole('button', { name: 'Schedule message' }));
 
     expect(await screen.findByText('Choose a time at least 5 seconds in the future.')).toBeInTheDocument();

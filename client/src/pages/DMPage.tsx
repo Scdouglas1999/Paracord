@@ -4,7 +4,7 @@ import { useCurrentChannelStore, useAvailableChannels } from '../hooks/useChanne
 import { useCurrentUser, useCurrentAccountScope } from '../hooks/useCurrentUser';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { MessagesSquare, PenSquare, Hash, Search, X } from 'lucide-react';
+import { MessagesSquare, PenSquare, Search, X } from 'lucide-react';
 import { TopBar } from '../components/layout/TopBar';
 import { MessageList } from '../components/message/MessageList';
 import { MessageInput } from '../components/message/MessageInput';
@@ -29,6 +29,8 @@ import { cn } from '../lib/utils';
 import { ChannelType, type Channel, type Message, type ReadState } from '../types';
 import { displayName } from '../lib/displayName';
 import { presenceLight } from '../lib/presence';
+import { avatarInitials } from '../components/light';
+import { getIdentityColor } from '../lib/colors';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 
 const EMPTY_CHANNELS: Channel[] = [];
@@ -225,15 +227,13 @@ function OwnedDMPage() {
   // ---- Index view: the all-conversations destination -----------------------
   if (!channelId) {
     return (
-      <div className="flex h-full min-h-0 flex-col bg-bg-primary">
-        <header className="shrink-0 border-b border-border-subtle bg-bg-secondary px-4 py-4 sm:px-6">
-          <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-md bg-accent-tint text-accent-primary">
-              <MessagesSquare size={19} />
-            </span>
+      <div className="flex h-full min-h-0 flex-col bg-bg-base p-[var(--gutter)]">
+        <div className="pc-plate flex min-h-0 flex-1 flex-col overflow-hidden">
+        <header className="shrink-0 border-b border-border-subtle px-4 py-4 sm:px-6">
+          <div className="flex flex-wrap items-center gap-3">
             <div className="min-w-0 flex-1">
-              <h1 className="font-display text-heading text-text-primary">Messages</h1>
-              <p className="text-meta text-text-muted">Your direct and group conversations, most recent first.</p>
+              <h1 className="pc-display text-display text-text-primary">Messages</h1>
+              <p className="mt-1 text-meta text-text-faint">Every conversation you are part of, brightest first.</p>
             </div>
             <Button onClick={() => setPickerOpen(true)} className="shrink-0">
               <PenSquare size={16} className="mr-1.5" />
@@ -247,7 +247,7 @@ function OwnedDMPage() {
             {rows.length === 0 ? (
               <EmptyState
                 icon={<MessagesSquare size={20} />}
-                title="No conversations yet"
+                title="Nobody has said anything to you yet"
                 description="Find a friend and say hi — pick up a conversation and every DM you start lands right here, across every server you're on."
                 action={
                   <div className="flex flex-wrap items-center gap-2">
@@ -283,20 +283,22 @@ function OwnedDMPage() {
                     </button>
                   )}
                 </div>
-                <div className="mb-2 flex items-center justify-between gap-3 px-1 text-section text-text-muted">
-                  <span>Conversations — {conversationQuery ? `${filteredRows.length} of ${rows.length}` : rows.length}</span>
-                  {conversationQuery && <span className="normal-case tracking-normal">Filtered by name</span>}
+                <div className="mb-2 flex items-center justify-between gap-3 px-1 text-section text-text-secondary">
+                  <span>Conversations</span>
+                  <span className="pc-mono text-meta text-text-faint">
+                    {conversationQuery ? `${filteredRows.length} of ${rows.length}` : rows.length}
+                  </span>
                 </div>
                 {filteredRows.length === 0 ? (
                   <EmptyState
-                    className="border border-border-subtle bg-bg-secondary"
+                    className="bg-bg-well shadow-[var(--shadow-well)]"
                     icon={<Search size={20} />}
                     title="No matching conversations"
                     description={`No direct or group conversations match “${conversationQuery.trim()}”.`}
                     action={<Button variant="secondary" size="sm" onClick={() => setConversationQuery('')}>Clear filter</Button>}
                   />
                 ) : (
-                  <div className="divide-y divide-border-subtle overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
+                  <div className="flex flex-col gap-0.5">
                     {filteredRows.map((row) => (
                       <DmListRow key={row.key} row={row} onOpen={openConversation} />
                     ))}
@@ -307,14 +309,18 @@ function OwnedDMPage() {
           </div>
         </div>
 
+        </div>
         <DmPickerModal open={pickerOpen} onClose={() => setPickerOpen(false)} />
       </div>
     );
   }
 
   // ---- Conversation view ---------------------------------------------------
+  // §7.6: a DM is a text room between two people, so it is the same plate — the
+  // header, the timeline and the composer on one surface, on the 12px gutter.
   return (
-    <div className="flex h-full min-h-0 flex-col bg-bg-primary">
+    <div className="flex h-full min-h-0 flex-col bg-bg-base p-[var(--gutter)]">
+      <div className="pc-plate flex min-h-0 flex-1 flex-col overflow-hidden">
       <TopBar isDM recipientName={recipientName} dmChannelId={channelId} />
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         {inThisDmCall && watchedStreamerId && (
@@ -352,8 +358,15 @@ function OwnedDMPage() {
             }
           />
         </ErrorBoundary>
-        <MessageInput channelId={channelId} replyingTo={replyingTo} onCancelReply={() => setReplyingTo(null)} />
+        <MessageInput
+          channelId={channelId}
+          channelName={recipientName}
+          conversationKind={isGroupDM ? 'room' : 'person'}
+          replyingTo={replyingTo}
+          onCancelReply={() => setReplyingTo(null)}
+        />
         {inThisDmCall && <VoiceControlBar />}
+      </div>
       </div>
     </div>
   );
@@ -390,10 +403,12 @@ function DmListRow({ row, onOpen }: { row: DmRow; onOpen: (row: DmRow) => void }
   const activity = formatDmActivity(row.lastActivityId);
 
   return (
+    // §8 TextRoomRow: a window dot / lit face, the name with its last line, and
+    // one attention mark on the right. A conversation is a room, so it is a row.
     <button
       type="button"
       onClick={() => onOpen(row)}
-      className="group flex w-full items-center gap-3 px-4 py-2.5 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
+      className="pc-focusable group grid w-full grid-cols-[36px_minmax(0,1fr)_auto] items-center gap-3 rounded-[var(--radius-control)] px-3 py-2 text-left transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle"
     >
       <div className="relative shrink-0">
         {/* §1.5: presence is a rim of light on the avatar, never a coloured dot. */}
@@ -401,17 +416,18 @@ function DmListRow({ row, onOpen }: { row: DmRow; onOpen: (row: DmRow) => void }
           data-testid={row.isGroup ? undefined : 'presence-light'}
           data-status={row.isGroup ? undefined : status}
           className={cn(
-            'flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-bg-mod-strong text-label font-semibold text-text-secondary',
+            'pc-display flex h-9 w-9 items-center justify-center overflow-hidden rounded-full text-label font-bold text-text-on-light',
             !row.isGroup && light.avatarClass,
             !row.isGroup && light.dnd && 'pc-dnd',
           )}
+          style={{ background: src ? undefined : getIdentityColor(row.recipientId ?? row.channelId) }}
         >
           {src ? (
             <img src={src} alt="" className="h-full w-full object-cover" />
           ) : row.isGroup ? (
-            <MessagesSquare size={17} aria-hidden className="text-text-secondary" />
+            <MessagesSquare size={17} aria-hidden className="text-text-on-light" />
           ) : (
-            (row.title.charAt(0) || '?').toUpperCase()
+            avatarInitials(row.title)
           )}
         </div>
         {statusWord && statusWord !== subtitle && (
@@ -419,14 +435,14 @@ function DmListRow({ row, onOpen }: { row: DmRow; onOpen: (row: DmRow) => void }
         )}
       </div>
 
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0">
         <div className="flex items-center gap-1.5">
-          {row.isGroup && <Hash size={13} aria-hidden className="shrink-0 text-text-muted" />}
-          <span className={cn('truncate text-label', row.unread ? 'font-semibold text-text-primary' : 'font-medium text-text-primary')}>
+          <span className={cn('pc-display truncate text-name', row.unread ? 'text-text-primary' : 'text-text-primary')}>
             {row.title}
           </span>
+          {row.isGroup && <span className="text-meta text-text-faint">group</span>}
         </div>
-        <div className={cn('truncate text-meta', row.unread ? 'text-text-secondary' : 'text-text-muted')}>{subtitle}</div>
+        <div className={cn('truncate text-meta', row.unread ? 'text-text-secondary' : 'text-text-faint')}>{subtitle}</div>
       </div>
 
       <div className="flex shrink-0 items-center gap-1.5">
@@ -435,7 +451,7 @@ function DmListRow({ row, onOpen }: { row: DmRow; onOpen: (row: DmRow) => void }
             data-testid="dm-last-activity"
             dateTime={new Date(activityMs(row.lastActivityId)).toISOString()}
             title={activity.full}
-            className={cn('mr-1 text-meta tabular-nums', row.unread ? 'text-text-secondary' : 'text-text-muted')}
+            className={cn('pc-mono mr-1 text-meta', row.unread ? 'text-text-secondary' : 'text-text-faint')}
           >
             {activity.short}
           </time>
@@ -443,7 +459,7 @@ function DmListRow({ row, onOpen }: { row: DmRow; onOpen: (row: DmRow) => void }
         {showMention && (
           <span
             data-testid="mention-badge"
-            className="flex h-4 min-w-4 items-center justify-center rounded-xs bg-accent-primary px-1 text-meta font-semibold tabular-nums text-text-on-accent"
+            className="pc-mono flex h-5 min-w-5 items-center justify-center rounded-[var(--radius-chip)] bg-accent-primary px-1.5 text-meta font-semibold text-text-on-accent"
           >
             {row.mentionCount > 99 ? '99+' : row.mentionCount}
           </span>

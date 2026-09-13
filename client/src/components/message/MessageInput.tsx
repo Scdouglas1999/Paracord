@@ -60,6 +60,11 @@ interface MessageInputProps {
   replyingTo?: { id: string; author: string; content: string } | null;
   onCancelReply?: () => void;
   /**
+   * What `channelName` names. A one-to-one DM is a person, everything else is a
+   * room — it only changes the preposition, never the behaviour.
+   */
+  conversationKind?: 'room' | 'person';
+  /**
    * WP3 (spec §7.2, §8), additive: `ribbon` is the composer inside the Stage's
    * chat ribbon — 42px instead of 50, "Say something to the room", and a send
    * button in white light, because everybody it reaches is in the room right
@@ -106,13 +111,19 @@ const POLL_DURATION_OPTIONS = [
  * so counting yourself would mean the fallback never appeared and a room you
  * are alone in would invite you to talk to yourself.
  */
-export function composerPlaceholder(readingOthers: number, roomName?: string | null): string {
+export function composerPlaceholder(
+  readingOthers: number,
+  name?: string | null,
+  kind: 'room' | 'person' = 'room',
+): string {
   if (readingOthers > 0) {
     return readingOthers === 1
       ? 'Say something to the 1 person reading'
       : `Say something to the ${readingOthers} people reading`;
   }
-  return roomName ? `Say something in ${roomName}` : 'Say something here';
+  if (!name) return 'Say something here';
+  // You say something *in* a room and *to* a person.
+  return kind === 'person' ? `Say something to ${name}` : `Say something in ${name}`;
 }
 
 function canPreviewImageFile(file: File): boolean {
@@ -318,7 +329,7 @@ export function MessageInput(props: MessageInputProps) {
   return <OwnedMessageInput key={memberScopeKey(scope, props.channelId)} {...props} scope={scope} messageStore={messageStore} />;
 }
 
-function OwnedMessageInput({ channelId, guildId, channelName, replyingTo, onCancelReply, variant = 'default', scope, messageStore }: MessageInputProps & {
+function OwnedMessageInput({ channelId, guildId, channelName, conversationKind = 'room', replyingTo, onCancelReply, variant = 'default', scope, messageStore }: MessageInputProps & {
   scope: AccountScope;
   messageStore: ReturnType<typeof useCurrentMessageStoreApi>;
 }) {
@@ -1446,7 +1457,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, replyingTo, onCanc
                   ? `Schedule a message for ${channelName ?? 'this conversation'}`
                   : ribbon
                     ? 'Say something to the room'
-                    : composerPlaceholder(readingOthers, channelName)
+                    : composerPlaceholder(readingOthers, channelName, conversationKind)
           }
           rows={1}
           maxLength={MAX_MESSAGE_LENGTH}

@@ -139,14 +139,18 @@ export function ChannelSwitcher({
           // filling a block parent, so without it the trigger keeps its natural
           // width while the wrapper shrinks, and the channel name spills out
           // over the topic instead of ellipsizing.
-          'flex h-8 w-full min-w-0 max-w-[15rem] items-center gap-1.5 rounded-sm px-1.5 text-left outline-none',
+          'pc-focusable -ml-1 flex h-8 w-full min-w-0 max-w-[18rem] items-center gap-1.5 rounded-[var(--radius-control)] px-1 text-left outline-none',
           'text-text-primary transition-colors duration-[140ms] ease-[var(--ease-out)]',
-          'hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]',
+          'hover:bg-bg-mod-subtle',
           open && 'bg-bg-mod-subtle',
         )}
       >
-        <CurrentIcon size={18} className="shrink-0 text-channel-icon" aria-hidden />
-        <span className="truncate text-[15px] font-semibold">{channelName}</span>
+        {/* A text room's kind is already said by the window dot beside this
+            trigger; anything else still needs its own mark. */}
+        {channelType != null && channelType !== ChannelType.Text && (
+          <CurrentIcon size={18} className="shrink-0 text-text-muted" aria-hidden />
+        )}
+        <span className="pc-display truncate text-[20px] font-bold leading-tight tracking-[-0.01em]">{channelName}</span>
         <ChevronDown
           size={14}
           aria-hidden
@@ -164,7 +168,7 @@ export function ChannelSwitcher({
           aria-modal="true"
           tabIndex={-1}
           aria-label={`Switch room in ${guildName || 'this space'}`}
-          className="absolute left-0 top-[calc(100%+0.5rem)] z-50 w-[min(20rem,calc(100vw-4rem))] overflow-hidden rounded-md border border-border-subtle bg-bg-floating shadow-lg"
+          className="pc-floating absolute left-0 top-[calc(100%+0.5rem)] z-50 w-[min(20rem,calc(100vw-4rem))] overflow-hidden"
           onKeyDown={(event) => {
             if (event.key === 'ArrowDown') {
               event.preventDefault();

@@ -266,7 +266,7 @@ export function SearchOverlay({
         tabIndex={-1}
         data-testid="context-panel"
         data-mode="search"
-        className="flex h-full shrink-0 flex-col overflow-hidden border-l border-border-subtle bg-bg-secondary shadow-sm outline-none"
+        className="pc-plate flex h-[calc(100%-var(--gutter)*2)] shrink-0 flex-col overflow-hidden outline-none my-[var(--gutter)] mr-[var(--gutter)]"
         style={{ width: 'var(--member-list-width)' }}
       >
         {header}

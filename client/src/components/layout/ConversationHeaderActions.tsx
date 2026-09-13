@@ -4,6 +4,21 @@ import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
 import { Tooltip } from '../ui/Tooltip';
 import { cn } from '../../lib/utils';
 
+/**
+ * The header's action cluster (docs/lantern-stage-spec.md §7.4).
+ *
+ * Search, pins, threads and one labeled overflow — the controls a room's header
+ * carries. Counts ride on the control they belong to, in the mono meta face.
+ *
+ * Two rules this file keeps:
+ *   - Nothing here spends a light token. A count of pinned messages is not
+ *     somebody being present (§0, §6.3), so these are quiet ghost controls and
+ *     the action colour marks only what is currently open.
+ *   - The narrow layout is `docs/layout-spec.md` §7.8: below the small
+ *     breakpoint only the high-frequency controls stay visible and the rest
+ *     move into the overflow menu, which lists them at every width.
+ */
+
 export interface HeaderAction {
   label: string;
   icon: LucideIcon;
@@ -12,6 +27,10 @@ export interface HeaderAction {
   disabled?: boolean;
   reason?: string | null;
   controlsPanel?: boolean;
+  /** A count that belongs to this control — "2 pinned", "3 threads". */
+  count?: number | null;
+  /** Hide below the small breakpoint; the overflow menu carries it there. */
+  overflowWhenNarrow?: boolean;
 }
 export interface ActiveHeaderSurface {
   label: string;
@@ -25,13 +44,31 @@ export function attentionDescription(unread: number, mentions: number): string {
     : unread > 0 ? conversations : 'No unread conversations';
 }
 
-function HeaderActionButton({ label, icon: Icon, onClick, active, disabled, reason, controlsPanel }: HeaderAction) {
+/** 32px control, radius 9, quiet ink — §3 control heights, §9 hit targets. */
+const HEADER_CONTROL =
+  'pc-focusable relative inline-flex h-[var(--h-control)] min-w-[var(--h-control)] shrink-0 items-center '
+  + 'justify-center gap-1.5 rounded-[var(--radius-control)] px-1.5 text-text-secondary '
+  + 'transition-[background-color,color] duration-[var(--duration-fast)] ease-[var(--ease-out)] '
+  + 'hover:bg-bg-mod-subtle hover:text-text-primary '
+  + '[@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:min-w-11';
+
+function HeaderActionButton({
+  label, icon: Icon, onClick, active, disabled, reason, controlsPanel, count, overflowWhenNarrow,
+}: HeaderAction) {
   return <Tooltip content={reason ?? label} side="bottom">
     <button type="button" aria-label={label} aria-pressed={active}
       aria-expanded={controlsPanel ? Boolean(active) : undefined}
       title={reason ?? undefined} onClick={onClick} disabled={disabled}
-      className={cn('chat-header-action', active && 'bg-accent-tint text-accent-primary', disabled && 'cursor-not-allowed text-text-muted')}>
+      className={cn(
+        HEADER_CONTROL,
+        overflowWhenNarrow && 'hidden sm:inline-flex',
+        active && 'bg-accent-tint text-accent-primary hover:bg-accent-tint-strong hover:text-accent-primary',
+        disabled && 'cursor-not-allowed text-text-faint hover:bg-transparent hover:text-text-faint',
+      )}>
       <Icon size={18} aria-hidden />
+      {count != null && count > 0 && (
+        <span className="pc-mono pr-0.5 text-meta text-text-faint">{count > 99 ? '99+' : count}</span>
+      )}
     </button>
   </Tooltip>;
 }
@@ -72,7 +109,13 @@ export function ConversationHeaderActions({ primary, items, activeSurface, unrea
   } }));
   const SurfaceIcon = activeSurface?.icon;
   return <>
-    {activeSurface && SurfaceIcon && <button type="button" className="chat-header-active"
+    {activeSurface && SurfaceIcon && <button type="button"
+      className={cn(
+        'pc-focusable hidden min-w-0 max-w-[12rem] items-center gap-2 rounded-[var(--radius-control)]',
+        'bg-bg-raised px-2.5 py-1.5 text-meta font-semibold text-text-primary',
+        'shadow-[var(--shadow-raised)] transition-colors duration-[var(--duration-fast)]',
+        'ease-[var(--ease-out)] hover:bg-bg-mod-strong sm:inline-flex',
+      )}
       aria-label={`Close ${activeSurface.label}`} aria-expanded="true"
       onClick={() => { activeSurface.onClose(); trigger.current?.focus({ preventScroll: true }); }}>
       <SurfaceIcon size={16} aria-hidden />
@@ -86,7 +129,11 @@ export function ConversationHeaderActions({ primary, items, activeSurface, unrea
           aria-describedby={descriptionId} aria-haspopup="menu" aria-expanded={Boolean(position)}
           onClick={openMenu} onKeyDown={event => {
             if (event.key === 'ArrowDown') { event.preventDefault(); if (!position) openMenu(); }
-          }} className={cn('chat-header-action chat-header-more', position && 'bg-accent-tint text-accent-primary')}>
+          }} className={cn(
+            HEADER_CONTROL,
+            'px-2',
+            position && 'bg-accent-tint text-accent-primary hover:bg-accent-tint-strong hover:text-accent-primary',
+          )}>
           <span id={descriptionId} className="sr-only">{description}</span>
           <MoreHorizontal size={18} aria-hidden />
           <span className="chat-header-more-label">More</span>

@@ -97,7 +97,7 @@ export function GroupDmMembersPanel({ channelId, onClose }: GroupDmMembersPanelP
     <aside
 
       aria-label="Members"
-      className="flex h-full shrink-0 flex-col overflow-hidden border-l border-border-subtle bg-bg-secondary shadow-sm"
+      className="pc-plate flex h-[calc(100%-var(--gutter)*2)] shrink-0 flex-col overflow-hidden my-[var(--gutter)] mr-[var(--gutter)]"
       style={{ width: 'var(--member-list-width)' }}
       data-testid="context-panel"
       data-mode="members"
