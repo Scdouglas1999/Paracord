@@ -150,6 +150,20 @@ describe('production encrypted event journal', () => {
     await runtime.ingestEncryptedMessage(message('101'));
     expect(await local.vault.transact(tx => tx.list('messages.encrypted-inbox'))).toEqual([]);
   });
+  // A failed AEAD open is a DOMException named OperationError whose message is
+  // the empty string; the composer's recovery notice and the per-channel error
+  // map both gate on non-empty text, so an empty message reported the failure
+  // and silenced it at once. A tampered ciphertext must never be quiet.
+  it('reports a ciphertext that fails authentication with real text, never the empty string', async () => {
+    useAccountStore.setState({ isUnlocked: true }); await runtime.enroll();
+    const authenticationFailure = Object.assign(new Error(''), { name: 'OperationError' });
+    fixture.decrypt.mockRejectedValueOnce(authenticationFailure);
+    await runtime.ingestEncryptedMessage(message('100'));
+    const state = runtime.store.getState();
+    expect(state.encryptionError).toBeTruthy();
+    expect(state.encryptionError).toMatch(/did not decrypt/);
+    expect(state.channelErrors?.['10']).toMatch(/did not decrypt/);
+  });
   it('does not retire the journal when an old identity decrypt finishes after lock', async () => {
     useAccountStore.setState({ isUnlocked: true }); await runtime.enroll();
     const first = deferred<string>(); fixture.decrypt.mockReturnValueOnce(first.promise);

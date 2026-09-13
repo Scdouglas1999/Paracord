@@ -61,7 +61,21 @@ type DeviceSession = Awaited<ReturnType<typeof openDeviceAccountVault>>;
 type IdentitySession = Awaited<ReturnType<typeof openAccountVault>>;
 type Lane = { session: DeviceSession | IdentitySession; driver: DurableDelivery; mutations: DeliveredMutations };
 const draftsNamespace = 'messages.drafts';
-const errorText = (error: unknown) => error instanceof Error ? error.message : 'Encrypted messaging is unavailable.';
+const errorText = (error: unknown) => {
+  const message = error instanceof Error ? error.message.trim() : '';
+  if (message) return message;
+  // An AEAD open that does not authenticate throws a `DOMException` named
+  // OperationError whose `message` is the EMPTY STRING, and every surface that
+  // reports encryption trouble — the composer's recovery notice, the per-channel
+  // error map — gates on the text being non-empty. An empty message therefore
+  // recorded the failure and then silenced it: a ciphertext altered in transit
+  // rendered as an ordinary undecrypted placeholder with nothing said about it.
+  // No error ever reaches a surface as the empty string.
+  if (error instanceof Error && error.name === 'OperationError') {
+    return 'A message in this conversation did not decrypt: its ciphertext failed authentication, so it may have been altered or sent with a key this device does not hold.';
+  }
+  return 'Encrypted messaging is unavailable.';
+};
 const pendingMessage = (message: Message): Message => ({ ...message, content: 'Loading message…', e2ee: null, message_revision: undefined });
 
 /** One runtime owns account data; selecting another server does not retarget it. */
@@ -110,7 +124,9 @@ export class AccountMessagingRuntime {
       if (!this.recoveredChannels.has(channelId)) throw new Error('Wait for this conversation’s message recovery before sending.');
     }
   }
-  private updateChannelErrors() { this.store.setState({ channelErrors: Object.fromEntries([...this.recoveryFailures, ...this.receiveFailures].map(([id, error]) => [id, error.message])) }); }
+  // Through `errorText`, never `error.message`: a failed AEAD open carries the
+  // empty string, and an empty per-channel error reads as no error at all.
+  private updateChannelErrors() { this.store.setState({ channelErrors: Object.fromEntries([...this.recoveryFailures, ...this.receiveFailures].map(([id, error]) => [id, errorText(error)])) }); }
   /** Stop accepted network work immediately; a fresh handshake owns replacement drivers. */
   pauseForRecovery() {
     if (this.disposed) return;
