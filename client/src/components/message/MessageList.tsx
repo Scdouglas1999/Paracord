@@ -1415,6 +1415,23 @@ function OwnedMessageList({
     revokeLightboxBlobUrls();
   }, []);
 
+  // `window.location.hash = 'msg-<id>'` is how search and the pins panel ask
+  // for a jump, and it fires `hashchange` — nothing else. The jump effect below
+  // reads the hash but is keyed on the timeline'"'"'s own state, so unless a message
+  // happened to arrive in the same moment it never re-ran and the jump did
+  // nothing at all. Tick it here, and forget the last target so asking for the
+  // same message twice works the second time too.
+  const [hashJumpTick, setHashJumpTick] = useState(0);
+  useEffect(() => {
+    const onHashChange = () => {
+      hashJumpDoneRef.current = null;
+      jumpFetchAttemptedRef.current = null;
+      setHashJumpTick((tick) => tick + 1);
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
+
   useEffect(() => {
     if (!window.location.hash.startsWith('#msg-')) {
       jumpFetchAttemptedRef.current = null;
@@ -1467,7 +1484,7 @@ function OwnedMessageList({
     return () => {
       cancelled = true;
     };
-  }, [messages.length, channelId, fetchMessages, highlightJumpTarget, rows, virtualizer]);
+  }, [messages.length, channelId, fetchMessages, highlightJumpTarget, hashJumpTick, rows, virtualizer]);
 
   const scrollToMessage = useCallback((messageId: string) => {
     const rowIndex = rows.findIndex(
