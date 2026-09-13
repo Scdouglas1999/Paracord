@@ -244,12 +244,7 @@ export const AttachmentFrame = React.forwardRef<
     >
       {children}
       {footer && (
-        // `[&>button]:mt-0` defends this row from layout.css's vertical-rhythm
-        // fallback, which gives any button that directly follows a text element
-        // a 1rem top margin. In a block column that is the intent; in this
-        // centred flex row it dropped the first action button 8px below its
-        // neighbours.
-        <div className="flex flex-wrap items-center gap-2 px-3 py-2 text-meta text-text-muted [&>button]:mt-0">
+        <div className="flex flex-wrap items-center gap-2 px-3 py-2 text-meta text-text-muted">
           {footer}
         </div>
       )}

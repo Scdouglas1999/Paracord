@@ -2653,7 +2653,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                         key={att.id}
                         // `[&>button]:mt-0`: see AttachmentFrame — the same
                     // vertical-rhythm fallback would push Download out of line.
-                    className="mt-2 inline-flex max-w-full flex-wrap items-center gap-2 rounded-[var(--radius-well)] bg-bg-well px-3 py-2 text-meta shadow-[var(--shadow-chip)] [&>button]:mt-0"
+                    className="mt-2 inline-flex max-w-full flex-wrap items-center gap-2 rounded-[var(--radius-well)] bg-bg-well px-3 py-2 text-meta shadow-[var(--shadow-chip)]"
                       >
                         {federatedBadge}
                         <span className="max-w-[20rem] truncate font-medium text-text-body">
@@ -2737,27 +2737,36 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                           {att.size != null && (
                             <span className="pc-mono ml-auto shrink-0">{formatFileSize(att.size)}</span>
                           )}
-                          <Button variant="ghost" size="sm" onClick={() => void openImageLightbox()}>
-                            Open
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => void downloadAttachment(att.id, att.filename)}
-                            disabled={attachmentBusyId === att.id}
-                          >
-                            {attachmentBusyId === att.id ? (downloadProgress != null ? `${downloadProgress}%` : 'Downloading…') : 'Download'}
-                          </Button>
-                          {isOwnMessage && !isFederated && (
+                          {/* The actions live inside their own row, so that no
+                              button is the immediate sibling of a text element:
+                              layout.css gives such a button a 1rem top margin —
+                              vertical rhythm for a block column, but here it
+                              dropped "Open" 8px below its neighbours, and it
+                              outranks any utility class (it is unlayered, and
+                              Tailwind's utilities are in a layer). */}
+                          <span className="flex flex-wrap items-center gap-2">
+                            <Button variant="ghost" size="sm" onClick={() => void openImageLightbox()}>
+                              Open
+                            </Button>
                             <Button
-                              variant="danger"
+                              variant="ghost"
                               size="sm"
-                              onClick={() => void deleteAttachment(msg.id, att.id)}
+                              onClick={() => void downloadAttachment(att.id, att.filename)}
                               disabled={attachmentBusyId === att.id}
                             >
-                              {attachmentBusyId === att.id ? 'Deleting…' : 'Delete'}
+                              {attachmentBusyId === att.id ? (downloadProgress != null ? `${downloadProgress}%` : 'Downloading…') : 'Download'}
                             </Button>
-                          )}
+                            {isOwnMessage && !isFederated && (
+                              <Button
+                                variant="danger"
+                                size="sm"
+                                onClick={() => void deleteAttachment(msg.id, att.id)}
+                                disabled={attachmentBusyId === att.id}
+                              >
+                                {attachmentBusyId === att.id ? 'Deleting…' : 'Delete'}
+                              </Button>
+                            )}
+                          </span>
                         </>
                       }
                     >
@@ -2777,13 +2786,10 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                     </AttachmentFrame>
                   );
                 }
-                // `[&>button]:mt-0`: see AttachmentFrame — layout.css's
-                // vertical-rhythm fallback would otherwise push Download 1rem
-                // down, out of line with the rest of this row.
                 return (
                   <div
                     key={att.id}
-                    className="mt-2 inline-flex max-w-full flex-wrap items-center gap-2 rounded-[var(--radius-well)] bg-bg-well px-3 py-2 text-meta shadow-[var(--shadow-chip)] [&>button]:mt-0"
+                    className="mt-2 inline-flex max-w-full flex-wrap items-center gap-2 rounded-[var(--radius-well)] bg-bg-well px-3 py-2 text-meta shadow-[var(--shadow-chip)]"
                   >
                     {federatedBadge}
                     <button
@@ -2795,24 +2801,27 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                       {att.filename}
                     </button>
                     {att.size != null && <span className="pc-mono text-text-faint">{formatFileSize(att.size)}</span>}
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => void downloadAttachment(att.id, att.filename)}
-                      disabled={attachmentBusyId === att.id}
-                    >
-                      {attachmentBusyId === att.id ? (downloadProgress != null ? `${downloadProgress}%` : 'Downloading…') : 'Download'}
-                    </Button>
-                    {isOwnMessage && !isFederated && (
+                    {/* Own row — see the image footer above for why. */}
+                    <span className="flex flex-wrap items-center gap-2">
                       <Button
-                        variant="danger"
+                        variant="ghost"
                         size="sm"
-                        onClick={() => void deleteAttachment(msg.id, att.id)}
+                        onClick={() => void downloadAttachment(att.id, att.filename)}
                         disabled={attachmentBusyId === att.id}
                       >
-                        {attachmentBusyId === att.id ? 'Deleting…' : 'Delete'}
+                        {attachmentBusyId === att.id ? (downloadProgress != null ? `${downloadProgress}%` : 'Downloading…') : 'Download'}
                       </Button>
-                    )}
+                      {isOwnMessage && !isFederated && (
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          onClick={() => void deleteAttachment(msg.id, att.id)}
+                          disabled={attachmentBusyId === att.id}
+                        >
+                          {attachmentBusyId === att.id ? 'Deleting…' : 'Delete'}
+                        </Button>
+                      )}
+                    </span>
                   </div>
                 );
               })}
