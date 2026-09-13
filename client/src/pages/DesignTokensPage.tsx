@@ -83,8 +83,10 @@ import {
   supportsLinearEasing,
   transitionWith,
   useFlipList,
+  usePresence,
   useReducedMotion,
 } from '../lib/motion';
+import { cn } from '../lib/utils';
 import { AccountPlate } from '../components/layout/sidebar/AccountPlate';
 import { BuildingsColumn } from '../components/layout/sidebar/BuildingsColumn';
 import { useMobile } from '../hooks/useMobile';
@@ -1158,6 +1160,13 @@ function MotionSection() {
   const [engine, setEngine] = useState<string | null>(null);
   const [order, setOrder] = useState(REORDER_ROWS);
   const reorderRef = useFlipList<HTMLDivElement>();
+  // WP9d: the reaction pop row, the writing pulse, and a plate from its edge.
+  const [popped, setPopped] = useState(false);
+  const popRef = useFlipList<HTMLDivElement>({ enter: 'pop' });
+  const [writing, setWriting] = useState(false);
+  const writingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [plateOpen, setPlateOpen] = useState(false);
+  const platePresence = usePresence(plateOpen);
 
   const walk = (force?: 'flip') => {
     void transitionWith(() => setWalkedIn((value) => !value), {
@@ -1293,6 +1302,78 @@ function MotionSection() {
                 {row}
               </div>
             ))}
+          </div>
+        </Recipe>
+
+        <Recipe
+          id="motion-pop"
+          name="Reaction pop"
+          tokens="0.6 / 0.8 · spring-settle · --duration-fast out"
+          model="A reaction lands, it does not slide in. Yours pops 0.6 to 1 and the emoji over-rotates 8° on the way; somebody else's pops smaller at 0.8. Removing fades the chip and shrinks it back out the way it came — replay again to see the leave. The row under a real message is this exact hook."
+          onPlay={() => setPopped((value) => !value)}
+        >
+          <div ref={popRef} className="flex flex-wrap items-center gap-1.5">
+            <Chip data-flip-key="seed" className="gap-1.5 px-2.5">
+              <span data-flip-glyph>🔥</span>
+              <span className="font-medium">2</span>
+            </Chip>
+            {popped && (
+              <>
+                <Chip data-flip-key="mine" data-flip-own className="gap-1.5 bg-accent-tint px-2.5 text-accent-primary">
+                  <span data-flip-glyph>👍</span>
+                  <span className="font-medium">1</span>
+                </Chip>
+                <Chip data-flip-key="theirs" className="gap-1.5 px-2.5">
+                  <span data-flip-glyph>🎉</span>
+                  <span className="font-medium">3</span>
+                </Chip>
+              </>
+            )}
+          </div>
+        </Recipe>
+
+        <Recipe
+          id="motion-writing"
+          name="Writing pulse"
+          tokens="--duration-breathe · --glow-window-amber-breathe"
+          model="While somebody writes in the room, its window breathes at half the speaking ring's amplitude — presence, not an alert. The pulse holds while typing refreshes and ends when typing stops; under reduced motion the window is simply lit."
+          onPlay={() => {
+            if (writingTimer.current) clearTimeout(writingTimer.current);
+            setWriting(true);
+            // Two breaths, then it stops — the way an 8s typing window closes.
+            writingTimer.current = setTimeout(() => setWriting(false), 3300);
+          }}
+        >
+          <span className="flex items-center gap-4">
+            <span
+              className={cn('pc-window is-reading h-[26px] w-[20px]', writing && 'is-writing')}
+              aria-hidden
+            />
+            <span className="pc-typing-dots" aria-hidden>
+              <span />
+              <span />
+              <span />
+            </span>
+          </span>
+        </Recipe>
+
+        <Recipe
+          id="motion-plate"
+          name="Contextual plate"
+          tokens="--duration-move · spring-settle in · --duration-fast ease-in out"
+          model="A pane slides in from the edge it opens against and slides back the way it came. The surface stays mounted for the 120ms the leave takes and is scenery the whole way — the desktop right rail and the profile card run on this."
+          onPlay={() => setPlateOpen((value) => !value)}
+        >
+          <div className="relative h-24 w-full overflow-hidden rounded-[var(--radius-well)] bg-bg-base">
+            {platePresence.mounted && (
+              <div
+                className={cn(
+                  'absolute right-0 top-0 h-full w-2/5 rounded-l-[var(--radius-card)] bg-bg-plate shadow-[var(--shadow-plate)]',
+                  platePresence.exiting ? 'pc-drawer-out-right' : 'pc-drawer-in-right',
+                )}
+                {...platePresence.scenery}
+              />
+            )}
           </div>
         </Recipe>
 

@@ -55,6 +55,7 @@ const SEQUENCE_BUDGET_MS = 1600;
 const OUT_DIR = path.resolve(process.cwd(), '..', 'output', 'design-reference', 'motion', 'frames-wp9a');
 const OUT_DIR_B = path.resolve(process.cwd(), '..', 'output', 'design-reference', 'motion', 'frames-wp9b');
 const OUT_DIR_C = path.resolve(process.cwd(), '..', 'output', 'design-reference', 'motion', 'frames-wp9c');
+const OUT_DIR_D = path.resolve(process.cwd(), '..', 'output', 'design-reference', 'motion', 'frames-wp9d');
 
 interface MomentSample {
   /** Per frame: when, and what the engine had in flight when it was served. */
@@ -255,6 +256,32 @@ function expectRecipes(label: string, sample: MomentSample, wanted: readonly str
   expect(missing, `${label}: never played [${missing.join(', ')}] — saw ${[...played].join(', ')}`).toEqual([]);
 }
 
+/**
+ * The declared keyframes of every `data-motion-recipe:<name>` animation in
+ * flight right now — each animation as a list of `transform|opacity` strings.
+ * Polls until one shows up: an emit round-trips through the realtime stub, so
+ * the animation lands a beat after `emitGateway` resolves and the recipe's
+ * whole run is only a few hundred ms long.
+ */
+async function recipeKeyframes(page: Page, recipe: string, budgetMs = 900): Promise<string[][]> {
+  const deadline = Date.now() + budgetMs;
+  while (Date.now() < deadline) {
+    const found = await page.evaluate((name) =>
+      document
+        .getAnimations()
+        .filter((a) => (a as Animation & { id?: string }).id === `data-motion-recipe:${name}`)
+        .map((a) =>
+          (((a.effect as KeyframeEffect | null)?.getKeyframes?.() ?? []) as Keyframe[]).map(
+            (k) => `${String(k.transform ?? '')}|${String(k.opacity ?? '')}`,
+          ),
+        ),
+    recipe);
+    if (found.length > 0) return found;
+    await page.waitForTimeout(40);
+  }
+  return [];
+}
+
 test.describe('the motion gate (§5.3)', () => {
   test.beforeEach(async ({ page }) => {
     await setStandingWorld();
@@ -319,6 +346,11 @@ test.describe('the motion gate (§5.3)', () => {
       'motion-press',
       'motion-stagger',
       'motion-roll',
+      // WP9d's two finite cards. `motion-writing` is deliberately absent: the
+      // pulse is an infinite breathe, exempt from the duration budget by the
+      // same rule as the speaking ring, and its own test asserts it exists.
+      'motion-pop',
+      'motion-plate',
     ];
     for (const id of recipes) {
       const block = page.locator(`#${id}`);
@@ -448,6 +480,313 @@ test.describe('the motion gate (§5.3)', () => {
     expect(after).not.toEqual(before);
     expect(after[0]).toBe(before[before.length - 1]);
     expectBudget('list reorder (FLIP)', sample);
+  });
+
+  /* ------------------------------------------------------------------ */
+  /* WP9d — further moments, the surface half                             */
+  /* ------------------------------------------------------------------ */
+
+  const reactionAdd = (userId: string, emoji: string) => ({
+    op: 0,
+    t: 'MESSAGE_REACTION_ADD',
+    d: { channel_id: MOTION_TEXT_CHANNEL_ID, message_id: '3000', user_id: userId, emoji },
+  });
+  const typingStart = (channelId: string, userId: string) =>
+    emitGateway({ op: 0, t: 'TYPING_START', d: { channel_id: channelId, user_id: userId } });
+
+  /**
+   * §5.1's "a reaction lands, it does not slide in" — yours takes the full
+   * 0.6 pop with the emoji over-rotating, somebody else's pops smaller at
+   * 0.8, and a removed chip fades back out the way it came.
+   *
+   * The seeded message has no reactions, so the row mounts on the first chip:
+   * that first commit is the no-motion-on-first-paint rule doing its job, and
+   * the pops begin with the second arrival.
+   */
+  test('a reaction pops — yours bigger, theirs smaller, the leave shrinks', async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openRoom(page);
+    const history = page.getByLabel('Message history');
+
+    await emitGateway(reactionAdd('43', '👍'));
+    await expect(history.locator('[data-flip-key="👍"]')).toBeVisible();
+    await page.waitForTimeout(400);
+
+    let ownPop: string[][] = [];
+    const own = await measureMoment(page, async () => {
+      await emitGateway(reactionAdd('42', '🔥'));
+      ownPop = await recipeKeyframes(page, 'pop');
+    });
+    await expect(history.locator('[data-flip-key="🔥"]')).toBeVisible();
+    expectRecipes('reaction pop (own)', own, ['pop']);
+    expectBudget('reaction pop (own)', own);
+    expect(
+      ownPop.some((frames) => /scale\(0\.6/.test(frames[0] ?? '')),
+      `your chip did not pop from 0.6 — saw ${JSON.stringify(ownPop)}`,
+    ).toBe(true);
+    expect(
+      ownPop.some((frames) => frames.some((frame) => /rotate\(-8/.test(frame))),
+      `the emoji never over-rotated — saw ${JSON.stringify(ownPop)}`,
+    ).toBe(true);
+
+    let theirPop: string[][] = [];
+    const theirs = await measureMoment(page, async () => {
+      await emitGateway(reactionAdd('45', '✨'));
+      theirPop = await recipeKeyframes(page, 'pop');
+    });
+    await expect(history.locator('[data-flip-key="✨"]')).toBeVisible();
+    expectRecipes('reaction pop (theirs)', theirs, ['pop']);
+    expectBudget('reaction pop (theirs)', theirs);
+    expect(
+      theirPop.some((frames) => /scale\(0\.8/.test(frames[0] ?? '')),
+      `an incoming chip did not pop from 0.8 — saw ${JSON.stringify(theirPop)}`,
+    ).toBe(true);
+
+    const leave = await measureMoment(page, async () => {
+      await emitGateway({
+        op: 0,
+        t: 'MESSAGE_REACTION_REMOVE',
+        d: { channel_id: MOTION_TEXT_CHANNEL_ID, message_id: '3000', user_id: '45', emoji: '✨' },
+      });
+    });
+    await expect(history.locator('[data-flip-key="✨"]')).toHaveCount(0);
+    expectRecipes('reaction leave', leave, ['exit']);
+    expectBudget('reaction leave', leave);
+  });
+
+  /**
+   * §5.1's typing pulse: while somebody writes in THIS text room its amber
+   * window breathes at half amplitude — the same `--duration-breathe` the
+   * speaking ring takes. The pulse is an infinite CSS animation, so the
+   * sampler skips it (that exemption is the same one breathing gets); what is
+   * asserted is that it exists, that it is scoped to the room, and that the
+   * moment around it held its frames.
+   */
+  test('the typing pulse breathes while somebody writes, and ends when they stop', async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openRoom(page);
+    const roomWindow = page.locator('.chat-header .pc-window').first();
+    await expect(roomWindow).toBeVisible();
+
+    // Writing in another room — even this building's voice room — does not
+    // light this one's window.
+    await typingStart(MOTION_VOICE_CHANNEL_ID, '43');
+    await page.waitForTimeout(300);
+    await expect(roomWindow).not.toHaveClass(/is-writing/);
+
+    const sample = await measureMoment(page, async () => {
+      await typingStart(MOTION_TEXT_CHANNEL_ID, '43');
+    }, 700);
+    const measured = report('typing pulse', sample);
+    await expect(roomWindow).toHaveClass(/is-writing/);
+    // The feed says it in words at the same time — light always has words.
+    await expect(page.getByLabel('Message history').getByText(/typing/)).toBeVisible();
+    const breathing = await page.evaluate(() => {
+      const el = document.querySelector('.chat-header .pc-window');
+      return document
+        .getAnimations()
+        .filter((a) => (a.effect as KeyframeEffect | null)?.target === el)
+        .map((a) => ({
+          name: (a as CSSAnimation).animationName ?? '',
+          iterations: a.effect?.getComputedTiming?.().iterations ?? 0,
+        }));
+    });
+    expect(
+      breathing,
+      'no breathing animation on the room window while is-writing',
+    ).toContainEqual({ name: 'pc-window-breathe', iterations: Infinity });
+    expect(
+      measured.worstOverall.delta,
+      `typing pulse: ${describeFrame(measured.worstOverall)} — over ${MOMENT_FRAME_CEILING_MS}ms in the moment`,
+    ).toBeLessThanOrEqual(MOMENT_FRAME_CEILING_MS);
+
+    // A voice room's light is people being in it — writing never recolours
+    // it. The stage header does not even carry the room's window, so the
+    // assertion is that nothing on the page takes the pulse.
+    await page.goto(`/app/guilds/${MOTION_GUILD_ID}/channels/${MOTION_VOICE_CHANNEL_ID}`);
+    await expect(page.getByRole('button', { name: 'Join the room' })).toBeVisible();
+    await typingStart(MOTION_VOICE_CHANNEL_ID, '44');
+    await page.waitForTimeout(300);
+    await expect(page.locator('.is-writing')).toHaveCount(0);
+
+    // And back in the text room it ends when typing stops — the typing window
+    // lapses and the light goes back to whatever the room was doing.
+    await page.goto(`/app/guilds/${MOTION_GUILD_ID}/channels/${MOTION_TEXT_CHANNEL_ID}`);
+    await expect(page.getByLabel('Message history')).toBeVisible();
+    const textWindow = page.locator('.chat-header .pc-window').first();
+    await expect(textWindow).toBeVisible();
+    await typingStart(MOTION_TEXT_CHANNEL_ID, '43');
+    await expect(textWindow).toHaveClass(/is-writing/);
+    await page.waitForTimeout(8_400);
+    await expect(textWindow).not.toHaveClass(/is-writing/);
+    expect(
+      await page.evaluate(() => {
+        const el = document.querySelector('.chat-header .pc-window');
+        return document
+          .getAnimations()
+          .filter((a) => (a.effect as KeyframeEffect | null)?.target === el).length;
+      }),
+      'the window is still animating after typing stopped',
+    ).toBe(0);
+  });
+
+  /**
+   * §5.1's contextual plate: the desktop right rail slides in from the edge it
+   * opens against and slides back out the same way, staying mounted (and out
+   * of the accessibility tree) for the 120ms the leave takes.
+   */
+  test('a contextual plate slides in from its edge', async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openRoom(page);
+
+    const panel = page.getByTestId('context-panel');
+    const opening = await measureMoment(page, async () => {
+      await page.getByRole('button', { name: 'Search messages' }).click();
+    }, 900);
+    await expect(panel).toBeVisible();
+    expect(
+      recipesIn(opening).has('pc-drawer-in-right'),
+      `the plate never slid in — saw ${[...recipesIn(opening)].join(', ') || 'nothing'}`,
+    ).toBe(true);
+    expectBudget('contextual plate (enter)', opening);
+
+    // Watch the slide's own opacity across the leave, the way the dialog test
+    // does — the screencast serves three frames across a 120ms exit, and "it
+    // was there, then it was not" is what a silently-dropped exit looks like.
+    await page.evaluate(() => {
+      const wrapper = document.querySelector('[data-testid="context-panel"]')?.parentElement ?? null;
+      const samples: Array<{ at: number; opacity: number; hidden: string | null }> = [];
+      (window as unknown as { __plateExit: typeof samples }).__plateExit = samples;
+      const started = performance.now();
+      const tick = () => {
+        if (!wrapper || !wrapper.isConnected) return;
+        samples.push({
+          at: performance.now() - started,
+          opacity: Number(getComputedStyle(wrapper).opacity),
+          hidden: wrapper.getAttribute('aria-hidden'),
+        });
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+
+    const closing = await measureMoment(page, async () => {
+      await page.getByRole('button', { name: 'Close search' }).click();
+    }, 800);
+    await expect(panel).toHaveCount(0);
+    expect(
+      recipesIn(closing).has('pc-drawer-out-right'),
+      `the plate never slid out — saw ${[...recipesIn(closing)].join(', ') || 'nothing'}`,
+    ).toBe(true);
+    expectBudget('contextual plate (exit)', closing);
+
+    const exit = await page.evaluate(
+      () => (window as unknown as { __plateExit: Array<{ at: number; opacity: number; hidden: string | null }> }).__plateExit,
+    );
+    const leaving = exit.filter((sample) => sample.opacity < 0.98);
+    console.log(
+      `[motion-gate] contextual plate (exit): ${exit.length} sampled frames, `
+      + `${leaving.length} below full opacity, floor=${Math.min(...exit.map((s) => s.opacity)).toFixed(2)}, `
+      + `aria-hidden while leaving=${leaving.every((s) => s.hidden === 'true')}`,
+    );
+    expect(leaving.length, 'the plate never faded — the exit did not play').toBeGreaterThan(1);
+    expect(
+      leaving.every((sample) => sample.hidden === 'true'),
+      'the leaving plate was still in the accessibility tree',
+    ).toBe(true);
+  });
+
+  /**
+   * §5.1's phone pull — the dragged-down timeline reveals the room's lamp.
+   * Only exists where a pull is physically possible, so it runs under the
+   * phone emulation: coarse pointer, small viewport, touch events.
+   */
+  test.describe('the phone pull lamp', () => {
+    test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
+
+    const pull = async (page: Page, distancePx: number) => {
+      const client = await page.context().newCDPSession(page);
+      const feed = page.getByLabel('Message history');
+      const box = await feed.boundingBox();
+      const x = (box?.x ?? 0) + (box?.width ?? 0) / 2;
+      const y = (box?.y ?? 0) + 60;
+      await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+      for (let dy = 15; dy <= distancePx; dy += 15) {
+        await client.send('Input.dispatchTouchEvent', {
+          type: 'touchMove',
+          touchPoints: [{ x, y: y + dy }],
+        });
+        await page.waitForTimeout(30);
+      }
+      return { client, x, y };
+    };
+
+    test('a pull far enough lights the lamp, flickers, and refetches', async ({ page }) => {
+      test.setTimeout(120_000);
+      await openRoom(page);
+      // Only exists where a pull is physically possible — the coarse-pointer
+      // gate is part of the moment, so the gate asserts it is really on.
+      expect(await page.evaluate(() => window.matchMedia('(hover: none), (pointer: coarse)').matches)).toBe(true);
+      const lamp = page.locator('.pc-window.is-reading.pointer-events-none');
+      await expect(lamp).toHaveCount(1);
+      await expect(lamp).toHaveCSS('opacity', '0');
+
+      let refetched = false;
+      page.on('request', (request) => {
+        if (request.method() === 'GET' && request.url().includes(`/channels/${MOTION_TEXT_CHANNEL_ID}/messages`)) {
+          refetched = true;
+        }
+      });
+
+      const sample = await measureMoment(page, async () => {
+        const { client } = await pull(page, 105);
+        // Mid-pull the lamp is lit in proportion to the pull — over the 72px
+        // threshold it is all the way on.
+        const lit = Number(await lamp.evaluate((el) => getComputedStyle(el).opacity));
+        expect(lit, `the lamp never lit — mid-pull opacity ${lit}`).toBeGreaterThan(0.5);
+        await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      }, 1_400);
+      expect(refetched, 'the pull crossed the threshold but no refresh fired').toBe(true);
+      expectRecipes('pull lamp', sample, ['flicker', 'exit']);
+      expectBudget('pull lamp (refresh)', sample);
+      await expect(lamp).toHaveCSS('opacity', '0', { timeout: 3_000 });
+    });
+
+    test('a pull that lets go early just dims the lamp back out', async ({ page }) => {
+      test.setTimeout(120_000);
+      await openRoom(page);
+      const lamp = page.locator('.pc-window.is-reading.pointer-events-none');
+      await expect(lamp).toHaveCount(1);
+
+      let refetched = false;
+      page.on('request', (request) => {
+        if (request.method() === 'GET' && request.url().includes(`/channels/${MOTION_TEXT_CHANNEL_ID}/messages`)) {
+          refetched = true;
+        }
+      });
+
+      const sample = await measureMoment(page, async () => {
+        const { client } = await pull(page, 45);
+        const lit = Number(await lamp.evaluate((el) => getComputedStyle(el).opacity));
+        expect(lit, `the lamp never lit on a partial pull — opacity ${lit}`).toBeGreaterThan(0.1);
+        await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      }, 1_200);
+      // It dimmed out, it did not refresh, and it never claimed to.
+      expect(refetched, 'a sub-threshold pull still asked for a refresh').toBe(false);
+      expect(
+        recipesIn(sample).has('data-motion-recipe:flicker'),
+        'a sub-threshold pull still played the refresh flicker',
+      ).toBe(false);
+      await expect(lamp).toHaveCSS('opacity', '0', { timeout: 3_000 });
+      const measured = report('pull lamp (early release)', sample);
+      expect(
+        measured.worstOverall.delta,
+        `pull lamp (early release): ${describeFrame(measured.worstOverall)} — over ${MOMENT_FRAME_CEILING_MS}ms`,
+      ).toBeLessThanOrEqual(MOMENT_FRAME_CEILING_MS);
+    });
   });
 
   /**
@@ -1075,6 +1414,191 @@ test.describe('the motion gate (§5.3)', () => {
     console.log(`[motion-gate] WP9c strips written to ${OUT_DIR_C}`);
   });
 
+  /**
+   * WP9d's frame strips (§10). Same CDP method: `page.screenshot` costs more
+   * than a frame of these moments.
+   *
+   *   PARACORD_E2E_MOTION=1 PARACORD_E2E_MOTION_FRAMES=1 npx playwright test
+   */
+  test('capture the WP9d moments as frame strips', async ({ page }) => {
+    test.skip(process.env.PARACORD_E2E_MOTION_FRAMES !== '1', 'frame capture is opt-in');
+    test.setTimeout(240_000);
+    await mkdir(OUT_DIR_D, { recursive: true });
+    await page.setViewportSize({ width: 1280, height: 900 });
+
+    const { writeFile } = await import('node:fs/promises');
+    const client = await page.context().newCDPSession(page);
+    const strip = async (
+      name: string,
+      wanted: number[],
+      act: () => Promise<void>,
+      settleMs = 900,
+      format: 'png' | 'jpeg' = 'png',
+      minFrames = 2,
+    ) => {
+      const frames: Array<{ at: number; data: string }> = [];
+      let started = Number.POSITIVE_INFINITY;
+      const onFrame = async (frame: { data: string; sessionId: number }) => {
+        frames.push({ at: Date.now() - started, data: frame.data });
+        await client.send('Page.screencastFrameAck', { sessionId: frame.sessionId }).catch(() => {});
+      };
+      client.on('Page.screencastFrame', onFrame);
+      await client.send('Page.startScreencast',
+        format === 'jpeg' ? { format, quality: 80, everyNthFrame: 1 } : { format, everyNthFrame: 1 });
+      await page.waitForTimeout(300);
+      started = Date.now();
+      await act();
+      await page.waitForTimeout(settleMs);
+      await client.send('Page.stopScreencast');
+      client.off('Page.screencastFrame', onFrame);
+
+      const picked = new Set<number>();
+      for (const target of wanted) {
+        let best = -1;
+        let distance = Number.POSITIVE_INFINITY;
+        for (let i = 0; i < frames.length; i += 1) {
+          if (frames[i].at < -8) continue;
+          const delta = Math.abs(frames[i].at - target);
+          if (delta < distance && !picked.has(i)) {
+            distance = delta;
+            best = i;
+          }
+        }
+        if (best < 0) continue;
+        picked.add(best);
+        await writeFile(
+          path.join(OUT_DIR_D, `${name}-${String(target).padStart(4, '0')}ms.${format === 'jpeg' ? 'jpg' : 'png'}`),
+          Buffer.from(frames[best].data, 'base64'),
+        );
+      }
+      console.log(`[motion-gate] ${name}: ${frames.length} frames, wrote ${picked.size}`);
+      expect(picked.size, `${name}: no frames captured`).toBeGreaterThanOrEqual(minFrames);
+    };
+
+    // 1 — the reaction pop on a real row: the first chip mounts the row
+    // silently (first paint), the second is the pop the strip is of.
+    await openRoom(page);
+    await emitGateway(reactionAdd('43', '👍'));
+    await expect(page.getByLabel('Message history').locator('[data-flip-key="👍"]')).toBeVisible();
+    await page.waitForTimeout(400);
+    await strip('reaction-pop', [0, 40, 80, 120, 160, 220, 300, 420], async () => {
+      await emitGateway(reactionAdd('42', '🔥'));
+    }, 1_000);
+    await strip('reaction-leave', [0, 20, 40, 60, 80, 100, 120, 160, 240], async () => {
+      await emitGateway({
+        op: 0,
+        t: 'MESSAGE_REACTION_REMOVE',
+        d: { channel_id: MOTION_TEXT_CHANNEL_ID, message_id: '3000', user_id: '42', emoji: '🔥' },
+      });
+    }, 700, 'jpeg', 1);
+
+    // 2 — the writing pulse: one full breath of the room's window while the
+    // typing row sits under the feed. Half-amplitude, so the strip leans on
+    // the words to show what the light is saying.
+    await strip('typing-pulse', [0, 200, 400, 600, 800, 1000, 1200, 1400], async () => {
+      await typingStart(MOTION_TEXT_CHANNEL_ID, '43');
+    }, 1_700);
+
+    // 3 — the contextual plate: in from the right edge, back out the same way.
+    await strip('plate-in', [0, 40, 80, 140, 200, 280, 380, 500], async () => {
+      await page.getByRole('button', { name: 'Search messages' }).click();
+    }, 800);
+    await strip('plate-out', [0, 20, 40, 60, 80, 100, 120, 160, 240], async () => {
+      await page.getByRole('button', { name: 'Close search' }).click();
+    }, 600, 'jpeg', 1);
+
+    // 4 — the three /design-tokens cards that replay the same recipes, so a
+    // reader can compare the real surface with its named recipe.
+    await page.goto('/design-tokens');
+    await expect(page.getByRole('heading', { name: 'Motion', exact: true })).toBeVisible();
+    await page.evaluate(() => document.fonts.ready);
+    for (const [id, wanted] of [
+      ['motion-pop', [0, 40, 80, 120, 160, 220, 300, 420]],
+      ['motion-plate', [0, 40, 80, 140, 200, 280, 380, 500]],
+    ] as const) {
+      const card = page.locator(`#${id}`);
+      await card.scrollIntoViewIfNeeded();
+      await page.waitForTimeout(400);
+      await strip(id, [...wanted], async () => {
+        await card.getByRole('button', { name: 'Replay' }).click();
+      }, 800);
+    }
+    const writing = page.locator('#motion-writing');
+    await writing.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(400);
+    await strip('motion-writing', [0, 200, 400, 600, 800, 1000, 1200, 1400], async () => {
+      await writing.getByRole('button', { name: 'Replay' }).click();
+    }, 1_700);
+
+    console.log(`[motion-gate] WP9d strips written to ${OUT_DIR_D}`);
+  });
+
+  /**
+   * The pull lamp's strip needs the phone: the gesture only exists on a coarse
+   * pointer. Same opt-in flag as the other captures.
+   */
+  test.describe('capture: the phone pull lamp', () => {
+    test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
+
+    test('pulling the timeline down, frame by frame', async ({ page }) => {
+      test.skip(process.env.PARACORD_E2E_MOTION_FRAMES !== '1', 'frame capture is opt-in');
+      test.setTimeout(120_000);
+      await mkdir(OUT_DIR_D, { recursive: true });
+      await openRoom(page);
+      expect(await page.evaluate(() => window.matchMedia('(hover: none), (pointer: coarse)').matches)).toBe(true);
+
+      const { writeFile } = await import('node:fs/promises');
+      const client = await page.context().newCDPSession(page);
+      const frames: Array<{ at: number; data: string }> = [];
+      let started = Number.POSITIVE_INFINITY;
+      client.on('Page.screencastFrame', async (frame) => {
+        frames.push({ at: Date.now() - started, data: frame.data });
+        await client.send('Page.screencastFrameAck', { sessionId: frame.sessionId }).catch(() => {});
+      });
+      await client.send('Page.startScreencast', { format: 'jpeg', quality: 80, everyNthFrame: 1 });
+      await page.waitForTimeout(300);
+
+      const feed = page.getByLabel('Message history');
+      const box = await feed.boundingBox();
+      const x = (box?.x ?? 0) + (box?.width ?? 0) / 2;
+      const y = (box?.y ?? 0) + 60;
+      started = Date.now();
+      await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+      for (let dy = 15; dy <= 105; dy += 15) {
+        await client.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y: y + dy }] });
+        await page.waitForTimeout(45);
+      }
+      await page.waitForTimeout(120);
+      await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await page.waitForTimeout(900);
+      await client.send('Page.stopScreencast');
+
+      let written = 0;
+      const picked = new Set<number>();
+      for (const target of [0, 100, 200, 300, 420, 540, 660, 780]) {
+        let best = -1;
+        let distance = Number.POSITIVE_INFINITY;
+        for (let i = 0; i < frames.length; i += 1) {
+          if (frames[i].at < -8) continue;
+          const delta = Math.abs(frames[i].at - target);
+          if (delta < distance && !picked.has(i)) {
+            distance = delta;
+            best = i;
+          }
+        }
+        if (best < 0) continue;
+        picked.add(best);
+        written += 1;
+        await writeFile(
+          path.join(OUT_DIR_D, `pull-lamp-${String(target).padStart(4, '0')}ms.jpg`),
+          Buffer.from(frames[best].data, 'base64'),
+        );
+      }
+      console.log(`[motion-gate] pull-lamp: ${frames.length} frames, wrote ${written}`);
+      expect(written, 'pull-lamp: no frames captured').toBeGreaterThanOrEqual(2);
+    });
+  });
+
   test('reduced motion runs no animations at all', async ({ page }) => {
     test.setTimeout(120_000);
     await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -1174,6 +1698,61 @@ test.describe('the motion gate (§5.3)', () => {
     await page.getByRole('button', { name: 'Keep it' }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
     expect(await page.evaluate(() => document.getAnimations().length)).toBe(0);
+
+    // WP9d's moments, under the same switch: the light still says the thing,
+    // it just does not move to say it.
+    await openRoom(page);
+
+    // The WP9d checks below count animations with a real duration. The global
+    // reduced-motion blanket turns every transition into a 0.01ms one-shot,
+    // and in this headless harness a 0.01ms transition can sit at
+    // `state: 'running'` forever — no frame is produced to retire it. The rule
+    // being gated is "nothing moves", so the filter is "nothing that could".
+    const realAnimations = () =>
+      page.evaluate(() =>
+        document
+          .getAnimations()
+          .filter((a) => Number(a.effect?.getComputedTiming?.().activeDuration) > 1)
+          .map((a) => {
+            const w = a as Animation & { animationName?: string; transitionProperty?: string; id?: string };
+            return w.id || w.animationName || w.transitionProperty || 'anonymous';
+          }),
+      );
+
+    // Somebody writing still lights the room's window — the pulse is the
+    // motion, so under reduced motion the window is simply lit and still.
+    await typingStart(MOTION_TEXT_CHANNEL_ID, '43');
+    const roomWindow = page.locator('.chat-header .pc-window').first();
+    await expect(roomWindow).toHaveClass(/is-writing/);
+    await expect(page.getByLabel('Message history').getByText(/typing/)).toBeVisible();
+    await page.waitForTimeout(120);
+    expect(await realAnimations(), 'the writing pulse ran under reduced motion').toEqual([]);
+
+    // Reactions land where they landed — a pop is motion, so they simply are
+    // there, and one leaving simply is not.
+    await emitGateway(reactionAdd('43', '👍'));
+    await emitGateway(reactionAdd('42', '🔥'));
+    const history = page.getByLabel('Message history');
+    await expect(history.locator('[data-flip-key="🔥"]')).toBeVisible();
+    await page.waitForTimeout(120);
+    expect(await realAnimations(), 'a reaction pop ran under reduced motion').toEqual([]);
+    await emitGateway({
+      op: 0,
+      t: 'MESSAGE_REACTION_REMOVE',
+      d: { channel_id: MOTION_TEXT_CHANNEL_ID, message_id: '3000', user_id: '42', emoji: '🔥' },
+    });
+    await expect(history.locator('[data-flip-key="🔥"]')).toHaveCount(0);
+    expect(await realAnimations(), 'a reaction leave ran under reduced motion').toEqual([]);
+
+    // The plate is there or it is not — `usePresence` drops it on the spot
+    // rather than holding it for an exit nobody asked to see.
+    await page.getByRole('button', { name: 'Search messages' }).click();
+    await expect(page.getByTestId('context-panel')).toBeVisible();
+    await page.waitForTimeout(120);
+    expect(await realAnimations(), 'the plate slid in under reduced motion').toEqual([]);
+    await page.getByRole('button', { name: 'Close search' }).click();
+    await expect(page.getByTestId('context-panel')).toHaveCount(0);
+    expect(await realAnimations(), 'the plate slid out under reduced motion').toEqual([]);
 
     expect(MOTION_CHANNEL_NAME).toBe('build-log');
   });
