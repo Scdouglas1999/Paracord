@@ -2163,8 +2163,8 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                 <EphemeralMessage>
                   {!msg.poll && decryptingIds.has(msg.id) ? (
                     <div className="flex flex-col gap-1.5 py-0.5" aria-label="Decrypting message">
-                      <div className="h-3.5 w-3/4 animate-pulse rounded-[var(--radius-window)] bg-bg-mod-subtle" />
-                      <div className="h-3.5 w-1/2 animate-pulse rounded-[var(--radius-window)] bg-bg-mod-subtle" />
+                      <div className="h-3.5 w-3/4 pc-skeleton rounded-[var(--radius-window)] bg-bg-mod-subtle" />
+                      <div className="h-3.5 w-1/2 pc-skeleton rounded-[var(--radius-window)] bg-bg-mod-subtle" />
                     </div>
                   ) : (
                     <div className={cn('break-words text-body text-text-body', ribbon && 'text-ribbon')}>
@@ -2181,8 +2181,8 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                 </EphemeralMessage>
               ) : !msg.poll && decryptingIds.has(msg.id) ? (
                 <div className="flex flex-col gap-1.5 py-0.5" aria-label="Decrypting message">
-                  <div className="h-3.5 w-3/4 animate-pulse rounded-[var(--radius-window)] bg-bg-mod-subtle" />
-                  <div className="h-3.5 w-1/2 animate-pulse rounded-[var(--radius-window)] bg-bg-mod-subtle" />
+                  <div className="h-3.5 w-3/4 pc-skeleton rounded-[var(--radius-window)] bg-bg-mod-subtle" />
+                  <div className="h-3.5 w-1/2 pc-skeleton rounded-[var(--radius-window)] bg-bg-mod-subtle" />
                 </div>
               ) : !msg.poll ? (
                 <div className={cn('mt-0.5 break-words text-body text-text-body', ribbon && 'text-ribbon')}>

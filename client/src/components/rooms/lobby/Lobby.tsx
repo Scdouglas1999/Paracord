@@ -224,7 +224,7 @@ export function Lobby({ guildId }: LobbyProps) {
   if (!guild) {
     return (
       <div role="status" aria-label="Loading the lobby" className="h-full bg-bg-base p-[var(--gutter)]">
-        <Plate as="section" className="h-full animate-pulse" aria-hidden />
+        <Plate as="section" className="h-full pc-skeleton" aria-hidden />
         <span className="sr-only">Opening the lobby…</span>
       </div>
     );

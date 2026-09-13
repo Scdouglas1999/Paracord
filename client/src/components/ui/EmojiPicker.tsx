@@ -16,7 +16,7 @@ import { emojiApi } from '../../api/emojis';
 import { buildGuildEmojiImageUrl, formatCustomEmojiToken } from '../../lib/customEmoji';
 import { cn } from '../../lib/utils';
 import { EmptyState } from './Feedback';
-import { Skeleton } from './Skeleton';
+import { Skeleton, SkeletonSwap } from './Skeleton';
 
 // ---------------------------------------------------------------------------
 // Emoji data
@@ -561,8 +561,9 @@ export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPicke
       </div>
 
       {/* ── Grid ── */}
-      <div
+      <SkeletonSwap
         ref={gridRef}
+        busy={activeTab === 'server' && loadingServerEmojis}
         onScroll={handleGridScroll}
         className="scrollbar-thin flex-1 overflow-y-auto px-2 pb-2 pt-1"
       >
@@ -644,7 +645,7 @@ export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPicke
             </div>
           ))
         )}
-      </div>
+      </SkeletonSwap>
 
       {/* ── Category nav ── */}
       {!search.trim() && activeTab === 'unicode' && (

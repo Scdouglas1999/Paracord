@@ -439,6 +439,21 @@
   transition-duration: 80ms;
 }
 
+/* -----------------------------------------------------------------------------
+   §5 Loading and presence indicators.
+   -------------------------------------------------------------------------- */
+
+/* A matte placeholder pulse — the breath timing, like every other slow pulse
+   in the product, and it stops dead under reduced motion rather than freezing
+   wherever the global 0.01ms override happens to land. */
+.pc-skeleton {
+  animation: skeleton-pulse var(--duration-breathe) var(--ease-in-out) infinite;
+}
+
+:root[data-motion='reduced'] .pc-skeleton {
+  animation: none;
+}
+
 /* The on-air pill's live dot breathes only while somebody is actually
    speaking — never as decoration (§5.1, §6.7). */
 .pc-live-dot.is-speaking {

@@ -15,7 +15,7 @@ import { getGuildColor } from '../lib/colors';
 import { EmptyState } from '../components/ui/Feedback';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
-import { Skeleton } from '../components/ui/Skeleton';
+import { Skeleton, SkeletonSwap } from '../components/ui/Skeleton';
 import { Modal, ModalBody, ModalFooter, ModalHeader, ModalTitle } from '../components/ui/Modal';
 
 interface DiscoverableGuild {
@@ -198,7 +198,7 @@ export function DiscoveryPage() {
         </div>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-4 scrollbar-thin sm:p-6">
+      <SkeletonSwap busy={loading} className="min-h-0 flex-1 overflow-y-auto p-4 scrollbar-thin sm:p-6">
         {loading ? (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {Array.from({ length: 6 }, (_, i) => (
@@ -338,7 +338,7 @@ export function DiscoveryPage() {
             })}
           </div>
         )}
-      </div>
+      </SkeletonSwap>
 
       <DiscoveryPreview
         guild={selectedGuild}

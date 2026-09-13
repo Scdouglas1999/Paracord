@@ -7,7 +7,7 @@ import { resolveResourceUrl } from '../../lib/config/apiBaseUrl';
 import { getDownloadTicket } from '../../lib/downloadTicket';
 import { safeClientResourceUrl } from '../../lib/security';
 import { EmptyState } from '../ui/Feedback';
-import { Skeleton } from '../ui/Skeleton';
+import { Skeleton, SkeletonSwap } from '../ui/Skeleton';
 
 interface StickerPickerProps {
   guildId?: string;
@@ -122,8 +122,8 @@ export function StickerPicker({ guildId, onSelect, onClose }: StickerPickerProps
         </div>
       </div>
 
-      {/* Sticker grid */}
-      <div className="scrollbar-thin flex-1 overflow-y-auto p-2">
+      {/* Sticker grid — the placeholder crossfades to the stickers (§5.3). */}
+      <SkeletonSwap busy={loading && !error} className="scrollbar-thin flex-1 overflow-y-auto p-2">
         {error ? (
           <EmptyState
             role="alert"
@@ -195,7 +195,7 @@ export function StickerPicker({ guildId, onSelect, onClose }: StickerPickerProps
             })}
           </div>
         )}
-      </div>
+      </SkeletonSwap>
 
       {/* Footer: sticker count */}
       {stickers.length > 0 && (
