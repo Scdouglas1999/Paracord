@@ -263,6 +263,8 @@ describe('OnAirPill', () => {
   const onAir = {
     room: null,
     roomName: 'Shop floor',
+    isDirectMessage: false,
+    others: [{ userId: 'u-ada', name: 'Ada', speaking: false }],
     buildingName: 'Kestrel Robotics',
     durationMs: 34 * 60_000 + 12_000,
     micOn: true,
@@ -289,8 +291,28 @@ describe('OnAirPill', () => {
     render(<OnAirPill onAir={{ ...onAir, micOn: false, sharing: true }} />);
     expect(
       screen.getByText(
-        'You are in Shop floor in Kestrel Robotics — mic off, sharing your screen. Return to the room.',
+        'You are in Shop floor in Kestrel Robotics — with Ada, mic off, sharing your screen. Return to the call.',
       ),
+    ).toBeTruthy();
+  });
+
+  it('names the person a direct-message call is with, and says when nobody has joined', () => {
+    const calling = {
+      ...onAir, room: null, isDirectMessage: true, buildingName: null,
+      roomName: 'Ada', others: [], durationMs: 4_000,
+    };
+    const { unmount } = render(<OnAirPill onAir={calling} />);
+    expect(screen.getByText('Ada')).toBeTruthy();
+    expect(screen.getByText('ringing')).toBeTruthy();
+    expect(
+      screen.getByText('You are in a call with Ada — nobody has joined yet, mic on. Return to the call.'),
+    ).toBeTruthy();
+    unmount();
+
+    render(<OnAirPill onAir={{ ...calling, others: [{ userId: 'u-ada', name: 'Ada', speaking: true }] }} />);
+    expect(screen.queryByText('ringing')).toBeNull();
+    expect(
+      screen.getByText('You are in a call with Ada — with Ada, mic on. Return to the call.'),
     ).toBeTruthy();
   });
 
@@ -360,6 +382,8 @@ describe('no light component hard-codes a colour', () => {
           onAir={{
             room: null,
             roomName: 'Shop floor',
+            isDirectMessage: false,
+            others: [],
             buildingName: 'Kestrel Robotics',
             durationMs: 1_000,
             micOn: true,

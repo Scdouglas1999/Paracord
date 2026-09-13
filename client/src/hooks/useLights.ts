@@ -32,6 +32,7 @@ import { useTypingStore } from '../stores/typingStore';
 import { useVoiceStore } from '../stores/voiceStore';
 
 import { getAccountChannelView } from '../lib/channelView';
+import { displayName } from '../lib/displayName';
 import { accountScopeKey, entityScopeKey, type AccountScope } from '../lib/serverScope';
 import {
   aroundNowSentence,
@@ -389,9 +390,27 @@ export function useHereNow(
   }, [building, channelId]);
 }
 
+/** Somebody else on the call, for the on-air pill. */
+export interface OnAirPerson {
+  userId: string;
+  name: string;
+  speaking: boolean;
+}
+
 export interface OnAir {
   room: RoomLight | null;
   roomName: string;
+  /**
+   * A direct message rather than a room in a building. A DM has no
+   * `BuildingLight`, so the old label fell through to the literal "the room":
+   * the caller was told nothing about who they had rung.
+   */
+  isDirectMessage: boolean;
+  /**
+   * Everybody else on the call. Empty means nobody has joined yet — the one
+   * thing the caller of a DM most needs to know and previously could not tell.
+   */
+  others: OnAirPerson[];
   /** Where the room is — "Kestrel Robotics". */
   buildingName: string | null;
   durationMs: number | null;
@@ -420,27 +439,63 @@ export function useOnAir(): OnAir | null {
   const selfDeaf = useVoiceStore((state) => state.selfDeaf);
   const selfStream = useVoiceStore((state) => state.selfStream);
   const speakingUsers = useVoiceStore((state) => state.speakingUsers);
+  const participants = useVoiceStore((state) => state.participants);
+  const selfUserId = useAuthStore((state) => state.user?.id ?? null);
   const building = useBuildingLight(guildId);
-  const channelName = useChannelStore((state) =>
-    scope && channelId
-      ? (getAccountChannelView(scope, state).channelsById[channelId]?.name ?? null)
-      : null,
+  const channel = useChannelStore((state) =>
+    scope && channelId ? (getAccountChannelView(scope, state).channelsById[channelId] ?? null) : null,
   );
+  const isDirectMessage = guildId === 'dm';
+  // A DM's duration has no `RoomLight` to come from, so it uses the same
+  // observation log §7.2 uses for a room: time since *this* client saw the call
+  // lit, never a guess. Without it the readout sat at a frozen 0:00.
+  const nowMs = useLightClock(connected);
+  const litSinceMs =
+    scope && channelId && isDirectMessage
+      ? roomLitHistory.observe(entityScopeKey(scope, channelId), connected, nowMs).litSinceMs
+      : null;
 
   return useMemo(() => {
     if (!connected || !channelId) return null;
     const room = building?.rooms.find((entry) => entry.channelId === channelId) ?? null;
+    const others: OnAirPerson[] = room
+      ? room.occupants
+          .filter((occupant) => occupant.person.userId !== selfUserId)
+          .map((occupant) => ({
+            userId: occupant.person.userId,
+            name: occupant.person.name,
+            speaking: occupant.speaking,
+          }))
+      : [...participants.values()]
+          .filter((state) => state.user_id !== selfUserId)
+          .map((state) => ({
+            userId: state.user_id,
+            name: displayName(state),
+            speaking: speakingUsers.has(state.user_id),
+          }));
+    const dmName = channel?.name
+      ?? (channel?.recipient ? displayName(channel.recipient) : null)
+      ?? (channel?.recipients?.length
+        ? channel.recipients.filter((person) => person.id !== selfUserId).map((person) => displayName(person)).join(', ')
+        : null)
+      // The channel may not be loaded on this surface yet; the call itself
+      // still knows who answered.
+      ?? (others.length ? others.map((person) => person.name).join(', ') : null);
     return {
       room,
-      roomName: room?.name ?? channelName ?? 'the room',
+      roomName: room?.name
+        ?? (isDirectMessage ? (dmName ?? 'this conversation') : (channel?.name ?? 'the room')),
+      isDirectMessage,
+      others,
       buildingName: building?.name ?? null,
-      durationMs: room?.durationMs ?? null,
+      durationMs: room?.durationMs ?? (litSinceMs != null ? Math.max(0, nowMs - litSinceMs) : null),
       micOn: !selfMute,
       deafened: selfDeaf,
       sharing: selfStream,
       speaking: speakingUsers.size > 0,
     };
-  }, [connected, channelId, building, channelName, selfMute, selfDeaf, selfStream, speakingUsers]);
+  }, [connected, channelId, building, channel, isDirectMessage, participants, selfUserId,
+    litSinceMs, nowMs, selfMute, selfDeaf, selfStream, speakingUsers]);
 }
 
 /** Test seam: the account key a hook is scoped to. */

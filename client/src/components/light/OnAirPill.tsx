@@ -24,6 +24,14 @@ export const OnAirPill = React.forwardRef<HTMLButtonElement, OnAirPillProps>(fun
   ref,
 ) {
   const mic = onAir.deafened ? 'deafened' : onAir.micOn ? 'mic on' : 'mic off';
+  // Who else is actually on this call. A 1:1 DM used to say nothing at all, so
+  // the caller could not tell whether the other person had picked up.
+  const shown = onAir.others.slice(0, 3);
+  const company = onAir.others.length === 0
+    ? (onAir.isDirectMessage ? 'nobody has joined yet' : 'you are the only one here')
+    : onAir.others.length === 1
+    ? `with ${onAir.others[0].name}`
+    : `with ${onAir.others.length} others`;
   return (
     <button
       ref={ref}
@@ -53,13 +61,38 @@ export const OnAirPill = React.forwardRef<HTMLButtonElement, OnAirPillProps>(fun
         aria-hidden
       />
       <span className="pc-display min-w-0 truncate font-semibold">{onAir.roomName}</span>
+      {/* The company you are keeping: initials for up to three, a count past
+          that, and an explicit "nobody yet" rather than an empty space. */}
+      {shown.length > 0 ? (
+        <span className="flex shrink-0 items-center -space-x-1.5" aria-hidden>
+          {shown.map((person) => (
+            <span
+              key={person.userId}
+              title={person.name}
+              className={cn(
+                'flex h-5 w-5 items-center justify-center rounded-full bg-bg-mod-strong text-[10px] font-semibold text-text-secondary ring-2 ring-bg-raised',
+                person.speaking && 'text-light-white',
+              )}
+            >
+              {person.name.charAt(0).toUpperCase()}
+            </span>
+          ))}
+          {onAir.others.length > shown.length && (
+            <span className="pl-2.5 text-meta text-text-faint">{`+${onAir.others.length - shown.length}`}</span>
+          )}
+        </span>
+      ) : (
+        <span className="shrink-0 truncate text-meta text-text-faint" aria-hidden>
+          {onAir.isDirectMessage ? 'ringing' : 'alone'}
+        </span>
+      )}
       <span className="pc-mono shrink-0 text-meta text-text-faint">
         {callDuration(onAir.durationMs)}
       </span>
       <span className="sr-only">
-        {`You are in ${onAir.roomName}${onAir.buildingName ? ` in ${onAir.buildingName}` : ''} — ${mic}${
-          onAir.sharing ? ', sharing your screen' : ''
-        }. Return to the room.`}
+        {`You are ${onAir.isDirectMessage ? 'in a call with' : 'in'} ${onAir.roomName}${
+          onAir.buildingName ? ` in ${onAir.buildingName}` : ''
+        } — ${company}, ${mic}${onAir.sharing ? ', sharing your screen' : ''}. Return to the call.`}
       </span>
       <span
         className={cn(

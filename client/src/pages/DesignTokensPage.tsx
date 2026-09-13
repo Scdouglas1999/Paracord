@@ -774,6 +774,8 @@ const DEMO_HERE_NOW = {
 };
 
 const DEMO_ON_AIR = {
+  isDirectMessage: false,
+  others: [{ userId: 'u-ada', name: 'Ada', speaking: false }],
   room: DEMO_LIT_ROOM,
   roomName: 'Shop floor',
   buildingName: 'Kestrel Robotics',
