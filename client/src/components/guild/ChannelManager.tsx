@@ -802,7 +802,7 @@ function CategoryGroupSection({
                 </Button>
               </div>
             ) : (
-              <div className="flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/cat:opacity-100">
+              <div className="flex items-center gap-0.5 sm:opacity-0 sm:transition-opacity sm:focus-within:opacity-100 sm:group-hover/cat:opacity-100">
                 <IconButton
                   label={`Add channel to ${group.name}`}
                   size="md"

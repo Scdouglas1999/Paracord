@@ -503,7 +503,7 @@ export function RolesSection({
                     )}
                     {role.hoist && <Chip size="sm">Hoisted</Chip>}
                     {canManage && (
-                      <div className="flex items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+                      <div className="flex items-center gap-1 sm:opacity-0 sm:transition-opacity sm:focus-within:opacity-100 sm:group-hover:opacity-100">
                         <Button
                           variant="ghost"
                           size="sm"
@@ -726,7 +726,7 @@ export function MembersSection({
                         })}
                     </div>
                   )}
-                  <div className="flex items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+                  <div className="flex items-center gap-1 sm:opacity-0 sm:transition-opacity sm:focus-within:opacity-100 sm:group-hover:opacity-100">
                     {canManage && (
                       <Button
                         variant="ghost"
@@ -1095,7 +1095,7 @@ export function EmojisSection({
                         &lt;{emoji.animated ? 'a' : ''}:{emoji.name}:{emoji.id}&gt;
                       </p>
                       {canManage && (
-                        <div className="mt-2.5 flex items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+                        <div className="mt-2.5 flex items-center gap-1 sm:opacity-0 sm:transition-opacity sm:focus-within:opacity-100 sm:group-hover:opacity-100">
                           {editing ? (
                             <>
                               <Button variant="ghost" size="sm" onClick={() => onSaveEmojiName(emoji.id)}>
@@ -1505,7 +1505,7 @@ export function BotsSection({
                   <Button
                     variant="danger"
                     size="sm"
-                    className="opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
+                    className="sm:opacity-0 sm:transition-opacity sm:focus-visible:opacity-100 sm:group-hover:opacity-100"
                     onClick={() => onRemoveBot(entry.application.id)}
                   >
                     Remove
@@ -1529,7 +1529,7 @@ export function BotsSection({
                   <Button
                     variant="danger"
                     size="sm"
-                    className="opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
+                    className="sm:opacity-0 sm:transition-opacity sm:focus-visible:opacity-100 sm:group-hover:opacity-100"
                     onClick={() => onRemoveNativeBot(entry.id)}
                   >
                     Remove

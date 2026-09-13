@@ -1177,12 +1177,12 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
           {encrypted && encryption === 'setup' && <Link className="ml-2 underline" to={`/setup?${new URLSearchParams({ migrate: '1', server: scope.serverId, user: scope.userId, returnTo: window.location.pathname + window.location.search })}`}>Set up encryption</Link>}
           {encrypted && encryption === 'unlock' && <Link className="ml-2 underline" to={`/unlock?${new URLSearchParams({ returnTo: window.location.pathname + window.location.search })}`}>Unlock encryption</Link>}
           {/* A second device — a fresh browser, a new laptop — signs in and
-              lands here holding no identity at all. Without this it was a dead
-              end: a blocker with nothing but "Check again", and no route to
-              either restoring the enrolled identity or enrolling this device.
-              The setup page handles both: it unlocks a saved identity when
-              there is one, and creates and attaches one when there is not. */}
-          {encrypted && encryption === 'identity_mismatch' && <Link className="ml-2 underline" to={`/setup?${new URLSearchParams({ migrate: '1', server: scope.serverId, user: scope.userId, returnTo: window.location.pathname + window.location.search })}`}>Set up this device</Link>}
+              lands here holding no identity, or a different one. Without this
+              it was the one encryption blocker with no route out: nothing but
+              "Check again". Setup is not the answer either — it refuses when
+              the account already has an identity, and tells the user to restore
+              the recovery phrase — so link straight at the page that does it. */}
+          {encrypted && encryption === 'identity_mismatch' && <Link className="ml-2 underline" to="/recover">Restore your identity</Link>}
           {/* A blocker can be resolved by someone else (a recipient finishing
               encryption setup, a restored permission), so the check is always
               repeatable from here instead of only after a request failure. */}

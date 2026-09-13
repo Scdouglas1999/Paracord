@@ -243,6 +243,21 @@ describe('RolesSection', () => {
     expect(screen.getByRole('button', { name: 'Delete role Moderators' })).toBeTruthy();
   });
 
+  it('keeps the row actions visible where there is no hover', () => {
+    // `opacity-0 ... group-hover:opacity-100` with no breakpoint prefix means a
+    // touch device never reveals Edit or Delete at all: there is no hover to
+    // give. The invites row already guards this with `sm:`; the role, member,
+    // emoji, bot and ban rows did not.
+    renderRoles({ roles: [defaultRole, customRole] });
+    const actions = screen
+      .getByRole('button', { name: 'Delete role Moderators' })
+      .closest('div');
+    expect(actions).not.toBeNull();
+    const className = actions!.className;
+    expect(className).toContain('sm:opacity-0');
+    expect(className.split(/\s+/)).not.toContain('opacity-0');
+  });
+
   it('names the real default role rather than a Discord-ism', () => {
     renderRoles();
     expect(screen.getByText(/Everyone holds Member/)).toBeTruthy();
