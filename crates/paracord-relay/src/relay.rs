@@ -12,7 +12,9 @@ use tokio::task::AbortHandle;
 use tokio::time::MissedTickBehavior;
 use tracing::{debug, error, info, warn};
 
-use paracord_transport::control::{ControlMessage, SessionParticipant, TrackKind};
+use paracord_transport::control::{
+    is_valid_media_public_key, ControlMessage, SessionParticipant, TrackKind,
+};
 use paracord_transport::protocol::{
     MediaHeader, TrackType, VideoFrameMetadata, HEADER_SIZE, MAX_STREAM_FRAME_SIZE,
 };
@@ -863,6 +865,10 @@ struct ActiveSessionInfo {
     room_id: String,
     session_id: String,
     video_capabilities: Vec<VideoCodecCapability>,
+    /// The call key this participant published, republished verbatim in the
+    /// participant roster. The relay never uses it; it only carries it, and it
+    /// only ever carries one that is the right shape.
+    media_public_key: Option<String>,
 }
 
 /// Relay-driven per-viewer, per-track simulcast layer selection state (spec §4.2).
@@ -1922,6 +1928,7 @@ impl RelayForwarder {
                 room_id: requested_room_id,
                 session_id,
                 video_capabilities,
+                media_public_key,
             } => {
                 if requested_room_id != room_id || session_id != handle.session_id {
                     warn!(
@@ -1932,6 +1939,25 @@ impl RelayForwarder {
                     );
                     return;
                 }
+                // The call key is republished to every other participant under
+                // this user's id, so a malformed one is refused here rather
+                // than handed on for a peer to choke on. A join that carries
+                // none is still a join: the peers report the missing key as a
+                // refusal to encrypt, which is louder and more useful than a
+                // dropped session.
+                let media_public_key = match media_public_key {
+                    Some(key) if is_valid_media_public_key(&key) => Some(key),
+                    Some(_) => {
+                        warn!(
+                            user_id,
+                            room_id = %room_id,
+                            "relay: ignoring malformed media call key on session join"
+                        );
+                        None
+                    }
+                    None => None,
+                };
+
                 // Announcing the session and recording it on the participant
                 // are one step: a half-applied join would leave the room
                 // advertising capabilities for a session the relay no longer
@@ -1952,6 +1978,7 @@ impl RelayForwarder {
                                 room_id: room_id.to_string(),
                                 session_id: handle.session_id.clone(),
                                 video_capabilities: video_capabilities.clone(),
+                                media_public_key: media_public_key.clone(),
                             },
                         );
                     }));
@@ -1975,6 +2002,7 @@ impl RelayForwarder {
                                 user_id: *entry.key(),
                                 session_id: active_session.session_id.clone(),
                                 video_capabilities: active_session.video_capabilities.clone(),
+                                media_public_key: active_session.media_public_key.clone(),
                             })
                         } else {
                             None
@@ -1988,8 +2016,12 @@ impl RelayForwarder {
                     &ControlMessage::SessionState { participants },
                 )
                 .await;
-                self.send_initial_track_state(handle).await;
-
+                // Announce the arrival before asking anybody for a key.
+                // `send_initial_track_state` may send a publisher a
+                // `RequestStreamKey` naming this user, and a publisher that has
+                // not yet been told this user exists does not know the call key
+                // to wrap for — it would have to refuse. Order the two so the
+                // question never arrives before the answer is possible.
                 self.broadcast_control_from(
                     handle,
                     Some(user_id),
@@ -1998,10 +2030,19 @@ impl RelayForwarder {
                             user_id,
                             session_id,
                             video_capabilities,
+                            media_public_key,
                         },
                     },
                 )
                 .await;
+
+                // This join replaced this participant's call key, so every
+                // track key stored for it is sealed to a key it no longer has.
+                // Drop them before the initial track state goes out, and the
+                // publishers get asked for fresh ones.
+                self.room_manager
+                    .forget_track_keys_for_recipient(room_id, user_id);
+                self.send_initial_track_state(handle).await;
             }
             ControlMessage::SessionLeave {
                 room_id: requested_room_id,
@@ -3267,6 +3308,7 @@ mod tests {
                 room_id: "1:100".to_string(),
                 session_id: "sess".to_string(),
                 video_capabilities: vec![],
+                media_public_key: None,
             },
         );
         assert!(forwarder.sender_rate_limiter.try_acquire(user_id));
@@ -3730,6 +3772,7 @@ mod tests {
                     room_id: "room-b".to_string(),
                     session_id: "sess".to_string(),
                     video_capabilities: vec![],
+                    media_public_key: None,
                 },
             )
             .await;
@@ -3761,6 +3804,7 @@ mod tests {
                     room_id: room_id.clone(),
                     session_id: "sess-old".to_string(),
                     video_capabilities: vec![],
+                    media_public_key: None,
                 },
             )
             .await;
@@ -4949,6 +4993,7 @@ mod tests {
                     room_id: room_id.clone(),
                     session_id: "call-1".to_string(),
                     video_capabilities: vec![],
+                    media_public_key: None,
                 },
             )
             .await;
@@ -4973,6 +5018,7 @@ mod tests {
                     room_id: room_id.clone(),
                     session_id: "call-2".to_string(),
                     video_capabilities: vec![],
+                    media_public_key: None,
                 },
             )
             .await;
@@ -5094,6 +5140,7 @@ mod tests {
                     room_id: room_id.clone(),
                     session_id: "call-1".to_string(),
                     video_capabilities: vec![],
+                    media_public_key: None,
                 },
             )
             .await;
@@ -5131,6 +5178,7 @@ mod tests {
                 room_id: room_id.clone(),
                 session_id: "call-2".to_string(),
                 video_capabilities: vec![],
+                media_public_key: None,
             },
             ControlMessage::TrackPublish {
                 track: simple_track(1, "stream-forged", "cam"),
@@ -5181,6 +5229,7 @@ mod tests {
                     room_id: room_id.clone(),
                     session_id: "call-2".to_string(),
                     video_capabilities: vec![],
+                    media_public_key: None,
                 },
             )
             .await;
@@ -5224,6 +5273,7 @@ mod tests {
                         room_id: room_id.clone(),
                         session_id: "call-1".to_string(),
                         video_capabilities: vec![],
+                        media_public_key: None,
                     },
                 )
                 .await;
@@ -5252,6 +5302,7 @@ mod tests {
                         room_id: room_id.clone(),
                         session_id: "call-2".to_string(),
                         video_capabilities: vec![],
+                        media_public_key: None,
                     },
                 )
                 .await;

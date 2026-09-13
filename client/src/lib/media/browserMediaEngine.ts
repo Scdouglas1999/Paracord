@@ -47,7 +47,7 @@ import {
 } from './video/videoEncoder';
 import { MediaVideoDecoder } from './video/videoDecoder';
 import { CanvasRenderer } from './video/canvasRenderer';
-import { unwrapDeliveredMediaSenderKey } from './mediaSenderKeyEnvelope';
+import { isMediaCallKey, MediaKeyring } from './mediaKeyring';
 import {
   codecLabelFromHeader,
   deriveTrackSsrc,
@@ -200,11 +200,14 @@ interface SessionParticipantWire {
   userId?: string | number;
   sessionId?: string;
   videoCapabilities?: SessionParticipantCapabilities['videoCapabilities'];
+  mediaPublicKey?: string;
 }
 
 interface SessionParticipantCapabilities {
   userId: string;
   sessionId: string;
+  /** The call key this peer published; see `./mediaKeyring`. */
+  mediaPublicKey?: string;
   videoCapabilities: Array<{
     codec: 'vp9' | 'av1' | 'h264' | string;
     encode: boolean;
@@ -233,6 +236,9 @@ export function readSessionParticipantWire(
   return {
     userId,
     sessionId: String(participant?.sessionId ?? ''),
+    mediaPublicKey: isMediaCallKey(participant?.mediaPublicKey)
+      ? participant.mediaPublicKey
+      : undefined,
     videoCapabilities: Array.isArray(participant?.videoCapabilities)
       ? participant.videoCapabilities
       : [],
@@ -340,6 +346,8 @@ async function detectBrowserStreamCapabilities(): Promise<MediaStreamCapabilitie
 export class BrowserMediaEngine implements MediaEngine {
   private transport: WebTransportManager | null = null;
   private senderKeys = new SenderKeyManager();
+  /** Call keys for this media session. Minted on connect, destroyed on leave. */
+  private keyring = MediaKeyring.create();
 
   // Audio capture
   private audioContext: AudioContext | null = null;
@@ -528,6 +536,8 @@ export class BrowserMediaEngine implements MediaEngine {
       type: 'session_join',
       room_id: this.localRoomId ?? '',
       session_id: this.membershipSessionId!,
+      // The key every other participant wraps its frame keys to for this call.
+      media_public_key: this.keyring.publicKey,
       video_capabilities: (await this.getStreamCapabilities()).video.map((capability) => ({
         codec: capability.codec,
         encode: capability.encode,
@@ -570,6 +580,9 @@ export class BrowserMediaEngine implements MediaEngine {
     this.pendingTrackKeys.clear();
     this.sessionParticipantIds.clear();
     this.sessionParticipantCapabilities.clear();
+    // The call keys die with the call: they protect this conversation and
+    // nothing else, so there is nothing to keep.
+    this.keyring.dispose();
     this.sourceVolumes.clear();
     for (const sub of this.videoSubscriptions.values()) { sub.stop?.(); }
     this.videoSubscriptions.clear();
@@ -2086,6 +2099,7 @@ export class BrowserMediaEngine implements MediaEngine {
           const userId = participant.userId;
           desired.add(userId);
           desiredCapabilities.set(userId, participant);
+          this.keyring.setPeerKey(userId, participant.mediaPublicKey);
           if (!this.sessionParticipantIds.has(userId)) {
             this.ensureRemoteParticipantState(userId);
             this.participantJoinCb?.(userId);
@@ -2121,6 +2135,7 @@ export class BrowserMediaEngine implements MediaEngine {
           break;
         }
         const userId = participant.userId;
+        this.keyring.setPeerKey(userId, participant.mediaPublicKey);
         const receipt = participant.sessionId;
         if (this.sessionParticipantCapabilities.get(userId)?.sessionId === receipt && this.sessionParticipantIds.has(userId)) break;
         this.sessionParticipantIds.add(userId);
@@ -2358,6 +2373,13 @@ export class BrowserMediaEngine implements MediaEngine {
         if (!track || String(track.publisherUserId) !== String(this.localUserId ?? '')) {
           break;
         }
+        // A request can name somebody this engine has not been introduced to
+        // yet, whose call key it therefore does not hold. Not an error and not
+        // a reason to send anything unencrypted: the roster update that
+        // introduces them announces the key to them anyway.
+        if (!this.keyring.hasPeer(String(recipientUserId))) {
+          break;
+        }
         void this.announceTrackSenderKey(track, [String(recipientUserId)]).catch(error => this.failKeyExchange(error));
         break;
       }
@@ -2370,11 +2392,12 @@ export class BrowserMediaEngine implements MediaEngine {
         if (!streamId || !trackId || !senderUserId || epoch === undefined || !Array.isArray(ciphertext)) {
           break;
         }
-        void unwrapDeliveredMediaSenderKey(
-          this.trackKeyScope(streamId, trackId),
-          senderUserId,
-          Uint8Array.from(ciphertext), this.account,
-        )
+        void this.keyring
+          .unwrapSenderKey(
+            this.trackKeyScope(streamId, trackId),
+            senderUserId,
+            Uint8Array.from(ciphertext),
+          )
           .then((decrypted) => {
         if (this.disposed) return;
             this.rememberDeliveredTrackKey(
@@ -2588,6 +2611,7 @@ export class BrowserMediaEngine implements MediaEngine {
       this.orphanAudioPackets.delete(ssrc);
     }
     this.removePublishedTracksForUser(userId);
+    this.keyring.removePeer(userId);
 
     const sub = this.videoSubscriptions.get(userId);
     if (sub) {
@@ -2830,6 +2854,8 @@ export class BrowserMediaEngine implements MediaEngine {
       type: 'session_join',
       room_id: this.localRoomId ?? '',
       session_id: this.membershipSessionId!,
+      // The key every other participant wraps its frame keys to for this call.
+      media_public_key: this.keyring.publicKey,
       video_capabilities: (await this.getStreamCapabilities()).video.map((capability) => ({
         codec: capability.codec,
         encode: capability.encode,
@@ -2999,7 +3025,14 @@ export class BrowserMediaEngine implements MediaEngine {
     epoch: number,
     recipientUserIds: string[],
   ): Promise<Array<[string, number[]]>> {
-    const wrapped = await wrapSenderKeyForRecipients(scope, rawKey, epoch, recipientUserIds, this.account);
+    const wrapped = await wrapSenderKeyForRecipients(
+      scope,
+      rawKey,
+      epoch,
+      recipientUserIds,
+      this.keyring,
+      this.account,
+    );
     this.assertOpen();
     // The recipient is a snowflake, so it stays a string all the way to the
     // wire. `Number(...)` here rounded every id past 2^53 to a neighbouring
@@ -3114,7 +3147,7 @@ export class BrowserMediaEngine implements MediaEngine {
     epoch: number,
     payload: Uint8Array,
   ): Promise<void> {
-    const decrypted = await unwrapDeliveredMediaSenderKey(this.audioKeyScope(), senderUserId, payload, this.account);
+    const decrypted = await this.keyring.unwrapSenderKey(this.audioKeyScope(), senderUserId, payload);
     this.assertOpen();
     const rawKey = decrypted.rawKey;
     const resolvedEpoch = decrypted.epoch || epoch;

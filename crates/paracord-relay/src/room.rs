@@ -418,6 +418,19 @@ impl MediaRoomManager {
         Ok(())
     }
 
+    /// Forget every stored track key in `room_id` addressed to this recipient.
+    ///
+    /// Called when a participant (re)joins a media session, because the call
+    /// key those envelopes were sealed to has just been replaced.
+    pub fn forget_track_keys_for_recipient(&self, room_id: &str, recipient_user_id: i64) {
+        let Some(mut room) = self.rooms.get_mut(room_id) else {
+            return;
+        };
+        for participant in room.participants.values_mut() {
+            participant.forget_track_keys_for_recipient(recipient_user_id);
+        }
+    }
+
     pub fn latest_track_key_for_recipient(
         &self,
         room_id: &str,

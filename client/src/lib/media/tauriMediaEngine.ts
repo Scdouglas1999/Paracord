@@ -14,7 +14,7 @@ import { MediaVideoDecoder, isWebCodecsDecodeSupported } from './video/videoDeco
 import { CanvasRenderer } from './video/canvasRenderer';
 import { NativeVideoTile } from './video/nativeVideoTile';
 import { logVoiceDiagnostic } from '../desktopDiagnostics';
-import { unwrapDeliveredMediaSenderKey } from './mediaSenderKeyEnvelope';
+import { MediaKeyring } from './mediaKeyring';
 import {
   parsePulledVideoFrameBinary,
   type ParsedPulledVideoFrame,
@@ -77,6 +77,8 @@ type ExportedSenderKey = {
 type SessionParticipantCapabilities = {
   userId: string;
   sessionId: string;
+  /** The call key this peer published; see `./mediaKeyring`. */
+  mediaPublicKey?: string;
   videoCapabilities: Array<{
     codec: 'vp9' | 'av1' | 'h264' | string;
     encode: boolean;
@@ -502,6 +504,8 @@ export class TauriMediaEngine implements MediaEngine {
   private localUserId: string | null = null;
   private localRoomId: string | null = null;
   private sessionParticipantCapabilities = new Map<string, SessionParticipantCapabilities>();
+  /** Call keys for this media session. Minted on connect, destroyed on leave. */
+  private keyring = MediaKeyring.create();
 
   // Screen share state for the native desktop capture path
   private screenShareEndedCb: (() => void) | null = null;
@@ -600,6 +604,9 @@ export class TauriMediaEngine implements MediaEngine {
         certHash,
         roomId: '',
         advertisedCapabilities,
+        // The key every other participant wraps its frame keys to for this
+        // call. The native session publishes it in its `SessionJoin`.
+        mediaPublicKey: this.keyring.publicKey,
       });
       this.assertOpen();
       await this.initializePublishedTrackListeners();
@@ -618,6 +625,7 @@ export class TauriMediaEngine implements MediaEngine {
       this.sessionParticipantCapabilities.clear();
       for (const participant of participants) {
         this.sessionParticipantCapabilities.set(participant.userId, participant);
+        this.keyring.setPeerKey(participant.userId, participant.mediaPublicKey);
       }
       await this.announceWrappedLocalSenderKeys();
     } catch (err) {
@@ -645,6 +653,9 @@ export class TauriMediaEngine implements MediaEngine {
     this.screenEventUnlisten = this.cameraEventUnlisten = this.transportLostUnlisten = null;
     this.publishedTracks.clear();
     this.sessionParticipantCapabilities.clear();
+    // The call keys die with the call: they protect this conversation and
+    // nothing else, so there is nothing to keep.
+    this.keyring.dispose();
     this.publishedTrackListenersReady = false;
     this.localUserId = this.localRoomId = null;
     this.disposePromise = this.startScheduled
@@ -1364,11 +1375,12 @@ export class TauriMediaEngine implements MediaEngine {
       if (!payload?.senderUserId || payload.epoch == null || !Array.isArray(payload.ciphertext)) {
         return;
       }
-      void unwrapDeliveredMediaSenderKey(
-        this.audioKeyScope(),
-        payload.senderUserId,
-        Uint8Array.from(payload.ciphertext), this.account,
-      )
+      void this.keyring
+        .unwrapSenderKey(
+          this.audioKeyScope(),
+          payload.senderUserId,
+          Uint8Array.from(payload.ciphertext),
+        )
         .then((decrypted) =>
           this.invokeOwned('media_apply_audio_sender_key', {
             senderUserId: payload.senderUserId,
@@ -1396,11 +1408,12 @@ export class TauriMediaEngine implements MediaEngine {
       ) {
         return;
       }
-      void unwrapDeliveredMediaSenderKey(
-        this.trackKeyScope(payload.streamId, payload.trackId),
-        payload.senderUserId,
-        Uint8Array.from(payload.ciphertext), this.account,
-      )
+      void this.keyring
+        .unwrapSenderKey(
+          this.trackKeyScope(payload.streamId, payload.trackId),
+          payload.senderUserId,
+          Uint8Array.from(payload.ciphertext),
+        )
         .then((decrypted) =>
           this.invokeOwned('media_apply_track_sender_key', {
             streamId: payload.streamId,
@@ -1424,12 +1437,14 @@ export class TauriMediaEngine implements MediaEngine {
         return;
       }
       this.sessionParticipantCapabilities.set(payload.userId, payload);
+      this.keyring.setPeerKey(payload.userId, payload.mediaPublicKey);
     });
     const participantLeaveUnlisten = await this.listenOwned('media_participant_leave', (event) => {
       const userId = this.matchParticipantDeparture(event.payload);
       if (!userId) return;
       if (userId) {
         this.sessionParticipantCapabilities.delete(userId);
+        this.keyring.removePeer(userId);
       }
       void this.announceWrappedLocalSenderKeys().catch(error => this.failKeyExchange(error));
     });
@@ -2158,7 +2173,9 @@ export class TauriMediaEngine implements MediaEngine {
       scope,
       Uint8Array.from(senderKey.rawKey),
       senderKey.epoch,
-      recipientUserIds, this.account,
+      recipientUserIds,
+      this.keyring,
+      this.account,
     );
     return wrapped.map((entry) => ({
       recipientUserId: entry.recipientUserId,

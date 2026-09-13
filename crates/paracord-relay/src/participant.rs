@@ -154,6 +154,18 @@ impl MediaParticipant {
             });
     }
 
+    /// Forget every stored key addressed to `recipient_user_id`.
+    ///
+    /// A wrapped track key is sealed to the call key the recipient held when it
+    /// was announced. When that participant rejoins it mints a new one, and
+    /// every stored envelope becomes an envelope nobody can open — replaying it
+    /// would hand the rejoiner a key exchange it can only fail. Dropping them
+    /// makes the relay ask the publisher for a fresh one instead.
+    pub fn forget_track_keys_for_recipient(&mut self, recipient_user_id: i64) {
+        self.published_track_keys
+            .retain(|(_, _, _, stored_recipient), _| *stored_recipient != recipient_user_id);
+    }
+
     pub fn store_track_key(
         &mut self,
         stream_id: &StreamId,

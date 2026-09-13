@@ -5,7 +5,7 @@
 import type { OperationContext } from '../operationContext';
 import type { PublishedLayerDescriptor, PublishedTrackDescriptor } from './mediaEngine';
 import { decodeVideoFrameMetadata, type VideoFrameMetadata } from './transport/protocol';
-import { wrapMediaSenderKeyForRecipient } from './mediaSenderKeyEnvelope';
+import type { MediaKeyring } from './mediaKeyring';
 
 /** In-progress reassembly of a fragmented video frame, keyed per frame. */
 export interface VideoReassemblyState {
@@ -205,30 +205,30 @@ export function parseRoomIdFromToken(token: string): string | null {
 }
 
 /**
- * Wrap a raw sender key for each recipient, dropping recipients whose wrap fails
- * (e.g. missing identity key). Callers adapt the returned entries to their own
- * on-wire payload shape.
+ * Wrap a raw sender key once per recipient, using the call keys the media
+ * control plane published (see `./mediaKeyring`).
+ *
+ * A recipient whose key is missing or unusable is not silently skipped: media
+ * has exactly one path and it is encrypted, so a peer nobody can wrap for is an
+ * error the caller surfaces and the call ends. Callers adapt the returned
+ * entries to their own on-wire payload shape.
  */
 export async function wrapSenderKeyForRecipients(
   scope: string,
   rawKey: Uint8Array,
   epoch: number,
   recipientUserIds: string[],
+  keyring: MediaKeyring,
   account?: OperationContext,
 ): Promise<Array<{ recipientUserId: string; wrapped: Uint8Array }>> {
   if (!account) throw new Error('An owned account context is required for encrypted media.');
   account.assertCurrent();
   const wrappedEntries = await Promise.all(
-    recipientUserIds.map(async (recipientUserId) => {
-      const wrapped = await wrapMediaSenderKeyForRecipient(scope, rawKey, epoch, recipientUserId, account);
-      if (!wrapped) {
-        return null;
-      }
-      return { recipientUserId, wrapped };
-    }),
+    recipientUserIds.map(async (recipientUserId) => ({
+      recipientUserId,
+      wrapped: await keyring.wrapSenderKey(scope, rawKey, epoch, recipientUserId),
+    })),
   );
   account.assertCurrent();
-  return wrappedEntries.filter(
-    (entry): entry is { recipientUserId: string; wrapped: Uint8Array } => entry != null,
-  );
+  return wrappedEntries;
 }

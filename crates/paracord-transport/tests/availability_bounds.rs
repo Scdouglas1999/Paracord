@@ -96,6 +96,7 @@ fn oversized_control_identifiers_are_rejected() {
                 user_id: 1,
                 session_id: huge.clone(),
                 video_capabilities: Vec::new(),
+                media_public_key: None,
             }],
         },
         ControlMessage::SessionParticipantJoin {
@@ -103,6 +104,7 @@ fn oversized_control_identifiers_are_rejected() {
                 user_id: 1,
                 session_id: huge.clone(),
                 video_capabilities: Vec::new(),
+                media_public_key: None,
             },
         },
     ];

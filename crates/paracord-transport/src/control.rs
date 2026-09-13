@@ -46,6 +46,30 @@ pub struct SessionParticipant {
     pub session_id: String,
     #[serde(default)]
     pub video_capabilities: Vec<VideoCodecCapability>,
+    /// X25519 public key this participant minted for this call, hex-encoded.
+    ///
+    /// Media is end-to-end encrypted: every sender wraps its frame key once per
+    /// recipient, and this is the key it wraps to. It is public, it lives only
+    /// as long as the call, and the relay never holds its private half — it
+    /// copies the value from the owner's `SessionJoin` into the roster it
+    /// already sends. Absent only from a peer that published none, which its
+    /// callers report as a refusal rather than falling back to plaintext.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_public_key: Option<String>,
+}
+
+/// Length of a hex-encoded X25519 media call key.
+pub const MEDIA_PUBLIC_KEY_HEX_LEN: usize = 64;
+
+/// A media call key is 32 bytes of X25519 public key, lowercase hex.
+///
+/// The relay does not use the key, but it does republish it under a user id, so
+/// it refuses anything that is not the exact shape a peer can consume.
+pub fn is_valid_media_public_key(value: &str) -> bool {
+    value.len() == MEDIA_PUBLIC_KEY_HEX_LEN
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// Control messages exchanged over QUIC bidirectional streams.
@@ -75,6 +99,10 @@ pub enum ControlMessage {
         session_id: String,
         #[serde(default)]
         video_capabilities: Vec<VideoCodecCapability>,
+        /// The hex X25519 public key this peer will accept wrapped frame keys
+        /// on, for this call only. See [`SessionParticipant::media_public_key`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        media_public_key: Option<String>,
     },
 
     /// Client leaves a specific stream-capable media session.
@@ -646,6 +674,7 @@ mod tests {
                 user_id: BIG,
                 session_id: "receipt".into(),
                 video_capabilities: Vec::new(),
+                media_public_key: None,
             }],
         };
         let json = serde_json::to_string(&state).unwrap();
@@ -708,6 +737,7 @@ mod tests {
                     user_id: 357_608_638_640_033_792,
                     session_id: "r".into(),
                     video_capabilities: Vec::new(),
+                    media_public_key: None,
                 }],
             }
         );
@@ -763,6 +793,7 @@ mod tests {
             room_id: "1:2".to_string(),
             session_id: "browser-42".to_string(),
             video_capabilities: vec![],
+            media_public_key: None,
         };
         let encoded = msg.encode().unwrap();
         let (decoded, _) = ControlMessage::decode(&encoded).unwrap().unwrap();
@@ -777,11 +808,13 @@ mod tests {
                     user_id: 42,
                     session_id: "native-42".to_string(),
                     video_capabilities: vec![],
+                    media_public_key: None,
                 },
                 SessionParticipant {
                     user_id: 99,
                     session_id: "browser-99".to_string(),
                     video_capabilities: vec![],
+                    media_public_key: None,
                 },
             ],
         };
@@ -797,6 +830,7 @@ mod tests {
                 user_id: 77,
                 session_id: "native-77".to_string(),
                 video_capabilities: vec![],
+                media_public_key: None,
             },
         };
         let encoded = msg.encode().unwrap();
@@ -816,6 +850,7 @@ mod tests {
                 encode_hardware: true,
                 decode_hardware: true,
             }],
+            media_public_key: None,
         };
         let encoded = msg.encode().unwrap();
         let (decoded, _) = ControlMessage::decode(&encoded).unwrap().unwrap();
@@ -835,6 +870,7 @@ mod tests {
                     encode_hardware: false,
                     decode_hardware: true,
                 }],
+                media_public_key: None,
             }],
         };
         let encoded = msg.encode().unwrap();

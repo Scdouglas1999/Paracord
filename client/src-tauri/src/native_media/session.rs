@@ -610,4 +610,6 @@ struct MediaTokenClaims {
 pub struct RemoteSessionParticipant {
     pub session_id: String,
     pub video_capabilities: Vec<VideoCodecCapability>,
+    /// The hex X25519 call key this peer published for this call.
+    pub media_public_key: Option<String>,
 }

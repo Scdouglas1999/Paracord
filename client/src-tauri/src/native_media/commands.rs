@@ -65,6 +65,9 @@ pub struct SessionParticipantCapabilities {
     pub user_id: String,
     pub session_id: String,
     pub video_capabilities: Vec<paracord_transport::stream::VideoCodecCapability>,
+    /// The call key this peer published, carried straight through to the
+    /// renderer, which owns the wrapping.
+    pub media_public_key: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -107,6 +110,11 @@ pub struct StreamSubscriptionRequest {
 
 // ── Voice session lifecycle ──────────────────────────────────────────────────
 
+/// Start a native call.
+///
+/// `media_public_key` is the hex X25519 call key the renderer minted for this
+/// call; every other participant wraps its frame keys to it. See
+/// `client/src/lib/media/mediaKeyring.ts`.
 #[tauri::command]
 pub async fn start_voice_session(
     owner_id: String,
@@ -115,6 +123,7 @@ pub async fn start_voice_session(
     cert_hash: String,
     room_id: String,
     advertised_capabilities: Option<super::capabilities::MediaStreamCapabilities>,
+    media_public_key: Option<String>,
     state: State<'_, MediaState>,
     app: tauri::AppHandle,
 ) -> Result<VoiceSessionInfo, String> {
@@ -133,6 +142,13 @@ pub async fn start_voice_session(
     if owner_id.is_empty() || owner_id.len() > 128 {
         return Err("invalid native call owner".into());
     }
+    // Media is end-to-end encrypted on exactly one path, so a call without a
+    // key to encrypt to is refused here rather than started and then found to
+    // be silent.
+    let media_public_key = match media_public_key {
+        Some(key) if paracord_transport::control::is_valid_media_public_key(&key) => key,
+        _ => return Err("a native call needs a media call key".into()),
+    };
     state.calls.begin(&owner_id)?;
     let _transition = state.calls.transition.lock().await;
     let result = async {
@@ -181,6 +197,7 @@ pub async fn start_voice_session(
                     .iter()
                     .map(|capability| capability.to_transport())
                     .collect(),
+                media_public_key: Some(media_public_key.clone()),
             })
             .await?;
 
@@ -885,6 +902,7 @@ pub async fn media_get_stream_diagnostics(
                 user_id: user_id.to_string(),
                 session_id: participant.session_id.clone(),
                 video_capabilities: participant.video_capabilities.clone(),
+                media_public_key: participant.media_public_key.clone(),
             })
             .collect::<Vec<_>>();
         return Ok(StreamDiagnostics {
@@ -978,6 +996,7 @@ pub async fn media_list_session_participant_capabilities(
             user_id: user_id.to_string(),
             session_id: participant.session_id.clone(),
             video_capabilities: participant.video_capabilities.clone(),
+            media_public_key: participant.media_public_key.clone(),
         })
         .collect();
     Ok(participants)

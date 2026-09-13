@@ -286,6 +286,7 @@ fn control_plane_rejects_over_long_identifiers() {
             room_id: huge.clone(),
             session_id: "s".to_string(),
             video_capabilities: Vec::new(),
+            media_public_key: None,
         },
     ] {
         assert!(

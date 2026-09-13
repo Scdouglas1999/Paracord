@@ -128,6 +128,7 @@ pub fn emit_participant_join_details(app: &super::CallEventSink, participant: &S
             "userId": participant.user_id.to_string(),
             "sessionId": participant.session_id,
             "videoCapabilities": participant.video_capabilities,
+            "mediaPublicKey": participant.media_public_key,
         }),
     );
 }
@@ -445,12 +446,14 @@ async fn handle_control_message(
                 let inserted = known.get(&participant.user_id).is_none_or(|existing| {
                     existing.session_id != participant.session_id
                         || existing.video_capabilities != participant.video_capabilities
+                        || existing.media_public_key != participant.media_public_key
                 });
                 known.insert(
                     participant.user_id,
                     super::session::RemoteSessionParticipant {
                         session_id: participant.session_id.clone(),
                         video_capabilities: participant.video_capabilities.clone(),
+                        media_public_key: participant.media_public_key.clone(),
                     },
                 );
                 if inserted {
@@ -724,23 +727,13 @@ async fn handle_control_message(
             epoch,
             ciphertext,
         } => {
-            if let Ok(key) = track_key_from_ciphertext(&ciphertext) {
-                {
-                    let mut registry = stream_registry.lock().await;
-                    registry.store_delivered_track_key(&stream_id, &track_id, epoch, key);
-                }
-                apply_delivered_track_key(stream_registry, frame_decryptor, &stream_id, &track_id)
-                    .await;
-            } else {
-                tracing::debug!(
-                    stream_id = stream_id.0,
-                    track_id = track_id.0,
-                    epoch,
-                    key_len = ciphertext.len(),
-                    "ignoring malformed stream key delivery"
-                );
-            }
-
+            // A delivered key is a sealed envelope addressed to this call's
+            // key, and only the renderer can open it. This used to accept a
+            // 16-byte ciphertext verbatim as the sender key — no envelope, no
+            // key agreement, no check of who sent it — which let anything on
+            // the control plane install a key of its choosing against a peer's
+            // SSRC and speak in that peer's name. Nothing legitimate ever took
+            // that path, and nothing takes it now.
             let _ = app.emit(
                 "media_stream_key_deliver",
                 serde_json::json!({
@@ -757,14 +750,8 @@ async fn handle_control_message(
             epoch,
             ciphertext,
         } => {
-            if let Ok(key) = track_key_from_ciphertext(&ciphertext) {
-                let sender_audio_ssrc =
-                    super::session::NativeMediaSession::derive_track_ssrc(sender_user_id, "audio");
-                if let Ok(mut decryptor) = frame_decryptor.lock() {
-                    decryptor.set_peer_key(sender_audio_ssrc, epoch, &key);
-                }
-            }
-
+            // Opened by the renderer, which holds this call's key; see the
+            // note on `StreamKeyDeliver` above.
             let _ = app.emit(
                 "media_key_deliver",
                 serde_json::json!({
@@ -862,6 +849,7 @@ async fn apply_session_state(
                 super::session::RemoteSessionParticipant {
                     session_id: participant.session_id.clone(),
                     video_capabilities: participant.video_capabilities.clone(),
+                    media_public_key: participant.media_public_key.clone(),
                 },
             )
         })
@@ -875,6 +863,7 @@ async fn apply_session_state(
                 .map(|existing| {
                     existing.session_id != participant.session_id
                         || existing.video_capabilities != participant.video_capabilities
+                        || existing.media_public_key != participant.media_public_key
                 })
                 .unwrap_or(true)
         });
@@ -888,6 +877,7 @@ async fn apply_session_state(
             .map(|existing| {
                 existing.session_id != participant.session_id
                     || existing.video_capabilities != participant.video_capabilities
+                    || existing.media_public_key != participant.media_public_key
             })
             .unwrap_or(true);
         if should_emit_join {
@@ -1125,15 +1115,6 @@ async fn rotate_track_sender_keys(
     }
 
     Ok(())
-}
-
-fn track_key_from_ciphertext(ciphertext: &[u8]) -> Result<[u8; KEY_SIZE], ()> {
-    if ciphertext.len() != KEY_SIZE {
-        return Err(());
-    }
-    let mut key = [0u8; KEY_SIZE];
-    key.copy_from_slice(ciphertext);
-    Ok(key)
 }
 
 async fn apply_delivered_track_key(
