@@ -101,19 +101,24 @@ describe('DmPickerModal', () => {
     expect(screen.getByText('No friends found')).toBeInTheDocument();
   });
 
-  it('makes group mode explicit and shows selection progress', async () => {
+  it('says why a group cannot be created instead of creating a dead one', async () => {
     const user = userEvent.setup();
     mockRelationshipState.relationships = [friend('u1', 'Ada'), friend('u2', 'Grace')];
     renderPicker();
 
     await user.click(screen.getByRole('tab', { name: 'Group' }));
     expect(screen.getByRole('tab', { name: 'Group' })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByRole('button', { name: 'Create group conversation' })).toBeDisabled();
+    expect(screen.getByText('Group conversations aren’t ready yet')).toBeInTheDocument();
+    expect(screen.getByText(/not encrypted yet/)).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: /Ada/i }));
-    expect(screen.getByText('1 friend selected')).toBeInTheDocument();
-    expect(screen.getByText('2 total')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Create group conversation' })).toBeEnabled();
+    // Nothing here can create a conversation the composer would refuse.
+    expect(screen.queryByRole('button', { name: 'Create group conversation' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Ada/i })).toBeNull();
+    expect(screen.queryByRole('searchbox', { name: 'Search friends' })).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Start a direct message instead' }));
+    expect(screen.getByRole('tab', { name: 'Direct' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('button', { name: /Ada/i })).toBeInTheDocument();
   });
 
   it('creates a DM on selection, updates the store, fires onCreated and closes', async () => {

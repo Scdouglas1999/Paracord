@@ -25,6 +25,7 @@ import { extractApiError } from '../../api/client';
 import { MessageType, Permissions, hasPermission, type Channel, type ChannelOverwrite, type Member, type Message, type Role } from '../../types';
 import { guildApi } from '../../api/guilds';
 import { UserProfilePopup } from '../user/UserProfile';
+import { GROUP_DM_LIMITATION, isUnusableGroupDm } from '../../lib/messages/messagingReadiness';
 import { EmojiPicker } from '../ui/EmojiPicker';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
 import { usePermissions } from '../../hooks/usePermissions';
@@ -761,6 +762,9 @@ function OwnedMessageList({
   const canAddReactions =
     !activeGuildId || isAdmin || hasPermission(permissions, Permissions.ADD_REACTIONS);
   const activeChannelType = activeChannel?.channel_type ?? activeChannel?.type;
+  // A group DM refuses every message it is offered (docs/known-limitations.md),
+  // so its empty state says so instead of inviting the one action that fails.
+  const emptyGroupDm = isUnusableGroupDm(activeChannelType);
   const canCreateThreads =
     Boolean(activeGuildId) &&
     (activeChannelType === 0 || activeChannelType === 5) &&
@@ -3036,15 +3040,20 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
             <span className="pc-window h-2.5 w-2.5" aria-hidden />
             <div>
               <h3 className="pc-display text-heading text-text-primary">
-                {activeChannel?.name ? `${activeChannel.name} is dark` : 'Nobody has said anything here yet'}
+                {emptyGroupDm
+                  ? 'Nothing can be said here yet'
+                  : activeChannel?.name ? `${activeChannel.name} is dark` : 'Nobody has said anything here yet'}
               </h3>
               <p className="mt-1 max-w-md text-body text-text-body">
-                {activeChannel?.name
+                {emptyGroupDm
+                  ? GROUP_DM_LIMITATION
+                  : activeChannel?.name
                   ? `Nobody has posted in ${activeChannel.name} yet. Say something and the room lights up.`
                   : 'Say something and the room lights up.'}
               </p>
             </div>
-            <Button
+            {/* Never offer the one action this conversation is going to refuse. */}
+            {!emptyGroupDm && <Button
               variant="primary"
               className="mt-1 gap-2"
               onClick={() => {
@@ -3054,7 +3063,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
             >
               <Send size={16} />
               Send the first message
-            </Button>
+            </Button>}
           </div>
         ) : (
           // §7.4: a room reads from the bottom. `mt-auto` only has room to act
