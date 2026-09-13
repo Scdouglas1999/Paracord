@@ -23,6 +23,12 @@ import {
 import { Select, Textarea } from '../../components/ui/Input';
 import { confirm } from '../../stores/confirmStore';
 
+/** A federation endpoint refusing because the deployment has federation off. */
+function isFederationDisabled(err: unknown): boolean {
+  const status = (err as { response?: { status?: number } })?.response?.status;
+  return status === 400 && /federation is disabled/i.test(extractApiError(err));
+}
+
 function DetailRow({
   label,
   value,
@@ -76,6 +82,12 @@ export function FederationPanel() {
   const [deletingSubId, setDeletingSubId] = useState<string | null>(null);
   const [importText, setImportText] = useState('');
   const [importing, setImporting] = useState(false);
+  // null until the deployment has answered. Federation is off by default, and
+  // every federation endpoint answers 400 "federation is disabled" — which this
+  // panel used to surface as a red toast reading "Failed to load federated
+  // servers: bad request: federation is disabled" every time an admin opened
+  // the tab, above a peer form that could not possibly work.
+  const [federationEnabled, setFederationEnabled] = useState<boolean | null>(null);
   const [applyError, setApplyError] = useState<string | null>(null);
   const [subError, setSubError] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
@@ -91,7 +103,11 @@ export function FederationPanel() {
         setSelectedServer(match);
       }
     } catch (err) {
-      toast.error(`Failed to load federated servers: ${extractApiError(err)}`);
+      if (isFederationDisabled(err)) {
+        setFederationEnabled(false);
+      } else {
+        toast.error(`Failed to load federated servers: ${extractApiError(err)}`);
+      }
       setServers([]);
       setSelectedServer(null);
     } finally {
@@ -112,7 +128,11 @@ export function FederationPanel() {
         Array.isArray(subRes.data.subscriptions) ? subRes.data.subscriptions : [],
       );
     } catch (err) {
-      toast.error(`Failed to load federation moderation: ${extractApiError(err)}`);
+      if (isFederationDisabled(err)) {
+        setFederationEnabled(false);
+      } else {
+        toast.error(`Failed to load federation moderation: ${extractApiError(err)}`);
+      }
       setTrustStates([]);
       setSubscriptions([]);
     } finally {
@@ -122,8 +142,29 @@ export function FederationPanel() {
   };
 
   useEffect(() => {
-    fetchServers();
-    fetchModeration();
+    let cancelled = false;
+    // Ask the deployment whether federation is on before knocking on endpoints
+    // that answer 400 when it is off. If health itself is unreachable, fall
+    // through and let the calls decide, so a health outage never hides the
+    // panel from a server that is genuinely federating.
+    adminApi
+      .getHealth()
+      .then(({ data }) => (cancelled ? null : data.network.federation_enabled))
+      .catch(() => (cancelled ? null : true))
+      .then((enabled) => {
+        if (cancelled || enabled === null) return;
+        setFederationEnabled(enabled);
+        if (!enabled) {
+          setLoading(false);
+          setModLoading(false);
+          return;
+        }
+        fetchServers();
+        fetchModeration();
+      });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -387,6 +428,24 @@ export function FederationPanel() {
     }
   };
 
+
+  if (federationEnabled === false) {
+    return (
+      <div className="flex flex-col gap-8">
+        <section>
+          <SettingsSectionHeader
+            title="Federation"
+            description="Manage trusted peer servers and inspect discovered federation metadata."
+          />
+          <EmptyState
+            icon={<Globe2 size={18} />}
+            title="Federation is turned off on this deployment"
+            description="Nothing is exchanged with other servers, and no peers can be added. Set enabled = true under [federation] in this server's configuration file, give it a domain and a signing key, then restart to peer with other servers."
+          />
+        </section>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-8">
