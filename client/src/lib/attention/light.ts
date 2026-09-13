@@ -10,3 +10,5 @@ export * from './personLight';
 export * from './roomLight';
 export * from './buildingLight';
 export * from './litHistory';
+export * from './lightsOn';
+export * from './arrivals';

@@ -12,6 +12,11 @@
  *   animate ....... bloom · dim · flicker · settleIn · stagger · press ·
  *                   flash · liftOut · relax
  *   sharedElement . "the thing you click becomes the thing you look at"
+ *   marks ......... what a surface tells the engine it is holding
+ *   lightsOn ...... "lights on" — the building waking up
+ *   arrive ........ "someone arrives / leaves" — one path, one burst
+ *   walk .......... "walk into a room / back to the pill"
+ *   flip .......... the things an arrival pushed out of the way
  *   flipCounter ... `<RollingNumber>` — "numbers re-roll"
  *   bus ........... gestures that cross a pane boundary
  *
@@ -21,20 +26,56 @@
  */
 
 export {
+  arriveIn,
   bloom,
   dim,
   fadeIn,
   flash,
   flicker,
+  ghostOut,
   liftOut,
   press,
+  recede,
   relax,
   scaleShadow,
   settleIn,
+  slideOut,
   stagger,
   type SettleOptions,
   type StaggerOptions,
 } from './animate';
+export {
+  BURST_WINDOW_MS,
+  RIM_AFTER_ROOM_MS,
+  captureArrival,
+  facesFor,
+  playArrivals,
+  playDepartures,
+  type RoomPersonEvent,
+} from './arrive';
+export { captureFlip, type FlipCapture } from './flip';
+export {
+  LIGHTS_ON_BUDGET_MS,
+  lightsOnStep,
+  playLightsOn,
+  type LightsOnOptions,
+  type LightsOnSequence,
+} from './lightsOn';
+export {
+  EVENT_MARK,
+  LAMP_MARK,
+  LIT_MARK,
+  PERSON_MARK,
+  PLATE_MARK,
+  RECEDE_MARK,
+  RIM_MARK,
+  ROOM_MARK,
+  STRIP_MARK,
+  WINDOW_MARK,
+  lightMarks,
+  markSelector,
+} from './marks';
+export { recedeAround, roomSharedName, walkIntoRoom, walkOutOfRoom, type WalkOptions } from './walk';
 export { emitMotion, onMotion, resetMotionBusForTests, type MotionEvents } from './bus';
 export { RollingNumber, type RollingNumberProps } from './flipCounter';
 export {

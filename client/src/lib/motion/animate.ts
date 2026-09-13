@@ -344,3 +344,165 @@ export function relax(el: Element | null | undefined): Animation | null {
     { duration, easing: motionToken('--ease-spring-settle'), fill: 'none' },
   );
 }
+
+/* -------------------------------------------------------------------------- */
+/* Walking through: recede, arrive, leave                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The room you are walking out of stepping back (§5.1 "the thing you click
+ * becomes the thing you look at": the rest of the Lobby recedes while the card
+ * you clicked travels).
+ *
+ * `fill: 'forwards'` on purpose — the element it is played on is usually about
+ * to be unmounted by the route change, and a recede that snapped back for the
+ * last frame before it went would read as a flinch.
+ */
+export function recede(el: Element | null | undefined, options: { duration?: number } = {}): Animation | null {
+  if (!animatable(el)) return null;
+  if (prefersReducedMotion()) return landed(el);
+  return run(
+    el,
+    'recede',
+    [
+      { transform: 'scale(1)', opacity: 1 },
+      { transform: 'scale(0.96)', opacity: 0 },
+    ],
+    {
+      duration: options.duration ?? ms('--duration-move'),
+      easing: motionToken('--ease-out'),
+      fill: 'forwards',
+    },
+  );
+}
+
+/**
+ * Somebody arriving into a strip of faces (§5.1 "arrivals travel one path":
+ * they spring into the here-now strip).
+ *
+ * The study animates the slot's width; this does not. §5.3 puts no layout
+ * property in a keyframe, so the newcomer springs in on transform and opacity
+ * and everything the insertion displaced is carried by `captureFlip` — also
+ * transform only. The two together are the study's motion with the budget
+ * kept.
+ */
+export function arriveIn(
+  el: Element | null | undefined,
+  options: { delay?: number; distance?: number; spring?: SpringConfig } = {},
+): Animation | null {
+  if (!animatable(el)) return null;
+  if (prefersReducedMotion()) return landed(el);
+  const duration = ms('--duration-move');
+  const distance = options.distance ?? 10;
+  return run(
+    el,
+    'arrive',
+    [
+      { transform: `translate3d(${distance}px, 0, 0) scale(0.6)`, opacity: 0 },
+      { transform: 'translate3d(0, 0, 0) scale(1)', opacity: 1 },
+    ],
+    {
+      duration,
+      delay: options.delay ?? 0,
+      easing: springEasing(options.spring ?? springTokens(), { durationMs: duration }),
+      fill: 'backwards',
+    },
+  );
+}
+
+/**
+ * The mirror: a face sliding out of the strip (§5.1 "leaving is the mirror").
+ * `--ease-in`, like every other light going out — it lingers a beat, then goes.
+ */
+export function slideOut(
+  el: Element | null | undefined,
+  options: { delay?: number; distance?: number } = {},
+): Animation | null {
+  if (!animatable(el)) return null;
+  if (prefersReducedMotion()) return landed(el);
+  const distance = options.distance ?? 6;
+  return run(
+    el,
+    'leave',
+    [
+      { transform: 'translate3d(0, 0, 0) scale(1)', opacity: 1 },
+      { transform: `translate3d(${distance}px, 0, 0) scale(0.6)`, opacity: 0 },
+    ],
+    {
+      duration: ms('--duration-slow'),
+      delay: options.delay ?? 0,
+      easing: motionToken('--ease-in'),
+      fill: 'forwards',
+    },
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* The ghost — animating something that is already gone                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A copy of an element, parked over the real one, for the length of one exit.
+ *
+ * Somebody leaving a room is removed from the strip by the store update that
+ * told us they left — by the time React has rendered, the face is not in the
+ * document to animate. WP9a hit the same wall with the composer's lifting words
+ * and answered it the same way: **the thing that moves is a ghost, not the
+ * element**. The ghost is DOM the engine owns outright, so no re-render can
+ * wipe it and no component has to hold a leaving person in its state.
+ *
+ * It is `aria-hidden` and `pointer-events: none`: it is a picture of something
+ * that has already happened, and assistive tech is told about the change by the
+ * live region on the count, not by a corpse in the tree.
+ */
+const GHOST_LAYER_ID = 'pc-motion-ghosts';
+
+function ghostLayer(): HTMLElement | null {
+  if (typeof document === 'undefined') return null;
+  const existing = document.getElementById(GHOST_LAYER_ID);
+  if (existing) return existing;
+  const layer = document.createElement('div');
+  layer.id = GHOST_LAYER_ID;
+  layer.setAttribute('aria-hidden', 'true');
+  layer.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:var(--z-motion-ghost, 900);';
+  document.body.append(layer);
+  return layer;
+}
+
+/**
+ * Clone `el` where it stands and hand the copy to `play`. The ghost is removed
+ * when the animation finishes or is cancelled — and immediately if nothing
+ * played, so a reduced-motion run leaves nothing behind.
+ */
+export function ghostOut(
+  el: Element | null | undefined,
+  play: (ghost: HTMLElement) => Animation | null,
+): Animation | null {
+  if (!animatable(el) || prefersReducedMotion()) return null;
+  const layer = ghostLayer();
+  if (!layer) return null;
+  const box = el.getBoundingClientRect();
+  if (box.width === 0 && box.height === 0) return null;
+  const ghost = el.cloneNode(true) as HTMLElement;
+  ghost.removeAttribute('id');
+  ghost.style.position = 'fixed';
+  ghost.style.left = `${box.left}px`;
+  ghost.style.top = `${box.top}px`;
+  ghost.style.width = `${box.width}px`;
+  ghost.style.height = `${box.height}px`;
+  ghost.style.margin = '0';
+  ghost.style.pointerEvents = 'none';
+  layer.append(ghost);
+  const remove = () => ghost.remove();
+  const animation = play(ghost);
+  if (!animation) {
+    remove();
+    return null;
+  }
+  animation.addEventListener('finish', remove);
+  animation.addEventListener('cancel', remove);
+  // A belt-and-braces sweep: an animation on a detached-then-reattached element
+  // can lose its events, and a ghost that outlives its moment is litter.
+  window.setTimeout(remove, 2_000);
+  return animation;
+}

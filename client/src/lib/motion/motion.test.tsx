@@ -2,22 +2,32 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  arriveIn,
   bloom,
+  captureFlip,
   configureMotion,
   emitMotion,
   flicker,
+  lightsOnStep,
   liftOut,
   MOTION_TOKEN_FALLBACKS,
   onMotion,
   parseDuration,
+  playArrivals,
+  playDepartures,
+  playLightsOn,
   prefersReducedMotion,
   press,
+  recede,
+  recedeAround,
   relax,
+  roomSharedName,
   resetMotionBusForTests,
   resetMotionSwitchForTests,
   RollingNumber,
   scaleShadow,
   settleIn,
+  slideOut,
   springDuration,
   springEasing,
   springLinearEasing,
@@ -199,6 +209,11 @@ describe('the recipes', () => {
     relax(el);
     liftOut(el);
     stagger([el, el]);
+    // WP9b's four: the Lobby receding, a face springing into a strip, a face
+    // sliding out, and the FLIP that carries whatever they displaced.
+    recede(el);
+    arriveIn(el);
+    slideOut(el);
     for (const record of waapi.played) {
       for (const frame of record.keyframes) {
         for (const property of Object.keys(frame)) {
@@ -218,6 +233,9 @@ describe('the recipes', () => {
     relax(el);
     liftOut(el);
     flicker(el);
+    recede(el);
+    arriveIn(el);
+    slideOut(el);
     for (const record of waapi.played) {
       const duration = Number(record.options.duration ?? 0);
       const delay = Number(record.options.delay ?? 0);
@@ -476,5 +494,357 @@ describe('the token reader', () => {
       '--ease-out',
       '--ease-spring-settle',
     ]);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* §5.1 — "lights on": the building wakes                                      */
+/* -------------------------------------------------------------------------- */
+
+describe('playLightsOn', () => {
+  beforeEach(() => {
+    stubMatchMedia(false);
+    configureMotion('full');
+  });
+
+  /** One plate with `lit` windows and one face in the first of them. */
+  function street(lit: number, plates = 1) {
+    for (let p = 0; p < plates; p += 1) {
+      const plate = document.createElement('div');
+      plate.setAttribute('data-motion-plate', '');
+      const lamp = document.createElement('span');
+      lamp.setAttribute('data-motion-lamp', '');
+      plate.append(lamp);
+      for (let i = 0; i < lit; i += 1) {
+        const win = document.createElement('span');
+        win.setAttribute('data-motion-window', `room-${p}-${i}`);
+        win.setAttribute('data-motion-lit', '');
+        plate.append(win);
+      }
+      const dark = document.createElement('span');
+      dark.setAttribute('data-motion-window', `dark-${p}`);
+      plate.append(dark);
+      document.body.append(plate);
+    }
+  }
+
+  function personIn(room: string) {
+    const person = document.createElement('span');
+    person.setAttribute('data-motion-person', 'tomas');
+    person.setAttribute('data-motion-lit', '');
+    person.setAttribute('data-motion-room', room);
+    const rim = document.createElement('span');
+    rim.setAttribute('data-motion-rim', '');
+    person.append(rim);
+    document.body.append(person);
+    return { person, rim };
+  }
+
+  it('blooms the lit windows in order, one --stagger-light apart, and leaves the dark ones dark', () => {
+    street(3);
+    const sequence = playLightsOn();
+    expect(sequence.windows).toBe(3);
+    expect(sequence.stepMs).toBe(30);
+    const blooms = waapi.played.filter((record) => record.animation.id === 'data-motion-recipe:bloom');
+    // Three lit windows, and nothing for the dark one: no glow without a source.
+    expect(blooms).toHaveLength(3);
+    const delays = blooms.map((record) => Number(record.options.delay));
+    expect(delays[1] - delays[0]).toBe(30);
+    expect(delays[2] - delays[1]).toBe(30);
+  });
+
+  it('fades the lamp in behind its own first lit window', () => {
+    street(2);
+    playLightsOn();
+    const lamp = waapi.played.find((record) => record.animation.id === 'data-motion-recipe:fade')!;
+    const firstWindow = waapi.played.find(
+      (record) => record.animation.id === 'data-motion-recipe:bloom',
+    )!;
+    expect(Number(lamp.options.delay)).toBe(Number(firstWindow.options.delay) + 60);
+  });
+
+  it('brings a rim up 120ms after the room it is in', () => {
+    street(2);
+    const { rim } = personIn('room-0-1');
+    playLightsOn();
+    const secondWindow = waapi.played.filter(
+      (record) => record.animation.id === 'data-motion-recipe:bloom',
+    )[1];
+    const rimRecord = waapi.played.find((record) => record.target === rim)!;
+    expect(Number(rimRecord.options.delay)).toBe(Number(secondWindow.options.delay) + 120);
+  });
+
+  it('settles the plates 120ms apart as the street renders', () => {
+    street(1, 3);
+    playLightsOn();
+    const settles = waapi.played.filter((record) => record.animation.id === 'data-motion-recipe:settle');
+    expect(settles.map((record) => Number(record.options.delay))).toEqual([0, 120, 240]);
+  });
+
+  it('compresses the stagger so a big map still lands inside §5.3s 1.6s', () => {
+    // 16 windows at the preferred 30ms would be fine; 200 would not.
+    expect(lightsOnStep(16)).toBe(30);
+    expect(lightsOnStep(200)).toBeLessThan(30);
+    street(120, 2);
+    personIn('room-0-0');
+    const sequence = playLightsOn();
+    expect(sequence.endsAtMs).toBeLessThanOrEqual(1_600);
+  });
+
+  it('plays nothing at all under reduced motion — everything is already landed', () => {
+    stubMatchMedia(true);
+    configureMotion('system');
+    street(4);
+    personIn('room-0-0');
+    expect(playLightsOn().animations).toHaveLength(0);
+    expect(waapi.played).toHaveLength(0);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* §5.1 — "someone arrives": one path, one burst                               */
+/* -------------------------------------------------------------------------- */
+
+describe('playArrivals / playDepartures', () => {
+  beforeEach(() => {
+    stubMatchMedia(false);
+    configureMotion('full');
+  });
+
+  function room(id: string) {
+    const win = document.createElement('span');
+    win.setAttribute('data-motion-window', id);
+    document.body.append(win);
+    return win;
+  }
+
+  function faceInStrip(userId: string) {
+    const strip = document.createElement('span');
+    strip.setAttribute('data-motion-strip', '');
+    const person = document.createElement('span');
+    person.setAttribute('data-motion-person', userId);
+    const rim = document.createElement('span');
+    rim.setAttribute('data-motion-rim', '');
+    person.append(rim);
+    strip.append(person);
+    document.body.append(strip);
+    return { strip, person, rim };
+  }
+
+  it('travels one path: window, then the rim 120ms later, then into the strip', () => {
+    const win = room('2001');
+    const { person, rim } = faceInStrip('tomas');
+    playArrivals([{ userId: 'tomas', roomId: '2001' }]);
+
+    const windowBloom = waapi.played.find((record) => record.target === win)!;
+    const rimBloom = waapi.played.find((record) => record.target === rim)!;
+    const spring = waapi.played.find((record) => record.target === person)!;
+    expect(Number(windowBloom.options.delay)).toBe(0);
+    expect(Number(rimBloom.options.delay)).toBe(120);
+    expect(Number(spring.options.delay)).toBe(120);
+    expect(spring.keyframes[0].transform).toContain('scale(0.6)');
+  });
+
+  it('fades the inline room event in last', () => {
+    room('2001');
+    faceInStrip('tomas');
+    const event = document.createElement('div');
+    event.setAttribute('data-motion-event', '2001');
+    document.body.append(event);
+    playArrivals([{ userId: 'tomas', roomId: '2001' }]);
+    const record = waapi.played.find((played) => played.target === event)!;
+    expect(Number(record.options.delay)).toBe(260);
+  });
+
+  it('runs ONE choreography for a burst of five, staggered, not five sequences', () => {
+    room('2001');
+    const people = ['a', 'b', 'c', 'd', 'e'];
+    const faces = people.map((id) => faceInStrip(id));
+    playArrivals(people.map((userId) => ({ userId, roomId: '2001' })));
+    const springs = faces.map(
+      (face) => waapi.played.find((record) => record.target === face.person)!,
+    );
+    expect(springs.map((record) => Number(record.options.delay))).toEqual([120, 150, 180, 210, 240]);
+  });
+
+  it('continues a burst already in flight rather than restarting it', () => {
+    room('2001');
+    const sixth = faceInStrip('f');
+    playArrivals([{ userId: 'f', roomId: '2001' }], { startIndex: 5 });
+    const spring = waapi.played.find((record) => record.target === sixth.person)!;
+    expect(Number(spring.options.delay)).toBe(5 * 30 + 120);
+  });
+
+  it('does not spring a face that is not in a strip — a timeline row is not arriving', () => {
+    room('2001');
+    const person = document.createElement('span');
+    person.setAttribute('data-motion-person', 'tomas');
+    document.body.append(person);
+    playArrivals([{ userId: 'tomas', roomId: '2001' }]);
+    expect(waapi.played.some((record) => record.animation.id === 'data-motion-recipe:arrive')).toBe(false);
+  });
+
+  it('cools the window on the way out only when the room actually went dark', () => {
+    const win = room('2001');
+    win.style.boxShadow = '0 0 8px rgba(1, 2, 3, 0.5)';
+    faceInStrip('tomas');
+    playDepartures([{ userId: 'tomas', roomId: '2001', roomWentDark: false }]);
+    expect(waapi.played.some((record) => record.target === win)).toBe(false);
+
+    playDepartures([{ userId: 'tomas', roomId: '2001', roomWentDark: true }]);
+    expect(waapi.played.some((record) => record.target === win)).toBe(true);
+  });
+
+  it('plays nothing under reduced motion', () => {
+    stubMatchMedia(true);
+    configureMotion('system');
+    room('2001');
+    faceInStrip('tomas');
+    expect(playArrivals([{ userId: 'tomas', roomId: '2001' }])).toHaveLength(0);
+    expect(playDepartures([{ userId: 'tomas', roomId: '2001' }])).toHaveLength(0);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* §5.1 — the FLIP that carries what an arrival displaced                      */
+/* -------------------------------------------------------------------------- */
+
+describe('captureFlip', () => {
+  beforeEach(() => {
+    stubMatchMedia(false);
+    configureMotion('full');
+  });
+
+  it('plays an element back from where it was, on transform alone', () => {
+    const el = document.createElement('div');
+    el.getBoundingClientRect = () => ({ left: 10, top: 0, width: 20, height: 20 }) as DOMRect;
+    document.body.append(el);
+    const capture = captureFlip([el]);
+    el.getBoundingClientRect = () => ({ left: 28, top: 0, width: 20, height: 20 }) as DOMRect;
+    const played = capture.play();
+    expect(played).toHaveLength(1);
+    const record = waapi.played.at(-1)!;
+    expect(record.keyframes[0].transform).toBe('translate3d(-18px, 0px, 0)');
+    expect(Object.keys(record.keyframes[0])).toEqual(['transform']);
+  });
+
+  it('ignores an element that did not move, and one React removed', () => {
+    const still = document.createElement('div');
+    still.getBoundingClientRect = () => ({ left: 4, top: 4, width: 10, height: 10 }) as DOMRect;
+    const gone = document.createElement('div');
+    gone.getBoundingClientRect = () => ({ left: 0, top: 0, width: 10, height: 10 }) as DOMRect;
+    document.body.append(still, gone);
+    const capture = captureFlip([still, gone]);
+    gone.remove();
+    expect(capture.play()).toHaveLength(0);
+  });
+
+  it('captures nothing under reduced motion', () => {
+    stubMatchMedia(true);
+    configureMotion('system');
+    const el = document.createElement('div');
+    document.body.append(el);
+    expect(captureFlip([el]).size).toBe(0);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* §5.1 — "walk into a room": the origin, and what recedes behind it           */
+/* -------------------------------------------------------------------------- */
+
+describe('walking into a room', () => {
+  beforeEach(() => {
+    stubMatchMedia(false);
+    configureMotion('full');
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      cb(0);
+      return 0;
+    });
+  });
+
+  it('gives a room one name on every surface that draws it', () => {
+    expect(roomSharedName('2001')).toBe('room-2001');
+  });
+
+  it('recedes every branch except the one the origin is on', () => {
+    document.body.innerHTML = `
+      <section data-motion-recede="">
+        <header id="header"></header>
+        <div id="grid">
+          <article id="other"></article>
+          <article id="clicked"><button id="join"></button></article>
+        </div>
+        <footer id="footer"></footer>
+      </section>
+      <aside id="sidebar" data-motion-recede=""></aside>
+    `;
+    const clicked = document.getElementById('clicked')!;
+    recedeAround(clicked);
+    const receded = waapi.played.map((record) => (record.target as HTMLElement).id).sort();
+    // The clicked card travels; its neighbour, the header, the footer and the
+    // whole sidebar step back.
+    expect(receded).toEqual(['footer', 'header', 'other', 'sidebar']);
+  });
+
+  it('recedes a region whole when the origin is somewhere else', () => {
+    document.body.innerHTML = `<aside id="sidebar" data-motion-recede=""><span id="row"></span></aside>`;
+    recedeAround(null);
+    expect(waapi.played.map((record) => (record.target as HTMLElement).id)).toEqual(['sidebar']);
+  });
+
+  it('lets the caller say which element is the origin when a name is on three surfaces', async () => {
+    const make = (id: string, left: number) => {
+      const el = document.createElement('div');
+      el.id = id;
+      el.setAttribute('data-motion-shared', 'room-2001');
+      el.getBoundingClientRect = () => ({ left, top: 0, width: 10, height: 10 }) as DOMRect;
+      document.body.append(el);
+      return el;
+    };
+    // The same room, drawn on the sidebar row and on the Lobby card at once.
+    const row = make('row', 0);
+    const card = make('card', 500);
+
+    await transitionWith(
+      () => {
+        // Walking in replaces both with the Stage's dominant tile.
+        row.remove();
+        card.remove();
+        const tile = make('tile', 100);
+        void tile;
+      },
+      { engine: 'flip', chrome: false, names: ['room-2001'], origin: card },
+    );
+
+    const record = waapi.played.at(-1)!;
+    expect((record.target as HTMLElement).id).toBe('tile');
+    // From the CARD (left 500), not the row (left 0) that happened to be first
+    // in the document.
+    expect(record.keyframes[0].transform).toBe('translate3d(400px, 0px, 0) scale(1, 1)');
+  });
+
+  it('stamps the journey on <html> so both engines dress it the same way', async () => {
+    const el = document.createElement('div');
+    el.setAttribute('data-motion-shared', 'room-2001');
+    el.getBoundingClientRect = () => ({ left: 0, top: 0, width: 10, height: 10 }) as DOMRect;
+    document.body.append(el);
+    let stampedDuringUpdate: string | null = null;
+    await transitionWith(
+      () => {
+        stampedDuringUpdate = document.documentElement.getAttribute('data-motion-transition');
+      },
+      { engine: 'flip', chrome: false, kind: 'walk-in' },
+    );
+    expect(stampedDuringUpdate).toBe('walk-in');
+  });
+
+  it('tells beforeUpdate which engine is about to carry it', async () => {
+    const seen: string[] = [];
+    await transitionWith(() => {}, {
+      engine: 'flip',
+      chrome: false,
+      beforeUpdate: (engine) => seen.push(engine),
+    });
+    expect(seen).toEqual(['flip']);
   });
 });

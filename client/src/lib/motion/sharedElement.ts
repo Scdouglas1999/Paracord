@@ -35,6 +35,28 @@ type ViewTransitionDocument = Document & {
 export interface SharedTransitionOptions {
   /** The `data-motion-shared` names taking part. Omit for every marked element. */
   names?: readonly string[];
+  /**
+   * The element the gesture started on, when more than one thing on screen
+   * carries the same name.
+   *
+   * A room's name is on its Lobby card, on its sidebar row and on the inline
+   * "lit up" event at the same time — all three are the same room. Without
+   * this, "first in the document wins" makes the sidebar the origin of every
+   * journey, and a card you clicked in the middle of the Lobby appears to fly
+   * out of the sidebar. The caller knows which one was clicked; nothing else
+   * can.
+   */
+  origin?: Element | null;
+  /**
+   * What kind of journey this is, stamped on `<html>` as
+   * `data-motion-transition` for the length of it. Both engines read it: the
+   * FLIP path through `beforeUpdate`, the View Transitions path through CSS
+   * (`primitives.css`), which is how "the rest of the Lobby recedes" is the
+   * same motion on both.
+   */
+  kind?: string;
+  /** Runs before the update, told which engine is about to carry it. */
+  beforeUpdate?: (engine: 'view-transition' | 'flip') => void;
   /** The root to search. Defaults to the document. */
   root?: ParentNode;
   /** Override `--duration-move`. */
@@ -53,14 +75,31 @@ function selectorFor(names: readonly string[] | undefined): string {
   return names.map((name) => `[${SHARED_ATTR}="${CSS.escape(name)}"]`).join(',');
 }
 
-function collect(root: ParentNode, names: readonly string[] | undefined): Map<string, HTMLElement> {
+function collect(
+  root: ParentNode,
+  names: readonly string[] | undefined,
+  origin?: Element | null,
+): Map<string, HTMLElement> {
   const found = new Map<string, HTMLElement>();
+  // The origin is put in first, so it wins its own name.
+  if (origin instanceof HTMLElement && origin.isConnected) {
+    const name = origin.getAttribute(SHARED_ATTR);
+    if (name && (!names || names.includes(name))) found.set(name, origin);
+  }
   for (const el of root.querySelectorAll<HTMLElement>(selectorFor(names))) {
     const name = el.getAttribute(SHARED_ATTR);
     // First wins: a name is meant to identify ONE thing on each side.
     if (name && !found.has(name)) found.set(name, el);
   }
   return found;
+}
+
+/** Stamp the journey on `<html>` so CSS can dress it, and hand back the undo. */
+function stampKind(kind: string | undefined): () => void {
+  if (!kind || typeof document === 'undefined') return () => {};
+  const root = document.documentElement;
+  root.setAttribute('data-motion-transition', kind);
+  return () => root.removeAttribute('data-motion-transition');
 }
 
 /** One frame, so the browser has laid the updated DOM out before we measure. */
@@ -134,9 +173,12 @@ export async function transitionWith(
         ? 'view-transition'
         : 'flip';
 
+  const unstamp = stampKind(options.kind);
+
   if (engine === 'view-transition' && typeof doc.startViewTransition === 'function') {
-    const before = collect(root, options.names);
+    const before = collect(root, options.names, options.origin);
     for (const [name, el] of before) el.style.viewTransitionName = `pc-${name.replace(/[^\w-]/g, '-')}`;
+    options.beforeUpdate?.('view-transition');
     const transition = doc.startViewTransition(async () => {
       await update();
       await nextTask();
@@ -146,13 +188,17 @@ export async function transitionWith(
     const animations = options.chrome === false ? [] : await transition.ready.then(() => riseChrome(root, duration));
     await transition.finished.catch(() => {});
     for (const el of root.querySelectorAll<HTMLElement>(`[${SHARED_ATTR}]`)) el.style.viewTransitionName = '';
+    unstamp();
     return { engine: 'view-transition', animations };
   }
 
   // FLIP: first, last, invert, play — on transform alone, so nothing reflows.
   const first = new Map<string, DOMRect>();
-  for (const [name, el] of collect(root, options.names)) first.set(name, el.getBoundingClientRect());
+  for (const [name, el] of collect(root, options.names, options.origin)) {
+    first.set(name, el.getBoundingClientRect());
+  }
 
+  options.beforeUpdate?.('flip');
   await update();
   await nextFrame();
 
@@ -178,5 +224,7 @@ export async function transitionWith(
     );
   }
   if (options.chrome !== false) animations.push(...riseChrome(root, duration));
+  // The stamp outlives the last animation it dresses, not the call.
+  window.setTimeout(unstamp, duration + ms('--stagger-chrome') + ms('--duration-move'));
   return { engine: 'flip', animations };
 }
