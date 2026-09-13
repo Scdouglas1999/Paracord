@@ -78,7 +78,7 @@ are what most of them ride on. **`framer-motion` left production code here.**
 
 | | |
 |---|---|
-| `/design-tokens` › Motion | Every recipe has a card that replays it: `#motion-bloom`, `#motion-dim`, `#motion-flicker`, `#motion-settle`, `#motion-press`, `#motion-stagger`, `#motion-roll`, `#motion-reorder`, `#motion-pop`, `#motion-writing`, `#motion-plate`, `#motion-voice`, `#motion-outage`, `#motion-lights-change`, `#motion-shared`. Gate case: `every engine recipe on /design-tokens holds the budget`. |
+| `/design-tokens` › Motion | Fifteen cards, each replaying a real recipe: `#motion-bloom`, `#motion-dim`, `#motion-flicker`, `#motion-settle`, `#motion-press`, `#motion-stagger`, `#motion-roll`, `#motion-reorder`, `#motion-pop`, `#motion-writing`, `#motion-plate`, `#motion-voice`, `#motion-outage`, `#motion-lights-change`, `#motion-shared`. `every engine recipe on /design-tokens holds the budget` sweeps the nine finite element recipes; the other six have their own cases (`#motion-reorder` → the reorder case, `#motion-shared` → the two walk-in paths, `#motion-voice` / `#motion-outage` / `#motion-lights-change` → the WP9d-hard cases, `#motion-writing` → the typing pulse, which is an infinite breathe and so is asserted rather than budgeted). |
 | Reduced motion | One authority — the `data-motion` attribute in `utilities.css`, plus the four targeted `animation: none` rules where the 0.01ms blanket would *finish* a breathe instead of stopping it (`.pc-skeleton`, `.pc-typing-dots > span`, `.pc-window.is-writing`, `.pc-speaking` — which also pins the ring back to `--ring-speaking`, since the level driver does not run either). Gate case: `reduced motion runs no animations at all`, which carries every package's assertions. |
 
 ---
