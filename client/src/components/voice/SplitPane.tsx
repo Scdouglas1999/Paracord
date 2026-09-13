@@ -1,4 +1,3 @@
-import { Monitor } from 'lucide-react';
 import { StreamViewer } from './StreamViewer';
 import { FocusedWebcamView } from './FocusedWebcamView';
 import { SplitPaneSourcePicker, type PaneSource } from './SplitPaneSourcePicker';
@@ -40,7 +39,7 @@ export function SplitPane({
   return (
     <div
       data-native-underlay-clear=""
-      className="relative min-h-0 flex-1 overflow-hidden rounded-md border border-border-subtle"
+      className="relative min-h-0 flex-1 overflow-hidden rounded-[var(--radius-card)] bg-bg-well shadow-[var(--shadow-tile)]"
     >
       {/* Source picker overlay */}
       <div className="absolute left-2 top-2 z-20">
@@ -101,20 +100,12 @@ export function SplitPane({
 
 function EmptyPane() {
   return (
-    <div
-      className="flex h-full min-h-[200px] items-center justify-center p-6"
-      style={{ backgroundColor: 'var(--bg-tertiary)' }}
-    >
-      <div className="flex max-w-[260px] flex-col items-center gap-3 text-center">
-        <div className="flex h-12 w-12 items-center justify-center rounded-md bg-accent-tint text-text-muted">
-          <Monitor size={22} />
-        </div>
-        <div>
-          <div className="text-label text-text-secondary">This pane is empty</div>
-          <div className="mt-0.5 text-meta text-text-muted">
-            Pick a stream or camera from the source menu in the top-left.
-          </div>
-        </div>
+    <div className="flex h-full min-h-[200px] items-center bg-bg-well px-6">
+      <div className="flex max-w-[32ch] flex-col items-start gap-1.5">
+        <span className="pc-display text-heading text-text-primary">Nothing in this pane</span>
+        <p className="text-label text-text-secondary">
+          Pick a share or a camera from the menu in the top-left.
+        </p>
       </div>
     </div>
   );

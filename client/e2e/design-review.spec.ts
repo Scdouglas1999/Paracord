@@ -851,7 +851,16 @@ test('capture the design-review screens', async ({ page }) => {
       name: string,
       type: number,
       position: number,
-    ) => ({ ...textChannel, id, guild_id, name, type, channel_type: type, position });
+    ) => ({
+      ...textChannel,
+      id,
+      guild_id,
+      name,
+      type,
+      channel_type: type,
+      position,
+      last_message_id: type === 0 ? '3010' : null,
+    });
 
     const kestrelChannels = [
       channel('2002', GUILD_ID, 'Shop floor', 2, 0),
@@ -876,7 +885,7 @@ test('capture the design-review screens', async ({ page }) => {
       creator_id: user.id,
       name: 'Thermal test — driver v3',
       description: null,
-      scheduled_start: new Date(Date.now() + 90 * 60 * 1000).toISOString(),
+      scheduled_start: new Date('2026-09-12T22:30:00').toISOString(),
       scheduled_end: null,
       status: 1,
       entity_type: 1,
@@ -893,34 +902,54 @@ test('capture the design-review screens', async ({ page }) => {
     const frame = (t: string, d: unknown) =>
       `event: gateway\ndata: ${JSON.stringify({ op: 0, t, d })}\n\n`;
 
-    const realtimeBody = () => {
-      // A long retry so a finished body does not become a reconnect storm.
-      let body = 'retry: 600000\n\n';
-      body += frame('READY', {
-        session_id: 'design-session',
-        database_history_epoch: historyEpoch,
-        user: { id: user.id },
-        guilds: [],
-      });
-      const lit = scenario === 'lit';
-      for (const [index, who] of [...CAST, ...extras].entries()) {
-        const status = lit
-          ? who.id === '107'
+    /**
+     * The scenario's light is delivered inside READY.
+     *
+     * `connectionManager` drops every dispatch that arrives before a READY has
+     * taught the connection its history epoch, and READY's own guild payload is
+     * the sanctioned place for a session's voice states and presences
+     * (`gateway/dispatch.ts` READY: `loadVoiceStates` + `updatePresence`). So
+     * the whole scenario rides in one frame instead of racing the reconnect.
+     */
+    const readyGuild = (
+      id: string,
+      name: string,
+      memberCount: number,
+      channels: unknown[],
+      voiceStates: unknown[],
+      presences: unknown[],
+    ) => ({
+      id,
+      owner_id: user.id,
+      name,
+      icon_hash: null,
+      created_at: nowIso,
+      member_count: memberCount,
+      channels,
+      voice_states: voiceStates,
+      presences,
+    });
+
+    const presenceOf = (index: number, id: string) => ({
+      user_id: id,
+      status:
+        scenario === 'lit'
+          ? id === '107'
             ? 'idle'
             : 'online'
           : index === 0
             ? 'idle'
-            : 'offline';
-        body += frame('PRESENCE_UPDATE', { user_id: who.id, status, activities: [] });
-      }
-      if (lit) {
-        const inRoom = [
-          { who: CAST[0], self_stream: true },
-          { who: CAST[1], self_stream: false },
-          { who: CAST[2], self_stream: false },
-        ];
-        for (const { who, self_stream } of inRoom) {
-          body += frame('VOICE_STATE_UPDATE', {
+            : 'offline',
+      activities: [],
+    });
+
+    const voiceStates = () =>
+      scenario === 'lit'
+        ? [
+            { who: CAST[0], self_stream: true },
+            { who: CAST[1], self_stream: false },
+            { who: CAST[2], self_stream: false },
+          ].map(({ who, self_stream }) => ({
             user_id: who.id,
             channel_id: '2002',
             guild_id: GUILD_ID,
@@ -935,8 +964,35 @@ test('capture the design-review screens', async ({ page }) => {
             username: who.username,
             display_name: who.display_name,
             avatar_hash: null,
-          });
-        }
+          }))
+        : [];
+
+    const realtimeBody = () => {
+      const everyone = [...CAST, ...extras];
+      let body = frame('READY', {
+        session_id: 'design-session',
+        database_history_epoch: historyEpoch,
+        user: { id: user.id },
+        guilds: [
+          readyGuild(
+            GUILD_ID,
+            'Kestrel Robotics',
+            61,
+            kestrelChannels,
+            voiceStates(),
+            everyone.map((who, index) => presenceOf(index, who.id)),
+          ),
+          readyGuild(
+            SALT_ID,
+            'Saltmarsh Sailing',
+            20,
+            saltChannels,
+            [],
+            SALT_MEMBERS.map((m, index) => presenceOf(index, m.user.id)),
+          ),
+        ],
+      });
+      if (scenario === 'lit') {
         for (const [channelId, ids] of [
           ['2001', ['104', '105']],
           ['2005', ['106']],
@@ -950,16 +1006,13 @@ test('capture the design-review screens', async ({ page }) => {
       return body;
     };
 
-    if (!process.env.PARACORD_WP6_NO_RT)
-    await page.route('**/api/v2/rt/events**', (route) => {
-      const body = realtimeBody();
-      console.log('[rt] serving', route.request().url(), body.length, 'bytes');
-      return route.fulfill({
+    await page.route('**/api/v2/rt/events**', (route) =>
+      route.fulfill({
         status: 200,
         headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
-        body,
-      });
-    });
+        body: realtimeBody(),
+      }),
+    );
 
     // Scenario-specific REST, added last so it wins over the base handler.
     await page.route('**/api/v1/**', async (route) => {
@@ -1065,20 +1118,6 @@ test('capture the design-review screens', async ({ page }) => {
       return route.fallback();
     });
 
-    await page.addInitScript(() => {
-      const Orig = window.EventSource;
-      // @ts-expect-error debug shim
-      window.EventSource = class extends Orig {
-        constructor(...args: unknown[]) {
-          // @ts-expect-error debug shim
-          super(...args);
-          this.addEventListener('open', () => console.log('[es] open'));
-          this.addEventListener('error', () => console.log('[es] error'));
-          this.addEventListener('gateway', (e) => console.log('[es]', (e as MessageEvent<string>).data.slice(0, 140)));
-        }
-      };
-    });
-
     // The very first load of a fresh profile learns the database-history epoch
     // from the first response header. Learning it EXPIRES every operation
     // captured before it was known — including the one-shot guild fetch, which
@@ -1092,21 +1131,22 @@ test('capture the design-review screens', async ({ page }) => {
     ] as const) {
       scenario = when as Scenario;
       await page.clock.setFixedTime(new Date(clock));
-      page.on('console', (m) => console.log('[browser]', m.type(), m.text().slice(0, 400)));
-      page.on('requestfailed', (r) => console.log('[failed]', r.url(), r.failure()?.errorText));
-      page.on('response', async (r) => {
-        if (r.url().includes('/users/@me/guilds')) {
-          console.log('[guilds]', r.status(), (await r.text().catch(() => '')).slice(0, 300));
-        }
-      });
       for (const [size, viewport] of [
         ['1440x900', DESKTOP],
         ['390x844', PHONE],
       ] as const) {
         await page.setViewportSize(viewport);
         await page.goto('/app');
-        await expect(page.getByRole('main')).toBeVisible();
-        await expect(page.getByRole('main').getByText('Your buildings')).toBeVisible();
+        const main = page.getByRole('main');
+        await expect(main).toBeVisible();
+        await expect(main.getByText('Your buildings')).toBeVisible();
+        // Wait for the light itself, not just the frame: the scenario's voice
+        // and presence frames land on the first reconnect after READY.
+        if (scenario === 'lit') {
+          await expect(main.getByText('Mara is sharing a screen')).toBeVisible({ timeout: 30_000 });
+        } else {
+          await expect(main.getByText(/Dark · nobody in/).first()).toBeVisible({ timeout: 30_000 });
+        }
         await shoot(`home-${label}-${size}`);
       }
     }

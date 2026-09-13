@@ -5,7 +5,7 @@ import { useRef, useEffect, useMemo, useState, useReducer, useCallback, type CSS
 import { createPortal } from 'react-dom';
 import { captureScopedOperation, type OperationContext } from '../../lib/operationContext';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { AlertTriangle, ArrowDown, ArrowRight, Smile, Reply, MoreHorizontal, Hash, Check, X as XIcon, Pencil, Pin, PinOff, Copy, Clipboard, Trash2, MessageSquare, Send, Eye, Loader2, Bookmark, BookmarkCheck } from 'lucide-react';
+import { AlertTriangle, ArrowDown, Smile, Reply, MoreHorizontal, Hash, Check, X as XIcon, Pencil, Pin, PinOff, Copy, Clipboard, Trash2, MessageSquare, Send, Eye, Loader2, Bookmark, BookmarkCheck } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { useMessages } from '../../hooks/useMessages';
 import { useTypingStore } from '../../stores/typingStore';
@@ -35,14 +35,27 @@ import { writeClipboardText } from '../../lib/clipboard';
 import { SkeletonMessage } from '../ui/Skeleton';
 import { parseMarkdown } from '../../lib/markdown';
 import { getHighestRoleColor } from '../../lib/colors';
-import { formatTimestamp, formatDate } from '../../lib/formatters';
+import { formatFileSize, formatTimestamp, relativeTime } from '../../lib/formatters';
 import { useLightboxStore, type LightboxImage } from '../../stores/lightboxStore';
 import { confirm } from '../../stores/confirmStore';
 import { buildGuildEmojiImageUrl, parseCustomEmojiToken } from '../../lib/customEmoji';
 import { isAllowedImageMimeType, safeClientResourceUrl } from '../../lib/security';
 import { mentionsEveryone } from '../../lib/mentions';
-import { resolveUserAvatarUrl } from '../../lib/userAvatar';
 import { MessageEmbedCard, extractUrls } from './MessageEmbed';
+import { LitAvatar } from '../light';
+import { Chip } from '../ui';
+import {
+  AttachmentFrame,
+  AuthorMeta,
+  DayDivider,
+  dayDividerLabel,
+  ReplyChip,
+  RoomLitEventRow,
+  ThreadRow,
+  TIMELINE_GUTTER,
+} from './TimelineParts';
+import { useAuthorLights, useRoomLitEvents, type RoomLitEvent } from './messageLight';
+import { useVoiceStore } from '../../stores/voiceStore';
 import { GitHubEventEmbed, isGitHubWebhookMessage } from './GitHubEventEmbed';
 import { PollMessageCard } from './PollMessageCard';
 import { EphemeralMessage } from './EphemeralMessage';
@@ -52,6 +65,7 @@ import { ErrorBanner } from '../ui/Feedback';
 import { Button } from '../ui/Button';
 import { Modal, ModalDescription, ModalFooter, ModalHeader, ModalTitle } from '../ui/Modal';
 import { displayName } from '../../lib/displayName';
+import { cn } from '../../lib/utils';
 import { fetchChannelOverwrites, fetchGuildRoles } from '../../lib/permissionDataCache';
 
 const EMPTY_TYPING: string[] = [];
@@ -203,7 +217,7 @@ function ResolvedAttachmentImage({
   if (!safeRawUrl || !resolvedSrc) {
     return (
       <div
-        className="max-w-[min(100%,400px)] rounded-md border border-border-subtle bg-bg-mod-subtle px-3 py-6 text-center text-meta text-text-muted"
+        className="max-w-[min(100%,400px)] rounded-[var(--radius-well)] bg-bg-well px-3 py-6 text-center text-meta text-text-faint shadow-[var(--shadow-well)]"
         style={{ maxHeight: '300px' }}
       >
         Loading attachment…
@@ -227,9 +241,30 @@ function isImageAttachment(att: { content_type?: string; filename: string }): bo
   return IMAGE_ATTACHMENT_EXTENSION_RE.test(att.filename);
 }
 
+/** "4 replies · 12 min ago" — the meta line on a thread row (§7.4). */
+function threadMetaFor(thread: Channel): string {
+  const replies = thread.message_count ?? null;
+  const parts: string[] = [];
+  if (replies != null) parts.push(`${replies} ${replies === 1 ? 'reply' : 'replies'}`);
+  if (thread.created_at) parts.push(relativeTime(thread.created_at));
+  return parts.join(' \u00b7 ');
+}
+
 interface MessageListProps {
   channelId: string;
   onReply?: (message: Message) => void;
+  /**
+   * WP3 (spec §7.2), additive: `ribbon` is the compact timeline in the Stage's
+   * chat ribbon — 28px avatars, tighter rows, the 14/1.45 ribbon body step.
+   * Everything else about the list is unchanged.
+   */
+  variant?: 'default' | 'ribbon';
+  /**
+   * WP3 (spec §7.2), additive: authors who are in the room right now, so their
+   * messages get the raised "from the room" highlight. The set comes from
+   * WP1's `useHereNow` — this list never works out who is present itself.
+   */
+  inRoomUserIds?: ReadonlySet<string>;
 }
 
 function getTimestamp(msg: { timestamp?: string; created_at?: string }): string {
@@ -367,6 +402,12 @@ type VirtualRow =
       replyParentId: string | null;
     }
   | { type: 'typing' }
+  /**
+   * A voice room in this building lit up while you were reading (§7.4). It is a
+   * transition in WP1's room light observed by this client, never a server
+   * message — so it lives in the row list without ever entering `messages`.
+   */
+  | { type: 'room-event'; event: RoomLitEvent }
   | { type: 'bottom-sentinel' };
 
 // --- Consolidated UI state (useReducer) -------------------------------------
@@ -486,7 +527,16 @@ export function MessageList(props: MessageListProps) {
   return <OwnedMessageList key={key} {...props} scope={scope} />;
 }
 
-function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { scope: AccountScope | null }) {
+function OwnedMessageList({
+  channelId,
+  onReply,
+  variant = 'default',
+  inRoomUserIds,
+  scope,
+}: MessageListProps & { scope: AccountScope | null }) {
+  // WP3: the Stage's chat ribbon. A presentation variant only — no branch below
+  // changes what is fetched, rendered or announced.
+  const ribbon = variant === 'ribbon';
   const lowBandwidthMode = useUIStore((s) => s.lowBandwidthMode);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -578,6 +628,18 @@ function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { sc
     return map;
   }, [activeGuildChannels, channelId]);
   const activeTyping = typingUsers.filter((id) => id !== me);
+  // §7.4: a timeline row is a person, so every author carries their light, and
+  // the meta says "in Shop floor" when they are in a room right now. Both come
+  // from WP1 — this file never decides who is lit.
+  const authorLight = useAuthorLights(activeGuildId, channelServerId);
+  const roomLitEvents = useRoomLitEvents(activeGuildId);
+  const joinLitRoom = useCallback(
+    (event: RoomLitEvent) => {
+      void useVoiceStore.getState().joinChannel(event.channelId, event.guildId ?? undefined);
+      if (event.guildId) navigate(`/app/guilds/${event.guildId}/channels/${event.channelId}`);
+    },
+    [navigate],
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
   /** Messages that arrived while the user was scrolled away from the bottom. */
@@ -807,13 +869,20 @@ function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { sc
       });
     }
 
+    // Room events sit at the tail of the timeline, after everything that has
+    // actually been said: they report what is happening *now*, not something
+    // that happened at a point in the history.
+    for (const event of roomLitEvents) {
+      result.push({ type: 'room-event', event });
+    }
+
     if (activeTyping.length > 0) {
       result.push({ type: 'typing' });
     }
 
     result.push({ type: 'bottom-sentinel' });
     return result;
-  }, [messages, activeTyping.length, replyLayoutById]);
+  }, [messages, activeTyping.length, replyLayoutById, roomLitEvents]);
 
   const isNearBottom = useCallback(() => {
     const el = scrollRef.current;
@@ -864,6 +933,7 @@ function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { sc
     estimateSize: (index) => {
       const row = rows[index];
       if (row.type === 'date-separator') return 48;
+      if (row.type === 'room-event') return 30;
       if (row.type === 'typing') return 36;
       if (row.type === 'bottom-sentinel') return 1;
       // message row
@@ -1738,15 +1808,11 @@ function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { sc
   // Render a single virtual row
   const renderRow = (row: VirtualRow) => {
     if (row.type === 'date-separator') {
-      return (
-        <div className="my-5 flex items-center gap-3">
-          <div className="h-px flex-1" style={{ backgroundColor: 'var(--border-subtle)' }} />
-          <span className="text-meta font-semibold uppercase tabular-nums text-text-muted">
-            {formatDate(row.date)}
-          </span>
-          <div className="h-px flex-1" style={{ backgroundColor: 'var(--border-subtle)' }} />
-        </div>
-      );
+      return <DayDivider label={dayDividerLabel(row.date)} />;
+    }
+
+    if (row.type === 'room-event') {
+      return <RoomLitEventRow event={row.event} onJoin={joinLitRoom} />;
     }
 
     if (row.type === 'typing') {
@@ -1764,11 +1830,11 @@ function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { sc
 
       const names = activeTyping.map(resolveUsername);
       return (
-        <div className="px-4 py-2 text-meta text-text-muted" style={{ paddingLeft: '72px' }}>
-          {names.length === 1 && <><strong>{names[0]}</strong> is typing...</>}
-          {names.length === 2 && <><strong>{names[0]}</strong> and <strong>{names[1]}</strong> are typing...</>}
-          {names.length === 3 && <><strong>{names[0]}</strong>, <strong>{names[1]}</strong>, and <strong>{names[2]}</strong> are typing...</>}
-          {names.length > 3 && <>{names.length} people are typing...</>}
+        <div className={cn('py-2 text-meta text-text-faint sm:pl-[82px]', TIMELINE_GUTTER)}>
+          {names.length === 1 && <><strong className="font-semibold text-text-secondary">{names[0]}</strong> is typing…</>}
+          {names.length === 2 && <><strong className="font-semibold text-text-secondary">{names[0]}</strong> and <strong className="font-semibold text-text-secondary">{names[1]}</strong> are typing…</>}
+          {names.length === 3 && <><strong className="font-semibold text-text-secondary">{names[0]}</strong>, <strong className="font-semibold text-text-secondary">{names[1]}</strong>, and <strong className="font-semibold text-text-secondary">{names[2]}</strong> are typing…</>}
+          {names.length > 3 && <>{names.length} people are typing…</>}
         </div>
       );
     }
@@ -1810,11 +1876,19 @@ function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { sc
     const authorGuildMember = activeGuildMemberById.get(msg.author.id);
     const authorName = displayName(msg.author, authorGuildMember?.nick);
     const authorRoleColor = authorGuildMember ? getHighestRoleColor(authorGuildMember.roles ?? [], guildRoles) : undefined;
-    const authorAvatarSrc = resolveUserAvatarUrl(msg.author.avatar_hash ?? msg.author.avatar);
+    // §1.5: a person is a rim of light, not a coloured dot. The author's light
+    // also carries "in Shop floor" when they are in a room right now (§7.4).
+    const authorPerson = authorLight({
+      id: msg.author.id,
+      name: authorName,
+      avatar: msg.author.avatar_hash ?? msg.author.avatar ?? null,
+    });
     // A message that pings the reader gets the mention-line treatment (§7):
     // a persistent emerald tint plus a 2px accent left border, hover-independent.
     const mentionsMe = messageMentionsUser(msg, me);
     const isActiveRow = hoveredMessageId === msg.id || focusedMessageId === msg.id;
+    // "From the room": written by somebody who is in the call right now (§7.2).
+    const fromRoom = Boolean(inRoomUserIds?.has(msg.author.id));
     const rowBackground = jumpHighlightId === msg.id
       ? 'var(--accent-tint-strong)'
       : isActiveRow
@@ -1833,12 +1907,20 @@ function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { sc
         aria-posinset={row.messageIndex + 1}
         aria-setsize={messages.length}
         tabIndex={msg.id === activeRowMessageId ? 0 : -1}
-        className="group relative -mx-2 flex gap-4 rounded-sm px-4 py-1 transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+        className={cn(
+          'group relative flex gap-[14px] rounded-[var(--radius-control)] py-1.5',
+          'transition-colors duration-[140ms] ease-[var(--ease-out)]',
+          'focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]',
+          TIMELINE_GUTTER,
+          ribbon && 'gap-2.5 px-3.5 py-1',
+          fromRoom && 'shadow-[var(--shadow-raised)]',
+        )}
         style={{
-          marginTop: isGrouped ? '2px' : replyDepth > 0 ? '0.5rem' : '1.25rem',
+          marginTop: isGrouped ? '2px' : replyDepth > 0 ? '0.5rem' : '10px',
           paddingLeft: replyIndent > 0 ? `${16 + replyIndent}px` : undefined,
           borderLeft: mentionsMe || jumpHighlightId === msg.id ? '2px solid var(--accent-primary)' : undefined,
-          backgroundColor: rowBackground,
+          backgroundColor:
+            rowBackground === 'transparent' && fromRoom ? 'var(--bg-raised)' : rowBackground,
         }}
         onMouseEnter={() => setHoveredMessageId(msg.id)}
         onMouseLeave={() => setHoveredMessageId(null)}
@@ -1870,11 +1952,8 @@ function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { sc
           </div>
         )}
         {isGrouped ? (
-          <div className="flex w-10 flex-shrink-0 items-start justify-center pt-0.5">
-            <span
-              className="text-[11px] tabular-nums opacity-0 transition-opacity duration-[140ms] ease-[var(--ease-out)] group-hover:opacity-100"
-              style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}
-            >
+          <div className={cn('flex w-9 flex-shrink-0 items-start justify-center pt-0.5', ribbon && 'w-7')}>
+            <span className="pc-mono text-[11px] text-text-faint opacity-0 transition-opacity duration-[140ms] ease-[var(--ease-out)] group-hover:opacity-100">
               {new Date(getTimestamp(msg)).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
             </span>
           </div>
@@ -1882,27 +1961,13 @@ function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { sc
           <button
             type="button"
             aria-label={`Open profile for ${authorName}`}
-            className="relative h-10 w-10 flex-shrink-0 overflow-hidden rounded-full border-0 p-0 shadow-sm transition-transform duration-[140ms] ease-[var(--ease-out)] active:scale-95 focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+            className={cn(
+              'relative flex h-9 w-9 flex-shrink-0 rounded-full border-0 p-0 transition-transform duration-[140ms] ease-[var(--ease-out)] active:scale-95 focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]',
+              ribbon && 'h-7 w-7',
+            )}
             onClick={(e) => openAuthorProfile(e, msg)}
           >
-            {authorAvatarSrc ? (
-              <img src={authorAvatarSrc} alt="" className="h-full w-full object-cover" />
-            ) : (
-              // Avatar fallback is a NEUTRAL well tinted by the author's role color
-              // when present — never the emerald accent (that stays reserved for
-              // meaning, per §1.2 / kill-list #2). No role color → warm-neutral fill.
-              <span
-                className="flex h-full w-full items-center justify-center text-label font-semibold"
-                style={{
-                  backgroundColor: authorRoleColor
-                    ? `color-mix(in srgb, ${authorRoleColor} 24%, var(--bg-mod-strong))`
-                    : 'var(--bg-mod-strong)',
-                  color: authorRoleColor ?? 'var(--text-secondary)',
-                }}
-              >
-                {authorName.charAt(0).toUpperCase()}
-              </span>
-            )}
+            <LitAvatar person={authorPerson} size={ribbon ? 28 : 36} hideLabel />
           </button>
         )}
 
@@ -1920,37 +1985,26 @@ function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { sc
 
         <div className="flex-1 min-w-0 pr-8 sm:pr-0">
           {replyParentId && (
-            <div className="mb-0.5 flex items-center gap-1">
-              <span
-                className="h-3.5 w-3 shrink-0 rounded-bl-sm border-b border-l"
-                style={{ borderColor: 'var(--border-subtle)', opacity: 0.65 }}
-              />
-              <button
-                type="button"
-                onClick={() => scrollToMessage(replyParentId)}
-                className="inline-flex max-w-full items-center gap-1.5 rounded-sm px-1 py-0.5 text-meta text-text-muted transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-                title="Jump to replied message"
-              >
-                <Reply size={12} className="shrink-0" />
-                <span className="max-w-[8rem] truncate font-semibold" style={{ color: 'var(--text-secondary)' }}>
-                  {replyParentMessage
-                    ? displayName(
-                        replyParentMessage.author,
-                        activeGuildMemberById.get(replyParentMessage.author.id)?.nick,
-                      )
-                    : 'Original message'}
-                </span>
-                <span className="truncate">
-                  {replyParentMessage ? getReplyPreviewText(replyParentMessage) : 'Message not loaded'}
-                </span>
-              </button>
-            </div>
+            <ReplyChip
+              author={
+                replyParentMessage
+                  ? displayName(
+                      replyParentMessage.author,
+                      activeGuildMemberById.get(replyParentMessage.author.id)?.nick,
+                    )
+                  : 'Original message'
+              }
+              preview={
+                replyParentMessage ? getReplyPreviewText(replyParentMessage) : 'Message not loaded'
+              }
+              onJump={() => scrollToMessage(replyParentId)}
+            />
           )}
           {!isGrouped && (
-            <div className="flex items-baseline gap-2">
+            <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
               <button
                 type="button"
-                className="rounded-xs text-left text-[15px] font-semibold leading-tight hover:underline focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                className="pc-display rounded-[var(--radius-window)] text-left text-name leading-tight hover:underline focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                 style={{ color: authorRoleColor ?? 'var(--text-primary)' }}
                 aria-label={`Open profile for ${authorName}`}
                 onClick={(e) => openAuthorProfile(e, msg)}
@@ -1958,22 +2012,23 @@ function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { sc
                 {authorName}
               </button>
               {msg.anonymous?.is_anonymous && (
-                <span className="rounded-xs bg-warning-tint px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide text-accent-warning">
+                <Chip size="sm" className="text-accent-warning">
                   Anonymous
-                </span>
+                </Chip>
               )}
               {msg.author.bot && (
-                <span className="rounded-xs bg-accent-tint px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide text-accent-primary">
+                <Chip size="sm" className="text-accent-primary">
                   Bot
-                </span>
+                </Chip>
               )}
-              <span className="text-meta tabular-nums text-text-muted" style={{ fontFamily: 'var(--font-code)' }}>
-                {formatTimestamp(getTimestamp(msg))}
-              </span>
+              <AuthorMeta
+                person={authorPerson}
+                timestamp={formatTimestamp(getTimestamp(msg))}
+              />
               {(msg.edited_timestamp || msg.edited_at) && (
                 <button
                   type="button"
-                  className="rounded-xs text-left text-[11px] text-text-muted hover:underline focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                  className="rounded-[var(--radius-window)] text-left text-[11px] text-text-faint hover:underline focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                   title={`Edited: ${formatTimestamp(msg.edited_timestamp || msg.edited_at || '')}`}
                   aria-label={`Show edit history for message ${msg.id}`}
                   onClick={(e) => openEditHistory(e, msg.id)}
@@ -1996,7 +2051,7 @@ function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { sc
               <textarea
                 autoFocus
                 aria-label={`Edit message from ${authorName}`}
-                className="w-full resize-none rounded-sm border border-border-subtle bg-bg-tertiary px-3 py-2 text-body text-text-primary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus:border-accent-primary focus-visible:shadow-[var(--focus-ring-input)]"
+className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 text-body text-text-primary shadow-[var(--shadow-well)] outline-none transition-[box-shadow] duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring-input)]"
                 style={{ minHeight: '2.5rem', maxHeight: '50vh' }}
                 value={editContent}
                 onChange={(e) => setEditContent(e.target.value)}
@@ -2034,11 +2089,11 @@ function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { sc
                 <EphemeralMessage>
                   {!msg.poll && decryptingIds.has(msg.id) ? (
                     <div className="flex flex-col gap-1.5 py-0.5" aria-label="Decrypting message">
-                      <div className="h-3.5 w-3/4 animate-pulse rounded bg-text-muted/10" />
-                      <div className="h-3.5 w-1/2 animate-pulse rounded bg-text-muted/10" />
+                      <div className="h-3.5 w-3/4 animate-pulse rounded-[var(--radius-window)] bg-bg-mod-subtle" />
+                      <div className="h-3.5 w-1/2 animate-pulse rounded-[var(--radius-window)] bg-bg-mod-subtle" />
                     </div>
                   ) : (
-                    <div className="break-words text-[15px]" style={{ lineHeight: '1.58rem' }}>
+                    <div className={cn('break-words text-body text-text-body', ribbon && 'text-ribbon')}>
                       {getCachedParsedMarkdown(
                         msg.id,
                         msg.content || '',
@@ -2052,11 +2107,11 @@ function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { sc
                 </EphemeralMessage>
               ) : !msg.poll && decryptingIds.has(msg.id) ? (
                 <div className="flex flex-col gap-1.5 py-0.5" aria-label="Decrypting message">
-                  <div className="h-3.5 w-3/4 animate-pulse rounded bg-text-muted/10" />
-                  <div className="h-3.5 w-1/2 animate-pulse rounded bg-text-muted/10" />
+                  <div className="h-3.5 w-3/4 animate-pulse rounded-[var(--radius-window)] bg-bg-mod-subtle" />
+                  <div className="h-3.5 w-1/2 animate-pulse rounded-[var(--radius-window)] bg-bg-mod-subtle" />
                 </div>
               ) : !msg.poll ? (
-                <div className="break-words text-[15px]" style={{ color: 'var(--text-primary)', lineHeight: '1.58rem' }}>
+                <div className={cn('mt-0.5 break-words text-body text-text-body', ribbon && 'text-ribbon')}>
                   {getCachedParsedMarkdown(
                     msg.id,
                     msg.content || '',
@@ -2126,27 +2181,17 @@ function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { sc
           })()}
 
           {linkedThreads.length > 0 && (
-            <div className="mt-2 flex flex-wrap items-center gap-1.5">
-              {linkedThreads.map((thread) => {
-                const isArchived = Boolean(thread.thread_metadata?.archived);
-                return (
-                  <button
-                    key={thread.id}
-                    type="button"
-                    onClick={() => openLinkedThread(thread.id)}
-                    className="inline-flex max-w-full items-center gap-1.5 rounded-sm border border-border-subtle bg-bg-secondary px-2.5 py-1 text-meta font-medium text-text-secondary shadow-sm transition-colors duration-[140ms] ease-[var(--ease-out)] hover:border-border-strong hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-                  >
-                    <MessageSquare size={13} className="text-accent-primary" />
-                    <span className="max-w-[14rem] truncate">{thread.name || 'Thread'}</span>
-                    {isArchived && (
-                      <span className="rounded-xs bg-bg-mod-strong px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-                        Archived
-                      </span>
-                    )}
-                    <ArrowRight size={12} />
-                  </button>
-                );
-              })}
+            <div className="flex flex-wrap items-center gap-1.5">
+              {linkedThreads.map((thread) => (
+                <ThreadRow
+                  key={thread.id}
+                  name={thread.name || 'Thread'}
+                  meta={threadMetaFor(thread)}
+                  people={[authorPerson]}
+                  archived={Boolean(thread.thread_metadata?.archived)}
+                  onOpen={() => openLinkedThread(thread.id)}
+                />
+              ))}
             </div>
           )}
           {/* Reactions */}
@@ -2155,15 +2200,14 @@ function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { sc
               {(msg.reactions as Array<{emoji: string; count: number; me: boolean}>).map((r, reactionIndex) => {
                 const parsedCustomEmoji = activeGuildId ? parseCustomEmojiToken(r.emoji) : null;
                 return (
-                <button
+                <Chip
+                  as="button"
                   key={`${r.emoji}-${reactionIndex}`}
                   onClick={() => void toggleReaction(msg.id, r)}
-                  className="inline-flex items-center gap-1 rounded-sm border px-2 py-0.5 text-meta transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-                  style={{
-                    borderColor: r.me ? 'var(--accent-primary)' : 'var(--border-subtle)',
-                    backgroundColor: r.me ? 'var(--accent-tint)' : 'var(--bg-mod-subtle)',
-                    color: r.me ? 'var(--accent-primary)' : 'var(--text-secondary)',
-                  }}
+                  className={cn(
+                    'gap-1.5 px-2.5',
+                    r.me && 'bg-accent-tint text-accent-primary shadow-none hover:bg-accent-tint-strong hover:text-accent-primary',
+                  )}
                 >
                   <span>
                     {parsedCustomEmoji && activeGuildId ? (
@@ -2179,7 +2223,7 @@ function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { sc
                     )}
                   </span>
                   <span className="font-medium">{r.count}</span>
-                </button>
+                </Chip>
               )})}
             </div>
           )}
@@ -2233,12 +2277,13 @@ function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { sc
                 const src = resolveFederatedAttachmentUrl(att, msg.channel_id);
                 const isFederated = Boolean(att.origin_server);
                 const federatedBadge = isFederated ? (
-                  <span
-                    className="rounded-xs border border-accent-primary/35 bg-accent-primary/12 px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide text-accent-primary"
+                  <Chip
+                    size="sm"
+                    tone="accent"
                     title={att.content_hash ? `Hash: ${att.content_hash}` : `From: ${att.origin_server}`}
                   >
                     Federated
-                  </span>
+                  </Chip>
                 ) : null;
                 const attachmentIsImage = isImageAttachment(att) && Boolean(src);
                 if (attachmentIsImage) {
@@ -2246,37 +2291,34 @@ function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { sc
                     return (
                       <div
                         key={att.id}
-                        className="inline-flex flex-wrap items-center gap-2 rounded-md border border-border-subtle bg-bg-mod-subtle px-3 py-2 text-sm"
-                        style={{ maxWidth: 'fit-content' }}
+                        className="mt-2 inline-flex max-w-full flex-wrap items-center gap-2 rounded-[var(--radius-well)] bg-bg-well px-3 py-2 text-meta shadow-[var(--shadow-chip)]"
                       >
                         {federatedBadge}
-                        <span className="max-w-[20rem] truncate text-text-secondary">
+                        <span className="max-w-[20rem] truncate font-medium text-text-body">
                           {att.filename}
                         </span>
-                        <span className="rounded-xs border border-border-subtle px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-                          Preview Off
-                        </span>
-                        <button
-                          type="button"
-                          className="rounded-sm border border-border-subtle px-2 py-1 text-xs font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
+                        <Chip size="sm" className="text-text-faint">Preview off</Chip>
+                        <Button
+                          variant="ghost"
+                          size="sm"
                           onClick={() => void downloadAttachment(att.id, att.filename)}
                           disabled={attachmentBusyId === att.id}
                         >
                           {attachmentBusyId === att.id
                             ? downloadProgress != null
                               ? `${downloadProgress}%`
-                              : 'Downloading...'
+                              : 'Downloading…'
                             : 'Download'}
-                        </button>
+                        </Button>
                         {isOwnMessage && !isFederated && (
-                          <button
-                            type="button"
-                            className="rounded-sm border border-accent-danger/30 bg-accent-danger/10 px-2 py-1 text-xs font-semibold text-accent-danger transition-colors hover:bg-accent-danger/15"
+                          <Button
+                            variant="danger"
+                            size="sm"
                             onClick={() => void deleteAttachment(msg.id, att.id)}
                             disabled={attachmentBusyId === att.id}
                           >
-                            {attachmentBusyId === att.id ? 'Deleting...' : 'Delete'}
-                          </button>
+                            {attachmentBusyId === att.id ? 'Deleting…' : 'Delete'}
+                          </Button>
                         )}
                       </div>
                     );
@@ -2321,83 +2363,90 @@ function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { sc
                     useLightboxStore.getState().open(lightboxImages, imageIndex >= 0 ? imageIndex : 0);
                   };
                   return (
-                    <div key={att.id} className="inline-flex max-w-fit flex-col gap-1.5">
+                    // §7.4: the picture sits in a well with its own line under
+                    // it — the file's name and size, then what you can do with
+                    // it. No frame, no border, no card-in-a-card.
+                    <AttachmentFrame
+                      key={att.id}
+                      footer={
+                        <>
+                          {federatedBadge}
+                          <span className="min-w-0 truncate font-medium text-text-body">{att.filename}</span>
+                          {att.size != null && (
+                            <span className="pc-mono ml-auto shrink-0">{formatFileSize(att.size)}</span>
+                          )}
+                          <Button variant="ghost" size="sm" onClick={() => void openImageLightbox()}>
+                            Open
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => void downloadAttachment(att.id, att.filename)}
+                            disabled={attachmentBusyId === att.id}
+                          >
+                            {attachmentBusyId === att.id ? (downloadProgress != null ? `${downloadProgress}%` : 'Downloading…') : 'Download'}
+                          </Button>
+                          {isOwnMessage && !isFederated && (
+                            <Button
+                              variant="danger"
+                              size="sm"
+                              onClick={() => void deleteAttachment(msg.id, att.id)}
+                              disabled={attachmentBusyId === att.id}
+                            >
+                              {attachmentBusyId === att.id ? 'Deleting…' : 'Delete'}
+                            </Button>
+                          )}
+                        </>
+                      }
+                    >
                       <button
                         type="button"
-                        className="inline-block max-w-fit cursor-pointer border-0 bg-transparent p-0 text-left"
+                        aria-label={`Open image preview: ${att.filename}`}
+                        className="pc-focusable block w-full cursor-pointer border-0 bg-transparent p-0 text-left"
                         onClick={() => void openImageLightbox()}
                       >
                         <ResolvedAttachmentImage
                           url={src!}
                           alt={att.filename}
-                          className="max-w-[min(100%,400px)] rounded-md border border-border-subtle"
+                          className="block w-full"
                           style={{ maxHeight: '300px', objectFit: 'contain' }}
                         />
                       </button>
-                      <div className="flex flex-wrap items-center gap-2">
-                        {federatedBadge}
-                        <button
-                          type="button"
-                          className="rounded-sm border border-border-subtle bg-bg-mod-subtle px-2.5 py-1 text-xs font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
-                          onClick={() => void openImageLightbox()}
-                        >
-                          Open
-                        </button>
-                        <button
-                          type="button"
-                          className="rounded-sm border border-border-subtle bg-bg-mod-subtle px-2.5 py-1 text-xs font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
-                          onClick={() => void downloadAttachment(att.id, att.filename)}
-                          disabled={attachmentBusyId === att.id}
-                        >
-                          {attachmentBusyId === att.id ? (downloadProgress != null ? `${downloadProgress}%` : 'Downloading...') : 'Download'}
-                        </button>
-                        {isOwnMessage && !isFederated && (
-                          <button
-                            type="button"
-                            className="rounded-sm border border-accent-danger/30 bg-accent-danger/10 px-2.5 py-1 text-xs font-semibold text-accent-danger transition-colors hover:bg-accent-danger/15"
-                            onClick={() => void deleteAttachment(msg.id, att.id)}
-                            disabled={attachmentBusyId === att.id}
-                          >
-                            {attachmentBusyId === att.id ? 'Deleting...' : 'Delete'}
-                          </button>
-                        )}
-                      </div>
-                    </div>
+                    </AttachmentFrame>
                   );
                 }
                 return (
                   <div
                     key={att.id}
-                    className="inline-flex flex-wrap items-center gap-2 rounded-md border border-border-subtle bg-bg-mod-subtle px-3 py-2 text-sm"
-                    style={{ maxWidth: 'fit-content' }}
+                    className="mt-2 inline-flex max-w-full flex-wrap items-center gap-2 rounded-[var(--radius-well)] bg-bg-well px-3 py-2 text-meta shadow-[var(--shadow-chip)]"
                   >
                     {federatedBadge}
                     <button
                       type="button"
-                      className="max-w-[20rem] truncate text-left text-text-link transition-colors hover:underline"
+                      className="pc-focusable max-w-[20rem] truncate rounded-[var(--radius-chip)] text-left font-medium text-text-link transition-colors hover:underline"
                       onClick={() => void downloadAttachment(att.id, att.filename)}
                       disabled={attachmentBusyId === att.id}
                     >
                       {att.filename}
                     </button>
-                    {att.size && <span className="text-xs text-text-muted">({(att.size / 1024).toFixed(1)} KB)</span>}
-                    <button
-                      type="button"
-                      className="rounded-sm border border-border-subtle px-2 py-1 text-xs font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
+                    {att.size != null && <span className="pc-mono text-text-faint">{formatFileSize(att.size)}</span>}
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       onClick={() => void downloadAttachment(att.id, att.filename)}
                       disabled={attachmentBusyId === att.id}
                     >
-                      {attachmentBusyId === att.id ? (downloadProgress != null ? `${downloadProgress}%` : 'Downloading...') : 'Download'}
-                    </button>
+                      {attachmentBusyId === att.id ? (downloadProgress != null ? `${downloadProgress}%` : 'Downloading…') : 'Download'}
+                    </Button>
                     {isOwnMessage && !isFederated && (
-                      <button
-                        type="button"
-                        className="rounded-sm border border-accent-danger/30 bg-accent-danger/10 px-2 py-1 text-xs font-semibold text-accent-danger transition-colors hover:bg-accent-danger/15"
+                      <Button
+                        variant="danger"
+                        size="sm"
                         onClick={() => void deleteAttachment(msg.id, att.id)}
                         disabled={attachmentBusyId === att.id}
                       >
-                        {attachmentBusyId === att.id ? 'Deleting...' : 'Delete'}
-                      </button>
+                        {attachmentBusyId === att.id ? 'Deleting…' : 'Delete'}
+                      </Button>
                     )}
                   </div>
                 );
@@ -2408,7 +2457,7 @@ function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { sc
 
         {isCoarsePointer && canOpenMessageMenu && (
           <button
-            className="absolute right-1.5 top-1.5 inline-flex h-8 w-8 items-center justify-center rounded-sm border border-border-subtle bg-bg-accent text-text-secondary shadow-sm md:hidden"
+            className="pc-focusable absolute right-1.5 top-1.5 inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-control)] bg-bg-raised text-text-secondary shadow-[var(--shadow-lifted)] md:hidden"
             title="Message actions"
             aria-label="Message actions"
             onClick={() => setMenuMessageId((curr) => (curr === msg.id ? null : msg.id))}
@@ -2418,7 +2467,7 @@ function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { sc
         )}
 
         {(hoveredMessageId === msg.id || focusedMessageId === msg.id) && !isCoarsePointer && (
-          <div className="absolute -top-3.5 right-2 flex items-center gap-0.5 overflow-hidden rounded-sm border border-border-subtle bg-bg-accent p-0.5 shadow-md">
+          <div className="pc-floating absolute -top-3.5 right-4 flex items-center gap-0.5 overflow-hidden p-0.5 sm:right-8">
             {canAddReactions && (
               <button className="hover-action-btn rounded-sm" title="Add Reaction" aria-label="Add Reaction" onClick={(e) => openReactionPicker(e, msg.id)}>
                 <Smile size={16} />
@@ -2441,7 +2490,7 @@ function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { sc
         )}
         {menuMessageId === msg.id && canOpenMessageMenu && (
           <div
-            className="glass-modal absolute right-1 top-11 z-10 min-w-[10rem] max-w-[calc(100vw-2.75rem)] rounded-md p-1 sm:right-2"
+            className="pc-floating absolute right-1 top-11 z-10 min-w-[10rem] max-w-[calc(100vw-2.75rem)] p-1 sm:right-2"
           >
             {canAddReactions && (
               <button
@@ -2545,7 +2594,7 @@ function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { sc
       </div>
       <div
         ref={scrollRef}
-        className="h-full overflow-y-auto px-2.5 sm:px-5"
+        className="h-full overflow-y-auto"
         onScroll={handleScroll}
         style={{ overscrollBehavior: 'contain' }}
         role="feed"
@@ -2567,25 +2616,23 @@ function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { sc
             />
           </div>
         ) : messages.length === 0 ? (
-          <div className="flex h-full flex-col items-start justify-end gap-3 px-2 pb-8 sm:px-4">
-            <span className="flex h-10 w-10 items-center justify-center rounded-sm bg-accent-tint">
-              <Hash size={20} className="text-text-muted" />
-            </span>
+          <div className={cn('flex h-full flex-col items-start justify-end gap-3 pb-8', TIMELINE_GUTTER)}>
+            <span className="pc-window h-2.5 w-2.5" aria-hidden />
             <div>
-              <h3 className="text-subhead text-text-primary">
-                {activeChannel?.name ? `#${activeChannel.name} is ready when you are` : 'This is the start of your conversation'}
+              <h3 className="pc-display text-heading text-text-primary">
+                {activeChannel?.name ? `${activeChannel.name} is dark` : 'Nobody has said anything here yet'}
               </h3>
-              <p className="mt-1 max-w-md text-label text-text-secondary">
+              <p className="mt-1 max-w-md text-body text-text-body">
                 {activeChannel?.name
-                  ? `No one has posted in #${activeChannel.name} yet. Kick things off — a hello, a question, or whatever's on your mind.`
-                  : 'There are no messages here yet. Say hello and get the conversation going.'}
+                  ? `Nobody has posted in ${activeChannel.name} yet. Say something and the room lights up.`
+                  : 'Say something and the room lights up.'}
               </p>
             </div>
             <Button
-              variant="default"
+              variant="primary"
               className="mt-1 gap-2"
               onClick={() => {
-                const composer = document.querySelector<HTMLTextAreaElement>('textarea[placeholder^="Message "]');
+                const composer = document.querySelector<HTMLTextAreaElement>('textarea[data-composer-input]');
                 composer?.focus();
               }}
             >
@@ -2619,10 +2666,10 @@ function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { sc
       </div>
 
       {threadModalForMessageId && (
-        <div className="absolute inset-0 z-20 flex items-center justify-center bg-bg-tertiary/75 p-4 backdrop-blur-sm">
+        <div className="absolute inset-0 z-20 flex items-center justify-center p-4" style={{ backgroundColor: 'var(--overlay-backdrop)' }}>
           <div
             ref={threadCreateDialogRef}
-            className="glass-modal w-full max-w-md rounded-lg border border-border-strong p-5"
+            className="pc-dialog w-full max-w-md p-5"
             role="dialog"
             aria-modal="true"
             aria-labelledby="create-thread-dialog-title"
@@ -2674,10 +2721,10 @@ function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { sc
       )}
 
       {reportingMessage && (
-        <div className="absolute inset-0 z-20 flex items-center justify-center bg-bg-tertiary/75 p-4 backdrop-blur-sm">
+        <div className="absolute inset-0 z-20 flex items-center justify-center p-4" style={{ backgroundColor: 'var(--overlay-backdrop)' }}>
           <div
             ref={reportDialogRef}
-            className="glass-modal w-full max-w-lg rounded-lg border border-border-strong p-5"
+            className="pc-dialog w-full max-w-lg p-5"
             role="dialog"
             aria-modal="true"
             aria-labelledby="report-message-dialog-title"
@@ -2740,14 +2787,14 @@ function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { sc
       {showScrollButton && (
         <button
           onClick={scrollToBottom}
-          className="absolute bottom-[calc(var(--safe-bottom)+0.75rem)] left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-sm border border-border-subtle bg-bg-accent px-4 py-2 text-label font-semibold text-text-primary shadow-md transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+          className="pc-focusable absolute bottom-[calc(var(--safe-bottom)+0.75rem)] left-1/2 flex h-[var(--h-control)] -translate-x-1/2 items-center gap-2 rounded-[var(--radius-control)] bg-bg-raised px-4 text-label font-semibold text-text-primary shadow-[var(--shadow-lifted)] transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong"
         >
           <ArrowDown size={16} className="text-accent-primary" />
           Jump to present
         </button>
       )}
       {bulkDeleteMode && canManageMessages && (
-        <div className="absolute bottom-[calc(var(--safe-bottom)+0.75rem)] left-1/2 z-20 flex w-[min(95%,38rem)] -translate-x-1/2 flex-wrap items-center justify-between gap-2 rounded-md border border-border-subtle bg-bg-accent px-4 py-2.5 shadow-lg">
+        <div className="absolute bottom-[calc(var(--safe-bottom)+0.75rem)] left-1/2 z-20 flex w-[min(95%,38rem)] -translate-x-1/2 flex-wrap items-center justify-between gap-2 rounded-[var(--radius-well)] bg-bg-raised px-4 py-2.5 shadow-[var(--shadow-lifted)]">
           <span className="text-label font-semibold tabular-nums text-text-secondary">
             {selectedMessageIds.length} selected
           </span>

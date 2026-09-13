@@ -41,6 +41,7 @@ import { formatFileSize, toDatetimeLocalValue } from '../../lib/formatters';
 import { toast } from '../../stores/toastStore';
 import { extractApiError } from '../../api/client';
 import { displayName } from '../../lib/displayName';
+import { useConversationReaders, useSelfUser } from './messageLight';
 
 const EmojiPicker = lazy(() =>
   import('../ui/EmojiPicker').then((m) => ({ default: m.EmojiPicker })),
@@ -58,20 +59,29 @@ interface MessageInputProps {
   channelName?: string;
   replyingTo?: { id: string; author: string; content: string } | null;
   onCancelReply?: () => void;
+  /**
+   * WP3 (spec §7.2, §8), additive: `ribbon` is the composer inside the Stage's
+   * chat ribbon — 42px instead of 50, "Say something to the room", and a send
+   * button in white light, because everybody it reaches is in the room right
+   * now. Nothing about sending changes.
+   */
+  variant?: 'default' | 'ribbon';
 }
 
 // 36px icon control (design-spec §7 Icon button): radius-sm, --interactive-normal →
 // --interactive-hover on a --bg-mod-subtle wash, press = scale(.97), layered focus
 // ring, 44px min touch target on coarse pointers.
+// §8 Composer tool: a quiet 32px ghost control inside the raised bar (§3
+// control heights, §9 hit targets — 44px on a coarse pointer).
 const ICON_BTN =
-  'inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-sm text-interactive-normal ' +
-  'transition-[color,background-color,transform] duration-[140ms] ease-[var(--ease-out)] ' +
-  'hover:bg-bg-mod-subtle hover:text-interactive-hover active:scale-[0.97] ' +
-  'focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ' +
+  'pc-focusable inline-flex h-8 w-8 shrink-0 items-center justify-center ' +
+  'rounded-[var(--radius-control)] text-text-muted ' +
+  'transition-[color,background-color] duration-[140ms] ease-[var(--ease-out)] ' +
+  'hover:bg-bg-mod-subtle hover:text-text-primary ' +
   'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent ' +
   '[@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:w-11';
 
-// Emerald active affordance for the composer toggles (formatting / poll / schedule).
+// A composer mode that is switched on — the action colour, never a light token.
 const ICON_BTN_ACTIVE =
   'bg-accent-tint text-accent-primary hover:bg-accent-tint-strong hover:text-accent-primary';
 
@@ -84,6 +94,26 @@ const POLL_DURATION_OPTIONS = [
   { label: '7 days', minutes: 10080 },
   { label: '14 days', minutes: 20160 },
 ];
+
+/**
+ * The composer's invitation (docs/lantern-stage-spec.md §7.4, §6.9).
+ *
+ * It names the people who will actually read this — "Say something to the 5
+ * people reading" — and falls back to the room when nobody else is here. Never
+ * "Message #channel": a room is people, and the copy says so.
+ *
+ * `readingOthers` excludes you. You are always reading the room you have open,
+ * so counting yourself would mean the fallback never appeared and a room you
+ * are alone in would invite you to talk to yourself.
+ */
+export function composerPlaceholder(readingOthers: number, roomName?: string | null): string {
+  if (readingOthers > 0) {
+    return readingOthers === 1
+      ? 'Say something to the 1 person reading'
+      : `Say something to the ${readingOthers} people reading`;
+  }
+  return roomName ? `Say something in ${roomName}` : 'Say something here';
+}
 
 function canPreviewImageFile(file: File): boolean {
   return isAllowedImageMimeType(file.type);
@@ -288,10 +318,13 @@ export function MessageInput(props: MessageInputProps) {
   return <OwnedMessageInput key={memberScopeKey(scope, props.channelId)} {...props} scope={scope} messageStore={messageStore} />;
 }
 
-function OwnedMessageInput({ channelId, guildId, channelName, replyingTo, onCancelReply, scope, messageStore }: MessageInputProps & {
+function OwnedMessageInput({ channelId, guildId, channelName, replyingTo, onCancelReply, variant = 'default', scope, messageStore }: MessageInputProps & {
   scope: AccountScope;
   messageStore: ReturnType<typeof useCurrentMessageStoreApi>;
 }) {
+  // WP3: the Stage's chat ribbon. Presentation only — the same draft, the same
+  // send path, the same permissions.
+  const ribbon = variant === 'ribbon';
   const { content, setContent, error: draftError, retrySave, capture: captureDraft, clearSubmitted, runtime: messagingRuntime } = useMessageDraft(scope, channelId);
   const mounted = useRef(false);
   useEffect(() => {
@@ -341,6 +374,15 @@ function OwnedMessageInput({ channelId, guildId, channelName, replyingTo, onCanc
   const canCreatePoll = actions.poll.allowed;
   const canSendMessages = actions.send.allowed;
   const canAttachFiles = actions.attach.allowed;
+  // §7.4 / §6.9: the composer names who is actually going to read this. The
+  // count is the people the room can tell are here, minus you — "nobody is
+  // reading" has to mean nobody *else*, or the fallback copy never appears.
+  const readers = useConversationReaders(guildId, channelId, scope);
+  const self = useSelfUser();
+  const readingOthers = useMemo(
+    () => readers.filter((person) => person.userId !== self?.id).length,
+    [readers, self?.id],
+  );
   const composerAction = showPollComposer ? actions.poll : showScheduleComposer ? actions.schedule
     : stagedFiles.length > 0 && !actions.attach.allowed ? actions.attach : actions.send;
 
@@ -984,7 +1026,10 @@ function OwnedMessageInput({ channelId, guildId, channelName, replyingTo, onCanc
 
   return (
     <div
-      className="message-composer-surface relative flex w-full min-w-0 flex-col gap-2 px-4 pb-[calc(var(--safe-bottom)+1.25rem)] pt-2 sm:px-6 sm:pb-8"
+      className={cn(
+        'message-composer-surface relative flex w-full min-w-0 flex-col gap-2 px-4 pb-[calc(var(--safe-bottom)+0.875rem)] pt-3.5 sm:px-8',
+        ribbon && 'gap-1.5 px-0 pb-0 pt-0 sm:px-0',
+      )}
       onDragOver={(e) => {
         if (!canAttachFiles || !canSendMessages) return;
         e.preventDefault();
@@ -997,14 +1042,14 @@ function OwnedMessageInput({ channelId, guildId, channelName, replyingTo, onCanc
         <div
           role="status"
           aria-live="polite"
-          className="flex items-center gap-2 rounded-sm border border-border-subtle bg-bg-mod-subtle px-3 py-2 text-meta text-text-secondary"
+          className="flex items-center gap-2 rounded-[var(--radius-control)] bg-bg-raised px-3 py-2 text-meta text-text-secondary shadow-[var(--shadow-raised)]"
         >
           <Loader2 size={14} className="shrink-0 animate-spin text-accent-primary" />
           <span>Waiting for command response…</span>
         </div>
       )}
       {!composerAction.allowed && (
-        <div role="status" className="rounded-sm border border-border-subtle bg-bg-mod-subtle px-3 py-2 text-meta text-text-muted">
+        <div role="status" className="rounded-[var(--radius-control)] bg-bg-raised px-3 py-2 text-meta text-text-muted shadow-[var(--shadow-raised)]">
           {composerAction.reason}
           {encrypted && encryption === 'setup' && <Link className="ml-2 underline" to={`/setup?${new URLSearchParams({ migrate: '1', server: scope.serverId, user: scope.userId, returnTo: window.location.pathname + window.location.search })}`}>Set up encryption</Link>}
           {encrypted && encryption === 'unlock' && <Link className="ml-2 underline" to={`/unlock?${new URLSearchParams({ returnTo: window.location.pathname + window.location.search })}`}>Unlock encryption</Link>}
@@ -1015,14 +1060,14 @@ function OwnedMessageInput({ channelId, guildId, channelName, replyingTo, onCanc
         </div>
       )}
       {isAnonymousChannel && (
-        <div className="flex items-center gap-2 rounded-sm border border-accent-primary/30 bg-accent-tint px-3 py-2 text-meta text-accent-primary">
+        <div className="flex items-center gap-2 rounded-[var(--radius-control)] bg-accent-tint px-3 py-2 text-meta text-accent-primary">
           <EyeOff size={14} className="shrink-0" />
           <span>Messages in this channel are posted anonymously</span>
         </div>
       )}
 
       {replyingTo && (
-        <div className="flex flex-wrap items-center gap-2 rounded-md border border-border-subtle bg-bg-secondary px-3 py-1.5 text-meta text-text-muted">
+        <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-well)] bg-bg-raised px-3 py-1.5 text-meta text-text-muted shadow-[var(--shadow-raised)]">
           <span>Replying to</span>
           <span className="font-semibold text-text-primary">{replyingTo.author}</span>
           <span className="min-w-0 flex-1 truncate text-text-muted">{replyingTo.content}</span>
@@ -1045,19 +1090,20 @@ function OwnedMessageInput({ channelId, guildId, channelName, replyingTo, onCanc
               return (
                 <div
                   key={i}
-                  className={`relative flex flex-shrink-0 items-center gap-2 rounded-sm border bg-bg-tertiary px-2 py-1.5 ${
-                    overLimit ? 'border-accent-danger' : 'border-border-subtle'
-                  }`}
+                  className={cn(
+                    'relative flex flex-shrink-0 items-center gap-2 rounded-[var(--radius-well)] bg-bg-raised px-2 py-1.5',
+                    overLimit ? 'shadow-[0_0_0_1px_var(--accent-danger)]' : 'shadow-[var(--shadow-raised)]',
+                  )}
                   style={{ maxWidth: 'min(220px, 60vw)' }}
                 >
                   {canPreviewImageFile(file) ? (
                     <img
                       src={stagedImagePreviews[i] || ''}
                       alt={file.name}
-                      className="h-10 w-10 rounded-xs object-cover"
+                      className="h-10 w-10 rounded-[var(--radius-chip)] object-cover"
                     />
                   ) : (
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xs bg-bg-mod-subtle text-text-muted">
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-chip)] bg-bg-well text-text-muted">
                       <FileText size={18} />
                     </span>
                   )}
@@ -1072,7 +1118,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, replyingTo, onCanc
                   </div>
                   <button
                     onClick={() => removeFile(i)}
-                    className="ml-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm bg-bg-mod-strong text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-danger hover:text-text-on-danger focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                    className="pc-focusable ml-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--radius-chip)] bg-bg-mod-strong text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-danger-well hover:text-accent-danger"
                     aria-label={`Remove ${file.name}`}
                     title={`Remove ${file.name}`}
                   >
@@ -1082,14 +1128,14 @@ function OwnedMessageInput({ channelId, guildId, channelName, replyingTo, onCanc
               );
             })}
           </div>
-          <div className="px-0.5 text-meta text-text-muted">
-            Max file size {formatFileSize(maxUploadSize)}
+          <div className="px-0.5 text-meta text-text-faint">
+            Max file size <span className="pc-mono">{formatFileSize(maxUploadSize)}</span>
           </div>
         </div>
       )}
 
       {showPollComposer && (
-        <div className="rounded-md border border-border-subtle bg-bg-secondary p-4 shadow-sm">
+        <div className="rounded-[var(--radius-well)] bg-bg-raised p-4 shadow-[var(--shadow-raised)]">
           <div className="mb-3 flex items-center justify-between gap-2">
             <span className="inline-flex items-center gap-1.5 text-section text-text-secondary">
               <BarChart3 size={14} className="text-accent-primary" />
@@ -1174,9 +1220,9 @@ function OwnedMessageInput({ channelId, guildId, channelName, replyingTo, onCanc
       )}
 
       {showScheduleComposer && (
-        <div className="rounded-md border border-border-subtle bg-bg-secondary p-4 shadow-sm">
+        <div className="rounded-[var(--radius-well)] bg-bg-raised p-4 shadow-[var(--shadow-raised)]">
           <label className="block">
-            <span className="text-section text-text-secondary">Send At</span>
+            <span className="text-section text-text-secondary">Send at</span>
             <Input
               type="datetime-local"
               value={scheduledAt}
@@ -1215,7 +1261,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, replyingTo, onCanc
       )}
       {submitError && (
         <div
-          className="rounded-md border border-accent-danger/40 bg-danger-tint px-3 py-2 text-meta font-semibold text-accent-danger"
+          className="rounded-[var(--radius-control)] bg-danger-well px-3 py-2 text-meta font-semibold text-accent-danger"
           role="alert"
         >
           {submitError}
@@ -1225,22 +1271,28 @@ function OwnedMessageInput({ channelId, guildId, channelName, replyingTo, onCanc
       <div
         ref={composerShellRef}
         className={cn(
-          // Constant 1px border so the drop state never reflows the composer (§7 Input,
-          // no outer glow); focus-within paints the emerald edge + inset focus ring.
-          'group relative flex min-h-[52px] items-end gap-1 rounded-md border px-2 py-1.5 transition-[background-color,border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus-within:border-accent-primary focus-within:shadow-[var(--focus-ring-input)]',
-          isDragOver
-            ? 'border-accent-primary bg-accent-tint'
-            : 'border-border-subtle bg-bg-tertiary shadow-sm',
+          // §8 Composer: raised, 50px, radius 12. Depth is the warm top
+          // highlight plus a lift — never a border, so the drop state cannot
+          // reflow the row.
+          'group relative flex min-h-[var(--h-composer)] items-end gap-2 rounded-[var(--radius-card)] py-1.5 pl-2.5 pr-2',
+          'transition-[background-color,box-shadow] duration-[140ms] ease-[var(--ease-out)]',
+          'focus-within:shadow-[var(--focus-ring-input)]',
+          isDragOver ? 'bg-accent-tint' : 'bg-bg-raised shadow-[var(--shadow-composer)]',
+          '[@media(max-width:640px)]:min-h-[var(--h-composer-phone)]',
+          // §8: the ribbon composer is 42px, and it is a well rather than a
+          // raised bar because the ribbon plate is already the raised surface.
+          ribbon && 'min-h-[var(--h-composer-ribbon)] gap-1.5 pl-2 [@media(max-width:640px)]:min-h-[var(--h-composer-ribbon)]',
+          ribbon && !isDragOver && 'pc-well bg-bg-well shadow-[var(--shadow-well)]',
         )}
       >
         {nearLimit && (
           <span
             className={cn(
-              'pointer-events-none absolute -top-6 right-1 rounded-xs px-1.5 py-0.5 text-meta tabular-nums',
-              overLimit ? 'bg-danger-tint text-accent-danger' : 'text-text-muted',
+              'pointer-events-none absolute -top-6 right-1 rounded-[var(--radius-chip)] px-1.5 py-0.5 text-meta tabular-nums',
+              overLimit ? 'bg-danger-well text-accent-danger' : 'text-text-faint',
             )}
           >
-            {content.length}/{MAX_MESSAGE_LENGTH}
+            <span className="pc-mono">{content.length}/{MAX_MESSAGE_LENGTH}</span>
           </span>
         )}
 
@@ -1263,7 +1315,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, replyingTo, onCanc
           <motion.div
             {...popoverEnter}
             transition={popoverTransition}
-            className="absolute bottom-full left-2 right-2 z-10 mb-2 rounded-md border border-border-subtle bg-bg-floating p-1 shadow-lg"
+            className="pc-floating absolute bottom-full left-2 right-2 z-10 mb-2 p-1"
           >
             <MarkdownToolbar textareaRef={textareaRef} onContentChange={setContent} />
           </motion.div>
@@ -1302,23 +1354,26 @@ function OwnedMessageInput({ channelId, guildId, channelName, replyingTo, onCanc
           <motion.div
             {...popoverEnter}
             transition={popoverTransition}
-            className="absolute bottom-full left-2 right-2 z-20 mb-2 max-h-64 overflow-y-auto rounded-md border border-border-subtle bg-bg-floating p-1 shadow-lg"
+            className="pc-floating absolute bottom-full left-2 right-2 z-20 mb-2 max-h-64 overflow-y-auto p-1"
           >
             {mentionResults.map((member, i) => (
               <button
                 key={member.user.id}
                 type="button"
-                className={`flex w-full items-center gap-2.5 rounded-sm px-2 py-1.5 text-left transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${i === mentionIndex
-                    ? 'bg-accent-tint text-text-primary'
-                    : 'text-text-secondary hover:bg-accent-tint hover:text-text-primary'
-                  }`}
+                className={cn(
+                  'pc-focusable flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-2 py-1.5 text-left',
+                  'transition-colors duration-[140ms] ease-[var(--ease-out)]',
+                  i === mentionIndex
+                    ? 'bg-bg-mod-strong text-text-primary'
+                    : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
+                )}
                 onMouseDown={(e) => {
                   e.preventDefault();
                   insertMention(member.user.id);
                 }}
                 onMouseEnter={() => setMentionIndex(i)}
               >
-                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent-tint-strong text-meta font-semibold text-accent-primary">
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-bg-mod-strong text-meta font-semibold text-text-secondary">
                   {displayName(member.user, member.nick).charAt(0).toUpperCase()}
                 </span>
                 <span className="min-w-0 flex-1 truncate">
@@ -1366,6 +1421,41 @@ function OwnedMessageInput({ channelId, guildId, channelName, replyingTo, onCanc
           <Plus size={18} />
         </button>
 
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          className="hidden"
+          onChange={handleFileSelect}
+        />
+
+        <textarea
+          ref={textareaRef}
+          value={showPollComposer ? '' : content}
+          onChange={(e) => {
+            setContent(e.target.value);
+            detectMentionQuery(e.target.value, e.target.selectionStart);
+            triggerTyping();
+          }}
+          onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
+          placeholder={
+            showPollComposer
+                ? 'The question above is what gets sent'
+                : showScheduleComposer
+                  ? `Schedule a message for ${channelName ?? 'this conversation'}`
+                  : ribbon
+                    ? 'Say something to the room'
+                    : composerPlaceholder(readingOthers, channelName)
+          }
+          rows={1}
+          maxLength={MAX_MESSAGE_LENGTH}
+          disabled={showPollComposer}
+          data-composer-input=""
+          className="min-w-[160px] flex-1 resize-none self-center bg-transparent px-1.5 py-2 text-body text-text-primary outline-none placeholder:text-text-faint disabled:cursor-not-allowed disabled:opacity-70"
+          style={{ maxHeight: '50vh' }}
+        />
+
         <button
           type="button"
           data-composer-picker-toggle="formatting"
@@ -1401,38 +1491,6 @@ function OwnedMessageInput({ channelId, guildId, channelName, replyingTo, onCanc
         >
           <Clock3 size={18} />
         </button>
-
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          className="hidden"
-          onChange={handleFileSelect}
-        />
-
-        <textarea
-          ref={textareaRef}
-          value={showPollComposer ? '' : content}
-          onChange={(e) => {
-            setContent(e.target.value);
-            detectMentionQuery(e.target.value, e.target.selectionStart);
-            triggerTyping();
-          }}
-          onKeyDown={handleKeyDown}
-          onPaste={handlePaste}
-          placeholder={
-            showPollComposer
-                ? 'Poll question above will be sent as a poll message'
-                : showScheduleComposer
-                  ? `Schedule message for ${channelName ? '#' + channelName : 'this channel'}`
-                  : `Message ${channelName ? '#' + channelName : 'this channel'}`
-          }
-          rows={1}
-          maxLength={MAX_MESSAGE_LENGTH}
-          disabled={showPollComposer}
-          className="min-w-0 flex-1 resize-none self-center bg-transparent px-1.5 py-2 text-body text-text-primary outline-none placeholder:text-text-muted disabled:cursor-not-allowed disabled:opacity-70"
-          style={{ maxHeight: '50vh' }}
-        />
 
         {guildId && (
           <div className="relative">
@@ -1548,10 +1606,16 @@ function OwnedMessageInput({ channelId, guildId, channelName, replyingTo, onCanc
           whileTap={reduceMotion || sendDisabled ? undefined : { scale: [1, 1.08, 1] }}
           transition={{ duration: 0.32, ease: [0.2, 0.9, 0.3, 1.3] }}
           className={cn(
-            'inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-sm transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:w-11',
+            'pc-focusable inline-flex h-[34px] shrink-0 items-center justify-center gap-1.5 rounded-[var(--radius-control)] px-3',
+            'transition-colors duration-[140ms] ease-[var(--ease-out)]',
+            '[@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:px-4',
             sendDisabled
-              ? 'cursor-not-allowed bg-bg-mod-subtle text-interactive-muted'
-              : 'bg-accent-primary text-text-on-accent shadow-sm hover:bg-accent-primary-hover active:bg-accent-primary-active',
+              ? 'cursor-not-allowed bg-bg-mod-subtle text-text-faint'
+              // Inside the Stage the send button is white light: everybody it
+              // reaches is in the room right now (§8 Composer).
+              : ribbon
+                ? 'bg-light-white font-semibold text-text-on-light shadow-[var(--glow-control-on)]'
+                : 'bg-accent-primary font-semibold text-text-on-accent hover:bg-accent-primary-hover active:bg-accent-primary-active',
           )}
           aria-label={showScheduleComposer ? (schedulingMessage ? 'Scheduling message' : 'Schedule message') : 'Send message'}
           title={showScheduleComposer ? (schedulingMessage ? 'Scheduling message' : 'Schedule message') : 'Send message'}
@@ -1567,8 +1631,8 @@ function OwnedMessageInput({ channelId, guildId, channelName, replyingTo, onCanc
       </div>
 
       {isDragOver && (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-md border-2 border-dashed border-accent-primary/50 bg-bg-primary/60 backdrop-blur-sm">
-          <div className="inline-flex items-center gap-2 text-subhead text-accent-primary">
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-[var(--radius-card)] border-2 border-dashed border-accent-primary/50 bg-bg-plate/70">
+          <div className="pc-display inline-flex items-center gap-2 text-heading text-accent-primary">
             <Plus size={20} />
             Drop files to attach
           </div>

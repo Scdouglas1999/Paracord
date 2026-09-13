@@ -5,7 +5,9 @@ import { useStream } from '../../hooks/useStream';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { useAuthStore } from '../../stores/authStore';
 import { cn } from '../../lib/utils';
+import { IconButton } from '../ui';
 import { Tooltip } from '../ui/Tooltip';
+import { StageControlBar } from './stage';
 import { ScreenSharePickerModal } from './ScreenSharePickerModal';
 import { InCallDeviceMenu } from './InCallDeviceMenu';
 import {
@@ -91,6 +93,12 @@ export function VoiceControlBar({
     const pttEngaged = useVoiceStore((s) => s.pttEngaged);
     const rawNotifications = useAuthStore((s) => s.settings?.notifications as Record<string, unknown> | undefined);
     const isPttMode = (rawNotifications?.['voiceInputMode'] ?? 'voice_activity') === 'push_to_talk';
+
+    // Mic on is white light (§7.2): the fill asserts that the room can hear you
+    // right now, which is a state, not emphasis. Muted — or push-to-talk with
+    // the key up — is the danger well.
+    const micLive = !selfMute && !selfDeaf && (!isPttMode || pttEngaged);
+    const micOff = isPttMode ? !pttEngaged : selfMute;
 
     const [streamStarting, setStreamStarting] = useState(false);
     const [streamError, setStreamError] = useState<string | null>(null);
@@ -203,15 +211,12 @@ export function VoiceControlBar({
         await loadScreenSources();
     }, [loadScreenSources]);
 
-    // Shared control-button base: 44px touch target, radius-sm, layered focus ring,
-    // tactile press (design-spec §7 Icon button + §4 focus + §5 motion).
-    const ctrlBase =
-        'flex h-11 w-11 items-center justify-center rounded-sm outline-none transition-[background-color,box-shadow,transform] duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] active:scale-[.97]';
-
     return (
         <>
-        {/* z-[70]: stay above maximized StreamViewer (z-50) and mobile voice chat (z-50). */}
-        <div className="absolute bottom-6 left-1/2 z-[70] flex -translate-x-1/2 items-center gap-1.5 rounded-md border border-border-subtle bg-bg-secondary px-2 py-2 shadow-md">
+        {/* The Stage lays the bar out in flow and centres it (§7.2); the
+            controls are 46px (50 on a phone) on the 13px stage radius, mic-on
+            is white light and leave is danger. */}
+        <StageControlBar>
             {listenOnly ? (
                 <Tooltip
                     content={requestToSpeakPending ? 'Cancel request to speak' : 'Ask the stage moderators to invite you'}
@@ -224,10 +229,12 @@ export function VoiceControlBar({
                         disabled={requestBusy || !onToggleRequestToSpeak}
                         onClick={onToggleRequestToSpeak}
                         className={cn(
-                            'flex h-11 items-center gap-2 rounded-sm px-3.5 text-label outline-none transition-[background-color,box-shadow,transform] duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] active:scale-[.97] disabled:cursor-not-allowed disabled:opacity-60',
+                            'pc-focusable inline-flex h-[var(--h-stage-control)] items-center gap-2 rounded-[var(--radius-stage-control)] px-4 text-label',
+                            'transition-[background-color,color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+                            'disabled:pointer-events-none disabled:opacity-60',
                             requestToSpeakPending
-                                ? 'bg-accent-tint text-accent-primary'
-                                : 'bg-bg-mod-subtle text-interactive-normal hover:bg-bg-mod-strong hover:text-interactive-hover',
+                                ? 'bg-light-white text-text-on-light shadow-[var(--glow-control-on)]'
+                                : 'bg-bg-raised text-text-primary shadow-[var(--shadow-lifted)] hover:bg-bg-mod-strong',
                         )}
                     >
                         <Hand size={19} />
@@ -237,7 +244,7 @@ export function VoiceControlBar({
                     </button>
                 </Tooltip>
             ) : (
-            <div className="flex items-stretch rounded-sm bg-bg-mod-subtle">
+            <div className="flex items-stretch">
                 <Tooltip
                     content={
                         isPttMode
@@ -246,44 +253,37 @@ export function VoiceControlBar({
                     }
                     side="top"
                 >
-                    <button
-                        aria-label={
+                    <IconButton
+                        label={
                             isPttMode
                                 ? pttEngaged ? 'Transmitting with push to talk' : 'Push to talk muted'
                                 : selfMute ? 'Unmute microphone' : 'Mute microphone'
                         }
+                        size="stage"
+                        tone={micLive ? 'light' : micOff ? 'danger' : 'raised'}
                         onClick={() => { if (!isPttMode) toggleMute(); }}
-                        className={cn(
-                            ctrlBase,
-                            'relative rounded-r-none',
-                            isPttMode
-                                ? pttEngaged
-                                    // Transmitting = emerald active-on ring (design-spec speaking cue).
-                                    ? 'bg-accent-tint text-accent-primary ring-2 ring-accent-primary'
-                                    : 'bg-danger-tint text-accent-danger'
-                                : selfMute
-                                    ? 'bg-danger-tint text-accent-danger'
-                                    : 'text-interactive-normal hover:bg-bg-mod-strong hover:text-interactive-hover'
-                        )}
+                        className="relative rounded-r-none"
                         style={{ cursor: isPttMode ? 'default' : undefined }}
                     >
                         {isPttMode
                             ? pttEngaged
-                                ? <Radio size={20} className="animate-pulse" />
+                                ? <Radio size={20} />
                                 : <MicOff size={20} />
                             : selfMute
                                 ? <MicOff size={20} />
                                 : <Mic size={20} />
                         }
-                        {!selfMute && !selfDeaf && (!isPttMode || pttEngaged) && (
-                            <span className="absolute bottom-1 left-2 right-2 h-0.5 overflow-hidden rounded-full bg-bg-mod-strong" aria-hidden>
+                        {micLive && (
+                            /* Your own level, on your own control — the one place
+                               the bar means something you can act on. */
+                            <span className="absolute bottom-1.5 left-2.5 right-2.5 h-0.5 overflow-hidden rounded-full bg-text-on-light/25" aria-hidden>
                                 <span
-                                    className="block h-full rounded-full bg-accent-primary transition-[width] duration-100"
+                                    className="block h-full rounded-full bg-text-on-light transition-[width] duration-100"
                                     style={{ width: `${Math.round(Math.min(1, Math.max(0, micInputLevel)) * 100)}%` }}
                                 />
                             </span>
                         )}
-                    </button>
+                    </IconButton>
                 </Tooltip>
                 <InCallDeviceMenu
                     micLevel={micInputLevel}
@@ -297,48 +297,35 @@ export function VoiceControlBar({
             )}
 
             <Tooltip content={selfDeaf ? 'Undeafen' : 'Deafen'} side="top">
-                <button
-                    aria-label={selfDeaf ? 'Undeafen audio' : 'Deafen audio'}
+                <IconButton
+                    label={selfDeaf ? 'Undeafen audio' : 'Deafen audio'}
+                    size="stage"
+                    tone={selfDeaf ? 'danger' : 'raised'}
                     onClick={() => toggleDeaf()}
-                    className={cn(
-                        ctrlBase,
-                        selfDeaf
-                            ? 'bg-danger-tint text-accent-danger'
-                            : 'text-interactive-normal hover:bg-bg-mod-subtle hover:text-interactive-hover'
-                    )}
                 >
                     {selfDeaf ? <HeadphoneOff size={20} /> : <Headphones size={20} />}
-                </button>
+                </IconButton>
             </Tooltip>
 
             {!listenOnly && <Tooltip content={selfVideo ? 'Turn Off Camera' : 'Turn On Camera'} side="top">
-                <button
-                    aria-label={selfVideo ? 'Turn off camera' : 'Turn on camera'}
+                <IconButton
+                    label={selfVideo ? 'Turn off camera' : 'Turn on camera'}
+                    size="stage"
+                    tone={selfVideo ? 'light' : 'raised'}
                     onClick={() => { void toggleVideo(); }}
-                    className={cn(
-                        ctrlBase,
-                        selfVideo
-                            ? 'bg-accent-tint text-accent-primary'
-                            : 'text-interactive-normal hover:bg-bg-mod-subtle hover:text-interactive-hover'
-                    )}
                 >
                     {selfVideo ? <Video size={20} /> : <VideoOff size={20} />}
-                </button>
+                </IconButton>
             </Tooltip>}
 
-            {!listenOnly && <div className="mx-1 h-6 w-px bg-border-subtle" />}
-
-            {/* Screen-share split button — opens the device-picker menu (design-spec §7). */}
+            {/* Screen-share split control — the picker menu lives behind the chevron. */}
             {!listenOnly && <div className="relative flex items-center" ref={streamMenuRef}>
-                <div
-                    className={cn(
-                        'flex items-stretch overflow-hidden rounded-sm',
-                        selfStream ? 'bg-accent-tint' : 'bg-bg-mod-subtle'
-                    )}
-                >
+                <div className="flex items-stretch">
                     <Tooltip content={selfStream ? 'Stop Streaming' : 'Share Screen'} side="top">
-                        <button
-                            aria-label={selfStream ? 'Stop streaming' : streamStarting ? 'Starting screen share' : 'Share screen'}
+                        <IconButton
+                            label={selfStream ? 'Stop streaming' : streamStarting ? 'Starting screen share' : 'Share screen'}
+                            size="stage"
+                            tone={selfStream ? 'light' : 'raised'}
                             disabled={streamStarting}
                             onClick={selfStream ? handleStopStream : () => {
                                 if (mediaEngine?.supportsNativeSourcePicker()) {
@@ -347,13 +334,7 @@ export function VoiceControlBar({
                                 }
                                 void handleStartStream();
                             }}
-                            className={cn(
-                                'flex h-11 items-center gap-2 px-3.5 outline-none transition-[background-color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] disabled:opacity-70',
-                                selfStream
-                                    // Active-on = emerald tint + emerald icon, never a fill wash.
-                                    ? 'text-accent-primary hover:bg-accent-tint-strong'
-                                    : 'text-interactive-normal hover:bg-bg-mod-strong hover:text-interactive-hover'
-                            )}
+                            className={cn(!selfStream && 'rounded-r-none')}
                         >
                             {selfStream ? (
                                 <MonitorOff size={20} />
@@ -362,20 +343,18 @@ export function VoiceControlBar({
                             ) : (
                                 <MonitorUp size={20} />
                             )}
-                            <span className="hidden whitespace-nowrap text-label sm:block">
-                                {selfStream ? 'Stop Stream' : streamStarting ? 'Starting…' : 'Share Screen'}
-                            </span>
-                        </button>
+                        </IconButton>
                     </Tooltip>
 
                     {!selfStream && (
                         <button
                             ref={qualityTriggerRef}
+                            type="button"
                             aria-label={showStreamMenu ? 'Hide share quality menu' : 'Choose share quality'}
                             onClick={() => setShowStreamMenu(!showStreamMenu)}
-                            className="flex items-center justify-center border-l border-border-subtle px-2 text-interactive-normal outline-none transition-colors hover:bg-bg-mod-strong hover:text-interactive-hover focus-visible:shadow-[var(--focus-ring)]"
+                            className="pc-focusable flex h-[var(--h-stage-control)] w-7 items-center justify-center rounded-r-[var(--radius-stage-control)] bg-bg-raised text-text-secondary shadow-[var(--shadow-lifted)] transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
                         >
-                            <ChevronUp size={18} />
+                            <ChevronUp size={18} className={cn('transition-transform', showStreamMenu && 'rotate-180')} />
                         </button>
                     )}
                 </div>
@@ -385,16 +364,16 @@ export function VoiceControlBar({
                 {showStreamMenu && (
                     <StreamOverlayPortal
                         panelRef={qualityPanelRef}
-                        className="w-[min(15rem,calc(100vw-1rem))] rounded-md border border-border-subtle bg-bg-secondary p-1 shadow-lg"
+                        className="pc-floating w-[min(15rem,calc(100vw-1rem))] p-1.5"
                         style={{
                             bottom: qualityCoords?.bottom ?? 72,
                             left: qualityCoords?.left ?? 8,
                         }}
                     >
-                        <div className="px-2.5 pb-1.5 pt-1 text-section text-text-muted">
+                        <div className="px-2 pb-1 pt-0.5 text-section text-text-faint">
                             Share quality
                         </div>
-                        <p className="px-2.5 pb-2 text-meta leading-snug text-text-secondary">
+                        <p className="px-2 pb-2 text-meta leading-snug text-text-secondary">
                             Sets the quality you send. Viewers can adapt playback for their connection.
                         </p>
                         <div className="flex flex-col gap-0.5">
@@ -408,15 +387,16 @@ export function VoiceControlBar({
                             ].map((q) => (
                                 <button
                                     key={q.value}
+                                    type="button"
                                     onClick={() => {
                                         setCaptureQuality(q.value);
                                         setShowStreamMenu(false);
                                     }}
                                     className={cn(
-                                        'flex items-center justify-between rounded-sm px-2.5 py-1.5 text-label outline-none transition-colors focus-visible:shadow-[var(--focus-ring)]',
+                                        'pc-focusable flex items-center justify-between rounded-[var(--radius-control)] px-2.5 py-1.5 text-label transition-colors',
                                         captureQuality === q.value
-                                            ? 'bg-accent-tint text-accent-primary'
-                                            : 'text-text-secondary hover:bg-accent-tint hover:text-text-primary'
+                                            ? 'bg-bg-mod-strong text-text-primary'
+                                            : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
                                     )}
                                 >
                                     {q.label}
@@ -427,15 +407,16 @@ export function VoiceControlBar({
                     </StreamOverlayPortal>
                 )}
 
-                {/* Stream warning affordance — warning semantic, not the emerald accent. */}
+                {/* Stream warning affordance — warning semantic, not a light. */}
                 {streamIssueMessage && (
                     <div className="relative ml-1.5">
                         <button
                             ref={warningTriggerRef}
+                            type="button"
                             aria-label={showError ? 'Hide screen share warning' : 'Show screen share warning'}
                             aria-expanded={showError}
                             onClick={() => setShowError(!showError)}
-                            className={cn(ctrlBase, 'bg-warning-tint text-accent-warning')}
+                            className="pc-focusable inline-flex h-[var(--h-stage-control)] w-[var(--h-stage-control)] items-center justify-center rounded-[var(--radius-stage-control)] bg-warning-tint text-accent-warning shadow-[var(--shadow-lifted)]"
                         >
                             <AlertTriangle size={20} />
                         </button>
@@ -443,7 +424,7 @@ export function VoiceControlBar({
                             <StreamOverlayPortal
                                 panelRef={warningPanelRef}
                                 role="status"
-                                className="w-[min(18rem,calc(100vw-1rem))] rounded-md border border-border-subtle bg-bg-secondary px-3 py-2.5 text-meta leading-relaxed text-text-secondary shadow-lg"
+                                className="pc-floating w-[min(18rem,calc(100vw-1rem))] px-3 py-2.5 text-meta leading-relaxed text-text-secondary"
                                 style={{
                                     bottom: warningCoords?.bottom ?? 72,
                                     left: warningCoords?.left ?? 8,
@@ -457,36 +438,32 @@ export function VoiceControlBar({
                 )}
             </div>}
 
-            <div className="mx-1 h-6 w-px bg-border-subtle" />
-
             {onToggleChat && (
                 <Tooltip content={isChatOpen ? 'Hide Chat' : 'Show Chat'} side="top">
-                    <button
+                    <IconButton
+                        label={isChatOpen ? 'Hide voice chat' : 'Show voice chat'}
+                        size="stage"
+                        tone="raised"
+                        active={isChatOpen}
                         onClick={onToggleChat}
-                        aria-label={isChatOpen ? 'Hide voice chat' : 'Show voice chat'}
-                        className={cn(
-                            ctrlBase,
-                            isChatOpen
-                                ? 'bg-accent-tint text-accent-primary'
-                                : 'text-interactive-normal hover:bg-bg-mod-subtle hover:text-interactive-hover'
-                        )}
                     >
                         <MessageSquare size={20} />
-                    </button>
+                    </IconButton>
                 </Tooltip>
             )}
 
             <Tooltip content="Disconnect" side="top">
-                <button
-                    aria-label="Disconnect from voice"
+                <IconButton
+                    label="Disconnect from voice"
+                    size="stage"
+                    tone="danger"
                     onClick={() => void leaveChannel()}
-                    className="flex h-11 items-center gap-2 rounded-sm bg-accent-danger-fill px-4 text-text-on-danger shadow-sm outline-none transition-[background-color,box-shadow,transform] duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-[color-mix(in_srgb,var(--accent-danger-fill)_90%,#000)] focus-visible:shadow-[var(--focus-ring)] active:scale-[.97]"
+                    className="w-[72px] sm:w-16"
                 >
                     <PhoneOff size={20} />
-                    <span className="hidden whitespace-nowrap text-label sm:block">Disconnect</span>
-                </button>
+                </IconButton>
             </Tooltip>
-        </div>
+        </StageControlBar>
         {showSourcePicker && !selfStream && (
             <ScreenSharePickerModal
                 sources={screenSources}

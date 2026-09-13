@@ -35,6 +35,11 @@ const MediaTest = import.meta.env.DEV ? lazy(() => import('./pages/MediaTest')) 
 const DesignTokensPage = import.meta.env.DEV
   ? lazy(() => import('./pages/DesignTokensPage'))
   : null;
+// The Stage, at full size, from fixture models — the WP3 screenshot gate
+// (docs/design/wp3-checkpoint.md). Dev builds only, same fold-to-null.
+const StagePreviewPage = import.meta.env.DEV
+  ? lazy(() => import('./pages/StagePreviewPage'))
+  : null;
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { useAccountStore } from './stores/accountStore';
 import { useServerListStore } from './stores/serverListStore';
@@ -325,6 +330,11 @@ export default function App() {
       {/* Design-system reference — dev builds only, stripped from production. */}
       {import.meta.env.DEV && DesignTokensPage && (
         <Route path="/design-tokens" element={lazyRoute(<DesignTokensPage />)} />
+      )}
+
+      {/* The Stage at full size — dev builds only, stripped from production. */}
+      {import.meta.env.DEV && StagePreviewPage && (
+        <Route path="/design-stage" element={lazyRoute(<StagePreviewPage />)} />
       )}
 
       {/* Default: send to app (which handles auth redirects) */}

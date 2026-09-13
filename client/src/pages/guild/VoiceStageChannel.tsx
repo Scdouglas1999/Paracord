@@ -1,26 +1,58 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, EyeOff, Hand, LayoutList, Mic, Monitor, PanelLeft, PictureInPicture2, X } from 'lucide-react';
+import {
+  Check,
+  ChevronLeft,
+  EyeOff,
+  Hand,
+  LayoutList,
+  MoreHorizontal,
+  PanelLeft,
+  PictureInPicture2,
+  UserPlus,
+  X,
+} from 'lucide-react';
 import { RoomEvent, Track } from 'livekit-client';
+import { useNavigate } from 'react-router';
+
 import { StreamViewer } from '../../components/voice/StreamViewer';
-import { VideoGrid } from '../../components/voice/VideoGrid';
 import { SplitPane } from '../../components/voice/SplitPane';
 import { VoiceControlBar } from '../../components/voice/VoiceControlBar';
+import { StageSpeakers } from '../../components/voice/StageSpeakers';
+import {
+  StageHeader,
+  StageLayout,
+  StageNotice,
+  StageStatus,
+  callTransport,
+  transportReadout,
+  type StagePhase,
+} from '../../components/voice/stage';
+import { VoiceConnectionCheckButton } from '../../components/voice/VoiceConnectionCheckButton';
 import type { PaneSource } from '../../components/voice/SplitPaneSourcePicker';
+import { AvatarStack, HereNowStrip } from '../../components/light';
+import { Button, IconButton, MenuItem, Popover, Raised } from '../../components/ui';
+import { InviteModal } from '../../components/guild/InviteModal';
 import { useVoice } from '../../hooks/useVoice';
 import { useStream } from '../../hooks/useStream';
 import { useWebcamTiles } from '../../hooks/useWebcamTiles';
 import { useScreenShareSubscriptions } from '../../hooks/useScreenShareSubscriptions';
-import { useMobile } from '../../hooks/useMobile';
+import { useBuildingLight, useHereNow, useLightClock } from '../../hooks/useLights';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { stageApi, type StageInstance } from '../../api/stage';
 import { extractApiError } from '../../api/client';
 import { VoiceLobby } from './VoiceLobby';
-import { VoiceChatSidebar } from './VoiceChatSidebar';
-import { Button } from '../../components/ui/Button';
+import { RoomChat } from './RoomChat';
 import { displayName } from '../../lib/displayName';
 import { ErrorBoundary } from '../../components/ErrorBoundary';
 
 type VideoLayout = 'top' | 'side' | 'pip' | 'hidden';
+
+const LAYOUT_OPTIONS = [
+  { mode: 'top' as const, icon: LayoutList, label: 'Focus' },
+  { mode: 'side' as const, icon: PanelLeft, label: 'Split' },
+  { mode: 'pip' as const, icon: PictureInPicture2, label: 'Picture in picture' },
+  { mode: 'hidden' as const, icon: EyeOff, label: 'Share only' },
+];
 
 interface VoiceStageChannelProps {
   guildId: string | undefined;
@@ -61,16 +93,32 @@ export function VoiceStageChannel({
   const channelParticipants = useVoiceStore((s) => s.channelParticipants);
   const setWatchedStreamer = useVoiceStore((s) => s.setWatchedStreamer);
   const room = useVoiceStore((s) => s.room);
+  const callPhase = useVoiceStore((s) => s.callPhase);
   const previewStreamerId = useVoiceStore((s) => s.previewStreamerId);
   const streamAudioWarning = useVoiceStore((s) => s.streamAudioWarning);
   const mediaEngine = useVoiceStore((s) => s.mediaEngine);
-  const isMobile = useMobile();
   const webcamTiles = useWebcamTiles();
+  const navigate = useNavigate();
+
+  // The room, as light (WP1). Who is here, how long it has been lit and what
+  // the header says all come from here — the Stage never re-derives a light.
+  const building = useBuildingLight(guildId);
+  const roomLight = useMemo(
+    () => building?.rooms.find((entry) => entry.channelId === channelId) ?? null,
+    [building, channelId],
+  );
+  const hereNow = useHereNow(guildId, channelId);
 
   const [replyingTo, setReplyingTo] = useState<{ id: string; author: string; content: string } | null>(null);
   const [videoLayout, setVideoLayout] = useState<VideoLayout>('top');
   const [activeStreamers, setActiveStreamers] = useState<string[]>([]);
-  const [showVoiceChat, setShowVoiceChat] = useState(false);
+  const [showRoomChat, setShowRoomChat] = useState(!isPhoneLayout);
+  const [chatSheetExpanded, setChatSheetExpanded] = useState(true);
+  const [showInvite, setShowInvite] = useState(false);
+  const [layoutMenuOpen, setLayoutMenuOpen] = useState(false);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const layoutAnchor = useRef<HTMLButtonElement>(null);
+  const moreAnchor = useRef<HTMLButtonElement>(null);
   const [stageInstance, setStageInstance] = useState<StageInstance | null>(null);
   const [stageLoading, setStageLoading] = useState(false);
   const [stageBusy, setStageBusy] = useState(false);
@@ -92,10 +140,6 @@ export function VoiceStageChannel({
         (participant) => participant.channel_id === channelId,
       ),
     [participants, channelId],
-  );
-  const stageSpeakers = useMemo(
-    () => stageParticipants.filter((participant) => !participant.suppress),
-    [stageParticipants],
   );
   const stageAudience = useMemo(
     () => stageParticipants.filter((participant) => participant.suppress),
@@ -540,6 +584,25 @@ export function VoiceStageChannel({
     return map;
   }, [participants]);
 
+  // How long this client has been trying to get back in — the reconnect count
+  // in "Reconnecting to Shop floor · 3 s". Observed here, never guessed.
+  const reconnecting = inSelectedVoiceChannel && callPhase === 'reconnecting';
+  const reconnectSinceRef = useRef<number | null>(null);
+  if (reconnecting && reconnectSinceRef.current == null) reconnectSinceRef.current = Date.now();
+  if (!reconnecting && reconnectSinceRef.current != null) reconnectSinceRef.current = null;
+  const clockNow = useLightClock(reconnecting || voiceJoinPending);
+  const reconnectElapsedMs =
+    reconnectSinceRef.current != null ? clockNow - reconnectSinceRef.current : 0;
+
+  const transport = transportReadout({
+    transport: callTransport({ hasMediaEngine: Boolean(mediaEngine), hasRoom: Boolean(room) }),
+  });
+
+  const retryJoin = () => {
+    clearConnectionError();
+    if (channelId && guildId) void joinChannel(channelId, guildId);
+  };
+
   // The call surface drives WebGL/native video. A throw in here must not take
   // the channel (or the app) down — the user needs the controls to leave.
   const streamViewerElement = watchedStreamerId ? (
@@ -547,6 +610,7 @@ export function VoiceStageChannel({
     <StreamViewer
       streamerId={watchedStreamerId}
       streamerName={watchedStreamerName}
+      transport={transport}
       issueMessage={
         currentUserId != null && watchedStreamerId === currentUserId
           ? ownStreamIssueMessage
@@ -566,34 +630,325 @@ export function VoiceStageChannel({
     </ErrorBoundary>
   ) : null;
 
-  return (
-    <div data-native-underlay-clear="" className="flex min-h-0 flex-1 flex-col relative text-text-muted">
-      {inSelectedVoiceChannel && (
-        <VoiceControlBar
-          onToggleChat={() => setShowVoiceChat(!showVoiceChat)}
-          isChatOpen={showVoiceChat}
-          listenOnly={isStageAudience}
-          requestToSpeakPending={hasRequestedToSpeak}
-          requestBusy={stageRequestBusy}
-          onToggleRequestToSpeak={() => { void toggleSpeakerRequest(); }}
+  const splitElement = (
+    <div data-native-underlay-clear="" className="flex min-h-0 h-full gap-[var(--gutter)]">
+      {(['left', 'right'] as const).map((side) => (
+        <SplitPane
+          key={side}
+          source={splitState[side]}
+          onSourceChange={(src) => setSplitState((prev) => ({ ...prev, [side]: src }))}
+          otherPaneSource={splitState[side === 'left' ? 'right' : 'left']}
+          activeStreamers={activeStreamers}
+          webcamTiles={webcamTiles}
+          participantNames={participantNames}
+          currentUserId={currentUserId}
+          selfStream={selfStream}
+          streamIssueMessage={ownStreamIssueMessage}
+          activeStreamerSet={activeStreamerSet}
+          onStopStream={() => {
+            stopStream();
+          }}
         />
-      )}
+      ))}
+    </div>
+  );
 
-      {!inSelectedVoiceChannel && (
+  const occupants = roomLight?.occupants ?? [];
+  const canChooseLayout = !isStage && Boolean(watchedStreamerId || videoLayout === 'side');
+  // Split view fills the whole area; picture-in-picture and share-only hide the
+  // strip while a share is on the dominant tile. Everything else keeps it.
+  const showSpeakerStrip =
+    videoLayout === 'side' ? false : videoLayout === 'top' || !watchedStreamerId;
+
+  const header = (
+    <StageHeader
+      compact={isPhoneLayout}
+      roomName={roomLight?.name ?? channelName}
+      buildingName={building?.name ?? null}
+      durationMs={roomLight?.durationMs ?? null}
+      leading={
+        isPhoneLayout ? (
+          <IconButton
+            label="Back to the building"
+            size="md"
+            tone="ghost"
+            onClick={() => navigate(guildId ? `/app/guilds/${guildId}` : '/app')}
+          >
+            <ChevronLeft size={20} />
+          </IconButton>
+        ) : undefined
+      }
+      hereCaption={hereNow.here > 0 ? `${hereNow.here} here` : null}
+      hereNow={
+        isPhoneLayout ? (
+          <AvatarStack
+            people={hereNow.people}
+            size={26}
+            max={3}
+            context={`in ${roomLight?.name ?? channelName}`}
+          />
+        ) : (
+          <HereNowStrip hereNow={hereNow} context={`in ${roomLight?.name ?? channelName}`} />
+        )
+      }
+      actions={
+        <>
+          {!isPhoneLayout && guildId && channelId && (
+            <Button variant="ghost" onClick={() => setShowInvite(true)}>
+              <UserPlus size={16} className="mr-1.5" />
+              Invite
+            </Button>
+          )}
+          {canChooseLayout && (
+            <>
+              <Button
+                ref={layoutAnchor}
+                variant="ghost"
+                aria-haspopup="menu"
+                aria-expanded={layoutMenuOpen}
+                onClick={() => setLayoutMenuOpen((open) => !open)}
+              >
+                <LayoutList size={16} className="mr-1.5" />
+                Layout
+              </Button>
+              <Popover
+                anchor={layoutAnchor}
+                open={layoutMenuOpen}
+                onClose={() => setLayoutMenuOpen(false)}
+                side="bottom"
+                align="end"
+                role="menu"
+                label="Video layout"
+                className="w-56 p-1.5"
+              >
+                {LAYOUT_OPTIONS.filter((option) => !(isPhoneLayout && option.mode === 'side')).map(
+                  ({ mode, icon: Icon, label }) => (
+                    <MenuItem
+                      key={mode}
+                      icon={<Icon size={16} />}
+                      trailing={videoLayout === mode ? <Check size={15} /> : undefined}
+                      onClick={() => {
+                        setVideoLayout(mode);
+                        setLayoutMenuOpen(false);
+                      }}
+                    >
+                      {label}
+                    </MenuItem>
+                  ),
+                )}
+              </Popover>
+            </>
+          )}
+          <IconButton
+            ref={moreAnchor}
+            label="More room actions"
+            size="md"
+            tone="ghost"
+            aria-haspopup="menu"
+            aria-expanded={moreMenuOpen}
+            onClick={() => setMoreMenuOpen((open) => !open)}
+          >
+            <MoreHorizontal size={18} />
+          </IconButton>
+          <Popover
+            anchor={moreAnchor}
+            open={moreMenuOpen}
+            onClose={() => setMoreMenuOpen(false)}
+            side="bottom"
+            align="end"
+            label="Room actions"
+            className="w-64 p-2"
+          >
+            <div className="flex flex-col items-stretch gap-2">
+              {isPhoneLayout && guildId && channelId && (
+                <Button variant="ghost" onClick={() => { setShowInvite(true); setMoreMenuOpen(false); }}>
+                  <UserPlus size={16} className="mr-1.5" />
+                  Invite people
+                </Button>
+              )}
+              <VoiceConnectionCheckButton variant="ghost" label="Run a connection check" />
+            </div>
+          </Popover>
+        </>
+      }
+    />
+  );
+
+  const ribbon =
+    showRoomChat && channelId ? (
+      <RoomChat
+        isPhone={isPhoneLayout}
+        channelId={channelId}
+        guildId={guildId}
+        channelName={roomLight?.name ?? channelName}
+        replyingTo={replyingTo}
+        onReply={setReplyingTo}
+        onClose={() => setShowRoomChat(false)}
+        expanded={chatSheetExpanded}
+        onToggleExpanded={() => setChatSheetExpanded((open) => !open)}
+      />
+    ) : undefined;
+
+  const requestsRow =
+    isStage && canManageStage && speakerRequests.length > 0 ? (
+      <Raised bare className="flex shrink-0 flex-col gap-1.5 p-2.5">
+        <div className="flex items-center gap-2">
+          <Hand size={14} className="shrink-0 text-text-secondary" aria-hidden />
+          <span className="text-label text-text-primary">
+            {speakerRequests.length === 1
+              ? 'One person wants to speak'
+              : `${speakerRequests.length} people want to speak`}
+          </span>
+        </div>
+        <ul className="flex flex-col gap-1">
+          {speakerRequests.map((participant) => (
+            <li
+              key={participant.user_id}
+              className="flex items-center gap-2 rounded-[var(--radius-control)] bg-bg-well px-2.5 py-1.5"
+            >
+              <span className="min-w-0 flex-1 truncate text-label text-text-primary">
+                {displayName(participant)}
+              </span>
+              <Button
+                size="sm"
+                variant="light"
+                disabled={stageBusy || stageRequestBusy}
+                onClick={() => { void inviteSpeaker(participant.user_id); }}
+              >
+                <Check size={14} className="mr-1" /> Invite
+              </Button>
+              <IconButton
+                label={`Dismiss ${displayName(participant)}'s request`}
+                size="sm"
+                tone="ghost"
+                disabled={stageBusy || stageRequestBusy}
+                onClick={() => { void dismissSpeakerRequest(participant.user_id); }}
+              >
+                <X size={14} />
+              </IconButton>
+            </li>
+          ))}
+        </ul>
+        {stageError && (
+          <p role="alert" className="text-meta text-accent-danger">{stageError}</p>
+        )}
+      </Raised>
+    ) : null;
+
+  const speakersArrangement = (dominant: boolean) => (dominant ? 'strip' : 'grid');
+  const renderSpeakers = (withDominant: boolean) => (
+    <div className="flex min-h-0 flex-col gap-[var(--gutter)]">
+      {requestsRow}
+      <StageSpeakers
+        className="min-h-0 flex-1"
+        occupants={occupants}
+        currentUserId={currentUserId}
+        arrangement={speakersArrangement(withDominant)}
+        compact={isPhoneLayout}
+        onWatch={setWatchedStreamer}
+        watchingUserId={watchedStreamerId}
+      />
+    </div>
+  );
+
+  // A reconnect is a notice above the tiles, never a replacement for them:
+  // unmounting a live share would tear its subscriptions down and rebuild them
+  // for a blip the transport is already handling.
+  const reconnectNotice = reconnecting ? (
+    <Raised bare className="shrink-0 px-3 py-2">
+      <StageNotice
+        phase="reconnecting"
+        roomName={roomLight?.name ?? channelName}
+        elapsedMs={reconnectElapsedMs}
+      />
+    </Raised>
+  ) : undefined;
+
+  const dominant = (() => {
+    if (videoLayout === 'side') return splitElement;
+    if (!watchedStreamerId) return null;
+    if (videoLayout === 'pip') {
+      return (
+        <div data-native-underlay-clear="" className="relative h-full min-h-0 overflow-hidden">
+          {streamViewerElement}
+          <div className="absolute bottom-3 right-3 z-10">
+            <ErrorBoundary variant="section" label="the video tiles">
+              <StageSpeakers
+                occupants={occupants}
+                currentUserId={currentUserId}
+                arrangement="pip"
+                compact={isPhoneLayout}
+              />
+            </ErrorBoundary>
+          </div>
+        </div>
+      );
+    }
+    return streamViewerElement;
+  })();
+
+  const inviteModal =
+    showInvite && channelId ? (
+      <InviteModal
+        guildName={channelName}
+        channelId={channelId}
+        onClose={() => setShowInvite(false)}
+      />
+    ) : null;
+
+  // --- Not in the room yet ------------------------------------------------
+  if (!inSelectedVoiceChannel) {
+    const pendingPhase: StagePhase | null = voiceJoinPending
+      ? 'joining'
+      : voiceJoinError
+        ? 'failed'
+        : null;
+
+    if (pendingPhase) {
+      return (
+        <div data-native-underlay-clear="" className="flex min-h-0 flex-1 flex-col bg-bg-base p-[var(--gutter)]">
+          <StageLayout
+            phone={isPhoneLayout}
+            header={header}
+            dominant={
+              <StageStatus
+                phase={pendingPhase}
+                roomName={roomLight?.name ?? channelName}
+                elapsedMs={null}
+                reason={voiceJoinError}
+                actions={
+                  pendingPhase === 'failed' ? (
+                    <>
+                      <Button variant="light" onClick={retryJoin}>
+                        Try joining again
+                      </Button>
+                      <VoiceConnectionCheckButton variant="ghost" label="Run a connection check" autoStart />
+                    </>
+                  ) : undefined
+                }
+              />
+            }
+            speakers={occupants.length > 0 ? renderSpeakers(true) : undefined}
+            controls={null}
+            ribbon={ribbon}
+          />
+          {inviteModal}
+        </div>
+      );
+    }
+
+    return (
+      <div data-native-underlay-clear="" className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-bg-base">
         <VoiceLobby
           channelName={channelName}
           participantCount={participantCount}
           isStage={isStage}
           channelId={channelId}
           guildId={guildId}
+          room={roomLight}
           voiceJoinError={voiceJoinError}
           voiceJoinPending={voiceJoinPending}
-          onRetryJoin={() => {
-            clearConnectionError();
-            if (channelId && guildId) {
-              void joinChannel(channelId, guildId);
-            }
-          }}
+          onRetryJoin={retryJoin}
           onJoin={() => {
             if (channelId && guildId) {
               void joinChannel(channelId, guildId);
@@ -629,224 +984,35 @@ export function VoiceStageChannel({
           }}
           lobbyParticipants={channelId ? (channelParticipants.get(channelId) || []) : []}
         />
-      )}
-      {inSelectedVoiceChannel && (
-        <div data-native-underlay-clear="" className="flex min-h-0 flex-1 relative bg-black">
-          {/* Video Area */}
-          <div data-native-underlay-clear="" className="flex min-h-0 flex-1 flex-col relative bg-black/40 group/video">
-            {!isStage && (watchedStreamerId || videoLayout === 'side') && (
-              <div data-native-overlay-occlude="" className="absolute top-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-1 rounded-md border border-border-subtle bg-bg-floating px-1.5 py-1.5 shadow-lg backdrop-blur-md opacity-0 group-hover/video:opacity-100 group-focus-within/video:opacity-100 transition-opacity">
-                <span className="px-1 text-section text-text-muted">View</span>
-                <div className="mx-0.5 h-4 w-px bg-border-strong" />
-                {([
-                  { mode: 'top' as const, icon: LayoutList, label: 'Top' },
-                  { mode: 'side' as const, icon: PanelLeft, label: 'Side' },
-                  { mode: 'pip' as const, icon: PictureInPicture2, label: 'PiP' },
-                  { mode: 'hidden' as const, icon: EyeOff, label: 'Hide' },
-                ]).map(({ mode, icon: Icon, label }) => (
-                  <button
-                    key={mode}
-                    title={label}
-                    aria-label={`Use ${label} video layout`}
-                    onClick={() => setVideoLayout(mode)}
-                    className={`flex h-8 w-8 items-center justify-center rounded-sm outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] ${videoLayout === mode
-                      ? 'bg-accent-primary text-text-on-accent shadow-sm'
-                      : 'text-interactive-normal hover:bg-bg-mod-subtle hover:text-interactive-hover'
-                      }`}
-                  >
-                    <Icon size={16} />
-                  </button>
-                ))}
-              </div>
-            )}
-            {videoLayout === 'side' ? (
-              <div data-native-underlay-clear="" className="flex min-h-0 flex-1 gap-2">
-                <SplitPane
-                  source={splitState.left}
-                  onSourceChange={(src) => setSplitState((prev) => ({ ...prev, left: src }))}
-                  otherPaneSource={splitState.right}
-                  activeStreamers={activeStreamers}
-                  webcamTiles={webcamTiles}
-                  participantNames={participantNames}
-                  currentUserId={currentUserId}
-                  selfStream={selfStream}
-                  streamIssueMessage={ownStreamIssueMessage}
-                  activeStreamerSet={activeStreamerSet}
-                  onStopStream={() => {
-                    stopStream();
-                  }}
-                />
-                <SplitPane
-                  source={splitState.right}
-                  onSourceChange={(src) => setSplitState((prev) => ({ ...prev, right: src }))}
-                  otherPaneSource={splitState.left}
-                  activeStreamers={activeStreamers}
-                  webcamTiles={webcamTiles}
-                  participantNames={participantNames}
-                  currentUserId={currentUserId}
-                  selfStream={selfStream}
-                  streamIssueMessage={ownStreamIssueMessage}
-                  activeStreamerSet={activeStreamerSet}
-                  onStopStream={() => {
-                    stopStream();
-                  }}
-                />
-              </div>
-            ) : watchedStreamerId ? (
-              videoLayout === 'pip' ? (
-                <div data-native-underlay-clear="" className="relative min-h-0 flex-1 overflow-hidden">
-                  {streamViewerElement}
-                  <div className="absolute bottom-3 right-3 z-10">
-                    <ErrorBoundary variant="section" label="the video tiles"><VideoGrid layout="pip" /></ErrorBoundary>
-                  </div>
-                </div>
-              ) : videoLayout === 'hidden' ? (
-                <div data-native-underlay-clear="" className="min-h-0 flex-1 overflow-hidden">
-                  {streamViewerElement}
-                </div>
-              ) : (
-                <>
-                  <ErrorBoundary variant="section" label="the video tiles"><VideoGrid layout="compact" /></ErrorBoundary>
-                  <div data-native-underlay-clear="" className="min-h-0 flex-1 overflow-hidden">
-                    {streamViewerElement}
-                  </div>
-                </>
-              )
-            ) : (
-              <>
-                <ErrorBoundary variant="section" label="the video tiles"><VideoGrid layout="grid" /></ErrorBoundary>
-                <div className="min-h-0 flex-1 overflow-hidden">
-                  <div className="flex h-full min-h-[240px] items-center bg-bg-primary px-6 sm:min-h-[300px] sm:px-10">
-                    <div className="w-full max-w-md">
-                      <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-sm bg-accent-tint text-accent-primary">
-                        {isStage ? <Mic size={20} /> : <Monitor size={20} />}
-                      </div>
-                      <h3 className="font-display text-heading text-text-primary">
-                        {isStage ? (stageInstance?.topic || 'The stage is live') : 'Pick a stream to watch'}
-                      </h3>
-                      {isStage ? (
-                        <>
-                          <div className="mt-3 flex flex-wrap items-center gap-2">
-                            <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-meta font-semibold ${isStageAudience ? 'bg-bg-mod-subtle text-text-secondary' : 'bg-accent-tint text-accent-primary'}`}>
-                              {isStageAudience ? <Hand size={13} /> : <Mic size={13} />}
-                              {isStageAudience ? (hasRequestedToSpeak ? 'Request sent' : 'You’re listening') : 'You’re on stage'}
-                            </span>
-                            <span className="text-meta text-text-muted">
-                              {stageSpeakers.length} {stageSpeakers.length === 1 ? 'speaker' : 'speakers'} · {stageAudience.length} listening
-                            </span>
-                          </div>
-                          <p className="mt-3 max-w-prose text-body text-text-secondary">
-                            {isStageAudience
-                              ? hasRequestedToSpeak
-                                ? 'Moderators can see your request. You can keep listening or cancel it from the control bar.'
-                                : 'You joined as an audience member. Raise your hand from the control bar when you want to contribute.'
-                              : 'Your microphone, camera, and screen share controls are available while you’re on stage.'}
-                          </p>
-                          {canManageStage && speakerRequests.length > 0 && (
-                            <div className="mt-5 rounded-md border border-border-subtle bg-bg-secondary p-3.5">
-                              <div className="flex items-center justify-between gap-3">
-                                <div>
-                                  <div className="text-section text-text-muted">Requests to speak</div>
-                                  <p className="mt-0.5 text-meta text-text-secondary">
-                                    {speakerRequests.length} {speakerRequests.length === 1 ? 'person is' : 'people are'} waiting.
-                                  </p>
-                                </div>
-                                <span className="rounded-full bg-accent-tint px-2 py-0.5 text-meta font-semibold tabular-nums text-accent-primary">
-                                  {speakerRequests.length}
-                                </span>
-                              </div>
-                              <div className="mt-3 flex flex-col gap-1.5">
-                                {speakerRequests.map((participant) => (
-                                  <div key={participant.user_id} className="flex items-center gap-2 rounded-sm bg-bg-tertiary px-2.5 py-2">
-                                    <Hand size={15} className="shrink-0 text-accent-primary" />
-                                    <span className="min-w-0 flex-1 truncate text-label text-text-primary">{displayName(participant)}</span>
-                                    <Button
-                                      size="sm"
-                                      disabled={stageBusy || stageRequestBusy}
-                                      onClick={() => { void inviteSpeaker(participant.user_id); }}
-                                    >
-                                      <Check size={14} className="mr-1" /> Invite
-                                    </Button>
-                                    <Button
-                                      size="sm"
-                                      variant="ghost"
-                                      aria-label={`Dismiss ${displayName(participant)}'s request`}
-                                      disabled={stageBusy || stageRequestBusy}
-                                      onClick={() => { void dismissSpeakerRequest(participant.user_id); }}
-                                    >
-                                      <X size={14} />
-                                    </Button>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                          {stageError && (
-                            <div role="alert" className="mt-4 rounded-sm border border-accent-danger/35 bg-danger-tint px-3 py-2 text-meta text-accent-danger">
-                              {stageError}
-                            </div>
-                          )}
-                        </>
-                      ) : activeStreamers.length > 0 ? (
-                        <div className="mt-4 flex flex-col gap-2">
-                          {activeStreamers.map((userId) => {
-                            const name =
-                              currentUserId != null && userId === currentUserId
-                                ? 'You'
-                                : participantNames.get(userId) ?? `User ${userId.slice(0, 6)}`;
-                            return (
-                              <button
-                                key={userId}
-                                type="button"
-                                onClick={() => setWatchedStreamer(userId)}
-                                className="flex items-center gap-3 rounded-sm border border-border-subtle bg-bg-secondary px-3 py-2.5 text-left outline-none transition-colors hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
-                              >
-                                <span className="inline-flex items-center rounded-xs bg-danger-tint px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-accent-danger">
-                                  Live
-                                </span>
-                                <span className="truncate text-label text-text-primary">
-                                  Watch {name}&rsquo;s stream
-                                </span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      ) : (
-                        <p className="mt-2 max-w-prose text-body text-text-secondary">
-                          When someone shares their screen, they show up in this list and in the
-                          sidebar under the voice channel so you can watch with one click. You can
-                          also use the Side layout source picker.
-                        </p>
-                      )}
-                      <div className="mt-4 font-code text-meta text-text-muted">
-                        {!isStage && activeStreamers.length > 0
-                          ? `${activeStreamers.length} stream${activeStreamers.length === 1 ? '' : 's'} live right now`
-                          : isStage
-                            ? `${stageParticipants.length} participant${stageParticipants.length === 1 ? '' : 's'} in this stage`
-                            : 'No one is streaming yet'}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
+      </div>
+    );
+  }
 
-          {/* Voice Chat Sidebar / Mobile Overlay */}
-          {showVoiceChat && (
-            <VoiceChatSidebar
-              isMobile={isMobile}
-              isStage={isStage}
-              channelId={channelId!}
-              guildId={guildId}
-              channelName={channelName}
-              replyingTo={replyingTo}
-              onReply={setReplyingTo}
-              onClose={() => setShowVoiceChat(false)}
-            />
-          )}
-        </div>
-      )}
+  // --- On the Stage -------------------------------------------------------
+  return (
+    <div data-native-underlay-clear="" className="flex min-h-0 flex-1 flex-col bg-bg-base p-[var(--gutter)]">
+      <StageLayout
+        phone={isPhoneLayout}
+        header={header}
+        notice={reconnectNotice}
+        dominant={dominant}
+        speakers={showSpeakerStrip ? renderSpeakers(Boolean(dominant)) : undefined}
+        controls={
+          <VoiceControlBar
+            onToggleChat={() => {
+              setShowRoomChat((open) => !open);
+              setChatSheetExpanded(true);
+            }}
+            isChatOpen={showRoomChat}
+            listenOnly={isStageAudience}
+            requestToSpeakPending={hasRequestedToSpeak}
+            requestBusy={stageRequestBusy}
+            onToggleRequestToSpeak={() => { void toggleSpeakerRequest(); }}
+          />
+        }
+        ribbon={ribbon}
+      />
+      {inviteModal}
     </div>
   );
 }

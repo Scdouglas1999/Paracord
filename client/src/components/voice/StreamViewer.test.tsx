@@ -52,18 +52,18 @@ describe('StreamViewer', () => {
     } as unknown as CanvasRenderingContext2D);
   });
 
-  it('shows the unavailable placeholder when no track is active', () => {
+  it('says who is not sharing when no track is active', () => {
     render(<StreamViewer streamerId="u2" streamerName="Alice" />);
-    expect(screen.getByText('Stream is not available')).toBeInTheDocument();
+    expect(screen.getByText('Alice is not sharing')).toBeInTheDocument();
     expect(
-      screen.getByText('Alice is not currently publishing a stream track.'),
+      screen.getByText('No screen track is reaching this room right now.'),
     ).toBeInTheDocument();
   });
 
-  it('shows the connecting placeholder while expecting a stream', () => {
+  it('says the share is opening while the first frames are on their way', () => {
     render(<StreamViewer streamerId="u2" streamerName="Alice" expectingStream />);
-    expect(screen.getByText('Starting stream...')).toBeInTheDocument();
-    expect(screen.getByText('Connecting to the media server')).toBeInTheDocument();
+    expect(screen.getByText('Opening your share')).toBeInTheDocument();
+    expect(screen.getByText('The first frames are on their way to the room.')).toBeInTheDocument();
   });
 
   it('reveals the issue message when the warning affordance is toggled', () => {
@@ -164,13 +164,13 @@ describe('StreamViewer', () => {
   it('surfaces the system audio badge when capture is active', () => {
     voiceState.current.systemAudioCaptureActive = true;
     render(<StreamViewer streamerId="u2" streamerName="Alice" />);
-    expect(screen.getByText('System Audio')).toBeInTheDocument();
+    expect(screen.getByText('Sharing system audio')).toBeInTheDocument();
   });
 
   it('shows the privacy warning and acknowledges it', () => {
     voiceState.current.showSystemAudioPrivacyWarning = true;
     render(<StreamViewer streamerId="u2" streamerName="Alice" />);
-    expect(screen.getByText('System Audio Capture Is Active')).toBeInTheDocument();
+    expect(screen.getByText('Your share is carrying system audio')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'I understand' }));
     expect(voiceState.current.acknowledgeSystemAudioPrivacyWarning).toHaveBeenCalledTimes(1);
   });

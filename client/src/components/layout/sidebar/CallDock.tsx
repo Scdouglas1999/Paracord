@@ -1,20 +1,21 @@
 import { useNavigate } from 'react-router';
 import { Radio } from 'lucide-react';
 import { useVoiceStore } from '../../../stores/voiceStore';
-import { MiniVoiceBar } from '../../voice/MiniVoiceBar';
+import { OnAirDock } from '../../voice/OnAirDock';
 
 /**
  * Persistent call dock for the Unified Sidebar footer (layout-spec §1, §2 — the
  * successor to the deleted channel-column voice footer). Renders ONLY when voice is
- * connected (`voiceStore.connected`); the dock body reuses the promoted `MiniVoiceBar`
- * primitive so the call surface never diverges from the mobile dock.
+ * connected (`voiceStore.connected`); the dock body is WP3's
+ * `OnAirDock` (the on-air pill, spec §7.7) so the call surface never diverges
+ * from the mobile dock.
  *
  * Collapsed (64px icon rail, §6): a compact "in call" affordance — a pulsing accent
- * indicator that routes back to the active voice channel — since the full MiniVoiceBar
- * is too wide for the rail.
+ * indicator that routes back to the active voice channel — since the pill is too
+ * wide for the rail.
  *
- * MiniVoiceBar's mute/deafen/disconnect + channel nav cover the persistent-dock
- * essentials; richer stream/video affordances live on the channel/room views.
+ * The pill's single action is "take me back to the Stage"; every call control
+ * lives on the Stage itself.
  */
 
 export interface CallDockProps {
@@ -57,7 +58,7 @@ export function CallDock({ collapsed = false }: CallDockProps) {
 
   return (
     <div data-testid="call-dock">
-      <MiniVoiceBar />
+      <OnAirDock />
     </div>
   );
 }

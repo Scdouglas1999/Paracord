@@ -16,6 +16,15 @@ export interface HereNowStripProps extends Omit<React.HTMLAttributes<HTMLDivElem
   everyone?: readonly PersonLight[];
   /** Face diameter. 24 in a room header (§7.2, §7.4). */
   size?: number;
+  /**
+   * Override the strip's sentence.
+   *
+   * The default is "4 here · 20 lights on" (§7.2). A **text** room says what
+   * being there means — "5 reading · 19 lights on" (§7.4) — so the surface that
+   * knows the verb supplies it. Whatever is passed is the light's DOM text
+   * equivalent (§9), so it still has to say the count in words.
+   */
+  caption?: React.ReactNode;
 }
 
 /**
@@ -28,7 +37,7 @@ export interface HereNowStripProps extends Omit<React.HTMLAttributes<HTMLDivElem
  * member list anywhere.
  */
 export const HereNowStrip = React.forwardRef<HTMLDivElement, HereNowStripProps>(
-  function HereNowStrip({ hereNow, context, everyone, size = 24, className, ...props }, ref) {
+  function HereNowStrip({ hereNow, context, everyone, size = 24, caption, className, ...props }, ref) {
     const anchor = useRef<HTMLButtonElement>(null);
     const [open, setOpen] = useState(false);
     const people = everyone && everyone.length > 0 ? everyone : hereNow.people;
@@ -54,10 +63,14 @@ export const HereNowStrip = React.forwardRef<HTMLDivElement, HereNowStripProps>(
               max={HERE_NOW_MAX_FACES}
               context={context}
             />
-            <span className="min-w-0 truncate text-label text-text-text-body">
-              <span className="font-semibold text-text-primary">{hereNow.here} here</span>
-              {' · '}
-              {hereNow.lightsOn} lights on
+            <span className="min-w-0 truncate text-label text-text-body">
+              {caption ?? (
+                <>
+                  <span className="font-semibold text-text-primary">{hereNow.here} here</span>
+                  {' · '}
+                  {hereNow.lightsOn} lights on
+                </>
+              )}
             </span>
           </button>
         </Well>
