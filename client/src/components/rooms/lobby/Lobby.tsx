@@ -5,7 +5,7 @@ import { useCurrentChannelStore } from '../../../hooks/useChannels';
 import { useCurrentMessageStore } from '../../../hooks/useMessageStore';
 import { useCurrentAccountScope } from '../../../hooks/useCurrentUser';
 import { useGuild } from '../../../hooks/useGuilds';
-import { useAroundNow, useBuildingLight, useBuildingPeople } from '../../../hooks/useLights';
+import { useAroundNow, useBuildingLight } from '../../../hooks/useLights';
 import { useRoomThumbnail } from '../../../hooks/useRoomThumbnail';
 import { useMutedGuilds } from '../../../hooks/useMutedGuilds';
 import { usePermissions } from '../../../hooks/usePermissions';
@@ -20,7 +20,7 @@ import { useMemberStore } from '../../../stores/memberStore';
 import { useUIStore } from '../../../stores/uiStore';
 import { useVoiceStore } from '../../../stores/voiceStore';
 import { ChannelType, Permissions, hasPermission, type Channel } from '../../../types';
-import type { RoomLight } from '../../../lib/attention/light';
+import type { PersonLight, RoomLight } from '../../../lib/attention/light';
 import { RECEDE_MARK, walkIntoRoom } from '../../../lib/motion';
 import { BuildingNotFound } from '../../guild/BuildingNotFound';
 import { InviteModal } from '../../guild/InviteModal';
@@ -50,6 +50,7 @@ export interface LobbyProps {
 
 const EMPTY_CHANNELS: Channel[] = [];
 const NO_ROOMS: RoomLight[] = [];
+const NO_PEOPLE: PersonLight[] = [];
 
 function isTextDestination(channel: Channel): boolean {
   const type = channel.type ?? channel.channel_type;
@@ -94,7 +95,6 @@ export function Lobby({ guildId }: LobbyProps) {
   const guild = useGuild(guildId);
   const scope = useCurrentAccountScope();
   const building = useBuildingLight(guildId);
-  const people = useBuildingPeople(guildId);
   const buildings = useMemo(() => (building ? [building] : []), [building]);
   // With lights on but nobody in a room, WP1's default empty sentence would
   // contradict the "+N lights on" count beside it.
@@ -209,12 +209,24 @@ export function Lobby({ guildId }: LobbyProps) {
   );
   const previews = useRoomPreviews(previewRequests);
 
+  /**
+   * The faces in the Around-now well (§7.3, §8 HereNowStrip).
+   *
+   * `useBuildingPeople` only knew about people who were *in a room*, so a
+   * building where somebody had the app open but was in no room drew an empty
+   * stack beside a bare "+1 lights on" chip — the count and the picture
+   * disagreeing about the same person. `building.people` is everybody the
+   * building can see, which is what the count is drawn from too.
+   *
+   * Only lit people get a face. Light is state (§0): a stack of matte
+   * strangers under the words "Around now" would be five people who are not.
+   */
   const litPeople = useMemo(
     () =>
-      [...people].sort(
-        (a, b) => Number(b.lit) - Number(a.lit) || a.name.localeCompare(b.name),
-      ),
-    [people],
+      (building?.people ?? NO_PEOPLE)
+        .filter((person) => person.lit)
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [building],
   );
 
   const selectedChannelId = useMemo(() => {

@@ -2,11 +2,15 @@ import * as React from 'react';
 
 import { Well } from '../../ui';
 import { AvatarStack } from '../../light';
-import { lightsOnOverflowCaption, type PersonLight } from '../../../lib/attention/light';
+import {
+  HERE_NOW_MAX_FACES,
+  lightsOnOverflowCaption,
+  type PersonLight,
+} from '../../../lib/attention/light';
 import { cn } from '../../../lib/utils';
 
 export interface AroundNowWellProps {
-  /** The people this building's rooms can see — lit first. */
+  /** The people in this building whose lights are on. */
   people: readonly PersonLight[];
   /** WP1's one-sentence summary of who is where. */
   sentence: string;
@@ -26,7 +30,7 @@ export interface AroundNowWellProps {
  * (§6.9).
  */
 export const AroundNowWell = React.forwardRef<HTMLElement, AroundNowWellProps>(
-  function AroundNowWell({ people, sentence, lightsOn, max = 6 }, ref) {
+  function AroundNowWell({ people, sentence, lightsOn, max = HERE_NOW_MAX_FACES }, ref) {
     const shown = people.slice(0, max);
     const litShown = shown.filter((person) => person.lit).length;
     const overflow = Math.max(0, lightsOn - litShown);
@@ -50,7 +54,11 @@ export const AroundNowWell = React.forwardRef<HTMLElement, AroundNowWellProps>(
             <AvatarStack people={shown} size={28} max={max} overlap={6} context="around now" />
           )}
         </span>
-        <span className="min-w-0 flex-1 text-ribbon text-text-body">{sentence}</span>
+        {/* The sentence and the count are one statement about the same people,
+            so they travel together. Pushed apart by a `flex-1` the count sat
+            ~800px away at the far edge of the well, reading as an unrelated
+            chip (§8: "avatar stack + 'N here · M lights on'"). */}
+        <span className="min-w-0 truncate text-ribbon text-text-body">{sentence}</span>
         {overflow > 0 && (
           <span className="shrink-0 whitespace-nowrap text-meta text-text-faint">
             {lightsOnOverflowCaption(overflow)}
