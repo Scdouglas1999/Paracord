@@ -3,6 +3,7 @@ import { secureGet } from '../secureStorage';
 import { getServerAccountScope } from '../serverIdentity';
 import { accountScopeKey, LOCAL_SERVER_ID, type AccountScope } from '../serverScope';
 import type { AccountVault, VaultTransaction } from './accountVault';
+import { CHANNEL_PIN_NAMESPACE, IDENTITY_PIN_NAMESPACE } from './identityPinNamespaces';
 
 /**
  * Where a peer's identity trust lives.
@@ -22,8 +23,7 @@ import type { AccountVault, VaultTransaction } from './accountVault';
  *
  * A locked vault therefore means *unknown*, never *not verified*.
  */
-export const IDENTITY_PIN_NAMESPACE = 'signal.identity-pins';
-export const CHANNEL_PIN_NAMESPACE = 'signal.channel-pins';
+export { IDENTITY_PIN_NAMESPACE, CHANNEL_PIN_NAMESPACE } from './identityPinNamespaces';
 
 /** The pinned key for one peer account. `identity` is the key we trust. */
 export interface IdentityPinRecord {

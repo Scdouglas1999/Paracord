@@ -181,7 +181,10 @@ test('a delayed initial message decrypts with its archived signed key after rota
     try { await bobDm.decrypt('delayed', alicePeer, wrong, '100'); } catch (failure) { error = String(failure); }
     return { error, plaintext: await bobDm.decrypt('delayed', alicePeer, payload, '100') };
   }, payload);
-  expect(received.error).toContain('signed key for this message is missing');
+  // Named for what it is — a key this device never held — so the runtime can
+  // tell it apart from a ciphertext that failed authentication.
+  expect(received.error).toContain('MissingPrivatePrekeyError');
+  expect(received.error).toContain('never held');
   expect(received.plaintext).toBe('Sent before signed-key rotation');
 });
 

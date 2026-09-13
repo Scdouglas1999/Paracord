@@ -2,14 +2,8 @@ import type { DmCipherDependencies } from '../dmCipher';
 import { IdentityPinError, formatIdentityFingerprint } from '../keyVerification';
 import { deserializePrekeyStore, serializePrekeyStore } from './sessionManager';
 import type { VaultTransaction } from './accountVault';
-import {
-  CHANNEL_PIN_NAMESPACE,
-  IDENTITY_PIN_NAMESPACE,
-  readChannelPin,
-  readIdentityPin,
-  writeChannelPin,
-  writeIdentityPin,
-} from './identityTrust';
+import { CHANNEL_PIN_NAMESPACE, IDENTITY_PIN_NAMESPACE } from './identityPinNamespaces';
+import { readChannelPin, readIdentityPin, writeChannelPin, writeIdentityPin } from './identityTrust';
 import type { LocalPrekeyStore, SerializedLocalPrekeyStore } from './types';
 
 export const SIGNAL_PREKEY_NAMESPACE = 'signal.prekeys';
