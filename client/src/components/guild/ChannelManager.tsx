@@ -1131,7 +1131,12 @@ function SortableChannelItem({
           <GripVertical size={14} />
         </IconButton>
         {channelTypeIcon(channel.type)}
-        <span className="pc-display min-w-0 flex-1 truncate text-name text-text-primary">
+        {/* `min-w-0 flex-1` let the name shrink to nothing: a text room carries a
+            type chip, an NSFW switch, a slowmode select and a Features button on
+            the same line, and at 1440px "general" rendered as "g..". The row
+            already wraps — give the name a floor and the controls wrap instead
+            of eating it. */}
+        <span className="pc-display min-w-[9rem] flex-1 truncate text-name text-text-primary">
           {channel.name || 'unnamed'}
         </span>
         <Chip size="sm">{channelTypeBadge(channel.type)}</Chip>
