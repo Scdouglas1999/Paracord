@@ -7,6 +7,7 @@ import {
   IdentityPinError,
   markIdentityVerified,
 } from './keyVerification';
+import { installIdentityTrustVault, resetIdentityTrust } from '../test/identityTrustVaultMock';
 
 const mocks = vi.hoisted(() => {
   const profiles = new Map<string, Map<string, string>>();
@@ -111,6 +112,10 @@ function makeUser(id: string): TestUser {
   };
 }
 
+// Peer trust lives in each account's own vault, so it is swapped with the
+// profile: one member's pins must never answer for another's.
+const trustRecords = new Map<string, Map<string, unknown>>();
+
 function setActiveUser(userId: string): void {
   mocks.activeUserId = userId;
   let store = mocks.profiles.get(userId);
@@ -119,6 +124,10 @@ function setActiveUser(userId: string): void {
     mocks.profiles.set(userId, store);
   }
   mocks.activeStore = store;
+  let records = trustRecords.get(userId);
+  if (!records) { records = new Map<string, unknown>(); trustRecords.set(userId, records); }
+  resetIdentityTrust();
+  installIdentityTrustVault(records, userId);
 }
 
 function publicKeyResolver(users: TestUser[]): (userId: string) => string | null {
@@ -138,6 +147,8 @@ describe('groupDmE2ee', () => {
     mocks.activeUserId = '';
     mocks.activeStore = new Map<string, string>();
     mocks.profiles.clear();
+    trustRecords.clear();
+    resetIdentityTrust();
     mocks.records.length = 0;
     mocks.nextRecordId = 1;
     mocks.postGroupSenderKeys.mockClear();

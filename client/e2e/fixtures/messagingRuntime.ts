@@ -12,6 +12,7 @@ import { ed25519 } from '@noble/curves/ed25519.js';
 import { bytesToHex } from '../../src/lib/crypto/util';
 import { setUnlockedPrivateKey } from '../../src/lib/accountSession';
 import { useAccountStore } from '../../src/stores/accountStore';
+import { formatIdentityFingerprint, getIdentityTrustState, markIdentityVerified } from '../../src/lib/keyVerification';
 
 export const FIRST_EPOCH = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 export const SECOND_EPOCH = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -39,5 +40,8 @@ export async function initializeMessagingRuntime(epoch: string | null = FIRST_EP
     history: (value: string) => { acceptDatabaseHistoryEpoch(scope, value); addChannel(); },
     logout: () => useAuthStore.setState({ token: null, user: null }),
     close: () => { runtime.dispose(); stop(); }, acceptEncryptedDraft, AccountVault,
+    // Peer verification, the decision that used to evaporate on reload.
+    markVerified: (peerId: string, identityKeyHex: string) => markIdentityVerified(peerId, formatIdentityFingerprint(identityKeyHex)),
+    trustState: (peerId: string, identityKeyHex: string) => getIdentityTrustState(peerId, formatIdentityFingerprint(identityKeyHex)),
   };
 }

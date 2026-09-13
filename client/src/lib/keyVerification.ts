@@ -1,4 +1,18 @@
-import { secureGet, secureSet } from './secureStorage';
+import type { AccountScope } from './serverScope';
+import {
+  CHANNEL_PIN_NAMESPACE,
+  IdentityTrustLockedError,
+  normalizeIdentity,
+  readChannelPin,
+  readIdentityPin,
+  transactIdentityTrust,
+  writeChannelPin,
+  writeIdentityPin,
+  type ChannelPinRecord,
+  type IdentityPinRecord,
+} from './crypto/identityTrust';
+
+export { IdentityTrustLockedError, identityTrustUnlocked } from './crypto/identityTrust';
 
 interface IdentityVerificationRecord {
   /**
@@ -21,16 +35,14 @@ interface IdentityVerificationRecord {
   pending_seen_at?: string;
 }
 
-type IdentityVerificationStore = Record<string, IdentityVerificationRecord>;
-
 /**
  * Per-DM-channel binding of the peer's identity key.
  *
- * The user-scoped store above is the primary anchor, but the DM ratchet path
+ * The user-scoped record above is the primary anchor, but the DM ratchet path
  * only ever receives a channel id plus a server-supplied peer key (the decrypt
  * entry point is handed a key, not a user id), so it needs an anchor it can
- * reach. Both stores are reconciled through `markIdentityVerified`, which is
- * the single user-driven recovery action.
+ * reach. Both are reconciled through `markIdentityVerified`, which is the
+ * single user-driven recovery action.
  */
 interface DmPeerIdentityPin {
   fingerprint: string;
@@ -41,73 +53,32 @@ interface DmPeerIdentityPin {
   pending_seen_at?: string;
 }
 
-type DmPeerIdentityPinStore = Record<string, DmPeerIdentityPin>;
-
-const SECURE_KEY = 'paracord:key-verification-store';
-const LEGACY_STORAGE_KEY = 'paracord:identity-verification:v1';
-const DM_PIN_SECURE_KEY = 'paracord:dm-peer-identity-pins';
-
-async function readStore(): Promise<IdentityVerificationStore> {
-  try {
-    const raw = await secureGet(SECURE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as IdentityVerificationStore;
-      if (parsed && typeof parsed === 'object') return parsed;
-    }
-  } catch {
-    // fall through to migration
-  }
-  // Migrate from legacy localStorage
-  if (typeof localStorage !== 'undefined') {
-    try {
-      const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
-      if (legacy) {
-        const parsed = JSON.parse(legacy) as IdentityVerificationStore;
-        if (parsed && typeof parsed === 'object') {
-          await secureSet(SECURE_KEY, legacy);
-          localStorage.removeItem(LEGACY_STORAGE_KEY);
-          return parsed;
-        }
-      }
-    } catch {
-      // ignore migration failures
-    }
-  }
-  return {};
-}
-
-async function writeStore(store: IdentityVerificationStore): Promise<void> {
-  try {
-    await secureSet(SECURE_KEY, JSON.stringify(store));
-  } catch {
-    // ignore storage failures
-  }
-}
-
-async function readDmPinStore(): Promise<DmPeerIdentityPinStore> {
-  try {
-    const raw = await secureGet(DM_PIN_SECURE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as DmPeerIdentityPinStore;
-      if (parsed && typeof parsed === 'object') return parsed;
-    }
-  } catch {
-    // fall through to an empty store
-  }
-  return {};
-}
-
-async function writeDmPinStore(store: DmPeerIdentityPinStore): Promise<void> {
-  try {
-    await secureSet(DM_PIN_SECURE_KEY, JSON.stringify(store));
-  } catch {
-    // ignore storage failures
-  }
-}
-
 export function formatIdentityFingerprint(identityKeyHex: string): string {
-  const normalized = identityKeyHex.toLowerCase().replace(/[^a-f0-9]/g, '');
+  const normalized = normalizeIdentity(identityKeyHex ?? '');
   return normalized.match(/.{1,4}/g)?.join(' ') ?? normalized;
+}
+
+function toVerificationRecord(pin: IdentityPinRecord): IdentityVerificationRecord {
+  return {
+    fingerprint: formatIdentityFingerprint(pin.identity),
+    first_seen_at: pin.firstSeenAt,
+    last_seen_at: pin.lastSeenAt ?? pin.firstSeenAt,
+    ...(pin.rotatedAt ? { rotated_at: pin.rotatedAt } : {}),
+    ...(pin.previousIdentity ? { previous_fingerprint: formatIdentityFingerprint(pin.previousIdentity) } : {}),
+    ...(pin.verifiedAt ? { verified_at: pin.verifiedAt } : {}),
+    ...(pin.pendingIdentity ? { pending_fingerprint: formatIdentityFingerprint(pin.pendingIdentity) } : {}),
+    ...(pin.pendingSeenAt ? { pending_seen_at: pin.pendingSeenAt } : {}),
+  };
+}
+
+function toDmPin(channel: ChannelPinRecord): DmPeerIdentityPin {
+  return {
+    fingerprint: formatIdentityFingerprint(channel.identity),
+    pinned_at: channel.pinnedAt ?? '',
+    ...(channel.userId ? { user_id: channel.userId } : {}),
+    ...(channel.pendingIdentity ? { pending_fingerprint: formatIdentityFingerprint(channel.pendingIdentity) } : {}),
+    ...(channel.pendingSeenAt ? { pending_seen_at: channel.pendingSeenAt } : {}),
+  };
 }
 
 /**
@@ -118,53 +89,50 @@ export function formatIdentityFingerprint(identityKeyHex: string): string {
  * untouched: only `markIdentityVerified` — an explicit user decision — may move
  * a pin. Anything weaker would let a hostile server retire the pinned key just
  * by serving its own.
+ *
+ * Throws {@link IdentityTrustLockedError} when this account's vault is locked:
+ * the answer then is "unknown", not "unverified".
  */
 export async function observeIdentityFingerprint(
   userId: string,
   fingerprint: string,
 ): Promise<{ rotated: boolean; previousFingerprint?: string; record: IdentityVerificationRecord }> {
-  const store = await readStore();
-  const now = new Date().toISOString();
-  const existing = store[userId];
-  if (!existing) {
-    const record: IdentityVerificationRecord = {
-      fingerprint,
-      first_seen_at: now,
-      last_seen_at: now,
-    };
-    store[userId] = record;
-    await writeStore(store);
-    return { rotated: false, record };
-  }
-
-  if (existing.fingerprint !== fingerprint) {
-    const record: IdentityVerificationRecord = {
-      ...existing,
-      previous_fingerprint: existing.fingerprint,
-      rotated_at: now,
-      last_seen_at: now,
-      pending_fingerprint: fingerprint,
-      pending_seen_at: now,
-    };
-    store[userId] = record;
-    await writeStore(store);
-    return { rotated: true, previousFingerprint: existing.fingerprint, record };
-  }
-
-  const record: IdentityVerificationRecord = {
-    ...existing,
-    last_seen_at: now,
-    pending_fingerprint: undefined,
-    pending_seen_at: undefined,
-  };
-  store[userId] = record;
-  await writeStore(store);
-  return { rotated: false, record };
+  const identity = normalizeIdentity(fingerprint);
+  return transactIdentityTrust(async transaction => {
+    const now = new Date().toISOString();
+    const existing = await readIdentityPin(transaction, userId);
+    if (!existing) {
+      const record: IdentityPinRecord = { identity, firstSeenAt: now, lastSeenAt: now };
+      writeIdentityPin(transaction, userId, record);
+      return { rotated: false, record: toVerificationRecord(record) };
+    }
+    if (existing.identity !== identity) {
+      const record: IdentityPinRecord = {
+        ...existing,
+        previousIdentity: existing.identity,
+        rotatedAt: now,
+        lastSeenAt: now,
+        pendingIdentity: identity,
+        pendingSeenAt: now,
+      };
+      writeIdentityPin(transaction, userId, record);
+      return {
+        rotated: true,
+        previousFingerprint: formatIdentityFingerprint(existing.identity),
+        record: toVerificationRecord(record),
+      };
+    }
+    const record: IdentityPinRecord = { ...existing, lastSeenAt: now };
+    delete record.pendingIdentity;
+    delete record.pendingSeenAt;
+    writeIdentityPin(transaction, userId, record);
+    return { rotated: false, record: toVerificationRecord(record) };
+  });
 }
 
 export async function getIdentityVerification(userId: string): Promise<IdentityVerificationRecord | null> {
-  const store = await readStore();
-  return store[userId] ?? null;
+  const pin = await transactIdentityTrust(transaction => readIdentityPin(transaction, userId));
+  return pin ? toVerificationRecord(pin) : null;
 }
 
 /**
@@ -173,63 +141,59 @@ export async function getIdentityVerification(userId: string): Promise<IdentityV
  * This is the ONLY way a pin moves, and therefore the single recovery path out
  * of a fail-closed rotation: the user compares fingerprints out of band (QR /
  * safety numbers on the profile card), confirms, and both the user-scoped pin
- * and any DM-channel pin waiting on that same key are promoted together.
+ * and this peer's DM-channel pins are promoted together.
  */
 export async function markIdentityVerified(userId: string, fingerprint: string): Promise<void> {
-  const store = await readStore();
-  const now = new Date().toISOString();
-  const existing = store[userId];
-  if (!existing) {
-    store[userId] = {
-      fingerprint,
-      first_seen_at: now,
-      last_seen_at: now,
-      verified_at: now,
-    };
-  } else {
-    store[userId] = {
-      ...existing,
-      previous_fingerprint:
-        existing.fingerprint !== fingerprint ? existing.fingerprint : existing.previous_fingerprint,
-      fingerprint,
-      verified_at: now,
-      last_seen_at: now,
-      pending_fingerprint: undefined,
-      pending_seen_at: undefined,
-    };
-  }
-  await writeStore(store);
-  await promoteDmPinsForFingerprint(userId, fingerprint);
+  const identity = normalizeIdentity(fingerprint);
+  await transactIdentityTrust(async transaction => {
+    const now = new Date().toISOString();
+    const existing = await readIdentityPin(transaction, userId);
+    const record: IdentityPinRecord = existing
+      ? { ...existing, identity, verifiedAt: now, lastSeenAt: now,
+          ...(existing.identity !== identity ? { previousIdentity: existing.identity } : {}) }
+      : { identity, firstSeenAt: now, lastSeenAt: now, verifiedAt: now };
+    delete record.pendingIdentity;
+    delete record.pendingSeenAt;
+    writeIdentityPin(transaction, userId, record);
+
+    // Promote this peer's channel pins. A channel pin whose owner is unknown is
+    // promoted only when it was waiting on exactly this key, so verifying one
+    // peer can never silently re-anchor a conversation with somebody else.
+    for (const { id: channelId, value } of await transaction.list<ChannelPinRecord>(CHANNEL_PIN_NAMESPACE)) {
+      const ownedByPeer = value.userId === userId;
+      if (!ownedByPeer && !(!value.userId && value.pendingIdentity === identity)) continue;
+      if (value.identity === identity && !value.pendingIdentity) continue;
+      const promoted: ChannelPinRecord = { userId, identity, pinnedAt: now };
+      writeChannelPin(transaction, channelId, promoted);
+    }
+  });
 }
 
-/** Promote every DM-channel pin that was blocked waiting on exactly this key. */
-async function promoteDmPinsForFingerprint(userId: string, fingerprint: string): Promise<void> {
-  const pins = await readDmPinStore();
-  let changed = false;
-  const now = new Date().toISOString();
-  for (const [channelId, pin] of Object.entries(pins)) {
-    if (pin.pending_fingerprint !== fingerprint) continue;
-    // Only promote pins that belong to this user, or that were established
-    // before the peer's user id was known.
-    if (pin.user_id && pin.user_id !== userId) continue;
-    pins[channelId] = {
-      ...pin,
-      fingerprint,
-      user_id: pin.user_id ?? userId,
-      pinned_at: now,
-      pending_fingerprint: undefined,
-      pending_seen_at: undefined,
-    };
-    changed = true;
-  }
-  if (changed) {
-    await writeDmPinStore(pins);
+/**
+ * Verified / not verified / unknown.
+ *
+ * "Unknown" is the honest answer while the account vault is locked: the record
+ * exists, this device simply cannot read it yet. Reporting "not verified" there
+ * would invite a user to re-verify a key they already checked.
+ */
+export type IdentityTrustState = 'verified' | 'unverified' | 'unknown';
+
+export async function getIdentityTrustState(
+  userId: string,
+  fingerprint: string,
+): Promise<IdentityTrustState> {
+  try {
+    return (await isIdentityVerified(userId, fingerprint)) ? 'verified' : 'unverified';
+  } catch (error) {
+    if (error instanceof IdentityTrustLockedError) return 'unknown';
+    throw error;
   }
 }
 
 export async function isIdentityVerified(userId: string, fingerprint: string): Promise<boolean> {
-  const record = await getIdentityVerification(userId);
-  return Boolean(record && record.fingerprint === fingerprint && record.verified_at);
+  const identity = normalizeIdentity(fingerprint);
+  const pin = await transactIdentityTrust(transaction => readIdentityPin(transaction, userId));
+  return Boolean(pin && pin.identity === identity && pin.verifiedAt);
 }
 
 export function buildIdentityVerificationPayload(
@@ -267,6 +231,7 @@ export function parseIdentityVerificationPayload(
 // the gate: every path that turns a *server-supplied* identity key into key
 // material must call one of them first. On first sight the key is pinned; if it
 // ever changes, encryption/decryption is refused until the user re-verifies.
+// A locked vault refuses too — it cannot prove the key is the pinned one.
 
 export type IdentityPinErrorCode = 'IDENTITY_KEY_ROTATED' | 'IDENTITY_KEY_MISSING';
 
@@ -321,85 +286,87 @@ export async function assertPinnedIdentityKey(
 }
 
 /**
- * Batch form of {@link assertPinnedIdentityKey}: reads and writes the store
- * once for the whole set. Group DM fan-out wraps a sender key to every
- * recipient, so the per-recipient form would otherwise cost one secure-storage
- * round trip per member per message.
+ * Batch form of {@link assertPinnedIdentityKey}: one vault transaction for the
+ * whole set. Group DM fan-out wraps a sender key to every recipient, so the
+ * per-recipient form would otherwise cost one transaction per member per
+ * message.
  */
 export async function assertPinnedIdentityKeys(
   entries: Array<{ userId: string; identityKeyHex: string }>,
+  scope?: AccountScope | null,
 ): Promise<string[]> {
   if (entries.length === 0) return [];
 
-  const fingerprints = entries.map((entry) => {
-    const fingerprint = formatIdentityFingerprint(entry.identityKeyHex ?? '');
-    if (!fingerprint) {
+  const identities = entries.map(entry => {
+    const identity = normalizeIdentity(entry.identityKeyHex ?? '');
+    if (!identity) {
       throw new IdentityPinError(
         'IDENTITY_KEY_MISSING',
         `No usable identity key for user ${entry.userId}`,
         { userId: entry.userId },
       );
     }
-    return fingerprint;
+    return identity;
   });
 
-  const store = await readStore();
-  const now = new Date().toISOString();
-  let changed = false;
+  // A rotation must be remembered even though the assertion throws, so the
+  // profile card can offer verification. A vault transaction discards its
+  // staged writes when the body throws, so the pending key is committed in its
+  // own transaction and the refusal is raised after it.
+  const rotation = await transactIdentityTrust(async transaction => {
+    const now = new Date().toISOString();
+    for (let index = 0; index < entries.length; index++) {
+      const { userId } = entries[index];
+      const identity = identities[index];
+      const existing = await readIdentityPin(transaction, userId);
 
-  for (let i = 0; i < entries.length; i++) {
-    const { userId } = entries[i];
-    const fingerprint = fingerprints[i];
-    const existing = store[userId];
-
-    if (!existing) {
-      store[userId] = { fingerprint, first_seen_at: now, last_seen_at: now };
-      changed = true;
-      continue;
-    }
-
-    if (existing.fingerprint === fingerprint) {
-      // Deliberately does not touch `last_seen_at`: this runs on every message
-      // send, and a write per message would be a secure-storage round trip for
-      // pure bookkeeping. The profile card's `observeIdentityFingerprint` keeps
-      // that field fresh.
-      if (existing.pending_fingerprint) {
-        store[userId] = {
-          ...existing,
-          pending_fingerprint: undefined,
-          pending_seen_at: undefined,
-        };
-        changed = true;
+      if (!existing) {
+        writeIdentityPin(transaction, userId, { identity, firstSeenAt: now, lastSeenAt: now });
+        continue;
       }
-      continue;
-    }
 
-    // Rotation: remember what was presented so the UI can offer verification,
-    // but keep the pin and refuse to use the new key.
-    store[userId] = {
-      ...existing,
-      previous_fingerprint: existing.fingerprint,
-      rotated_at: now,
-      last_seen_at: now,
-      pending_fingerprint: fingerprint,
-      pending_seen_at: now,
-    };
-    await writeStore(store);
+      if (existing.identity === identity) {
+        // Deliberately does not touch `lastSeenAt`: this runs on every message
+        // send, and a write per message would be a vault commit for pure
+        // bookkeeping. `observeIdentityFingerprint` keeps that field fresh.
+        if (existing.pendingIdentity) {
+          const cleared = { ...existing };
+          delete cleared.pendingIdentity;
+          delete cleared.pendingSeenAt;
+          writeIdentityPin(transaction, userId, cleared);
+        }
+        continue;
+      }
+
+      writeIdentityPin(transaction, userId, {
+        ...existing,
+        previousIdentity: existing.identity,
+        rotatedAt: now,
+        lastSeenAt: now,
+        pendingIdentity: identity,
+        pendingSeenAt: now,
+      });
+      return { userId, pinned: existing.identity, presented: identity };
+    }
+    return null;
+  }, scope);
+
+  if (rotation) {
     throw new IdentityPinError(
       'IDENTITY_KEY_ROTATED',
-      rotationMessage(`User ${userId}'s`, existing.fingerprint, fingerprint),
+      rotationMessage(
+        `User ${rotation.userId}'s`,
+        formatIdentityFingerprint(rotation.pinned),
+        formatIdentityFingerprint(rotation.presented),
+      ),
       {
-        userId,
-        pinnedFingerprint: existing.fingerprint,
-        presentedFingerprint: fingerprint,
+        userId: rotation.userId,
+        pinnedFingerprint: formatIdentityFingerprint(rotation.pinned),
+        presentedFingerprint: formatIdentityFingerprint(rotation.presented),
       },
     );
   }
-
-  if (changed) {
-    await writeStore(store);
-  }
-  return fingerprints;
+  return identities.map(formatIdentityFingerprint);
 }
 
 /**
@@ -415,8 +382,8 @@ export async function assertPinnedDmPeerIdentity(
   identityKeyHex: string,
   peerUserId?: string | null,
 ): Promise<void> {
-  const fingerprint = formatIdentityFingerprint(identityKeyHex ?? '');
-  if (!fingerprint) {
+  const identity = normalizeIdentity(identityKeyHex ?? '');
+  if (!identity) {
     throw new IdentityPinError('IDENTITY_KEY_MISSING', 'No usable peer identity key for this DM', {
       channelId,
       userId: peerUserId ?? undefined,
@@ -427,63 +394,63 @@ export async function assertPinnedDmPeerIdentity(
     await assertPinnedIdentityKey(peerUserId, identityKeyHex);
   }
 
-  const pins = await readDmPinStore();
-  const now = new Date().toISOString();
-  const existing = pins[channelId];
+  const rotation = await transactIdentityTrust(async transaction => {
+    const now = new Date().toISOString();
+    const existing = await readChannelPin(transaction, channelId);
 
-  if (!existing) {
-    pins[channelId] = {
-      fingerprint,
-      pinned_at: now,
-      user_id: peerUserId ?? undefined,
-    };
-    await writeDmPinStore(pins);
-    return;
-  }
-
-  if (existing.fingerprint === fingerprint) {
-    if (existing.pending_fingerprint || (peerUserId && existing.user_id !== peerUserId)) {
-      pins[channelId] = {
-        ...existing,
-        user_id: peerUserId ?? existing.user_id,
-        pending_fingerprint: undefined,
-        pending_seen_at: undefined,
-      };
-      await writeDmPinStore(pins);
+    if (!existing) {
+      writeChannelPin(transaction, channelId, {
+        userId: peerUserId ?? '',
+        identity,
+        pinnedAt: now,
+      });
+      return null;
     }
-    return;
-  }
 
-  // The channel pin disagrees. Accept only if the user explicitly verified this
-  // exact key for the peer (the same action that promotes the pin below).
-  const ownerId = peerUserId ?? existing.user_id;
-  if (ownerId && (await isIdentityVerified(ownerId, fingerprint))) {
-    pins[channelId] = {
-      fingerprint,
-      pinned_at: now,
-      user_id: ownerId,
-    };
-    await writeDmPinStore(pins);
-    return;
-  }
+    if (existing.identity === identity) {
+      if (existing.pendingIdentity || (peerUserId && existing.userId !== peerUserId)) {
+        const cleared: ChannelPinRecord = { ...existing, userId: peerUserId ?? existing.userId };
+        delete cleared.pendingIdentity;
+        delete cleared.pendingSeenAt;
+        writeChannelPin(transaction, channelId, cleared);
+      }
+      return null;
+    }
 
-  pins[channelId] = {
-    ...existing,
-    user_id: ownerId,
-    pending_fingerprint: fingerprint,
-    pending_seen_at: now,
-  };
-  await writeDmPinStore(pins);
-  throw new IdentityPinError(
-    'IDENTITY_KEY_ROTATED',
-    rotationMessage("This conversation peer's", existing.fingerprint, fingerprint),
-    {
-      channelId,
+    // The channel pin disagrees. Accept only if the user explicitly verified
+    // this exact key for the peer — the same action that promotes the pin.
+    const ownerId = peerUserId || existing.userId;
+    const owner = ownerId ? await readIdentityPin(transaction, ownerId) : null;
+    if (owner && owner.identity === identity && owner.verifiedAt) {
+      writeChannelPin(transaction, channelId, { userId: ownerId, identity, pinnedAt: now });
+      return null;
+    }
+
+    writeChannelPin(transaction, channelId, {
+      ...existing,
       userId: ownerId,
-      pinnedFingerprint: existing.fingerprint,
-      presentedFingerprint: fingerprint,
-    },
-  );
+      pendingIdentity: identity,
+      pendingSeenAt: now,
+    });
+    return { ownerId, pinned: existing.identity, presented: identity };
+  });
+
+  if (rotation) {
+    throw new IdentityPinError(
+      'IDENTITY_KEY_ROTATED',
+      rotationMessage(
+        "This conversation peer's",
+        formatIdentityFingerprint(rotation.pinned),
+        formatIdentityFingerprint(rotation.presented),
+      ),
+      {
+        channelId,
+        userId: rotation.ownerId || undefined,
+        pinnedFingerprint: formatIdentityFingerprint(rotation.pinned),
+        presentedFingerprint: formatIdentityFingerprint(rotation.presented),
+      },
+    );
+  }
 }
 
 /** Pending (unaccepted) identity rotation for a user, for the verification UI. */
@@ -500,8 +467,8 @@ export async function getPendingIdentityRotation(
 
 /** Identity pin recorded for a DM channel, for the verification UI. */
 export async function getDmPeerIdentityPin(channelId: string): Promise<DmPeerIdentityPin | null> {
-  const pins = await readDmPinStore();
-  return pins[channelId] ?? null;
+  const pin = await transactIdentityTrust(transaction => readChannelPin(transaction, channelId));
+  return pin ? toDmPin(pin) : null;
 }
 
 /**

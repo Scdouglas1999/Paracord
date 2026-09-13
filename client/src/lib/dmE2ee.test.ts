@@ -14,6 +14,7 @@ import { bytesToHex, toBase64 } from './crypto/util';
 import { generatePrekeyBundle, savePrekeyStore } from './crypto/sessionManager';
 import { DmE2eeError, decryptDmMessage, encryptDmMessageV2 } from './dmE2ee';
 import { formatIdentityFingerprint, IdentityPinError, markIdentityVerified } from './keyVerification';
+import { installIdentityTrustVault, resetIdentityTrust } from '../test/identityTrustVaultMock';
 
 const mocks = vi.hoisted(() => {
   const profiles = new Map<string, Map<string, string>>();
@@ -59,6 +60,10 @@ function makeUser(id: string): TestUser {
   return { id, privateKey, publicKeyHex: bytesToHex(ed25519.getPublicKey(privateKey)) };
 }
 
+// Peer trust lives in the profile's own account vault, so it is swapped with
+// the profile: one party's pins must never answer for the other's.
+const trustRecords = new Map<string, Map<string, unknown>>();
+
 function selectProfile(userId: string): void {
   let store = mocks.profiles.get(userId);
   if (!store) {
@@ -66,6 +71,10 @@ function selectProfile(userId: string): void {
     mocks.profiles.set(userId, store);
   }
   mocks.activeStore = store;
+  let records = trustRecords.get(userId);
+  if (!records) { records = new Map<string, unknown>(); trustRecords.set(userId, records); }
+  resetIdentityTrust();
+  installIdentityTrustVault(records, userId);
 }
 
 /**
@@ -100,6 +109,8 @@ describe('dmE2ee identity binding', () => {
   beforeEach(async () => {
     mocks.profiles.clear();
     mocks.bundles.clear();
+    trustRecords.clear();
+    resetIdentityTrust();
     mocks.activeStore = new Map<string, string>();
     mocks.getBundle.mockClear();
     alice = makeUser('alice');

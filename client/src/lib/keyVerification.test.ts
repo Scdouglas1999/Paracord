@@ -13,7 +13,10 @@ import {
   markIdentityVerified,
   observeIdentityFingerprint,
   parseIdentityVerificationPayload,
+  getIdentityTrustState,
+  IdentityTrustLockedError,
 } from './keyVerification';
+import { installIdentityTrustVault, resetIdentityTrust } from '../test/identityTrustVaultMock';
 
 const KEY_A = 'a'.repeat(64);
 const KEY_B = 'b'.repeat(64);
@@ -34,6 +37,8 @@ describe('keyVerification', () => {
     localStorage.clear();
     const mod = await import('./secureStorage') as unknown as { __store: Map<string, string> };
     mod.__store.clear();
+    resetIdentityTrust();
+    installIdentityTrustVault();
   });
 
   it('formats fingerprint into grouped hex', () => {
@@ -163,5 +168,61 @@ describe('keyVerification', () => {
       username: 'alice',
       fingerprint: 'ffff 1111',
     });
+  });
+});
+
+describe('keyVerification durability', () => {
+  beforeEach(() => { resetIdentityTrust(); localStorage.clear(); });
+
+  it('keeps a verification decision and a peer pin across a reload', async () => {
+    const first = installIdentityTrustVault();
+    await markIdentityVerified('user-1', formatIdentityFingerprint(KEY_A));
+    await assertPinnedDmPeerIdentity('chan-1', KEY_A, 'user-1');
+    expect(await isIdentityVerified('user-1', formatIdentityFingerprint(KEY_A))).toBe(true);
+
+    // A reload: every in-process store is gone; only what the vault holds
+    // survives, and the vault is re-opened from the same encrypted records.
+    first.lock();
+    resetIdentityTrust();
+    installIdentityTrustVault(first.records);
+
+    expect(await isIdentityVerified('user-1', formatIdentityFingerprint(KEY_A))).toBe(true);
+    expect(await getIdentityTrustState('user-1', formatIdentityFingerprint(KEY_A))).toBe('verified');
+    expect((await getDmPeerIdentityPin('chan-1'))?.fingerprint).toBe(formatIdentityFingerprint(KEY_A));
+    // Nothing about the decision is written outside the encrypted vault.
+    expect(JSON.stringify(localStorage)).not.toContain(KEY_A);
+  });
+
+  it('reports unknown, not unverified, while the vault is locked', async () => {
+    const trust = installIdentityTrustVault();
+    await markIdentityVerified('user-1', formatIdentityFingerprint(KEY_A));
+    trust.lock();
+
+    expect(await getIdentityTrustState('user-1', formatIdentityFingerprint(KEY_A))).toBe('unknown');
+    await expect(isIdentityVerified('user-1', formatIdentityFingerprint(KEY_A)))
+      .rejects.toBeInstanceOf(IdentityTrustLockedError);
+    await expect(markIdentityVerified('user-1', formatIdentityFingerprint(KEY_B)))
+      .rejects.toBeInstanceOf(IdentityTrustLockedError);
+    // A locked vault can prove nothing, so the gate stays closed.
+    await expect(assertPinnedIdentityKey('user-1', KEY_A)).rejects.toBeInstanceOf(IdentityTrustLockedError);
+
+    installIdentityTrustVault(trust.records);
+    expect(await getIdentityTrustState('user-1', formatIdentityFingerprint(KEY_A))).toBe('verified');
+  });
+
+  it('shares one record with the ratchet, so verifying a rotated key releases it', async () => {
+    const trust = installIdentityTrustVault();
+    const { createSignalVaultDependencies } = await import('./crypto/signalVault');
+    const { createIdentityTrustVault } = await import('../test/identityTrustVaultMock');
+    // The ratchet reaches the same records through its own transaction.
+    const ratchetSees = (identity: string) =>
+      createIdentityTrustVault(trust.records).vault.transact(tx =>
+        createSignalVaultDependencies(tx, 'chan-1', {} as never)
+          .assertPinnedDmPeerIdentity!('chan-1', identity, 'user-1'));
+
+    await ratchetSees(KEY_A);
+    await expect(ratchetSees(KEY_B)).rejects.toBeInstanceOf(IdentityPinError);
+    await markIdentityVerified('user-1', formatIdentityFingerprint(KEY_B));
+    await expect(ratchetSees(KEY_B)).resolves.toBeUndefined();
   });
 });

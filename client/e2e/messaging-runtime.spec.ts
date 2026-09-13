@@ -220,3 +220,46 @@ test('verified enrollment uses committed account keys while identity lock leaves
   expect(await page.evaluate(() => window.messaging.runtime.store.getState().encryption)).toBe('ready');
   expect(publications).toHaveLength(1);
 });
+
+test('a verification decision survives a reload in the browser build, and a locked vault says unknown', async ({ page }) => {
+  const PEER = 'b'.repeat(64);
+  let publicKey = ''; const publications: Array<Record<string, unknown>> = [];
+  const keys = async (route: import('@playwright/test').Route) => {
+    const previous = publications.at(-1);
+    if (route.request().method() === 'GET') return route.fulfill({ status: 200, headers: { 'X-Paracord-History-Epoch': firstEpoch }, json: {
+      identity_key: publicKey, signed_prekey: previous?.signed_prekey ?? null,
+      last_resort_prekey: previous?.last_resort_prekey ?? null, one_time_prekeys: previous?.one_time_prekeys ?? [],
+    } });
+    const body = route.request().postDataJSON(); publications.push(body);
+    return route.fulfill({ status: 200, headers: { 'X-Paracord-History-Epoch': firstEpoch }, json: {
+      request_id: body.request_id, signed_prekey_id: body.signed_prekey?.id ?? null,
+      last_resort_prekey_id: body.last_resort_prekey?.id ?? null,
+      one_time_prekeys_stored: body.one_time_prekeys?.length ?? 0, one_time_prekeys_total: body.one_time_prekeys?.length ?? 0,
+    } });
+  };
+  await page.route('**/api/v1/users/@me/keys', keys);
+
+  await open(page);
+  publicKey = await page.evaluate(() => window.messaging.unlockIdentity());
+  await page.evaluate(() => window.messaging.runtime.enroll());
+  expect(await page.evaluate(peer => window.messaging.trustState('peer-1', peer), PEER)).toBe('unverified');
+  await page.evaluate(peer => window.messaging.markVerified('peer-1', peer), PEER);
+  expect(await page.evaluate(peer => window.messaging.trustState('peer-1', peer), PEER)).toBe('verified');
+
+  // Nothing about the decision is left in plaintext for the page to lose.
+  const plaintext = await page.evaluate(() => JSON.stringify(localStorage));
+  expect(plaintext).not.toContain('b'.repeat(64));
+  expect(plaintext).not.toContain('verified');
+
+  // Reload: every in-process store is gone. Before the vault is open the
+  // honest answer is "unknown", not "not verified".
+  await open(page);
+  expect(await page.evaluate(peer => window.messaging.trustState('peer-1', peer), PEER)).toBe('unknown');
+  await page.evaluate(() => window.messaging.unlockIdentity());
+  await page.evaluate(() => window.messaging.runtime.enroll());
+  expect(await page.evaluate(peer => window.messaging.trustState('peer-1', peer), PEER)).toBe('verified');
+
+  // Locking the identity closes the vault: unknown again, never unverified.
+  await page.evaluate(() => window.messaging.lockIdentity());
+  expect(await page.evaluate(peer => window.messaging.trustState('peer-1', peer), PEER)).toBe('unknown');
+});

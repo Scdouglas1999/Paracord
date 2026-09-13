@@ -2,7 +2,7 @@ import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
 import { useSelectedGuildId } from '../../hooks/useGuilds';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { MessageSquare, UserPlus, Ban, Users, CalendarDays, Link2, ShieldCheck, ShieldAlert, QrCode, Copy, Flag, Radio, BadgeCheck, StickyNote, UserCheck, UserX, UserMinus } from 'lucide-react';
+import { MessageSquare, UserPlus, Ban, Users, CalendarDays, Link2, ShieldCheck, ShieldAlert, ShieldQuestion, QrCode, Copy, Flag, Radio, BadgeCheck, StickyNote, UserCheck, UserX, UserMinus } from 'lucide-react';
 import { isAdmin, type User } from '../../types/index';
 import { extractApiError } from '../../api/client';
 import { activateChannel } from '../../lib/channelNavigation';
@@ -32,7 +32,8 @@ import { cn } from '../../lib/utils';
 import {
   buildIdentityVerificationPayload,
   formatIdentityFingerprint,
-  isIdentityVerified,
+  getIdentityTrustState,
+  IdentityTrustLockedError,
   markIdentityVerified,
   observeIdentityFingerprint,
   parseIdentityVerificationPayload,
@@ -155,7 +156,11 @@ function UserProfileCard({
   const [now, setNow] = useState(() => Date.now());
   const [profileData, setProfileData] = useState<PublicUserProfile | null>(null);
   const [identityFingerprint, setIdentityFingerprint] = useState<string | null>(null);
-  const [identityVerified, setIdentityVerified] = useState(false);
+  // Verified / not verified / unknown. "Unknown" is what a locked account vault
+  // can honestly say: the decision is stored there, this device just cannot
+  // read it yet. Calling that "not verified" would invite the user to redo a
+  // check they already made.
+  const [identityTrust, setIdentityTrust] = useState<'verified' | 'unverified' | 'unknown'>('unknown');
   const [identityRotationWarning, setIdentityRotationWarning] = useState<string | null>(null);
   const [showIdentityVerifyModal, setShowIdentityVerifyModal] = useState(false);
   const [identityVerifyPayload, setIdentityVerifyPayload] = useState('');
@@ -225,13 +230,19 @@ function UserProfileCard({
       }
 
       const fingerprint = formatIdentityFingerprint(identityKeyHex);
-      const observed = await observeIdentityFingerprint(user.id, fingerprint);
+      if (cancelled) return;
+      setIdentityFingerprint(fingerprint);
 
+      let observed: Awaited<ReturnType<typeof observeIdentityFingerprint>> | null = null;
+      try {
+        observed = await observeIdentityFingerprint(user.id, fingerprint);
+      } catch (error) {
+        if (!(error instanceof IdentityTrustLockedError)) throw error;
+      }
       if (cancelled) return;
 
-      setIdentityFingerprint(fingerprint);
-      setIdentityVerified(await isIdentityVerified(user.id, fingerprint));
-      if (observed.rotated && observed.previousFingerprint) {
+      setIdentityTrust(await getIdentityTrustState(user.id, fingerprint));
+      if (observed?.rotated && observed.previousFingerprint) {
         const warning = `Identity key changed. Previous fingerprint: ${observed.previousFingerprint}`;
         setIdentityRotationWarning(warning);
         toast.error(`${user.username}'s identity key changed. Verify before sharing sensitive info.`);
@@ -437,9 +448,18 @@ function UserProfileCard({
 
   const handleMarkIdentityVerified = async () => {
     if (!identityFingerprint) return;
-    await markIdentityVerified(user.id, identityFingerprint);
-    setIdentityVerified(true);
+    try {
+      await markIdentityVerified(user.id, identityFingerprint);
+    } catch (error) {
+      // A verification that cannot be written down is not a verification.
+      setActionError(error instanceof IdentityTrustLockedError
+        ? 'Unlock this account’s encryption to record a verification. It is stored with your encrypted messages, not in the browser.'
+        : `Failed to record this verification: ${extractApiError(error)}`);
+      return;
+    }
+    setIdentityTrust('verified');
     setIdentityRotationWarning(null);
+    setActionError(null);
     toast.success(`Marked ${user.username}'s identity key as verified.`);
   };
 
@@ -458,8 +478,15 @@ function UserProfileCard({
       setActionError('Verification payload fingerprint does not match the current key.');
       return;
     }
-    await markIdentityVerified(user.id, identityFingerprint);
-    setIdentityVerified(true);
+    try {
+      await markIdentityVerified(user.id, identityFingerprint);
+    } catch (error) {
+      setActionError(error instanceof IdentityTrustLockedError
+        ? 'Unlock this account’s encryption to record a verification. It is stored with your encrypted messages, not in the browser.'
+        : `Failed to record this verification: ${extractApiError(error)}`);
+      return;
+    }
+    setIdentityTrust('verified');
     setIdentityRotationWarning(null);
     setIdentityVerifyPayload('');
     setShowIdentityVerifyModal(false);
@@ -571,10 +598,15 @@ function UserProfileCard({
             <div className="rounded-well px-3.5 py-3" style={{ background: 'var(--bg-well)' }}>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="inline-flex items-center gap-1.5 text-meta font-semibold">
-                  {identityVerified ? (
+                  {identityTrust === 'verified' ? (
                     <>
                       <ShieldCheck size={13} className="text-accent-success" />
                       <span className="text-accent-success">Verified</span>
+                    </>
+                  ) : identityTrust === 'unknown' ? (
+                    <>
+                      <ShieldQuestion size={13} className="text-text-muted" />
+                      <span className="text-text-secondary">Unknown until you unlock encryption</span>
                     </>
                   ) : (
                     <>
@@ -605,7 +637,7 @@ function UserProfileCard({
                   {identityRotationWarning}
                 </div>
               )}
-              {!identityVerified && (
+              {identityTrust !== 'verified' && (
                 <button
                   className={`mt-2 inline-flex items-center gap-1.5 rounded-chip bg-success-tint px-2 py-1 text-meta font-medium text-accent-success transition-colors hover:bg-accent-success/20 ${FOCUS_RING}`}
                   onClick={() => void handleMarkIdentityVerified()}
