@@ -184,24 +184,72 @@ The glass tokens (`--glass-*`), `--noise-texture`, `--ambient-glow-*` and
 
 ---
 
-## 5. Motion
+## 5. Motion — the building is alive
 
-Light is the only thing that animates on its own; everything else is a plain
-120–160ms ease-out.
+**The law: only light and the things people do animate.** Nothing decorative
+moves. The base never animates. Every motion below has a physical model, and a
+reviewer rejects motion that has none.
 
-- **Warm-up**: when a room becomes lit or a person's lights come on, the rim/
-  window animates from dark to lit over 220ms ease-out. **Dim**: 400ms ease-in
-  when they leave (light lingers a beat, then goes).
-- **Speaking**: the speaking tile's ring breathes between alpha .55 and .8 at
-  ~1.6s; the lit avatar of a speaker in the "here now" strip does the same.
-  Never bounce, never scale.
-- **Live thumbnail**: real frames at ≤2fps for screen share, or a 6–8s animated
-  preview for cameras; when unavailable, a still + the LIVE dot. No fake
-  waveform animation.
-- Respect `prefers-reduced-motion`: warm-up/dim become instant; breathing stops
-  (ring stays at .7).
+### 5.1 Physical models
 
----
+- **Light has a source and a speed.** A window, rim or tile that lights up
+  *blooms* 20% past its resting glow and settles — 220 ms, `--ease-out`. It
+  dims over 400 ms, `--ease-in` (light lingers a beat, then goes). Neighbouring
+  lights stagger 30 ms. A lamp fades in once the first window in its plate is
+  lit. Reading light *flickers* once (two 40 ms pulses) when a message lands.
+- **The thing you click becomes the thing you look at.** Navigation into a room,
+  a thread, a settings section or a dialog moves one shared element from where
+  it was to where it will be (View Transitions API where the webview has it,
+  Web Animations transform fallback elsewhere — the same choreography on
+  both). 360–420 ms on the *spring-settle* curve; supporting chrome rises 80 ms
+  later, staggered. Leaving reverses it (into the on-air pill for a room).
+- **Arrivals travel one path.** Someone entering a room: their window blooms →
+  their rim catches 120 ms later → they spring into the here-now strip →
+  counts re-roll like a flip counter → the inline room event fades in last.
+  Leaving is the mirror. Nothing else on screen moves.
+- **A message has mass.** Sent text lifts out of the composer along the path it
+  lands in the timeline (220 ms, ease-out); the composer relaxes 0.8% and
+  springs back; the send control flashes white light for one beat; the room's
+  amber window flickers. Receipts fade in only after the server answers.
+- **Speaking is a breath.** The speaking ring breathes between the two alphas
+  in §1.2 at ~1.6 s and, where the engine exposes level, brightens with the
+  voice (±15% intensity, 60 ms attack / 240 ms release) — never below the
+  resting ring.
+- **Controls are tactile.** Hover: 1 px lift + faint bloom (`--bg-mod-subtle`
+  wash, 120 ms). Press: 0.96 scale, 80 ms, then spring back. Toggles, tabs and
+  segmented controls slide their indicator on the spring-settle curve.
+- **Plates settle.** A plate entering the street rises 14 px on the spring-settle
+  curve; lists that change order animate layout (FLIP) on the same curve.
+- **Numbers re-roll.** Any count that changes (unread, "N reading", "24 in",
+  duration ticks excepted) flips vertically, old up/out and new up/in, 180 ms.
+
+### 5.2 Curves and tokens
+
+Two curves only, both tokens: `--ease-out` `cubic-bezier(0.22, 1, 0.36, 1)` for
+light and fades; `--ease-spring-settle` `cubic-bezier(0.34, 1.2, 0.64, 1)` for
+things that move (one small overshoot, no bounce). Springs in code use
+stiffness 260 / damping 22–28 / mass 1 (`--spring-*` tokens) and must resolve
+to those curves. Durations: `--duration-fast` 120, `--duration-normal` 160,
+`--duration-slow` 220, `--duration-warm-up` 220, `--duration-dim` 400,
+`--duration-move` 380, `--duration-breathe` 1600, `--duration-roll` 180.
+
+### 5.3 Budget and gates (non-negotiable)
+
+- `transform` and `opacity` only, plus `box-shadow`/`background` on the small
+  light elements (windows, rims, dots). No layout properties in keyframes.
+- No motion longer than 500 ms except breathing and the lights-on stagger
+  (whole sequence ≤ 1.6 s).
+- 60 fps on an integrated GPU: every signature moment is measured in a
+  Playwright trace; a frame over 32 ms fails the motion gate.
+- `prefers-reduced-motion`: everything lands instantly, no stagger, breathing
+  stops at the resting ring. One central switch, never per component.
+- Motion never delays input: a control responds on the same frame; animations
+  are interruptible and retarget (a spring, not a fixed tween).
+- Never animate on first paint what the user did not cause or presence did not
+  cause; loading skeletons crossfade to content, they do not pulse forever.
+
+Reference studies for the four signature moments are on the design canvas
+(page "Motion") and in `output/design-reference/motion/`.
 
 ## 6. Anti-slop kill-list (extends the Emerald Commons list; a reviewer rejects any instance)
 
@@ -344,6 +392,10 @@ visual **and** automated — no package is done without inspected screenshots.
 | **WP5 Text room & DMs** | §7.4 + §7.6: header strip, timeline restyle, room events inline, composer copy; keep the durable-delivery/recovery regions. | `components/message/*`, `components/layout/TopBar*`, `pages/DMPage` | WP1 |
 | **WP6 Home** | §7.5 on `HomePage`/`HomeNeedsYou`. | `pages/HomePage.tsx`, `components/home/*` | WP1, WP4 |
 | **WP7 Settings, modals, onboarding, setup** | Restyle to the plate/well system; `/setup-server`, register/login, voice connection check, admin. No new features. | `components/settings/*`, `pages/*` | WP0 |
+| **WP9a Motion engine** | Spring/choreography layer over the motion tokens (`lib/motion/`: springs, stagger, shared-element with View Transitions + WAAPI fallback, flip counter, bloom/flicker recipes, central reduced-motion), motion tokens in `tokens.css`, frame-timing gate, `/design-tokens` Motion section. | `lib/motion/**`, `styles/tokens.css`, `styles/primitives.css`, `e2e/motion-gate.spec.ts` | WP8 |
+| **WP9b Signature moments** | Lights on, walk into a room / back to the pill, someone arrives/leaves, say something — wired through the real stores and engines (§5.1). | surfaces from WP2–WP6 | WP9a |
+| **WP9c Systematic micro-motion** | Hover/press, plates settle, menus/dialogs/toasts enter-exit, tab/toggle indicators, list FLIP, phone sheet physics, number re-roll everywhere. | `ui/**`, `light/**`, dialogs, sidebar, Stage sheet | WP9a |
+| **WP9d Further moments** | Audio-reactive speaking ring, theme change as the lights changing, reaction pop, typing pulse, contextual plates sliding in, phone pull-to-refresh lamp. | per item | WP9a |
 | **WP8 Sweep & delete** | Remove Emerald Commons leftovers: old tokens, `--color-status-*` dots, glass panels, Fraunces/Inter, any remaining member-list dock; update `docs/design-spec.md` → pointer to this file and `docs/layout-spec.md` §7 recipes; README screenshots. | repo-wide | all |
 
 Ownership boundaries are per file globs above; WP3/WP4/WP5/WP6 can run in
