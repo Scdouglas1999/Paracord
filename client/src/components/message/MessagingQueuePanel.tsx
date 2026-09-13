@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useStore } from 'zustand';
 import type { AccountMessagingRuntime, RuntimeQueueRow } from '../../lib/messages/accountMessagingRuntime';
 import { isPreparedSend } from '../../lib/messages/durableOutbox';
@@ -16,7 +16,31 @@ import { cn } from '../../lib/utils';
  *
  * The behaviour is untouched: retry, copy, edit, discard and restore all go
  * through the messaging runtime exactly as before.
+ *
+ * One thing IS held back: a send that is merely in flight. Every send spends a
+ * moment in this queue on its way to the server, and surfacing a card for it
+ * meant the composer and the whole timeline were shoved down and back up again
+ * in the ~200ms it took — a 180px reflow in the middle of §5.1's "a message has
+ * mass", which is exactly the layout animation §5.3 forbids. A send is only
+ * something you need to decide about once it has been waiting a while, so a
+ * pending row with no error waits `IN_FLIGHT_GRACE_MS` before it appears.
+ * Nothing else waits: a failure, a prepared/discard resolution, a saved edit or
+ * deletion and a recovery draft all show the instant they exist.
  */
+
+/**
+ * How long a send may be in flight before it is worth a card. Long enough that
+ * an ordinary send never draws one, short enough that a stuck one still tells
+ * you before you wonder.
+ */
+const IN_FLIGHT_GRACE_MS = 1_500;
+
+/** A send that is simply on its way, and has not been on its way for long. */
+function isQuietlyInFlight(row: RuntimeQueueRow, nowMs: number): boolean {
+  if (row.record.status !== 'pending' || row.record.error) return false;
+  const started = Date.parse(row.record.createdAt);
+  return Number.isFinite(started) && nowMs - started < IN_FLIGHT_GRACE_MS;
+}
 
 /** One raised row. The shape is shared by queued sends, mutations and recovery. */
 function DeliveryRow({ className, children }: { className?: string; children: React.ReactNode }) {
@@ -83,7 +107,23 @@ function QueueEntry({ runtime, row, copy }: { runtime: AccountMessagingRuntime; 
 export function MessagingQueuePanel({ runtime, channelId }: { runtime: AccountMessagingRuntime; channelId: string }) {
   const snapshot = useStore(runtime.store);
   const [error, setError] = useState<string | null>(null);
-  const rows = snapshot.queue.filter(row => row.record.channelId === channelId);
+  // Bumped when a held send crosses the grace period, so it appears on its own.
+  const [, setGraceTick] = useState(0);
+  const queued = snapshot.queue.filter(row => row.record.channelId === channelId);
+  const now = Date.now();
+  const rows = queued.filter(row => !isQuietlyInFlight(row, now));
+  const held = queued.filter(row => isQuietlyInFlight(row, now));
+  const nextDeadline = held.reduce(
+    (soonest, row) => Math.min(soonest, Date.parse(row.record.createdAt) + IN_FLIGHT_GRACE_MS),
+    Number.POSITIVE_INFINITY,
+  );
+
+  useEffect(() => {
+    if (!Number.isFinite(nextDeadline)) return;
+    const timer = window.setTimeout(() => setGraceTick(tick => tick + 1), Math.max(0, nextDeadline - Date.now()) + 16);
+    return () => window.clearTimeout(timer);
+  }, [nextDeadline]);
+
   const mutations = snapshot.mutations.filter(row => row.record.target.channelId === channelId);
   const recovery = snapshot.recovery.filter(row => row.channelId === channelId);
   if (!rows.length && !mutations.length && !recovery.length) return null;

@@ -1,6 +1,6 @@
 import { prefersReducedMotion } from './reducedMotion';
 import { springEasing, springTokens, type SpringConfig } from './spring';
-import { motionToken, ms } from './tokens';
+import { motionToken, ms, rawToken as motionRawToken } from './tokens';
 
 /**
  * The engine's recipes (docs/lantern-stage-spec.md §5.1).
@@ -137,16 +137,24 @@ export function flicker(el: Element | null | undefined): Animation | null {
   if (!animatable(el)) return null;
   if (prefersReducedMotion()) return landed(el);
   const rest = restingShadow(el);
-  const bright = rest === 'none' ? null : scaleShadow(rest, { spread: 1.8, alpha: 1.7 });
-  const half = rest === 'none' ? null : scaleShadow(rest, { spread: 1.4, alpha: 1.35 });
+  // The reference study takes the amber window's 8px/.5 glow to 18px/.95 and
+  // then to 14px/.8, and pushes the fill toward white at the first peak. These
+  // ratios are that, applied to whatever glow the element actually carries.
+  const bright = rest === 'none' ? null : scaleShadow(rest, { spread: 2.25, alpha: 1.9 });
+  const half = rest === 'none' ? null : scaleShadow(rest, { spread: 1.75, alpha: 1.6 });
+  const restFill = typeof getComputedStyle === 'function' ? getComputedStyle(el as HTMLElement).backgroundColor : '';
+  // `--light-white` is resolved here rather than written as a keyframe: WAAPI
+  // does not substitute `var()` inside a keyframe value.
+  const litFill = motionRawToken('--light-white');
+  const fills = restFill && litFill ? { rest: restFill, lit: litFill } : null;
   // 200ms total: pulse (40) · fall (40) · pulse (50) · settle (70).
   const keyframes: Keyframe[] = bright
     ? [
-        { boxShadow: rest, offset: 0 },
-        { boxShadow: bright, offset: 0.2 },
-        { boxShadow: rest, offset: 0.4 },
-        { boxShadow: half, offset: 0.65 },
-        { boxShadow: rest, offset: 1 },
+        { boxShadow: rest, ...(fills && { background: fills.rest }), offset: 0 },
+        { boxShadow: bright, ...(fills && { background: fills.lit }), offset: 0.2 },
+        { boxShadow: rest, ...(fills && { background: fills.rest }), offset: 0.4 },
+        { boxShadow: half, ...(fills && { background: fills.rest }), offset: 0.65 },
+        { boxShadow: rest, ...(fills && { background: fills.rest }), offset: 1 },
       ]
     : [
         { opacity: 1, offset: 0 },
@@ -237,23 +245,44 @@ export function press(el: Element | null | undefined): Animation | null {
 }
 
 /**
- * The send control catching the light for one beat (§5.1 "a message has
- * mass"). `--light-white` is painted by the caller's class; this is the beat.
+ * The send control catching the light for one beat (§5.1 "a message has mass").
+ *
+ * The light is written as INLINE STYLE, not a class: the control is a React
+ * element whose `className` is recomputed on the very next render (the send
+ * makes it busy), which would wipe a class the engine added microseconds
+ * earlier. React does not own this element's `style`, so the beat survives. It
+ * is removed after 80ms, or if the animation is cancelled.
+ *
+ * This is a light element for the length of that beat, which is why it may
+ * paint `background` and `box-shadow` (§5.3).
  */
-export function flash(el: Element | null | undefined, className: string): Animation | null {
+const FLASH_LIGHT: ReadonlyArray<readonly [string, string]> = [
+  // A beat, not a fade: the control almost always carries a colour transition
+  // for its hover state, and leaving it on turns the flash into a 140ms ramp
+  // that never reaches the light. Removing the properties restores the
+  // transition, so it comes ON like a light and goes off like one.
+  ['transition', 'none'],
+  ['background', 'var(--light-white)'],
+  ['color', 'var(--text-on-light)'],
+  ['box-shadow', 'var(--glow-control-on)'],
+];
+
+export function flash(el: Element | null | undefined): Animation | null {
   if (!animatable(el)) return null;
   if (prefersReducedMotion()) return landed(el);
-  el.classList.add(className);
+  for (const [property, value] of FLASH_LIGHT) el.style.setProperty(property, value, 'important');
   const animation = run(el, 'flash', [{ transform: 'scale(0.94)' }, { transform: 'scale(1)' }], {
     duration: 80 + ms('--duration-normal'),
     easing: motionToken('--ease-spring-settle'),
     fill: 'none',
   });
-  const remove = () => el.classList.remove(className);
+  const unlight = () => {
+    for (const [property] of FLASH_LIGHT) el.style.removeProperty(property);
+  };
   if (animation) {
-    window.setTimeout(remove, 80);
-    animation.addEventListener('cancel', remove);
-  } else remove();
+    window.setTimeout(unlight, 80);
+    animation.addEventListener('cancel', unlight);
+  } else unlight();
   return animation;
 }
 

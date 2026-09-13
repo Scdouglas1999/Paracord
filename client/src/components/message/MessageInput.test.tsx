@@ -167,7 +167,10 @@ describe('MessageInput', () => {
     render(<MemoryRouter><MessageInput channelId="ch1" channelName="Alice" /></MemoryRouter>);
     const input = screen.getByRole('textbox');
     await userEvent.type(input, 'Keep this private draft');
-    const link = screen.getByRole('link', { name: 'Set up encryption' });
+    // The composer holds a blocker back for 400ms so a readiness dip that
+    // resolves itself cannot shove the composer mid-send; a real one, like this,
+    // is still there when the wait is over.
+    const link = await screen.findByRole('link', { name: 'Set up encryption' });
     const destination = new URL(link.getAttribute('href')!, 'http://localhost');
     expect(destination.pathname).toBe('/setup');
     expect(destination.searchParams.get('server')).toBe(mockOwner.serverId);
@@ -352,7 +355,10 @@ describe('MessageInput', () => {
     expect(screen.getByPlaceholderText('What should everyone weigh in on?')).toHaveValue('Lunch?');
     expect(screen.getByPlaceholderText('Option 1')).toHaveValue('Soup');
     expect(screen.getByPlaceholderText('Option 2')).toHaveValue('Salad');
-    expect(screen.getByRole('status')).toHaveTextContent('Permission removed.');
+    // The composer holds a blocker back for 400ms (a readiness dip that heals
+    // itself must not shove the composer mid-send); a revoked permission does
+    // not heal, so the notice arrives and stays.
+    expect(await screen.findByRole('status')).toHaveTextContent('Permission removed.');
     await user.click(screen.getByRole('button', { name: 'Send message' }));
     expect(channelApi.createPoll).not.toHaveBeenCalled();
     expect(mockSendMessage).not.toHaveBeenCalled();

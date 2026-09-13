@@ -62,4 +62,4 @@ export {
   type SharedTransitionOptions,
   type SharedTransitionResult,
 } from './sharedElement';
-export { motionToken, ms, num, parseDuration, MOTION_TOKEN_FALLBACKS } from './tokens';
+export { motionToken, ms, num, parseDuration, rawToken, MOTION_TOKEN_FALLBACKS } from './tokens';

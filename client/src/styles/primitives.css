@@ -244,17 +244,6 @@
   animation-timing-function: var(--ease-out);
 }
 
-/* -----------------------------------------------------------------------------
-   §5.1 "A message has mass" — the send control catches the light for one beat.
-   The engine (lib/motion/animate.ts `flash`) adds this class for ~80ms and the
-   spring-back is a transform; the class itself is the light. This is a LIGHT
-   element, so it is allowed to animate background and box-shadow (§5.3).
-   -------------------------------------------------------------------------- */
-.pc-flash-light {
-  background: var(--light-white) !important;
-  color: var(--text-on-light) !important;
-  box-shadow: var(--glow-control-on) !important;
-}
 
 /* -----------------------------------------------------------------------------
    §9 Focus — 2px accent outside a 2px base gap, on every control including

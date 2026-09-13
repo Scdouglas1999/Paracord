@@ -404,6 +404,16 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
     () => readers.filter((person) => person.userId !== self?.id).length,
     [readers, self?.id],
   );
+  /**
+   * A blocker is worth reading only if it lasts.
+   *
+   * Delivery readiness dips out of `ready` for a beat every time the runtime
+   * recovers a channel — including the channel you just posted to — so the
+   * "wait for recovery" notice used to appear and vanish inside 80ms, shoving
+   * the composer 40px in the middle of §5.1's send. A blocker that resolves
+   * itself faster than a person can read it was never a blocker; one that does
+   * not is still here 400ms later, and then it shows.
+   */
   const composerAction = showPollComposer ? actions.poll : showScheduleComposer ? actions.schedule
     : stagedFiles.length > 0 && !actions.attach.allowed ? actions.attach : actions.send;
 
@@ -587,7 +597,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
       liftTimer.current = window.setTimeout(() => { textarea.style.opacity = ''; }, 4000);
     }
     relax(shell);
-    flash(sendButtonRef.current, 'pc-flash-light');
+    flash(sendButtonRef.current);
     emitMotion('say:sent', { channelId, nonce: `${channelId}:${Date.now()}` });
   };
 
@@ -1113,7 +1123,19 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
     { label: 'Emoji', icon: <Smile size={18} />, action: () => { setShowEmojiPicker(true); setShowGifPicker(false); setShowStickerPicker(false); }, disabled: showPollComposer },
   ];
 
+  const [blockerSettled, setBlockerSettled] = useState(false);
+  useEffect(() => {
+    if (composerAction.allowed) { setBlockerSettled(false); return; }
+    const timer = window.setTimeout(() => setBlockerSettled(true), 400);
+    return () => window.clearTimeout(timer);
+  }, [composerAction.allowed, composerAction.reason]);
+
   const busy = uploading || creatingPoll || schedulingMessage || sending;
+  // A spinner is for a wait a person can feel. A plain send is over in a frame
+  // or two — the send control's own beat (§5.1) is the feedback, and a spinner
+  // that appears and vanishes inside 200ms reads as a glitch. Uploads, polls
+  // and scheduling really do wait, so those keep it.
+  const showsSpinner = uploading || creatingPoll || schedulingMessage;
   const sendDisabled =
     busy ||
     !composerAction.allowed ||
@@ -1151,7 +1173,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
           <span>Waiting for command response…</span>
         </div>
       )}
-      {!composerAction.allowed && (
+      {!composerAction.allowed && blockerSettled && (
         <div role="status" className="rounded-[var(--radius-control)] bg-bg-raised px-3 py-2 text-meta text-text-muted shadow-[var(--shadow-raised)]">
           {composerAction.reason}
           {encrypted && encryption === 'setup' && <Link className="ml-2 underline" to={`/setup?${new URLSearchParams({ migrate: '1', server: scope.serverId, user: scope.userId, returnTo: window.location.pathname + window.location.search })}`}>Set up encryption</Link>}
@@ -1739,7 +1761,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
           aria-label={showScheduleComposer ? (schedulingMessage ? 'Scheduling message' : 'Schedule message') : 'Send message'}
           title={showScheduleComposer ? (schedulingMessage ? 'Scheduling message' : 'Schedule message') : 'Send message'}
         >
-          {busy ? (
+          {showsSpinner ? (
             <Loader2 size={17} className="animate-spin" />
           ) : showScheduleComposer ? (
             <Clock3 size={17} />

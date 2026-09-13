@@ -50,6 +50,16 @@ export function parseDuration(value: string): number {
   return match[2] === 's' ? amount * 1000 : amount;
 }
 
+/**
+ * Any custom property off the document root, for the two places WAAPI has to be
+ * handed a resolved value: it does not substitute `var()` inside a keyframe.
+ * Returns '' off-DOM, and callers fall back to not painting that property.
+ */
+export function rawToken(name: string): string {
+  if (typeof document === 'undefined' || typeof getComputedStyle !== 'function') return '';
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
 /** A duration token in milliseconds. */
 export function ms(name: MotionTokenName): number {
   return parseDuration(motionToken(name));

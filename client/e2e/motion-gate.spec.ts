@@ -328,6 +328,107 @@ test.describe('the motion gate (§5.3)', () => {
     await expect(shared.getByText('Last run: view-transition.')).toBeVisible();
   });
 
+  /**
+   * The visual half of the verification (§10: "no package is done without
+   * inspected screenshots"). A CDP screencast is the only way to get real
+   * frames out of a 600ms moment — `page.screenshot` costs more than a frame.
+   *
+   *   PARACORD_E2E_MOTION=1 PARACORD_E2E_MOTION_FRAMES=1 npx playwright test
+   */
+  test('capture the send moment as a frame strip', async ({ page }) => {
+    test.skip(process.env.PARACORD_E2E_MOTION_FRAMES !== '1', 'frame capture is opt-in');
+    test.setTimeout(120_000);
+    await mkdir(OUT_DIR, { recursive: true });
+    await page.setViewportSize({ width: 1280, height: 800 });
+    const composer = await openRoom(page);
+    await composer.fill('I will come by at 1 with the v2 bracket to compare.');
+    await page.waitForTimeout(500);
+
+    const client = await page.context().newCDPSession(page);
+    const frames: Array<{ at: number; data: string }> = [];
+    // Zeroed on the keystroke, not on the screencast: the strip's labels are
+    // "ms after Enter", which is the only clock the moment is written in.
+    let started = Number.POSITIVE_INFINITY;
+    client.on('Page.screencastFrame', async (frame) => {
+      frames.push({ at: Date.now() - started, data: frame.data });
+      await client.send('Page.screencastFrameAck', { sessionId: frame.sessionId }).catch(() => {});
+    });
+    await client.send('Page.startScreencast', { format: 'png', everyNthFrame: 1 });
+    // Let the screencast warm up so the first real frame is not the first frame.
+    await page.waitForTimeout(300);
+    started = Date.now();
+    await composer.press('Enter');
+    await page.waitForTimeout(1400);
+    await client.send('Page.stopScreencast');
+
+    const { writeFile } = await import('node:fs/promises');
+    // One strip across the whole moment: the words leaving, the row landing,
+    // the receipt answering.
+    const wanted = [0, 40, 80, 120, 160, 220, 280, 340, 420, 500, 620, 760, 900];
+    const picked = new Set<number>();
+    for (const target of wanted) {
+      let best = -1;
+      let distance = Number.POSITIVE_INFINITY;
+      for (let i = 0; i < frames.length; i += 1) {
+        if (frames[i].at < -8) continue;
+        const delta = Math.abs(frames[i].at - target);
+        if (delta < distance && !picked.has(i)) {
+          distance = delta;
+          best = i;
+        }
+      }
+      if (best < 0) continue;
+      picked.add(best);
+      await writeFile(
+        path.join(OUT_DIR, `say-${String(target).padStart(4, '0')}ms.png`),
+        Buffer.from(frames[best].data, 'base64'),
+      );
+    }
+    console.log(`[motion-gate] captured ${frames.length} frames, wrote ${picked.size} to ${OUT_DIR}`);
+    expect(picked.size).toBeGreaterThan(6);
+
+    // The room's amber window is dark in this fixture (nobody is reading), so
+    // the flicker itself is captured where it can be seen: the recipe on
+    // /design-tokens, which is the same `flicker()` the room header calls.
+    await page.goto('/design-tokens');
+    await expect(page.getByRole('heading', { name: 'Motion', exact: true })).toBeVisible();
+    const card = page.locator('#motion-flicker');
+    await card.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(400);
+    const lit: Array<{ at: number; data: string }> = [];
+    let litFrom = Number.POSITIVE_INFINITY;
+    const onLit = async (frame: { data: string; sessionId: number }) => {
+      lit.push({ at: Date.now() - litFrom, data: frame.data });
+      await client.send('Page.screencastFrameAck', { sessionId: frame.sessionId }).catch(() => {});
+    };
+    client.on('Page.screencastFrame', onLit);
+    await client.send('Page.startScreencast', { format: 'png', everyNthFrame: 1 });
+    await page.waitForTimeout(300);
+    litFrom = Date.now();
+    await card.getByRole('button', { name: 'Replay' }).click();
+    await page.waitForTimeout(500);
+    await client.send('Page.stopScreencast');
+    const box = await card.boundingBox();
+    for (const target of [0, 40, 80, 120, 160, 220]) {
+      let best = -1;
+      let distance = Number.POSITIVE_INFINITY;
+      for (let i = 0; i < lit.length; i += 1) {
+        if (lit[i].at < -8) continue;
+        const delta = Math.abs(lit[i].at - target);
+        if (delta < distance) {
+          distance = delta;
+          best = i;
+        }
+      }
+      if (best < 0 || !box) continue;
+      await writeFile(
+        path.join(OUT_DIR, `flicker-${String(target).padStart(4, '0')}ms.png`),
+        Buffer.from(lit[best].data, 'base64'),
+      );
+    }
+    console.log(`[motion-gate] captured ${lit.length} flicker frames`);
+  });
+
   test('reduced motion runs no animations at all', async ({ page }) => {
     test.setTimeout(120_000);
     await page.emulateMedia({ reducedMotion: 'reduce' });
