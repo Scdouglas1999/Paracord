@@ -173,7 +173,9 @@
 .pc-window {
   border-radius: var(--radius-window);
   background: var(--window-dark);
-  box-shadow: var(--shadow-tile);
+  /* Recessed, not raised: an unlit window is a hole, and the warm top
+     highlight of a tile was what made a dark one read as a loading chip. */
+  box-shadow: var(--shadow-well);
   transition: background var(--duration-warm-up) var(--ease-out), box-shadow var(--duration-warm-up) var(--ease-out);
 }
 

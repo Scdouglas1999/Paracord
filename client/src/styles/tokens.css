@@ -333,8 +333,11 @@
   --bg-floating: rgba(20, 23, 28, 0.97);
   --bg-mod-subtle: rgba(243, 234, 216, 0.04);
   --bg-mod-strong: rgba(243, 234, 216, 0.1);
-  /* An unlit window / the matte ground a light sits on. */
-  --window-dark: #1c2026;
+  /* An unlit window: a hole in the wall, DARKER than the plate it sits in.
+     It read lighter than the plate until WP-QA, which made a two-room
+     building's window map look like two grey avatar skeletons that never
+     resolved rather than two dark windows. */
+  --window-dark: #0b0d11;
   --overlay-backdrop: rgba(10, 12, 16, 0.72);
   /* A spoiler is a well you have not opened yet; revealed, it is a hover wash. */
   --spoiler-bg: var(--bg-well);
@@ -699,7 +702,7 @@
   --bg-floating: rgba(11, 12, 15, 0.98);
   --bg-mod-subtle: rgba(243, 234, 216, 0.055);
   --bg-mod-strong: rgba(243, 234, 216, 0.12);
-  --window-dark: #16181d;
+  --window-dark: #000000;
   --overlay-backdrop: rgba(0, 0, 0, 0.88);
   --thumb-frame-lit: #080d0b;
 
