@@ -72,6 +72,8 @@ const GUILD_KEY = 'layout-tour-guild-home';
 const DONE = 'done';
 const BODY_ID = 'layout-tour-desc';
 const TOOLTIP_W = 268;
+/** How often a live step re-checks that its anchor is still on screen. */
+const ANCHOR_POLL_MS = 250;
 
 const GUILD_HOME_PATH = /^\/app\/guilds\/[^/]+$/;
 
@@ -215,6 +217,15 @@ export function LayoutTour() {
 
   // Track the anchor's position while a step is active — it follows scroll (inner
   // panes scroll too, hence capture) and resize so the ring/popover stay glued.
+  //
+  // Scroll and resize are not enough on their own: an anchor can simply be
+  // unmounted underneath a live step. At phone width the shell renders the
+  // collapsed navigation rail for a beat and then swaps to the bottom tab bar,
+  // which left the ring painted at the rail's last rectangle — a stray emerald
+  // line down the whole screen, beside a popover describing a sidebar that is
+  // no longer there. So poll as well, and when the anchor is gone move on to
+  // the next reachable step (or finish) exactly as `next` does, rather than
+  // leaving a coach-mark pinned to nothing.
   useEffect(() => {
     if (!active) {
       setRect(null);
@@ -223,16 +234,23 @@ export function LayoutTour() {
     const step = stepsFor(active.tour)[active.index];
     const update = () => {
       const el = findAnchor(step.selector);
-      setRect(el ? el.getBoundingClientRect() : null);
+      if (!el) {
+        setRect(null);
+        next();
+        return;
+      }
+      setRect(el.getBoundingClientRect());
     };
     update();
+    const poll = window.setInterval(update, ANCHOR_POLL_MS);
     window.addEventListener('scroll', update, true);
     window.addEventListener('resize', update);
     return () => {
+      window.clearInterval(poll);
       window.removeEventListener('scroll', update, true);
       window.removeEventListener('resize', update);
     };
-  }, [active]);
+  }, [active, next]);
 
   // Move focus to the popover once per step (not on every scroll reposition), so
   // keyboard/screen-reader users land on the coach-mark (WCAG 2.4.3).
@@ -254,6 +272,12 @@ export function LayoutTour() {
   const hasMore = steps
     .slice(active.index + 1)
     .some((s) => findAnchor(s.selector));
+  // Count only the steps this viewport can actually show. A step whose anchor
+  // is absent is skipped silently, so "1 of 2" beside a Done button — which is
+  // what a phone saw, where the search field does not exist — promises a second
+  // card that never arrives.
+  const reachable = steps.filter((s, i) => i === active.index || findAnchor(s.selector));
+  const reachableIndex = reachable.findIndex((s) => s.id === step.id) + 1;
   const pos = computePosition(rect, step.side);
 
   return createPortal(
@@ -294,7 +318,7 @@ export function LayoutTour() {
         </p>
         <div className="mt-3 flex items-center justify-between gap-2">
           <span className="pc-mono text-meta text-text-faint">
-            {steps.length > 1 ? `${active.index + 1} of ${steps.length}` : ''}
+            {reachable.length > 1 ? `${reachableIndex} of ${reachable.length}` : ''}
           </span>
           <div className="flex items-center gap-1">
             {hasMore && (
