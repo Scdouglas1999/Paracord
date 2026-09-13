@@ -310,8 +310,8 @@ export function DiscoveryPage() {
                           <Users size={13} />
                           {guild.member_count}
                         </span>
-                        <span className="inline-flex items-center gap-1 text-status-online">
-                          <span className="h-1.5 w-1.5 rounded-full bg-status-online" />
+                        <span className="inline-flex items-center gap-1 text-light-amber">
+                          <span className="h-1.5 w-1.5 rounded-full bg-light-amber" />
                           {guild.online_count} online
                         </span>
                       </div>
@@ -416,13 +416,13 @@ function DiscoveryPreview({
 
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
           <PreviewFact icon={<Users size={15} />} label="Members" value={guild.member_count.toLocaleString()} />
-          <PreviewFact icon={<span className="h-2 w-2 rounded-full bg-status-online" />} label="Online now" value={guild.online_count.toLocaleString()} />
+          <PreviewFact icon={<span className="h-2 w-2 rounded-full bg-light-amber" />} label="Online now" value={guild.online_count.toLocaleString()} />
           {createdLabel && <PreviewFact icon={<CalendarDays size={15} />} label="Established" value={createdLabel} className="col-span-2 sm:col-span-1" />}
         </div>
 
         {guild.tags.length > 0 && (
           <div>
-            <div className="text-section uppercase text-text-muted">Topics</div>
+            <div className="text-section text-text-muted">Topics</div>
             <div className="mt-2 flex flex-wrap gap-1.5">
               {guild.tags.map((tag) => (
                 <span key={tag} className="rounded-xs bg-bg-mod-strong px-2 py-1 text-meta font-semibold text-text-secondary">{tag}</span>

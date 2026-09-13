@@ -216,7 +216,7 @@ export function ChannelSwitcher({
             ) : (
               groups.map((group) => (
                 <div key={group.id} className="mt-1 border-t border-border-subtle pt-1">
-                  <p className="px-2 py-1 text-section uppercase text-text-muted">{group.name}</p>
+                  <p className="px-2 py-1 text-section text-text-muted">{group.name}</p>
                   {group.channels.map((channel) => {
                     const type = channel.type ?? channel.channel_type;
                     const Icon = iconForType(type);

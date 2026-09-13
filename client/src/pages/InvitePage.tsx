@@ -77,7 +77,7 @@ export function InvitePage() {
       <AuthCard className="max-w-md overflow-hidden">
         {/* Solid framed identity header — no gradient banner, no floating circle. */}
         <div className="border-b border-border-subtle bg-bg-tertiary/40 px-8 py-7">
-          <p className="text-section uppercase text-accent-primary">You’re invited</p>
+          <p className="text-section text-accent-primary">You’re invited</p>
           <div className="mt-4 flex items-center gap-4">
             <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border-subtle bg-bg-secondary">
               {iconSrc ? (

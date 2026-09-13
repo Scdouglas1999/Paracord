@@ -320,7 +320,7 @@ export function FileStorageSection({ guildId, canManage }: FileStorageSectionPro
                 />
               ) : (
                 <div className="mt-4">
-                  <div className="hidden items-center gap-3 border-b border-border-subtle px-1 pb-2 text-section uppercase text-text-muted sm:flex">
+                  <div className="hidden items-center gap-3 border-b border-border-subtle px-1 pb-2 text-section text-text-muted sm:flex">
                     {canManage && <span className="w-4" />}
                     <span className="flex-1">Filename</span>
                     <span className="w-24 text-right">Size</span>

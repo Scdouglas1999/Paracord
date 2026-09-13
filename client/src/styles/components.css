@@ -12,17 +12,14 @@
   padding: 0 1.1rem;
   background: var(--accent-primary);
   color: var(--text-on-accent);
-  border: 1px solid color-mix(in srgb, var(--accent-primary) 80%, #ffffff 20%);
-  border-radius: 0.88rem;
+  border: none;
+  border-radius: var(--radius-control);
   font-weight: 600;
   font-size: 0.95rem;
   line-height: 1.1;
   text-align: center;
   white-space: nowrap;
   letter-spacing: 0.01em;
-  box-shadow:
-    0 10px 24px rgba(56, 82, 196, 0.34),
-    0 0 0 1px color-mix(in srgb, var(--accent-primary) 62%, white 38%) inset;
   cursor: pointer;
   transition:
     background-color var(--duration-normal) var(--ease-out),
@@ -33,11 +30,6 @@
 
 .btn-primary:hover {
   background-color: var(--accent-primary-hover);
-  transform: translateY(-1px);
-  border-color: color-mix(in srgb, var(--accent-primary-hover) 75%, #ffffff 25%);
-  box-shadow:
-    0 12px 28px rgba(68, 95, 216, 0.38),
-    0 0 0 1px color-mix(in srgb, var(--accent-primary-hover) 66%, white 34%) inset;
 }
 
 .btn-primary:active {
@@ -86,10 +78,10 @@
   justify-content: center;
   min-height: 2.5rem;
   padding: 0 0.95rem;
-  background-color: var(--accent-danger);
-  color: var(--text-on-accent);
-  border: 1px solid color-mix(in srgb, var(--accent-danger) 78%, #ffffff 22%);
-  border-radius: 0.72rem;
+  background-color: var(--danger-well);
+  color: var(--accent-danger);
+  border: none;
+  border-radius: var(--radius-control);
   font-weight: 600;
   font-size: 0.9rem;
   line-height: 1.1;
@@ -285,7 +277,7 @@
   border: none;
   font-weight: 600;
   font-size: 1.125rem;
-  color: #fff;
+  color: var(--text-on-light);
 }
 
 .guild-icon:hover,
@@ -336,11 +328,10 @@
   gap: 0.3rem;
   width: 100%;
   padding: 0.42rem 0.38rem;
-  font-size: 0.75rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-muted);
+  font-size: var(--text-section);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0;
+  color: var(--text-secondary);
   background: transparent;
   border: none;
   cursor: pointer;
@@ -418,8 +409,8 @@
   gap: 4px;
   border-radius: 0.75rem;
   border: 1px solid var(--border-subtle);
-  background-color: var(--bg-primary);
-  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.28);
+  background-color: var(--bg-raised);
+  box-shadow: var(--shadow-lifted);
   overflow: hidden;
 }
 
@@ -482,21 +473,10 @@
   animation: popup-enter var(--duration-normal) var(--ease-out);
 }
 
-/* Voice pulse animation */
-@keyframes voice-pulse {
-
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 rgba(35, 165, 90, 0.4);
-  }
-
-  50% {
-    box-shadow: 0 0 0 6px rgba(35, 165, 90, 0);
-  }
-}
-
+/* Someone is in the room and talking (spec §5): the rim breathes between the
+   lit and the speaking ring at ~1.6s. It never bounces and never scales. */
 .voice-connected-pulse {
-  animation: voice-pulse 2s ease-in-out infinite;
+  animation: pc-breathe var(--duration-breathe) var(--ease-in-out) infinite;
 }
 
 @keyframes scale-in {
@@ -561,7 +541,7 @@
   white-space: nowrap;
   color: var(--text-primary);
   background-color: var(--bg-floating);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--shadow-floating);
   pointer-events: none;
   opacity: 0;
   transition: opacity 0.1s;
@@ -589,12 +569,8 @@
   max-width: 33rem;
   border-radius: 1.05rem;
   padding: 2rem 2.05rem;
-  background:
-    linear-gradient(165deg, var(--glass-panel-fill-top), var(--glass-panel-fill-bottom)),
-    color-mix(in srgb, var(--bg-primary) 88%, var(--bg-tertiary) 12%);
-  border: 1px solid var(--border-subtle);
-  box-shadow: var(--shadow-xl);
-  backdrop-filter: blur(16px) saturate(135%);
+  background: var(--bg-plate);
+  box-shadow: var(--shadow-plate);
 }
 
 .auth-shell {
@@ -603,41 +579,29 @@
   align-items: center;
   justify-content: center;
   padding: 2rem 1rem;
-  background:
-    var(--noise-texture),
-    var(--bg-primary);
-  background-blend-mode: overlay, normal;
+  background: var(--bg-base);
 }
 
 .legal-shell {
   min-height: 100vh;
   padding: clamp(1.5rem, 2.8vw, 3rem) 1rem;
-  background:
-    var(--noise-texture),
-    var(--bg-primary);
-  background-blend-mode: overlay, normal;
+  background: var(--bg-base);
 }
 
 .legal-card {
   width: min(920px, 100%);
   margin: 0 auto;
   border-radius: 1rem;
-  border: 1px solid var(--border-subtle);
-  background:
-    linear-gradient(160deg, var(--glass-panel-fill-top), var(--glass-panel-fill-bottom)),
-    color-mix(in srgb, var(--bg-primary) 90%, var(--bg-tertiary) 10%);
-  box-shadow: var(--shadow-xl);
+  background: var(--bg-plate);
+  box-shadow: var(--shadow-plate);
   padding: clamp(1.25rem, 2.8vw, 2.25rem);
 }
 
 
 .settings-surface-card {
   border-radius: 1rem;
-  border: 1px solid var(--border-subtle);
-  background:
-    linear-gradient(165deg, var(--glass-panel-fill-top), var(--glass-panel-fill-bottom)),
-    color-mix(in srgb, var(--bg-secondary) 92%, var(--bg-tertiary) 8%);
-  box-shadow: var(--shadow-md);
+  background: var(--bg-plate);
+  box-shadow: var(--shadow-plate);
   padding: 1.5rem;
 }
 

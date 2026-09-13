@@ -14,7 +14,7 @@ export function HomeSectionHeader({
 }) {
   return (
     <div className="mb-3 flex items-center justify-between gap-2 px-0.5">
-      <div className="flex items-center gap-2 text-section uppercase text-text-muted">
+      <div className="flex items-center gap-2 text-section text-text-muted">
         {icon && <span className="text-interactive-normal">{icon}</span>}
         <span>{label}</span>
         {count != null && count > 0 && (

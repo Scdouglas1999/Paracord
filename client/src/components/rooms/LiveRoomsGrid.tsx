@@ -104,7 +104,7 @@ export function LiveRoomsGrid({ guildId, channels }: LiveRoomsGridProps) {
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex items-center gap-2 text-section uppercase text-text-muted">
+    <div className="flex items-center gap-2 text-section text-text-muted">
       <Radio size={14} className="text-interactive-normal" />
       {children}
     </div>

@@ -386,7 +386,7 @@ export function CommandPalette() {
         {groupedItems.length > 0 ? (
           groupedItems.map((group) => (
             <div key={group.category} className="mb-1.5 last:mb-0">
-              <div className="px-3 pb-1 pt-3 text-section uppercase text-text-muted first:pt-1">
+              <div className="px-3 pb-1 pt-3 text-section text-text-muted first:pt-1">
                 {group.category}
               </div>
               {group.items.map((item) => {

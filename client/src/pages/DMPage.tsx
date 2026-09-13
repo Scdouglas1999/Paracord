@@ -28,17 +28,10 @@ import { Input } from '../components/ui/Input';
 import { cn } from '../lib/utils';
 import { ChannelType, type Channel, type Message, type ReadState } from '../types';
 import { displayName } from '../lib/displayName';
+import { presenceLight } from '../lib/presence';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 
 const EMPTY_CHANNELS: Channel[] = [];
-
-const STATUS_COLOR: Record<string, string> = {
-  online: 'bg-status-online',
-  idle: 'bg-status-idle',
-  dnd: 'bg-status-dnd',
-  streaming: 'bg-status-streaming',
-  offline: 'bg-status-offline',
-};
 
 const STATUS_LABEL: Record<string, string> = {
   online: 'Online',
@@ -290,7 +283,7 @@ function OwnedDMPage() {
                     </button>
                   )}
                 </div>
-                <div className="mb-2 flex items-center justify-between gap-3 px-1 text-section uppercase text-text-muted">
+                <div className="mb-2 flex items-center justify-between gap-3 px-1 text-section text-text-muted">
                   <span>Conversations — {conversationQuery ? `${filteredRows.length} of ${rows.length}` : rows.length}</span>
                   {conversationQuery && <span className="normal-case tracking-normal">Filtered by name</span>}
                 </div>
@@ -389,6 +382,8 @@ function DmListRow({ row, onOpen }: { row: DmRow; onOpen: (row: DmRow) => void }
         ? STATUS_LABEL[status] ?? 'Direct message'
         : 'Direct message';
 
+  const statusWord = row.isGroup ? null : STATUS_LABEL[status] ?? 'Offline';
+  const light = presenceLight(status);
   const src = safeStoredImageDataUrl(row.avatar);
   const showMention = row.mentionCount > 0;
   const showUnreadDot = row.unread && !showMention;
@@ -401,7 +396,16 @@ function DmListRow({ row, onOpen }: { row: DmRow; onOpen: (row: DmRow) => void }
       className="group flex w-full items-center gap-3 px-4 py-2.5 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
     >
       <div className="relative shrink-0">
-        <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-bg-mod-strong text-label font-semibold text-text-secondary">
+        {/* §1.5: presence is a rim of light on the avatar, never a coloured dot. */}
+        <div
+          data-testid={row.isGroup ? undefined : 'presence-light'}
+          data-status={row.isGroup ? undefined : status}
+          className={cn(
+            'flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-bg-mod-strong text-label font-semibold text-text-secondary',
+            !row.isGroup && light.avatarClass,
+            !row.isGroup && light.dnd && 'pc-dnd',
+          )}
+        >
           {src ? (
             <img src={src} alt="" className="h-full w-full object-cover" />
           ) : row.isGroup ? (
@@ -410,13 +414,8 @@ function DmListRow({ row, onOpen }: { row: DmRow; onOpen: (row: DmRow) => void }
             (row.title.charAt(0) || '?').toUpperCase()
           )}
         </div>
-        {!row.isGroup && status !== 'offline' && (
-          <span
-            data-testid="presence-dot"
-            data-status={status}
-            className={cn('absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full', STATUS_COLOR[status] ?? 'bg-status-offline')}
-            style={{ boxShadow: '0 0 0 2.5px var(--bg-secondary)' }}
-          />
+        {statusWord && statusWord !== subtitle && (
+          <span className="sr-only">{statusWord}</span>
         )}
       </div>
 

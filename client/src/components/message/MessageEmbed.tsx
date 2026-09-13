@@ -29,7 +29,7 @@ export function MessageEmbedCard({ embed }: MessageEmbedCardProps) {
       <div className="flex min-w-0 flex-1 gap-3 px-3.5 py-3">
         <div className="min-w-0 flex-1">
           {embed.site_name && (
-            <div className="text-section uppercase text-text-muted">
+            <div className="text-section text-text-muted">
               {embed.site_name}
             </div>
           )}
@@ -60,7 +60,7 @@ export function MessageEmbedCard({ embed }: MessageEmbedCardProps) {
           />
         )}
         {!hasImage && lowBandwidthMode && imageUrl && (
-          <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-sm border border-border-subtle bg-bg-tertiary text-section uppercase text-text-muted">
+          <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-sm border border-border-subtle bg-bg-tertiary text-section text-text-muted">
             Image
           </div>
         )}

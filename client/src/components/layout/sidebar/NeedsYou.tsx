@@ -8,7 +8,7 @@ import { cn } from '../../../lib/utils';
 /**
  * "Needs you" section (layout-spec §1, §7.7). Attention-ranked entries — already
  * scored and capped at 6 by `useUnifiedConversations` — rendered as ConversationRows
- * under a --text-section uppercase header. Incoming friend requests rank ABOVE them
+ * under a --text-section header. Incoming friend requests rank ABOVE them
  * (they are literally waiting on the user) as RequestRows that open /app/friends.
  * Empty state is left-aligned with warm, specific copy (design-spec Empty-state recipe;
  * kill-list #4/#11 — never "It's quiet").
@@ -96,7 +96,7 @@ export function NeedsYou({
   return (
     <section aria-label="Needs you" className="flex flex-col gap-0.5">
       <div className="flex items-center justify-between gap-2 px-2 pb-1">
-        <h2 className="text-section uppercase text-text-muted">Needs you</h2>
+        <h2 className="text-section text-text-muted">Needs you</h2>
         {overflowCount > 0 && (
           <span className="text-meta normal-case tabular-nums text-text-muted">
             +{overflowCount} below

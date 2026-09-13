@@ -171,7 +171,7 @@ export function GuildOnboardingGate({ guildId }: GuildOnboardingGateProps) {
       <div className="w-full max-w-2xl overflow-hidden rounded-lg border border-border-strong bg-bg-accent shadow-xl">
         <div className="flex items-start justify-between gap-4 border-b border-border-subtle bg-bg-secondary px-6 py-5">
           <div className="min-w-0">
-            <div className="text-section uppercase text-accent-primary">Getting started</div>
+            <div className="text-section text-accent-primary">Getting started</div>
             <h3 className="mt-1 font-display text-title text-text-primary">
               {payload.settings.welcome_title || 'Welcome'}
             </h3>
@@ -196,7 +196,7 @@ export function GuildOnboardingGate({ guildId }: GuildOnboardingGateProps) {
         <div className="space-y-6 px-6 py-5">
           {payload.settings.rules_text && (
             <section className="space-y-3">
-              <div className="flex items-center gap-2 text-section uppercase text-text-muted">
+              <div className="flex items-center gap-2 text-section text-text-muted">
                 <ShieldCheck size={15} className="text-text-secondary" />
                 Server rules
               </div>
@@ -222,7 +222,7 @@ export function GuildOnboardingGate({ guildId }: GuildOnboardingGateProps) {
 
           {payload.settings.role_options.length > 0 && (
             <section className="space-y-3">
-              <div className="flex items-center gap-2 text-section uppercase text-text-muted">
+              <div className="flex items-center gap-2 text-section text-text-muted">
                 <UserRoundCheck size={15} className="text-text-secondary" />
                 {payload.settings.role_prompt || 'Pick your interests'}
               </div>

@@ -1,6 +1,6 @@
 import { Moon, Sun, Monitor, Eye, Check } from 'lucide-react';
 import { useUIStore, type AccentPreset } from '../../stores/uiStore';
-import { ACCENT_PRESETS } from '../../hooks/useTheme';
+import { ACCENT_PRESETS, THEME_SURFACES } from '../../hooks/useTheme';
 import { cn } from '../../lib/utils';
 
 type ThemeId = 'dark' | 'light' | 'amoled' | 'high-contrast';
@@ -10,16 +10,10 @@ interface ThemeSelectorProps {
   onThemeChange?: (theme: ThemeId) => void;
 }
 
-// Representative surface hexes per theme. A preview must render OTHER themes' colors
-// while the app is in the current one, so live CSS vars can't be used here — these
-// mirror the surface ramp each theme defines in tokens.css / useTheme.ts. The accent
-// bar reads the live --accent-primary so the swatch reflects the chosen preset too.
-const THEME_SWATCH: Record<ThemeId, { base: string; raised: string; line: string }> = {
-  dark: { base: '#141b17', raised: '#1b241f', line: 'rgba(234, 242, 237, 0.34)' },
-  light: { base: '#eef1ec', raised: '#ffffff', line: 'rgba(20, 27, 23, 0.30)' },
-  amoled: { base: '#000000', raised: '#0c0f0d', line: 'rgba(234, 242, 237, 0.32)' },
-  'high-contrast': { base: '#000000', raised: '#0a0a0a', line: 'rgba(255, 255, 255, 0.55)' },
-};
+// A preview must render OTHER themes' colors while the app is in the current
+// one, so live CSS vars can't be used here. THEME_SURFACES is the one place
+// those ramps are mirrored for JS (tokens.css remains the source of truth). The
+// accent bar reads the live --accent-primary so the swatch reflects the preset.
 
 const THEME_OPTIONS: Array<{
   id: ThemeId;
@@ -27,10 +21,10 @@ const THEME_OPTIONS: Array<{
   hint: string;
   icon: React.ReactNode;
 }> = [
-  { id: 'dark', label: 'Dark', hint: 'The warm emerald default', icon: <Moon size={16} /> },
-  { id: 'light', label: 'Light', hint: 'Warm paper, green undertone', icon: <Sun size={16} /> },
-  { id: 'amoled', label: 'AMOLED', hint: 'True black for OLED panels', icon: <Monitor size={16} /> },
-  { id: 'high-contrast', label: 'High Contrast', hint: 'Maximum legibility', icon: <Eye size={16} /> },
+  { id: 'dark', label: 'Night', hint: 'The default — a building after dark', icon: <Moon size={16} /> },
+  { id: 'light', label: 'Daylight', hint: 'Warm paper; lit rooms read as ink', icon: <Sun size={16} /> },
+  { id: 'amoled', label: 'AMOLED', hint: 'A true-black street for OLED panels', icon: <Monitor size={16} /> },
+  { id: 'high-contrast', label: 'High contrast', hint: 'Thicker rims, two text steps', icon: <Eye size={16} /> },
 ];
 
 const ACCENT_LABELS: Record<AccentPreset, string> = {
@@ -47,20 +41,20 @@ const ACCENT_LABELS: Record<AccentPreset, string> = {
 };
 
 function FieldLabel({ children }: { children: React.ReactNode }) {
-  return <div className="mb-3 text-section uppercase text-text-secondary">{children}</div>;
+  return <div className="mb-3 text-section text-text-secondary">{children}</div>;
 }
 
 /** A miniature app frame — sidebar + main pane — painted in a theme's real surfaces. */
 function ThemeSwatch({ id }: { id: ThemeId }) {
-  const sw = THEME_SWATCH[id];
+  const sw = THEME_SURFACES[id];
   return (
     <div className="mb-3 flex h-16 gap-1.5 rounded-sm p-1.5" style={{ background: sw.base }}>
-      <div className="flex w-1/3 flex-col gap-1 rounded-[4px] p-1" style={{ background: sw.raised }}>
+      <div className="flex w-1/3 flex-col gap-1 rounded-[4px] p-1" style={{ background: sw.plate }}>
         <div className="h-1.5 w-full rounded-full" style={{ background: 'var(--accent-primary)' }} />
         <div className="h-1 w-3/4 rounded-full" style={{ background: sw.line }} />
         <div className="h-1 w-2/3 rounded-full" style={{ background: sw.line }} />
       </div>
-      <div className="flex flex-1 flex-col gap-1 rounded-[4px] p-1" style={{ background: sw.raised }}>
+      <div className="flex flex-1 flex-col gap-1 rounded-[4px] p-1" style={{ background: sw.plate }}>
         <div className="h-1 w-full rounded-full" style={{ background: sw.line }} />
         <div className="h-1 w-5/6 rounded-full" style={{ background: sw.line }} />
         <div className="mt-auto h-2 w-9 rounded-full" style={{ background: 'var(--accent-primary)' }} />
@@ -114,7 +108,7 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
       </div>
 
       <div>
-        <FieldLabel>Accent Color</FieldLabel>
+        <FieldLabel>Accent color</FieldLabel>
         <div className="flex flex-wrap items-center gap-2.5">
           {(Object.keys(ACCENT_PRESETS) as AccentPreset[]).map((preset) => {
             const selected = accentPreset === preset;
@@ -138,8 +132,8 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
           })}
         </div>
         <p className="mt-2.5 text-meta text-text-muted">
-          The accent drives primary buttons, active navigation, mentions, and focus rings. Teal brand
-          moments stay fixed.
+          The accent drives primary buttons, active navigation, mentions and focus rings. The
+          light that shows who is in a room never changes colour.
         </p>
       </div>
     </div>

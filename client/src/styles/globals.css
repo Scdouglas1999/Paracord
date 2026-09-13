@@ -1,12 +1,18 @@
-@import "@fontsource-variable/inter";
-/* Display face for headings only — self-hosted (CSP-safe), never external CDN. */
-@import "@fontsource-variable/fraunces";
+/* Self-hosted faces only (CSP-safe); never an external CDN. See spec §2. */
+/* UI / body — Onest (variable, 100–900; the ramp uses 400/500/600). */
+@import "@fontsource-variable/onest";
+/* Display / names — Gabarito 500/600/700. */
+@import "@fontsource/gabarito/500.css";
+@import "@fontsource/gabarito/600.css";
+@import "@fontsource/gabarito/700.css";
+/* Meta — JetBrains Mono. */
 @import "@fontsource/jetbrains-mono/400.css";
 @import "@fontsource/jetbrains-mono/500.css";
 @import "@fontsource/jetbrains-mono/600.css";
 @import "@fontsource/jetbrains-mono/700.css";
 @import "tailwindcss";
 @import './tokens.css';
+@import './primitives.css';
 @import './layout.css';
 @import './components.css';
 @import './utilities.css';

@@ -12,7 +12,7 @@ const SERIES_COLORS = [
   'var(--accent-info)',
   'var(--accent-success)',
   'var(--accent-warning)',
-  'var(--status-streaming)',
+  'var(--text-faint)',
   'var(--accent-primary)',
   'var(--accent-danger)',
 ];
@@ -20,7 +20,7 @@ const SERIES_COLORS = [
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div className="text-section uppercase text-text-muted">{label}</div>
+      <div className="text-section text-text-muted">{label}</div>
       <div className="font-display text-lg tabular-nums text-text-primary">{value}</div>
     </div>
   );
@@ -32,7 +32,7 @@ export function BotMetricsPanel({ metrics, onRefresh }: BotMetricsPanelProps) {
   return (
     <div className="rounded-sm border border-border-subtle bg-bg-tertiary p-4">
       <div className="mb-3 flex items-center justify-between">
-        <span className="text-section uppercase text-text-secondary">Metrics · last 30 days</span>
+        <span className="text-section text-text-secondary">Metrics · last 30 days</span>
         <button
           type="button"
           className="inline-flex items-center gap-1.5 rounded-sm border border-border-subtle px-2.5 py-1 text-meta font-semibold text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
@@ -54,7 +54,7 @@ export function BotMetricsPanel({ metrics, onRefresh }: BotMetricsPanelProps) {
               <Stat label="Active guilds" value={String(metrics.active_guild_count)} />
             </div>
             <div>
-              <div className="text-section uppercase text-text-muted">Rating</div>
+              <div className="text-section text-text-muted">Rating</div>
               <div className="inline-flex items-center gap-1.5 font-display text-lg tabular-nums text-text-primary">
                 <Star size={14} className="text-accent-warning" />
                 {metrics.average_rating.toFixed(1)} ({metrics.review_count} reviews)

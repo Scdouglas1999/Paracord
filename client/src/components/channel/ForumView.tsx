@@ -797,7 +797,7 @@ function NewPostModal({
       </ModalHeader>
       <ModalBody className="space-y-4">
           <div>
-            <label htmlFor="forum-post-title" className="mb-1.5 block text-section uppercase text-text-muted">
+            <label htmlFor="forum-post-title" className="mb-1.5 block text-section text-text-muted">
               Title
             </label>
             <input
@@ -814,7 +814,7 @@ function NewPostModal({
 
           <div>
             <div className="mb-1.5 flex items-center justify-between gap-3">
-              <label htmlFor="forum-post-content" className="text-section uppercase text-text-muted">
+              <label htmlFor="forum-post-content" className="text-section text-text-muted">
                 Opening message (optional)
               </label>
               <span className="text-meta tabular-nums text-text-muted">{content.length}/2000</span>
@@ -847,7 +847,7 @@ function NewPostModal({
 
           {tags.length > 0 && (
             <div>
-              <div className="mb-1.5 block text-section uppercase text-text-muted">
+              <div className="mb-1.5 block text-section text-text-muted">
                 Tags
               </div>
               <div className="flex flex-wrap gap-1.5" role="toolbar" aria-label="Post tag selection">

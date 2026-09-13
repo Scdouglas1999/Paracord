@@ -3,6 +3,7 @@ import { Hash, Volume2, MessageSquare, MessagesSquare } from 'lucide-react';
 import { usePresenceStore } from '../../../stores/presenceStore';
 import { safeStoredImageDataUrl } from '../../../lib/security';
 import { cn } from '../../../lib/utils';
+import { presenceLight } from '../../../lib/presence';
 import type { ConversationEntry } from '../../../lib/attention/conversationModel';
 
 /**
@@ -13,7 +14,7 @@ import type { ConversationEntry } from '../../../lib/attention/conversationModel
  * (--accent-secondary) left edge bar + --text-primary. The leading element is
  * chosen by `entry.kind`:
  *   - guild_text / voice / thread → lucide line icon + small --text-muted context label
- *   - dm                          → avatar + presence dot (presence read PER ROW, §3.2)
+ *   - dm                          → avatar + lit/dim rim (presence read PER ROW, §3.2)
  *   - group_dm                    → group avatar (no single presence subject)
  *   - guild_home                  → guild (squircle) avatar
  *
@@ -22,29 +23,14 @@ import type { ConversationEntry } from '../../../lib/attention/conversationModel
  * only, lucide line icons (kill-list #2/#3).
  */
 
-const STATUS_COLORS: Record<string, string> = {
-  online: 'bg-status-online',
-  idle: 'bg-status-idle',
-  dnd: 'bg-status-dnd',
-  streaming: 'bg-status-streaming',
-  offline: 'bg-status-offline',
-};
-
-/** Presence dot that runs its OWN store selector so only this row re-renders on a tick. */
-function PresenceDot({ userId, scope }: { userId?: string | null; scope?: string }) {
-  const status = usePresenceStore((s) =>
+/**
+ * Presence status for this row only — its OWN store selector, so a presence tick
+ * re-renders just this row (§3.2). §1.5: presence is a rim of light on the
+ * avatar, not a coloured dot.
+ */
+function usePresenceStatus(userId?: string | null, scope?: string): string {
+  return usePresenceStore((s) =>
     userId ? s.getPresence(userId, scope)?.status ?? 'offline' : 'offline',
-  );
-  return (
-    <span
-      data-testid="presence-dot"
-      data-status={status}
-      aria-hidden
-      className={cn(
-        'absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full ring-2 ring-bg-secondary',
-        STATUS_COLORS[status] ?? STATUS_COLORS.offline,
-      )}
-    />
   );
 }
 
@@ -57,12 +43,17 @@ function LeadingAvatar({ entry }: { entry: ConversationEntry }) {
   // Render the real stored avatar (matching AroundNowStrip / OccupantStack), with
   // an initials / group-icon chip as the fallback (design-spec §7 Avatar recipe).
   const src = safeStoredImageDataUrl(avatar);
+  const isDM = kind === 'dm';
+  const status = usePresenceStatus(isDM ? userId : null, serverId);
+  const light = presenceLight(status);
   return (
     <span className="relative shrink-0">
       <span
         className={cn(
           'flex h-6 w-6 items-center justify-center overflow-hidden bg-bg-mod-strong text-meta font-semibold text-text-secondary',
           isGuildHome ? 'rounded-md' : 'rounded-full',
+          isDM && light.avatarClass,
+          isDM && light.dnd && 'pc-dnd',
         )}
       >
         {src ? (
@@ -73,7 +64,11 @@ function LeadingAvatar({ entry }: { entry: ConversationEntry }) {
           (title.charAt(0) || '?').toUpperCase()
         )}
       </span>
-      {kind === 'dm' && <PresenceDot userId={userId} scope={serverId} />}
+      {isDM && (
+        <span data-testid="presence-dot" data-status={status} className="sr-only">
+          {light.label}
+        </span>
+      )}
     </span>
   );
 }

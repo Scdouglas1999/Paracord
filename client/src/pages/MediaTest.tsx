@@ -149,13 +149,13 @@ export default function MediaTest() {
     'h-10 rounded-sm border border-border-subtle bg-bg-tertiary px-3 font-code text-meta text-text-primary transition-colors placeholder:text-text-muted focus:border-accent-primary focus:outline-none focus:[box-shadow:var(--focus-ring-input)] disabled:opacity-60';
 
   const panelCls = 'rounded-md border border-border-subtle bg-bg-secondary p-4 shadow-sm';
-  const sectionHeadCls = 'mb-3 flex items-center gap-2 text-section uppercase text-text-muted';
+  const sectionHeadCls = 'mb-3 flex items-center gap-2 text-section text-text-muted';
 
   return (
     <div className="min-h-screen w-full overflow-y-auto bg-bg-primary p-8 text-text-primary">
       <div className="mx-auto max-w-4xl">
         <header className="mb-8">
-          <p className="mb-2 text-section uppercase text-accent-secondary">Internal · Media transport</p>
+          <p className="mb-2 text-section text-accent-secondary">Internal · Media transport</p>
           <h1 className="font-display text-title text-text-primary">Media engine harness</h1>
           <p className="mt-1.5 max-w-2xl text-body text-text-secondary">
             Drive the custom QUIC media server directly against a running
@@ -167,7 +167,7 @@ export default function MediaTest() {
         {/* Connection controls */}
         <div className="mb-4 flex flex-wrap items-end gap-3">
           <div className="flex flex-col">
-            <label htmlFor="mt-endpoint" className="mb-1.5 text-section uppercase text-text-muted">
+            <label htmlFor="mt-endpoint" className="mb-1.5 text-section text-text-muted">
               Relay endpoint
             </label>
             <input
@@ -180,7 +180,7 @@ export default function MediaTest() {
             />
           </div>
           <div className="flex flex-col">
-            <label htmlFor="mt-token" className="mb-1.5 text-section uppercase text-text-muted">
+            <label htmlFor="mt-token" className="mb-1.5 text-section text-text-muted">
               Auth token
             </label>
             <input
@@ -291,7 +291,7 @@ export default function MediaTest() {
                     <span
                       className={cn(
                         'h-2 w-2 shrink-0 rounded-full',
-                        p.speaking ? 'bg-status-online' : 'bg-status-offline',
+                        p.speaking ? 'bg-light-white' : 'bg-text-faint',
                       )}
                     />
                     <span className="flex-1 truncate font-code text-meta text-text-secondary">

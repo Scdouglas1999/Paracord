@@ -143,7 +143,7 @@ export function SpacesList({
 
   return (
     <section aria-label="Spaces" className="flex flex-col gap-0.5">
-      <h2 className="px-2 pb-1 text-section uppercase text-text-muted">Spaces</h2>
+      <h2 className="px-2 pb-1 text-section text-text-muted">Spaces</h2>
       <div role="group" aria-label="Joined spaces" className="flex flex-col gap-0.5">
         {spaces.map((space, i) => {
           const active = space.key === activeGuildKey && !!activeScope && accountScopeKey(activeScope) === accountScopeKey(space.scope);

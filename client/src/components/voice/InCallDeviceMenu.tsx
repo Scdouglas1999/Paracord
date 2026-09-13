@@ -242,7 +242,7 @@ export function InCallDeviceMenu(props: InCallDeviceMenuProps) {
         >
           <div className="mb-3 flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <div className="text-section uppercase text-text-muted">Audio devices</div>
+              <div className="text-section text-text-muted">Audio devices</div>
               <p className="mt-1 text-meta text-text-secondary">
                 Changes apply immediately and carry into your next call.
               </p>

@@ -391,7 +391,7 @@ export function VoiceControlBar({
                             left: qualityCoords?.left ?? 8,
                         }}
                     >
-                        <div className="px-2.5 pb-1.5 pt-1 text-section uppercase text-text-muted">
+                        <div className="px-2.5 pb-1.5 pt-1 text-section text-text-muted">
                             Share quality
                         </div>
                         <p className="px-2.5 pb-2 text-meta leading-snug text-text-secondary">

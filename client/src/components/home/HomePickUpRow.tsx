@@ -4,30 +4,16 @@ import { usePresenceStore } from '../../stores/presenceStore';
 import { resolveUserAvatarUrl } from '../../lib/userAvatar';
 import { snowflakeToMs, type ConversationEntry } from '../../lib/attention/conversationModel';
 import { cn } from '../../lib/utils';
-
-const STATUS_COLORS: Record<string, string> = {
-  online: 'bg-status-online',
-  idle: 'bg-status-idle',
-  dnd: 'bg-status-dnd',
-  streaming: 'bg-status-streaming',
-  offline: 'bg-status-offline',
-};
+import { presenceLight } from '../../lib/presence';
 
 const AVATAR_KINDS = new Set<ConversationEntry['kind']>(['dm', 'group_dm']);
 
-function PresenceDot({ userId, scope }: { userId?: string | null; scope?: string }) {
+/** §1.5: presence is a rim of light on the avatar, never a coloured dot. */
+function usePresenceLight(userId?: string | null, scope?: string) {
   const status = usePresenceStore((s) =>
     userId ? (s.getPresence(userId, scope)?.status ?? 'offline') : 'offline',
   );
-  return (
-    <span
-      aria-hidden
-      className={cn(
-        'absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full ring-2 ring-bg-secondary',
-        STATUS_COLORS[status] ?? STATUS_COLORS.offline,
-      )}
-    />
-  );
+  return presenceLight(status);
 }
 
 function relativeFromSnowflake(id: string | null): string | null {
@@ -60,6 +46,8 @@ export interface HomePickUpRowProps {
  * unread/mention hints. Intentionally not the sidebar `ConversationRow` chrome.
  */
 export function HomePickUpRow({ entry, onClick }: HomePickUpRowProps) {
+  const light = usePresenceLight(entry.kind === 'dm' ? entry.userId : null, entry.serverId);
+  const showPresence = entry.kind === 'dm';
   const useAvatar = AVATAR_KINDS.has(entry.kind);
   const src = resolveUserAvatarUrl(entry.avatar);
   const time = relativeFromSnowflake(entry.lastActivityId);
@@ -79,7 +67,13 @@ export function HomePickUpRow({ entry, onClick }: HomePickUpRowProps) {
     >
       <span className="relative shrink-0">
         {useAvatar ? (
-          <span className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-accent-tint text-label font-semibold text-accent-primary">
+          <span
+            className={cn(
+              'flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-accent-tint text-label font-semibold text-accent-primary',
+              showPresence && light.avatarClass,
+              showPresence && light.dnd && 'pc-dnd',
+            )}
+          >
             {src ? (
               <img src={src} alt="" className="h-full w-full object-cover" />
             ) : entry.kind === 'group_dm' ? (
@@ -93,7 +87,7 @@ export function HomePickUpRow({ entry, onClick }: HomePickUpRowProps) {
             <Icon size={18} aria-hidden />
           </span>
         )}
-        {entry.kind === 'dm' && <PresenceDot userId={entry.userId} scope={entry.serverId} />}
+        {showPresence && <span className="sr-only">{light.label}</span>}
       </span>
 
       <span className="min-w-0 flex-1">

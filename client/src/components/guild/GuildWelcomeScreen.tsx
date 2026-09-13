@@ -91,7 +91,7 @@ export function GuildWelcomeScreen({ guild, channels, onDismiss }: GuildWelcomeS
               )}
             </div>
             <div className="min-w-0 pt-0.5">
-              <div className="text-section uppercase text-accent-primary">Welcome aboard</div>
+              <div className="text-section text-accent-primary">Welcome aboard</div>
               <h2 className="mt-1 font-display text-title text-text-primary">
                 {guild.name}
               </h2>
@@ -111,7 +111,7 @@ export function GuildWelcomeScreen({ guild, channels, onDismiss }: GuildWelcomeS
 
         <div className="px-6 py-5">
           {/* Getting-started rows */}
-          <div className="text-section uppercase text-text-muted">Get started</div>
+          <div className="text-section text-text-muted">Get started</div>
           <div className="mt-2 divide-y divide-border-subtle">
             {gettingStarted.map(({ icon: Icon, title, body }) => (
               <div key={title} className="flex items-start gap-3 py-3">
@@ -129,12 +129,12 @@ export function GuildWelcomeScreen({ guild, channels, onDismiss }: GuildWelcomeS
           {/* Channel overview */}
           {textChannels.length > 0 && (
             <div className="mt-5">
-              <div className="text-section uppercase text-text-muted">Explore channels</div>
+              <div className="text-section text-text-muted">Explore channels</div>
               <div className="scrollbar-thin mt-2 max-h-44 space-y-0.5 overflow-y-auto">
                 {Array.from(categories.entries()).map(([catId, cat]) => (
                   <div key={catId || '__uncategorized'}>
                     {catId && (
-                      <div className="mb-0.5 mt-2 px-2 text-section uppercase text-text-muted">
+                      <div className="mb-0.5 mt-2 px-2 text-section text-text-muted">
                         {cat.name}
                       </div>
                     )}

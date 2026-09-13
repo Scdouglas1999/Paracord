@@ -167,7 +167,7 @@ export function SettingsPanel() {
         </section>
 
         <section className="space-y-5 border-t border-border-subtle pt-7">
-          <h3 className="text-section uppercase text-text-secondary">Guild storage limits</h3>
+          <h3 className="text-section text-text-secondary">Guild storage limits</h3>
           <Field
             label="Max guild storage quota (MB)"
             htmlFor="setting-storage-quota"
@@ -185,7 +185,7 @@ export function SettingsPanel() {
         </section>
 
         <section className="space-y-5 border-t border-border-subtle pt-7">
-          <h3 className="text-section uppercase text-text-secondary">Federation file cache</h3>
+          <h3 className="text-section text-text-secondary">Federation file cache</h3>
           <div className="rounded-md border border-border-subtle bg-bg-tertiary/40 px-4 py-3">
             <Toggle
               checked={settings.federation_file_cache_enabled === 'true'}

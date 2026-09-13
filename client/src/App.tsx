@@ -30,6 +30,11 @@ const TemplateGalleryPage = lazy(() => import('./pages/TemplateGalleryPage').the
 // in production (import.meta.env.DEV is statically false), so Rollup drops the
 // dynamic import and the harness never ships to end users.
 const MediaTest = import.meta.env.DEV ? lazy(() => import('./pages/MediaTest')) : null;
+// The design-system reference page (docs/lantern-stage-spec.md made visible).
+// Dev builds only, by the same fold-to-null trick as the media harness.
+const DesignTokensPage = import.meta.env.DEV
+  ? lazy(() => import('./pages/DesignTokensPage'))
+  : null;
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { useAccountStore } from './stores/accountStore';
 import { useServerListStore } from './stores/serverListStore';
@@ -205,7 +210,7 @@ export function AuthRoute({ children }: { children: React.ReactNode }) {
 
 /**
  * Full-viewport branded boot state shown while auth/session resolves. A real
- * loading moment (app mark on the deepest `--bg-tertiary` base, Fraunces
+ * loading moment (app mark on the deepest `--bg-base` street, Gabarito
  * wordmark, muted status line) rather than a bare spinner — and it matches the
  * document's first-paint surface so there is no flash while the app hydrates.
  * The mark breathes gently; `useReducedMotion` collapses it to a static mark.
@@ -315,6 +320,11 @@ export default function App() {
       {/* Media engine test harness — registered in dev builds only, stripped from production. */}
       {import.meta.env.DEV && MediaTest && (
         <Route path="/media-test" element={lazyRoute(<MediaTest />)} />
+      )}
+
+      {/* Design-system reference — dev builds only, stripped from production. */}
+      {import.meta.env.DEV && DesignTokensPage && (
+        <Route path="/design-tokens" element={lazyRoute(<DesignTokensPage />)} />
       )}
 
       {/* Default: send to app (which handles auth redirects) */}

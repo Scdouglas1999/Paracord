@@ -497,7 +497,7 @@ export function EventList({ guildId }: EventListProps) {
         <>
           {upcoming.length > 0 && (
             <div className="space-y-3">
-              <h3 className="px-0.5 text-section uppercase text-text-muted">Upcoming</h3>
+              <h3 className="px-0.5 text-section text-text-muted">Upcoming</h3>
               {upcoming.map((event) => (
                 <EventCard
                   key={event.id}
@@ -517,7 +517,7 @@ export function EventList({ guildId }: EventListProps) {
 
           {past.length > 0 && (
             <div className="space-y-3">
-              <h3 className="px-0.5 text-section uppercase text-text-muted">Past events</h3>
+              <h3 className="px-0.5 text-section text-text-muted">Past events</h3>
               {past.map((event) => (
                 <EventCard
                   key={event.id}

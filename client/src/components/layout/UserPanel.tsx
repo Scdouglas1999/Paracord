@@ -9,7 +9,9 @@ import { cn } from '../../lib/utils';
 import { writeClipboardText } from '../../lib/clipboard';
 import { toast } from '../../stores/toastStore';
 import { displayName } from '../../lib/displayName';
+import { presenceLight } from '../../lib/presence';
 import type { UserSettings } from '../../types';
+import { getIdentityColor } from '../../lib/colors';
 
 interface UserPanelProps {
   user: { id: string; username: string; display_name?: string | null; email?: string; flags?: number } | null;
@@ -23,25 +25,16 @@ interface UserPanelProps {
 
 type PresenceStatus = UserSettings['status'];
 
-const STATUS_OPTIONS: Array<{ id: PresenceStatus; label: string; color: string }> = [
-  { id: 'online', label: 'Online', color: 'bg-status-online' },
-  { id: 'idle', label: 'Idle', color: 'bg-status-idle' },
-  { id: 'dnd', label: 'Do Not Disturb', color: 'bg-status-dnd' },
-  { id: 'invisible', label: 'Invisible', color: 'bg-status-offline' },
+/**
+ * §1.5: a picker is the one place that legitimately needs a per-option visual,
+ * so each option carries a swatch in the light vocabulary rather than a colour.
+ */
+const STATUS_OPTIONS: Array<{ id: PresenceStatus; label: string; swatch: string }> = [
+  { id: 'online', label: 'Online', swatch: 'pc-lit' },
+  { id: 'idle', label: 'Idle', swatch: 'pc-dim' },
+  { id: 'dnd', label: 'Do Not Disturb', swatch: 'pc-dim pc-dnd' },
+  { id: 'invisible', label: 'Invisible', swatch: 'pc-dim' },
 ];
-
-function statusDotClass(status: PresenceStatus | undefined): string {
-  switch (status) {
-    case 'idle':
-      return 'bg-status-idle';
-    case 'dnd':
-      return 'bg-status-dnd';
-    case 'invisible':
-      return 'bg-status-offline';
-    default:
-      return 'bg-status-online';
-  }
-}
 
 function statusLabel(status: PresenceStatus | undefined, custom?: string | null): string {
   if (custom?.trim()) return custom.trim();
@@ -147,15 +140,16 @@ export function UserPanel({
             }}
           >
             <div className="relative shrink-0">
-              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-accent-primary text-label font-semibold text-text-on-accent shadow-sm">
-                {displayName(user).charAt(0).toUpperCase()}
-              </div>
               <div
                 className={cn(
-                  'absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full ring-2 ring-bg-secondary',
-                  statusDotClass(status),
+                  'flex h-9 w-9 items-center justify-center rounded-full text-label font-semibold text-text-on-light',
+                  presenceLight(status === 'invisible' ? 'offline' : status).avatarClass,
+                  status === 'dnd' && 'pc-dnd',
                 )}
-              />
+                style={{ backgroundColor: getIdentityColor(user?.id ?? '0') }}
+              >
+                {displayName(user).charAt(0).toUpperCase()}
+              </div>
             </div>
             <div className="min-w-0 flex-1">
               <div className="truncate text-label font-semibold leading-tight text-text-primary">
@@ -189,7 +183,7 @@ export function UserPanel({
                     setMenuOpen(false);
                   }}
                 >
-                  <span className={cn('h-2.5 w-2.5 rounded-full', option.color)} />
+                  <span aria-hidden className={cn('h-2.5 w-2.5 rounded-full bg-bg-raised', option.swatch)} />
                   {option.label}
                 </button>
               ))}

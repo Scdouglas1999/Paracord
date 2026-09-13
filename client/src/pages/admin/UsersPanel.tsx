@@ -137,7 +137,7 @@ export function UsersPanel() {
       <button
         type="button"
         onClick={() => toggleSort(keyName)}
-        className="inline-flex items-center gap-1 rounded-sm text-section uppercase text-text-secondary outline-none transition-colors hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+        className="inline-flex items-center gap-1 rounded-sm text-section text-text-secondary outline-none transition-colors hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
       >
         {label}
         {sortKey === keyName && (sortAsc ? <ArrowUp size={12} /> : <ArrowDown size={12} />)}
@@ -174,10 +174,10 @@ export function UsersPanel() {
             <thead>
               <tr className="border-b border-border-subtle bg-bg-tertiary/40">
                 <SortHeader label="User" keyName="name" className="px-5 py-3" />
-                <th scope="col" className="px-5 py-3 text-section uppercase text-text-secondary">Email</th>
-                <th scope="col" className="px-5 py-3 text-section uppercase text-text-secondary">Role</th>
+                <th scope="col" className="px-5 py-3 text-section text-text-secondary">Email</th>
+                <th scope="col" className="px-5 py-3 text-section text-text-secondary">Role</th>
                 <SortHeader label="Joined" keyName="joined" className="px-5 py-3" />
-                <th scope="col" className="px-5 py-3 text-right text-section uppercase text-text-secondary">Actions</th>
+                <th scope="col" className="px-5 py-3 text-right text-section text-text-secondary">Actions</th>
               </tr>
             </thead>
             <tbody>

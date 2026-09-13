@@ -181,10 +181,10 @@ export function BackupsPanel() {
             <table className="w-full min-w-[720px] text-left">
               <thead>
                 <tr className="border-b border-border-subtle bg-bg-tertiary/40">
-                  <th scope="col" className="px-5 py-3 text-section uppercase text-text-secondary">Filename</th>
-                  <th scope="col" className="px-5 py-3 text-section uppercase text-text-secondary">Created</th>
-                  <th scope="col" className="px-5 py-3 text-section uppercase text-text-secondary">Size</th>
-                  <th scope="col" className="px-5 py-3 text-right text-section uppercase text-text-secondary">Actions</th>
+                  <th scope="col" className="px-5 py-3 text-section text-text-secondary">Filename</th>
+                  <th scope="col" className="px-5 py-3 text-section text-text-secondary">Created</th>
+                  <th scope="col" className="px-5 py-3 text-section text-text-secondary">Size</th>
+                  <th scope="col" className="px-5 py-3 text-right text-section text-text-secondary">Actions</th>
                 </tr>
               </thead>
               <tbody>

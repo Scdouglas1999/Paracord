@@ -472,7 +472,7 @@ export function ChannelManager({ guildId, channels, roles, canManageRoles, highl
           {activeDragItem && (
             <div className="flex scale-[1.02] items-center gap-2 rounded-sm border border-accent-primary bg-bg-accent px-3 py-2 text-sm text-text-primary shadow-md">
               {activeDragItem.type === 'category' ? (
-                <span className="text-section uppercase text-text-secondary">
+                <span className="text-section text-text-secondary">
                   {activeDragItem.channel.name}
                 </span>
               ) : (
@@ -546,7 +546,7 @@ export function ChannelManager({ guildId, channels, roles, canManageRoles, highl
 
         {canManageRoles && assignableRoles.length > 0 && (
           <div className="space-y-2 border-t border-border-subtle pt-3">
-            <div className="text-section uppercase text-text-muted">Restrict to roles (optional)</div>
+            <div className="text-section text-text-muted">Restrict to roles (optional)</div>
             <div className="flex flex-wrap gap-1.5">
               {assignableRoles.map((role) => {
                 const active = newChannelRequiredRoleIds.includes(role.id);
@@ -718,7 +718,7 @@ function CategoryGroupSection({
         ) : (
           <span
             className={cn(
-              'flex-1 truncate text-section uppercase',
+              'flex-1 truncate text-section',
               group.isReal ? 'cursor-pointer text-text-secondary' : 'text-text-muted'
             )}
             onDoubleClick={() => {

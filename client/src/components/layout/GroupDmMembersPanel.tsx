@@ -136,7 +136,7 @@ export function GroupDmMembersPanel({ channelId, onClose }: GroupDmMembersPanelP
 
       {addingMember && (
         <div className="border-b border-border-subtle p-2">
-          <div className="px-2 pb-1.5 text-section uppercase text-text-muted">Add from friends</div>
+          <div className="px-2 pb-1.5 text-section text-text-muted">Add from friends</div>
           {eligibleFriends.map((rel) => (
             <button
               key={rel.id}

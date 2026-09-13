@@ -281,7 +281,7 @@ export function TemplateGalleryPage() {
 
                   <div className="mt-5 grid min-h-0 flex-1 grid-cols-1 gap-5 lg:grid-cols-2">
                     <div className="flex min-h-0 flex-col">
-                      <div className="mb-2 flex items-center gap-1.5 text-section uppercase text-text-muted">
+                      <div className="mb-2 flex items-center gap-1.5 text-section text-text-muted">
                         <MessagesSquare size={13} />
                         Channels — {selectedTemplate.template_data.channels.length}
                       </div>
@@ -308,7 +308,7 @@ export function TemplateGalleryPage() {
                     </div>
 
                     <div className="flex min-h-0 flex-col">
-                      <div className="mb-2 flex items-center gap-1.5 text-section uppercase text-text-muted">
+                      <div className="mb-2 flex items-center gap-1.5 text-section text-text-muted">
                         <Shield size={13} />
                         Roles — {selectedTemplate.template_data.roles.length}
                       </div>

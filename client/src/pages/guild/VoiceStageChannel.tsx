@@ -636,7 +636,7 @@ export function VoiceStageChannel({
           <div data-native-underlay-clear="" className="flex min-h-0 flex-1 flex-col relative bg-black/40 group/video">
             {!isStage && (watchedStreamerId || videoLayout === 'side') && (
               <div data-native-overlay-occlude="" className="absolute top-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-1 rounded-md border border-border-subtle bg-bg-floating px-1.5 py-1.5 shadow-lg backdrop-blur-md opacity-0 group-hover/video:opacity-100 group-focus-within/video:opacity-100 transition-opacity">
-                <span className="px-1 text-section uppercase text-text-muted">View</span>
+                <span className="px-1 text-section text-text-muted">View</span>
                 <div className="mx-0.5 h-4 w-px bg-border-strong" />
                 {([
                   { mode: 'top' as const, icon: LayoutList, label: 'Top' },
@@ -746,7 +746,7 @@ export function VoiceStageChannel({
                             <div className="mt-5 rounded-md border border-border-subtle bg-bg-secondary p-3.5">
                               <div className="flex items-center justify-between gap-3">
                                 <div>
-                                  <div className="text-section uppercase text-text-muted">Requests to speak</div>
+                                  <div className="text-section text-text-muted">Requests to speak</div>
                                   <p className="mt-0.5 text-meta text-text-secondary">
                                     {speakerRequests.length} {speakerRequests.length === 1 ? 'person is' : 'people are'} waiting.
                                   </p>

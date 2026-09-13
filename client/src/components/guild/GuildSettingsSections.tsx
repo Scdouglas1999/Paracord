@@ -184,7 +184,7 @@ export function OverviewSection({
         {stats.map((stat) => (
           <div key={stat.label} className="px-1 first:pl-0 sm:px-5">
             <div className="font-code text-2xl font-semibold tabular-nums text-text-primary">{stat.value}</div>
-            <div className="mt-0.5 text-meta uppercase tracking-[0.04em] text-text-muted">{stat.label}</div>
+            <div className="mt-0.5 text-meta tracking-[0.04em] text-text-muted">{stat.label}</div>
           </div>
         ))}
       </section>
@@ -828,7 +828,7 @@ export function InvitesSection({ invites, onCreateInvite, onRevokeInvite }: Invi
           />
         ) : (
           <>
-            <div className="hidden items-center gap-3 border-b border-border-subtle pb-2 text-section uppercase text-text-muted sm:flex">
+            <div className="hidden items-center gap-3 border-b border-border-subtle pb-2 text-section text-text-muted sm:flex">
               <span className="flex-1">Code</span>
               <span className="w-24">Uses</span>
               <span className="w-28">Expires</span>
@@ -1150,7 +1150,7 @@ export function WebhooksSection({
               </Button>
             </div>
             <label className="flex flex-wrap items-center gap-2 text-meta text-text-muted">
-              <span className="text-section uppercase text-text-secondary">Filter</span>
+              <span className="text-section text-text-secondary">Filter</span>
               <Select
                 className="w-auto min-w-[12rem]"
                 value={webhookFilterChannelId}
@@ -1571,7 +1571,7 @@ export function ReportsSection({
                         by {reporterName} · {createdLabel}
                       </div>
                       {isQuarantineReport && (
-                        <div className="mt-1 text-section uppercase text-text-secondary">AutoMod quarantine review</div>
+                        <div className="mt-1 text-section text-text-secondary">AutoMod quarantine review</div>
                       )}
                     </div>
                     <span className="rounded-xs bg-bg-mod-strong px-2 py-0.5 text-meta font-semibold uppercase text-text-secondary">

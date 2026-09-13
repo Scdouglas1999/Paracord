@@ -124,7 +124,7 @@ function HealthBody({ health }: { health: HealthReport }) {
       ) : (
         <div className="overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
           <div className="border-b border-border-subtle px-5 py-3">
-            <span className="text-section uppercase text-text-muted">
+            <span className="text-section text-text-muted">
               {checks.length} thing{checks.length === 1 ? '' : 's'} to look at
             </span>
           </div>
@@ -238,7 +238,7 @@ function Stat({
   return (
     <div className="flex flex-col gap-2 p-6">
       <div className="flex items-center justify-between">
-        <span className="text-section uppercase text-text-muted">{label}</span>
+        <span className="text-section text-text-muted">{label}</span>
         <Icon size={15} className={lead ? 'text-accent-primary' : 'text-text-muted'} />
       </div>
       <span
@@ -265,7 +265,7 @@ function FactCard({
     <div className="rounded-md border border-border-subtle bg-bg-secondary p-5 shadow-sm">
       <div className="mb-3 flex items-center gap-2">
         <Icon size={15} className="text-text-muted" />
-        <span className="text-section uppercase text-text-muted">{title}</span>
+        <span className="text-section text-text-muted">{title}</span>
       </div>
       <dl className="space-y-2">
         {rows.map(([k, v]) => (

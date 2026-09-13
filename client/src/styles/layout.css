@@ -26,7 +26,7 @@ html[data-theme='high-contrast'] #root {
 
 ::selection {
   color: var(--text-primary);
-  background: rgba(126, 175, 255, 0.34);
+  background: var(--accent-tint-strong);
 }
 
 /* Skeleton loading animation */
@@ -64,12 +64,8 @@ html[data-theme='high-contrast'] #root {
   padding: 16px;
   display: flex;
   flex-direction: column;
-  background:
-    var(--noise-texture),
-    radial-gradient(110% 90% at 0% 0%, rgba(255, 255, 255, 0.045) 0%, rgba(255, 255, 255, 0) 55%),
-    radial-gradient(90% 80% at 100% 0%, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0) 45%),
-    var(--bg-primary);
-  background-blend-mode: overlay, normal, normal, normal;
+  /* The street (§0): flat, matte, no wash. Every glow has a source. */
+  background: var(--bg-base);
 }
 
 .workspace-stage {
@@ -96,21 +92,16 @@ html[data-theme='high-contrast'] #root {
 }
 
 .panel-surface {
-  background-color: var(--bg-secondary);
-  border-radius: 20px;
-  border: 1px solid color-mix(in srgb, var(--border-subtle) 64%, transparent);
-  box-shadow:
-    0 12px 34px rgba(0, 0, 0, 0.34),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+  background-color: var(--bg-plate);
+  border-radius: var(--radius-plate);
+  box-shadow: var(--shadow-plate);
 }
 
 .dock-surface {
-  background-color: var(--bg-nav, rgba(10, 14, 23, 0.65));
-  color: #fff;
-  border-radius: 36px;
-  box-shadow:
-    0 18px 48px rgba(0, 0, 0, 0.55),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  background-color: var(--bg-base);
+  color: var(--text-primary);
+  border-radius: var(--radius-plate);
+  box-shadow: var(--shadow-raised);
 }
 
 .nav-panel {
@@ -182,18 +173,14 @@ html[data-theme='high-contrast'] #root {
   width: 100%;
   overflow: hidden;
   padding: 12px;
-  background:
-    var(--noise-texture),
-    var(--bg-primary);
-  background-blend-mode: overlay, normal;
+  background: var(--bg-base);
 }
 
 .architect-eyebrow {
-  font-size: 0.62rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  color: color-mix(in srgb, var(--text-muted) 88%, white 12%);
+  font-size: var(--text-section);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0;
+  color: var(--text-faint);
 }
 
 .architect-context-title {
@@ -207,11 +194,10 @@ html[data-theme='high-contrast'] #root {
 .architect-group-label {
   margin-bottom: 0.36rem;
   padding: 0 0.7rem;
-  font-size: 0.68rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-muted);
+  font-size: var(--text-section);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0;
+  color: var(--text-faint);
 }
 
 .architect-nav-item {
@@ -229,15 +215,13 @@ html[data-theme='high-contrast'] #root {
 }
 
 .architect-nav-item:hover {
-  background-color: rgba(255, 255, 255, 0.07);
+  background-color: var(--bg-mod-subtle);
   color: var(--text-primary);
 }
 
 .architect-nav-item-active {
-  background-color: color-mix(in srgb, var(--accent-primary) 84%, #ffffff 16%);
-  border: 1px solid color-mix(in srgb, var(--accent-primary) 70%, #ffffff 30%);
-  box-shadow: 0 8px 18px rgba(var(--accent-primary-rgb), 0.28);
-  color: #0a0c10;
+  background-color: var(--accent-primary);
+  color: var(--text-on-accent);
 }
 
 .architect-top-icon {
@@ -259,97 +243,74 @@ html[data-theme='high-contrast'] #root {
 
 .architect-top-icon:hover {
   color: var(--text-primary);
-  background-color: rgba(255, 255, 255, 0.06);
-  border-color: var(--border-subtle);
+  background-color: var(--bg-mod-subtle);
+  border-color: transparent;
 }
 
 .architect-top-icon-active {
   color: var(--text-primary);
-  background-color: rgba(255, 255, 255, 0.08);
-  border-color: var(--border-subtle);
+  background-color: var(--bg-mod-strong);
+  border-color: transparent;
 }
 
 .architect-input-shell {
-  background-color: color-mix(in srgb, var(--bg-primary) 92%, white 8%);
-  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.38);
+  background-color: var(--bg-well);
+  box-shadow: var(--shadow-well);
 }
 
-/* ─── Crystalline Depth System ──────────────────────────────────
-   Depth levels: dock/rail → panels → modals/tooltips.
-   backdrop-filter is reserved for TRANSIENT overlays (modals, menus,
-   tooltips) only. WebKitGTK (the Linux Tauri webview) renders
-   backdrop-filter on the CPU, so persistent full-height chrome with blur
-   repaints constantly and tanks the app framerate. The rail/sidebar/panels
-   sit beside — not over — moving content, so blur added nothing visually.
-   Active panels receive a subtle accent glow on box-shadow keyed to keyboard focus. */
+/* ─── Shell surfaces (§4: street → plate → raised/well) ──────────────────
+   Legacy `.glass-*` class names, kept so the un-restyled shell (WP2–WP7 will
+   replace these call sites) keeps working; there is no glass left in them.
+   Every surface is a flat token fill plus a plate/well shadow recipe. No
+   backdrop blur anywhere: WebKitGTK (the Linux Tauri webview) renders
+   backdrop-filter on the CPU and it repaints constantly. */
 
 .glass-rail {
-  background: var(--bg-nav, rgba(10, 14, 23, 0.65));
+  background: var(--bg-base);
   border: 1px solid var(--border-subtle);
-  box-shadow: var(--shadow-lg);
+  border-radius: var(--radius-plate);
 }
 
 .glass-sidebar {
   background: var(--sidebar-bg);
   border-right: 1px solid var(--sidebar-border);
-  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.2);
 }
 
 .sidebar-item-active {
-  box-shadow: 0 0 0 2px var(--sidebar-active-indicator), 0 4px 12px rgba(var(--accent-primary-rgb, 235, 77, 75), 0.36);
+  box-shadow: 0 0 0 2px var(--sidebar-active-indicator);
 }
 
 .glass-panel {
-  background: var(--bg-panel, var(--bg-secondary));
-  border: 1px solid var(--border-subtle);
-  box-shadow: var(--shadow-md);
+  background: var(--bg-plate);
+  border-radius: var(--radius-plate);
+  box-shadow: var(--shadow-plate);
 }
 
-/* Active panel glow — applied to the focused panel */
+/* Focus is a ring, not a halo (§6.1: no glow without a source). */
 .glass-panel:focus-within {
-  box-shadow:
-    var(--shadow-md),
-    0 0 0 1px rgba(var(--accent-primary-rgb), 0.12),
-    0 0 32px rgba(var(--accent-primary-rgb), 0.06);
+  box-shadow: var(--shadow-plate), 0 0 0 1px var(--border-strong);
 }
 
+/* Floating surfaces (§4): --bg-floating + the plate shadow. No blur — WebKitGTK
+   (the Linux Tauri webview) renders backdrop-filter on the CPU. */
 .glass-modal {
-  background: var(--bg-floating, rgba(20, 28, 42, 0.95));
+  background: var(--bg-floating);
+  border-radius: var(--radius-plate);
+  box-shadow: var(--shadow-floating);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .glass-modal {
+    background: var(--bg-plate);
+  }
+}
+
+[data-theme='high-contrast'] :where(.glass-rail, .glass-panel, .glass-modal) {
   border: 1px solid var(--border-strong);
-  box-shadow: var(--shadow-xl);
-  backdrop-filter: blur(12px) saturate(120%);
-}
-
-/* Tooltips and context menus — lightest blur, sharper borders */
-.context-menu,
-.sidebar-tooltip::after {
-  backdrop-filter: blur(12px) saturate(115%);
-}
-
-:root[data-theme='amoled'] :where(.glass-modal) {
-  backdrop-filter: blur(10px) saturate(105%);
-}
-
-:root[data-theme='amoled'] :where(.glass-rail, .glass-panel) {
-  backdrop-filter: none;
-}
-
-:root[data-theme='amoled'] .glass-panel:focus-within {
-  box-shadow: var(--shadow-md);
-}
-
-:root[data-theme='high-contrast'] :where(.glass-rail, .glass-panel, .glass-modal) {
-  backdrop-filter: none;
-  border-width: 2px;
-}
-
-:root[data-theme='high-contrast'] .glass-panel:focus-within {
-  box-shadow: var(--shadow-md), 0 0 0 2px var(--accent-primary);
 }
 
 .panel-divider {
   border-color: var(--border-subtle);
-  box-shadow: inset 0 1px 0 var(--panel-divider-glint);
 }
 
 .command-icon-btn {
@@ -412,6 +373,9 @@ html[data-theme='high-contrast'] #root {
   transform: scale(0.97);
 }
 
+/* Cards drawn by the un-restyled app (WP2–WP7 replace these call sites with the
+   Plate/Well primitives). Give them the v2 raised recipe rather than the old
+   border-plus-literal-shadow so they sit coherently on the new surfaces. */
 :where(.card-surface,
   div[class*="rounded-xl"][class*="border-border-subtle"][class*="bg-bg-mod-subtle"],
   div[class*="rounded-2xl"][class*="border-border-subtle"][class*="bg-bg-mod-subtle"],
@@ -425,29 +389,9 @@ html[data-theme='high-contrast'] #root {
   li[class*="rounded-2xl"][class*="border-border-subtle"][class*="bg-bg-mod-subtle"]) {
   position: relative;
   isolation: isolate;
-  border-color: color-mix(in srgb, var(--border-strong) 68%, var(--border-subtle) 32%);
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--border-strong) 58%, transparent) inset,
-    0 10px 20px rgba(2, 8, 18, 0.22),
-    0 1px 0 rgba(255, 255, 255, 0.03);
-}
-
-:root[data-theme='light'] :where(.card-surface,
-  div[class*="rounded-xl"][class*="border-border-subtle"][class*="bg-bg-mod-subtle"],
-  div[class*="rounded-2xl"][class*="border-border-subtle"][class*="bg-bg-mod-subtle"],
-  div[class*="rounded-xl"][class*="border-border-subtle"][class*="bg-bg-secondary/60"],
-  div[class*="rounded-2xl"][class*="border-border-subtle"][class*="bg-bg-secondary/60"],
-  div[class*="rounded-xl"][class*="border-border-subtle"][class*="bg-bg-primary/60"],
-  div[class*="rounded-2xl"][class*="border-border-subtle"][class*="bg-bg-primary/60"],
-  section[class*="rounded-xl"][class*="border-border-subtle"][class*="bg-bg-mod-subtle"],
-  section[class*="rounded-2xl"][class*="border-border-subtle"][class*="bg-bg-mod-subtle"],
-  li[class*="rounded-xl"][class*="border-border-subtle"][class*="bg-bg-mod-subtle"],
-  li[class*="rounded-2xl"][class*="border-border-subtle"][class*="bg-bg-mod-subtle"]) {
-  border-color: color-mix(in srgb, var(--border-strong) 74%, var(--border-subtle) 26%);
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--border-strong) 60%, transparent) inset,
-    0 10px 20px rgba(28, 49, 84, 0.14),
-    0 1px 0 rgba(255, 255, 255, 0.18);
+  border-color: transparent;
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-lifted);
 }
 
 /* Universal fallback for missing bottom margins on text elements before UI components */
@@ -519,7 +463,7 @@ html[data-theme='high-contrast'] #root {
    `data-native-underlay-clear` — so the tile's cleared pixels form a real
    hole down to the video. Panels (sidebar, topbar, chat) keep their own
    opaque backgrounds, and the GTK toplevel beneath is painted the same base
-   color (#141b17) as the default --bg-primary, so punched regions read as
+   color (#0a0c10) as the default --bg-base, so punched regions read as
    the app's own background. Never set in the browser build or on overlay
    platforms (macOS).
 

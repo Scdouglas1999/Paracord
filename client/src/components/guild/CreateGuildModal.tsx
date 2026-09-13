@@ -267,7 +267,7 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
                 />
               </label>
               <div className="rounded-md border border-border-subtle bg-bg-tertiary px-4 py-3">
-                <div className="text-section uppercase text-text-secondary">Invites look like</div>
+                <div className="text-section text-text-secondary">Invites look like</div>
                 <div className="mt-1.5 space-y-0.5 font-code text-sm text-text-muted">
                   <div>hTKzmak</div>
                   <div>https://paracord.gg/hTKzmak</div>

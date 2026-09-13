@@ -19,7 +19,7 @@ interface GuildHomeHeaderProps {
 
 /**
  * Guild-home header — a solid raised surface (never a gradient hero, kill-list #1).
- * Fraunces space name, a presence-first "who's around now" summary, an invite
+ * Gabarito space name, a presence-first "who's around now" summary, an invite
  * affordance, economy panel access, and a permission-gated settings entry.
  */
 export function GuildHomeHeader({

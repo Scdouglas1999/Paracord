@@ -381,7 +381,7 @@ export function ContextPanel({
                           {thread.name || 'Thread'}
                         </span>
                         {isArchived && (
-                          <span className="text-meta uppercase text-text-muted">Archived</span>
+                          <span className="text-meta text-text-muted">Archived</span>
                         )}
                       </span>
                     </button>

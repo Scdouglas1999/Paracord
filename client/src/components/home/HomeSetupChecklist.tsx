@@ -31,7 +31,7 @@ export function HomeSetupChecklist({ steps }: HomeSetupChecklistProps) {
   return (
     <section aria-label="Get set up">
       <div className="mb-2.5 flex items-baseline justify-between gap-3 px-0.5">
-        <span className="text-section uppercase text-text-muted">Get set up</span>
+        <span className="text-section text-text-muted">Get set up</span>
         <span className="text-meta tabular-nums text-text-muted">
           {doneCount} of {steps.length}
         </span>

@@ -91,7 +91,12 @@ confirmation toasts; never reuse light tokens for semantics.
 | `--text-body` | `#D4D1CA` | Message bodies, prose. |
 | `--text-secondary` | `#B3B0A8` | Nav rows, secondary labels. |
 | `--text-muted` | `#8B8D8E` | Captions, previews. |
-| `--text-faint` | `#6C6E70` | Meta (timestamps, counts, section labels). |
+| `--text-faint` | `#838587` | Meta (timestamps, counts, section labels). |
+
+> **Corrected in WP0.** This step read `#6C6E70` (the value in the reference
+> renders), which measures **3.51:1** on `--bg-plate` and so cannot satisfy §9's
+> non-negotiable "meta ≥ 4.5:1". `#838587` is the smallest lift that clears
+> 4.5:1 on all four Night grounds. See `docs/design/wp0-checkpoint.md`.
 
 ### 1.5 Presence
 
@@ -111,8 +116,11 @@ Themes remap the *tokens*, never the recipes:
 - **Night** (default) — values above.
 - **Daylight** — warm paper `#F4F1EA` base, plates `#FBF9F4`, wells `#EBE6DC`, ink
   text `#17170F`; the light tokens become **ink** (`--light-white → #17170F` rim,
-  `--light-amber → #A8763C`) with the same box-shadow recipes at half alpha, so
+  `--light-amber → #855E30`) with the same box-shadow recipes at half alpha, so
   "lit" still reads as presence on a light ground.
+  *(Corrected in WP0: the amber read `#A8763C`, which measures 3.17:1 on
+  `--bg-well`. Amber is a label as well as a fill — "5 reading" — so it has to
+  clear §9's 4.5:1; `#855E30` is the smallest deepening that does.)*
 - **AMOLED** — `--bg-base #000`, plates `#0B0C0F`; light recipes unchanged.
 - **High contrast** — rims 2px, alpha ×1.5, text ramp collapsed to two steps.
 

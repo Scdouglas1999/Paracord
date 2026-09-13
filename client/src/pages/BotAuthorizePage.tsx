@@ -288,7 +288,7 @@ export function BotAuthorizePage() {
       <div className="flex-1 overflow-y-auto p-4 sm:p-6 md:p-8">
         <div className="mx-auto w-full max-w-2xl space-y-5">
           <div>
-            <p className="text-section uppercase text-accent-primary">Authorize application</p>
+            <p className="text-section text-accent-primary">Authorize application</p>
             <h1 className="mt-1 font-display text-title text-text-primary">Add a bot to your server</h1>
             <p className="mt-1.5 text-body text-text-secondary">
               Review what this application can do, then choose where to install it. You stay in control.
@@ -331,7 +331,7 @@ export function BotAuthorizePage() {
                 <div className="border-t border-border-subtle p-6">
                   <label
                     htmlFor="bot-authorize-server"
-                    className="text-section uppercase text-text-secondary"
+                    className="text-section text-text-secondary"
                   >
                     Install on
                   </label>
@@ -354,7 +354,7 @@ export function BotAuthorizePage() {
 
                 {/* Requested scopes, grouped by risk */}
                 <div className="border-t border-border-subtle p-6">
-                  <p className="text-section uppercase text-text-secondary">This bot will be able to</p>
+                  <p className="text-section text-text-secondary">This bot will be able to</p>
                   {scopeGroups.length === 0 ? (
                     <p className="mt-3 text-body text-text-secondary">
                       No special permissions requested — it can only do what any member can.
@@ -363,7 +363,7 @@ export function BotAuthorizePage() {
                     <div className="mt-3 max-h-72 space-y-5 overflow-y-auto pr-1">
                       {scopeGroups.map((group) => (
                         <div key={group.risk}>
-                          <p className="text-section uppercase text-text-muted">
+                          <p className="text-section text-text-muted">
                             {RISK_META[group.risk].label}
                           </p>
                           <ul className="mt-2 space-y-2">
@@ -451,7 +451,7 @@ export function BotAuthorizePage() {
 
               {/* Community reviews */}
               <div className="rounded-md border border-border-subtle bg-bg-secondary p-6 shadow-sm">
-                <p className="text-section uppercase text-text-secondary">Rate this bot</p>
+                <p className="text-section text-text-secondary">Rate this bot</p>
                 <div className="mt-3 flex items-center gap-2">
                   <select
                     className="select-field"

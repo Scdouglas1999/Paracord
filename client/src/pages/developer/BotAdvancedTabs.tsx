@@ -91,7 +91,7 @@ export function BotAdvancedTabs({
         {/* Guilds tab */}
         {tab === 'guilds' && (
           <>
-            <p className="mb-3 text-section uppercase text-text-secondary">Installed guilds</p>
+            <p className="mb-3 text-section text-text-secondary">Installed guilds</p>
             {installs && installs.length > 0 ? (
               <div className="space-y-2">
                 {installs.map((install) => (
@@ -115,7 +115,7 @@ export function BotAdvancedTabs({
         {tab === 'commands' && (
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <p className="text-section uppercase text-text-secondary">Global commands</p>
+              <p className="text-section text-text-secondary">Global commands</p>
               <Button size="sm" variant={showCommandBuilder ? 'secondary' : 'default'} onClick={onToggleCommandBuilder}>
                 {showCommandBuilder ? 'Cancel' : '+ New Command'}
               </Button>
@@ -169,7 +169,7 @@ export function BotAdvancedTabs({
         {/* Intents tab */}
         {tab === 'intents' && (
           <div className="space-y-3">
-            <p className="text-section uppercase text-text-secondary">Gateway intents</p>
+            <p className="text-section text-text-secondary">Gateway intents</p>
             <IntentSelector value={intents} onChange={onIntentsChange} />
             {dirty && (
               <Button size="sm" onClick={onSaveSettings} loading={saving} disabled={saving}>
@@ -182,7 +182,7 @@ export function BotAdvancedTabs({
         {/* Permissions tab */}
         {tab === 'permissions' && (
           <div className="space-y-3">
-            <p className="text-section uppercase text-text-secondary">Default bot permissions</p>
+            <p className="text-section text-text-secondary">Default bot permissions</p>
             <PermissionCalculator value={permissions} onChange={onPermissionsChange} />
             {dirty && (
               <Button size="sm" onClick={onSaveSettings} loading={saving} disabled={saving}>

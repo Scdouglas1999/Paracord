@@ -64,7 +64,7 @@ export function HelpOverlay({ open, onClose }: HelpOverlayProps) {
       <div className="grid gap-x-10 gap-y-6 sm:grid-cols-2">
         {SHORTCUT_GROUPS.map((group) => (
           <section key={group.title}>
-            <h3 className="mb-2.5 text-section uppercase text-text-muted">{group.title}</h3>
+            <h3 className="mb-2.5 text-section text-text-muted">{group.title}</h3>
             <dl className="space-y-2">
               {group.shortcuts.map((item) => (
                 <div key={item.label} className="flex items-center justify-between gap-4">

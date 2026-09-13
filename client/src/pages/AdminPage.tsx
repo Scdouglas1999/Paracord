@@ -71,7 +71,7 @@ export function AdminPage() {
             <ArrowLeft size={18} />
           </button>
           <div>
-            <div className="text-section uppercase text-text-muted">Control Plane</div>
+            <div className="text-section text-text-muted">Control Plane</div>
             <h1 className="font-display text-heading text-text-primary">Admin</h1>
           </div>
         </div>

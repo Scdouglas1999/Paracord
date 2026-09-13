@@ -16,7 +16,7 @@ interface LegalDocumentProps {
   sections: LegalSection[];
 }
 
-// Long-form legal prose (design-spec §2): readable measure, Fraunces headings,
+// Long-form legal prose (design-spec §2): readable measure, Gabarito headings,
 // Body prose in --text-secondary, section anchors + a table of contents. Not a
 // card, not a sparse marketing page.
 export function LegalDocument({ eyebrow, icon: Icon, title, updated, intro, sections }: LegalDocumentProps) {
@@ -32,7 +32,7 @@ export function LegalDocument({ eyebrow, icon: Icon, title, updated, intro, sect
         </Link>
 
         <header className="border-b border-border-subtle pb-8">
-          <div className="mb-4 inline-flex items-center gap-2 text-section uppercase text-accent-primary">
+          <div className="mb-4 inline-flex items-center gap-2 text-section text-accent-primary">
             <Icon size={15} />
             {eyebrow}
           </div>
@@ -45,7 +45,7 @@ export function LegalDocument({ eyebrow, icon: Icon, title, updated, intro, sect
           {/* Table of contents */}
           <nav aria-label="On this page" className="mb-8 shrink-0 lg:mb-0 lg:w-56">
             <div className="lg:sticky lg:top-10">
-              <p className="mb-3 text-section uppercase text-text-muted">On this page</p>
+              <p className="mb-3 text-section text-text-muted">On this page</p>
               <ul className="space-y-1.5">
                 {sections.map((s) => (
                   <li key={s.id}>

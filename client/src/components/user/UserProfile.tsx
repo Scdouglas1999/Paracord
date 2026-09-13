@@ -25,6 +25,8 @@ import { roleColorToHex } from '../../lib/colors';
 import { parseMarkdown } from '../../lib/markdown';
 import { safeExternalUrl, safeStoredImageDataUrl } from '../../lib/security';
 import { resolveUserAvatarUrl } from '../../lib/userAvatar';
+import { cn } from '../../lib/utils';
+import { presenceLight } from '../../lib/presence';
 import {
   buildIdentityVerificationPayload,
   formatIdentityFingerprint,
@@ -49,13 +51,6 @@ interface UserProfilePopupProps {
   roles?: Array<{ id: string; name: string; color: number }>;
 }
 
-const STATUS_COLORS: Record<'online' | 'idle' | 'dnd' | 'offline', string> = {
-  online: 'var(--status-online)',
-  idle: 'var(--status-idle)',
-  dnd: 'var(--status-dnd)',
-  offline: 'var(--status-offline)',
-};
-
 function formatDate(dateStr: string): string {
   try {
     return new Date(dateStr).toLocaleDateString(undefined, {
@@ -75,7 +70,7 @@ const FOCUS_RING =
 // UPPERCASE category label — the Section type step, muted for hierarchy.
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div className="mb-2 text-section uppercase" style={{ color: 'var(--text-muted)' }}>
+    <div className="mb-2 text-section" style={{ color: 'var(--text-muted)' }}>
       {children}
     </div>
   );
@@ -250,6 +245,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
   const isBotUser = user.bot;
   const isStaffUser = isAdmin(profileData?.user?.flags ?? user.flags ?? 0);
   const isStreaming = activity ? getActivityType(activity) === 1 : false;
+  const statusLight = presenceLight(isStreaming ? 'streaming' : status);
   const avatarSrc = resolveUserAvatarUrl(
     profileData?.user?.avatar_hash ?? user.avatar_hash ?? user.avatar,
   );
@@ -438,7 +434,12 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
         <div className="px-5 pb-4">
           <div className="relative -mt-9 mb-3 w-max">
             <div
-              className="rounded-full p-[3px]"
+              className={cn(
+                'rounded-full p-[3px]',
+                statusLight.avatarClass,
+                statusLight.dnd && 'pc-dnd',
+              )}
+              title={`Status: ${statusLight.label}`}
               style={{
                 background: isStreaming
                   ? 'linear-gradient(135deg, var(--accent-secondary), var(--accent-primary))'
@@ -456,11 +457,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
                 </div>
               )}
             </div>
-            <span
-              className="absolute bottom-0.5 right-0.5 h-[18px] w-[18px] rounded-full"
-              style={{ backgroundColor: STATUS_COLORS[status], boxShadow: '0 0 0 3px var(--bg-floating)' }}
-              title={`Status: ${status}`}
-            />
+            <span className="sr-only">{statusLight.label}</span>
           </div>
 
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -500,7 +497,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
           {activityLabel && (
             <div
               className="mt-2 inline-flex items-center gap-1.5 text-meta"
-              style={{ color: isStreaming ? 'var(--status-streaming)' : 'var(--text-secondary)' }}
+              style={{ color: isStreaming ? 'var(--light-white)' : 'var(--text-secondary)' }}
             >
               {isStreaming && <Radio size={12} />}
               <span>{activityElapsed ? `${activityLabel} · ${activityElapsed}` : activityLabel}</span>
@@ -897,7 +894,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
                 <div className="flex h-52 w-52 items-center justify-center text-meta text-text-muted">Generating code…</div>
               )}
             </div>
-            <div className="mb-2 text-section uppercase text-text-muted">Payload</div>
+            <div className="mb-2 text-section text-text-muted">Payload</div>
             <div className="mb-3 break-all rounded-sm px-2 py-1.5 font-code text-[11px] text-text-secondary" style={{ background: 'var(--bg-tertiary)' }}>
               {verificationPayload}
             </div>
@@ -913,7 +910,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
               <Copy size={12} />
               Copy payload
             </button>
-            <div className="mb-2 text-section uppercase text-text-muted">Verify from scanned payload</div>
+            <div className="mb-2 text-section text-text-muted">Verify from scanned payload</div>
             <input
               type="text"
               className={`mb-4 h-10 w-full rounded-sm border border-border-subtle bg-bg-tertiary px-3 text-body text-text-primary transition-colors placeholder:text-text-muted focus:border-accent-primary ${FOCUS_RING}`}

@@ -162,13 +162,13 @@ export function SecurityPanel() {
             <table className="w-full min-w-[900px] text-left">
               <thead>
                 <tr className="border-b border-border-subtle bg-bg-tertiary/40">
-                  <th scope="col" className="px-4 py-3 text-section uppercase text-text-secondary">Time</th>
-                  <th scope="col" className="px-4 py-3 text-section uppercase text-text-secondary">Action</th>
-                  <th scope="col" className="px-4 py-3 text-section uppercase text-text-secondary">Actor</th>
-                  <th scope="col" className="px-4 py-3 text-section uppercase text-text-secondary">Target</th>
-                  <th scope="col" className="px-4 py-3 text-section uppercase text-text-secondary">IP</th>
-                  <th scope="col" className="px-4 py-3 text-section uppercase text-text-secondary">Session</th>
-                  <th scope="col" className="px-4 py-3 text-right text-section uppercase text-text-secondary">Details</th>
+                  <th scope="col" className="px-4 py-3 text-section text-text-secondary">Time</th>
+                  <th scope="col" className="px-4 py-3 text-section text-text-secondary">Action</th>
+                  <th scope="col" className="px-4 py-3 text-section text-text-secondary">Actor</th>
+                  <th scope="col" className="px-4 py-3 text-section text-text-secondary">Target</th>
+                  <th scope="col" className="px-4 py-3 text-section text-text-secondary">IP</th>
+                  <th scope="col" className="px-4 py-3 text-section text-text-secondary">Session</th>
+                  <th scope="col" className="px-4 py-3 text-right text-section text-text-secondary">Details</th>
                 </tr>
               </thead>
               <tbody>
@@ -209,7 +209,7 @@ export function SecurityPanel() {
                             <dl className="space-y-3">
                               {details.map(([label, value]) => (
                                 <div key={label}>
-                                  <dt className="mb-1 text-section uppercase text-text-muted">{label}</dt>
+                                  <dt className="mb-1 text-section text-text-muted">{label}</dt>
                                   <dd>
                                     <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-sm border border-border-subtle bg-bg-tertiary p-3 font-code text-meta text-text-secondary">
                                       {value}

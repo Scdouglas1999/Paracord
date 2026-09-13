@@ -45,6 +45,7 @@ import type { ReadState } from '../../types';
 import { canAccessGuildSettings } from '../../lib/guildSettingsAccess';
 import { Tooltip } from '../ui/Tooltip';
 import { cn } from '../../lib/utils';
+import { getIdentityColor } from '../../lib/colors';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { useMutedGuilds } from '../../hooks/useMutedGuilds';
 import { entityScopeKey } from '../../lib/serverScope';
@@ -487,7 +488,10 @@ function OwnedTopBar({
               <ChevronLeft size={16} aria-hidden />
               <span className="hidden sm:inline">Messages</span>
             </button>
-            <span className="chat-header-avatar flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-primary text-label font-semibold text-text-on-accent">
+            <span
+              className="chat-header-avatar flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-label font-semibold text-text-on-light"
+              style={{ backgroundColor: getIdentityColor(dmChannelId || channelId || recipientName || '0') }}
+            >
               {recipientName?.charAt(0).toUpperCase() || '?'}
             </span>
             <span className="chat-header-dm-name truncate text-[15px] font-semibold text-text-primary">

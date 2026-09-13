@@ -24,7 +24,7 @@
 .hljs-variable,
 .hljs-template-tag,
 .hljs-template-variable {
-  color: #b5cea8 !important;
+  color: var(--accent-primary) !important;
 }
 
 .hljs-comment,
@@ -35,13 +35,13 @@
 }
 
 .hljs-number {
-  color: #d19a66 !important;
+  color: var(--accent-warning) !important;
 }
 
 .hljs-built_in,
 .hljs-class .hljs-title,
 .hljs-title.function_ {
-  color: #e5c07b !important;
+  color: var(--light-amber) !important;
 }
 
 .hljs-params {
@@ -49,7 +49,7 @@
 }
 
 .hljs-attr {
-  color: #7ecbff !important;
+  color: var(--accent-info) !important;
 }
 
 /* =========================================================================
@@ -70,12 +70,12 @@
 
 ::-webkit-scrollbar-track {
   background: transparent;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-full);
 }
 
 ::-webkit-scrollbar-thumb {
   background-color: var(--scrollbar-auto-thumb);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-full);
   border: 3px solid transparent;
   background-clip: padding-box;
   transition: background-color 0.2s ease;
@@ -119,30 +119,31 @@
   }
 }
 
-/* Theme selector previews and accent swatches use tokenized classes (no inline styling). */
+/* Theme selector previews: each theme's own street surface, flat (anti-slop #2:
+   no gradient wash). Kept in step with the [data-theme] blocks in tokens.css. */
 .theme-preview-dark {
-  background: linear-gradient(145deg, #121212 0%, #1e1e1e 100%);
+  background: #0a0c10;
 }
 
 .theme-preview-light {
-  background: linear-gradient(145deg, #e8e8e6 0%, #fdfdfd 100%);
+  background: #f4f1ea;
 }
 
 .theme-preview-amoled {
-  background: linear-gradient(145deg, #000000 0%, #050505 100%);
+  background: #000000;
 }
 
 .theme-preview-high-contrast {
-  background: linear-gradient(145deg, #000000 0%, #111111 100%);
+  background: #000000;
 }
 
 .theme-accent-chip {
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bg-secondary) 55%, transparent);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
 }
 
 .theme-accent-chip-red { background-color: #eb4d4b; }
 .theme-accent-chip-blue { background-color: #4f7cff; }
-.theme-accent-chip-emerald { background-color: #24d196; }
+.theme-accent-chip-emerald { background-color: #2bd39a; }
 .theme-accent-chip-amber { background-color: #d1972f; }
 .theme-accent-chip-rose { background-color: #d95d7a; }
 .theme-accent-chip-violet { background-color: #7a6cff; }

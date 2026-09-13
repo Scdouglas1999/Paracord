@@ -472,7 +472,7 @@ export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPicke
       {/* ── Frequently used ── */}
       <div className="shrink-0 border-b border-border-subtle px-3 pb-2.5 pt-3">
         <div className="mb-1.5 flex items-center justify-between">
-          <span className="text-section uppercase text-text-muted">Frequently used</span>
+          <span className="text-section text-text-muted">Frequently used</span>
           {customizeMode ? (
             <button
               type="button"
@@ -591,7 +591,7 @@ export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPicke
             />
           ) : (
             <div>
-              <div className="text-section select-none px-1.5 pb-1.5 pt-2 uppercase text-text-muted">
+              <div className="text-section select-none px-1.5 pb-1.5 pt-2 text-text-muted">
                 Server emoji
               </div>
               <div className="grid grid-cols-6 gap-1.5">
@@ -625,7 +625,7 @@ export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPicke
                 categoryRefs.current[ci] = el;
               }}
             >
-              <div className="text-section select-none px-1.5 pb-1 pt-2 uppercase text-text-muted">
+              <div className="text-section select-none px-1.5 pb-1 pt-2 text-text-muted">
                 {cat.name}
               </div>
               <div className="grid grid-cols-8 gap-0.5">

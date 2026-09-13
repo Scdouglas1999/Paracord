@@ -16,6 +16,10 @@ import { defineConfig, devices } from '@playwright/test';
 // mocked invocation never runs the real-server project or triggers the heavier
 // real-server webServer.
 const REAL_SERVER = process.env.PARACORD_E2E_REAL === '1';
+// Design-review screenshots (design-review.spec.ts): opt-in, mocked like the
+// smoke, output under output/design-reference/<WP>/. Gated out of the default
+// run so the CI smoke stays fast. See docs/lantern-stage-spec.md §10.
+const DESIGN_REVIEW = !REAL_SERVER && process.env.PARACORD_E2E_DESIGN === '1';
 const REAL_SERVER_PORT = process.env.PARACORD_E2E_PORT ?? '18150';
 
 export default defineConfig({
@@ -37,6 +41,14 @@ export default defineConfig({
         {
           name: 'real-server',
           testMatch: /real-server(?:\.smoke|\.voice-check|-restore|-setup)\.spec\.ts$/,
+          use: { ...devices['Desktop Chrome'] },
+        },
+      ]
+    : DESIGN_REVIEW
+    ? [
+        {
+          name: 'design-review',
+          testMatch: /[\\/]design-review\.spec\.ts$/,
           use: { ...devices['Desktop Chrome'] },
         },
       ]

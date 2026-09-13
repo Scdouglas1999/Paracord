@@ -65,7 +65,7 @@ export function SpaceBriefing({ guildId, settings, channels }: SpaceBriefingProp
 
   return (
     <section aria-label="Start here" className="flex flex-col gap-4">
-      <div className="flex items-center gap-2 text-section uppercase text-text-muted">
+      <div className="flex items-center gap-2 text-section text-text-muted">
         <BookOpen size={14} className="text-interactive-normal" aria-hidden />
         Start here
       </div>
@@ -90,7 +90,7 @@ export function SpaceBriefing({ guildId, settings, channels }: SpaceBriefingProp
         >
           {hasCopy && (
             <div className="px-5 py-5 sm:px-6 sm:py-6">
-              <p className="text-section uppercase text-accent-primary">Welcome</p>
+              <p className="text-section text-accent-primary">Welcome</p>
               {welcome && (
                 <h2 className="mt-1.5 font-display text-subhead text-text-primary sm:text-title">
                   {welcome}
@@ -106,7 +106,7 @@ export function SpaceBriefing({ guildId, settings, channels }: SpaceBriefingProp
 
           {pinnedChannels.length > 0 && (
             <div className="border-t border-border-subtle px-3 py-3 lg:border-l lg:border-t-0">
-              <p className="px-2 pb-1.5 text-section uppercase text-text-muted">
+              <p className="px-2 pb-1.5 text-section text-text-muted">
                 Featured rooms
               </p>
               <div className="flex flex-col gap-0.5">

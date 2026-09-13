@@ -101,7 +101,7 @@ export function PollMessageCard({ channelId, poll, canVote }: PollMessageCardPro
           <BarChart3 size={16} className="mt-0.5 shrink-0 text-accent-primary" />
           <p className="text-subhead text-text-primary">{livePoll.question}</p>
         </div>
-        <span className="shrink-0 rounded-xs bg-bg-mod-strong px-2 py-0.5 text-section uppercase text-text-secondary">
+        <span className="shrink-0 rounded-xs bg-bg-mod-strong px-2 py-0.5 text-section text-text-secondary">
           {livePoll.allow_multiselect ? 'Multi Select' : 'Single Select'}
         </span>
       </div>
@@ -147,11 +147,11 @@ export function PollMessageCard({ channelId, poll, canVote }: PollMessageCardPro
           {formatExpiryLabel(livePoll.expires_at, nowMs)}
         </span>
         {isExpired ? (
-          <span className="rounded-xs bg-bg-mod-strong px-2 py-0.5 text-section uppercase text-text-secondary">
+          <span className="rounded-xs bg-bg-mod-strong px-2 py-0.5 text-section text-text-secondary">
             Closed
           </span>
         ) : (
-          <span className="rounded-xs bg-success-tint px-2 py-0.5 text-section uppercase text-accent-success">
+          <span className="rounded-xs bg-success-tint px-2 py-0.5 text-section text-accent-success">
             Open
           </span>
         )}

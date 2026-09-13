@@ -91,17 +91,42 @@ function contrastRatio(foreground, background) {
 const themeBase = extractBlocks('@theme');
 const rootBase = extractBlocks(':root');
 const themeBlocks = {
-  dark: {},
-  light: extractBlocks(":root[data-theme='light']"),
-  amoled: extractBlocks(":root[data-theme='amoled']"),
-  'high-contrast': extractBlocks(":root[data-theme='high-contrast']"),
+  night: {},
+  daylight: extractBlocks("[data-theme='light']"),
+  amoled: extractBlocks("[data-theme='amoled']"),
+  'high-contrast': extractBlocks("[data-theme='high-contrast']"),
 };
 
+// docs/lantern-stage-spec.md §9 (Accessibility, non-negotiable):
+//   body text >= 7:1 on plates, meta >= 4.5:1, white-light Join ink >= 12:1,
+//   emerald on plate >= 4.5:1 for text.
+// Every ramp step is checked against every ground it can actually land on —
+// a token that only passes on the darkest surface is not passing.
+const GROUNDS = ['--bg-base', '--bg-plate', '--bg-raised', '--bg-well'];
+
 const checks = [
-  { fg: '--text-primary', bg: '--bg-primary', min: 4.5 },
-  { fg: '--text-secondary', bg: '--bg-primary', min: 4.5 },
-  { fg: '--text-muted', bg: '--bg-primary', min: 3.0 },
-  { fg: '--accent-primary', bg: '--bg-primary', min: 3.0 },
+  // The text ramp. `--text-body-ink` is the body step (the name `--text-body`
+  // belongs to Tailwind's body *type* step, a font-size).
+  ...GROUNDS.map((bg) => ({ fg: '--text-primary', bg, min: 7 })),
+  ...GROUNDS.map((bg) => ({ fg: '--text-body-ink', bg, min: 7 })),
+  ...GROUNDS.map((bg) => ({ fg: '--text-secondary', bg, min: 4.5 })),
+  ...GROUNDS.map((bg) => ({ fg: '--text-muted', bg, min: 4.5 })),
+  ...GROUNDS.map((bg) => ({ fg: '--text-faint', bg, min: 4.5 })),
+  // Action and semantics as text on a plate.
+  ...GROUNDS.map((bg) => ({ fg: '--accent-primary', bg, min: 4.5 })),
+  ...GROUNDS.map((bg) => ({ fg: '--accent-danger', bg, min: 4.5 })),
+  ...GROUNDS.map((bg) => ({ fg: '--accent-warning', bg, min: 4.5 })),
+  ...GROUNDS.map((bg) => ({ fg: '--accent-info', bg, min: 4.5 })),
+  // Ink on a fill.
+  { fg: '--text-on-light', bg: '--light-white', min: 12 },
+  { fg: '--text-on-accent', bg: '--accent-primary', min: 4.5 },
+  { fg: '--text-on-danger', bg: '--danger-well', min: 4.5 },
+  // The two lights must stay legible as a label as well as a fill.
+  ...GROUNDS.map((bg) => ({ fg: '--light-white', bg, min: 4.5 })),
+  ...GROUNDS.map((bg) => ({ fg: '--light-amber', bg, min: 4.5 })),
+  // Legacy aliases the un-restyled app still consumes.
+  { fg: '--text-primary', bg: '--bg-primary', min: 7 },
+  { fg: '--text-secondary', bg: '--bg-secondary', min: 4.5 },
 ];
 
 let hasFailure = false;
@@ -131,4 +156,7 @@ if (hasFailure) {
   process.exit(1);
 }
 
-console.log('[contrast] WCAG contrast checks passed for all configured themes.');
+console.log(
+  `[contrast] ${checks.length} checks x ${Object.keys(themeBlocks).length} themes passed ` +
+    '(docs/lantern-stage-spec.md §9).',
+);

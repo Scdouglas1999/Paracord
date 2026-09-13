@@ -7,16 +7,17 @@ import { useVoiceStore } from '../../stores/voiceStore';
 import { useAuthStore } from '../../stores/authStore';
 import { useVoice } from '../../hooks/useVoice';
 
-// Map the transport's live connection quality onto a semantic presence color +
-// human label. Unknown resolves to "online" — being connected at all is a link.
+// Map the transport's live connection quality onto a semantic health color +
+// human label. This is link health, not presence, so it reads the semantic
+// accents. Unknown resolves to healthy — being connected at all is a link.
 function qualityMeta(quality: ConnectionQuality): { color: string; label: string } {
   switch (quality) {
     case ConnectionQuality.Poor:
-      return { color: 'var(--status-idle)', label: 'Connection unstable' };
+      return { color: 'var(--accent-warning)', label: 'Connection unstable' };
     case ConnectionQuality.Lost:
-      return { color: 'var(--status-dnd)', label: 'Connection lost' };
+      return { color: 'var(--accent-danger)', label: 'Connection lost' };
     default:
-      return { color: 'var(--status-online)', label: 'Connection stable' };
+      return { color: 'var(--accent-primary)', label: 'Connection stable' };
   }
 }
 
@@ -88,7 +89,7 @@ export function MiniVoiceBar() {
         }}
         className="flex min-w-0 flex-1 items-center gap-2.5 rounded-sm px-1.5 py-1 outline-none transition-colors hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
       >
-        {/* Connection-quality dot — semantic presence color. Labeled so the
+        {/* Connection-quality dot — semantic health color. Labeled so the
             state is announced, not conveyed by color alone (design-spec §8). */}
         <span
           className="relative flex h-2.5 w-2.5 shrink-0 items-center justify-center"

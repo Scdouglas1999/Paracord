@@ -1,22 +1,43 @@
 import type { Role } from '../types';
 
-// ============ Guild Icon Colors ============
+// ============ Identity colors ============
 
-/** Guild icon color palette, consumed by `getGuildColor` below. */
-const GUILD_COLORS = [
-  '#5865f2', '#57f287', '#fee75c', '#eb459e', '#ed4245',
-  '#3ba55c', '#faa61a', '#e67e22', '#e91e63', '#1abc9c',
+/**
+ * The identity palette (docs/lantern-stage-spec.md §1.2, and the reference
+ * renders' avatar hues). Five warm, desaturated colours that sit quietly on the
+ * dark ground — a person's or a building's colour is *who they are*, so it is
+ * fixed across themes and never carries state. Light is the only thing that
+ * carries state.
+ *
+ * Returned as token references so there is still exactly one place the values
+ * live (`--color-avatar-*` in src/styles/tokens.css). Ink on any of them is
+ * `--text-on-light`.
+ */
+const IDENTITY_COLORS = [
+  'var(--color-avatar-1)',
+  'var(--color-avatar-2)',
+  'var(--color-avatar-3)',
+  'var(--color-avatar-4)',
+  'var(--color-avatar-5)',
 ];
 
-/** Deterministic color for a guild icon based on its ID. */
-export function getGuildColor(id: string): string {
+/**
+ * Deterministic identity color for a person or a building, from its snowflake.
+ *
+ * Use this for every avatar fallback. Never `--accent-primary`: the emerald
+ * means "an action you can take", and a person is not an action.
+ */
+export function getIdentityColor(id: string): string {
   let hash = 0;
   for (let i = 0; i < id.length; i++) {
     hash = ((hash << 5) - hash) + id.charCodeAt(i);
     hash |= 0;
   }
-  return GUILD_COLORS[Math.abs(hash) % GUILD_COLORS.length];
+  return IDENTITY_COLORS[Math.abs(hash) % IDENTITY_COLORS.length];
 }
+
+/** @deprecated Use {@link getIdentityColor}; a building is an identity too. */
+export const getGuildColor = getIdentityColor;
 
 // ============ Role Color Utilities ============
 

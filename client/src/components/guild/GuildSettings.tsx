@@ -1161,7 +1161,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
               <ArrowLeft size={14} className="transition-transform group-hover:-translate-x-0.5" />
               Back
             </button>
-            <div className="px-2 pb-3 text-section uppercase text-text-muted">
+            <div className="px-2 pb-3 text-section text-text-muted">
               {guild?.name || guildName}
             </div>
             <div className="flex flex-col gap-1">

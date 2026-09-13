@@ -53,7 +53,7 @@ function AvatarChip({
         <span
           aria-label={`${name} is streaming`}
           title={`${name} is streaming`}
-          className="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full bg-status-streaming ring-2 ring-bg-secondary"
+          className="pc-live-dot absolute -right-0.5 -top-0.5"
         />
       )}
       {muted && (

@@ -91,7 +91,7 @@ export function PermissionCalculator({ value, onChange }: PermissionCalculatorPr
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <span className="text-section uppercase text-text-muted">Permissions</span>
+        <span className="text-section text-text-muted">Permissions</span>
         <span className="text-meta tabular-nums text-text-muted">{enabledCount} enabled</span>
       </div>
 

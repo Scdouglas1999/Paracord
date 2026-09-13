@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { cn } from '../../lib/utils';
 
 // Shared settings-surface language for the guild-settings module (design-spec §7).
-// Each section leads with a Fraunces Heading step + a --text-secondary description,
+// Each section leads with a Gabarito Heading step + a --text-secondary description,
 // then divider-separated rows — never tiled identical cards (kill-list #5).
 
 interface SectionHeaderProps {
@@ -31,7 +31,7 @@ export function SectionHeader({ title, description, action, className }: Section
 // UPPERCASE category label (Section step) that opens a grouped block of rows.
 export function GroupLabel({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div className={cn('text-section uppercase text-text-muted', className)}>{children}</div>
+    <div className={cn('text-section text-text-muted', className)}>{children}</div>
   );
 }
 
@@ -101,7 +101,7 @@ export function ToggleRow({ label, description, checked, onChange, disabled, ari
 // Field label (Label step) for a form control — small-caps, tracked, secondary.
 export function FieldLabel({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <span className={cn('mb-2 block text-section uppercase text-text-secondary', className)}>
+    <span className={cn('mb-2 block text-section text-text-secondary', className)}>
       {children}
     </span>
   );

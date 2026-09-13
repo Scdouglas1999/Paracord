@@ -168,7 +168,7 @@ export function RoomCard({
             aria-label={`Watch ${displayName(streamer)}`}
             className="inline-flex h-9 items-center gap-1.5 rounded-sm border border-border-subtle px-3 text-label font-semibold text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
           >
-            <Play size={14} className="text-status-streaming" />
+            <Play size={14} className="text-light-white" />
             Watch
           </button>
         )}

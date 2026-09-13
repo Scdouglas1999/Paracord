@@ -10,18 +10,12 @@ import { useUIStore } from '../../stores/uiStore';
 import { Tooltip } from '../ui/Tooltip';
 import { safeStoredImageDataUrl } from '../../lib/security';
 import { cn } from '../../lib/utils';
+import { presenceLight } from '../../lib/presence';
 import type { Member } from '../../types';
 
 interface AroundNowStripProps {
   guildId: string;
 }
-
-const STATUS_RING: Record<string, string> = {
-  online: 'bg-status-online',
-  idle: 'bg-status-idle',
-  dnd: 'bg-status-dnd',
-  streaming: 'bg-status-streaming',
-};
 
 const MAX_VISIBLE = 16;
 
@@ -68,7 +62,7 @@ export function AroundNowStrip({ guildId }: AroundNowStripProps) {
   return (
     <section aria-label="Around now" className="flex flex-col gap-3">
       <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-section uppercase text-text-muted">
+        <div className="flex items-center gap-2 text-section text-text-muted">
           <Users size={14} className="text-interactive-normal" />
           <span>Around now</span>
           <span className="tabular-nums text-text-secondary">{online.length}</span>
@@ -87,12 +81,17 @@ export function AroundNowStrip({ guildId }: AroundNowStripProps) {
           const status = getPresence(m.user.id, scope)?.status || 'offline';
           const src = safeStoredImageDataUrl(m.user.avatar_hash);
           const name = memberName(m);
+          const light = presenceLight(status);
           return (
-            <Tooltip key={m.user.id} content={name} side="top">
+            <Tooltip key={m.user.id} content={`${name} — ${light.label}`} side="top">
               <div className="relative">
                 <div
                   aria-label={name}
-                  className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-accent-primary text-meta font-semibold text-text-on-accent ring-2 ring-bg-secondary"
+                  className={cn(
+                    'flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-accent-primary text-meta font-semibold text-text-on-accent',
+                    light.avatarClass,
+                    light.dnd && 'pc-dnd',
+                  )}
                 >
                   {src ? (
                     <img src={src} alt="" className="h-full w-full object-cover" />
@@ -100,13 +99,7 @@ export function AroundNowStrip({ guildId }: AroundNowStripProps) {
                     name.charAt(0).toUpperCase()
                   )}
                 </div>
-                <span
-                  aria-hidden="true"
-                  className={cn(
-                    'absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full ring-2 ring-bg-secondary',
-                    STATUS_RING[status] || 'bg-status-offline',
-                  )}
-                />
+                <span className="sr-only">{light.label}</span>
               </div>
             </Tooltip>
           );

@@ -1091,7 +1091,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, replyingTo, onCanc
       {showPollComposer && (
         <div className="rounded-md border border-border-subtle bg-bg-secondary p-4 shadow-sm">
           <div className="mb-3 flex items-center justify-between gap-2">
-            <span className="inline-flex items-center gap-1.5 text-section uppercase text-text-secondary">
+            <span className="inline-flex items-center gap-1.5 text-section text-text-secondary">
               <BarChart3 size={14} className="text-accent-primary" />
               Poll
             </span>
@@ -1176,7 +1176,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, replyingTo, onCanc
       {showScheduleComposer && (
         <div className="rounded-md border border-border-subtle bg-bg-secondary p-4 shadow-sm">
           <label className="block">
-            <span className="text-section uppercase text-text-secondary">Send At</span>
+            <span className="text-section text-text-secondary">Send At</span>
             <Input
               type="datetime-local"
               value={scheduledAt}

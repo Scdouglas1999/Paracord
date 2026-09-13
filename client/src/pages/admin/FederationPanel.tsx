@@ -25,7 +25,7 @@ function Field({ label, htmlFor, className, children }: { label: string; htmlFor
 function DetailRow({ label, value, mono, className }: { label: string; value: string; mono?: boolean; className?: string }) {
   return (
     <div className={className}>
-      <dt className="text-section uppercase text-text-muted">{label}</dt>
+      <dt className="text-section text-text-muted">{label}</dt>
       <dd className={`mt-0.5 break-all text-body text-text-secondary ${mono ? 'font-code text-meta' : ''}`}>{value}</dd>
     </div>
   );
@@ -384,7 +384,7 @@ export function FederationPanel() {
       </header>
 
       <section className="rounded-md border border-border-subtle bg-bg-secondary p-6 shadow-sm">
-        <h3 className="mb-5 text-section uppercase text-text-secondary">Add a federated server</h3>
+        <h3 className="mb-5 text-section text-text-secondary">Add a federated server</h3>
         <div className="grid gap-4 md:grid-cols-2">
           <Field label="Server name" htmlFor="fed-name">
             <Input id="fed-name" aria-label="Server Name" type="text" value={serverName} onChange={(e) => setServerName(e.target.value)} placeholder="example-server" />
@@ -426,7 +426,7 @@ export function FederationPanel() {
       </section>
 
       <section>
-        <h3 className="mb-3 text-section uppercase text-text-secondary">Known servers</h3>
+        <h3 className="mb-3 text-section text-text-secondary">Known servers</h3>
         {loading ? (
           <div className="rounded-md border border-border-subtle bg-bg-secondary px-6 py-10 shadow-sm">
             <LoadingSpinner size="sm" label="Loading federated servers…" />
@@ -480,7 +480,7 @@ export function FederationPanel() {
 
       {selectedServer && (
         <section className="rounded-md border border-border-subtle bg-bg-secondary p-6 shadow-sm">
-          <h3 className="mb-4 text-section uppercase text-text-secondary">
+          <h3 className="mb-4 text-section text-text-secondary">
             Details — {selectedServer.server_name}
           </h3>
           <dl className="grid gap-4 sm:grid-cols-2">
@@ -503,7 +503,7 @@ export function FederationPanel() {
 
       <section className="rounded-md border border-border-subtle bg-bg-secondary p-6 shadow-sm">
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-          <h3 className="text-section uppercase text-text-secondary">Apply action</h3>
+          <h3 className="text-section text-text-secondary">Apply action</h3>
           <Button variant="outline" size="sm" onClick={() => fetchModeration(true)} disabled={modRefreshing} className="gap-2">
             {modRefreshing ? <Loader2 size={14} className="animate-spin" /> : <RotateCcw size={14} />}
             Refresh
@@ -548,7 +548,7 @@ export function FederationPanel() {
       </section>
 
       <section className="rounded-md border border-border-subtle bg-bg-secondary p-6 shadow-sm">
-        <h3 className="mb-2 text-section uppercase text-text-secondary">Paste / import list</h3>
+        <h3 className="mb-2 text-section text-text-secondary">Paste / import list</h3>
         <p className="mb-4 text-body text-text-muted">
           One entry per line: <span className="font-code text-meta">server</span>,{' '}
           <span className="font-code text-meta">server block</span>, or{' '}
@@ -577,7 +577,7 @@ export function FederationPanel() {
       </section>
 
       <section>
-        <h3 className="mb-3 text-section uppercase text-text-secondary">
+        <h3 className="mb-3 text-section text-text-secondary">
           Peer trust state{!modLoading && trustStates.length > 0 ? ` · ${trustStates.length}` : ''}
         </h3>
         {modLoading ? (
@@ -635,7 +635,7 @@ export function FederationPanel() {
       </section>
 
       <section className="rounded-md border border-border-subtle bg-bg-secondary p-6 shadow-sm">
-        <h3 className="mb-5 text-section uppercase text-text-secondary">Moderation list subscriptions</h3>
+        <h3 className="mb-5 text-section text-text-secondary">Moderation list subscriptions</h3>
         <div className="grid gap-4 md:grid-cols-2">
           <Field label="Source URL" htmlFor="sub-url" className="md:col-span-2">
             <Input id="sub-url" aria-label="Subscription source URL" type="url" value={subUrl} onChange={(e) => setSubUrl(e.target.value)} placeholder="https://example.com/moderation.json" />

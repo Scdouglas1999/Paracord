@@ -18,7 +18,7 @@ export interface HomeResumeHeroProps {
 
 /**
  * Home-unique "Jump into your space" hero — solid raised surface (kill-list #1),
- * Fraunces space name, primary Enter CTA. Complements sidebar SpacesList; does
+ * Gabarito space name, primary Enter CTA. Complements sidebar SpacesList; does
  * not clone RecentList.
  */
 export function HomeResumeHero({
@@ -52,7 +52,7 @@ export function HomeResumeHero({
           style={
             iconSrc
               ? undefined
-              : { backgroundColor: getGuildColor(space.id), color: '#fff' }
+              : { backgroundColor: getGuildColor(space.id), color: 'var(--text-on-light)' }
           }
           aria-hidden
         >
@@ -64,7 +64,7 @@ export function HomeResumeHero({
         </div>
 
         <div className="min-w-0 flex-1">
-          <p className="text-meta font-semibold uppercase tracking-wide text-text-muted">
+          <p className="text-section text-text-faint">
             Continue in
           </p>
           <h2 className="mt-0.5 truncate font-display text-title text-text-primary sm:text-heading">

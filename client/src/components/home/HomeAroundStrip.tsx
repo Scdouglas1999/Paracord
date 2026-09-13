@@ -6,15 +6,9 @@ import { HomeSectionHeader } from './HomeSectionHeader';
 import { resolveUserAvatarUrl } from '../../lib/userAvatar';
 import { displayName } from '../../lib/displayName';
 import { cn } from '../../lib/utils';
+import { presenceLight } from '../../lib/presence';
 import type { Activity, User } from '../../types';
 import type { Relationship } from '../../api/relationships';
-
-const STATUS_RING: Record<string, string> = {
-  online: 'bg-status-online',
-  idle: 'bg-status-idle',
-  dnd: 'bg-status-dnd',
-  streaming: 'bg-status-streaming',
-};
 
 const MAX_VISIBLE = 16;
 
@@ -64,29 +58,31 @@ export function HomeAroundStrip({ friends, onMessage }: HomeAroundStripProps) {
         {visible.map((f) => {
           const name = displayName(f.user);
           const src = resolveUserAvatarUrl(f.user.avatar_hash ?? f.user.avatar);
-          const tip = f.activity ? `${name} — ${f.activity}` : name;
+          const light = presenceLight(f.status);
+          const tip = f.activity
+            ? `${name} — ${light.label} — ${f.activity}`
+            : `${name} — ${light.label}`;
           return (
             <Tooltip key={f.user.id} content={tip} side="top">
               <button
                 type="button"
                 onClick={() => onMessage(f.user.id)}
-                aria-label={`Message ${name}`}
+                aria-label={`Message ${name} — ${light.label}`}
                 className="group relative outline-none focus-visible:shadow-[var(--focus-ring)]"
               >
-                <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-accent-tint text-label font-semibold text-accent-primary ring-2 ring-bg-primary transition-transform duration-[140ms] ease-[var(--ease-out)] group-hover:scale-[1.04]">
+                <div
+                  className={cn(
+                    'flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-accent-tint text-label font-semibold text-accent-primary transition-transform duration-[140ms] ease-[var(--ease-out)] group-hover:scale-[1.04]',
+                    light.avatarClass,
+                    light.dnd && 'pc-dnd',
+                  )}
+                >
                   {src ? (
                     <img src={src} alt="" className="h-full w-full object-cover" />
                   ) : (
                     name.charAt(0).toUpperCase()
                   )}
                 </div>
-                <span
-                  aria-hidden
-                  className={cn(
-                    'absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full ring-2 ring-bg-primary',
-                    STATUS_RING[f.status] || 'bg-status-offline',
-                  )}
-                />
               </button>
             </Tooltip>
           );

@@ -116,7 +116,7 @@ export function SplitPaneSourcePicker({
           {/* Streams section */}
           {activeStreamers.length > 0 && (
             <>
-              <div className="mx-1.5 mb-1 mt-2 text-section uppercase text-text-muted">
+              <div className="mx-1.5 mb-1 mt-2 text-section text-text-muted">
                 Streams
               </div>
               {activeStreamers.map((userId) => {
@@ -151,7 +151,7 @@ export function SplitPaneSourcePicker({
           {/* Webcams section */}
           {webcamTiles.length > 0 && (
             <>
-              <div className="mx-1.5 mb-1 mt-2 text-section uppercase text-text-muted">
+              <div className="mx-1.5 mb-1 mt-2 text-section text-text-muted">
                 Cameras
               </div>
               {webcamTiles.map((tile) => {

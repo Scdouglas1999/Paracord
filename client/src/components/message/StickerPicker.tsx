@@ -108,7 +108,7 @@ export function StickerPicker({ guildId, onSelect, onClose }: StickerPickerProps
     >
       {/* Header */}
       <div className="shrink-0 border-b border-border-subtle px-3 pb-2.5 pt-3">
-        <div className="text-section mb-2 uppercase text-text-muted">Stickers</div>
+        <div className="text-section mb-2 text-text-muted">Stickers</div>
         <div className="flex items-center gap-2 rounded-sm border border-border-subtle bg-bg-tertiary px-2.5 py-2 transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus-within:border-accent-primary focus-within:shadow-[var(--focus-ring-input)]">
           <Search size={16} className="shrink-0 text-text-muted" />
           <input

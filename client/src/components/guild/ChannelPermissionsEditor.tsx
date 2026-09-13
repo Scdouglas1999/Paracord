@@ -412,7 +412,7 @@ export function ChannelPermissionsEditor({
           {/* Left panel: list of overwrites */}
           <div className="flex max-h-[42vh] w-full shrink-0 flex-col border-b border-border-subtle bg-bg-secondary/40 sm:max-h-none sm:w-52 sm:border-b-0 sm:border-r">
             <div className="px-3 pb-2 pt-3">
-              <div className="mb-1.5 px-1 text-section uppercase text-text-muted">Overrides</div>
+              <div className="mb-1.5 px-1 text-section text-text-muted">Overrides</div>
               {loading ? (
                 <LoadingSpinner size="sm" className="px-1 py-1.5" label="Loading…" />
               ) : overwrites.length === 0 ? (
@@ -559,7 +559,7 @@ export function ChannelPermissionsEditor({
                 {effectivePreview && (
                   <div className="border-b border-border-subtle bg-bg-tertiary/70 px-5 py-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-section uppercase text-text-muted">Effective access preview</span>
+                      <span className="text-section text-text-muted">Effective access preview</span>
                       <span className="text-meta font-semibold tabular-nums text-text-secondary">
                         {previewAllowedCount} allowed · {previewPermissionCount - previewAllowedCount} denied
                       </span>
@@ -581,7 +581,7 @@ export function ChannelPermissionsEditor({
                 <div className="flex-1 space-y-5 overflow-y-auto px-5 py-4">
                   {PERMISSION_GROUPS.map(({ group, perms }) => (
                     <div key={group}>
-                      <div className="mb-2 text-section uppercase text-text-muted">{group}</div>
+                      <div className="mb-2 text-section text-text-muted">{group}</div>
                       <div className="divide-y divide-border-subtle">
                         {perms.map(({ key, label }) => {
                           const flag = Permissions[key];

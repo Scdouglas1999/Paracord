@@ -302,7 +302,7 @@ export function ServerConnectPage() {
             </Field>
 
             <div className="rounded-md border border-border-subtle bg-bg-tertiary/50 px-4 py-3">
-              <span className="text-section uppercase text-text-muted">Accepted formats</span>
+              <span className="text-section text-text-muted">Accepted formats</span>
               <ul className="mt-2 space-y-1 font-code text-meta leading-relaxed text-text-secondary">
                 <li>paracord://invite/aBcDeFgH…</li>
                 <li>http://192.168.1.5:8090/invite/abc123</li>
@@ -337,7 +337,7 @@ export function ServerConnectPage() {
         {servers.length > 0 && (
           <AuthCard>
             <div className="flex items-center justify-between px-6 pt-5">
-              <h2 className="text-section uppercase text-text-secondary">Your servers</h2>
+              <h2 className="text-section text-text-secondary">Your servers</h2>
               <span className="text-meta text-text-muted">{servers.length}</span>
             </div>
             <ul className="mt-2 flex flex-col divide-y divide-border-subtle px-3 pb-3">
@@ -346,7 +346,7 @@ export function ServerConnectPage() {
                   ? { dot: 'bg-accent-success', label: 'Connected', tone: 'text-accent-success' }
                   : server.token
                     ? { dot: 'bg-accent-warning', label: 'Saved — not connected', tone: 'text-accent-warning' }
-                    : { dot: 'bg-status-offline', label: 'Sign-in required', tone: 'text-text-muted' };
+                    : { dot: 'bg-text-faint', label: 'Sign-in required', tone: 'text-text-muted' };
                 const reconnecting = reconnectingId === server.id;
                 return (
                   <li

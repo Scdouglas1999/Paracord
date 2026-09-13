@@ -15,17 +15,10 @@ import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { cn } from '../lib/utils';
 import { displayName } from '../lib/displayName';
+import { presenceLight } from '../lib/presence';
 import { UserProfilePopup } from '../components/user/UserProfile';
 
 type FriendsTab = 'online' | 'all' | 'requests' | 'blocked';
-
-const STATUS_COLOR: Record<string, string> = {
-  online: 'bg-status-online',
-  idle: 'bg-status-idle',
-  dnd: 'bg-status-dnd',
-  streaming: 'bg-status-streaming',
-  offline: 'bg-status-offline',
-};
 
 const STATUS_LABEL: Record<string, string> = {
   online: 'Online',
@@ -99,15 +92,17 @@ function PersonRow({
         className="flex min-w-0 flex-1 items-center gap-3 rounded-sm px-2 py-1 text-left outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-default"
       >
         <div className="relative shrink-0">
-          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-accent-tint text-label font-semibold text-accent-primary">
+          {/* §1.5: presence is a rim of light on the avatar, never a coloured
+              dot. The status word itself is already in the row subtitle. */}
+          <div
+            className={cn(
+              'flex h-10 w-10 items-center justify-center rounded-full bg-accent-tint text-label font-semibold text-accent-primary',
+              showPresence && presenceLight(status).avatarClass,
+              showPresence && presenceLight(status).dnd && 'pc-dnd',
+            )}
+          >
             {name.charAt(0).toUpperCase()}
           </div>
-          {showPresence && status && status !== 'offline' && (
-            <span
-              className={cn('absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full', STATUS_COLOR[status] ?? 'bg-status-offline')}
-              style={{ boxShadow: '0 0 0 2.5px var(--bg-secondary)' }}
-            />
-          )}
         </div>
         <div className="min-w-0 flex-1">
           <div className="truncate text-label font-semibold text-text-primary">{name}</div>
@@ -322,7 +317,7 @@ export function FriendsPage() {
         {/* Inline add-friend input — the primary action, not a hidden tab (§ task 1). */}
         {showAddFriend && (
           <div className="mt-4 rounded-md border border-border-subtle bg-bg-primary p-4">
-            <div className="text-section uppercase text-text-muted">Add a friend</div>
+            <div className="text-section text-text-muted">Add a friend</div>
             <p className="mt-1 text-meta text-text-secondary">
               Send a request with someone's exact username, or their numeric user ID if you have it.
             </p>
@@ -445,7 +440,7 @@ export function FriendsPage() {
                 />
               ) : (
                 <>
-                  <div className="mb-2 px-1 text-section uppercase text-text-muted">
+                  <div className="mb-2 px-1 text-section text-text-muted">
                     {sectionLabel} — {filteredList.length}
                   </div>
                   <div className="divide-y divide-border-subtle overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
@@ -543,7 +538,7 @@ function RequestsView({
     <div className="flex flex-col gap-6">
       {incoming.length > 0 && (
         <section>
-          <div className="mb-2 px-1 text-section uppercase text-text-muted">Incoming — {incoming.length}</div>
+          <div className="mb-2 px-1 text-section text-text-muted">Incoming — {incoming.length}</div>
           <div className="divide-y divide-border-subtle overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
             {incoming.map((rel) => (
               <PersonRow
@@ -579,7 +574,7 @@ function RequestsView({
 
       {outgoing.length > 0 && (
         <section>
-          <div className="mb-2 px-1 text-section uppercase text-text-muted">Outgoing — {outgoing.length}</div>
+          <div className="mb-2 px-1 text-section text-text-muted">Outgoing — {outgoing.length}</div>
           <div className="divide-y divide-border-subtle overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
             {outgoing.map((rel) => (
               <PersonRow

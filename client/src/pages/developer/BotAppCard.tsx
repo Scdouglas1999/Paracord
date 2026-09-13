@@ -88,7 +88,7 @@ export function BotAppCard({
       {/* Token area — secret, mono, reveal/copy + a security warning. */}
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <span className="text-section uppercase text-text-secondary">Bot token</span>
+          <span className="text-section text-text-secondary">Bot token</span>
           {token && (
             <span className="inline-flex items-center gap-1 text-meta font-medium text-accent-warning">
               <ShieldAlert size={13} />
@@ -114,7 +114,7 @@ export function BotAppCard({
 
       {/* Install / OAuth link */}
       <div className="space-y-2">
-        <span className="text-section uppercase text-text-secondary">Install link</span>
+        <span className="text-section text-text-secondary">Install link</span>
         <div className="flex flex-wrap items-center gap-2 rounded-sm border border-border-subtle bg-bg-tertiary px-3 py-2">
           <code className="flex-1 break-all font-code text-meta text-text-secondary">{installUrl}</code>
           <button type="button" aria-label="Copy install link" className={actionBtn} onClick={onCopyInstallUrl}>

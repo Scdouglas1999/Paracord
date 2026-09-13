@@ -47,7 +47,7 @@ function detectGitHubEvent(content: string): GitHubEventInfo | null {
 // one-off hex, so the badge palette stays inside the system's meaning-colors.
 const EVENT_COLORS: Record<GitHubEventType, string> = {
   push: 'var(--accent-info)',
-  pull_request: 'var(--status-streaming)',
+  pull_request: 'var(--accent-info)',
   issues: 'var(--accent-success)',
   issue_comment: 'var(--accent-info)',
   create: 'var(--accent-success)',
@@ -110,7 +110,7 @@ export function GitHubEventEmbed({ content }: GitHubEventEmbedProps) {
           </svg>
           <Icon size={14} className="shrink-0" style={{ color }} />
           <span
-            className="rounded-xs px-1.5 py-0.5 text-section uppercase"
+            className="rounded-xs px-1.5 py-0.5 text-section"
             style={{ backgroundColor: `color-mix(in srgb, ${color} 16%, transparent)`, color }}
           >
             {label}

@@ -237,7 +237,7 @@ export function ScheduledMessagesPanel({
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <div className="flex items-center gap-2 text-section uppercase text-text-secondary">
+                      <div className="flex items-center gap-2 text-section text-text-secondary">
                         <span>{statusLabel(item.status)}</span>
                         <span aria-hidden>·</span>
                         <span className="font-code normal-case tabular-nums tracking-normal text-text-muted">
@@ -282,7 +282,7 @@ export function ScheduledMessagesPanel({
                         aria-label="Scheduled message content"
                       />
                       <label className="block">
-                        <span className="text-section uppercase text-text-secondary">
+                        <span className="text-section text-text-secondary">
                           Send at
                         </span>
                         <input

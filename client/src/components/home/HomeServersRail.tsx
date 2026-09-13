@@ -87,12 +87,10 @@ export function HomeServersRail({
                     data-testid="home-server-attention"
                     aria-hidden
                     className={cn(
-                      'absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-bg-secondary',
-                      attn.live && attn.unread
-                        ? 'bg-status-streaming ring-accent-primary'
-                        : attn.live
-                          ? 'bg-status-streaming'
-                          : 'bg-accent-primary',
+                      'absolute -right-0.5 -top-0.5 rounded-full',
+                      attn.live
+                        ? 'pc-live-dot'
+                        : 'h-2.5 w-2.5 bg-accent-primary ring-2 ring-bg-secondary',
                     )}
                   />
                 )}
@@ -103,7 +101,7 @@ export function HomeServersRail({
                 </span>
                 <span className="mt-1 flex items-center gap-2 text-meta text-text-muted">
                   {attn?.live ? (
-                    <Radio size={13} className="shrink-0 text-status-streaming" aria-hidden />
+                    <Radio size={13} className="shrink-0 text-light-white" aria-hidden />
                   ) : (
                     <Users size={13} className="shrink-0 text-text-muted" aria-hidden />
                   )}

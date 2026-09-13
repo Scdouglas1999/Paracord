@@ -24,7 +24,7 @@ export function PinnedRail({ entries, activeKey, onSelect, navIndexStart = 0, ac
 
   return (
     <section aria-label="Pinned" className="flex flex-col gap-0.5">
-      <h2 className="px-2 pb-1 text-section uppercase text-text-muted">Pinned</h2>
+      <h2 className="px-2 pb-1 text-section text-text-muted">Pinned</h2>
       <div role="group" aria-label="Pinned conversations" className="flex flex-col gap-0.5">
         {entries.map((entry, i) => (
           <ConversationRow

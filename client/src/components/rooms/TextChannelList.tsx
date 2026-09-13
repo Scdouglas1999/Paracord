@@ -65,7 +65,7 @@ export function TextChannelList({ guildId, channels }: TextChannelListProps) {
       <div className="flex flex-col gap-4">
         {groups.map((group) => (
           <div key={group.id} role="group" aria-label={`${group.name} channels`}>
-            <div className="mb-1 px-2 text-section uppercase text-text-muted">
+            <div className="mb-1 px-2 text-section text-text-muted">
               {group.name}
             </div>
             <div className="flex flex-col gap-0.5">
@@ -139,7 +139,7 @@ export function TextChannelList({ guildId, channels }: TextChannelListProps) {
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex items-center gap-2 text-section uppercase text-text-muted">
+    <div className="flex items-center gap-2 text-section text-text-muted">
       <MessagesSquare size={14} className="text-interactive-normal" />
       {children}
     </div>

@@ -441,7 +441,7 @@ export function HomePage() {
 
   return (
     <div className="flex h-full flex-col overflow-y-auto bg-bg-primary scrollbar-thin">
-      {/* Solid raised header — Fraunces greeting + meaningful status (kill-list #1). */}
+      {/* Solid raised header — Gabarito greeting + meaningful status (kill-list #1). */}
       <header className="shrink-0 border-b border-border-subtle bg-bg-secondary shadow-sm">
         <div className="flex flex-wrap items-center gap-4 px-6 py-5 sm:flex-nowrap sm:px-8 sm:py-6">
           <div

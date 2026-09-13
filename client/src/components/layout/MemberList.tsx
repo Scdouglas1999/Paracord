@@ -19,6 +19,7 @@ import { getHighestRoleColor } from '../../lib/colors';
 import { toast } from '../../stores/toastStore';
 import { cn } from '../../lib/utils';
 import { displayName } from '../../lib/displayName';
+import { presenceLight } from '../../lib/presence';
 import { fetchGuildRoles } from '../../lib/permissionDataCache';
 
 interface MemberWithUser {
@@ -45,13 +46,6 @@ interface MemberListProps {
    */
   hideStatsHeader?: boolean;
 }
-
-const STATUS_COLORS: Record<string, string> = {
-  online: 'var(--status-online)',
-  idle: 'var(--status-idle)',
-  dnd: 'var(--status-dnd)',
-  offline: 'var(--status-offline)',
-};
 
 export function resolveMemberStatus(
   presenceStatus: MemberWithUser['status'] | undefined,
@@ -218,12 +212,12 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
     setSelectedMember(member);
   };
 
-  const getStatusColor = (status?: string) => STATUS_COLORS[status || 'offline'];
   const isMemberListLoading = !propMembers && !storeMembers && !!selectedGuildId;
 
   const renderMember = (member: MemberWithUser) => {
     const roleColor = getHighestRoleColor(member.roles, roles);
     const offline = member.status === 'offline';
+    const light = presenceLight(member.streaming ? 'streaming' : member.status);
     return (
     <button
       key={member.user_id}
@@ -255,19 +249,16 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
           }
         >
           <span
-            className="flex h-8 w-8 items-center justify-center rounded-full text-label font-semibold text-white"
+            className={cn(
+              'flex h-8 w-8 items-center justify-center rounded-full text-label font-semibold text-white',
+              light.avatarClass,
+              light.dnd && 'pc-dnd',
+            )}
             style={{ backgroundColor: roleColor ?? 'var(--accent-primary)' }}
           >
             {displayName(member, member.nick).charAt(0).toUpperCase()}
           </span>
         </span>
-        <span
-          className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full"
-          style={{
-            backgroundColor: getStatusColor(member.status),
-            boxShadow: '0 0 0 2px var(--bg-secondary)',
-          }}
-        />
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-1.5">
@@ -280,6 +271,7 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
           >
             {displayName(member, member.nick)}
           </span>
+          <span className="sr-only">{light.label}</span>
           {member.bot && (
             <span className="shrink-0 rounded-xs bg-accent-tint px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide text-accent-primary">
               Bot
@@ -369,7 +361,7 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
         aria-label="Member list"
       >
         <div className="mb-4 flex flex-col items-center">
-          <div className="text-section uppercase text-text-muted">Members</div>
+          <div className="text-section text-text-muted">Members</div>
           <div className="mt-0.5 font-code text-meta tabular-nums text-text-secondary">{members.length}</div>
         </div>
 
@@ -381,11 +373,16 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
           ) : compactMembers.length > 0 ? (
             compactMembers.map((member) => {
               const roleColor = getHighestRoleColor(member.roles, roles);
+              const light = presenceLight(member.streaming ? 'streaming' : member.status);
               return (
               <button
                 key={member.user_id}
-                title={displayName(member, member.nick)}
-                className="group relative flex h-9 w-9 items-center justify-center rounded-full text-label font-semibold text-white outline-none transition-transform duration-[140ms] ease-[var(--ease-out)] hover:brightness-110 active:scale-95 focus-visible:shadow-[var(--focus-ring)]"
+                title={`${displayName(member, member.nick)} — ${light.label}`}
+                className={cn(
+                  'group relative flex h-9 w-9 items-center justify-center rounded-full text-label font-semibold text-white outline-none transition-transform duration-[140ms] ease-[var(--ease-out)] hover:brightness-110 active:scale-95 focus-visible:shadow-[var(--focus-ring)]',
+                  light.avatarClass,
+                  light.dnd && 'pc-dnd',
+                )}
                 style={{
                   backgroundColor: roleColor ?? 'var(--accent-primary)',
                   opacity: member.status === 'offline' ? 0.5 : 1,
@@ -393,13 +390,7 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
                 onClick={(e) => handleMemberClick(e, member)}
               >
                 {displayName(member, member.nick).charAt(0).toUpperCase()}
-                <span
-                  className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full"
-                  style={{
-                    backgroundColor: getStatusColor(member.status),
-                    boxShadow: '0 0 0 2px var(--bg-secondary)',
-                  }}
-                />
+                <span className="sr-only">{light.label}</span>
               </button>
               );
             })
@@ -463,12 +454,12 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
               >
                 {row.type === 'stats' && (
                   <div className="mb-3 flex items-baseline justify-between border-b border-border-subtle px-2 pb-2.5">
-                    <span className="text-section uppercase text-text-muted">Members</span>
+                    <span className="text-section text-text-muted">Members</span>
                     <span className="font-code text-meta tabular-nums text-text-secondary">{members.length}</span>
                   </div>
                 )}
                 {row.type === 'header' && (
-                  <div className="flex items-center gap-1.5 px-2 pb-1 pt-2 text-section uppercase text-text-muted">
+                  <div className="flex items-center gap-1.5 px-2 pb-1 pt-2 text-section text-text-muted">
                     <span className="truncate">{row.label}</span>
                     <span className="font-code tabular-nums text-text-muted">{row.count}</span>
                   </div>
@@ -476,7 +467,7 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
                 {row.type === 'member' && renderMember(row.member)}
                 {row.type === 'offlineToggle' && (
                   <button
-                    className="flex w-full items-center gap-1.5 rounded-sm px-2 py-1.5 text-section uppercase text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-secondary focus-visible:shadow-[var(--focus-ring)]"
+                    className="flex w-full items-center gap-1.5 rounded-sm px-2 py-1.5 text-section text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-secondary focus-visible:shadow-[var(--focus-ring)]"
                     onClick={() => setShowOffline(!showOffline)}
                   >
                     <ChevronDown

@@ -136,7 +136,7 @@ export function VoiceLobby({
   );
 
   const groupLabel = (icon: ReactNode, text: string) => (
-    <div className="mb-1.5 flex items-center gap-1.5 text-section uppercase text-text-muted">
+    <div className="mb-1.5 flex items-center gap-1.5 text-section text-text-muted">
       <span className="text-interactive-normal">{icon}</span>
       {text}
     </div>
@@ -201,7 +201,7 @@ export function VoiceLobby({
           <div className="rounded-md border border-border-subtle bg-bg-secondary p-4 shadow-sm">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
-                <div className="text-section uppercase text-text-muted">Stage session</div>
+                <div className="text-section text-text-muted">Stage session</div>
                 {stageLoading ? (
                   <div className="mt-1 text-label text-text-secondary">Checking for a live stage…</div>
                 ) : stageInstance ? (
@@ -240,7 +240,7 @@ export function VoiceLobby({
             )}
             {canManageStage && (
               <label className="mt-3 block">
-                <span className="text-section uppercase text-text-muted">Topic</span>
+                <span className="text-section text-text-muted">Topic</span>
                 <input
                   type="text"
                   className="mt-1.5 w-full rounded-sm border border-border-subtle bg-bg-tertiary px-3 py-2 text-body text-text-primary placeholder:text-text-muted outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus-visible:border-accent-primary focus-visible:shadow-[var(--focus-ring-input)]"

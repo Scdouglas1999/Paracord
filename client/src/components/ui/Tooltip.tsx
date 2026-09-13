@@ -111,11 +111,13 @@ export function Tooltip({
                             initial={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.94 }}
                             animate={reduceMotion ? { opacity: 1 } : { opacity: 1, scale: 1 }}
                             exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.96 }}
-                            transition={{ duration: 0.14, ease: [0.22, 1, 0.36, 1] }}
+                            transition={{ duration: 0.12, ease: [0.22, 1, 0.36, 1] }}
                             className={cn(
-                                // No backdrop-blur: over Linux underlay holes glass tooltips
-                                // composite into the live stream and can stick as ghost labels.
-                                "pointer-events-none fixed z-[9999] whitespace-nowrap rounded-sm border border-border-subtle bg-bg-secondary px-2.5 py-1.5 text-meta font-semibold text-text-primary shadow-lg",
+                                // A floating surface (spec §4): --bg-floating + the plate
+                                // shadow. No backdrop blur — over Linux underlay holes a
+                                // translucent tooltip composites into the live stream and
+                                // can stick there as a ghost label.
+                                "pc-floating pointer-events-none fixed z-[9999] whitespace-nowrap px-2.5 py-1.5 text-meta font-medium text-text-primary",
                                 className
                             )}
                             style={{
@@ -127,7 +129,7 @@ export function Tooltip({
                             {/* Arrow */}
                             <div
                                 className={cn(
-                                    "absolute w-2 h-2 bg-bg-secondary rotate-45",
+                                    "absolute h-2 w-2 rotate-45 bg-bg-floating",
                                     arrowPositions[side]
                                 )}
                             />

@@ -64,7 +64,7 @@ export function RecentList({
 
   return (
     <section aria-label="Recent" className="flex flex-col gap-0.5">
-      <h2 className="px-2 pb-1 text-section uppercase text-text-muted">Recent</h2>
+      <h2 className="px-2 pb-1 text-section text-text-muted">Recent</h2>
 
       {entries.length === 0 ? (
         <div className="flex flex-col items-start gap-1.5 px-2 py-3">

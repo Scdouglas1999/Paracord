@@ -6,7 +6,7 @@ import { cn } from '../lib/utils';
  * Shared building blocks for the unauthenticated entry surfaces (login, register,
  * connect, invite, account setup/recover/unlock, bot authorize). These consume
  * the Emerald Commons tokens directly — solid `--bg-primary` canvas, a single
- * raised `--bg-secondary` panel, Fraunces headings, emerald focus — so the first
+ * raised `--bg-secondary` panel, Gabarito headings, emerald focus — so the first
  * screens a new user sees read as one intentional system, never marketing slop.
  */
 
@@ -85,7 +85,7 @@ export function AuthCard({ children, className }: { children: ReactNode; classNa
 }
 
 /**
- * Heading block: optional brand mark, a Fraunces title, and `--text-secondary`
+ * Heading block: optional brand mark, a Gabarito title, and `--text-secondary`
  * subcopy. Establishes the Display/Title → body hierarchy the spec demands.
  */
 export function AuthHeading({
@@ -119,7 +119,7 @@ export function FieldLabel({
   required?: boolean;
 }) {
   return (
-    <span className="mb-2 flex items-center gap-1 text-section uppercase text-text-secondary">
+    <span className="mb-2 flex items-center gap-1 text-section text-text-secondary">
       {children}
       {required && <span className="text-accent-danger">*</span>}
     </span>

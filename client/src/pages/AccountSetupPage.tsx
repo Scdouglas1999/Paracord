@@ -155,7 +155,7 @@ function OwnedAccountSetupPage() {
         <AuthCard className="max-w-lg">
           <div className="flex flex-col gap-6 p-8">
             <div>
-              <p className="text-section uppercase text-accent-primary">Step 2 of 2</p>
+              <p className="text-section text-accent-primary">Step 2 of 2</p>
               <AuthHeading
                 mark={false}
                 title="Recovery Phrase"
@@ -224,7 +224,7 @@ function OwnedAccountSetupPage() {
       <AuthCard className="max-w-md">
         <form onSubmit={handleCreate} className="flex flex-col gap-6 p-8">
           <div>
-            <p className="text-section uppercase text-accent-primary">Step 1 of 2</p>
+            <p className="text-section text-accent-primary">Step 1 of 2</p>
             <AuthHeading
               mark={false}
               title={isMigration ? 'Secure your account' : 'Set up a local identity'}

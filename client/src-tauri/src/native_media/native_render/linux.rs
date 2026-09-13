@@ -796,7 +796,7 @@ pub fn install_render_host(app: &tauri::AppHandle) -> Result<(), String> {
     if let Some(toplevel) = vbox.toplevel() {
         let provider = gtk::CssProvider::new();
         if provider
-            .load_from_data(b"window { background-color: #141b17; }")
+            .load_from_data(b"window { background-color: #0a0c10; }")
             .is_ok()
         {
             toplevel

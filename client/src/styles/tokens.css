@@ -1,187 +1,226 @@
 /* =============================================================================
-   Paracord design-system tokens — "Emerald Commons" (warm-neutral dark).
-   Single source of truth for the visual language. See docs/design-spec.md for
-   the full contract, component recipes, and the anti-AI-slop kill-list.
+   Paracord design-system tokens — "Lantern Stage" (v2).
+   Single source of truth for the visual language. The contract is
+   docs/lantern-stage-spec.md; it supersedes docs/design-spec.md.
 
-   CANONICAL VOCABULARY (consume these in components/pages):
-     Surfaces ...... --bg-primary|secondary|tertiary|accent|floating (+ -mod-*)
-     Text .......... --text-primary|secondary|muted|link --text-on-accent|on-danger
-     Accent ........ --accent(-primary|-hover|-active) --accent-secondary(teal)
-     Semantic ...... --accent-success|warning|danger|info (+ --accent-danger-fill)
-     Tints ......... --accent-tint --teal-tint --success|warning|danger|info-tint
-     Presence ...... --status-online|idle|dnd|offline|streaming
-     Border ........ --border-subtle|strong
-     Interactive ... --interactive-normal|hover|active|muted --channel-icon
-     Radii ......... --radius-xs|sm|md|lg|full          (4 / 8 / 12 / 16 / pill)
-     Elevation ..... --shadow-sm|md|lg|xl               (near-black + top highlight)
-     Focus ......... --focus-ring --focus-ring-color --focus-ring-input
-     Spacing ....... --space-1 … --space-12             (4px grid, 0.25rem * n)
-     Type size ..... --text-xs|sm|base|lg|xl|2xl        (mirror Tailwind text-*)
-     Type steps .... --text-display|title|heading|subhead|body|label|meta|section
-     Line height ... --leading-tight|snug|normal|relaxed|loose
-     Font weight ... --font-weight-normal|medium|semibold|bold|body|display
-     Fonts ......... --font-primary (Inter) --font-display (Fraunces) --font-code
-     Motion ........ --duration-fast|normal|slow --ease-out|in-out|spring
+   THE IDEA: the app is a building at night and light means people. Everything
+   that is not light is dark, matte and quiet. Two laws follow:
+     1. Every glow has a source (a lit window, a speaking tile, a live
+        thumbnail, a lit avatar). Nothing else glows.
+     2. Light is state, never style. If a thing glows, a person is there now.
+   Never spend a `--light-*` token on emphasis, branding or "make it pop".
 
-   IDENTITY: a single calibrated emerald (#24D196) is spent only on meaning —
-   primary actions, active nav, mentions, online presence, links, focus rings.
-   Teal (#1CC3C0) is the secondary/brand tint (active-nav bar, presence ring,
-   app mark). It is NEVER a gradient wash. Semantic colors (success/warn/danger/
-   info) are distinct hues, not the accent.
+   CANONICAL VOCABULARY (consume these; never hard-code a hex):
+     Surfaces .... --bg-base|plate|raised|well|floating --bg-mod-subtle|strong
+     Light ....... --light-white (talking/live) --light-amber (reading)
+                   --window-dark (an unlit window)
+     Action ...... --accent-primary(-hover|-active)
+     Semantic .... --accent-danger|warning|info|success (+ --*-fill / --*-well)
+     Text ........ --text-primary|body-ink|secondary|muted|faint
+                   --text-on-light --text-on-accent --text-on-danger --text-link
+     Borders ..... --border-subtle|strong
+     Depth ....... --shadow-plate|plate-phone|raised|lifted|well|chip|tile
+                   --shadow-floating --shadow-composer
+     Glow ........ --glow-window-white|amber (+ -lg) --glow-live-dot
+                   --glow-light-fill --glow-control-on
+                   --ring-lit --ring-speaking --ring-lit-plate
+                   --lamp-radial --dim-filter
+     Radii ....... --radius-plate|card|control|well|window|full (+ -phone)
+     Sizes ....... --h-nav-row|list-row|control|control-sm|control-phone
+                   --h-composer|composer-ribbon|composer-phone --h-stage-control
+                   --w-buildings-column --w-chat-ribbon
+     Spacing ..... --space-1 … --space-12 (4px grid) --gutter
+     Type faces .. --font-display (Gabarito) --font-primary (Onest)
+                   --font-code (JetBrains Mono)
+     Type steps .. --text-display|title|heading|name|body|label|meta|section
+     Motion ...... --duration-fast|normal|warm-up|dim --ease-out|in|in-out
+     Focus ....... --focus-ring --focus-ring-color
 
-   RUNTIME NOTE: src/hooks/useTheme.ts re-applies theme + accent-preset values
-   at runtime via inline style. These @theme/:root values are the design default
-   and the pre-hydration fallback; keep the two in lockstep when editing.
+   THEMES (§1.7) remap the *tokens*, never the recipes: Night (`:root`),
+   Daylight (`[data-theme='light']`), AMOLED, High contrast. The theme blocks
+   are scoped to the plain `[data-theme]` attribute, not `:root[data-theme]`, so
+   a subtree can be painted in another theme — that is how `/design-tokens`
+   shows all four side by side, and how a preview renders a theme you are not in. The light tokens
+   are REMAPPED in every theme, never removed — "lit" must still read as
+   presence on a light ground. Accent presets (useTheme.ts) recolour
+   --accent-primary and its derivatives ONLY; they never touch the light tokens.
 
-   The --text-xs…2xl, --leading-*, --font-weight-*, and legacy line-height names
-   are kept so `var(--text-sm)` and the `text-sm` utility resolve identically.
+   LEGACY NAMES: --bg-primary/secondary/tertiary, --interactive-*, --shadow-sm…xl
+   etc. are kept as aliases onto the new surfaces so the un-restyled app (WP2–WP7)
+   still renders coherently. They are deprecated: new code consumes the names
+   above.
    ============================================================================= */
 @theme {
-  /* ---- Surfaces: warm-neutral dark with a whisper of green ------------------ */
-  --color-bg-primary: #141b17;
-  --color-bg-secondary: #1b241f;
-  --color-bg-tertiary: #0d1211;
-  --color-bg-accent: #222d27;
-  --color-bg-floating: rgba(27, 36, 31, 0.97);
-  --color-bg-mod-subtle: rgba(255, 255, 255, 0.04);
-  --color-bg-mod-strong: rgba(255, 255, 255, 0.1);
+  /* ---- Colour: the Tailwind namespace ------------------------------------
+     Every `--color-*` here POINTS AT a plain token declared in `:root` below
+     (and re-declared by each `[data-theme]` block). That indirection is what
+     makes the generated utilities — `bg-bg-plate`, `text-text-primary`,
+     `bg-light-white` — follow a theme switch: the utility reads
+     `var(--color-bg-plate)`, which reads `var(--bg-plate)`, which the active
+     theme has remapped. Put literal values in `:root`, never here. ------- */
 
-  /* ---- Text ramp ----------------------------------------------------------- */
-  --color-text-primary: #eaf2ed;
-  --color-text-secondary: #a7b8af;
-  --color-text-muted: #7a8b82;
-  --color-text-link: #24d196;
-  /* Foreground on a light/emerald accent fill: near-black ink (~9.4:1 AAA on
-     emerald). High-contrast theme overrides to pure black. */
-  --color-text-on-accent: #04140d;
-  /* Foreground on the deepened danger fill: white (~5.0:1 AA on #C93A44). */
-  --color-text-on-danger: #ffffff;
+  /* §1.1 Surfaces. */
+  --color-bg-base: var(--bg-base);
+  --color-bg-plate: var(--bg-plate);
+  --color-bg-raised: var(--bg-raised);
+  --color-bg-well: var(--bg-well);
+  --color-bg-floating: var(--bg-floating);
+  --color-bg-mod-subtle: var(--bg-mod-subtle);
+  --color-bg-mod-strong: var(--bg-mod-strong);
+  --color-window-dark: var(--window-dark);
+  /* Legacy surface aliases (deprecated; see header). */
+  --color-bg-primary: var(--bg-primary);
+  --color-bg-secondary: var(--bg-secondary);
+  --color-bg-tertiary: var(--bg-tertiary);
+  --color-bg-accent: var(--bg-accent);
 
-  /* ---- Accent + semantic --------------------------------------------------- */
-  --color-accent-primary: #24d196;
-  --color-accent-primary-hover: #33dba2;
-  --color-accent-primary-active: #1fbe88;
-  --color-accent-secondary: #1cc3c0;
-  /* Full semantic set — deliberately distinct hues, NOT the emerald accent. */
-  --color-accent-success: #4bc46b;
-  --color-accent-warning: #e8b23a;
-  --color-accent-danger: #e5484d;
-  /* Deepened danger for white-text button fills (AA); #e5484d stays the
-     icon/text/border danger color on dark surfaces. */
-  --color-accent-danger-fill: #c93a44;
-  --color-accent-info: #4f97f0;
+  /* §1.2 Light — three lights, three meanings. */
+  --color-light-white: var(--light-white);
+  --color-light-amber: var(--light-amber);
+  --color-accent-primary: var(--accent-primary);
+  --color-accent-primary-hover: var(--accent-primary-hover);
+  --color-accent-primary-active: var(--accent-primary-active);
 
-  /* ---- Tints: subtle meaning-colored backgrounds (badges, mention rows) ----- */
-  --color-accent-tint: rgba(36, 209, 150, 0.12);
-  --color-accent-tint-strong: rgba(36, 209, 150, 0.18);
-  --color-teal-tint: rgba(28, 195, 192, 0.12);
-  --color-success-tint: rgba(75, 196, 107, 0.14);
-  --color-warning-tint: rgba(232, 178, 58, 0.14);
-  --color-danger-tint: rgba(229, 72, 77, 0.14);
-  --color-info-tint: rgba(79, 151, 240, 0.14);
+  /* §1.3 Semantic. */
+  --color-accent-danger: var(--accent-danger);
+  --color-accent-warning: var(--accent-warning);
+  --color-accent-info: var(--accent-info);
+  --color-accent-success: var(--accent-success);
+  --color-danger-well: var(--danger-well);
+  --color-accent-danger-fill: var(--accent-danger-fill);
+  --color-accent-secondary: var(--accent-secondary);
 
-  /* ---- Borders: warm-green hairlines, not pure gray ------------------------ */
-  --color-border-subtle: rgba(160, 185, 170, 0.12);
-  --color-border-strong: rgba(160, 185, 170, 0.22);
-  --color-scrollbar-track: rgba(0, 0, 0, 0.2);
-  --color-scrollbar-thumb: rgba(160, 185, 170, 0.22);
+  /* Tints: meaning-coloured washes (mention rows, badges). */
+  --color-accent-tint: var(--accent-tint);
+  --color-accent-tint-strong: var(--accent-tint-strong);
+  --color-teal-tint: var(--teal-tint);
+  --color-success-tint: var(--success-tint);
+  --color-warning-tint: var(--warning-tint);
+  --color-danger-tint: var(--danger-tint);
+  --color-info-tint: var(--info-tint);
 
-  /* ---- Interactive (icons, hover text) ------------------------------------- */
-  --color-channel-icon: #7a8b82;
-  --color-interactive-normal: #a7b8af;
-  --color-interactive-hover: #eaf2ed;
-  --color-interactive-active: #ffffff;
-  --color-interactive-muted: #55645c;
+  /* §1.4 Text ramp. */
+  --color-text-primary: var(--text-primary);
+  --color-text-body: var(--text-body-ink);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-text-faint: var(--text-faint);
+  --color-text-on-light: var(--text-on-light);
+  --color-text-on-accent: var(--text-on-accent);
+  --color-text-on-danger: var(--text-on-danger);
+  --color-text-link: var(--text-link);
 
-  /* ---- Presence ------------------------------------------------------------ */
-  --color-status-online: #24d196;
-  --color-status-idle: #e8b23a;
-  --color-status-dnd: #e5484d;
-  --color-status-offline: #5c6b63;
-  --color-status-streaming: #9b7bff;
+  /* §1.6 Borders: hairlines only. */
+  --color-border-subtle: var(--border-subtle);
+  --color-border-strong: var(--border-strong);
+  --color-scrollbar-track: var(--scrollbar-auto-track);
+  --color-scrollbar-thumb: var(--scrollbar-auto-thumb);
 
-  /* ---- Type faces ---------------------------------------------------------- */
-  --font-primary: 'Inter Variable', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
-  /* Display face — Fraunces (self-hosted via @fontsource-variable, CSP-safe).
-     Used ONLY on Display/Title/Heading steps, never on body/UI. */
-  --font-display: 'Fraunces Variable', 'Fraunces', Georgia, 'Times New Roman', serif;
+  /* Interactive (icon + hover ink). */
+  --color-channel-icon: var(--channel-icon);
+  --color-interactive-normal: var(--interactive-normal);
+  --color-interactive-hover: var(--interactive-hover);
+  --color-interactive-active: var(--interactive-active);
+  --color-interactive-muted: var(--interactive-muted);
+
+  /* Avatar hues (the reference palette; identity, never state). Fixed across
+     themes: a person's colour is who they are, not where the app is. */
+  --color-avatar-1: #7fb7a3;
+  --color-avatar-2: #c9a27c;
+  --color-avatar-3: #9aa3b5;
+  --color-avatar-4: #d9a38f;
+  --color-avatar-5: #b58cc2;
+
+  /* ---- §2 Type faces ------------------------------------------------------ */
+  /* Display / names — room and building names, page titles, author names. */
+  --font-display: 'Gabarito', 'Helvetica Neue', Arial, sans-serif;
+  /* UI / body — everything else. */
+  --font-primary: 'Onest Variable', 'Onest', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  /* Meta — timestamps, durations, counts, latency, keys, filenames. */
   --font-code: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
 
-  /* ---- Layout metrics (unchanged names) ------------------------------------ */
-  --spacing-header-height: 3.5rem;
-  --spacing-sidebar-width: 5rem;
-  --spacing-channel-sidebar-width: 18rem;
-  /* Context surfaces scale with the window instead of claiming a fixed rail. */
-  --spacing-member-list-width: clamp(14rem, 24vw, 20rem);
-  --sidebar-item-size: 3.25rem;
+  /* ---- §2 Type steps (generate text-display … text-section utilities) ------ */
+  /* Lobby and Home titles. */
+  --text-display: 1.75rem; /* 28px */
+  --text-display--line-height: 1.05;
+  --text-display--letter-spacing: -0.015em;
+  --text-display--font-weight: 700;
 
-  /* ---- Type: Tailwind-mirrored raw sizes (keep for parity with text-*) ------ */
+  /* Stage room name, text-room header. */
+  --text-title: 1.375rem; /* 22px */
+  --text-title--line-height: 1.1;
+  --text-title--letter-spacing: -0.01em;
+  --text-title--font-weight: 700;
+
+  /* Building names, room card titles. */
+  --text-heading: 1.125rem; /* 18px */
+  --text-heading--line-height: 1.2;
+  --text-heading--letter-spacing: -0.005em;
+  --text-heading--font-weight: 700;
+
+  /* Author names, list item titles. */
+  --text-name: 0.96875rem; /* 15.5px */
+  --text-name--line-height: 1.2;
+  --text-name--letter-spacing: 0;
+  --text-name--font-weight: 600;
+
+  /* Messages, prose. */
+  --text-body: 0.9375rem; /* 15px */
+  --text-body--line-height: 1.55;
+  --text-body--font-weight: 400;
+
+  /* Ribbon body — the 336px chat ribbon beside the Stage. */
+  --text-ribbon: 0.875rem; /* 14px */
+  --text-ribbon--line-height: 1.45;
+  --text-ribbon--font-weight: 400;
+
+  /* Nav rows, buttons, inputs. */
+  --text-label: 0.875rem; /* 14px */
+  --text-label--line-height: 1.4;
+  --text-label--font-weight: 500;
+
+  /* Timestamps, counts, captions. */
+  --text-meta: 0.75rem; /* 12px */
+  --text-meta--line-height: 1.4;
+  --text-meta--letter-spacing: 0.01em;
+  --text-meta--font-weight: 500;
+
+  /* Section labels ("Kestrel Robotics · 24 in") — sentence case, NOT uppercase. */
+  --text-section: 0.75rem; /* 12px */
+  --text-section--line-height: 1.3;
+  --text-section--letter-spacing: 0;
+  --text-section--font-weight: 600;
+
+  /* Tailwind-mirrored raw sizes, kept so `text-sm` and var(--text-sm) agree. */
   --text-xs: 0.75rem;
   --text-sm: 0.875rem;
   --text-base: 1rem;
   --text-lg: 1.125rem;
   --text-xl: 1.25rem;
   --text-2xl: 1.5rem;
+  /* Legacy step name (design-spec v1); maps onto the v2 heading step. */
+  --text-subhead: var(--text-heading);
+  --text-subhead--line-height: 1.2;
+  --text-subhead--font-weight: 700;
 
-  /* ---- Type: semantic steps (generate text-display … text-section utilities).
-     Each carries its intended line-height / tracking / weight. --------------- */
-  --text-display: 2rem;
-  --text-display--line-height: 1.1;
-  --text-display--letter-spacing: -0.03em;
-  --text-display--font-weight: 800;
-
-  --text-title: 1.5rem;
-  --text-title--line-height: 1.15;
-  --text-title--letter-spacing: -0.02em;
-  --text-title--font-weight: 700;
-
-  --text-heading: 1.25rem;
-  --text-heading--line-height: 1.2;
-  --text-heading--letter-spacing: -0.015em;
-  --text-heading--font-weight: 700;
-
-  --text-subhead: 1.125rem;
-  --text-subhead--line-height: 1.3;
-  --text-subhead--letter-spacing: -0.01em;
-  --text-subhead--font-weight: 600;
-
-  --text-body: 0.9375rem;
-  --text-body--line-height: 1.5;
-  --text-body--font-weight: 440;
-
-  --text-label: 0.875rem;
-  --text-label--line-height: 1.4;
-  --text-label--font-weight: 500;
-
-  --text-meta: 0.75rem;
-  --text-meta--line-height: 1.4;
-  --text-meta--letter-spacing: 0.01em;
-  --text-meta--font-weight: 500;
-
-  --text-section: 0.75rem;
-  --text-section--line-height: 1.3;
-  --text-section--letter-spacing: 0.06em;
-  --text-section--font-weight: 600;
-
-  --leading-tight: 1.25;
-  --leading-snug: 1.375;
+  --leading-tight: 1.2;
+  --leading-snug: 1.35;
   --leading-normal: 1.5;
-  --leading-relaxed: 1.625;
-  --leading-loose: 2;
+  --leading-relaxed: 1.55;
+  --leading-loose: 1.8;
 
   --font-weight-normal: 400;
-  --font-weight-body: 440;
+  --font-weight-body: 400;
   --font-weight-medium: 500;
   --font-weight-semibold: 600;
   --font-weight-bold: 700;
-  --font-weight-display: 800;
+  --font-weight-display: 700;
 
-  /* Legacy line-height names kept as aliases (base styles still consume them). */
   --line-height-tight: var(--leading-tight);
   --line-height-normal: var(--leading-normal);
   --line-height-relaxed: var(--leading-relaxed);
 
-  /* ---- Spacing: 4px base grid (aligned to Tailwind --spacing) --------------- */
+  /* ---- §3 Spacing: 4px grid ---------------------------------------------- */
   --space-1: 0.25rem;
   --space-2: 0.5rem;
   --space-3: 0.75rem;
@@ -195,32 +234,545 @@
   --space-11: 2.75rem;
   --space-12: 3rem;
 
-  /* ---- Radii: deliberate 4 / 8 / 12 / 16 scale; pill only where meaningful -- */
-  --radius-xs: 0.25rem;
-  --radius-sm: 0.5rem;
-  --radius-md: 0.75rem;
-  --radius-lg: 1rem;
+  /* ---- §3 Radii ----------------------------------------------------------- */
+  --radius-plate: 14px;
+  --radius-card: 12px;
+  --radius-well: 10px;
+  --radius-control: 9px;
+  --radius-chip: 7px;
+  --radius-window: 2px;
+  /* Stage controls sit between a control and a card (§8 ControlBar). */
+  --radius-stage-control: 13px;
+  --radius-stage-control-phone: 16px;
   --radius-full: calc(infinity * 1px);
+  /* Phone: plates and controls round up. */
+  --radius-plate-phone: 16px;
+  --radius-control-phone: 16px;
+  /* Legacy radius scale (deprecated) mapped onto the v2 steps. */
+  --radius-xs: var(--radius-window);
+  --radius-sm: var(--radius-chip);
+  --radius-md: var(--radius-well);
+  --radius-lg: var(--radius-plate);
 
-  /* ---- Elevation: near-black shadow + 1px inset top highlight (lit-from-above) */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.04);
-  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  --shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  --shadow-xl: 0 28px 64px rgba(0, 0, 0, 0.58), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  /* ---- §3 Control heights and rail widths --------------------------------- */
+  --h-nav-row: 34px;
+  --h-list-row: 36px;
+  --h-control: 32px;
+  --h-control-sm: 28px;
+  --h-control-phone: 44px;
+  --h-composer: 50px;
+  --h-composer-ribbon: 42px;
+  --h-composer-phone: 46px;
+  --h-stage-control: 46px;
+  --h-stage-control-phone: 50px;
+  --h-chip: 24px;
+  --h-chip-sm: 20px;
+  --h-search-well: 38px;
+  --w-buildings-column: 276px;
+  --w-chat-ribbon: 336px;
+  /* Plates sit on a 12px gutter from the window edge and from each other. */
+  --gutter: 12px;
 
-  /* ---- Focus: layered ring — surface gap then emerald halo ------------------ */
-  --focus-ring-color: rgba(36, 209, 150, 0.55);
-  --focus-ring: 0 0 0 2px var(--bg-primary), 0 0 0 4px var(--focus-ring-color);
-  --focus-ring-input: 0 0 0 3px rgba(36, 209, 150, 0.25);
-
-  /* ---- Motion -------------------------------------------------------------- */
-  --duration-fast: 140ms;
-  --duration-normal: 180ms;
-  --duration-slow: 240ms;
+  /* ---- §5 Motion ---------------------------------------------------------- */
+  /* Everything that is not light: a plain 120–160ms ease-out. */
+  --duration-fast: 120ms;
+  --duration-normal: 160ms;
+  --duration-slow: 220ms;
+  /* Light only: warm-up when a room lights, dim when it empties. */
+  --duration-warm-up: 220ms;
+  --duration-dim: 400ms;
+  --duration-breathe: 1600ms;
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
   --ease-in-out: cubic-bezier(0.45, 0, 0.55, 1);
-  /* Subtle spring — discrete send/react only, never hover. */
-  --ease-spring: cubic-bezier(0.2, 0.9, 0.3, 1.3);
+  /* Deprecated: v1 spring. Light never bounces (§5). */
+  --ease-spring: var(--ease-out);
+
+  /* ---- Layout metrics (legacy names kept for the un-restyled shell) -------- */
+  --spacing-header-height: 3.5rem;
+  --spacing-sidebar-width: 5rem;
+  --spacing-channel-sidebar-width: var(--w-buildings-column);
+  --spacing-member-list-width: clamp(14rem, 24vw, 20rem);
+  --sidebar-item-size: 3.25rem;
+}
+
+/* =============================================================================
+   Night — the default theme. Effect recipes (§1.1, §1.2) live here as tokens so
+   a component never re-derives a shadow. Every theme below redefines this same
+   set; no theme adds or removes a name.
+   ============================================================================= */
+:root {
+  color-scheme: dark;
+
+  /* ---- §1.1 Surfaces — the literal Night values ---------------------------- */
+  /* The street: app base behind everything. */
+  --bg-base: #0a0c10;
+  /* Plates: the Stage, the Lobby, a text room, the chat ribbon, content cards. */
+  --bg-plate: #14171c;
+  /* Raised inside a plate: selected rows, chips, composer, hover cards, popovers. */
+  --bg-raised: #1a1e24;
+  /* Recessed inside a plate: search, tile grounds, "here now" strip, event cards. */
+  --bg-well: #0e1014;
+  /* Menus and tooltips over content. */
+  --bg-floating: rgba(20, 23, 28, 0.97);
+  --bg-mod-subtle: rgba(243, 234, 216, 0.04);
+  --bg-mod-strong: rgba(243, 234, 216, 0.1);
+  /* An unlit window / the matte ground a light sits on. */
+  --window-dark: #1c2026;
+  /* Legacy aliases (deprecated). */
+  --bg-primary: var(--bg-plate);
+  --bg-secondary: var(--bg-raised);
+  --bg-tertiary: var(--bg-base);
+  --bg-accent: var(--bg-raised);
+  --bg-canvas: var(--bg-base);
+  --bg-panel: var(--bg-plate);
+  --bg-dock: var(--bg-base);
+  --bg-chat: var(--bg-plate);
+  --app-bg-base: var(--bg-base);
+  --overlay-backdrop: rgba(10, 12, 16, 0.72);
+  --bg-code: var(--bg-well);
+  --border-code: var(--border-subtle);
+
+  /* ---- §1.2 Light — three lights, three meanings --------------------------- */
+  /* Talking / live: people in a voice or video room. */
+  --light-white: #f3ead8;
+  /* Reading: people present in a text room. */
+  --light-amber: #e2c98f;
+
+  /* ---- §1.4 Text ramp ------------------------------------------------------ */
+  --text-primary: #f1eee7;
+  /* NOTE: `--text-body` is Tailwind's *body type step* (a font-size), so the
+     body ink cannot share that name. Consume it as the `text-text-body`
+     utility, or as `var(--text-body-ink)` in a raw style. */
+  --text-body-ink: #d4d1ca;
+  --text-secondary: #b3b0a8;
+  --text-muted: #8b8d8e;
+  /* §9 floor: meta must clear 4.5:1. The reference render's #6C6E70 measures
+     3.51:1 on --bg-plate, so the faint step is lifted to the minimum value that
+     clears 4.5:1 on all four Night grounds. See docs/design/wp0-checkpoint.md. */
+  --text-faint: #838587;
+  /* Ink on white light (16.4:1) and on emerald (8.5:1). */
+  --text-on-light: #0a0c10;
+  --text-on-accent: #06241a;
+  /* A danger control is a danger *well* carrying danger ink, never a red fill. */
+  --text-on-danger: var(--accent-danger);
+  --text-link: var(--accent-primary);
+
+  /* ---- §1.2 / §1.3 Action + semantic --------------------------------------- */
+  /* Action you can take. NOT a light. */
+  --accent-primary: #2bd39a;
+  --accent-primary-hover: #5be0b4;
+  --accent-primary-active: #1fb587;
+  --accent: var(--accent-primary);
+  /* Deprecated alias: v1's teal secondary. v2 has one action colour. */
+  --accent-secondary: var(--accent-primary);
+  /* Success is the emerald, and only in confirmation toasts. */
+  --accent-success: var(--accent-primary);
+  --accent-warning: #e8b23a;
+  --accent-danger: #f07c7c;
+  --accent-info: #8fa9d9;
+  /* Danger as a *surface*: a deep maroon well carrying danger ink (the Leave
+     control in the reference renders). Never a saturated red fill. */
+  --danger-well: #2a1517;
+  /* Deprecated alias: the v1 "solid danger fill". v2's recipe is the well. */
+  --accent-danger-fill: var(--danger-well);
+  --accent-primary-rgb: 43, 211, 154;
+
+  /* ---- Tints: meaning-coloured washes (badges, mention rows) --------------- */
+  --accent-tint: rgba(43, 211, 154, 0.12);
+  --accent-tint-strong: rgba(43, 211, 154, 0.18);
+  --teal-tint: rgba(143, 169, 217, 0.12);
+  --success-tint: rgba(43, 211, 154, 0.12);
+  --warning-tint: rgba(232, 178, 58, 0.14);
+  --danger-tint: rgba(240, 124, 124, 0.14);
+  --info-tint: rgba(143, 169, 217, 0.14);
+
+  /* ---- §1.6 Borders + interactive ------------------------------------------ */
+  --border-subtle: rgba(243, 234, 216, 0.06);
+  --border-strong: rgba(243, 234, 216, 0.14);
+  --channel-icon: var(--text-muted);
+  --interactive-normal: var(--text-secondary);
+  --interactive-hover: var(--text-primary);
+  --interactive-active: var(--text-primary);
+  --interactive-muted: var(--text-faint);
+  --scrollbar-auto-track: transparent;
+  --scrollbar-auto-thumb: rgba(243, 234, 216, 0.16);
+  --scrollbar-auto-thumb-hover: rgba(243, 234, 216, 0.3);
+
+  /* ---- §1.1 Depth: a warm 1px top highlight + a deep shadow ---------------- */
+  --shadow-plate: 0 1px 0 rgba(243, 234, 216, 0.07) inset, 0 20px 44px rgba(0, 0, 0, 0.5);
+  --shadow-plate-phone: 0 1px 0 rgba(243, 234, 216, 0.07) inset, 0 16px 36px rgba(0, 0, 0, 0.5);
+  --shadow-well: 0 1px 2px rgba(0, 0, 0, 0.6) inset;
+  --shadow-raised: 0 1px 0 rgba(243, 234, 216, 0.08) inset;
+  --shadow-lifted: 0 1px 0 rgba(243, 234, 216, 0.08) inset, 0 6px 16px rgba(0, 0, 0, 0.35);
+  --shadow-composer: 0 1px 0 rgba(243, 234, 216, 0.1) inset, 0 8px 20px rgba(0, 0, 0, 0.35);
+  --shadow-chip: 0 1px 0 rgba(243, 234, 216, 0.06) inset;
+  --shadow-tile: 0 1px 0 rgba(243, 234, 216, 0.05) inset;
+  --shadow-floating: var(--shadow-plate);
+  /* Legacy elevation names (deprecated) mapped onto the three real layers. */
+  --shadow-sm: var(--shadow-chip);
+  --shadow-md: var(--shadow-lifted);
+  --shadow-lg: var(--shadow-plate);
+  --shadow-xl: var(--shadow-plate);
+
+  /* ---- §1.2 Light effects: fixed recipes, never free values ---------------- */
+  --glow-window-white: 0 0 6px rgba(243, 234, 216, 0.55);
+  --glow-window-amber: 0 0 6px rgba(226, 201, 143, 0.5);
+  /* The larger 12×16 windows on Home carry a proportionally larger glow. */
+  --glow-window-white-lg: 0 0 8px rgba(243, 234, 216, 0.55);
+  --glow-window-amber-lg: 0 0 8px rgba(226, 201, 143, 0.5);
+  --glow-live-dot: 0 0 6px rgba(243, 234, 216, 0.8);
+  /* A white-light fill (the Join button, the mic-on control). */
+  --glow-light-fill: 0 0 16px rgba(243, 234, 216, 0.25);
+  --glow-control-on: 0 0 18px rgba(243, 234, 216, 0.35);
+  /* A lit avatar rim; `speaking` breathes between these two (see primitives.css). */
+  --ring-lit: 0 0 0 1.5px rgba(243, 234, 216, 0.55), 0 0 12px rgba(243, 234, 216, 0.22);
+  --ring-speaking: 0 0 0 1.5px rgba(243, 234, 216, 0.7), 0 0 18px rgba(243, 234, 216, 0.25);
+  --ring-speaking-peak: 0 0 0 1.5px rgba(243, 234, 216, 0.8), 0 0 18px rgba(243, 234, 216, 0.25);
+  /* A plate whose room is live — layered ON TOP of --shadow-plate. */
+  --ring-lit-plate: 0 0 0 1px rgba(243, 234, 216, 0.16), 0 0 34px rgba(243, 234, 216, 0.1);
+  /* The one permitted radial: one lamp per lit building/room card. */
+  --lamp-radial: radial-gradient(closest-side, rgba(243, 234, 216, 0.16), rgba(243, 234, 216, 0));
+  /* Away / offline. No rim. */
+  --dim-filter: saturate(0.35) brightness(0.72);
+  /* A name tag over a live tile. */
+  --tag-fill: rgba(10, 12, 16, 0.78);
+
+  /* ---- §9 Focus: 2px accent outside a 2px base gap ------------------------- */
+  --focus-ring-color: var(--accent-primary);
+  --focus-ring: 0 0 0 2px var(--bg-base), 0 0 0 4px var(--focus-ring-color);
+  --focus-ring-input: 0 0 0 2px var(--bg-base), 0 0 0 4px var(--focus-ring-color);
+
+  /* ---- Density (server-synced compact/comfortable message display) --------- */
+  --density-scale: 1;
+  --density-space-1: 0.25rem;
+  --density-space-2: 0.5rem;
+  --density-space-3: 0.75rem;
+  --density-space-4: 1rem;
+  --density-space-5: 1.25rem;
+
+  /* ---- Shell metrics ------------------------------------------------------ */
+  --member-list-width: var(--spacing-member-list-width);
+  --sidebar-width: 72px;
+  --sidebar-item-size: 52px;
+  --sidebar-icon-size: 26px;
+  --sidebar-bg: var(--bg-base);
+  --sidebar-border: var(--border-subtle);
+  --sidebar-active-indicator: var(--accent-primary);
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+}
+
+/* =============================================================================
+   Re-substitute the Tailwind colour namespace on any themed subtree.
+
+   A custom property is substituted where it is DECLARED, and descendants
+   inherit the already-resolved value. `--color-bg-plate: var(--bg-plate)` is
+   declared on `:root`, so it resolves once against the root theme; a nested
+   `<div data-theme="light">` that remaps `--bg-plate` would not move it, and
+   `bg-bg-plate` inside that subtree would keep painting the Night surface.
+
+   Declaring the same mappings again on `[data-theme]` makes every themed
+   subtree re-resolve them against its own values. That is what lets
+   `/design-tokens` paint all four themes side by side, and what makes a theme
+   preview anywhere in the app show the real thing.
+   ============================================================================= */
+[data-theme] {
+  --color-bg-base: var(--bg-base);
+  --color-bg-plate: var(--bg-plate);
+  --color-bg-raised: var(--bg-raised);
+  --color-bg-well: var(--bg-well);
+  --color-bg-floating: var(--bg-floating);
+  --color-bg-mod-subtle: var(--bg-mod-subtle);
+  --color-bg-mod-strong: var(--bg-mod-strong);
+  --color-window-dark: var(--window-dark);
+  --color-bg-primary: var(--bg-primary);
+  --color-bg-secondary: var(--bg-secondary);
+  --color-bg-tertiary: var(--bg-tertiary);
+  --color-bg-accent: var(--bg-accent);
+  --color-light-white: var(--light-white);
+  --color-light-amber: var(--light-amber);
+  --color-accent-primary: var(--accent-primary);
+  --color-accent-primary-hover: var(--accent-primary-hover);
+  --color-accent-primary-active: var(--accent-primary-active);
+  --color-accent-danger: var(--accent-danger);
+  --color-accent-warning: var(--accent-warning);
+  --color-accent-info: var(--accent-info);
+  --color-accent-success: var(--accent-success);
+  --color-danger-well: var(--danger-well);
+  --color-accent-danger-fill: var(--accent-danger-fill);
+  --color-accent-secondary: var(--accent-secondary);
+  --color-accent-tint: var(--accent-tint);
+  --color-accent-tint-strong: var(--accent-tint-strong);
+  --color-teal-tint: var(--teal-tint);
+  --color-success-tint: var(--success-tint);
+  --color-warning-tint: var(--warning-tint);
+  --color-danger-tint: var(--danger-tint);
+  --color-info-tint: var(--info-tint);
+  --color-text-primary: var(--text-primary);
+  --color-text-body: var(--text-body-ink);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-text-faint: var(--text-faint);
+  --color-text-on-light: var(--text-on-light);
+  --color-text-on-accent: var(--text-on-accent);
+  --color-text-on-danger: var(--text-on-danger);
+  --color-text-link: var(--text-link);
+  --color-border-subtle: var(--border-subtle);
+  --color-border-strong: var(--border-strong);
+  --color-scrollbar-track: var(--scrollbar-auto-track);
+  --color-scrollbar-thumb: var(--scrollbar-auto-thumb);
+  --color-channel-icon: var(--channel-icon);
+  --color-interactive-normal: var(--interactive-normal);
+  --color-interactive-hover: var(--interactive-hover);
+  --color-interactive-active: var(--interactive-active);
+  --color-interactive-muted: var(--interactive-muted);
+}
+
+/* =============================================================================
+   §1.7 Daylight — warm paper. The light tokens become INK: a lit rim still
+   reads as presence on a light ground, at half the alpha of Night.
+   ============================================================================= */
+[data-theme='light'] {
+  color-scheme: light;
+
+  --bg-base: #f4f1ea;
+  --bg-plate: #fbf9f4;
+  --bg-raised: #f3efe5;
+  --bg-well: #ebe6dc;
+  --bg-floating: rgba(251, 249, 244, 0.97);
+  --bg-mod-subtle: rgba(23, 23, 15, 0.05);
+  --bg-mod-strong: rgba(23, 23, 15, 0.1);
+  --window-dark: #ded8cb;
+  --overlay-backdrop: rgba(23, 23, 15, 0.4);
+  --bg-code: var(--bg-well);
+  --border-code: var(--border-subtle);
+
+  /* Light-as-ink. §1.7 gives the amber as #A8763C; that reads at 3.2:1 against
+     the lightest paper ground, and amber is a *label* as well as a fill
+     ("5 reading"), so it is deepened to the minimum that clears §9's 4.5:1 on
+     every Daylight surface. The window fills below carry the same value, so a
+     lit window and its caption stay the same colour. */
+  --light-white: #17170f;
+  --light-amber: #855e30;
+
+  --text-primary: #17170f;
+  --text-body-ink: #33332a;
+  --text-secondary: #46463c;
+  --text-muted: #57574d;
+  --text-faint: #66665c;
+  /* On a light "light", the ink flips: paper on ink. */
+  --text-on-light: #fbf9f4;
+  --text-on-accent: #ffffff;
+  --text-on-danger: var(--accent-danger);
+  --text-link: var(--accent-primary);
+
+  --accent-primary: #166e50;
+  --accent-primary-hover: #135f46;
+  --accent-primary-active: #115239;
+  --accent: var(--accent-primary);
+  --accent-secondary: var(--accent-primary);
+  --accent-success: var(--accent-primary);
+  --accent-warning: #7f570b;
+  --accent-danger: #b13a3a;
+  --accent-info: #40608f;
+  --danger-well: #f6e3e3;
+  --accent-danger-fill: var(--danger-well);
+  --accent-primary-rgb: 22, 110, 80;
+
+  --accent-tint: rgba(22, 110, 80, 0.12);
+  --accent-tint-strong: rgba(22, 110, 80, 0.18);
+  --teal-tint: rgba(64, 96, 143, 0.12);
+  --success-tint: rgba(22, 110, 80, 0.12);
+  --warning-tint: rgba(127, 87, 11, 0.14);
+  --danger-tint: rgba(177, 58, 58, 0.12);
+  --info-tint: rgba(64, 96, 143, 0.12);
+
+  --border-subtle: rgba(23, 23, 15, 0.1);
+  --border-strong: rgba(23, 23, 15, 0.2);
+  --channel-icon: var(--text-muted);
+  --interactive-normal: var(--text-secondary);
+  --interactive-hover: var(--text-primary);
+  --interactive-active: var(--text-primary);
+  --interactive-muted: var(--text-faint);
+  --scrollbar-auto-track: transparent;
+  --scrollbar-auto-thumb: rgba(23, 23, 15, 0.18);
+  --scrollbar-auto-thumb-hover: rgba(23, 23, 15, 0.32);
+
+  /* Depth on paper: the highlight is white, the shadow is soft ink. */
+  --shadow-plate: 0 1px 0 rgba(255, 255, 255, 0.9) inset, 0 12px 30px rgba(23, 23, 15, 0.1);
+  --shadow-plate-phone: 0 1px 0 rgba(255, 255, 255, 0.9) inset, 0 10px 24px rgba(23, 23, 15, 0.1);
+  --shadow-well: 0 1px 2px rgba(23, 23, 15, 0.14) inset;
+  --shadow-raised: 0 1px 0 rgba(255, 255, 255, 0.8) inset;
+  --shadow-lifted: 0 1px 0 rgba(255, 255, 255, 0.8) inset, 0 6px 16px rgba(23, 23, 15, 0.09);
+  --shadow-composer: 0 1px 0 rgba(255, 255, 255, 0.9) inset, 0 8px 20px rgba(23, 23, 15, 0.09);
+  --shadow-chip: 0 1px 0 rgba(255, 255, 255, 0.7) inset;
+  --shadow-tile: 0 1px 0 rgba(255, 255, 255, 0.6) inset;
+  --shadow-floating: var(--shadow-plate);
+  --shadow-sm: var(--shadow-chip);
+  --shadow-md: var(--shadow-lifted);
+  --shadow-lg: var(--shadow-plate);
+  --shadow-xl: var(--shadow-plate);
+
+  /* Same recipes, ink instead of light, half alpha. */
+  --glow-window-white: 0 0 6px rgba(23, 23, 15, 0.28);
+  --glow-window-amber: 0 0 6px rgba(133, 94, 48, 0.25);
+  --glow-window-white-lg: 0 0 8px rgba(23, 23, 15, 0.28);
+  --glow-window-amber-lg: 0 0 8px rgba(133, 94, 48, 0.25);
+  --glow-live-dot: 0 0 6px rgba(23, 23, 15, 0.4);
+  --glow-light-fill: 0 0 16px rgba(23, 23, 15, 0.13);
+  --glow-control-on: 0 0 18px rgba(23, 23, 15, 0.18);
+  --ring-lit: 0 0 0 1.5px rgba(23, 23, 15, 0.28), 0 0 12px rgba(23, 23, 15, 0.11);
+  --ring-speaking: 0 0 0 1.5px rgba(23, 23, 15, 0.35), 0 0 18px rgba(23, 23, 15, 0.13);
+  --ring-speaking-peak: 0 0 0 1.5px rgba(23, 23, 15, 0.4), 0 0 18px rgba(23, 23, 15, 0.13);
+  --ring-lit-plate: 0 0 0 1px rgba(23, 23, 15, 0.16), 0 0 34px rgba(23, 23, 15, 0.05);
+  --lamp-radial: radial-gradient(closest-side, rgba(133, 94, 48, 0.14), rgba(133, 94, 48, 0));
+  --dim-filter: saturate(0.35) brightness(1.06) opacity(0.62);
+  --tag-fill: rgba(251, 249, 244, 0.82);
+
+  --sidebar-bg: var(--bg-base);
+  --sidebar-border: var(--border-subtle);
+  --sidebar-active-indicator: var(--accent-primary);
+}
+
+/* =============================================================================
+   §1.7 AMOLED — a true-black street. Light recipes unchanged.
+   ============================================================================= */
+[data-theme='amoled'] {
+  --bg-base: #000000;
+  --bg-plate: #0b0c0f;
+  --bg-raised: #16181d;
+  --bg-well: #050608;
+  --bg-floating: rgba(11, 12, 15, 0.98);
+  --bg-mod-subtle: rgba(243, 234, 216, 0.055);
+  --bg-mod-strong: rgba(243, 234, 216, 0.12);
+  --window-dark: #16181d;
+  --overlay-backdrop: rgba(0, 0, 0, 0.88);
+
+  --border-subtle: rgba(243, 234, 216, 0.1);
+  --border-strong: rgba(243, 234, 216, 0.18);
+  --scrollbar-auto-thumb: rgba(243, 234, 216, 0.22);
+  --scrollbar-auto-thumb-hover: rgba(243, 234, 216, 0.36);
+
+  --shadow-plate: 0 1px 0 rgba(243, 234, 216, 0.07) inset, 0 20px 44px rgba(0, 0, 0, 0.8);
+  --shadow-plate-phone: 0 1px 0 rgba(243, 234, 216, 0.07) inset, 0 16px 36px rgba(0, 0, 0, 0.8);
+  --shadow-well: 0 1px 2px rgba(0, 0, 0, 0.9) inset;
+  --shadow-lifted: 0 1px 0 rgba(243, 234, 216, 0.08) inset, 0 6px 16px rgba(0, 0, 0, 0.6);
+  --shadow-composer: 0 1px 0 rgba(243, 234, 216, 0.1) inset, 0 8px 20px rgba(0, 0, 0, 0.6);
+  --shadow-lg: var(--shadow-plate);
+  --shadow-xl: var(--shadow-plate);
+  --shadow-md: var(--shadow-lifted);
+}
+
+/* =============================================================================
+   §1.7 High contrast — rims 2px, light alpha ×1.5, text ramp collapsed to two
+   steps. Every token name still exists; only the values change.
+   ============================================================================= */
+[data-theme='high-contrast'] {
+  --bg-base: #000000;
+  --bg-plate: #0b0d11;
+  --bg-raised: #1a1e24;
+  --bg-well: #000000;
+  --bg-floating: rgba(0, 0, 0, 0.98);
+  --bg-mod-subtle: rgba(243, 234, 216, 0.12);
+  --bg-mod-strong: rgba(243, 234, 216, 0.22);
+  --window-dark: #2a2f36;
+  --overlay-backdrop: rgba(0, 0, 0, 0.94);
+
+  /* Two steps only: full ink, and one secondary. */
+  --text-primary: #ffffff;
+  --text-body-ink: #e6e3dc;
+  --text-secondary: #e6e3dc;
+  --text-muted: #e6e3dc;
+  --text-faint: #e6e3dc;
+  --text-on-light: #000000;
+  --text-on-accent: #00120c;
+  --text-on-danger: var(--accent-danger);
+
+  --accent-primary: #3af0b0;
+  --accent-primary-hover: #6ff7c8;
+  --accent-primary-active: #22d497;
+  --accent: var(--accent-primary);
+  --accent-secondary: var(--accent-primary);
+  --accent-success: var(--accent-primary);
+  --accent-warning: #ffd23a;
+  --accent-danger: #ff8f8f;
+  --accent-info: #9dbcff;
+  --danger-well: #3a0f12;
+  --accent-danger-fill: var(--danger-well);
+  --accent-primary-rgb: 58, 240, 176;
+
+  --accent-tint: rgba(58, 240, 176, 0.2);
+  --accent-tint-strong: rgba(58, 240, 176, 0.3);
+  --teal-tint: rgba(157, 188, 255, 0.2);
+  --success-tint: rgba(58, 240, 176, 0.2);
+  --warning-tint: rgba(255, 210, 58, 0.2);
+  --danger-tint: rgba(255, 143, 143, 0.2);
+  --info-tint: rgba(157, 188, 255, 0.2);
+
+  --border-subtle: rgba(243, 234, 216, 0.4);
+  --border-strong: rgba(243, 234, 216, 0.65);
+  --channel-icon: var(--text-secondary);
+  --interactive-normal: var(--text-secondary);
+  --interactive-muted: var(--text-secondary);
+  --scrollbar-auto-thumb: rgba(243, 234, 216, 0.45);
+  --scrollbar-auto-thumb-hover: rgba(243, 234, 216, 0.7);
+
+  --shadow-plate: 0 0 0 1px rgba(243, 234, 216, 0.4) inset, 0 20px 44px rgba(0, 0, 0, 0.8);
+  --shadow-plate-phone: 0 0 0 1px rgba(243, 234, 216, 0.4) inset, 0 16px 36px rgba(0, 0, 0, 0.8);
+  --shadow-well: 0 0 0 1px rgba(243, 234, 216, 0.32) inset;
+  --shadow-raised: 0 0 0 1px rgba(243, 234, 216, 0.32) inset;
+  --shadow-lifted: 0 0 0 1px rgba(243, 234, 216, 0.32) inset, 0 6px 16px rgba(0, 0, 0, 0.6);
+  --shadow-composer: 0 0 0 1px rgba(243, 234, 216, 0.32) inset, 0 8px 20px rgba(0, 0, 0, 0.6);
+  --shadow-chip: 0 0 0 1px rgba(243, 234, 216, 0.32) inset;
+  --shadow-tile: 0 0 0 1px rgba(243, 234, 216, 0.32) inset;
+  --shadow-floating: var(--shadow-plate);
+  --shadow-sm: var(--shadow-chip);
+  --shadow-md: var(--shadow-lifted);
+  --shadow-lg: var(--shadow-plate);
+  --shadow-xl: var(--shadow-plate);
+
+  /* Rims 2px, alpha ×1.5 (clamped at 1). */
+  --glow-window-white: 0 0 6px rgba(243, 234, 216, 0.82);
+  --glow-window-amber: 0 0 6px rgba(226, 201, 143, 0.75);
+  --glow-window-white-lg: 0 0 8px rgba(243, 234, 216, 0.82);
+  --glow-window-amber-lg: 0 0 8px rgba(226, 201, 143, 0.75);
+  --glow-live-dot: 0 0 6px rgba(243, 234, 216, 1);
+  --glow-light-fill: 0 0 16px rgba(243, 234, 216, 0.37);
+  --glow-control-on: 0 0 18px rgba(243, 234, 216, 0.52);
+  --ring-lit: 0 0 0 2px rgba(243, 234, 216, 0.82), 0 0 12px rgba(243, 234, 216, 0.33);
+  --ring-speaking: 0 0 0 2px rgba(243, 234, 216, 1), 0 0 18px rgba(243, 234, 216, 0.37);
+  --ring-speaking-peak: 0 0 0 2px rgba(243, 234, 216, 1), 0 0 18px rgba(243, 234, 216, 0.37);
+  --ring-lit-plate: 0 0 0 2px rgba(243, 234, 216, 0.24), 0 0 34px rgba(243, 234, 216, 0.15);
+  --lamp-radial: radial-gradient(closest-side, rgba(243, 234, 216, 0.24), rgba(243, 234, 216, 0));
+  --dim-filter: saturate(0.35) brightness(0.72);
+  --tag-fill: rgba(0, 0, 0, 0.9);
+
+  --sidebar-bg: var(--bg-base);
+  --sidebar-border: var(--border-strong);
+}
+
+/* =============================================================================
+   Density + responsive metrics
+   ============================================================================= */
+:root[data-density='compact'] {
+  --density-scale: 0.9;
+  --density-space-1: 0.2rem;
+  --density-space-2: 0.45rem;
+  --density-space-3: 0.65rem;
+  --density-space-4: 0.875rem;
+  --density-space-5: 1rem;
+}
+
+:root[data-density='comfortable'] {
+  --density-scale: 1.08;
+  --density-space-1: 0.35rem;
+  --density-space-2: 0.65rem;
+  --density-space-3: 0.9rem;
+  --density-space-4: 1.15rem;
+  --density-space-5: 1.4rem;
 }
 
 @media (width < 768px) {
@@ -229,6 +781,14 @@
     --spacing-channel-sidebar-width: 15.5rem;
     --spacing-member-list-width: 88vw;
     --sidebar-item-size: 2.75rem;
+    /* §3: phone plates and controls round up; hit targets grow (§9). */
+    --radius-plate: var(--radius-plate-phone);
+    --radius-control: var(--radius-control-phone);
+    --h-control: var(--h-control-phone);
+    --h-composer: var(--h-composer-phone);
+    --h-stage-control: var(--h-stage-control-phone);
+    --radius-stage-control: var(--radius-stage-control-phone);
+    --shadow-plate: var(--shadow-plate-phone);
   }
 
   .workspace-canvas {
@@ -249,344 +809,38 @@
   }
 }
 
-:root {
-  color-scheme: dark;
-  --bg-primary: var(--color-bg-primary);
-  --bg-secondary: var(--color-bg-secondary);
-  --bg-tertiary: var(--color-bg-tertiary);
-  --bg-accent: var(--color-bg-accent);
-  --bg-floating: var(--color-bg-floating);
-  --bg-canvas: var(--bg-primary);
-  --bg-panel: var(--bg-secondary);
-  --bg-dock: var(--bg-tertiary);
-  --bg-chat: var(--bg-primary);
-  --bg-mod-subtle: var(--color-bg-mod-subtle);
-  --bg-mod-strong: var(--color-bg-mod-strong);
-
-  --text-primary: var(--color-text-primary);
-  --text-secondary: var(--color-text-secondary);
-  --text-muted: var(--color-text-muted);
-  --text-link: var(--color-text-link);
-  --text-on-accent: var(--color-text-on-accent);
-  --text-on-danger: var(--color-text-on-danger);
-
-  --accent: var(--accent-primary);
-  --accent-primary: var(--color-accent-primary);
-  --accent-primary-hover: var(--color-accent-primary-hover);
-  --accent-primary-active: var(--color-accent-primary-active);
-  --accent-secondary: var(--color-accent-secondary);
-  --accent-success: var(--color-accent-success);
-  --accent-warning: var(--color-accent-warning);
-  --accent-danger: var(--color-accent-danger);
-  --accent-danger-fill: var(--color-accent-danger-fill);
-  --accent-info: var(--color-accent-info);
-
-  --accent-tint: var(--color-accent-tint);
-  --accent-tint-strong: var(--color-accent-tint-strong);
-  --teal-tint: var(--color-teal-tint);
-  --success-tint: var(--color-success-tint);
-  --warning-tint: var(--color-warning-tint);
-  --danger-tint: var(--color-danger-tint);
-  --info-tint: var(--color-info-tint);
-
-  --border-subtle: var(--color-border-subtle);
-  --border-strong: var(--color-border-strong);
-  --channel-icon: var(--color-channel-icon);
-  --interactive-normal: var(--color-interactive-normal);
-  --interactive-hover: var(--color-interactive-hover);
-  --interactive-active: var(--color-interactive-active);
-  --interactive-muted: var(--color-interactive-muted);
-
-  --status-online: var(--color-status-online);
-  --status-idle: var(--color-status-idle);
-  --status-dnd: var(--color-status-dnd);
-  --status-offline: var(--color-status-offline);
-  --status-streaming: var(--color-status-streaming);
-
-  --scrollbar-auto-track: var(--color-scrollbar-track);
-  --scrollbar-auto-thumb: var(--color-scrollbar-thumb);
-  --member-list-width: var(--spacing-member-list-width);
-
-  --density-scale: 1;
-  --density-space-1: 0.25rem;
-  --density-space-2: 0.5rem;
-  --density-space-3: 0.75rem;
-  --density-space-4: 1rem;
-  --density-space-5: 1.25rem;
-
-  /* Flat, calm base — no radial ambient-glow layers, no grain (anti-slop #1/#2). */
-  --app-bg-layer-one: none;
-  --app-bg-layer-two: none;
-  --app-bg-base: var(--bg-tertiary);
-  --overlay-backdrop: rgba(6, 10, 8, 0.62);
-  --noise-texture: none;
-  /* Panel/rail fills are subtle top-lit highlights layered over solid surfaces. */
-  --glass-rail-fill-top: rgba(255, 255, 255, 0.05);
-  --glass-rail-fill-bottom: rgba(255, 255, 255, 0.01);
-  --glass-panel-fill-top: rgba(255, 255, 255, 0.04);
-  --glass-panel-fill-bottom: rgba(255, 255, 255, 0.012);
-  --glass-modal-fill-top: rgba(34, 45, 39, 0.96);
-  --glass-modal-fill-bottom: rgba(27, 36, 31, 0.94);
-  --panel-divider-glint: rgba(255, 255, 255, 0.03);
-  --scrollbar-auto-thumb-hover: rgba(160, 185, 170, 0.4);
-  --ambient-glow-primary: transparent;
-  --ambient-glow-success: transparent;
-  --ambient-glow-danger: transparent;
-  --accent-primary-rgb: 36, 209, 150;
-  --safe-top: env(safe-area-inset-top, 0px);
-  --safe-right: env(safe-area-inset-right, 0px);
-  --safe-bottom: env(safe-area-inset-bottom, 0px);
-  --safe-left: env(safe-area-inset-left, 0px);
-
-  /* Sidebar specifics */
-  --sidebar-width: 72px;
-  --sidebar-item-size: 52px;
-  --sidebar-icon-size: 26px;
-  --sidebar-bg: rgba(13, 18, 17, 0.72);
-  --sidebar-border: rgba(255, 255, 255, 0.06);
-  --sidebar-active-indicator: var(--accent-secondary);
-  --bg-code: rgba(255, 255, 255, 0.05);
-  --border-code: rgba(255, 255, 255, 0.04);
-}
-
-:root[data-density='compact'] {
-  --density-scale: 0.9;
-  --density-space-1: 0.2rem;
-  --density-space-2: 0.45rem;
-  --density-space-3: 0.65rem;
-  --density-space-4: 0.875rem;
-  --density-space-5: 1rem;
-}
-
-:root[data-density='comfortable'] {
-  --density-scale: 1.08;
-  --density-space-1: 0.35rem;
-  --density-space-2: 0.65rem;
-  --density-space-3: 0.9rem;
-  --density-space-4: 1.15rem;
-  --density-space-5: 1.4rem;
-}
-
-:root[data-theme='light'] {
-  --bg-primary: #e7ece7;
-  --bg-secondary: #f4f7f3;
-  --bg-tertiary: #dce3dc;
-  --bg-accent: #eaefea;
-  --bg-floating: rgba(244, 247, 243, 0.94);
-  --bg-mod-subtle: rgba(22, 45, 33, 0.06);
-  --bg-mod-strong: rgba(22, 45, 33, 0.12);
-
-  --text-primary: #16211b;
-  --text-secondary: #4a5a50;
-  --text-muted: #6c7c72;
-  --text-link: #126f4d;
-
-  --accent-primary: #188e66;
-  --accent-primary-hover: #16825d;
-  --accent-primary-active: #147852;
-  --accent-secondary: #0f9d9a;
-  --accent-success: #128a54;
-  --accent-warning: #b5841e;
-  --accent-danger: #c93a44;
-  --accent-danger-fill: #c93a44;
-  --accent-info: #2f6fd0;
-  --text-on-accent: #04140d;
-
-  --accent-tint: rgba(24, 142, 102, 0.12);
-  --accent-tint-strong: rgba(24, 142, 102, 0.18);
-  --teal-tint: rgba(15, 157, 154, 0.12);
-  --success-tint: rgba(18, 138, 84, 0.14);
-  --warning-tint: rgba(181, 132, 30, 0.16);
-  --danger-tint: rgba(201, 58, 68, 0.12);
-  --info-tint: rgba(47, 111, 208, 0.12);
-
-  --border-subtle: rgba(30, 50, 40, 0.14);
-  --border-strong: rgba(30, 50, 40, 0.24);
-  --channel-icon: #5a6c62;
-  --interactive-normal: #47564d;
-  --interactive-hover: #1b2620;
-  --interactive-active: #0e140f;
-  --interactive-muted: #8a978e;
-
-  --status-online: #0fa968;
-  --status-idle: #b5841e;
-  --status-dnd: #c93a44;
-  --status-offline: #8a978e;
-  --status-streaming: #6d4fcb;
-
-  --app-bg-layer-one: none;
-  --app-bg-layer-two: none;
-  --app-bg-base: #dce3dc;
-  --overlay-backdrop: rgba(20, 34, 27, 0.38);
-  --glass-rail-fill-top: rgba(255, 255, 255, 0.78);
-  --glass-rail-fill-bottom: rgba(233, 240, 233, 0.64);
-  --glass-panel-fill-top: rgba(255, 255, 255, 0.72);
-  --glass-panel-fill-bottom: rgba(233, 240, 233, 0.58);
-  --glass-modal-fill-top: rgba(252, 254, 251, 0.95);
-  --glass-modal-fill-bottom: rgba(240, 245, 239, 0.94);
-  --panel-divider-glint: rgba(20, 44, 30, 0.08);
-  --scrollbar-auto-thumb-hover: rgba(60, 88, 74, 0.42);
-  --sidebar-bg: rgba(244, 247, 243, 0.76);
-  --sidebar-border: rgba(24, 44, 32, 0.14);
-  --ambient-glow-primary: transparent;
-  --ambient-glow-success: transparent;
-  --ambient-glow-danger: transparent;
-  --accent-primary-rgb: 24, 142, 102;
-  --bg-code: rgba(22, 45, 33, 0.08);
-  --border-code: rgba(22, 45, 33, 0.08);
-}
-
-:root[data-theme='amoled'] {
-  --bg-primary: #000000;
-  --bg-secondary: #000000;
-  --bg-tertiary: #000000;
-  --bg-accent: #0a0f0c;
-  --bg-floating: rgba(0, 0, 0, 0.98);
-  --bg-mod-subtle: rgba(255, 255, 255, 0.055);
-  --bg-mod-strong: rgba(255, 255, 255, 0.12);
-
-  --text-primary: #eaf2ed;
-  --text-secondary: #a7b8af;
-  --text-muted: #6e7d74;
-  --text-link: #33dba2;
-
-  --accent-primary: #24d196;
-  --accent-primary-hover: #33dba2;
-  --accent-primary-active: #1fbe88;
-  --accent-secondary: #1cc3c0;
-  --accent-success: #4bc46b;
-  --accent-warning: #e8b23a;
-  --accent-danger: #e5484d;
-  --accent-danger-fill: #c93a44;
-  --accent-info: #4f97f0;
-
-  --border-subtle: rgba(255, 255, 255, 0.12);
-  --border-strong: rgba(255, 255, 255, 0.22);
-  --channel-icon: #7f8f86;
-  --interactive-normal: #a7b8af;
-  --interactive-hover: #eaf2ed;
-  --interactive-active: #ffffff;
-  --interactive-muted: #4d5b53;
-
-  --app-bg-layer-one: none;
-  --app-bg-layer-two: none;
-  --app-bg-base: #000000;
-  --overlay-backdrop: rgba(0, 0, 0, 0.86);
-  --glass-rail-fill-top: rgba(0, 0, 0, 0.9);
-  --glass-rail-fill-bottom: rgba(0, 0, 0, 0.9);
-  --glass-panel-fill-top: rgba(0, 0, 0, 0.86);
-  --glass-panel-fill-bottom: rgba(0, 0, 0, 0.86);
-  --glass-modal-fill-top: rgba(0, 0, 0, 0.94);
-  --glass-modal-fill-bottom: rgba(0, 0, 0, 0.94);
-  --panel-divider-glint: rgba(255, 255, 255, 0.02);
-  --scrollbar-auto-thumb-hover: rgba(255, 255, 255, 0.36);
-  --sidebar-bg: rgba(0, 0, 0, 0.94);
-  --sidebar-border: rgba(255, 255, 255, 0.12);
-  --ambient-glow-primary: transparent;
-  --ambient-glow-success: transparent;
-  --ambient-glow-danger: transparent;
-  --accent-primary-rgb: 36, 209, 150;
-  --bg-code: rgba(255, 255, 255, 0.08);
-  --border-code: rgba(255, 255, 255, 0.06);
-}
-
-:root[data-theme='high-contrast'] {
-  --bg-primary: #000000;
-  --bg-secondary: #0a0a0a;
-  --bg-tertiary: #000000;
-  --bg-accent: #1a1a1a;
-  --bg-floating: rgba(0, 0, 0, 0.98);
-  --bg-mod-subtle: rgba(255, 255, 255, 0.1);
-  --bg-mod-strong: rgba(255, 255, 255, 0.2);
-
-  --text-primary: #ffffff;
-  --text-secondary: #e0e0e0;
-  --text-muted: #b0b0b0;
-  --text-link: #3af0b0;
-  /* Accents are bright here; black foreground clears WCAG AA on all of them. */
-  --text-on-accent: #000000;
-  --text-on-danger: #000000;
-
-  --accent-primary: #3af0b0;
-  --accent-primary-hover: #66f5c6;
-  --accent-primary-active: #23dc9d;
-  --accent-secondary: #34e0dd;
-  --accent-success: #33ff99;
-  --accent-warning: #ffdd00;
-  --accent-danger: #ff4d4d;
-  --accent-danger-fill: #ff4d4d;
-  --accent-info: #66b3ff;
-
-  --accent-tint: rgba(58, 240, 176, 0.2);
-  --accent-tint-strong: rgba(58, 240, 176, 0.28);
-  --teal-tint: rgba(52, 224, 221, 0.2);
-  --success-tint: rgba(51, 255, 153, 0.2);
-  --warning-tint: rgba(255, 221, 0, 0.2);
-  --danger-tint: rgba(255, 77, 77, 0.2);
-  --info-tint: rgba(102, 179, 255, 0.2);
-
-  --border-subtle: rgba(255, 255, 255, 0.4);
-  --border-strong: rgba(255, 255, 255, 0.6);
-  --channel-icon: #cccccc;
-  --interactive-normal: #cccccc;
-  --interactive-hover: #ffffff;
-  --interactive-active: #ffffff;
-  --interactive-muted: #808080;
-
-  --status-online: #33ff99;
-  --status-idle: #ffdd00;
-  --status-dnd: #ff4d4d;
-  --status-offline: #808080;
-  --status-streaming: #cc66ff;
-
-  --app-bg-layer-one: none;
-  --app-bg-layer-two: none;
-  --app-bg-base: #000000;
-  --overlay-backdrop: rgba(0, 0, 0, 0.92);
-  --glass-rail-fill-top: rgba(0, 0, 0, 0.95);
-  --glass-rail-fill-bottom: rgba(0, 0, 0, 0.95);
-  --glass-panel-fill-top: rgba(0, 0, 0, 0.92);
-  --glass-panel-fill-bottom: rgba(0, 0, 0, 0.92);
-  --glass-modal-fill-top: rgba(10, 10, 10, 0.98);
-  --glass-modal-fill-bottom: rgba(5, 5, 5, 0.98);
-  --panel-divider-glint: rgba(255, 255, 255, 0.08);
-  --scrollbar-auto-thumb-hover: rgba(255, 255, 255, 0.5);
-  --sidebar-bg: rgba(0, 0, 0, 0.95);
-  --sidebar-border: rgba(255, 255, 255, 0.4);
-  --ambient-glow-primary: transparent;
-  --ambient-glow-success: transparent;
-  --ambient-glow-danger: transparent;
-  --accent-primary-rgb: 58, 240, 176;
-  --bg-code: rgba(255, 255, 255, 0.12);
-  --border-code: rgba(255, 255, 255, 0.2);
-}
-
-/* Baseline reset lives in @layer base so Tailwind's layered margin/spacing
-   utilities (@layer utilities, which cascades after base) still win. Left
-   unlayered, `* { margin: 0 }` outranks every directional-margin and vertical-spacing utility in
-   the app (unlayered author styles beat layered ones regardless of
-   specificity), silently zeroing all margin utilities — the root cause of the
-   app-wide "squished spacing" regression. */
+/* =============================================================================
+   Baseline reset. Lives in @layer base so Tailwind's layered margin/spacing
+   utilities (@layer utilities cascades after base) still win — left unlayered,
+   `* { margin: 0 }` outranks every directional-margin utility in the app.
+   ============================================================================= */
 @layer base {
   * {
     margin: 0;
     box-sizing: border-box;
   }
-}
 
-button,
-input,
-select,
-textarea {
-  font: inherit;
-  color: inherit;
-}
+  /* These MUST stay inside @layer base. Unlayered author styles outrank every
+     layered one regardless of specificity, so an unlayered
+     `button { font: inherit; color: inherit }` silently beats `text-label` and
+     `text-text-on-accent` on every button in the app — the primary button's ink
+     was being inherited from <body> instead of read from the token. */
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+    color: inherit;
+  }
 
-button {
-  line-height: inherit;
+  button {
+    line-height: inherit;
+  }
 }
 
 html {
+  /* The rem basis. Never set a rem-valued font-size on <html>: it rescales
+     every rem-based token and utility in the app. */
   font-size: 16px;
   text-size-adjust: none;
   -webkit-text-size-adjust: none;
@@ -600,19 +854,20 @@ body,
   width: 100%;
   overflow: hidden;
   overscroll-behavior: none;
-  font-family: var(--font-primary);
-  /* tnum = tabular figures (aligned timestamps/counts); cv03/cv04 = Inter's
-     open-4 / single-story-a stylistic sets for a warmer, more legible read. */
-  font-feature-settings: 'tnum', 'cv03', 'cv04';
-  font-weight: var(--font-weight-body);
-  color: var(--text-primary);
-  background: var(--app-bg-base);
-  line-height: var(--line-height-normal);
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
 }
 
 body {
+  font-family: var(--font-primary);
+  /* §2: tabular numerals everywhere a number can change. */
+  font-feature-settings: 'tnum';
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--font-weight-body);
+  font-size: var(--text-body);
+  line-height: var(--leading-relaxed);
+  color: var(--text-primary);
+  background: var(--bg-base);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   user-select: none;
   -webkit-user-select: none;
 }

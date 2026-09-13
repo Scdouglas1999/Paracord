@@ -2633,7 +2633,7 @@ function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { sc
               Start a focused discussion branched off this message.
             </p>
             <label className="mt-4 block">
-              <span className="text-section uppercase text-text-secondary">Thread Name</span>
+              <span className="text-section text-text-secondary">Thread Name</span>
               <input
                 className="input-field mt-2"
                 value={threadName}
@@ -2699,7 +2699,7 @@ function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { sc
               </div>
             </div>
             <label className="mt-4 block">
-              <span className="text-section uppercase text-text-secondary">Reason</span>
+              <span className="text-section text-text-secondary">Reason</span>
               <textarea
                 className="input-field mt-2 min-h-[96px] resize-y"
                 value={reportReason}
@@ -2709,7 +2709,7 @@ function OwnedMessageList({ channelId, onReply, scope }: MessageListProps & { sc
               />
             </label>
             <label className="mt-3 block">
-              <span className="text-section uppercase text-text-secondary">Evidence (Optional)</span>
+              <span className="text-section text-text-secondary">Evidence (Optional)</span>
               <textarea
                 className="input-field mt-2 min-h-[72px] resize-y"
                 value={reportEvidence}

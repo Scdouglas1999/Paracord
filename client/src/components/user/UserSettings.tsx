@@ -957,7 +957,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
         mobileShowNav ? (
           <div className="relative z-10 flex flex-1 flex-col overflow-y-auto bg-bg-secondary pt-[calc(var(--safe-top)+0.75rem)]">
             <div className="flex items-center justify-between px-4 pb-3">
-              <div className="text-section uppercase text-text-muted">User settings</div>
+              <div className="text-section text-text-muted">User settings</div>
               <button
                 onClick={onClose}
                 className="flex h-9 w-9 items-center justify-center rounded-sm border border-border-subtle bg-bg-secondary text-interactive-normal"
@@ -974,7 +974,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 return (
                   <div key={group.label ?? `group-${gi}`}>
                     {group.label && (
-                      <div className="px-3 pb-1.5 text-section uppercase text-text-muted">{group.label}</div>
+                      <div className="px-3 pb-1.5 text-section text-text-muted">{group.label}</div>
                     )}
                     {items.map((item) => {
                       const Icon = item.icon;
@@ -1050,7 +1050,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
               return (
                 <div key={group.label ?? `group-${gi}`}>
                   {group.label && (
-                    <div className="mb-1.5 px-2.5 text-section uppercase text-text-muted">{group.label}</div>
+                    <div className="mb-1.5 px-2.5 text-section text-text-muted">{group.label}</div>
                   )}
                   <div className="flex flex-col gap-0.5">
                     {items.map((item) => (
@@ -1132,7 +1132,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
                 {/* Public profile */}
                 <section>
-                  <h3 className="text-section uppercase text-text-muted">Public profile</h3>
+                  <h3 className="text-section text-text-muted">Public profile</h3>
                   <div className="mt-2 divide-y divide-border-subtle">
                     <div className="flex flex-wrap items-center justify-between gap-4 py-4">
                       <div className="min-w-0">
@@ -1220,7 +1220,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
                 {/* Security & sign-in */}
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="text-section uppercase text-text-muted">Security &amp; sign-in</h3>
+                  <h3 className="text-section text-text-muted">Security &amp; sign-in</h3>
 
                   <div className="mt-5">
                     <div className="text-label text-text-primary">Email address</div>
@@ -1360,7 +1360,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
                     {mfaBackupCodes.length > 0 && (
                       <div className="mt-4 max-w-md">
-                        <div className="text-section uppercase text-accent-warning">Save these backup codes</div>
+                        <div className="text-section text-accent-warning">Save these backup codes</div>
                         <div className="mt-2 rounded-md border border-border-subtle bg-bg-tertiary p-3 font-code text-sm leading-relaxed text-text-primary">
                           {mfaBackupCodes.map((code) => (
                             <div key={code}>{code}</div>
@@ -1505,7 +1505,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
                 {/* Your data */}
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="text-section uppercase text-text-muted">Your data</h3>
+                  <h3 className="text-section text-text-muted">Your data</h3>
                   <div className="mt-4 flex flex-wrap items-center justify-between gap-4">
                     <div className="min-w-0">
                       <div className="text-label text-text-primary">Download your data</div>
@@ -1520,7 +1520,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
                 {/* Device security */}
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="text-section uppercase text-text-muted">Device security</h3>
+                  <h3 className="text-section text-text-muted">Device security</h3>
                   <div className="mt-2 divide-y divide-border-subtle">
                     <ToggleRow
                       title="Device crypto security"
@@ -1578,14 +1578,14 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                   description="Tune the look and density of Paracord to match how you read."
                 />
                 <section>
-                  <h3 className="text-section uppercase text-text-muted">Theme</h3>
+                  <h3 className="text-section text-text-muted">Theme</h3>
                   <div className="mt-3">
                     <ThemeSelector currentTheme={theme} onThemeChange={(t) => handleThemeChange(t)} />
                   </div>
                 </section>
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="text-section uppercase text-text-muted">Display</h3>
+                  <h3 className="text-section text-text-muted">Display</h3>
                   <div className="mt-2 divide-y divide-border-subtle">
                     <div className="flex flex-wrap items-center justify-between gap-4 py-4">
                       <div className="min-w-0">
@@ -1620,7 +1620,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </section>
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="text-section uppercase text-text-muted">Custom CSS</h3>
+                  <h3 className="text-section text-text-muted">Custom CSS</h3>
                   <p className="mt-2 max-w-xl text-sm text-text-secondary">
                     For power users — inject your own styles. Applies instantly on save.
                   </p>
@@ -1642,7 +1642,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                   description="Choose your devices and how your mic behaves in calls."
                 />
                 <section>
-                  <h3 className="text-section uppercase text-text-muted">Devices</h3>
+                  <h3 className="text-section text-text-muted">Devices</h3>
                   <div className="mt-2 divide-y divide-border-subtle">
                     <div className="py-4">
                       <label htmlFor="voice-input" className="text-label text-text-primary">Input device</label>
@@ -1729,7 +1729,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </section>
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="text-section uppercase text-text-muted">Input mode</h3>
+                  <h3 className="text-section text-text-muted">Input mode</h3>
                   <div className="mt-4 flex flex-wrap items-center justify-between gap-4">
                     <div className="min-w-0">
                       <div className="text-label text-text-primary">How your mic activates</div>
@@ -1751,7 +1751,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </section>
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="text-section uppercase text-text-muted">Processing</h3>
+                  <h3 className="text-section text-text-muted">Processing</h3>
                   <div className="mt-2 divide-y divide-border-subtle">
                     <ToggleRow
                       title="Noise suppression"
@@ -1775,7 +1775,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </section>
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="text-section uppercase text-text-muted">Trouble with calls</h3>
+                  <h3 className="text-section text-text-muted">Trouble with calls</h3>
                   <p className="mt-2 max-w-xl text-sm text-text-secondary">
                     Calls travel over a different network path than chat, so they can fail on their
                     own. The connection check tests your microphone, speaker, this device&rsquo;s
@@ -1891,7 +1891,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </section>
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="text-section uppercase text-text-muted">Detected apps</h3>
+                  <h3 className="text-section text-text-muted">Detected apps</h3>
                   <p className="mt-2 max-w-xl text-sm text-text-secondary">
                     Turn off any app you'd rather keep private. Paracord stops reporting it right away.
                   </p>
@@ -2006,13 +2006,13 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 )}
 
                 <section>
-                  <h3 className="text-section uppercase text-text-muted">Current identity key</h3>
+                  <h3 className="text-section text-text-muted">Current identity key</h3>
                   <p className="mt-2 max-w-xl text-sm text-text-secondary">
                     Share this fingerprint with trusted contacts so they can confirm it's really you.
                   </p>
                   {ownIdentityFingerprint ? (
                     <div className="mt-3 rounded-md border border-border-subtle bg-bg-tertiary px-4 py-3">
-                      <div className="text-section uppercase text-text-muted">Fingerprint</div>
+                      <div className="text-section text-text-muted">Fingerprint</div>
                       <div className="mt-1.5 break-all font-code text-sm text-text-primary">{ownIdentityFingerprint}</div>
                     </div>
                   ) : (
@@ -2023,7 +2023,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </section>
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="text-section uppercase text-text-muted">Export identity</h3>
+                  <h3 className="text-section text-text-muted">Export identity</h3>
                   <p className="mt-2 max-w-xl text-sm text-text-secondary">
                     Download a signed bundle you can import into another Paracord server.
                   </p>
@@ -2050,7 +2050,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </section>
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
-                  <h3 className="text-section uppercase text-text-muted">Import identity</h3>
+                  <h3 className="text-section text-text-muted">Import identity</h3>
                   <p className="mt-2 max-w-xl text-sm text-text-secondary">
                     Bring in a bundle from another server. Imported data is merged with this account.
                   </p>
@@ -2070,7 +2070,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
                   {importPreview && (
                     <div className="mt-5 rounded-md border border-border-subtle bg-bg-tertiary px-4 py-4">
-                      <div className="text-section uppercase text-text-muted">Import preview</div>
+                      <div className="text-section text-text-muted">Import preview</div>
                       <dl className="mt-3 space-y-2 text-sm">
                         {([
                           ['Origin server', String(importPreview.origin_server ?? 'Unknown')],
