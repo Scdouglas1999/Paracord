@@ -1,5 +1,6 @@
 import { activateChannel } from '../lib/channelNavigation';
 import { accountScopeKey, type AccountScope } from '../lib/serverScope';
+import { getServerAccountScope } from '../lib/serverIdentity';
 import { useCurrentChannelStore, useAvailableChannels } from '../hooks/useChannels';
 import { useCurrentUser, useCurrentAccountScope } from '../hooks/useCurrentUser';
 import { useEffect, useMemo, useState } from 'react';
@@ -28,20 +29,14 @@ import { Input } from '../components/ui/Input';
 import { cn } from '../lib/utils';
 import { ChannelType, type Channel, type Message, type ReadState } from '../types';
 import { displayName } from '../lib/displayName';
-import { presenceLight } from '../lib/presence';
+import { presenceLabel, presenceLight } from '../lib/presence';
+import { dmTitleFor } from '../lib/dmTitle';
+import { wallClock } from '../lib/formatters';
 import { avatarInitials } from '../components/light';
 import { getIdentityColor } from '../lib/colors';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 
 const EMPTY_CHANNELS: Channel[] = [];
-
-const STATUS_LABEL: Record<string, string> = {
-  online: 'Online',
-  idle: 'Idle',
-  dnd: 'Do not disturb',
-  streaming: 'Streaming',
-  offline: 'Offline',
-};
 
 interface DmRow {
   key: string;
@@ -57,14 +52,6 @@ interface DmRow {
   lastActivityId: string | null;
 }
 
-/** Best-effort DM/group-DM title from the channel's recipient(s). */
-function dmTitle(ch: Channel): string {
-  if (ch.name) return ch.name;
-  if (ch.recipient) return displayName(ch.recipient);
-  if (ch.recipients?.length) return ch.recipients.map((r) => displayName(r)).join(', ');
-  return 'Direct message';
-}
-
 function activityMs(id: string | null): number {
   return id ? snowflakeToMs(id) : 0;
 }
@@ -77,7 +64,7 @@ function formatDmActivity(id: string | null): { short: string; full: string } | 
     const now = new Date();
     const full = date.toLocaleString();
     if (date.toDateString() === now.toDateString()) {
-      return { short: date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), full };
+      return { short: wallClock(date), full };
     }
     const daysAgo = (now.getTime() - date.getTime()) / 86_400_000;
     if (daysAgo >= 0 && daysAgo < 7) {
@@ -145,9 +132,11 @@ function OwnedDMPage() {
   }, [activeServerId, channelId, dmChannels]);
   const dmChannel = dmChannelInfo?.channel;
   const isGroupDM = dmChannel?.channel_type === 3 || dmChannel?.type === 3;
-  const recipientName = isGroupDM
-    ? (dmChannel?.name || dmChannel?.recipients?.map((r) => r.username).join(', ') || 'Group DM')
-    : (dmChannel?.recipient ? displayName(dmChannel.recipient) : 'Direct message');
+  const recipientName = dmTitleFor(
+    dmChannel,
+    dmChannelInfo ? getServerAccountScope(dmChannelInfo.serverId)?.userId : null,
+    isGroupDM ? 'Just you' : 'Direct message',
+  );
 
   // Reset transient chat state and any lingering context panel when the DM changes.
   useEffect(() => {
@@ -188,7 +177,8 @@ function OwnedDMPage() {
           scope: ch.scope,
           channelId: ch.id,
           serverId,
-          title: dmTitle(ch),
+          // A conversation is named after the people in it OTHER than you.
+          title: dmTitleFor(ch, ch.scope.userId, isGroup ? 'Just you' : 'Direct message'),
           recipientId: isGroup ? null : ch.recipient?.id ?? null,
           avatar: isGroup ? null : ch.recipient?.avatar_hash ?? null,
           isGroup,
@@ -393,10 +383,10 @@ function DmListRow({ row, onOpen }: { row: DmRow; onOpen: (row: DmRow) => void }
     : row.isGroup
       ? 'Group conversation'
       : status !== 'offline'
-        ? STATUS_LABEL[status] ?? 'Direct message'
+        ? presenceLabel(status)
         : 'Direct message';
 
-  const statusWord = row.isGroup ? null : STATUS_LABEL[status] ?? 'Offline';
+  const statusWord = row.isGroup ? null : presenceLabel(status);
   const light = presenceLight(status);
   const src = safeStoredImageDataUrl(row.avatar);
   const showMention = row.mentionCount > 0;

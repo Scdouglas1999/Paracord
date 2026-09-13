@@ -118,21 +118,46 @@ function isClassList(value: string): boolean {
 /** The place, not the gap: "space" as its own word, never "space-y-2". */
 const PLACE = /(^|[^A-Za-z.-])[Ss]paces?(?![A-Za-z-])/;
 
-describe('the product calls a building a building', () => {
+/**
+ * Presence is light (§1.5), and §6.9 names "Online" as a thing the product
+ * never says. The words live in `lib/presence` — "Lights on", "Away", "Lights
+ * off" — and a surface that writes its own is a surface that will drift.
+ */
+const PRESENCE = /(^|[^A-Za-z-])(Online|Offline)(?![A-Za-z-])/;
+
+/** Where the banned presence words are still the right ones. */
+const PRESENCE_ALLOWED = [
+  /^offline$/i, // a status id on the wire, not a label
+  /offline-first/i,
+];
+
+function sweep(
+  word: RegExp,
+  allowed: readonly RegExp[],
+): string[] {
   const offenders: string[] = [];
   for (const file of sourceFiles(SRC)) {
     const source = withoutComments(readFileSync(file, 'utf8'));
     for (const value of readableStrings(source)) {
-      if (!PLACE.test(value)) continue;
+      if (!word.test(value)) continue;
       if (isClassList(value)) continue;
       // A JSX text run can swallow a comment; a comment may say what it likes.
       if (value.includes('//') || value.includes('/*')) continue;
-      if (ALLOWED.some((allowed) => allowed.test(value.trim()))) continue;
+      if (allowed.some((rule) => rule.test(value.trim()))) continue;
       offenders.push(`${file.slice(SRC.length + 1)}: ${value.trim().slice(0, 90)}`);
     }
   }
+  return offenders;
+}
 
+describe('the product calls a building a building', () => {
   it('never says "space" where it means a building', () => {
-    expect(offenders).toEqual([]);
+    expect(sweep(PLACE, ALLOWED)).toEqual([]);
+  });
+});
+
+describe('presence is light, not a status word', () => {
+  it('never says "Online" or "Offline" at a person', () => {
+    expect(sweep(PRESENCE, PRESENCE_ALLOWED)).toEqual([]);
   });
 });

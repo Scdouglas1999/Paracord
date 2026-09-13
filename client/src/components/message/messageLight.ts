@@ -48,6 +48,7 @@ import {
 } from '../../lib/attention/light';
 import { accountScopeKey, type AccountScope } from '../../lib/serverScope';
 import { displayName } from '../../lib/displayName';
+import { dmTitleFor } from '../../lib/dmTitle';
 import type { Channel, Message, User } from '../../types';
 
 const NO_TYPING: string[] = [];
@@ -154,15 +155,18 @@ export interface DmPerson {
   avatar?: string | null;
 }
 
-/** What to call a DM when it is treated as a room. */
-export function dmRoomName(channel: Channel | undefined): string {
+/**
+ * What to call a DM when it is treated as a room (§7.6).
+ *
+ * Everybody in it except the person reading it: a conversation is never
+ * addressed to its own reader.
+ */
+export function dmRoomName(
+  channel: Channel | undefined,
+  selfUserId?: string | null,
+): string {
   if (!channel) return 'this conversation';
-  if (channel.name) return channel.name;
-  if (channel.recipient) return displayName(channel.recipient);
-  if (channel.recipients?.length) {
-    return channel.recipients.map((person) => displayName(person)).join(', ');
-  }
-  return 'this conversation';
+  return dmTitleFor(channel, selfUserId, 'this conversation');
 }
 
 /** The local account, for the self-viewing reading term. */
@@ -281,7 +285,7 @@ export function useDmLight(channelId: string | undefined, scope: AccountScope | 
   );
   const self = useSelfUser();
   const people = useDmPeople(channel, scope);
-  const name = dmRoomName(channel);
+  const name = dmRoomName(channel, self?.id ?? null);
   const room = useDmRoomLight(channelId, name, people, self?.id ?? null, scope);
 
   return useMemo(() => {
