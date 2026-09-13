@@ -137,6 +137,20 @@ function ReactionRow({
   );
 }
 
+/**
+ * Three dots breathing while somebody types (§5.1 "speaking is a breath", and
+ * the same curve): `pc-breathe` timing, 200ms apart, still under reduced
+ * motion. They are `aria-hidden` — the sentence beside them already says it.
+ */
+function TypingDots() {
+  return (
+    <span className="pc-typing-dots" aria-hidden>
+      <span />
+      <span />
+      <span />
+    </span>
+  );
+}
 const EMPTY_CHANNELS: Channel[] = [];
 const EMPTY_MEMBERS: Member[] = [];
 const EMPTY_SAVED_IDS = new Set<string>();
@@ -1970,10 +1984,11 @@ function OwnedMessageList({
       const names = activeTyping.map(resolveUsername);
       return (
         <div className={cn('py-2 text-meta text-text-faint sm:pl-[82px]', TIMELINE_GUTTER)}>
-          {names.length === 1 && <><strong className="font-semibold text-text-secondary">{names[0]}</strong> is typing…</>}
-          {names.length === 2 && <><strong className="font-semibold text-text-secondary">{names[0]}</strong> and <strong className="font-semibold text-text-secondary">{names[1]}</strong> are typing…</>}
-          {names.length === 3 && <><strong className="font-semibold text-text-secondary">{names[0]}</strong>, <strong className="font-semibold text-text-secondary">{names[1]}</strong>, and <strong className="font-semibold text-text-secondary">{names[2]}</strong> are typing…</>}
-          {names.length > 3 && <>{names.length} people are typing…</>}
+          {names.length === 1 && <><strong className="font-semibold text-text-secondary">{names[0]}</strong> is typing</>}
+          {names.length === 2 && <><strong className="font-semibold text-text-secondary">{names[0]}</strong> and <strong className="font-semibold text-text-secondary">{names[1]}</strong> are typing</>}
+          {names.length === 3 && <><strong className="font-semibold text-text-secondary">{names[0]}</strong>, <strong className="font-semibold text-text-secondary">{names[1]}</strong>, and <strong className="font-semibold text-text-secondary">{names[2]}</strong> are typing</>}
+          {names.length > 3 && <>{names.length} people are typing</>}
+          <TypingDots />
         </div>
       );
     }

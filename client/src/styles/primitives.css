@@ -466,6 +466,49 @@
   animation: none;
 }
 
+/* Three dots breathing while somebody types — the pc-breathe timing
+   (--duration-breathe, --ease-in-out), 200ms apart. */
+@keyframes pc-dot-breathe {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+
+  50% {
+    opacity: 1;
+    transform: translateY(-1px);
+  }
+}
+
+.pc-typing-dots {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  margin-left: 3px;
+}
+
+.pc-typing-dots > span {
+  width: 3px;
+  height: 3px;
+  border-radius: var(--radius-full);
+  background: var(--text-faint);
+  animation: pc-dot-breathe var(--duration-breathe) var(--ease-in-out) infinite;
+}
+
+.pc-typing-dots > span:nth-child(2) {
+  animation-delay: 200ms;
+}
+
+.pc-typing-dots > span:nth-child(3) {
+  animation-delay: 400ms;
+}
+
+:root[data-motion='reduced'] .pc-typing-dots > span {
+  animation: none;
+  opacity: 0.6;
+}
+
 /* The on-air pill's live dot breathes only while somebody is actually
    speaking — never as decoration (§5.1, §6.7). */
 .pc-live-dot.is-speaking {
