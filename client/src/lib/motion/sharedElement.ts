@@ -130,17 +130,43 @@ function riseChrome(root: ParentNode, duration: number): Animation[] {
   const animations: Animation[] = [];
   [...root.querySelectorAll<HTMLElement>(`[${CHROME_ATTR}]`)].forEach((el, index) => {
     if (typeof el.animate !== 'function') return;
-    animations.push(
-      el.animate(
-        [
-          { transform: 'translate3d(0, 10px, 0)', opacity: 0 },
-          { transform: 'translate3d(0, 0, 0)', opacity: 1 },
-        ],
-        { duration, delay: base + index * step, easing, fill: 'backwards' },
-      ),
+    const animation = el.animate(
+      [
+        { transform: 'translate3d(0, 10px, 0)', opacity: 0 },
+        { transform: 'translate3d(0, 0, 0)', opacity: 1 },
+      ],
+      { duration, delay: base + index * step, easing, fill: 'backwards' },
     );
+    // Named, so the frame gate can say WHICH recipe owned a frame it did not
+    // like rather than reporting "anonymous".
+    animation.id = 'data-motion-recipe:chrome';
+    animations.push(animation);
   });
   return animations;
+}
+
+/**
+ * The chrome rises when the chrome exists.
+ *
+ * Every room, thread and settings surface in this app is behind a lazy route
+ * chunk, so the destination's header, tile strip and control bar are not in the
+ * document on the frame the route changes — they arrive when React has
+ * rendered the chunk. Rising "80ms after the move" over an empty document
+ * animates nothing at all, which is how WP9b's first gate run found this.
+ *
+ * So the rise waits for its subject, and gives up rather than firing late into
+ * a surface that never had any: a journey to somewhere with no chrome is a
+ * journey with no chrome rise, not a stalled promise.
+ */
+const CHROME_WAIT_MS = 600;
+
+async function risingChrome(root: ParentNode, duration: number): Promise<Animation[]> {
+  const deadline = Date.now() + CHROME_WAIT_MS;
+  while (root.querySelector(`[${CHROME_ATTR}]`) === null) {
+    if (Date.now() >= deadline) return [];
+    await nextFrame();
+  }
+  return riseChrome(root, duration);
 }
 
 export interface SharedTransitionResult {
@@ -185,8 +211,21 @@ export async function transitionWith(
       const after = collect(root, options.names);
       for (const [name, el] of after) el.style.viewTransitionName = `pc-${name.replace(/[^\w-]/g, '-')}`;
     });
-    const animations = options.chrome === false ? [] : await transition.ready.then(() => riseChrome(root, duration));
-    await transition.finished.catch(() => {});
+    // **Both of these promises reject in ordinary use**, and neither rejection
+    // is an error the person needs to hear about. `ready` rejects whenever the
+    // browser skips the transition — a second one starting on top of this one,
+    // the tab going to the background, the document being torn down — with
+    // "Transition was aborted because of invalid state"; before this was
+    // handled it escaped as an unhandled rejection and the app turned it into
+    // an error toast on top of the room you had just walked into. A skipped
+    // transition means the update still happened and the travel did not, which
+    // is the correct degradation, so the chrome simply rises without it.
+    const ready = await transition.ready.then(
+      () => true,
+      () => false,
+    );
+    const animations = options.chrome === false ? [] : await risingChrome(root, duration);
+    if (ready) await transition.finished.catch(() => {});
     for (const el of root.querySelectorAll<HTMLElement>(`[${SHARED_ATTR}]`)) el.style.viewTransitionName = '';
     unstamp();
     return { engine: 'view-transition', animations };
@@ -213,17 +252,17 @@ export async function transitionWith(
     const sx = to.width > 0 ? from.width / to.width : 1;
     const sy = to.height > 0 ? from.height / to.height : 1;
     if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5 && Math.abs(sx - 1) < 0.01 && Math.abs(sy - 1) < 0.01) continue;
-    animations.push(
-      el.animate(
-        [
-          { transformOrigin: 'top left', transform: `translate3d(${dx}px, ${dy}px, 0) scale(${sx}, ${sy})` },
-          { transformOrigin: 'top left', transform: 'translate3d(0, 0, 0) scale(1, 1)' },
-        ],
-        { duration, easing, fill: 'none' },
-      ),
+    const animation = el.animate(
+      [
+        { transformOrigin: 'top left', transform: `translate3d(${dx}px, ${dy}px, 0) scale(${sx}, ${sy})` },
+        { transformOrigin: 'top left', transform: 'translate3d(0, 0, 0) scale(1, 1)' },
+      ],
+      { duration, easing, fill: 'none' },
     );
+    animation.id = 'data-motion-recipe:shared';
+    animations.push(animation);
   }
-  if (options.chrome !== false) animations.push(...riseChrome(root, duration));
+  if (options.chrome !== false) animations.push(...(await risingChrome(root, duration)));
   // The stamp outlives the last animation it dresses, not the call.
   window.setTimeout(unstamp, duration + ms('--stagger-chrome') + ms('--duration-move'));
   return { engine: 'flip', animations };

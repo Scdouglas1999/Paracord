@@ -33,6 +33,7 @@ export interface OccupancyDelta {
 }
 
 const NONE: OccupancyDelta = { arrivals: [], departures: [] };
+const EMPTY: ReadonlySet<string> = new Set();
 
 /** Nothing crossed anything. */
 export function noCrossings(delta: OccupancyDelta): boolean {
@@ -46,11 +47,10 @@ export function noCrossings(delta: OccupancyDelta): boolean {
  * you walked into becomes the thing you are looking at — and playing Moment 3
  * over the top of it would animate you twice for one act.
  *
- * A room this snapshot has never heard of is **not** a burst of arrivals. The
- * first time a building's voice state loads, everybody in every room would
- * otherwise "arrive" at once; that is data appearing, not people walking in,
- * and §5.3 forbids exactly that. Pass `baseline: true` for the first
- * observation of a scope.
+ * `baseline` is the §5.3 guard: the first time a scope's voice state loads,
+ * everybody in every room would otherwise "arrive" at once, and that is data
+ * appearing rather than people walking in. Pass it for the first observation of
+ * a scope and whenever the account underneath changes.
  */
 export function diffOccupancy(
   previous: Occupancy | null,
@@ -63,10 +63,11 @@ export function diffOccupancy(
   const departures: RoomCrossing[] = [];
 
   for (const [roomId, now] of next) {
-    const before = previous.get(roomId);
-    // A room the previous snapshot did not carry at all is new information
-    // about the world, not an event in it.
-    if (!before) continue;
+    // The voice store only carries rooms that have somebody in them, so a room
+    // appearing for the first time is the room LIGHTING UP — the single most
+    // important arrival there is, and the one the study is drawn around. The
+    // "this is just data loading" case is `baseline`, above, not this.
+    const before = previous.get(roomId) ?? EMPTY;
     for (const userId of now) {
       if (before.has(userId) || userId === self) continue;
       arrivals.push({ userId, roomId, roomLitUp: before.size === 0 });

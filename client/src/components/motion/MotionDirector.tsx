@@ -60,13 +60,29 @@ export function MotionDirector() {
 /* Moment 1 — the building wakes                                               */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Presence arrives in a breath, not an instant.
+ *
+ * The gateway's READY sets the local account's own light before it has said a
+ * word about anybody else, and the building's channels, members and voice
+ * states follow over the next couple of hundred milliseconds. Sweeping on the
+ * first of those would wake a building that has not finished arriving: the
+ * plates would settle over a street with no windows lit in it, and every window
+ * that lit a beat later would look like somebody walking in.
+ *
+ * So the edge arms the moment and this is how long it waits for the rest of the
+ * picture. It is not part of the animation and not inside §5.3's 1.6s — nothing
+ * is moving while it runs.
+ */
+const GATHER_MS = 250;
+
 function useLightsOn() {
   // The three things the tracker weighs. Subscribing to `presences` by size
   // keeps this out of the re-render path of every presence tick.
   const presenceCount = usePresenceStore((state) => state.presences.size);
   const connected = useUIStore((state) => state.connectionStatus) === 'connected';
   const visible = useWindowIsVisible();
-  const frame = useRef<number | null>(null);
+  const pending = useRef<number | null>(null);
 
   useEffect(() => {
     const reason = lightsOnTracker.observe({
@@ -76,20 +92,18 @@ function useLightsOn() {
       nowMs: Date.now(),
     });
     if (!reason) return;
-    // One frame, so the windows this render lit are in the document before the
-    // sweep looks for them. Never more than one: the moment belongs to the
-    // frame presence landed on, and a second frame is a stutter the eye reads
-    // as the app hesitating.
-    if (frame.current != null) cancelAnimationFrame(frame.current);
-    frame.current = requestAnimationFrame(() => {
-      frame.current = null;
-      playLightsOn();
-    });
+    if (pending.current != null) clearTimeout(pending.current);
+    pending.current = window.setTimeout(() => {
+      pending.current = null;
+      // One frame on top, so whatever the gather brought in is in the document
+      // before the sweep looks for it.
+      requestAnimationFrame(() => playLightsOn());
+    }, GATHER_MS);
   }, [connected, presenceCount, visible]);
 
   useEffect(
     () => () => {
-      if (frame.current != null) cancelAnimationFrame(frame.current);
+      if (pending.current != null) clearTimeout(pending.current);
     },
     [],
   );
@@ -109,8 +123,16 @@ interface Burst {
 
 function useArrivals() {
   useEffect(() => {
-    let previous: Occupancy | null = null;
-    let baseline = true;
+    // The world as it is the moment this starts watching — not "whatever the
+    // next update happens to carry". The app shell is a lazy route, so the
+    // gateway's READY usually lands before this effect ever runs; treating the
+    // first update it sees as the baseline swallowed the first real arrival
+    // after it, which is how the gate found this.
+    const start = useVoiceStore.getState();
+    let previous: Occupancy | null = occupancyOf(start.channelParticipants);
+    let snapshotSeq = start.voiceSnapshotSeq;
+    let baseline = false;
+    let baselineUserId = useAuthStore.getState().user?.id ?? null;
     let burst: Burst | null = null;
     let frame: number | null = null;
 
@@ -128,6 +150,17 @@ function useArrivals() {
     const unsubscribe = useVoiceStore.subscribe((state) => {
       const next = occupancyOf(state.channelParticipants);
       const selfUserId = useAuthStore.getState().user?.id ?? null;
+      // Two things re-baseline, and both are the picture arriving rather than
+      // people moving (§5.3): a gateway snapshot replacing a whole guild's
+      // membership, and the account underneath changing.
+      if (state.voiceSnapshotSeq !== snapshotSeq) {
+        snapshotSeq = state.voiceSnapshotSeq;
+        baseline = true;
+      }
+      if (selfUserId !== baselineUserId) {
+        baselineUserId = selfUserId;
+        baseline = true;
+      }
       const delta = diffOccupancy(previous, next, { selfUserId, baseline });
       previous = next;
       baseline = false;

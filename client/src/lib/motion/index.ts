@@ -45,8 +45,10 @@ export {
   type StaggerOptions,
 } from './animate';
 export {
+  ARRIVAL_SEQUENCE_BUDGET_MS,
   BURST_WINDOW_MS,
   RIM_AFTER_ROOM_MS,
+  arrivalStep,
   captureArrival,
   facesFor,
   playArrivals,

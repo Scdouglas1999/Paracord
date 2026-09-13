@@ -185,8 +185,12 @@ export function VoiceLobby({
       {...{ [RECEDE_MARK]: '' }}
       className="relative m-[var(--gutter)] flex flex-col gap-4 overflow-hidden p-5"
     >
-      {/* The room, and the door into it. */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      {/* The room, and the door into it. §5.1: this is the chrome that supports
+          the tile you walked into, so it rises 80ms behind it. */}
+      <div
+        data-motion-chrome=""
+        className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"
+      >
         <div className="flex min-w-0 items-center gap-3">
           <Well
             bare
@@ -296,7 +300,7 @@ export function VoiceLobby({
 
       {/* Who is already in there. */}
       {lobbyParticipants.length > 0 ? (
-        <Well bare className="p-4">
+        <Well bare data-motion-chrome="" className="p-4">
           {isStage ? (
             <>
               {lobbySpeakers.length > 0 && (
@@ -323,7 +327,7 @@ export function VoiceLobby({
           )}
         </Well>
       ) : (
-        <Well bare className="flex items-center gap-3 px-4 py-3.5">
+        <Well bare data-motion-chrome="" className="flex items-center gap-3 px-4 py-3.5">
           <IconButton
             label={isStage ? `Open the stage ${channelName}` : `Join ${channelName}`}
             size="md"

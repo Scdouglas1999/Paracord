@@ -47,9 +47,12 @@ describe('who just walked in (§5.1)', () => {
     ).toBe(true);
   });
 
-  it('a room appearing in the snapshot for the first time is data, not an event', () => {
+  it('a room appearing in the snapshot IS the room lighting up', () => {
+    // The voice store only carries rooms with somebody in them, so the first
+    // person into a dark room shows up as a brand-new key. That is the arrival
+    // the whole moment is drawn around; treating it as "new data" would drop it.
     const delta = diffOccupancy(rooms({ '2001': ['mara'] }), rooms({ '2001': ['mara'], '2002': ['ren'] }));
-    expect(noCrossings(delta)).toBe(true);
+    expect(delta.arrivals).toEqual([{ userId: 'ren', roomId: '2002', roomLitUp: true }]);
   });
 
   it('reports nothing when nothing moved', () => {

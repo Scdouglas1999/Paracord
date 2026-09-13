@@ -42,6 +42,22 @@ const EVENT_AFTER_MS = 260;
  * whoever is already in it.
  */
 export const BURST_WINDOW_MS = 300;
+/**
+ * §5.3's ceiling for a staggered sequence. A burst is staggered like any other
+ * run of neighbouring lights, and compressed rather than truncated when a whole
+ * room's worth of people land at once — an arrival that never plays is worse
+ * than one that plays fast.
+ */
+export const ARRIVAL_SEQUENCE_BUDGET_MS = 1_600;
+
+/** The gap between neighbours in a burst, compressed to fit the budget. */
+export function arrivalStep(count: number): number {
+  const preferred = ms('--stagger-light');
+  if (count <= 1) return preferred;
+  const tail = RIM_AFTER_ROOM_MS + ms('--duration-move');
+  const room = Math.max(0, ARRIVAL_SEQUENCE_BUDGET_MS - tail);
+  return Math.max(1, Math.min(preferred, Math.floor(room / (count - 1))));
+}
 
 /** One person, arriving in or leaving one room. */
 export interface RoomPersonEvent {
@@ -88,8 +104,8 @@ export function playArrivals(
 ): Animation[] {
   if (typeof document === 'undefined' || prefersReducedMotion() || people.length === 0) return [];
   const root = options.root ?? document;
-  const step = ms('--stagger-light');
   const start = options.startIndex ?? 0;
+  const step = arrivalStep(start + people.length);
   const animations: Animation[] = [];
 
   // Whatever the insertion displaced moves with the newcomer, not after them.
@@ -147,24 +163,36 @@ export function playDepartures(
 ): Animation[] {
   if (typeof document === 'undefined' || prefersReducedMotion() || people.length === 0) return [];
   const root = options.root ?? document;
-  const step = ms('--stagger-light');
   const start = options.startIndex ?? 0;
+  const step = arrivalStep(start + people.length);
   const animations: Animation[] = [];
 
   people.forEach((person, order) => {
     const base = (start + order) * step;
 
-    // The rim dims: 400ms, `--ease-in`. A face still on screen somewhere else
-    // (a timeline row) keeps its own light; this is the one leaving a room.
-    for (const face of all(root, markSelector(PERSON_MARK, person.userId))) {
+    // The rim dims on every face of theirs that is STAYING on screen — a
+    // timeline row, a member sheet. A face that is leaving with them is handled
+    // by its ghost below: the real one is removed by the render this update
+    // causes, and an animation on a disconnected element is not played at all.
+    const staying = all(root, markSelector(PERSON_MARK, person.userId));
+    const leaving = new Set(options.ghosts?.get(person.userId) ?? []);
+    for (const face of staying) {
+      if (leaving.has(face)) continue;
       const animation = dim(rimOf(face));
       if (animation) animations.push(animation);
     }
 
     // The face slides out of the strip — as a ghost, because the real one is
-    // already gone.
-    for (const gone of options.ghosts?.get(person.userId) ?? []) {
-      const animation = ghostOut(gone, (copy) => slideOut(copy, { delay: base }));
+    // already gone. Its rim dims as it goes: §5.1's mirror is "rim dims
+    // (400ms), face slides out", and both happen to the same face.
+    for (const gone of leaving) {
+      const animation = ghostOut(gone, (copy) => {
+        // The dim governs how long the ghost lives: it is the longer of the
+        // two, and the face going before its light had finished going out
+        // would be the mirror played out of order.
+        slideOut(copy, { delay: base + RIM_AFTER_ROOM_MS });
+        return dim(rimOf(copy));
+      });
       if (animation) animations.push(animation);
     }
 

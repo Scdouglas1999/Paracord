@@ -3,10 +3,17 @@ import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
+  dropStreams,
+  emitGateway,
   installMotionMocks,
+  litBuilding,
   MOTION_CHANNEL_NAME,
   MOTION_GUILD_ID,
   MOTION_TEXT_CHANNEL_ID,
+  MOTION_VOICE_CHANNEL_ID,
+  MOTION_VOICE_CHANNEL_NAME,
+  setStandingWorld,
+  voiceFrame,
 } from './fixtures/motionFixture';
 
 /**
@@ -231,9 +238,29 @@ async function openRoom(page: Page) {
   return composer;
 }
 
+/** Which recipes the engine actually had in flight across a moment. */
+function recipesIn(sample: MomentSample): Set<string> {
+  const seen = new Set<string>();
+  for (const frame of sample.frames) for (const name of frame.names) seen.add(name);
+  for (const animation of sample.animations) seen.add(animation.name);
+  return seen;
+}
+
+/** The moment actually played the choreography, not just something. */
+function expectRecipes(label: string, sample: MomentSample, wanted: readonly string[]) {
+  const played = recipesIn(sample);
+  const missing = wanted.filter((name) => !played.has(`data-motion-recipe:${name}`));
+  expect(missing, `${label}: never played [${missing.join(', ')}] — saw ${[...played].join(', ')}`).toEqual([]);
+}
+
 test.describe('the motion gate (§5.3)', () => {
   test.beforeEach(async ({ page }) => {
+    await setStandingWorld();
     await installMotionMocks(page);
+  });
+
+  test.afterEach(async () => {
+    await setStandingWorld();
   });
 
   test('say something holds 60fps and stays inside the duration budget', async ({ page }) => {
@@ -429,6 +456,223 @@ test.describe('the motion gate (§5.3)', () => {
     console.log(`[motion-gate] captured ${lit.length} flicker frames`);
   });
 
+  /* ------------------------------------------------------------------ */
+  /* Moment 1 — lights on                                                 */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * Open the Lobby into a building that is already awake: five people with
+   * their lights on and three of them in Shop floor.
+   */
+  async function openLitLobby(page: Page) {
+    await setStandingWorld({ world: litBuilding() });
+    await page.goto(`/app/guilds/${MOTION_GUILD_ID}`);
+    await expect(page.getByRole('region', { name: 'Lobby' })).toBeVisible();
+    // The building really is lit before anything is measured: the room card
+    // carries the occupants, which is what a window map and a rim are drawn
+    // from. Without this the gate would measure an empty street.
+    await expect(page.getByRole('heading', { name: MOTION_VOICE_CHANNEL_NAME })).toBeVisible();
+    await expect(page.locator('[data-motion-window][data-motion-lit]').first()).toBeVisible();
+    await page.evaluate(() => document.fonts.ready);
+    await page.waitForTimeout(1400);
+  }
+
+  test('lights on: the building wakes, and the whole sequence lands inside 1.6s', async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openLitLobby(page);
+
+    // §5.1's second trigger: the gateway comes back. It is the one the gate can
+    // drive deterministically — the app is already on screen and already lit,
+    // so the sequence is measured over a building with something to wake up.
+    const sample = await measureMoment(page, async () => {
+      await dropStreams();
+    }, 3_200);
+
+    // Plates settle, windows bloom, a lamp fades in behind its plate's first
+    // lit window, rims catch: the whole of §5.1's "lights on".
+    expectRecipes('lights-on', sample, ['settle', 'bloom']);
+    expectBudget('lights-on (reconnect)', sample);
+  });
+
+  test('lights on does not fire again for a route change or a re-render', async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openLitLobby(page);
+    // It already fired once, on load. §5.3: "never animate on first paint what
+    // the user did not cause or presence did not cause" — and a route change is
+    // not presence.
+    await page.goto(`/app/guilds/${MOTION_GUILD_ID}/channels/${MOTION_TEXT_CHANNEL_ID}`);
+    await expect(page.getByLabel('Message history')).toBeVisible();
+    await page.goto(`/app/guilds/${MOTION_GUILD_ID}`);
+    await expect(page.getByRole('region', { name: 'Lobby' })).toBeVisible();
+
+    // Watch across the whole window the lights-on gather could fire in.
+    const woke: string[] = [];
+    for (let i = 0; i < 14; i += 1) {
+      woke.push(
+        ...(await page.evaluate(() =>
+          document
+            .getAnimations()
+            .map((animation) => (animation as Animation & { id?: string }).id ?? '')
+            .filter((id) => id === 'data-motion-recipe:settle' || id === 'data-motion-recipe:bloom'),
+        )),
+      );
+      await page.waitForTimeout(60);
+    }
+    expect(woke, 'the building woke up again for a route change').toEqual([]);
+  });
+
+  /* ------------------------------------------------------------------ */
+  /* Moment 2 — walk into a room                                          */
+  /* ------------------------------------------------------------------ */
+
+  /** Watch (and optionally remove) the View Transitions API before app code runs. */
+  async function instrumentViewTransitions(page: Page, { disable }: { disable: boolean }) {
+    await page.addInitScript((off: boolean) => {
+      const target = window as unknown as { __vtCalls: number };
+      target.__vtCalls = 0;
+      const doc = document as unknown as { startViewTransition?: unknown };
+      if (off || typeof doc.startViewTransition !== 'function') {
+        // The FLIP fallback is what every webview without the API gets, and it
+        // has to produce the same choreography. `startViewTransition` lives on
+        // Document.prototype, so `delete document.startViewTransition` removes
+        // nothing — shadowing it with an own property is what actually reaches
+        // that path on a Chromium that has the API.
+        Object.defineProperty(doc, 'startViewTransition', { value: undefined, configurable: true });
+        return;
+      }
+      const original = doc.startViewTransition as (update: () => unknown) => unknown;
+      doc.startViewTransition = function patched(this: Document, update: () => unknown) {
+        target.__vtCalls += 1;
+        return original.call(this, update);
+      };
+    }, disable);
+  }
+
+  async function walkIntoShopFloor(page: Page) {
+    // Warm the room route's lazy chunk first. A cold chunk is a real thing that
+    // happens exactly once per session, and it is the loader's latency rather
+    // than the engine's; measuring it would be measuring Vite.
+    await setStandingWorld({ world: litBuilding() });
+    await page.goto(`/app/guilds/${MOTION_GUILD_ID}/channels/${MOTION_VOICE_CHANNEL_ID}`);
+    await expect(page.getByRole('button', { name: 'Join the room' })).toBeVisible();
+    await openLitLobby(page);
+    // The room's name is on its sidebar row AND on its Lobby card — which is
+    // exactly why `transitionWith` needs an origin. The gate has to be as
+    // specific as the click is.
+    const card = page
+      .getByRole('region', { name: 'Lobby' })
+      .locator(`[data-motion-shared="room-${MOTION_VOICE_CHANNEL_ID}"]`)
+      .first();
+    await expect(card).toBeVisible();
+    const join = card.getByRole('button', { name: `Join ${MOTION_VOICE_CHANNEL_NAME}` });
+    await expect(join).toBeVisible();
+    return { card, join };
+  }
+
+  test('walk into a room: the Web Animations path', async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await instrumentViewTransitions(page, { disable: true });
+    const { join } = await walkIntoShopFloor(page);
+
+    const sample = await measureMoment(page, async () => {
+      await join.click();
+    }, 1_600);
+
+    // §5.3: motion never delays routing. The URL is the room's before the
+    // animation has finished — it changed inside the transition's update.
+    await expect(page).toHaveURL(new RegExp(`/channels/${MOTION_VOICE_CHANNEL_ID}$`));
+    expect(await page.evaluate(() => (window as unknown as { __vtCalls: number }).__vtCalls)).toBe(0);
+    // The card travelled, the rest of the Lobby receded, the chrome rose.
+    expectRecipes('walk-in (flip)', sample, ['shared', 'recede', 'chrome']);
+    expectBudget('walk-in (flip)', sample);
+  });
+
+  test('walk into a room: the View Transitions path is the same choreography', async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await instrumentViewTransitions(page, { disable: false });
+    const { join } = await walkIntoShopFloor(page);
+
+    const sample = await measureMoment(page, async () => {
+      await join.click();
+    }, 1_600);
+
+    await expect(page).toHaveURL(new RegExp(`/channels/${MOTION_VOICE_CHANNEL_ID}$`));
+    expect(
+      await page.evaluate(() => (window as unknown as { __vtCalls: number }).__vtCalls),
+      'the browser-driven path did not run',
+    ).toBeGreaterThan(0);
+    // Same chrome rise, same tokens. The frames are not gated here for the same
+    // reason WP9a did not gate them: the browser snapshots the whole viewport
+    // to run this and the harness has no GPU (see wp9a-checkpoint §4).
+    expectRecipes('walk-in (view transitions)', sample, ['chrome']);
+    expectBudget('walk-in (view transitions)', sample, { frames: false });
+  });
+
+  /* ------------------------------------------------------------------ */
+  /* Moment 3 — someone arrives, someone leaves                           */
+  /* ------------------------------------------------------------------ */
+
+  test('someone arrives: window, rim, the strip, and the counts', async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openLitLobby(page);
+
+    // Tomas walks into Shop floor while you are standing in the Lobby.
+    const sample = await measureMoment(page, async () => {
+      await emitGateway(voiceFrame('44', MOTION_VOICE_CHANNEL_ID));
+    }, 1_400);
+
+    await expect(
+      page.locator(`[data-motion-person="44"]`).first(),
+      'Tomas never appeared in the room he walked into',
+    ).toBeVisible();
+    // One path: his window blooms, his rim catches, he springs into the stack.
+    expectRecipes('arrival', sample, ['bloom', 'arrive']);
+    expectBudget('arrival', sample);
+  });
+
+  test('five people in one beat are one choreography, not five', async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    // Start with only Priya in the room, so the other four have somewhere to go.
+    await setStandingWorld({ world: litBuilding(['43']) });
+    await page.goto(`/app/guilds/${MOTION_GUILD_ID}`);
+    await expect(page.getByRole('region', { name: 'Lobby' })).toBeVisible();
+    await expect(page.locator('[data-motion-window][data-motion-lit]').first()).toBeVisible();
+    await page.waitForTimeout(1400);
+
+    const sample = await measureMoment(page, async () => {
+      await emitGateway(
+        ['44', '45', '46', '47'].map((id) => voiceFrame(id, MOTION_VOICE_CHANNEL_ID)),
+      );
+    }, 1_600);
+
+    expectRecipes('arrival burst', sample, ['arrive']);
+    // §5.1: five arrivals inside a beat are ONE sequence, staggered — so the
+    // whole thing still lands inside the staggered-sequence budget.
+    expectBudget('arrival burst (4 at once)', sample);
+  });
+
+  test('leaving is the mirror', async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openLitLobby(page);
+
+    const sample = await measureMoment(page, async () => {
+      await emitGateway(voiceFrame('43', null));
+    }, 1_400);
+
+    await expect(page.locator(`[data-motion-person="43"]`)).toHaveCount(0);
+    // The rim dims and the face slides out — as a ghost, because the store
+    // update that told us has already taken the real face out of the tree.
+    expectRecipes('departure', sample, ['dim', 'leave']);
+    expectBudget('departure', sample);
+  });
+
   test('reduced motion runs no animations at all', async ({ page }) => {
     test.setTimeout(120_000);
     await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -454,6 +698,26 @@ test.describe('the motion gate (§5.3)', () => {
     );
     expect(running, `animations were running under reduced motion: ${running.join(', ')}`).toHaveLength(0);
 
+    // And the three WP9b moments play nothing either: the lights come on, a
+    // room is walked into and somebody arrives, all with the engine silent.
+    await setStandingWorld({ world: litBuilding() });
+    await page.goto(`/app/guilds/${MOTION_GUILD_ID}`);
+    await expect(page.getByRole('region', { name: 'Lobby' })).toBeVisible();
+    await expect(page.locator('[data-motion-window][data-motion-lit]').first()).toBeVisible();
+    await page.waitForTimeout(900);
+    await emitGateway(voiceFrame('44', MOTION_VOICE_CHANNEL_ID));
+    await expect(page.locator(`[data-motion-person="44"]`).first()).toBeVisible();
+    await page
+      .getByRole('region', { name: 'Lobby' })
+      .locator(`[data-motion-shared="room-${MOTION_VOICE_CHANNEL_ID}"]`)
+      .first()
+      .getByRole('button', { name: `Join ${MOTION_VOICE_CHANNEL_NAME}` })
+      .click();
+    await expect(page).toHaveURL(new RegExp(`/channels/${MOTION_VOICE_CHANNEL_ID}$`));
+    await page.waitForTimeout(200);
+    const stillRunning = await page.evaluate(() => document.getAnimations().length);
+    expect(stillRunning, 'the engine animated under reduced motion').toBe(0);
+
     // And the recipes on /design-tokens land their end state instead of playing.
     await page.goto('/design-tokens');
     await expect(page.getByRole('heading', { name: 'Motion', exact: true })).toBeVisible();
@@ -464,3 +728,4 @@ test.describe('the motion gate (§5.3)', () => {
     expect(MOTION_CHANNEL_NAME).toBe('build-log');
   });
 });
+

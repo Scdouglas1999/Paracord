@@ -26,6 +26,124 @@ export const MOTION_TEXT_CHANNEL_ID = '2001';
 export const MOTION_CHANNEL_NAME = 'build-log';
 export const MOTION_HISTORY_EPOCH = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
+/**
+ * WP9b's three moments all happen to a BUILDING, so the fixture grew one: a
+ * voice room to walk into and three other people to turn their lights on and
+ * walk in and out of it.
+ */
+export const MOTION_VOICE_CHANNEL_ID = '2002';
+export const MOTION_VOICE_CHANNEL_NAME = 'Shop floor';
+export const MOTION_LOUNGE_CHANNEL_ID = '2003';
+export const MOTION_LOUNGE_CHANNEL_NAME = 'Lounge';
+/** The people who are not you. `42` is the local account. */
+export const MOTION_PEOPLE = [
+  { id: '43', username: 'priya.raman', display_name: 'Priya Raman' },
+  { id: '44', username: 'tomas.lindqvist', display_name: 'Tomas Lindqvist' },
+  { id: '45', username: 'ren.okada', display_name: 'Ren Okada' },
+  { id: '46', username: 'mara.osei', display_name: 'Mara Osei' },
+  { id: '47', username: 'aisha.khan', display_name: 'Aisha Khan' },
+] as const;
+
+/** The realtime stub's back door — see `e2e/realtime-stub.mjs`. */
+const STUB = `http://127.0.0.1:${process.env.PARACORD_E2E_RT_PORT ?? '4175'}`;
+
+async function stub(path: string, body: unknown): Promise<void> {
+  const response = await fetch(`${STUB}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new Error(`the realtime stub refused ${path}: ${response.status}`);
+}
+
+/** Write one gateway frame (or a batch) to every open stream. */
+export function emitGateway(frames: unknown): Promise<void> {
+  return stub('/__emit', frames);
+}
+
+/**
+ * The world every stream opens into — merged into its READY, plus any frames
+ * replayed behind it.
+ *
+ * A gate that measures the app WAKING UP needs the world to be there before the
+ * page is, and READY is where the real server puts it: the buildings you are
+ * in, their rooms, who is in those rooms and whose lights are on. Call it with
+ * nothing to clear.
+ */
+export function setStandingWorld(
+  options: { world?: Record<string, unknown>; frames?: unknown[] } = {},
+): Promise<void> {
+  return stub('/__standing', { world: options.world ?? {}, frames: options.frames ?? [] });
+}
+
+/** Cut every open stream, so the client reconnects (§5.1's second trigger). */
+export function dropStreams(): Promise<void> {
+  return stub('/__drop', {});
+}
+
+/**
+ * A lit building, as READY delivers one.
+ *
+ * Everybody's lights are on; whoever `inRoom` names is in Shop floor. The rest
+ * have the app open and are somewhere else, which is what makes the window map
+ * worth looking at — some windows lit, some dark.
+ */
+export function litBuilding(inRoom: readonly string[] = ['43', '45', '46']): Record<string, unknown> {
+  return {
+    guilds: [
+      {
+        id: MOTION_GUILD_ID,
+        owner_id: '42',
+        name: 'Kestrel Robotics',
+        icon_hash: null,
+        created_at: new Date().toISOString(),
+        member_count: 24,
+        channels: [
+          { id: MOTION_TEXT_CHANNEL_ID, guild_id: MOTION_GUILD_ID, name: MOTION_CHANNEL_NAME, type: 0, channel_type: 0, position: 0 },
+          { id: MOTION_VOICE_CHANNEL_ID, guild_id: MOTION_GUILD_ID, name: MOTION_VOICE_CHANNEL_NAME, type: 2, channel_type: 2, position: 1 },
+          { id: MOTION_LOUNGE_CHANNEL_ID, guild_id: MOTION_GUILD_ID, name: MOTION_LOUNGE_CHANNEL_NAME, type: 2, channel_type: 2, position: 2 },
+        ],
+        voice_states: inRoom.map((id) => voiceFrame(id, MOTION_VOICE_CHANNEL_ID).d),
+        presences: MOTION_PEOPLE.map((person) => presenceFrame(person.id).d),
+      },
+    ],
+  };
+}
+
+/** Somebody's lights coming on, as the gateway sends it. */
+export function presenceFrame(userId: string, status: 'online' | 'idle' | 'offline' = 'online') {
+  return {
+    op: 0,
+    t: 'PRESENCE_UPDATE',
+    d: { user_id: userId, guild_id: MOTION_GUILD_ID, status, activities: [] },
+  };
+}
+
+/** Somebody walking into (or out of) a voice room, as the gateway sends it. */
+export function voiceFrame(userId: string, channelId: string | null) {
+  const person = MOTION_PEOPLE.find((entry) => entry.id === userId);
+  return {
+    op: 0,
+    t: 'VOICE_STATE_UPDATE',
+    d: {
+      user_id: userId,
+      guild_id: MOTION_GUILD_ID,
+      channel_id: channelId,
+      session_id: `motion-voice-${userId}`,
+      deaf: false,
+      mute: false,
+      self_deaf: false,
+      self_mute: false,
+      self_stream: false,
+      self_video: false,
+      suppress: false,
+      username: person?.username,
+      display_name: person?.display_name ?? null,
+      avatar_hash: null,
+    },
+  };
+}
+
 export async function installMotionMocks(page: Page): Promise<void> {
   const nowIso = new Date().toISOString();
   /** Everything the fixture has served on a `/messages` path, by id. */
@@ -52,6 +170,17 @@ export async function installMotionMocks(page: Page): Promise<void> {
     created_at: nowIso,
   };
   const peer = { ...user, id: '43', username: 'priya.raman', display_name: 'Priya Raman' };
+  const people = MOTION_PEOPLE.map((entry) => ({ ...user, ...entry, email: `${entry.username}@example.test` }));
+  const members = [user, ...people].map((person) => ({
+    user: person,
+    user_id: person.id,
+    guild_id: MOTION_GUILD_ID,
+    nick: null,
+    roles: [],
+    joined_at: nowIso,
+    deaf: false,
+    mute: false,
+  }));
 
   const textChannel = {
     id: MOTION_TEXT_CHANNEL_ID,
@@ -65,6 +194,24 @@ export async function installMotionMocks(page: Page): Promise<void> {
     required_role_ids: [],
     created_at: nowIso,
   };
+
+  const voiceChannel = {
+    ...textChannel,
+    id: MOTION_VOICE_CHANNEL_ID,
+    name: MOTION_VOICE_CHANNEL_NAME,
+    type: 2,
+    channel_type: 2,
+    position: 1,
+  };
+  const loungeChannel = {
+    ...textChannel,
+    id: MOTION_LOUNGE_CHANNEL_ID,
+    name: MOTION_LOUNGE_CHANNEL_NAME,
+    type: 2,
+    channel_type: 2,
+    position: 2,
+  };
+  const channels = [textChannel, voiceChannel, loungeChannel];
 
   const messages: Array<Record<string, unknown>> = [
     {
@@ -233,11 +380,14 @@ export async function installMotionMocks(page: Page): Promise<void> {
         }),
       );
     }
-    if (path === `/api/v1/guilds/${MOTION_GUILD_ID}/channels` && method === 'GET') return json(200, [textChannel]);
+    if (path === `/api/v1/guilds/${MOTION_GUILD_ID}/channels` && method === 'GET') return json(200, channels);
     if (path === `/api/v1/guilds/${MOTION_GUILD_ID}/channels/visible` && method === 'GET') {
-      return json(200, { channel_ids: [MOTION_TEXT_CHANNEL_ID] });
+      return json(200, { channel_ids: channels.map((channel) => channel.id) });
     }
-    if (path === `/api/v1/channels/${MOTION_TEXT_CHANNEL_ID}` && method === 'GET') return json(200, textChannel);
+    if (path === `/api/v1/guilds/${MOTION_GUILD_ID}/members` && method === 'GET') return json(200, members);
+    for (const channel of channels) {
+      if (path === `/api/v1/channels/${channel.id}` && method === 'GET') return json(200, channel);
+    }
     if (path === `/api/v1/channels/${MOTION_TEXT_CHANNEL_ID}/messages` && method === 'GET') return json(200, messages);
     if (path === `/api/v1/guilds/${MOTION_GUILD_ID}/onboarding/me` && method === 'GET') {
       return json(200, {
