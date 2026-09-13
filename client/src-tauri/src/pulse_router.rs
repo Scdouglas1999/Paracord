@@ -28,7 +28,6 @@
 //! every remote participant's voice back into the stream (echoing them to
 //! themselves), which is strictly worse than surfacing that system audio is
 //! unavailable. Fail loudly, never degrade.
-#![cfg(target_os = "linux")]
 
 use std::collections::{HashMap, HashSet};
 use std::process::Command;

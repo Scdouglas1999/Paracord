@@ -262,6 +262,18 @@ cannot resolve a cryptographic ownership conflict.
 - `POST /api/v1/voice/livekit/webhook`
 - `POST /api/v1/dms/{channel_id}/voice/join`
 - `POST /api/v1/dms/{channel_id}/voice/leave`
+- `GET /api/v1/voice/transport-diagnostics`
+  - Side-effect free: reports the configured call transport, the media endpoint
+    and (native path) the certificate pin a browser needs for
+    `serverCertificateHashes`. It never creates voice state and never probes
+    reachability.
+- `GET /api/v1/voice/{channel_id}/media-stats`
+  - Side-effect free, gated by the same `VIEW_CHANNEL` + `CONNECT` permissions a
+    join is. Reports who currently holds a live media connection to the room and
+    the cumulative datagram/byte counters of each, so a silent call can be told
+    apart from an unjoined one. `transport` is `"quic"` (native desktop) or
+    `"webtransport"` (browser); counters restart on reconnect and `session_id`
+    identifies the call each row belongs to.
 
 ### Attachments
 

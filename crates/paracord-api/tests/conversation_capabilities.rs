@@ -152,7 +152,7 @@ async fn member_overwrite_decisions_match_poll_enforcement_and_hide_inaccessible
         id,
         1,
         0,
-        (Permissions::SEND_MESSAGES | Permissions::ATTACH_FILES).bits() as i64,
+        (Permissions::SEND_MESSAGES | Permissions::ATTACH_FILES).bits(),
     )
     .await
     .unwrap();

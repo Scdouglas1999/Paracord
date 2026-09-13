@@ -340,7 +340,7 @@ async fn revocation_and_history_denial_block_attention_previews() {
         .await
         .unwrap();
     sqlx::query("UPDATE roles SET permissions = permissions & $1 WHERE id = $2")
-        .bind(!(paracord_models::permissions::Permissions::READ_MESSAGE_HISTORY.bits() as i64))
+        .bind(!(paracord_models::permissions::Permissions::READ_MESSAGE_HISTORY.bits()))
         .bind(f.guild)
         .execute(&f.app.db)
         .await
@@ -444,7 +444,7 @@ async fn a_hidden_channel_does_not_create_mention_records_for_a_member_who_canno
         f.member_id,
         1,
         0,
-        paracord_models::permissions::Permissions::VIEW_CHANNEL.bits() as i64,
+        paracord_models::permissions::Permissions::VIEW_CHANNEL.bits(),
     )
     .await
     .unwrap();

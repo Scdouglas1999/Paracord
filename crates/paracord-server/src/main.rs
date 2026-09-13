@@ -598,9 +598,7 @@ async fn main() -> Result<()> {
     // routing: `h3` → WebTransport (browsers), anything else → raw QUIC
     // (desktop/federation). Admins only need to forward one port (TCP + UDP).
     if config.voice.native_media {
-        use paracord_transport::endpoint::{
-            certificate_hash, generate_self_signed_cert, MediaEndpoint,
-        };
+        use paracord_transport::endpoint::{generate_media_certificate, MediaEndpoint};
 
         let media_port = config.voice.port;
         let media_addr: std::net::SocketAddr = format!("0.0.0.0:{}", media_port).parse()?;
@@ -609,20 +607,26 @@ async fn main() -> Result<()> {
         // populated and the ALPN accept loop spawned; on failure we capture a
         // concrete, operator-actionable reason and decide below whether to
         // hard-fail (no fallback) or degrade to LiveKit.
-        let provisioning_error: Option<String> = match generate_self_signed_cert() {
-            Ok(tls) => {
-                // Compute SHA-256 hash of the DER certificate for WebTransport
-                // `serverCertificateHashes`. Browsers need this to trust
-                // self-signed certs.
-                let cert_hash = certificate_hash(&tls.cert_chain[0]);
+        // The certificate is valid for under 14 days, which is what browsers
+        // require of a WebTransport `serverCertificateHashes` pin; a rotation
+        // task below regenerates it before it expires.
+        let provisioning_error: Option<String> = match generate_media_certificate() {
+            Ok(generated) => {
+                // SHA-256 of the DER, for WebTransport `serverCertificateHashes`.
+                // Browsers need this to trust a self-signed cert.
+                let cert_hash = paracord_core::MediaCertHash::new(generated.hash.clone());
+                let cert_not_after = generated.not_after;
 
                 // Single unified endpoint: ALPN `h3` for WebTransport browsers,
                 // `paracord-media` for raw QUIC desktop/federation clients.
                 // Clients MUST send a matching ALPN (rustls requires it).
                 match MediaEndpoint::bind_unified(
                     media_addr,
-                    tls,
-                    vec![b"h3".to_vec(), b"paracord-media".to_vec()],
+                    generated.tls,
+                    MEDIA_ALPN_PROTOCOLS
+                        .iter()
+                        .map(|alpn| alpn.to_vec())
+                        .collect(),
                 ) {
                     Ok(endpoint) => {
                         let rooms = Arc::new(paracord_relay::room::MediaRoomManager::new());
@@ -641,8 +645,19 @@ async fn main() -> Result<()> {
                         };
                         state.native_media = Some(native_state);
                         tracing::info!(
-                            "Native QUIC media server listening on UDP port {} (unified: raw QUIC + WebTransport)",
-                            media_port
+                            "Native QUIC media server listening on UDP port {} (unified: raw QUIC + WebTransport), certificate pin {}… valid until {}",
+                            media_port,
+                            cert_hash_prefix(&generated.hash),
+                            format_timestamp(cert_not_after),
+                        );
+
+                        // Keep the certificate inside the browser's 14-day
+                        // window for as long as the process runs.
+                        spawn_media_certificate_rotation(
+                            Arc::clone(&endpoint),
+                            cert_hash.clone(),
+                            cert_not_after,
+                            shutdown_notify.clone(),
                         );
 
                         // Spawn unified accept loop — inspects ALPN to route
@@ -1479,6 +1494,100 @@ fn build_at_rest_profile(config: &config::Config) -> Result<AtRestRuntimeProfile
         file_cryptor,
         totp_cryptor,
     })
+}
+
+/// ALPN protocols the unified media port advertises: `h3` for browser
+/// WebTransport, `paracord-media` for raw QUIC desktop and federation peers.
+const MEDIA_ALPN_PROTOCOLS: [&[u8]; 2] = [b"h3", b"paracord-media"];
+
+/// Enough of a pin to correlate a rotation in the log with what a client saw,
+/// without printing a full fingerprint on every line.
+fn cert_hash_prefix(hash: &str) -> &str {
+    let end = hash
+        .char_indices()
+        .nth(12)
+        .map(|(idx, _)| idx)
+        .unwrap_or(hash.len());
+    &hash[..end]
+}
+
+fn format_timestamp(at: std::time::SystemTime) -> String {
+    chrono::DateTime::<chrono::Utc>::from(at).to_rfc3339()
+}
+
+/// Keep the media certificate inside the window browsers accept.
+///
+/// A browser accepts a WebTransport `serverCertificateHashes` pin only when the
+/// certificate is valid for at most 14 days, so the media certificate is issued
+/// for 13 (`paracord_transport::endpoint::MEDIA_CERT_LIFETIME`). A server that
+/// runs longer than that would keep presenting an expired certificate and every
+/// browser join would fail, so this task regenerates it roughly every 7 days —
+/// or immediately if the live certificate is already inside its last 3 days —
+/// and republishes the pin.
+///
+/// Sessions already established are unaffected: QUIC authenticates once, at
+/// handshake, so swapping the endpoint's server config only changes what *new*
+/// handshakes see. The endpoint swap happens before the published pin changes,
+/// so there is no window in which a client is handed a pin the port does not
+/// yet present.
+fn spawn_media_certificate_rotation(
+    endpoint: Arc<paracord_transport::endpoint::MediaEndpoint>,
+    cert_hash: paracord_core::MediaCertHash,
+    initial_not_after: std::time::SystemTime,
+    shutdown: Arc<tokio::sync::Notify>,
+) {
+    use paracord_transport::endpoint::{generate_media_certificate, media_cert_rotation_delay};
+
+    tokio::spawn(async move {
+        let mut not_after = initial_not_after;
+        loop {
+            let delay = media_cert_rotation_delay(std::time::SystemTime::now(), not_after);
+            tokio::select! {
+                _ = shutdown.notified() => break,
+                _ = tokio::time::sleep(delay) => {}
+            }
+
+            match generate_media_certificate() {
+                Ok(generated) => {
+                    // Present the new certificate first, publish the new pin
+                    // second: a client that reads the pin between the two steps
+                    // would otherwise pin a certificate the port is not serving.
+                    if let Err(err) = endpoint.set_certificate(&generated.tls) {
+                        tracing::error!(
+                            "Media certificate rotation failed to install the new certificate: {err}. \
+                             Retrying; the current certificate expires at {}.",
+                            format_timestamp(not_after)
+                        );
+                        // Back off rather than spinning on a persistent failure.
+                        tokio::select! {
+                            _ = shutdown.notified() => break,
+                            _ = tokio::time::sleep(std::time::Duration::from_secs(300)) => {}
+                        }
+                        continue;
+                    }
+                    cert_hash.store(generated.hash.clone());
+                    not_after = generated.not_after;
+                    tracing::info!(
+                        "Rotated the native media certificate: pin {}… valid until {}. \
+                         Established voice sessions are unaffected; new joins use the new pin.",
+                        cert_hash_prefix(&generated.hash),
+                        format_timestamp(not_after)
+                    );
+                }
+                Err(err) => {
+                    tracing::error!(
+                        "Media certificate rotation failed to generate a certificate: {err}. \
+                         Retrying; the current certificate expires at {}.",
+                        format_timestamp(not_after)
+                    );
+                    tokio::select! {
+                        _ = shutdown.notified() => break,
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(300)) => {}
+                    }
+                }
+            }
+        }
+    });
 }
 
 fn spawn_pending_attachment_cleanup(
@@ -3444,7 +3553,7 @@ async fn handle_webtransport_connection(
         }
     };
 
-    let wt_session = match tokio::time::timeout(
+    let mut wt_session = match tokio::time::timeout(
         std::time::Duration::from_secs(10),
         h3_session.accept_session(),
     )
@@ -3670,27 +3779,29 @@ async fn handle_webtransport_connection(
         "WebTransport: authenticated"
     );
 
-    // Spawn datagram bridge (handles QSID framing).
-    // The first WebTransport session on a fresh connection has QSID = 0.
-    let (outbound_tx, inbound_rx) = paracord_transport::webtransport::spawn_webtransport_bridge(
-        wt_session.quinn_conn().clone(),
-        0,
-    );
+    // Spawn the datagram bridge with this session's own quarter stream id
+    // (the CONNECT stream id / 4), so outbound media is attributed to the
+    // session and inbound datagrams naming another one are dropped.
+    let (outbound_tx, inbound_rx) = wt_session.spawn_datagram_bridge();
 
-    // Create bridged connection handle and start forwarding
+    // Create bridged connection handle and start forwarding. The handle gets
+    // the session's stream framer, not the bare quinn connection: a browser's
+    // control and keyframe streams are HTTP/3 WebTransport streams and must be
+    // opened and accepted with the session header applied.
     let handle = paracord_relay::relay::ConnectionHandle::new_bridged(
         user_id,
         room_id.clone(),
         media_session_id,
         outbound_tx,
         inbound_rx,
-        Some(wt_session.quinn_conn().clone()),
+        Some(wt_session.streams()),
     );
     relay.add_connection(handle.clone());
     relay.spawn_forwarding_task(handle.clone());
     relay.spawn_control_task(handle.clone());
     {
         let relay = relay.clone();
+        let handle = handle.clone();
         tokio::spawn(async move {
             relay.send_initial_track_state(&handle).await;
         });
@@ -3698,7 +3809,37 @@ async fn handle_webtransport_connection(
     tracing::info!(
         user_id,
         room_id = %room_id,
+        session_id = wt_session.session_id(),
         "WebTransport: relay forwarding started"
+    );
+
+    // Park here for the life of the call, holding the HTTP/3 connection and the
+    // session's CONNECT stream. Both are load-bearing, not bookkeeping:
+    // `h3::server::Connection::drop` closes the QUIC connection with
+    // H3_NO_ERROR, and dropping the CONNECT request stream FINs it, which is
+    // how a WebTransport session is torn down. Returning here without them
+    // killed every browser call the instant forwarding started.
+    //
+    // `closed()` watches that CONNECT stream as well as the QUIC connection,
+    // because a browser ends a session by closing the former and leaves the
+    // latter warm — waiting only on the connection kept a departed participant
+    // registered with the relay until the QUIC idle timeout.
+    let closed = wt_session.closed().await;
+
+    // Retiring the relay connection is transport-driven and lease-fenced: the
+    // bridge task's `read_datagram` must fail for the forwarding task to run
+    // its cleanup. When the session (rather than the connection) ended, the
+    // connection is still alive, so close it — this handle's connection carries
+    // exactly this session. If the account has already reconnected, this handle
+    // no longer owns it and the lease fence makes the cleanup a no-op.
+    handle.close("WebTransport session closed");
+    drop(wt_session);
+    drop(h3_session);
+    tracing::info!(
+        user_id,
+        room_id = %room_id,
+        reason = %closed,
+        "WebTransport: session closed"
     );
 }
 

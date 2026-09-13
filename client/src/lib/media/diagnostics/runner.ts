@@ -283,7 +283,7 @@ function transportOutcomeToStep(
         code: 'TRANSPORT_CERTIFICATE_REFUSED',
         summary: `The media port answered, but this browser refused the certificate it presented.`,
         remedy:
-          'The media port presents a certificate the server generates for itself. Chrome only accepts a pinned one when it is an ECDSA P-256 certificate valid for 14 days or less. Ask the operator to check the media certificate produced when the server starts, or use the Paracord desktop app, which pins the fingerprint directly.',
+          'The media port presents a certificate the server generates for itself, and this check pinned the fingerprint the server published moments ago. If that fingerprint was refused, this browser cannot pin a self-signed WebTransport certificate at all — Firefox and Safari cannot — so use a Chromium-based browser or the Paracord desktop app. If you are already in Chrome or Edge, re-run the check: the server rotates its media certificate, and a fingerprint read before a rotation is refused until it is read again.',
         detail,
       };
     case 'handshake-failed':
@@ -291,10 +291,12 @@ function transportOutcomeToStep(
         status: 'fail',
         code: 'TRANSPORT_HANDSHAKE_FAILED',
         // Browsers report a refused route and a dropped one with the same
-        // opaque handshake error, so the text must not claim which it was.
+        // opaque handshake error, so the text must not claim which it was. The
+        // server's own certificate is no longer a plausible cause: it is issued
+        // for 13 days and rotated, which is inside the window browsers accept.
         summary: `The QUIC handshake with ${endpoint} did not complete, so no voice traffic can flow.`,
         remedy: config.certificatePinSha256
-          ? `Two things produce this and browsers report them identically. The certificate: the media port presents one the server generates for itself, and Chrome only accepts a pinned certificate that is ECDSA P-256 and valid for 14 days or less — ask the operator to check the certificate the media listener creates at start-up. The route: ${portText} must be published on the same host that serves chat and reach the Paracord server itself rather than another service. If the server is on this machine or your own network, the certificate is the likelier cause.`
+          ? `The route is the likely cause: ${portText} must be published on the same host that serves chat and reach the Paracord server itself rather than another service, and nothing between this device and the server may drop UDP. If the server is on this machine or your own network, re-run this check first — the server rotates its media certificate, and a fingerprint read before a rotation is refused until it is read again.`
           : `Ask the operator to confirm ${portText} is published on the same host that serves chat and reaches the Paracord server itself rather than another service, and that the server's media listener started without errors. If it is, something between this device and the server is dropping UDP.`,
         detail,
       };

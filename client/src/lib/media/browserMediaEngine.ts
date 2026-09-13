@@ -12,6 +12,17 @@ import type {
   TrackSubscriptionDescriptor,
   TrackSubscriptionRequest,
 } from './mediaEngine';
+// The AudioWorklet processor must reach the browser as a real, transpiled
+// JavaScript module URL. `new URL('./audio/audioProcessor.ts', import.meta.url)`
+// is an *asset* reference: under `vite dev` the dev server happens to transpile
+// it, but a production build inlines the file's raw bytes as a
+// `data:video/mp2t;base64,…` URL — untranspiled TypeScript under a non-JS media
+// type — and `audioWorklet.addModule` rejects it. Capture was therefore dead in
+// every built (embedded/desktop) client while working in dev. `?worker&url`
+// makes Vite bundle the file and hand back the emitted chunk's URL, in both
+// modes. The build emits ES modules (`worker.format`), which is what
+// `addModule` expects.
+import audioProcessorUrl from './audio/audioProcessor.ts?worker&url';
 import { WebTransportManager, type StreamControlMessage } from './transport/webTransport';
 import {
   type MediaHeader,
@@ -474,7 +485,7 @@ export class BrowserMediaEngine implements MediaEngine {
       this.transportLostCb?.(reason);
     });
 
-    await this.transport.connect(endpoint, token, certHash);
+    await this.transport.connect(endpoint, token, certHash, session?.refreshCertHash);
     this.assertOpen();
 
     await this.transport.sendStreamControl({
@@ -1348,8 +1359,7 @@ export class BrowserMediaEngine implements MediaEngine {
     this.audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
 
     // Load the AudioWorklet processor
-    const processorUrl = new URL('./audio/audioProcessor.ts', import.meta.url).href;
-    await this.audioContext.audioWorklet.addModule(processorUrl);
+    await this.audioContext.audioWorklet.addModule(audioProcessorUrl);
     this.assertOpen();
 
     const source = this.audioContext.createMediaStreamSource(this.mediaStream);
@@ -2717,8 +2727,7 @@ export class BrowserMediaEngine implements MediaEngine {
     this.cleanupScreenAudioCapture();
     const audioOnlyStream = new MediaStream(audioTracks);
     this.screenAudioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
-    const processorUrl = new URL('./audio/audioProcessor.ts', import.meta.url).href;
-    await this.screenAudioContext.audioWorklet.addModule(processorUrl);
+    await this.screenAudioContext.audioWorklet.addModule(audioProcessorUrl);
     this.assertOpen();
     const source = this.screenAudioContext.createMediaStreamSource(audioOnlyStream);
     this.screenAudioWorkletNode = new AudioWorkletNode(this.screenAudioContext, 'media-audio-processor');

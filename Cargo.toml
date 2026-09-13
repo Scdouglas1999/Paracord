@@ -78,6 +78,9 @@ base64 = "0.22"
 hkdf = "0.12"
 totp-rs = { version = "5", features = ["gen_secret", "qr"] }
 
+# Lock-free atomic swap (already in the graph via axum-server)
+arc-swap = "1"
+
 # Concurrent collections
 dashmap = "6"
 
@@ -103,6 +106,10 @@ tempfile = "3"
 
 # TLS
 rcgen = "0.13"
+# Matches the `time` version rcgen exposes in `CertificateParams::not_before`/
+# `not_after`; it is already in the graph as an rcgen/yasna dependency.
+time = { version = "0.3", default-features = false, features = ["std"] }
+x509-parser = "0.16"
 axum-server = { version = "0.8", features = ["tls-rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 
@@ -112,6 +119,7 @@ mime_guess = "2"
 
 # QUIC transport
 quinn = "0.11"
+http = "1"
 h3 = "0.0.8"
 h3-quinn = "0.0.10"
 bytes = "1"

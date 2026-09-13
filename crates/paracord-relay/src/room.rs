@@ -337,11 +337,11 @@ impl MediaRoomManager {
             return None;
         };
         if expected.is_some_and(|id| {
-            !entry
+            entry
                 .get()
                 .participants
                 .get(&user_id)
-                .is_some_and(|participant| participant.session_id == id)
+                .is_none_or(|participant| participant.session_id != id)
         }) {
             return None;
         }

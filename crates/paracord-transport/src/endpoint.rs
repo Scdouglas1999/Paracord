@@ -5,6 +5,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -23,6 +24,8 @@ pub struct TlsConfig {
 /// A QUIC endpoint that can act as both server and client.
 pub struct MediaEndpoint {
     endpoint: quinn::Endpoint,
+    /// ALPN list this endpoint was bound with, replayed on certificate rotation.
+    alpn_protocols: Vec<Vec<u8>>,
 }
 
 /// Send-side datagram buffer for publisher/client endpoints.
@@ -98,19 +101,7 @@ impl MediaEndpoint {
     /// Outgoing connections must use [`Self::connect_pinned`]; server endpoints
     /// intentionally have no default client TLS configuration.
     pub fn bind(addr: SocketAddr, tls: TlsConfig) -> anyhow::Result<Self> {
-        ensure_rustls_provider();
-        let mut server_crypto = rustls::ServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(tls.cert_chain.clone(), tls.private_key.clone_key())?;
-        server_crypto.alpn_protocols = vec![b"paracord-media".to_vec()];
-
-        let mut server_config =
-            quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(server_crypto)?));
-        server_config.transport_config(server_transport_config());
-
-        let endpoint = quinn::Endpoint::server(server_config, addr)?;
-
-        Ok(Self { endpoint })
+        Self::bind_unified(addr, tls, vec![b"paracord-media".to_vec()])
     }
 
     /// Bind a unified QUIC endpoint that advertises multiple ALPN protocols.
@@ -125,19 +116,28 @@ impl MediaEndpoint {
         alpn_protocols: Vec<Vec<u8>>,
     ) -> anyhow::Result<Self> {
         ensure_rustls_provider();
-        let mut server_crypto = rustls::ServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(tls.cert_chain.clone(), tls.private_key.clone_key())?;
-
-        server_crypto.alpn_protocols = alpn_protocols;
-
-        let mut server_config =
-            quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(server_crypto)?));
-        server_config.transport_config(server_transport_config());
-
+        let server_config = server_config_for(&tls, alpn_protocols.clone())?;
         let endpoint = quinn::Endpoint::server(server_config, addr)?;
+        Ok(Self {
+            endpoint,
+            alpn_protocols,
+        })
+    }
 
-        Ok(Self { endpoint })
+    /// Replace the TLS certificate this endpoint presents to *new* handshakes.
+    ///
+    /// Connections that already completed their handshake are untouched: QUIC
+    /// authenticates once at connection setup, so a live media session survives
+    /// a certificate rotation. Only handshakes started after this call see the
+    /// new certificate, which is why the published pin must be updated in the
+    /// same step (see the rotation task in `paracord-server`).
+    ///
+    /// The ALPN list is preserved from [`Self::bind_unified`]; rotating a
+    /// certificate must never silently narrow which protocols the port accepts.
+    pub fn set_certificate(&self, tls: &TlsConfig) -> anyhow::Result<()> {
+        let server_config = server_config_for(tls, self.alpn_protocols.clone())?;
+        self.endpoint.set_server_config(Some(server_config));
+        Ok(())
     }
 
     /// Create a client-only endpoint. Connections must use
@@ -145,7 +145,10 @@ impl MediaEndpoint {
     pub fn client(addr: SocketAddr) -> anyhow::Result<Self> {
         ensure_rustls_provider();
         let endpoint = quinn::Endpoint::client(addr)?;
-        Ok(Self { endpoint })
+        Ok(Self {
+            endpoint,
+            alpn_protocols: Vec::new(),
+        })
     }
 
     /// Accept the next incoming QUIC connection.
@@ -190,18 +193,144 @@ impl MediaEndpoint {
     }
 }
 
-/// Generate a self-signed TLS certificate for development use.
-pub fn generate_self_signed_cert() -> anyhow::Result<TlsConfig> {
-    let rcgen::CertifiedKey { cert, key_pair } =
-        rcgen::generate_simple_self_signed(vec!["localhost".to_string()])?;
+/// Build the QUIC server configuration for a media endpoint.
+fn server_config_for(
+    tls: &TlsConfig,
+    alpn_protocols: Vec<Vec<u8>>,
+) -> anyhow::Result<quinn::ServerConfig> {
+    let mut server_crypto = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(tls.cert_chain.clone(), tls.private_key.clone_key())?;
+    server_crypto.alpn_protocols = alpn_protocols;
+
+    let mut server_config =
+        quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(server_crypto)?));
+    server_config.transport_config(server_transport_config());
+    Ok(server_config)
+}
+
+/// Subject alternative names placed on the generated media certificate.
+///
+/// The certificate is never validated by name: desktop and federation peers pin
+/// the raw SHA-256 of the DER, and browsers pin it through WebTransport's
+/// `serverCertificateHashes`, which bypasses name and CA checks entirely. The
+/// SAN exists only so the certificate is well-formed.
+const MEDIA_CERT_SAN: &str = "localhost";
+
+/// How far in the past the generated certificate starts being valid.
+///
+/// Clocks between a server and a client routinely differ by seconds to minutes.
+/// A certificate that becomes valid exactly "now" is rejected by a client whose
+/// clock runs slightly behind, so back-date it by an hour.
+pub const MEDIA_CERT_BACKDATE: Duration = Duration::from_secs(60 * 60);
+
+/// How long the generated media certificate stays valid.
+///
+/// **This must stay under 14 days.** Chromium (and Safari) accept a certificate
+/// supplied through WebTransport's `serverCertificateHashes` only when it is
+/// ECDSA P-256 *and* its total validity window is at most 14 days. rcgen's
+/// `generate_simple_self_signed` defaults to 1975-01-01 → 4096-01-01, which
+/// silently fails that rule: the browser refuses the handshake in a millisecond
+/// and reports nothing distinguishable from a blocked UDP port. Thirteen days
+/// leaves a day of headroom for clock skew at both ends, and
+/// [`MEDIA_CERT_BACKDATE`] is charged against it so the *total* window —
+/// notBefore to notAfter, which is what the browser measures — stays under the
+/// limit.
+pub const MEDIA_CERT_LIFETIME: Duration = Duration::from_secs(13 * 24 * 60 * 60);
+
+/// The hard ceiling the browser rule imposes. Asserted by tests, not by policy.
+pub const MEDIA_CERT_MAX_WINDOW: Duration = Duration::from_secs(14 * 24 * 60 * 60);
+
+/// Nominal interval between media-certificate rotations.
+///
+/// Half the lifetime: a rotation that fails still leaves days of runway before
+/// the published pin goes stale, and the next attempt is far from the cliff.
+pub const MEDIA_CERT_ROTATION_INTERVAL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
+/// Remaining validity below which a rotation is due immediately.
+pub const MEDIA_CERT_MIN_REMAINING: Duration = Duration::from_secs(3 * 24 * 60 * 60);
+
+/// A freshly generated media certificate, its published pin, and the validity
+/// window it was issued for.
+///
+/// The window is returned rather than re-parsed from the DER because the
+/// rotation task needs it to schedule the next regeneration.
+pub struct MediaCertificate {
+    pub tls: TlsConfig,
+    /// Base64 SHA-256 of the leaf DER — what clients pin.
+    pub hash: String,
+    pub not_before: SystemTime,
+    pub not_after: SystemTime,
+}
+
+/// Generate the self-signed certificate the native media endpoint presents.
+///
+/// Built through [`rcgen::CertificateParams`] rather than
+/// `generate_simple_self_signed` so the validity window can be constrained to
+/// [`MEDIA_CERT_LIFETIME`]; see that constant for why the default window makes
+/// browser voice impossible. The key is ECDSA P-256 (rcgen's default), which
+/// the same browser rule also requires.
+pub fn generate_media_certificate() -> anyhow::Result<MediaCertificate> {
+    let now = SystemTime::now();
+    let not_before = now - MEDIA_CERT_BACKDATE;
+    let not_after = not_before + MEDIA_CERT_LIFETIME;
+
+    let mut params = rcgen::CertificateParams::new(vec![MEDIA_CERT_SAN.to_string()])?;
+    params.not_before = to_offset_date_time(not_before)?;
+    params.not_after = to_offset_date_time(not_after)?;
+
+    // `KeyPair::generate` is ECDSA P-256, which the browser pin rule requires.
+    let key_pair = rcgen::KeyPair::generate()?;
+    let cert = params.self_signed(&key_pair)?;
 
     let cert_der = CertificateDer::from(cert.der().to_vec());
+    let hash = certificate_hash(&cert_der);
     let key_der = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_pair.serialize_der()));
 
-    Ok(TlsConfig {
-        cert_chain: vec![cert_der],
-        private_key: key_der,
+    Ok(MediaCertificate {
+        tls: TlsConfig {
+            cert_chain: vec![cert_der],
+            private_key: key_der,
+        },
+        hash,
+        not_before,
+        not_after,
     })
+}
+
+/// Generate a self-signed TLS certificate for the media endpoint.
+///
+/// Thin wrapper over [`generate_media_certificate`] for callers that do not
+/// need the pin or the validity window (tests, the federation transport, the
+/// standalone media dev server).
+pub fn generate_self_signed_cert() -> anyhow::Result<TlsConfig> {
+    Ok(generate_media_certificate()?.tls)
+}
+
+fn to_offset_date_time(at: SystemTime) -> anyhow::Result<time::OffsetDateTime> {
+    let unix = at
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_err(|_| anyhow::anyhow!("system clock is before the Unix epoch"))?;
+    time::OffsetDateTime::from_unix_timestamp(unix.as_secs() as i64)
+        .map_err(|e| anyhow::anyhow!("media certificate validity is out of range: {e}"))
+}
+
+/// How long to wait before regenerating a media certificate that expires at
+/// `not_after`.
+///
+/// Normally [`MEDIA_CERT_ROTATION_INTERVAL`], but a certificate already closer
+/// than [`MEDIA_CERT_MIN_REMAINING`] to expiry rotates immediately — that is the
+/// case a server restored from a snapshot, or resumed from suspend after a long
+/// sleep, lands in.
+pub fn media_cert_rotation_delay(now: SystemTime, not_after: SystemTime) -> Duration {
+    let remaining = not_after
+        .duration_since(now)
+        .unwrap_or(Duration::from_secs(0));
+    if remaining <= MEDIA_CERT_MIN_REMAINING {
+        return Duration::from_secs(0);
+    }
+    // Never sleep past the point where the certificate would be nearly expired.
+    MEDIA_CERT_ROTATION_INTERVAL.min(remaining - MEDIA_CERT_MIN_REMAINING)
 }
 
 /// Return the base64-encoded SHA-256 fingerprint used by WebTransport and raw
@@ -310,6 +439,214 @@ mod tests {
         let tls = generate_self_signed_cert().expect("cert generation should succeed");
         assert_eq!(tls.cert_chain.len(), 1);
         assert!(!tls.cert_chain[0].is_empty());
+    }
+
+    /// The regression this whole module exists to prevent.
+    ///
+    /// A browser accepts a WebTransport `serverCertificateHashes` pin only when
+    /// the certificate's total validity window is at most 14 days. rcgen's
+    /// `generate_simple_self_signed` defaults to 1975 → 4096, which made browser
+    /// voice impossible on every network, including loopback, and failed in a
+    /// millisecond with an error indistinguishable from a blocked UDP port.
+    ///
+    /// The DER is parsed independently (x509-parser) rather than reading back
+    /// the rcgen parameters, so this asserts what actually goes on the wire.
+    #[test]
+    fn media_certificate_validity_window_satisfies_the_browser_pin_rule() {
+        use x509_parser::prelude::FromDer;
+
+        let generated = generate_media_certificate().expect("cert generation should succeed");
+        let der = generated.tls.cert_chain[0].as_ref();
+        let (rest, parsed) =
+            x509_parser::certificate::X509Certificate::from_der(der).expect("valid DER");
+        assert!(rest.is_empty(), "certificate DER had trailing bytes");
+
+        let not_before = parsed.validity().not_before.timestamp();
+        let not_after = parsed.validity().not_after.timestamp();
+        assert!(
+            not_after > not_before,
+            "notAfter ({not_after}) must be after notBefore ({not_before})"
+        );
+
+        let window = Duration::from_secs((not_after - not_before) as u64);
+        assert!(
+            window <= MEDIA_CERT_MAX_WINDOW,
+            "media certificate is valid for {window:?}; browsers refuse a \
+             `serverCertificateHashes` pin beyond {MEDIA_CERT_MAX_WINDOW:?}"
+        );
+
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        assert!(
+            not_before < now,
+            "notBefore ({not_before}) must already be in the past at issue time \
+             so a client whose clock lags slightly still accepts it"
+        );
+        assert!(
+            not_after > now,
+            "notAfter ({not_after}) must be in the future"
+        );
+
+        // And the reported window matches the DER, because the rotation task
+        // schedules off the reported one.
+        let reported_after = generated
+            .not_after
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        assert_eq!(reported_after, not_after);
+    }
+
+    /// The other half of the browser rule: the key must be ECDSA P-256.
+    #[test]
+    fn media_certificate_uses_an_ecdsa_p256_key() {
+        use x509_parser::prelude::FromDer;
+
+        let generated = generate_media_certificate().unwrap();
+        let (_, parsed) = x509_parser::certificate::X509Certificate::from_der(
+            generated.tls.cert_chain[0].as_ref(),
+        )
+        .expect("valid DER");
+        let spki = parsed.public_key();
+        // id-ecPublicKey, with the prime256v1 named curve as its parameter.
+        assert_eq!(spki.algorithm.algorithm.to_id_string(), "1.2.840.10045.2.1");
+        let curve = spki
+            .algorithm
+            .parameters
+            .as_ref()
+            .expect("EC public keys carry a named-curve parameter")
+            .as_oid()
+            .expect("named curve OID");
+        assert_eq!(curve.to_id_string(), "1.2.840.10045.3.1.7");
+    }
+
+    #[test]
+    fn published_hash_matches_the_generated_certificate() {
+        let generated = generate_media_certificate().unwrap();
+        assert_eq!(
+            generated.hash,
+            certificate_hash(&generated.tls.cert_chain[0])
+        );
+    }
+
+    #[test]
+    fn rotation_is_scheduled_before_the_certificate_goes_stale() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
+
+        // A freshly issued certificate rotates on the nominal interval.
+        let fresh = now + MEDIA_CERT_LIFETIME;
+        assert_eq!(
+            media_cert_rotation_delay(now, fresh),
+            MEDIA_CERT_ROTATION_INTERVAL
+        );
+
+        // The scheduled rotation must land while the certificate is still valid.
+        assert!(MEDIA_CERT_ROTATION_INTERVAL < MEDIA_CERT_LIFETIME);
+
+        // A certificate inside the minimum-remaining window rotates now.
+        let nearly_expired = now + MEDIA_CERT_MIN_REMAINING;
+        assert_eq!(
+            media_cert_rotation_delay(now, nearly_expired),
+            Duration::from_secs(0)
+        );
+
+        // An already-expired certificate rotates now rather than underflowing.
+        assert_eq!(
+            media_cert_rotation_delay(now, now - Duration::from_secs(1)),
+            Duration::from_secs(0)
+        );
+
+        // Between the two, the wait is clamped so it never overshoots the cliff.
+        let middling = now + MEDIA_CERT_MIN_REMAINING + Duration::from_secs(3_600);
+        assert_eq!(
+            media_cert_rotation_delay(now, middling),
+            Duration::from_secs(3_600)
+        );
+    }
+
+    /// Rotating the certificate must not change which ALPN protocols the port
+    /// accepts, and must not disturb a session that already handshook.
+    #[tokio::test]
+    async fn rotation_swaps_the_certificate_without_dropping_live_sessions() {
+        let first = generate_media_certificate().unwrap();
+        let server = MediaEndpoint::bind_unified(
+            "127.0.0.1:0".parse().unwrap(),
+            first.tls,
+            vec![b"h3".to_vec(), b"paracord-media".to_vec()],
+        )
+        .unwrap();
+        let server_addr = server.local_addr().unwrap();
+
+        let client = MediaEndpoint::client("127.0.0.1:0".parse().unwrap()).unwrap();
+        let connecting = client
+            .connect_pinned(server_addr, "localhost", &first.hash)
+            .unwrap();
+        let server_incoming = server.accept().await.expect("server should accept");
+        let server_conn = server_incoming.accept().unwrap().await.unwrap();
+        let client_conn = connecting.await.unwrap();
+
+        // Rotate under the live session.
+        let second = generate_media_certificate().unwrap();
+        assert_ne!(second.hash, first.hash);
+        server.set_certificate(&second.tls).unwrap();
+
+        // The established connection keeps working: QUIC authenticated once.
+        client_conn
+            .send_datagram(bytes::Bytes::from_static(b"still here"))
+            .unwrap();
+        assert_eq!(
+            server_conn.read_datagram().await.unwrap().as_ref(),
+            b"still here"
+        );
+
+        // A new handshake pinned to the old hash is refused...
+        let stale = MediaEndpoint::client("127.0.0.1:0".parse().unwrap()).unwrap();
+        let stale_connecting = stale
+            .connect_pinned(server_addr, "localhost", &first.hash)
+            .unwrap();
+        let accept_stale = async {
+            if let Some(incoming) = server.accept().await {
+                if let Ok(conn) = incoming.accept() {
+                    let _ = conn.await;
+                }
+            }
+        };
+        let (stale_result, ()) = tokio::join!(stale_connecting, accept_stale);
+        assert!(
+            stale_result.is_err(),
+            "a handshake pinned to the rotated-out certificate must fail"
+        );
+
+        // ...and a handshake pinned to the new hash succeeds on the same port,
+        // with the ALPN list preserved across the swap.
+        let fresh = MediaEndpoint::client("127.0.0.1:0".parse().unwrap()).unwrap();
+        let fresh_connecting = fresh
+            .connect_pinned(server_addr, "localhost", &second.hash)
+            .unwrap();
+        let accept_fresh = async {
+            let incoming = server.accept().await.expect("server should accept");
+            incoming.accept().unwrap().await
+        };
+        let (fresh_result, accepted) = tokio::join!(fresh_connecting, accept_fresh);
+        let fresh_conn = fresh_result.expect("new pin must be accepted");
+        accepted.expect("server side of the rotated handshake");
+        assert_eq!(
+            fresh_conn
+                .handshake_data()
+                .unwrap()
+                .downcast::<quinn::crypto::rustls::HandshakeData>()
+                .unwrap()
+                .protocol
+                .as_deref(),
+            Some(&b"paracord-media"[..])
+        );
+
+        server.close();
+        client.close();
+        stale.close();
+        fresh.close();
     }
 
     #[tokio::test]

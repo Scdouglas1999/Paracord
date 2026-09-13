@@ -14,11 +14,12 @@ use tracing::{debug, error, info, warn};
 
 use paracord_transport::control::{ControlMessage, SessionParticipant, TrackKind};
 use paracord_transport::protocol::{
-    MediaHeader, VideoFrameMetadata, HEADER_SIZE, MAX_STREAM_FRAME_SIZE,
+    MediaHeader, TrackType, VideoFrameMetadata, HEADER_SIZE, MAX_STREAM_FRAME_SIZE,
 };
 use paracord_transport::stream::{
     PublishedTrack, StreamId, TrackId, VideoCodecCapability, ViewportHint,
 };
+use paracord_transport::webtransport::WebTransportStreams;
 
 use crate::bandwidth::{BandwidthEstimator, DownlinkEstimator};
 use crate::room::MediaRoomManager;
@@ -374,13 +375,14 @@ enum MediaTransport {
     Quic(quinn::Connection),
     /// Channel-bridged (WebTransport browser clients).
     /// The bridge task translates between HTTP/3 datagrams (with QSID
-    /// framing) and raw media packets. Keyframe uni streams, by contrast, are
-    /// forwarded byte-for-byte over `control_conn` (the WebTransport connection,
-    /// which under h3-quinn is a plain uni-capable quinn connection).
+    /// framing) and raw media packets. Control and keyframe streams go through
+    /// [`WebTransportStreams`], which applies the HTTP/3 WebTransport stream
+    /// header on open and strips it on accept, so the *payload* either side
+    /// reads is byte-for-byte what a native QUIC peer would read.
     Bridged {
         outbound_tx: mpsc::Sender<Bytes>,
         inbound_rx: Arc<Mutex<mpsc::Receiver<Bytes>>>,
-        control_conn: Option<quinn::Connection>,
+        control: Option<WebTransportStreams>,
         /// In-flight keyframe uni-stream tasks toward this viewer, keyed by SSRC
         /// (i.e. per track+layer), each queue oldest-first and bounded at
         /// [`MAX_BRIDGED_KEYFRAME_STREAMS`]. Keying per SSRC (not per connection)
@@ -399,16 +401,80 @@ impl Clone for MediaTransport {
             Self::Bridged {
                 outbound_tx,
                 inbound_rx,
-                control_conn,
+                control,
                 keyframe_streams,
             } => Self::Bridged {
                 outbound_tx: outbound_tx.clone(),
                 inbound_rx: Arc::clone(inbound_rx),
-                control_conn: control_conn.clone(),
+                control: control.clone(),
                 keyframe_streams: Arc::clone(keyframe_streams),
             },
         }
     }
+}
+
+/// Live media counters for one connection, shared by every task that holds a
+/// clone of its [`ConnectionHandle`].
+///
+/// These are cumulative for the life of the connection rather than a decaying
+/// window: [`BandwidthEstimator`] already keeps a ~5 s window for *rate*
+/// control, which answers "how fast is this peer sending right now" and forgets
+/// everything a few seconds later. Answering "did this participant's media ever
+/// reach the relay" needs a number that does not decay, and nothing kept one.
+#[derive(Debug, Default)]
+struct MediaCounters {
+    datagrams_received: AtomicU64,
+    bytes_received: AtomicU64,
+    audio_datagrams_received: AtomicU64,
+    video_datagrams_received: AtomicU64,
+    stream_frames_received: AtomicU64,
+    datagrams_sent: AtomicU64,
+    bytes_sent: AtomicU64,
+    stream_frames_sent: AtomicU64,
+}
+
+impl MediaCounters {
+    /// Count one datagram the relay accepted from this participant.
+    ///
+    /// Called after the header and length checks, so a malformed or oversized
+    /// packet is never counted as media that flowed.
+    fn record_ingress(&self, header: &MediaHeader, len: usize) {
+        self.datagrams_received.fetch_add(1, Ordering::Relaxed);
+        self.bytes_received.fetch_add(len as u64, Ordering::Relaxed);
+        match header.track_type {
+            TrackType::Audio => {
+                self.audio_datagrams_received
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            TrackType::Video => {
+                self.video_datagrams_received
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
+/// A point-in-time read of one connected participant's media counters.
+///
+/// Cumulative since the connection was established; a reconnect starts from
+/// zero because the counters belong to the connection, not to the account.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ConnectionMediaStats {
+    pub user_id: i64,
+    pub room_id: String,
+    /// The media-session receipt from the connection's JWT.
+    pub session_id: String,
+    /// `"quic"` for a native (desktop/federation) peer, `"webtransport"` for a
+    /// browser bridged over HTTP/3.
+    pub transport: &'static str,
+    pub datagrams_received: u64,
+    pub bytes_received: u64,
+    pub audio_datagrams_received: u64,
+    pub video_datagrams_received: u64,
+    pub stream_frames_received: u64,
+    pub datagrams_sent: u64,
+    pub bytes_sent: u64,
+    pub stream_frames_sent: u64,
 }
 
 /// Immutable ownership token for exactly one media connection.
@@ -439,6 +505,7 @@ pub struct ConnectionHandle {
     session_id: String,
     lease: Arc<ConnectionLease>,
     transport: MediaTransport,
+    counters: Arc<MediaCounters>,
 }
 
 impl ConnectionHandle {
@@ -450,17 +517,23 @@ impl ConnectionHandle {
             session_id,
             lease: Arc::new(ConnectionLease::default()),
             transport: MediaTransport::Quic(conn),
+            counters: Arc::new(MediaCounters::default()),
         }
     }
 
     /// Create a handle wrapping a channel-bridged WebTransport connection.
+    ///
+    /// `control` carries the session's stream framing: a browser's streams are
+    /// HTTP/3 WebTransport streams, not raw QUIC streams, so they must be
+    /// opened and accepted through [`WebTransportStreams`] rather than through
+    /// the `quinn::Connection` underneath it.
     pub fn new_bridged(
         user_id: i64,
         room_id: String,
         session_id: String,
         outbound_tx: mpsc::Sender<Bytes>,
         inbound_rx: mpsc::Receiver<Bytes>,
-        control_conn: Option<quinn::Connection>,
+        control: Option<WebTransportStreams>,
     ) -> Self {
         Self {
             user_id,
@@ -470,9 +543,32 @@ impl ConnectionHandle {
             transport: MediaTransport::Bridged {
                 outbound_tx,
                 inbound_rx: Arc::new(Mutex::new(inbound_rx)),
-                control_conn,
+                control,
                 keyframe_streams: Arc::new(Mutex::new(BridgedKeyframeStreams::default())),
             },
+            counters: Arc::new(MediaCounters::default()),
+        }
+    }
+
+    /// Read this connection's cumulative media counters.
+    pub fn media_stats(&self) -> ConnectionMediaStats {
+        let counters = &self.counters;
+        ConnectionMediaStats {
+            user_id: self.user_id,
+            room_id: self.room_id.clone(),
+            session_id: self.session_id.clone(),
+            transport: match &self.transport {
+                MediaTransport::Quic(_) => "quic",
+                MediaTransport::Bridged { .. } => "webtransport",
+            },
+            datagrams_received: counters.datagrams_received.load(Ordering::Relaxed),
+            bytes_received: counters.bytes_received.load(Ordering::Relaxed),
+            audio_datagrams_received: counters.audio_datagrams_received.load(Ordering::Relaxed),
+            video_datagrams_received: counters.video_datagrams_received.load(Ordering::Relaxed),
+            stream_frames_received: counters.stream_frames_received.load(Ordering::Relaxed),
+            datagrams_sent: counters.datagrams_sent.load(Ordering::Relaxed),
+            bytes_sent: counters.bytes_sent.load(Ordering::Relaxed),
+            stream_frames_sent: counters.stream_frames_sent.load(Ordering::Relaxed),
         }
     }
 
@@ -486,6 +582,14 @@ impl ConnectionHandle {
 
     /// Send a datagram to this connection.
     pub fn send_datagram(&self, data: Bytes) -> Result<(), quinn::SendDatagramError> {
+        // Count what is handed to the transport, before it can be shed: a
+        // bridged send that finds the bridge full is reported as `Ok` (media is
+        // unreliable) and must not be counted differently from a raw-QUIC send
+        // the kernel later drops.
+        self.counters.datagrams_sent.fetch_add(1, Ordering::Relaxed);
+        self.counters
+            .bytes_sent
+            .fetch_add(data.len() as u64, Ordering::Relaxed);
         match &self.transport {
             MediaTransport::Quic(conn) => conn.send_datagram(data),
             // Bounded, unreliable: an over-full bridge drops the datagram (as
@@ -526,11 +630,16 @@ impl ConnectionHandle {
             MediaTransport::Quic(conn) => conn.close_reason().map(|reason| reason.to_string()),
             MediaTransport::Bridged {
                 outbound_tx,
-                control_conn,
+                control,
                 ..
-            } => control_conn
+            } => control
                 .as_ref()
-                .and_then(|conn| conn.close_reason().map(|reason| reason.to_string()))
+                .and_then(|streams| {
+                    streams
+                        .connection()
+                        .close_reason()
+                        .map(|reason| reason.to_string())
+                })
                 .or_else(|| {
                     if outbound_tx.is_closed() {
                         Some("WebTransport bridge channel closed".to_string())
@@ -553,12 +662,14 @@ impl ConnectionHandle {
             MediaTransport::Quic(conn) => {
                 conn.close(quinn::VarInt::from_u32(1), reason.as_bytes());
             }
-            MediaTransport::Bridged { control_conn, .. } => {
+            MediaTransport::Bridged { control, .. } => {
                 // Closing the control connection tears down the bridged
                 // WebTransport session; the bridge task then observes closure
                 // and stops forwarding on the outbound channel.
-                if let Some(conn) = control_conn {
-                    conn.close(quinn::VarInt::from_u32(1), reason.as_bytes());
+                if let Some(streams) = control {
+                    streams
+                        .connection()
+                        .close(quinn::VarInt::from_u32(1), reason.as_bytes());
                 }
             }
         }
@@ -568,7 +679,9 @@ impl ConnectionHandle {
     pub fn quinn_connection(&self) -> Option<&quinn::Connection> {
         match &self.transport {
             MediaTransport::Quic(conn) => Some(conn),
-            MediaTransport::Bridged { control_conn, .. } => control_conn.as_ref(),
+            MediaTransport::Bridged { control, .. } => {
+                control.as_ref().map(WebTransportStreams::connection)
+            }
         }
     }
 
@@ -576,7 +689,7 @@ impl ConnectionHandle {
     pub async fn accept_bi(&self) -> Result<(quinn::SendStream, quinn::RecvStream), String> {
         match &self.transport {
             MediaTransport::Quic(conn) => conn.accept_bi().await.map_err(|e| e.to_string()),
-            MediaTransport::Bridged { control_conn, .. } => control_conn
+            MediaTransport::Bridged { control, .. } => control
                 .as_ref()
                 .ok_or_else(|| "bridged transport is missing a control connection".to_string())?
                 .accept_bi()
@@ -587,13 +700,14 @@ impl ConnectionHandle {
 
     /// Whether this connection carries the loss-resilient uni-stream keyframe
     /// path. Raw QUIC connections always do; a bridged WebTransport connection
-    /// does whenever it has a control connection — under h3-quinn that connection
-    /// is a plain uni-capable quinn connection, so keyframe uni streams bridge
-    /// byte-for-byte in both directions (contract S5).
+    /// does whenever it has a control connection — its WebTransport uni streams
+    /// carry the same keyframe message body as native QUIC uni streams, behind
+    /// the HTTP/3 stream header [`WebTransportStreams`] adds and removes
+    /// (contract S5).
     pub fn supports_media_uni_streams(&self) -> bool {
         match &self.transport {
             MediaTransport::Quic(_) => true,
-            MediaTransport::Bridged { control_conn, .. } => control_conn.is_some(),
+            MediaTransport::Bridged { control, .. } => control.is_some(),
         }
     }
 
@@ -605,7 +719,7 @@ impl ConnectionHandle {
     pub async fn accept_uni(&self) -> Result<quinn::RecvStream, String> {
         match &self.transport {
             MediaTransport::Quic(conn) => conn.accept_uni().await.map_err(|e| e.to_string()),
-            MediaTransport::Bridged { control_conn, .. } => control_conn
+            MediaTransport::Bridged { control, .. } => control
                 .as_ref()
                 .ok_or_else(|| "bridged transport is missing a control connection".to_string())?
                 .accept_uni()
@@ -631,19 +745,22 @@ impl ConnectionHandle {
                 let mut send = conn.open_uni().await.map_err(|e| e.to_string())?;
                 send.write_all(&msg).await.map_err(|e| e.to_string())?;
                 send.finish().map_err(|e| e.to_string())?;
+                self.counters
+                    .stream_frames_sent
+                    .fetch_add(1, Ordering::Relaxed);
                 Ok(())
             }
             MediaTransport::Bridged {
-                control_conn,
+                control,
                 keyframe_streams,
                 ..
             } => {
-                let conn = control_conn
+                let streams = control
                     .as_ref()
                     .ok_or_else(|| "bridged transport is missing a control connection".to_string())?
                     .clone();
                 let task = tokio::spawn(async move {
-                    if let Ok(mut send) = conn.open_uni().await {
+                    if let Ok(mut send) = streams.open_uni().await {
                         if send.write_all(&msg).await.is_ok() {
                             let _ = send.finish();
                             // Keep the task (and its SendStream) alive until the peer
@@ -654,8 +771,13 @@ impl ConnectionHandle {
                         }
                     }
                 });
-                let mut streams = keyframe_streams.lock().await;
-                streams.track(ssrc, task.abort_handle(), MAX_BRIDGED_KEYFRAME_SSRCS);
+                let mut tracked = keyframe_streams.lock().await;
+                tracked.track(ssrc, task.abort_handle(), MAX_BRIDGED_KEYFRAME_SSRCS);
+                // Counted once the stream is enqueued, which is what this
+                // method promises — the write itself completes on the task.
+                self.counters
+                    .stream_frames_sent
+                    .fetch_add(1, Ordering::Relaxed);
                 Ok(())
             }
         }
@@ -671,11 +793,11 @@ impl ConnectionHandle {
                 send.finish().map_err(|e| e.to_string())?;
                 Ok(())
             }
-            MediaTransport::Bridged { control_conn, .. } => {
-                let conn = control_conn.as_ref().ok_or_else(|| {
+            MediaTransport::Bridged { control, .. } => {
+                let streams = control.as_ref().ok_or_else(|| {
                     "bridged transport is missing a control connection".to_string()
                 })?;
-                let (mut send, _recv) = conn.open_bi().await.map_err(|e| e.to_string())?;
+                let (mut send, _recv) = streams.open_bi().await.map_err(|e| e.to_string())?;
                 let encoded = message.encode().map_err(|e| e.to_string())?;
                 send.write_all(&encoded).await.map_err(|e| e.to_string())?;
                 send.finish().map_err(|e| e.to_string())?;
@@ -1117,6 +1239,11 @@ impl RelayForwarder {
                         return;
                     }
 
+                    // Cumulative proof that this participant's media reached
+                    // the relay, counted only for a packet that passed the
+                    // header, length and rate-limit checks above.
+                    handle.counters.record_ingress(&header, datagram.len());
+
                     // Feed publisher-ingress goodput + per-SSRC loss to the uplink
                     // bandwidth estimator (all accepted track types count).
                     forwarder.bandwidth_estimator.record_ingress(
@@ -1320,6 +1447,10 @@ impl RelayForwarder {
                             return;
                         }
                     };
+                    task_handle
+                        .counters
+                        .stream_frames_received
+                        .fetch_add(1, Ordering::Relaxed);
                     // Same fence as the datagram path: a keyframe still
                     // draining from a superseded connection must not be
                     // forwarded on the replacement's behalf, and must not touch
@@ -1715,6 +1846,27 @@ impl RelayForwarder {
     /// Get the number of active connections.
     pub fn connection_count(&self) -> usize {
         self.connections.len()
+    }
+
+    /// Cumulative media counters for the connection that currently owns
+    /// `user_id`, or `None` when that account has no live media connection.
+    pub fn connection_media_stats(&self, user_id: i64) -> Option<ConnectionMediaStats> {
+        self.connections
+            .get(&user_id)
+            .map(|entry| entry.media_stats())
+    }
+
+    /// Cumulative media counters for every live connection in one room,
+    /// ordered by user id so a caller sees a stable list.
+    pub fn room_media_stats(&self, room_id: &str) -> Vec<ConnectionMediaStats> {
+        let mut stats: Vec<_> = self
+            .connections
+            .iter()
+            .filter(|entry| entry.room_id == room_id)
+            .map(|entry| entry.media_stats())
+            .collect();
+        stats.sort_by_key(|entry| entry.user_id);
+        stats
     }
 
     /// Cached fan-out plans currently retained for one sender. Bounded by
@@ -4086,7 +4238,7 @@ mod tests {
             "s9".into(),
             tx,
             rx,
-            Some(server_conn),
+            Some(WebTransportStreams::new(server_conn, 0)),
         );
         assert!(bridged.supports_media_uni_streams());
     }
@@ -4159,7 +4311,7 @@ mod tests {
             "s3".to_string(),
             tx,
             rx,
-            Some(bridged_server),
+            Some(WebTransportStreams::new(bridged_server, 0)),
         ));
 
         // One whole-frame keyframe message: cleartext header (routed on ssrc 500)
@@ -4175,17 +4327,27 @@ mod tests {
         );
 
         // Both viewers receive the identical bytes on a fresh uni stream.
-        let read_one = |conn: quinn::Connection| async move {
-            let mut recv = tokio::time::timeout(Duration::from_secs(5), conn.accept_uni())
-                .await
-                .expect("uni stream should arrive")
-                .expect("accept_uni ok");
-            recv.read_to_end(MAX_STREAM_FRAME_SIZE)
-                .await
-                .expect("read to FIN")
-        };
-        let got_quic = read_one(quic_client).await;
-        let got_bridged = read_one(bridged_client).await;
+        // The raw-QUIC viewer reads the stream directly; the bridged viewer
+        // reads it the way a browser does, through the WebTransport framing —
+        // which is the whole point: the message body must be byte-identical on
+        // both paths even though only one of them carries an HTTP/3 header.
+        let mut quic_recv = tokio::time::timeout(Duration::from_secs(5), quic_client.accept_uni())
+            .await
+            .expect("uni stream should arrive")
+            .expect("accept_uni ok");
+        let got_quic = quic_recv
+            .read_to_end(MAX_STREAM_FRAME_SIZE)
+            .await
+            .expect("read to FIN");
+        let browser = WebTransportStreams::new(bridged_client, 0);
+        let mut bridged_recv = tokio::time::timeout(Duration::from_secs(5), browser.accept_uni())
+            .await
+            .expect("uni stream should arrive")
+            .expect("accept_uni ok");
+        let got_bridged = bridged_recv
+            .read_to_end(MAX_STREAM_FRAME_SIZE)
+            .await
+            .expect("read to FIN");
         assert_eq!(got_quic, body, "raw-QUIC viewer receives identical bytes");
         assert_eq!(
             got_bridged, body,
@@ -4400,6 +4562,108 @@ mod tests {
         add_bridged_session(forwarder, uid, room_id, &format!("s{uid}"));
     }
 
+    /// The relay counts the media it actually moved, per connection, and keeps
+    /// counting it: this is the only thing that can answer "did this
+    /// participant's audio reach the server" after the fact, because the
+    /// bandwidth estimator's window decays to nothing seconds after a peer
+    /// stops sending.
+    #[tokio::test]
+    async fn media_counters_record_what_each_connection_sent_and_received() {
+        let mgr = MediaRoomManager::new();
+        for uid in [1, 2] {
+            mgr.join_room(
+                7,
+                100,
+                crate::participant::MediaParticipant::new(uid, format!("s{uid}")),
+            )
+            .unwrap();
+        }
+        let room_id = mgr.get_or_create_room(7, 100);
+        let forwarder = Arc::new(RelayForwarder::new(
+            Arc::new(mgr),
+            Arc::new(SpeakerDetector::new()),
+        ));
+
+        // The publisher's inbound channel stands in for its browser's datagrams;
+        // the viewer's outbound channel is what the fan-out writes to.
+        let (pub_out_tx, _pub_out_rx) = mpsc::channel::<Bytes>(8);
+        let (pub_in_tx, pub_in_rx) = mpsc::channel::<Bytes>(8);
+        let publisher = ConnectionHandle::new_bridged(
+            1,
+            room_id.clone(),
+            "s1".into(),
+            pub_out_tx,
+            pub_in_rx,
+            None,
+        );
+        let (view_out_tx, mut view_out_rx) = mpsc::channel::<Bytes>(8);
+        let (_view_in_tx, view_in_rx) = mpsc::channel::<Bytes>(8);
+        let viewer = ConnectionHandle::new_bridged(
+            2,
+            room_id.clone(),
+            "s2".into(),
+            view_out_tx,
+            view_in_rx,
+            None,
+        );
+        forwarder.add_connection(publisher.clone());
+        forwarder.add_connection(viewer.clone());
+
+        assert_eq!(
+            forwarder
+                .connection_media_stats(1)
+                .unwrap()
+                .datagrams_received,
+            0,
+            "a fresh connection has moved nothing"
+        );
+
+        forwarder.spawn_forwarding_task(publisher.clone());
+
+        let mut header = audio_header(11);
+        header.payload_length = 4;
+        let mut packet = header.to_bytes().to_vec();
+        packet.extend_from_slice(b"opus");
+        let packet_len = packet.len();
+        pub_in_tx.send(Bytes::from(packet.clone())).await.unwrap();
+
+        let forwarded = tokio::time::timeout(Duration::from_secs(5), view_out_rx.recv())
+            .await
+            .expect("the viewer receives the packet")
+            .expect("the fan-out channel is open");
+        assert_eq!(forwarded.as_ref(), packet.as_slice());
+
+        let publisher_stats = forwarder.connection_media_stats(1).unwrap();
+        assert_eq!(publisher_stats.transport, "webtransport");
+        assert_eq!(publisher_stats.session_id, "s1");
+        assert_eq!(publisher_stats.datagrams_received, 1);
+        assert_eq!(publisher_stats.audio_datagrams_received, 1);
+        assert_eq!(publisher_stats.video_datagrams_received, 0);
+        assert_eq!(publisher_stats.bytes_received, packet_len as u64);
+        // A publisher is not a recipient of its own media.
+        assert_eq!(publisher_stats.datagrams_sent, 0);
+
+        let viewer_stats = forwarder.connection_media_stats(2).unwrap();
+        assert_eq!(viewer_stats.datagrams_received, 0);
+        assert_eq!(viewer_stats.datagrams_sent, 1);
+        assert_eq!(viewer_stats.bytes_sent, packet_len as u64);
+
+        // The room read lists both connections, ordered by user id.
+        let room_stats = forwarder.room_media_stats(&room_id);
+        assert_eq!(
+            room_stats
+                .iter()
+                .map(|entry| entry.user_id)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert!(
+            forwarder.room_media_stats("7:999").is_empty(),
+            "another room's counters must not leak into this one"
+        );
+        assert!(forwarder.connection_media_stats(404).is_none());
+    }
+
     #[tokio::test]
     async fn keyframe_commit_flips_forwarded_layer_at_boundary() {
         let mgr = MediaRoomManager::new();
@@ -4607,7 +4871,7 @@ mod tests {
         user_id: i64,
         room_id: &str,
         session_id: &str,
-        control: Option<quinn::Connection>,
+        control: Option<WebTransportStreams>,
     ) -> ConnectionHandle {
         let (tx, _out_rx) = mpsc::channel::<Bytes>(8);
         let (_in_tx, rx) = mpsc::channel::<Bytes>(8);
@@ -4943,7 +5207,12 @@ mod tests {
             let (second_conn, _second_client) = quinn_pair().await;
 
             let first = if bridged {
-                bridged_with_control(1, &room_id, "call-1", Some(first_conn))
+                bridged_with_control(
+                    1,
+                    &room_id,
+                    "call-1",
+                    Some(WebTransportStreams::new(first_conn, 0)),
+                )
             } else {
                 ConnectionHandle::new(1, room_id.clone(), "call-1".to_string(), first_conn)
             };
@@ -4966,7 +5235,12 @@ mod tests {
             )
             .unwrap();
             let second = if bridged {
-                bridged_with_control(1, &room_id, "call-2", Some(second_conn))
+                bridged_with_control(
+                    1,
+                    &room_id,
+                    "call-2",
+                    Some(WebTransportStreams::new(second_conn, 0)),
+                )
             } else {
                 ConnectionHandle::new(1, room_id.clone(), "call-2".to_string(), second_conn)
             };

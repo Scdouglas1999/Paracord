@@ -132,18 +132,15 @@ async function dismissLayoutTour(page: Page): Promise<void> {
 }
 
 async function openConnectionCheck(page: Page): Promise<void> {
-  // The desktop shell has a settings button in the user panel; the phone layout
-  // reaches the same surface through the bottom navigation bar.
-  const desktopEntry = page.getByRole('button', { name: 'Open user settings', exact: true });
-  const phoneEntry = page.getByRole('button', { name: 'Settings', exact: true });
-  // Wait for whichever shell rendered before deciding, so a slow first paint
-  // does not silently send a desktop run down the phone path.
-  await expect(desktopEntry.or(phoneEntry).first()).toBeVisible();
-  if ((await desktopEntry.count()) > 0) {
-    await desktopEntry.click();
-  } else {
-    await phoneEntry.click();
-  }
+  // Pick the entry point by viewport rather than by probing: the desktop user
+  // panel and the phone navigation bar swap at Tailwind's `md` breakpoint, and
+  // the losing one is unmounted a tick later.
+  const width = page.viewportSize()?.width ?? 1280;
+  const entry =
+    width < 768
+      ? page.getByRole('button', { name: 'Settings', exact: true })
+      : page.getByRole('button', { name: 'Open user settings', exact: true });
+  await entry.click();
   await page.getByRole('button', { name: 'Voice & video', exact: true }).click();
   await page.getByRole('button', { name: /Run connection check/i }).click();
   await expect(page.getByRole('dialog').filter({ hasText: 'Voice connection check' })).toBeVisible();
@@ -200,30 +197,29 @@ test.describe('voice connection check against a reachable media endpoint', () =>
       expect(typeof payload.certificate_pin_sha256).toBe('string');
 
       await expect(step(page, 'secure-context')).toHaveAttribute('data-status', 'pass');
-      // A headless runner has no real capture hardware, so the microphone step
-      // may legitimately report a problem. What must hold is that it settles
-      // with a precise, named cause rather than hanging or going vague.
-      await expect(step(page, 'microphone')).toHaveAttribute('data-status', /pass|warn|fail/);
-      await expect(step(page, 'microphone')).toContainText(/MIC_[A-Z_]+/);
+      // Chromium is launched with a fake capture device, so the microphone step
+      // must actually pass. It used to report MIC_DENIED here no matter what,
+      // because the server sent `Permissions-Policy: camera=(), microphone=()`
+      // on its own UI document and disabled `getUserMedia` for every browser
+      // client. This assertion is what keeps that header honest.
+      await expect(step(page, 'microphone')).toHaveAttribute('data-status', 'pass');
+      await expect(step(page, 'microphone')).toContainText(/MIC_OK/);
       await expect(step(page, 'media-configuration')).toHaveAttribute('data-status', 'pass');
       await expect(step(page, 'media-configuration')).toContainText(
         `https://127.0.0.1:${MEDIA_PORT}/media`,
       );
 
-      // The transport step must settle — pass or a precisely classified failure —
-      // and must never be left running or ambiguous.
+      // The media listener is bound on loopback and definitely answering, and
+      // the certificate it presents is inside the 14-day window Chromium
+      // requires of a `serverCertificateHashes` pin, so this must actually
+      // connect. Anything less is the defect this case exists to catch: before
+      // the certificate fix the handshake was refused in 1–3 ms on every
+      // network including this one, and the failure was indistinguishable from
+      // a blocked UDP port.
       const transport = step(page, 'transport');
-      await expect(transport).not.toHaveAttribute('data-status', 'pending', { timeout: 60_000 });
-      await expect(transport).not.toHaveAttribute('data-status', 'running', { timeout: 60_000 });
-      const status = await transport.getAttribute('data-status');
-      expect(['pass', 'fail']).toContain(status);
-      if (status === 'fail') {
-        // A refusal here is a certificate problem, not a reachability one: the
-        // media listener is bound on loopback and definitely answering.
-        await expect(transport).toContainText(/TRANSPORT_(CERTIFICATE_REFUSED|HANDSHAKE_FAILED)/);
-      } else {
-        await expect(transport).toContainText(/Opened a media connection/);
-      }
+      await expect(transport).toHaveAttribute('data-status', 'pass', { timeout: 60_000 });
+      await expect(transport).toContainText(/TRANSPORT_OK/);
+      await expect(transport).toContainText(/Opened a media connection/);
 
       // Export becomes available as soon as there is a report to export.
       await expect(page.getByRole('button', { name: /Export diagnostics/i })).toBeEnabled();

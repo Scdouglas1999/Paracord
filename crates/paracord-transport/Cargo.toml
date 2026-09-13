@@ -10,6 +10,7 @@ license-file.workspace = true
 quinn = { workspace = true }
 h3 = { workspace = true }
 h3-quinn = { workspace = true }
+http = { workspace = true }
 rustls = { workspace = true }
 
 # Workspace crates
@@ -27,6 +28,7 @@ jsonwebtoken = { workspace = true }
 
 # Crypto / TLS
 rcgen = { workspace = true }
+time = { workspace = true }
 rand = { workspace = true }
 ed25519-dalek = { workspace = true }
 base64 = { workspace = true }
@@ -44,3 +46,9 @@ dashmap = { workspace = true }
 
 # Bytes
 bytes = { workspace = true }
+
+[dev-dependencies]
+# Independently parses generated certificates so the validity-window test
+# asserts against the DER that actually goes on the wire, not against the
+# parameters we asked rcgen for. Test-only: it is not linked into the server.
+x509-parser = { workspace = true }

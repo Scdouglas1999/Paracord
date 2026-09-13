@@ -665,7 +665,7 @@ async fn verify_secret_recovery(
 }
 
 fn decode_hex_bytes(value: &str) -> Option<Vec<u8>> {
-    if value.len() % 2 != 0 || !value.is_ascii() {
+    if !value.len().is_multiple_of(2) || !value.is_ascii() {
         return None;
     }
     (0..value.len())

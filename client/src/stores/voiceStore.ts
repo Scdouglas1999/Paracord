@@ -3193,7 +3193,15 @@ async function performCallJoin(owner: CallSession, previousMute: boolean, previo
           try {
             owner.assertCurrent();
             bindEngine(owner, engine);
-            await engine.connect(endpoint, token, data.cert_hash, { id: owner.id, signal: owner.signal, account: owner.context });
+            await engine.connect(endpoint, token, data.cert_hash, {
+              id: owner.id,
+              signal: owner.signal,
+              account: owner.context,
+              // The join response's pin is correct now; a reconnect minutes or
+              // hours later may not be, because the server rotates its media
+              // certificate. Let the engine re-read it rather than replay it.
+              refreshCertHash: () => api.mediaCertificatePin(),
+            });
             owner.assertCurrent();
             const muted = shouldMute || data.suppress === true;
             engine.setMute(muted);

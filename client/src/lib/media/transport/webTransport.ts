@@ -10,6 +10,19 @@ export interface StreamControlMessage {
   [key: string]: unknown;
 }
 
+/**
+ * Re-reads the media certificate pin the server currently publishes.
+ *
+ * Supplied by the caller (the voice store, from the authenticated
+ * transport-diagnostics route) so this module stays free of API wiring and the
+ * tests can drive it with a fake.
+ */
+export type CertHashRefresher = () => Promise<string | undefined>;
+
+/** Surfaced when a rotation is confirmed but the fresh pin is refused too. */
+export const REFRESHED_PIN_REFUSED =
+  "The server's media certificate changed and the new one was refused as well";
+
 export class WebTransportManager {
   private transport: WebTransport | null = null;
   private generation = 0;
@@ -37,20 +50,52 @@ export class WebTransportManager {
   private lastUrl = '';
   private lastToken = '';
   private lastCertHash?: string;
+  private refreshCertHash: CertHashRefresher | null = null;
+  /**
+   * Whether the one-shot "the pin may be stale" retry is still available.
+   *
+   * Armed on connect and re-armed after every successful handshake, so a
+   * rotation that happens mid-session still gets exactly one refetch-and-retry
+   * rather than an unbounded refetch loop against the control plane.
+   */
+  private certRefreshArmed = false;
 
   get isConnected(): boolean {
     return this.transport !== null;
   }
 
-  async connect(url: string, token: string, certHash?: string): Promise<void> {
+  async connect(
+    url: string,
+    token: string,
+    certHash?: string,
+    refreshCertHash?: CertHashRefresher,
+  ): Promise<void> {
     if (this.disposed) throw new DOMException('Transport was disposed.', 'AbortError');
     this.lastUrl = url;
     this.lastToken = token;
     this.lastCertHash = certHash;
+    this.refreshCertHash = refreshCertHash ?? null;
+    this.certRefreshArmed = true;
     this.shouldReconnect = true;
     this.reconnectAttempts = 0;
 
     await this.establishConnection(url, token, certHash);
+  }
+
+  /**
+   * Ask the server what pin it publishes now, never throwing.
+   *
+   * A failure here means the control plane is unreachable too, which is not a
+   * certificate problem — the caller keeps the pin it already has and lets the
+   * ordinary reconnect backoff report the real cause.
+   */
+  private async refetchCertHash(): Promise<string | undefined> {
+    if (!this.refreshCertHash) return undefined;
+    try {
+      return (await this.refreshCertHash()) || undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   private async establishConnection(url: string, token: string, certHash?: string): Promise<void> {
@@ -113,6 +158,7 @@ export class WebTransportManager {
       }
 
       this.reconnectAttempts = 0;
+      this.certRefreshArmed = true;
 
       const isRestore = this.hasConnectedOnce;
       if (isRestore) {
@@ -141,6 +187,30 @@ export class WebTransportManager {
       if (!this.current(generation, transport)) throw err;
       this.releaseDatagramWriter();
       this.transport = null;
+
+      // The server rotates its media certificate (it must stay inside the
+      // 14-day window browsers accept for a pinned one), and a pin cached from
+      // an earlier join names a certificate the media port no longer presents.
+      // The browser refuses that handshake in milliseconds with an error that
+      // reads exactly like a blocked UDP port, so message matching cannot tell
+      // the two apart — re-reading the published pin can. Do it once: if the
+      // pin actually changed, the cached one was stale and the retry is the
+      // fix; if it did not, this was never a certificate problem and the
+      // original error stands.
+      if (this.certRefreshArmed && this.refreshCertHash && certHash) {
+        this.certRefreshArmed = false;
+        const fresh = await this.refetchCertHash();
+        if (fresh && fresh !== certHash && this.current(generation)) {
+          this.lastCertHash = fresh;
+          try {
+            return await this.establishConnection(url, token, fresh);
+          } catch (retryErr) {
+            const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+            throw new Error(`${REFRESHED_PIN_REFUSED}: ${retryMsg}`);
+          }
+        }
+      }
+
       const msg = err instanceof Error ? err.message : 'Unknown connection error';
       if (this.shouldReconnect && this.reconnectAttempts < this.maxReconnectAttempts) {
         this.scheduleReconnect();
@@ -408,6 +478,13 @@ export class WebTransportManager {
     const delayMs = Math.min(500 * Math.pow(2, this.reconnectAttempts - 1), 30_000);
     this.reconnectTimer = setTimeout(async () => {
       this.reconnectTimer = null;
+      if (this.disposed || !this.shouldReconnect || generation !== this.generation) return;
+      // Read the pin fresh on every reconnect rather than replaying the one the
+      // join handed us: a server that rotated its media certificate while this
+      // session was down would otherwise refuse every attempt until the backoff
+      // is exhausted.
+      const fresh = await this.refetchCertHash();
+      if (fresh) this.lastCertHash = fresh;
       if (this.disposed || !this.shouldReconnect || generation !== this.generation) return;
       try {
         await this.establishConnection(this.lastUrl, this.lastToken, this.lastCertHash);

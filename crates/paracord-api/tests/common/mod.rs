@@ -374,7 +374,7 @@ pub async fn build_test_app(options: TestAppOptions) -> anyhow::Result<TestApp> 
             speaker_detector,
             endpoint: Arc::new(endpoint),
             relay_forwarder,
-            cert_hash,
+            cert_hash: paracord_core::MediaCertHash::new(cert_hash),
         })
     } else {
         None

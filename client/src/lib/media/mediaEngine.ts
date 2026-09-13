@@ -125,6 +125,18 @@ export interface MediaSessionContext {
   readonly id: string;
   readonly signal: AbortSignal;
   readonly account?: OperationContext;
+  /**
+   * Re-read the media certificate pin the server publishes right now.
+   *
+   * The pin handed to {@link MediaEngine.connect} comes from the join response
+   * and is correct at that instant, but the server rotates its media
+   * certificate (it has to: browsers only accept a pinned one valid for at most
+   * 14 days). An engine that reconnects must re-read the pin instead of
+   * replaying the joined-with one, because a stale pin is refused in
+   * milliseconds with an error a browser reports identically to a blocked
+   * UDP port.
+   */
+  readonly refreshCertHash?: () => Promise<string | undefined>;
 }
 
 export interface MediaEngine {

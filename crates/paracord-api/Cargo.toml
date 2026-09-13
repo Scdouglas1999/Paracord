@@ -54,3 +54,6 @@ sqlx = { workspace = true }
 # (bound QUIC endpoint + cert hash) so native voice routes exercise the full
 # native contract, including cert_hash.
 paracord-transport = { workspace = true }
+# Test-only: the relay's datagram API is expressed in `Bytes`, so a test that
+# registers a live connection against the shared RelayForwarder needs it.
+bytes = { workspace = true }

@@ -513,7 +513,10 @@ async fn stop_capture_internal(state: &MediaState, revoke_consent: bool) -> Resu
     Ok(())
 }
 
-async fn announce_screen_track(state: &MediaState, app: &super::CallEventSink) -> Result<(), String> {
+async fn announce_screen_track(
+    state: &MediaState,
+    app: &super::CallEventSink,
+) -> Result<(), String> {
     let mut guard = state.session.lock().await;
     let session = guard.as_mut().ok_or("no active session")?;
     let track = build_screen_track(session)?;

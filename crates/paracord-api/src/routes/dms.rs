@@ -517,7 +517,7 @@ pub async fn join_dm_voice(
         )
         .unwrap_or_default();
 
-        let cert_hash = state.native_media.as_ref().map(|nm| nm.cert_hash.clone());
+        let cert_hash = state.native_media.as_ref().map(|nm| nm.cert_hash.get());
 
         state.event_bus.dispatch_to_users(
             "VOICE_STATE_UPDATE",

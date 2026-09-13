@@ -61,3 +61,45 @@ describe('native adapter deferred ownership', () => {
     expect(ipc.invoke).not.toHaveBeenCalledWith('voice_enable_video', expect.objectContaining({ enabled: true }));
   });
 });
+
+describe('native media certificate pin', () => {
+  // The desktop engine has no in-engine reconnect: a lost connection surfaces
+  // through `media_transport_lost` and the call is closed, so the next attempt
+  // is a fresh join with a fresh pin. What must hold is that the engine never
+  // substitutes a remembered pin for the one it was handed — after a server
+  // rotation, a remembered pin names a certificate the media port no longer
+  // presents and the pinned QUIC handshake fails closed.
+  it('passes each join its own pin rather than reusing the previous one', async () => {
+    ipc.invoke.mockImplementation((command) =>
+      command === 'start_voice_session' ? Promise.resolve({ connected: true }) : Promise.resolve([]),
+    );
+
+    const first = engine();
+    await first.connect('https://media.example/media', 'token-one', 'pin-one');
+    expect(ipc.invoke).toHaveBeenCalledWith(
+      'start_voice_session',
+      expect.objectContaining({ certHash: 'pin-one', ownerId: first.sessionOwnerId }),
+    );
+    await first.disconnect();
+
+    // The server rotated its media certificate between the two joins.
+    const second = engine();
+    await second.connect('https://media.example/media', 'token-two', 'pin-two');
+    expect(ipc.invoke).toHaveBeenCalledWith(
+      'start_voice_session',
+      expect.objectContaining({ certHash: 'pin-two', ownerId: second.sessionOwnerId }),
+    );
+    expect(ipc.invoke).not.toHaveBeenCalledWith(
+      'start_voice_session',
+      expect.objectContaining({ certHash: 'pin-one', ownerId: second.sessionOwnerId }),
+    );
+  });
+
+  it('refuses to start a session with no pin at all rather than dialling unpinned', async () => {
+    const media = engine();
+    await expect(media.connect('https://media.example/media', 'token', undefined)).rejects.toThrow(
+      /certificate pin/i,
+    );
+    expect(ipc.invoke).not.toHaveBeenCalledWith('start_voice_session', expect.anything());
+  });
+});

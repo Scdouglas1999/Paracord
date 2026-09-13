@@ -22,7 +22,7 @@ acceptable for encrypted or account-scoped operations.
 | 10 | Patched HTTP dependency graph; independent Rust/npm audit jobs; dependency-update PR configuration; audit and HTTP/release validation | Complete |
 | 11 | Home Needs You with previews/context/actions and ranking reasons; truthful quiet state; stable focus/hover; reduced duplication; multi-space verification | Complete |
 | 12 | Header action hierarchy and overflow menu; active panels remain discoverable; distinct unread and mention indicators; responsive/keyboard verification | Complete |
-| 13 | Guided voice permission/device/secure-context/codec/certificate/transport checks; join-failure and setup entry points; redacted export; blocked-UDP recovery test | In progress |
+| 13 | Guided voice permission/device/secure-context/codec/certificate/transport checks; join-failure and setup entry points; redacted export; blocked-UDP recovery test | Complete (browser; the desktop native-QUIC probe is specified, not built) |
 | 14 | Call-session lifecycle/cancellation/teardown ownership; explicit call states; device preference separation; separate outbox/history/encryption/row responsibilities; lifecycle tests | In progress |
 | 15 | Real UI two-user/two-server tests: enrollment/DM, attachment confidentiality, response loss, replay/history, revoked permission, unsupported poll, mobile typing width | In progress (enrollment/DM, attachment confidentiality, response loss, replay/history, first-owner setup exist as real-server tests; two servers, revoked permission, unsupported poll, mobile width remain) |
 | 16 | Secure first-owner claim/setup, naming and initial space; complete password guidance; isolated restore verification; released SQLite upgrade fixture; encrypted-media recovery keys/config; operator-facing evidence | In progress |
@@ -1800,8 +1800,33 @@ own evidence, exact commands and honest gaps are in
   (scheduled task; the original `sc.exe` service path was wrong for a
   non-service-aware binary and was replaced), no-clone Docker path, CI installer
   smoke (`scripts/ci_install_smoke.sh`), docs.
-- **Item 13 — `voice-diagnostics`.** In progress at the time of this commit;
-  its files land in a follow-up commit.
+- **Item 13 — `voice-diagnostics`.** Eight-step guided check with a redacted
+  export, entry points in settings and on join failure, real blocked-UDP e2e.
+  Its transport step exposed that **no browser had ever been able to reach
+  native voice**: the media certificate was generated with rcgen's default
+  1975→4096 validity while Chromium pins only ≤14-day ECDSA P-256 certs.
+- **Browser voice (follow-ups `media-cert-rotation`, `browser-voice-join`).**
+  13-day certificate with live rotation (`MediaEndpoint::set_certificate`,
+  ArcSwap'd pin, clients refetch on reconnect); WebTransport CONNECT answered
+  and held; CSP `connect-src https:`; HTTP/3 session-header framing on bridged
+  streams and quarter-stream-id datagrams; immediate leave on CONNECT close;
+  `Permissions-Policy` allowing mic/camera; the audio worklet referenced as an
+  asset (it was inlined as `data:` TypeScript in every production build);
+  per-connection relay media counters + `GET /voice/{channel}/media-stats`.
+  Proven by a Chromium join with fake audio (≥10 datagrams under the join's
+  own receipt, leave within 15 s) and a two-browser audio exchange.
+- **Lint/format.** Workspace clean under CI's pinned Rust 1.91 clippy with
+  `-D warnings` and under the local 1.98 toolchain; rustfmt clean.
+
+Final gate on this branch (2026-09-13): rustfmt · clippy 1.91 · 83 test
+binaries / 1,481 tests on SQLite · `paracord-api` + `paracord-db` +
+`paracord-core` on PostgreSQL · client typecheck, eslint, 2,0xx unit tests,
+static a11y, contrast, production build, contracts check · release server build
+· Playwright mocked 84, real-server 13, production messaging, DM attachment
+confidentiality · installer smoke, shellcheck, Python syntax, migration sanity —
+all green. One workspace test link failed once with SIGBUS from btrfs checksum
+errors on the development machine's volume (hardware, not code) and passed on
+re-run.
 
 Not complete: items 2 (remaining unowned API workflows, connection lifetime),
 6 (real device keyboard), 7 (encrypted scheduling), 13, 14 (client voiceStore
