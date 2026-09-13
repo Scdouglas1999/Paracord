@@ -14,6 +14,7 @@ import { getAccountChannelView } from '../channelView';
 import { openAccountVault } from '../crypto/accountVaultSession';
 import { openDeviceAccountVault } from '../crypto/deviceAccountVault';
 import { createAccountPrekeyEnrollment, PrekeyEnrollmentError } from '../crypto/prekeyEnrollment';
+import { MissingPrivatePrekeyError } from '../crypto/sessionManager';
 import { registerIdentityTrustVault, releaseIdentityTrustVault } from '../crypto/identityTrust';
 import { getDatabaseHistoryEpoch, subscribeDatabaseHistory } from '../databaseHistory';
 import { DatabaseHistoryExpiredError } from '../operationContext';
@@ -663,6 +664,16 @@ export class AccountMessagingRuntime {
             this.receiveFailures.delete(value.channel_id);
           } catch (error) {
             identity.session.assertCurrent(); local.session.assertCurrent();
+            // A message sealed to a key this device never held reads
+            // "[Encrypted message]" and nothing more. It is the documented cost
+            // of setting up new keys after a recovery-phrase restore, not
+            // evidence that anything is wrong, so it must not fence the
+            // conversation the way a failed authentication does — otherwise a
+            // restored device could never send again, and anyone able to post
+            // ciphertext could silence a conversation by naming a prekey id
+            // nobody has. The envelope stays durable in case a backup is
+            // imported later.
+            if (error instanceof MissingPrivatePrekeyError) continue;
             // The encrypted envelope remains durable for a later recovery attempt.
             this.store.setState({ encryptionError: errorText(error) });
             this.receiveFailures.set(value.channel_id, error instanceof Error ? error : new Error(errorText(error)));

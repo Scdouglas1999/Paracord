@@ -24,6 +24,7 @@ vi.mock('./durableDm', () => ({ createDurableDm: (vault: AccountVault) => ({
 }) }));
 
 import { AccountMessagingRuntime } from './accountMessagingRuntime';
+import { MissingPrivatePrekeyError } from '../crypto/sessionManager';
 import { useAuthStore } from '../../stores/authStore';
 import { useServerListStore } from '../../stores/serverListStore';
 import { useAccountStore } from '../../stores/accountStore';
@@ -150,6 +151,25 @@ describe('production encrypted event journal', () => {
     expect(await local.vault.transact(tx => tx.list('messages.encrypted-inbox'))).toHaveLength(1);
     await runtime.ingestEncryptedMessage(message('101'));
     expect(await local.vault.transact(tx => tx.list('messages.encrypted-inbox'))).toEqual([]);
+  });
+  // The other half of that rule: a message sealed to a key this device has
+  // never held is not evidence of anything. It is what history looks like after
+  // a recovery-phrase restore, and fencing the conversation for it would leave
+  // the restored device unable to send at all — and would hand anyone who can
+  // post ciphertext a way to silence a conversation by naming a prekey id
+  // nobody has.
+  it('leaves a conversation usable when a message was sealed to a key this device never held', async () => {
+    useAccountStore.setState({ isUnlocked: true }); await runtime.enroll();
+    fixture.decrypt.mockRejectedValueOnce(new MissingPrivatePrekeyError('never held'));
+    await runtime.ingestEncryptedMessage(message('100'));
+    const state = runtime.store.getState();
+    expect(state.encryptionError).toBeNull();
+    expect(state.channelErrors?.['10']).toBeUndefined();
+    // The envelope stays, in case the account's encrypted backup is imported.
+    expect(await local.vault.transact(tx => tx.list('messages.encrypted-inbox'))).toHaveLength(1);
+    // And the next message in the same conversation is still read.
+    await runtime.ingestEncryptedMessage(message('101'));
+    expect(fixture.decrypt).toHaveBeenCalledTimes(3);
   });
   // A failed AEAD open is a DOMException named OperationError whose message is
   // the empty string; the composer's recovery notice and the per-channel error

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { assertLocalPrekeys, assertPrekeyOwnership, assertPublishedPrekeys } from './prekeyEnrollment';
-import { generatePrekeyBundle, serializePrekeyStore, deserializePrekeyStore, getSignedPrekeyPair } from './sessionManager';
+import { generatePrekeyBundle, serializePrekeyStore, deserializePrekeyStore, getSignedPrekeyPair, MissingPrivatePrekeyError } from './sessionManager';
 import { bytesToHex, toBase64 } from './util';
 import type { OwnPublicKeysResponse } from '../../api/keys';
 
@@ -55,7 +55,9 @@ describe('verified prekey ownership', () => {
     const loaded = deserializePrekeyStore(serializePrekeyStore(store));
     expect(getSignedPrekeyPair(loaded, old.id)).toEqual({ publicKey: old.publicKey, privateKey: old.privateKey });
     expect(getSignedPrekeyPair(loaded, current.id).publicKey).toEqual(current.publicKey);
-    expect(() => getSignedPrekeyPair(loaded, current.id + 1)).toThrow(/signed key.*missing/);
+    // A key this device never held is its own kind of failure: it is the state
+    // of history after a recovery-phrase restore, not a sign of tampering.
+    expect(() => getSignedPrekeyPair(loaded, current.id + 1)).toThrow(MissingPrivatePrekeyError);
     expect(() => getSignedPrekeyPair(loaded, NaN)).toThrow(/Invalid/);
   });
 });

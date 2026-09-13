@@ -331,12 +331,27 @@ export function ensureLocalLastResortPrekey(store: LocalPrekeyStore): LocalPreke
 }
 
 /**
+ * A message sealed to a private key this device has never held — the ordinary
+ * state of history after a recovery-phrase restore, where the account's old
+ * bundle stayed on the device that is gone.
+ *
+ * It is kept apart from every other decryption failure because it means
+ * something different. A failed authentication says the ciphertext or the
+ * session is not what it claims and the conversation should stop until somebody
+ * looks; this says only that the key was never here, which no amount of looking
+ * will change and which nobody can do anything about except import a backup.
+ */
+export class MissingPrivatePrekeyError extends Error {
+  constructor(message: string) { super(message); this.name = 'MissingPrivatePrekeyError'; }
+}
+
+/**
  * Get the signed prekey pair from the store as an X25519KeyPair.
  */
 export function getSignedPrekeyPair(store: LocalPrekeyStore, id?: number): X25519KeyPair {
   if (id !== undefined && (!Number.isSafeInteger(id) || id < 0)) throw new Error('Invalid signed-prekey ID.');
   const key = id === undefined || store.signedPrekey.id === id ? store.signedPrekey
     : store.signedPrekeyArchive?.find(key => key.id === id);
-  if (!key) throw new Error('The signed key for this message is missing. Restore the account’s encrypted key backup.');
+  if (!key) throw new MissingPrivatePrekeyError('This message was sealed to an encryption key this device has never held. Import the account’s encrypted backup to read it.');
   return { publicKey: key.publicKey, privateKey: key.privateKey };
 }
