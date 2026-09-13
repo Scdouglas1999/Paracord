@@ -4,7 +4,7 @@ import { Home, MessageSquare, Plus } from 'lucide-react';
 // §5.1: a column that changes order glides — buildings ride the spring-settle
 // FLIP as the attention ranking re-sorts them, new rows fade+rise, removed
 // rows fall away as ghosts. First mount only measures; reduced motion lands.
-import { useFlipList } from '../../../lib/motion';
+import { RollingNumber, useFlipList } from '../../../lib/motion';
 import { Button, Chip, NavRow, Well } from '../../ui';
 import type { BuildingLight, RoomLight } from '../../../lib/attention/light';
 import { BuildingSection } from './BuildingSection';
@@ -189,7 +189,11 @@ export function BuildingsColumn({
                 tone="talking"
                 aria-label={`${needsYouCount} ${needsYouCount === 1 ? 'conversation needs' : 'conversations need'} you`}
               >
-                {needsYouCount > 99 ? '99+' : needsYouCount}
+                <RollingNumber
+                  value={needsYouCount}
+                  format={(count) => (count > 99 ? '99+' : String(count))}
+                  announce={false}
+                />
               </Chip>
             ) : null
           }
@@ -212,7 +216,11 @@ export function BuildingsColumn({
                 size="sm"
                 aria-label={`${messagesCount} unread ${messagesCount === 1 ? 'conversation' : 'conversations'}`}
               >
-                {messagesCount > 99 ? '99+' : messagesCount}
+                <RollingNumber
+                  value={messagesCount}
+                  format={(count) => (count > 99 ? '99+' : String(count))}
+                  announce={false}
+                />
               </Chip>
             ) : null
           }

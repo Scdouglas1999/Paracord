@@ -1,5 +1,6 @@
 import { memo } from 'react';
 
+import { RollingNumber } from '../../../lib/motion';
 import { cn } from '../../../lib/utils';
 import { Chip, NavRow } from '../../ui';
 import { LightCaption, RoomThumbnail, roomCaptionFor } from '../../light';
@@ -68,7 +69,13 @@ function RoomTrailing({ room, attention }: { room: RoomLight; attention?: RoomAt
         tone="accent"
         aria-label={`${attention.mentionCount} ${attention.mentionCount === 1 ? 'mention' : 'mentions'}`}
       >
-        {attention.mentionCount > 99 ? '99+' : attention.mentionCount}
+        {/* §5.1: a mention count that changes re-rolls. The chip already
+            carries the words, so the roll itself stays silent. */}
+        <RollingNumber
+          value={attention.mentionCount}
+          format={(count) => (count > 99 ? '99+' : String(count))}
+          announce={false}
+        />
       </Chip>
     );
   }
