@@ -77,6 +77,21 @@ const ANCHOR_POLL_MS = 250;
 
 const GUILD_HOME_PATH = /^\/app\/guilds\/[^/]+$/;
 
+/** How often a tour that is waiting its turn looks again. */
+const START_POLL_MS = 300;
+
+/**
+ * Is another first-run surface already holding the screen?
+ *
+ * A brand-new phone user met three overlays in one session — the building's
+ * welcome modal, the shell coach marks and the Lobby coach mark — and dismissed
+ * all three before seeing the product. Each is fine; together they are a queue,
+ * so a tour waits while a modal dialog is open and starts when it closes.
+ */
+function modalIsOpen(): boolean {
+  return document.querySelector('[role="dialog"][aria-modal="true"]') !== null;
+}
+
 function stepsFor(tour: TourName): TourStepDef[] {
   return tour === 'shell' ? SHELL_STEPS : GUILD_STEPS;
 }
@@ -103,7 +118,10 @@ function computePosition(rect: DOMRect, side: 'right' | 'top'): { top: number; l
 
   if (side === 'right') {
     left = rect.right + gap;
-    top = rect.top + Math.min(24, rect.height * 0.1);
+    // Beside the MIDDLE of the anchor, not its top. `rect.top + min(24, …)`
+    // capped out immediately on a full-height sidebar, so step one always
+    // landed at y=24 — squarely on the page's own heading.
+    top = rect.top + rect.height / 2 - estHeight / 2;
     if (left + TOOLTIP_W + margin > vw) {
       // No room to the right — drop below the anchor's top edge instead.
       left = rect.left;
@@ -166,25 +184,26 @@ export function LayoutTour() {
   // first paint still lands the coach-mark. Steps with no anchor are skipped.
   useEffect(() => {
     if (shellDone || active) return undefined;
-    let raf = 0;
-    let tries = 0;
+    let timer = 0;
     let cancelled = false;
     const attempt = () => {
       if (cancelled) return;
-      const idx = SHELL_STEPS.findIndex((s) => findAnchor(s.selector));
-      if (idx >= 0) {
-        setActive({ tour: 'shell', index: idx });
-        return;
+      if (!modalIsOpen()) {
+        const idx = SHELL_STEPS.findIndex((s) => findAnchor(s.selector));
+        if (idx >= 0) {
+          setActive({ tour: 'shell', index: idx });
+          return;
+        }
       }
-      if (tries < 30) {
-        tries += 1;
-        raf = requestAnimationFrame(attempt);
-      }
+      // Keep looking: the anchor may still be painting, or a welcome modal may
+      // be in front of it waiting to be dismissed.
+      timer = window.setTimeout(attempt, START_POLL_MS);
     };
-    attempt();
+    const raf = requestAnimationFrame(attempt);
     return () => {
       cancelled = true;
       cancelAnimationFrame(raf);
+      window.clearTimeout(timer);
     };
   }, [shellDone, active]);
 
@@ -193,27 +212,32 @@ export function LayoutTour() {
   // never appears (e.g. the guild is unreachable) the step is skipped silently and
   // stays un-persisted so it can still fire on a later visit.
   useEffect(() => {
-    if (guildDone || active || !isGuildHome) return undefined;
-    let raf = 0;
+    // The Lobby's coach mark waits for the shell's: one at a time, the next on
+    // dismissal of the one before it.
+    if (guildDone || active || !isGuildHome || !shellDone) return undefined;
+    let timer = 0;
     let tries = 0;
     let cancelled = false;
     const attempt = () => {
       if (cancelled) return;
-      if (findAnchor(GUILD_STEPS[0].selector)) {
+      if (!modalIsOpen() && findAnchor(GUILD_STEPS[0].selector)) {
         setActive({ tour: 'guild', index: 0 });
         return;
       }
+      // Bounded: a building that never renders its rooms (unreachable, or no
+      // permission) must not leave a timer running for the session.
       if (tries < 40) {
         tries += 1;
-        raf = requestAnimationFrame(attempt);
+        timer = window.setTimeout(attempt, START_POLL_MS);
       }
     };
-    attempt();
+    const raf = requestAnimationFrame(attempt);
     return () => {
       cancelled = true;
       cancelAnimationFrame(raf);
+      window.clearTimeout(timer);
     };
-  }, [guildDone, active, isGuildHome]);
+  }, [guildDone, active, isGuildHome, shellDone]);
 
   // Track the anchor's position while a step is active — it follows scroll (inner
   // panes scroll too, hence capture) and resize so the ring/popover stay glued.
@@ -308,10 +332,32 @@ export function LayoutTour() {
           if (e.key === 'Escape') {
             e.stopPropagation();
             skip();
+            return;
+          }
+          // A dialog keeps the keyboard. Without this, Tab from "Next" walked
+          // straight out into the page behind — a keyboard user was inside an
+          // overlay with nothing to tell them they had left it.
+          if (e.key !== 'Tab') return;
+          const stops = Array.from(
+            tooltipRef.current?.querySelectorAll<HTMLElement>('button:not([disabled])') ?? [],
+          );
+          if (stops.length === 0) return;
+          const first = stops[0];
+          const last = stops[stops.length - 1];
+          const activeEl = document.activeElement;
+          if (e.shiftKey && (activeEl === first || activeEl === tooltipRef.current)) {
+            e.preventDefault();
+            last.focus();
+          } else if (!e.shiftKey && (activeEl === last || activeEl === tooltipRef.current)) {
+            e.preventDefault();
+            first.focus();
           }
         }}
         style={{ position: 'fixed', top: pos.top, left: pos.left, width: TOOLTIP_W }}
-        className="pc-enter pc-floating z-[120] p-3 outline-none"
+        // Opaque, not the 97%-alpha floating surface: a coach-mark sits ON the
+        // thing it is describing, and the display-size heading underneath was
+        // ghosting through it legibly.
+        className="pc-enter pc-coach z-[120] p-3 outline-none"
       >
         <p id={BODY_ID} className="text-label leading-relaxed text-text-primary">
           {step.body}

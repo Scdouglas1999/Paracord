@@ -55,6 +55,18 @@
   box-shadow: var(--shadow-floating);
 }
 
+/* A coach-mark: a floating card that deliberately sits ON the surface it is
+   introducing, so unlike a menu it cannot be translucent — the display-size
+   heading beneath it ghosted straight through 97% alpha. Opaque plate fill,
+   the floating depth, and a hairline so it separates from a plate of the same
+   colour underneath. */
+.pc-coach {
+  background: var(--bg-plate);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-floating);
+}
+
 /* §3: on a phone, plates round up. */
 @media (max-width: 640px) {
   .pc-dialog {
@@ -73,7 +85,7 @@
 
 /* §1.7 High contrast: surfaces get a real edge as well as their depth, so a
    plate still separates from the street when the shadow is not enough. */
-[data-theme='high-contrast'] :where(.pc-plate, .pc-floating, .pc-dialog) {
+[data-theme='high-contrast'] :where(.pc-plate, .pc-floating, .pc-dialog, .pc-coach) {
   border: 1px solid var(--border-strong);
 }
 
@@ -710,6 +722,32 @@
   outline: none;
   box-shadow: var(--pc-base-shadow, none), var(--focus-ring);
   animation: pc-ring-in var(--duration-fast) var(--ease-out);
+}
+
+/* §9 hit targets: a control a finger has to hit is 44px, whatever its ink.
+   Some controls are deliberately smaller than that — a 28px "Open" in a quiet
+   room card, a 32px filter chip, a split-button chevron — because a surface
+   built out of 44px boxes is a surface built out of buttons. `pc-touch` keeps
+   the ink the size the design asked for and carries the *hit area* out to 44px
+   around it with a pseudo-element, which is where the finger actually lands.
+
+   Coarse pointers only. A mouse does not need it, and an invisible box larger
+   than its own control would otherwise reach across the gap into a neighbour on
+   a dense desktop row. */
+@media (pointer: coarse) {
+  .pc-touch {
+    position: relative;
+  }
+
+  .pc-touch::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: max(100%, var(--h-control-phone));
+    height: max(100%, var(--h-control-phone));
+    transform: translate(-50%, -50%);
+  }
 }
 
 /* A checkbox. The native control carries the platform's own semantics (and its

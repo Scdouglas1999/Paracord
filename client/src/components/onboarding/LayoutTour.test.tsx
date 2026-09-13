@@ -160,6 +160,81 @@ describe('LayoutTour', () => {
     expect(getVersionedStorageItem(GUILD_KEY)).toBe('done');
   });
 
+  it('keeps the keyboard inside the coach-mark', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/app']}>
+        <ShellAnchors />
+        <LayoutTour />
+      </MemoryRouter>,
+    );
+
+    const dialog = await screen.findByRole('dialog', { name: TOUR.name });
+    await waitFor(() => expect(dialog).toHaveFocus());
+
+    // Tab cycles Skip → Next → Skip, and never walks out into the page behind.
+    await user.tab();
+    expect(screen.getByRole('button', { name: 'Skip tour' })).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole('button', { name: 'Next' })).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole('button', { name: 'Skip tour' })).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(screen.getByRole('button', { name: 'Next' })).toHaveFocus();
+  });
+
+  it('waits its turn behind a modal, and starts when the modal closes', async () => {
+    function WithModal({ open }: { open: boolean }) {
+      return (
+        <MemoryRouter initialEntries={['/app']}>
+          <ShellAnchors />
+          {open && (
+            <div role="dialog" aria-modal="true" tabIndex={-1} aria-label="Welcome aboard">
+              welcome
+            </div>
+          )}
+          <LayoutTour />
+        </MemoryRouter>
+      );
+    }
+    const { rerender } = render(<WithModal open />);
+
+    // One first-run surface at a time: the welcome modal owns the screen.
+    await new Promise((r) => setTimeout(r, 400));
+    expect(screen.queryByRole('dialog', { name: TOUR.name })).not.toBeInTheDocument();
+
+    rerender(<WithModal open={false} />);
+    await screen.findByText(/Everything that needs you/i, undefined, { timeout: 2000 });
+  });
+
+  it('holds the Lobby step until the shell tour is finished', async () => {
+    render(
+      <MemoryRouter initialEntries={['/app/guilds/123']}>
+        <RoomsAnchor />
+        <LayoutTour />
+      </MemoryRouter>,
+    );
+
+    // The shell tour runs first; the Lobby's coach mark is not a second overlay
+    // stacked on top of it.
+    await screen.findByText(/Everything that needs you/i);
+    expect(screen.queryByText(/jump into a room or pick a channel/i)).not.toBeInTheDocument();
+  });
+
+  it('places the first step beside the middle of a full-height anchor', async () => {
+    render(
+      <MemoryRouter initialEntries={['/app']}>
+        <ShellAnchors />
+        <LayoutTour />
+      </MemoryRouter>,
+    );
+
+    const dialog = await screen.findByRole('dialog', { name: TOUR.name });
+    // The stubbed anchor runs 100 → 600. Pinned to y=24 the card sat on the
+    // page's own heading; beside the anchor's middle it does not.
+    expect(Number.parseInt(dialog.style.top, 10)).toBeGreaterThan(100);
+  });
+
   it('shows nothing when no anchor is present', async () => {
     render(
       <MemoryRouter initialEntries={['/app']}>
