@@ -134,10 +134,26 @@ export function springLinearEasing(config: SpringConfig, options: SpringEasingOp
  * engine supports it (and where a velocity has to be carried), the
  * `--ease-spring-settle` token otherwise. Both are §5.2-legal.
  */
+/**
+ * Sampling the spring into a `linear()` string is real main-thread arithmetic,
+ * and a moment can ask for the same curve a dozen times on one frame — a burst
+ * of arrivals, or the travelling tile and the chrome behind it starting
+ * together. The answer only depends on the four numbers below, all of them
+ * tokens, so it is worth remembering. Small and bounded: the cache can only
+ * ever hold one entry per (spring, duration, velocity) the product uses.
+ */
+const easingCache = new Map<string, string>();
+
 export function springEasing(config?: SpringConfig, options: SpringEasingOptions = {}): string {
   const spring = config ?? springTokens();
   if (!supportsLinearEasing()) return motionToken('--ease-spring-settle');
-  return springLinearEasing(spring, options);
+  const key = `${spring.stiffness}/${spring.damping}/${spring.mass}/${spring.velocity ?? 0}/${options.durationMs ?? ''}/${options.samples ?? ''}`;
+  const cached = easingCache.get(key);
+  if (cached !== undefined) return cached;
+  const easing = springLinearEasing(spring, options);
+  if (easingCache.size > 64) easingCache.clear();
+  easingCache.set(key, easing);
+  return easing;
 }
 
 /** What a running animation was doing when it was interrupted. */

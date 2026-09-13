@@ -12,6 +12,7 @@ import { ContextPanel } from '../components/layout/ContextPanel';
 import { CommandPalette } from '../components/layout/CommandPalette';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { OnAirDock } from '../components/voice/OnAirDock';
+import { MotionDirector } from '../components/motion/MotionDirector';
 import { MobileBottomNav } from '../components/layout/MobileBottomNav';
 import { useUIStore } from '../stores/uiStore';
 import { useVoiceStore } from '../stores/voiceStore';
@@ -193,6 +194,11 @@ export function AppShell() {
         data-native-underlay-clear=""
         className="flex h-[100dvh] w-full flex-col overflow-hidden bg-bg-base text-text-primary"
       >
+        {/* The two moments nobody clicks: "lights on" and "someone arrives"
+            (§5.1). It renders nothing — it is one subscription and two effects,
+            mounted once so four subtrees cannot each grow their own copy. */}
+        <MotionDirector />
+
         {/* Skip-to-content for keyboard/screen-reader users */}
         <a
           href="#main-content"

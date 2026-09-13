@@ -160,7 +160,13 @@ describe('BuildingsColumn', () => {
     expect(dark).toHaveAccessibleName(/Dark · nobody in/);
 
     fireEvent.click(dark);
-    expect(handlers.onOpenRoom).toHaveBeenCalledWith(expect.objectContaining({ name: 'Lounge' }));
+    // The row also hands back the element it was clicked on: §5.1's shared
+    // element needs an origin, because a room's name is on its card, its row
+    // and the inline "lit up" event at the same time.
+    expect(handlers.onOpenRoom).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Lounge' }),
+      dark,
+    );
   });
 
   it('renders text rooms with their reading count, and a mention chip when one is waiting', () => {

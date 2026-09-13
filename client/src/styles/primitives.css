@@ -563,6 +563,31 @@
   animation-timing-function: var(--ease-out);
 }
 
+/* Walking into a room is the one journey where the page you left IS a thing
+   that moves: §5.1 has the rest of the Lobby receding 4% behind the card that
+   travelled. `transitionWith({ kind })` stamps the journey on <html>, so the
+   browser-driven path dresses its root snapshot exactly as the Web Animations
+   path dresses the live DOM (`walk.ts` → `recedeAround`) — one choreography,
+   two engines. */
+:root[data-motion-transition='walk-in']::view-transition-old(root) {
+  animation-name: pc-recede;
+  animation-duration: var(--duration-move);
+  animation-timing-function: var(--ease-out);
+  animation-fill-mode: forwards;
+  transform-origin: center;
+}
+
+@keyframes pc-recede {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
 
 /* -----------------------------------------------------------------------------
    §9 Focus — 2px accent outside a 2px base gap, on every control including

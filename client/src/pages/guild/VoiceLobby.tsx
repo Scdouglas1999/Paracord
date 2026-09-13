@@ -10,6 +10,7 @@ import { VoiceConnectionCheckButton } from '../../components/voice/VoiceConnecti
 import { getIdentityColor } from '../../lib/colors';
 import { cn } from '../../lib/utils';
 import { displayName } from '../../lib/displayName';
+import { RECEDE_MARK, roomSharedName, walkIntoRoom } from '../../lib/motion';
 
 interface VoiceLobbyProps {
   channelName: string;
@@ -161,15 +162,35 @@ export function VoiceLobby({
     </SectionLabel>
   );
 
+  /**
+   * §5.1: this plate is the room seen from outside, and it becomes the Stage's
+   * dominant tile when you walk in. The route does not change — you are already
+   * on the room's page — so the journey is the plate growing into the Stage the
+   * join renders, and everything else on the plate recedes behind it.
+   */
+  const walkIn = (origin: Element | null) => {
+    if (!channelId) {
+      onJoin();
+      return;
+    }
+    void walkIntoRoom({ channelId, origin, go: onJoin });
+  };
+
   return (
     <Plate
       as="section"
       bare
       lit={lit}
+      data-motion-shared={channelId ? roomSharedName(channelId) : undefined}
+      {...{ [RECEDE_MARK]: '' }}
       className="relative m-[var(--gutter)] flex flex-col gap-4 overflow-hidden p-5"
     >
-      {/* The room, and the door into it. */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      {/* The room, and the door into it. §5.1: this is the chrome that supports
+          the tile you walked into, so it rises 80ms behind it. */}
+      <div
+        data-motion-chrome=""
+        className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"
+      >
         <div className="flex min-w-0 items-center gap-3">
           <Well
             bare
@@ -202,7 +223,7 @@ export function VoiceLobby({
               variant={lit ? 'light' : 'primary'}
               loading={voiceJoinPending}
               disabled={voiceJoinPending || !channelId || !guildId || (isStage && !stageInstance)}
-              onClick={onJoin}
+              onClick={(event) => walkIn(event.currentTarget.closest('[data-motion-shared]'))}
             >
               {!voiceJoinPending && <Headphones size={16} className="mr-1.5" />}
               {voiceJoinPending ? `Joining ${channelName}` : isStage ? 'Join the stage' : 'Join the room'}
@@ -279,7 +300,7 @@ export function VoiceLobby({
 
       {/* Who is already in there. */}
       {lobbyParticipants.length > 0 ? (
-        <Well bare className="p-4">
+        <Well bare data-motion-chrome="" className="p-4">
           {isStage ? (
             <>
               {lobbySpeakers.length > 0 && (
@@ -306,8 +327,13 @@ export function VoiceLobby({
           )}
         </Well>
       ) : (
-        <Well bare className="flex items-center gap-3 px-4 py-3.5">
-          <IconButton label={isStage ? `Open the stage ${channelName}` : `Join ${channelName}`} size="md" tone="raised" onClick={onJoin}>
+        <Well bare data-motion-chrome="" className="flex items-center gap-3 px-4 py-3.5">
+          <IconButton
+            label={isStage ? `Open the stage ${channelName}` : `Join ${channelName}`}
+            size="md"
+            tone="raised"
+            onClick={(event) => walkIn(event.currentTarget.closest('[data-motion-shared]'))}
+          >
             {isStage ? <Mic size={16} /> : <Headphones size={16} />}
           </IconButton>
           <p className="text-label text-text-secondary">

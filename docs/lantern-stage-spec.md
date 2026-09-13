@@ -197,16 +197,42 @@ reviewer rejects motion that has none.
   dims over 400 ms, `--ease-in` (light lingers a beat, then goes). Neighbouring
   lights stagger 30 ms. A lamp fades in once the first window in its plate is
   lit. Reading light *flickers* once (two 40 ms pulses) when a message lands.
+  *(WP9b: "lights on" is one sequence with one clock, played by
+  `components/motion/MotionDirector` over the `data-motion-*` marks components
+  put in the DOM — a component says what it is holding, never when it moves.
+  The three things that turn the lights on are the first presence of a run, a
+  gateway reconnect and a return from more than five minutes away
+  (`lib/attention/lightsOn.ts`), and each waits for presence to actually be in
+  hand. The 30 ms stagger compresses so a large map still lands inside §5.3's
+  1.6 s rather than being capped. See `docs/design/wp9b-checkpoint.md`.)*
 - **The thing you click becomes the thing you look at.** Navigation into a room,
   a thread, a settings section or a dialog moves one shared element from where
   it was to where it will be (View Transitions API where the webview has it,
   Web Animations transform fallback elsewhere — the same choreography on
   both). 360–420 ms on the *spring-settle* curve; supporting chrome rises 80 ms
   later, staggered. Leaving reverses it (into the on-air pill for a room).
+  *(WP9b: a room travels under one name, `room-<channelId>`, on every surface
+  that draws it, so the Lobby card, the sidebar row, the inline "lit up" event,
+  the Stage's dominant region and the on-air pill are all the same journey. The
+  caller says which element the gesture started on and where it is going,
+  because more than one surface carries the name at once. Every destination is
+  behind a lazy route chunk, so the journey waits for the place it is going to
+  — which is what the browser is holding the old frame for — and the Web
+  Animations fallback holds a copy of what you clicked until the room arrives.
+  Joining from the Lobby now takes you INTO the room; it used to join the call
+  and leave you in the street.)*
 - **Arrivals travel one path.** Someone entering a room: their window blooms →
   their rim catches 120 ms later → they spring into the here-now strip →
   counts re-roll like a flip counter → the inline room event fades in last.
   Leaving is the mirror. Nothing else on screen moves.
+  *(WP9b: the newcomer springs in on transform and opacity, and everything the
+  insertion displaced is carried by a FLIP on transform alone — §5.3 puts no
+  layout property in a keyframe, so the study's animated slot width is not
+  copied. A leaving face is a ghost the engine owns, because the update that
+  told us has already taken the real one out of the tree. A burst inside 300 ms
+  is ONE staggered sequence, not five. Your own arrival never plays: that is
+  the moment below. Occupancy is read from voice membership, which is exact;
+  "reading" in a text room is derived and deliberately out of scope.)*
 - **A message has mass.** Sent text lifts out of the composer along the path it
   lands in the timeline (220 ms, ease-out); the composer relaxes 0.8% and
   springs back; the send control flashes white light for one beat; the room's
@@ -253,6 +279,10 @@ to those curves. Durations: `--duration-fast` 120, `--duration-normal` 160,
   of the arriving row and is there to the frame with motion switched off; and
   the View Transitions path, which the harness's software renderer halves the
   frame rate for. See `docs/design/wp9a-checkpoint.md` §4.)*
+  *(WP9b adds one more named allowance, also printed on every run: the walk-in's
+  Web Animations path may drop the frame on which the room's own surface mounts,
+  at one. Measured again with the engine's ghosts removed entirely, the same
+  frame is still 33 ms in the same place. See `wp9b-checkpoint.md` §9.)*
 - `prefers-reduced-motion`: everything lands instantly, no stagger, breathing
   stops at the resting ring. One central switch, never per component.
   *(WP9a: the switch is `client/src/lib/motion/reducedMotion.ts`. It folds the
@@ -265,11 +295,16 @@ to those curves. Durations: `--duration-fast` 120, `--duration-normal` 160,
   are interruptible and retarget (a spring, not a fixed tween).
 - Never animate on first paint what the user did not cause or presence did not
   cause; loading skeletons crossfade to content, they do not pulse forever.
+  *(WP9b: the edges that decide this are pure and testable —
+  `lib/attention/lightsOn.ts` for the building waking, `arrivals.ts` for a
+  person crossing a room's threshold. A gateway snapshot that REPLACES a
+  guild's membership is the picture arriving, not people walking in, and
+  re-baselines the arrival director rather than animating.)*
 
 Reference studies for the four signature moments are on the design canvas
 (page "Motion") and in `output/design-reference/motion/`. The engine that
-implements them is `client/src/lib/motion/` (WP9a); every recipe in it is on
-`/design-tokens` › Motion with a Replay button and the tokens it spends.
+implements them is `client/src/lib/motion/` (WP9a, WP9b); every recipe in it is
+on `/design-tokens` › Motion with a Replay button and the tokens it spends.
 
 ## 6. Anti-slop kill-list (extends the Emerald Commons list; a reviewer rejects any instance)
 
@@ -413,7 +448,7 @@ visual **and** automated — no package is done without inspected screenshots.
 | **WP6 Home** | §7.5 on `HomePage`/`HomeNeedsYou`. | `pages/HomePage.tsx`, `components/home/*` | WP1, WP4 |
 | **WP7 Settings, modals, onboarding, setup** | Restyle to the plate/well system; `/setup-server`, register/login, voice connection check, admin. No new features. | `components/settings/*`, `pages/*` | WP0 |
 | **WP9a Motion engine** | Spring/choreography layer over the motion tokens (`lib/motion/`: springs, stagger, shared-element with View Transitions + WAAPI fallback, flip counter, bloom/flicker recipes, central reduced-motion), motion tokens in `tokens.css`, frame-timing gate, `/design-tokens` Motion section. | `lib/motion/**`, `styles/tokens.css`, `styles/primitives.css`, `e2e/motion-gate.spec.ts` | WP8 |
-| **WP9b Signature moments** | Lights on, walk into a room / back to the pill, someone arrives/leaves, say something — wired through the real stores and engines (§5.1). | surfaces from WP2–WP6 | WP9a |
+| **WP9b Signature moments** | Lights on, walk into a room / back to the pill, someone arrives/leaves, say something — wired through the real stores and engines (§5.1). `docs/design/wp9b-checkpoint.md`. | surfaces from WP2–WP6 | WP9a |
 | **WP9c Systematic micro-motion** | Hover/press, plates settle, menus/dialogs/toasts enter-exit, tab/toggle indicators, list FLIP, phone sheet physics, number re-roll everywhere. | `ui/**`, `light/**`, dialogs, sidebar, Stage sheet | WP9a |
 | **WP9d Further moments** | Audio-reactive speaking ring, theme change as the lights changing, reaction pop, typing pulse, contextual plates sliding in, phone pull-to-refresh lamp. | per item | WP9a |
 | **WP8 Sweep & delete** | Remove Emerald Commons leftovers: old tokens, `--color-status-*` dots, glass panels, Fraunces/Inter, any remaining member-list dock; update `docs/design-spec.md` → pointer to this file and `docs/layout-spec.md` §7 recipes; README screenshots. | repo-wide | all |

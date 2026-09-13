@@ -4,6 +4,7 @@ import { OnAirPill } from '../light';
 import { useOnAir } from '../../hooks/useLights';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { cn } from '../../lib/utils';
+import { walkIntoRoom } from '../../lib/motion';
 
 export interface OnAirDockProps {
   className?: string;
@@ -33,13 +34,21 @@ export function OnAirDock({ className }: OnAirDockProps) {
       <OnAirPill
         className="w-full"
         onAir={onAir}
-        onReturn={() => {
+        onReturn={(origin) => {
           if (!channelId) return;
-          if (guildId === 'dm') {
-            navigate(`/app/dms/${channelId}`);
-          } else if (guildId) {
-            navigate(`/app/guilds/${guildId}/channels/${channelId}`);
-          }
+          // The pill unfolds back into the Stage's dominant tile — the same
+          // shared element that folded into it when you left (§5.1).
+          void walkIntoRoom({
+            channelId,
+            origin,
+            go: () => {
+              if (guildId === 'dm') {
+                navigate(`/app/dms/${channelId}`);
+              } else if (guildId) {
+                navigate(`/app/guilds/${guildId}/channels/${channelId}`);
+              }
+            },
+          });
         }}
       />
     </div>

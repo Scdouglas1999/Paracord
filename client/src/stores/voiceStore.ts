@@ -1893,6 +1893,18 @@ interface VoiceStoreState {
   participants: Map<string, VoiceState>;
   // Global voice participants across all channels, keyed by channel ID
   channelParticipants: Map<string, VoiceState[]>;
+  /**
+   * Bumped every time a whole guild's voice membership is REPLACED from a
+   * gateway snapshot rather than changed by one person moving.
+   *
+   * §5.3 forbids animating what the user did not cause and presence did not
+   * cause, and "the picture arrived" is neither: a READY that hands over three
+   * people already in a room is not three people walking in. The arrival
+   * director (`components/motion/MotionDirector`) re-baselines whenever this
+   * number moves, which is the only way a diff of memberships can tell a
+   * snapshot from an event.
+   */
+  voiceSnapshotSeq: number;
   // Set of user IDs currently speaking (from LiveKit)
   speakingUsers: Set<string>;
   // LiveKit connection info
@@ -1982,6 +1994,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
   selfVideo: false,
   participants: new Map(),
   channelParticipants: new Map(),
+  voiceSnapshotSeq: 0,
   speakingUsers: new Set(),
   livekitToken: null,
   livekitUrl: null,
@@ -2933,7 +2946,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
         channelParticipants.set(localVoiceState.channel_id, existing);
         participants.set(localVoiceState.user_id, localVoiceState);
       }
-      return { channelParticipants, participants };
+      return { channelParticipants, participants, voiceSnapshotSeq: prev.voiceSnapshotSeq + 1 };
     }),
 
   setSpeakingUsers: (userIds) =>

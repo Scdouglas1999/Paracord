@@ -62,7 +62,7 @@ export interface BuildingsColumnProps {
   onOpenHome: () => void;
   onOpenMessages: () => void;
   onOpenLobby: (building: BuildingLight) => void;
-  onOpenRoom: (room: RoomLight) => void;
+  onOpenRoom: (room: RoomLight, origin?: Element | null) => void;
   onAddBuilding: () => void;
   onBuildingContextMenu?: (event: MouseEvent, building: BuildingLight) => void;
   /** The account plate, and the call dock while you are in a room. */

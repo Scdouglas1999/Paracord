@@ -4,6 +4,7 @@ import { getIdentityColor } from '../../lib/colors';
 import { resolveUserAvatarUrl } from '../../lib/userAvatar';
 import { cn } from '../../lib/utils';
 import type { PersonLight } from '../../lib/attention/light';
+import { LIT_MARK, PERSON_MARK, RIM_MARK, ROOM_MARK } from '../../lib/motion';
 
 /** Initials for the fallback chip — at most two letters, never an emoji. */
 export function avatarInitials(name: string): string {
@@ -26,6 +27,14 @@ export interface LitAvatarProps extends Omit<React.HTMLAttributes<HTMLSpanElemen
    * everywhere else — light is never the only cue (§9).
    */
   hideLabel?: boolean;
+  /**
+   * The room this face is standing in, when the surface knows it.
+   *
+   * Purely a motion mark: "lights on" brings a person's rim up 120ms after the
+   * room they are in (§5.1), and without this the engine has no way to know
+   * which window is theirs. A face with no room simply follows the last one.
+   */
+  room?: string | null;
 }
 
 /**
@@ -41,13 +50,16 @@ export interface LitAvatarProps extends Omit<React.HTMLAttributes<HTMLSpanElemen
  * `src/styles/primitives.css` — there is no motion code in this component.
  */
 export const LitAvatar = React.forwardRef<HTMLSpanElement, LitAvatarProps>(function LitAvatar(
-  { person, size = 28, hideLabel = false, className, style, ...props },
+  { person, size = 28, hideLabel = false, room = null, className, style, ...props },
   ref,
 ) {
   const src = resolveUserAvatarUrl(person.avatar);
   const dimension = { width: size, height: size };
   const face = (
     <span
+      // The rim glow lives on this element, so this is the one that blooms and
+      // dims — the outer span is the thing that MOVES (§5.1).
+      {...{ [RIM_MARK]: '' }}
       className={cn(
         person.avatarClass,
         'pc-display pc-dimming relative flex shrink-0 items-center justify-center overflow-hidden rounded-full',
@@ -71,6 +83,9 @@ export const LitAvatar = React.forwardRef<HTMLSpanElement, LitAvatarProps>(funct
   return (
     <span
       ref={ref}
+      {...{ [PERSON_MARK]: person.userId }}
+      {...(person.lit ? { [LIT_MARK]: '' } : null)}
+      {...(room ? { [ROOM_MARK]: room } : null)}
       className={cn(
         'relative inline-flex shrink-0 rounded-full',
         person.dnd && 'pc-dnd',
