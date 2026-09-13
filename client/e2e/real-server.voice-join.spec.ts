@@ -167,7 +167,7 @@ async function signIn(page: Page, account: Account): Promise<void> {
   await page.goto(`${BASE}/login`);
   await page.locator('input[autocomplete="username"]').fill(account.email);
   await page.locator('input[autocomplete="current-password"]').fill(account.password);
-  await page.getByRole('button', { name: 'Log In', exact: true }).click();
+  await page.getByRole('button', { name: 'Log in', exact: true }).click();
   await expect(page).toHaveURL(/\/app/);
 
   await dismissFirstRunOverlays(page);
@@ -197,18 +197,25 @@ async function dismissFirstRunOverlays(page: Page): Promise<void> {
  * between the button rendering and the click landing.
  */
 async function joinVoice(page: Page): Promise<void> {
-  const joinButton = page.getByRole('button', { name: 'Join voice', exact: true });
-  await expect(joinButton).toBeVisible();
-  for (let attempt = 0; attempt < 5; attempt++) {
+  // The welcome screen and layout tour are dialogs that mark the rest of the
+  // app aria-hidden, and they can mount a beat after the room renders — so
+  // clear them, then look for the button, and repeat until the click lands.
+  const joinButton = page.getByRole('button', { name: 'Join the room', exact: true });
+  let clicked = false;
+  for (let attempt = 0; attempt < 8 && !clicked; attempt++) {
     await dismissFirstRunOverlays(page);
-    try {
-      await joinButton.click({ timeout: 3_000 });
-      return;
-    } catch {
-      // An overlay landed on top of the button; clear it and try again.
+    if (await joinButton.isVisible().catch(() => false)) {
+      try {
+        await joinButton.click({ timeout: 3_000 });
+        clicked = true;
+      } catch {
+        // An overlay landed between the visibility check and the click.
+      }
+    } else {
+      await page.waitForTimeout(500);
     }
   }
-  throw new Error('Join voice stayed obstructed by a first-run overlay');
+  expect(clicked, 'the Join the room button never became clickable').toBe(true);
 }
 
 interface RelayParticipant {

@@ -307,7 +307,7 @@ export function VoiceLobby({
         </Well>
       ) : (
         <Well bare className="flex items-center gap-3 px-4 py-3.5">
-          <IconButton label={isStage ? 'Open the stage' : 'Join the room'} size="md" tone="raised" onClick={onJoin}>
+          <IconButton label={isStage ? `Open the stage ${channelName}` : `Join ${channelName}`} size="md" tone="raised" onClick={onJoin}>
             {isStage ? <Mic size={16} /> : <Headphones size={16} />}
           </IconButton>
           <p className="text-label text-text-secondary">
