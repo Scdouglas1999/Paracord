@@ -1,6 +1,6 @@
 import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
 import { useSelectedGuildId } from '../../hooks/useGuilds';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { MessageSquare, UserPlus, Ban, Users, CalendarDays, Link2, ShieldCheck, ShieldAlert, QrCode, Copy, Flag, Radio, BadgeCheck, StickyNote, UserCheck, UserX, UserMinus } from 'lucide-react';
 import { isAdmin, type User } from '../../types/index';
@@ -88,13 +88,23 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
  */
 export function UserProfilePopup({ user, position, onClose, roles = [] }: UserProfilePopupProps) {
   const { mounted, exiting, scenery } = usePresence(user !== null);
-  const last = useRef<{ user: ProfileSubject; position: { x: number; y: number } } | null>(null);
-  if (user !== null && position !== null) last.current = { user, position };
-  if (!mounted || last.current === null) return null;
+  // Remembered during render (not in an effect) so the exit keeps its subject.
+  const [last, setLast] = useState<{
+    user: ProfileSubject;
+    position: { x: number; y: number };
+  } | null>(null);
+  if (
+    user !== null &&
+    position !== null &&
+    (last === null || last.user !== user || last.position.x !== position.x || last.position.y !== position.y)
+  ) {
+    setLast({ user, position });
+  }
+  if (!mounted || last === null) return null;
   return (
     <UserProfileCard
-      user={last.current.user}
-      position={last.current.position}
+      user={last.user}
+      position={last.position}
       onClose={onClose}
       roles={roles}
       exiting={exiting}
