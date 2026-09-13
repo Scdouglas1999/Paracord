@@ -26,6 +26,11 @@ const PUBLIC_IP_DETECTION_BODY_LIMIT: usize = 128;
 /// batch after shutdown is signalled, before the process tears down.
 const WORKER_SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// How long the restart notice gets to reach connected clients before the
+/// listeners are torn down. The frame is already queued on each session's
+/// channel when `dispatch` returns; this only lets the gateway's send loop run.
+const RESTART_NOTICE_FLUSH: std::time::Duration = std::time::Duration::from_millis(250);
+
 fn parse_detected_public_ip(text: &str) -> Option<String> {
     let ip = text.trim();
     if ip.is_empty() || ip.parse::<std::net::IpAddr>().is_err() {
@@ -755,6 +760,9 @@ async fn main() -> Result<()> {
     spawn_member_index_reconcile_worker(state.clone(), shutdown_notify.clone());
     bots::spawn_bot_manager(state.clone(), shutdown_notify.clone());
 
+    // The shutdown path publishes the restart notice on this bus, so it needs
+    // the state after the router has taken ownership of it.
+    let shutdown_state = state.clone();
     let router = paracord_api::build_router(&state)
         .merge(paracord_ws::gateway_router())
         .with_state(state);
@@ -910,7 +918,7 @@ async fn main() -> Result<()> {
         &voice_status,
     );
 
-    // Graceful shutdown on ctrl-c / ctrl-break.
+    // Graceful shutdown on ctrl-c / ctrl-break / SIGTERM.
     //
     // The API-triggered restart path is intentionally unwired: the
     // `admin::restart_update` endpoint is permanently disabled for security
@@ -935,12 +943,37 @@ async fn main() -> Result<()> {
         }
         #[cfg(not(windows))]
         {
-            tokio::signal::ctrl_c()
-                .await
-                .expect("failed to install ctrl-c signal handler");
-            println!();
-            tracing::info!("Shutting down (ctrl-c)...");
+            // SIGTERM is how a restart actually reaches this process: it is
+            // what `systemctl restart` sends (the units written by
+            // scripts/install.sh take the default KillSignal), what `docker
+            // stop` sends, and what a supervisor sends. Listening for SIGINT
+            // alone meant the whole graceful path below — worker grace period,
+            // managed LiveKit teardown, and now the restart notice — ran only
+            // when an operator pressed ctrl-c in a foreground terminal.
+            let mut terminate =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    .expect("failed to install SIGTERM handler");
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    println!();
+                    tracing::info!("Shutting down (ctrl-c)...");
+                }
+                _ = terminate.recv() => {
+                    tracing::info!("Shutting down (SIGTERM)...");
+                }
+            }
         }
+
+        // Tell everyone who is connected before the sockets go. The client
+        // shows "Server is restarting — you'll reconnect automatically" and
+        // holds its place instead of reporting a bare connection loss; without
+        // this the banner was unreachable UI that no crate ever emitted.
+        shutdown_state
+            .event_bus
+            .dispatch("SERVER_RESTART", serde_json::json!({}), None);
+        // Long enough for the gateway's send loop to put the frame on the wire,
+        // short enough that it costs nothing an operator would notice.
+        tokio::time::sleep(RESTART_NOTICE_FLUSH).await;
 
         // Signal every background worker (retention, backups, federation
         // delivery, scheduled/disappearing messages, bot manager, rate-limit

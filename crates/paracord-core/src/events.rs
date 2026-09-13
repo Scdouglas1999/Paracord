@@ -564,6 +564,33 @@ mod tests {
         assert!(bus.user_sessions.is_empty());
     }
 
+    // The restart notice the shutdown path publishes has no guild and no
+    // targets. Every connected session must see it — including a session that
+    // has joined no space at all, which is exactly the new account that would
+    // otherwise watch its connection die with no explanation.
+    #[test]
+    fn a_global_dispatch_reaches_every_session_including_one_in_no_guild() {
+        let bus = EventBus::new(16);
+        let mut solitary = bus.register_session("no-guilds", 1, &[]).expect("register");
+        let mut member = bus
+            .register_session("in-a-guild", 2, &[9])
+            .expect("register");
+
+        bus.dispatch("SERVER_RESTART", serde_json::json!({}), None);
+
+        for (label, receiver) in [
+            ("session in no guild", &mut solitary),
+            ("session in a guild", &mut member),
+        ] {
+            let event = receiver
+                .try_recv()
+                .unwrap_or_else(|error| panic!("{label} missed the notice: {error}"));
+            assert_eq!(event.event_type, "SERVER_RESTART");
+            assert!(event.guild_id.is_none());
+            assert!(event.target_user_ids.is_none());
+        }
+    }
+
     #[test]
     fn add_session_guild_on_unknown_session_creates_no_index_entry() {
         let bus = EventBus::new(16);

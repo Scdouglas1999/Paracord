@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
-"""Release-binary graceful shutdown smoke test."""
+"""Release-binary graceful shutdown smoke test.
+
+Also covers the restart notice: a connected gateway session must be told the
+server is going away *before* the listeners are torn down, so the client can
+show "Server is restarting — you'll reconnect automatically" instead of a bare
+connection loss. On POSIX the signal used is SIGTERM, because that is what
+`systemctl restart` and `docker stop` actually send.
+"""
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import signal
 import subprocess
@@ -11,8 +19,16 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 import requests
+
+try:
+    import websocket
+except ImportError as exc:  # pragma: no cover - dependency guard
+    raise SystemExit(
+        "Missing dependency: websocket-client. Install it before running this smoke."
+    ) from exc
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,7 +57,61 @@ def send_interrupt(proc: subprocess.Popen[object]) -> None:
     if os.name == "nt":
         proc.send_signal(signal.CTRL_BREAK_EVENT)
     else:
-        proc.send_signal(signal.SIGINT)
+        # SIGTERM, not SIGINT: this is the signal a supervisor sends, and the
+        # graceful path has to answer it or `systemctl restart` kills the
+        # process outright.
+        proc.send_signal(signal.SIGTERM)
+
+
+def recv_json(ws: "websocket.WebSocket", label: str) -> dict[str, Any]:
+    raw = ws.recv()
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8")
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise AssertionError(f"{label}: invalid JSON websocket payload: {raw!r}") from exc
+
+
+def connect_identified_gateway(base_url: str, port: int) -> "websocket.WebSocket":
+    """Register an account and bring one gateway session to READY."""
+    account = {
+        "username": "shutdownwatcher",
+        "email": "shutdown-watcher@example.com",
+        "password": "Sup3rStr0ng!Passw0rd",
+        "display_name": "Shutdown watcher",
+    }
+    response = requests.post(f"{base_url}/api/v1/auth/register", json=account, timeout=10)
+    response.raise_for_status()
+    token = response.json()["token"]
+
+    websocket.enableTrace(False)
+    ws = websocket.create_connection(f"ws://127.0.0.1:{port}/gateway", timeout=10)
+    hello = recv_json(ws, "gateway HELLO")
+    if hello.get("op") != 10:
+        raise AssertionError(f"expected gateway HELLO, got {hello}")
+    ws.send(json.dumps({"op": 2, "d": {"token": token}}))
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        frame = recv_json(ws, "READY")
+        if frame.get("op") == 0 and frame.get("t") == "READY":
+            return ws
+    raise TimeoutError("gateway session never reached READY")
+
+
+def wait_for_restart_notice(ws: "websocket.WebSocket", timeout_seconds: float) -> None:
+    ws.settimeout(timeout_seconds)
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        try:
+            frame = recv_json(ws, "SERVER_RESTART")
+        except (websocket.WebSocketTimeoutException, websocket.WebSocketConnectionClosedException) as exc:
+            raise AssertionError(
+                "the connection dropped without a SERVER_RESTART notice"
+            ) from exc
+        if frame.get("op") == 0 and frame.get("t") == "SERVER_RESTART":
+            return
+    raise AssertionError("no SERVER_RESTART notice before the timeout")
 
 
 def run_smoke(args: argparse.Namespace) -> None:
@@ -57,6 +127,12 @@ def run_smoke(args: argparse.Namespace) -> None:
         env.update(
             {
                 "PARACORD_BIND_ADDRESS": f"127.0.0.1:{args.port}",
+                # Native voice binds UDP 8443 by default — the product port, not
+                # a test one — so every smoke that left it alone fought every
+                # other smoke and anything real on the host for it, and two
+                # could never run at once. Derive it from this smoke's own HTTP
+                # port unless the caller named one.
+                "PARACORD_VOICE_PORT": env.get("PARACORD_VOICE_PORT", str(args.port + 1000)),
                 "PARACORD_DATABASE_ENGINE": "sqlite",
                 "PARACORD_DATABASE_URL": f"sqlite://{(data / 'paracord.db').as_posix()}?mode=rwc",
                 "PARACORD_JWT_SECRET": "release-shutdown-smoke-secret-0123456789abcdef",
@@ -66,6 +142,9 @@ def run_smoke(args: argparse.Namespace) -> None:
                 "PARACORD_BACKUP_DIR": str(data / "backups"),
                 "PARACORD_REGISTRATION_ENABLED": "true",
                 "PARACORD_AUTH_REQUIRE_EMAIL": "true",
+                # The watcher account registers itself, so this throwaway
+                # instance is bootstrapped without a first-owner claim.
+                "PARACORD_SETUP_REQUIRE_CLAIM": "false",
                 "PARACORD_LOG_ANSI": "false",
                 "RUST_LOG": "info",
             }
@@ -83,9 +162,14 @@ def run_smoke(args: argparse.Namespace) -> None:
                 creationflags=creationflags,
             )
             forced = False
+            watcher: "websocket.WebSocket | None" = None
             try:
                 startup_seconds = wait_for_health(base_url, proc)
+                watcher = connect_identified_gateway(base_url, args.port)
                 send_interrupt(proc)
+                # Read the notice off the live socket before the process is
+                # gone: it has to arrive ahead of the teardown, not after it.
+                wait_for_restart_notice(watcher, args.timeout)
                 try:
                     proc.wait(timeout=args.timeout)
                 except subprocess.TimeoutExpired:
@@ -93,6 +177,11 @@ def run_smoke(args: argparse.Namespace) -> None:
                     proc.kill()
                     proc.wait(timeout=10)
             finally:
+                if watcher is not None:
+                    try:
+                        watcher.close()
+                    except OSError:
+                        pass
                 if proc.poll() is None:
                     forced = True
                     proc.kill()
@@ -109,7 +198,8 @@ def run_smoke(args: argparse.Namespace) -> None:
         if "Shutting down" not in log_text:
             raise AssertionError(f"shutdown log line missing from captured logs: {log_text[-1000:]}")
         print(
-            "PASS: release server graceful shutdown smoke passed; "
+            "PASS: release server graceful shutdown smoke passed "
+            "(SIGTERM handled, SERVER_RESTART delivered before teardown); "
             f"startup_health_seconds={startup_seconds:.2f}; returncode={proc.returncode}; "
             f"log_bytes={len(log_text)}"
         )
