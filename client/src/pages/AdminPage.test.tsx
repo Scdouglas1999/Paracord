@@ -41,6 +41,21 @@ describe('AdminPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockAuthState.user = null;
+    // jsdom has no media-query engine; the settings shell asks for the phone
+    // breakpoint. Desktop (no match) is the layout these assertions describe.
+    Object.defineProperty(window, 'matchMedia', {
+      writable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: false,
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    });
   });
 
   it('shows a loading state while the current user is unresolved', () => {
@@ -59,7 +74,7 @@ describe('AdminPage', () => {
     expect(screen.getByRole('heading', { name: 'Access denied' })).toBeInTheDocument();
     expect(screen.queryByText('Overview panel body')).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'Go Back' }));
+    await user.click(screen.getByRole('button', { name: 'Go back' }));
 
     expect(screen.getByText('Home route')).toBeInTheDocument();
   });
@@ -69,7 +84,8 @@ describe('AdminPage', () => {
 
     renderAdminPage();
 
-    expect(screen.getByRole('heading', { name: 'Admin' })).toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: 'Server administration' })).toBeInTheDocument();
+    expect(screen.getByText('Admin')).toBeInTheDocument();
     expect(screen.getByText('Overview panel body')).toBeInTheDocument();
     expect(screen.queryByText('Users panel body')).not.toBeInTheDocument();
   });

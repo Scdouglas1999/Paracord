@@ -40,7 +40,7 @@ function highlightMatch(text: string, query: string): ReactNode {
   while (idx !== -1) {
     if (idx > start) parts.push(text.slice(start, idx));
     parts.push(
-      <mark key={key++} className="rounded-xs bg-accent-tint px-0.5 text-accent-primary">
+      <mark key={key++} className="rounded-window bg-accent-tint px-0.5 text-accent-primary">
         {text.slice(idx, idx + q.length)}
       </mark>,
     );
@@ -129,7 +129,7 @@ export function SearchOverlay({
   const header = (
     <header className="shrink-0 border-b border-border-subtle">
       <div className="flex items-center gap-3 px-5 py-3.5">
-        <span id="topbar-search-title" className="sr-only">Search Messages</span>
+        <span id="topbar-search-title" className="sr-only">Search messages</span>
         <Search size={18} className="shrink-0 text-text-muted" />
         <label htmlFor="topbar-message-search" className="sr-only">Search messages</label>
         <input
@@ -144,7 +144,7 @@ export function SearchOverlay({
           type="button"
           onClick={onClose}
           aria-label="Close search"
-          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-sm text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-chip text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
         >
           <X size={18} />
         </button>
@@ -183,7 +183,7 @@ export function SearchOverlay({
               <li key={msg.id}>
                 <button
                   type="button"
-                  className="w-full rounded-sm px-3 py-2.5 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
+                  className="w-full rounded-chip px-3 py-2.5 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
                   onClick={() => {
                     const messageChannel = allChannels.find((c) => c.id === msg.channel_id);
                     if (messageChannel?.guild_id) {
@@ -229,11 +229,11 @@ export function SearchOverlay({
           </div>
         ) : (
           <div className="flex items-start gap-3.5 px-5 py-8">
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-sm bg-accent-tint text-accent-primary">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-chip bg-accent-tint text-accent-primary">
               <Search size={20} />
             </span>
             <div className="min-w-0 pt-0.5">
-              <h3 className="text-subhead text-text-primary">Nothing matches &ldquo;{trimmedQuery}&rdquo;</h3>
+              <h3 className="text-heading text-text-primary">Nothing matches &ldquo;{trimmedQuery}&rdquo;</h3>
               <p className="mt-1 text-label text-text-secondary">
                 Try a different word, a member&apos;s name, or open another channel to widen the search.
               </p>
@@ -242,11 +242,11 @@ export function SearchOverlay({
         )
       ) : (
         <div className="flex items-start gap-3.5 px-5 py-8">
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-sm bg-accent-tint text-accent-primary">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-chip bg-accent-tint text-accent-primary">
             <Search size={20} />
           </span>
           <div className="min-w-0 pt-0.5">
-            <h3 className="text-subhead text-text-primary">Search this channel</h3>
+            <h3 className="text-heading text-text-primary">Search this channel</h3>
             <p className="mt-1 text-label text-text-secondary">
               Type a keyword, a phrase, or a member&apos;s name to find messages and shared files.
             </p>
@@ -266,8 +266,8 @@ export function SearchOverlay({
         tabIndex={-1}
         data-testid="context-panel"
         data-mode="search"
-        className="flex h-full shrink-0 flex-col overflow-hidden border-l border-border-subtle bg-bg-secondary shadow-sm outline-none"
-        style={{ width: 'var(--member-list-width)' }}
+        className="pc-plate flex h-[calc(100%-var(--gutter)*2)] shrink-0 flex-col overflow-hidden outline-none my-[var(--gutter)] mr-[var(--gutter)]"
+        style={{ width: 'var(--w-context-panel)' }}
       >
         {header}
         <div className="min-h-0 flex-1 overflow-y-auto p-2 scrollbar-thin">{content}</div>

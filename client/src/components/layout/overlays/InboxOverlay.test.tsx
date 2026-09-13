@@ -8,19 +8,6 @@ import { useReadStateStore } from '../../../stores/readStateStore';
 import { useSavedMessageStore } from '../../../stores/savedMessageStore';
 import { InboxOverlay } from './InboxOverlay';
 
-vi.mock('framer-motion', async () => {
-  const React = await import('react');
-  return {
-    AnimatePresence: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-    useReducedMotion: () => false,
-    motion: {
-      div: React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
-        ({ children, ...props }, ref) => <div ref={ref} {...props}>{children}</div>,
-      ),
-    },
-  };
-});
-
 vi.mock('../../../api/channels', () => ({
   createChannelApi: () => channelApi,
   channelApi: {

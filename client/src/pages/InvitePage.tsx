@@ -10,6 +10,8 @@ import { extractApiError } from '../api/client';
 import { safeStoredImageDataUrl } from '../lib/security';
 import { ErrorBanner } from '../components/ui/Feedback';
 import { Button } from '../components/ui/Button';
+import { Textarea } from '../components/ui/Input';
+import { Divider } from '../components/ui/Divider';
 import { AuthCanvas, AuthCard } from './authScaffold';
 import type { InvitePreview } from '../api/generated/InvitePreview';
 
@@ -74,46 +76,49 @@ export function InvitePage() {
 
   return (
     <AuthCanvas>
-      <AuthCard className="max-w-md overflow-hidden">
-        {/* Solid framed identity header — no gradient banner, no floating circle. */}
-        <div className="border-b border-border-subtle bg-bg-tertiary/40 px-8 py-7">
-          <p className="text-section uppercase text-accent-primary">You’re invited</p>
-          <div className="mt-4 flex items-center gap-4">
-            <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border-subtle bg-bg-secondary">
-              {iconSrc ? (
-                <img src={iconSrc} alt="" className="h-full w-full object-cover" />
-              ) : (
-                <span className="font-display text-heading text-text-secondary">{guildInitial}</span>
-              )}
-            </div>
-            <div className="min-w-0">
-              <h1 className="truncate font-display text-title text-text-primary">
-                {loadingPreview ? 'Loading invite…' : guild?.name ?? 'Join this space'}
-              </h1>
-              <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-text-muted">
-                {memberCount !== null && (
-                  <span className="inline-flex items-center gap-1.5">
-                    <Users size={13} />
-                    {memberCount.toLocaleString()} {memberCount === 1 ? 'member' : 'members'}
-                  </span>
+      <AuthCard className="max-w-md">
+        <div className="flex flex-col gap-6 p-7 sm:p-8">
+          {/* Who is inviting you — one identity row, no gradient banner and no
+              floating circle (spec §6.1, §6.2). */}
+          <div>
+            <p className="text-section text-text-faint">You’re invited</p>
+            <div className="mt-4 flex items-center gap-4">
+              <div className="pc-well flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-[var(--radius-card)]">
+                {iconSrc ? (
+                  <img src={iconSrc} alt="" className="h-full w-full object-cover" />
+                ) : (
+                  <span className="pc-display text-heading text-text-secondary">{guildInitial}</span>
                 )}
-                <span className="inline-flex items-center gap-1 font-code">
-                  <Hash size={12} />
-                  {code}
-                </span>
+              </div>
+              <div className="min-w-0">
+                <h1 className="truncate pc-display text-title text-text-primary">
+                  {loadingPreview ? 'Loading invite…' : guild?.name ?? 'Join this space'}
+                </h1>
+                <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-text-faint">
+                  {memberCount !== null && (
+                    <span className="inline-flex items-center gap-1.5">
+                      <Users size={13} aria-hidden />
+                      {memberCount.toLocaleString()} {memberCount === 1 ? 'member' : 'members'}
+                    </span>
+                  )}
+                  <span className="inline-flex items-center gap-1 pc-mono">
+                    <Hash size={12} aria-hidden />
+                    {code}
+                  </span>
+                </div>
               </div>
             </div>
           </div>
-        </div>
 
-        <div className="flex flex-col gap-5 p-8">
+          <Divider />
+
           {error && (
             <div className="flex flex-col gap-3">
-              <ErrorBanner message={error} />
+              <ErrorBanner multiline message={error} />
               <button
                 type="button"
                 onClick={() => navigate('/app')}
-                className="self-start text-label font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+                className="pc-focusable self-start rounded-[var(--radius-chip)] text-label font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
               >
                 Back to Paracord
               </button>
@@ -129,18 +134,18 @@ export function InvitePage() {
           )}
 
           {invitePreview && (
-            <div className="rounded-md border border-border-subtle bg-bg-tertiary/40 p-4">
-              <label className="flex cursor-pointer items-start gap-2.5 text-label text-text-secondary">
+            <div className="flex flex-col gap-3">
+              <label className="flex cursor-pointer items-start gap-2.5 text-label leading-relaxed text-text-secondary">
                 <input
                   type="checkbox"
                   checked={verificationAck}
                   onChange={(e) => setVerificationAck(e.target.checked)}
-                  className="mt-0.5 h-4 w-4 accent-[var(--accent-primary)]"
+                  className="pc-checkbox mt-0.5"
                 />
                 I acknowledge this space’s rules and verification requirements.
               </label>
-              <textarea
-                className="input-field mt-3 min-h-[72px] resize-y text-body"
+              <Textarea
+                className="min-h-[72px] resize-y"
                 placeholder="Verification answers (one per line, if this space requires them)"
                 value={verificationAnswers}
                 onChange={(e) => setVerificationAnswers(e.target.value)}
@@ -150,17 +155,18 @@ export function InvitePage() {
 
           <Button
             onClick={handleAccept}
+            size="lg"
             loading={loading}
             disabled={loading || loadingPreview || !invitePreview}
             aria-label={loading ? 'Joining server' : 'Accept invite'}
             className="w-full"
           >
             {loading ? 'Joining…' : 'Accept invite'}
-            {!loading && <ArrowRight size={16} className="ml-1.5" />}
+            {!loading && <ArrowRight size={16} aria-hidden />}
           </Button>
 
           {!token && (
-            <p className="text-meta leading-relaxed text-text-muted">
+            <p className="text-meta leading-relaxed text-text-faint">
               You’ll be asked to sign in first — your invite is saved and applied right after.
             </p>
           )}

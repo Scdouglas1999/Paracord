@@ -257,7 +257,7 @@ async function login(page: Page, base: string, email: string, password: string) 
   await page.goto(`${base}/login`);
   await page.locator('input[autocomplete="username"]').fill(email);
   await page.locator('input[autocomplete="current-password"]').fill(password);
-  await page.getByRole('button', { name: 'Log In', exact: true }).click();
+  await page.getByRole('button', { name: 'Log in', exact: true }).click();
   await expect(page).toHaveURL(/\/app/);
 }
 
@@ -453,7 +453,7 @@ test('restored backup replaces live history for connected browsers without a rel
     const memberHome = memberPage.getByRole('main');
     const memberAttention = memberHome.getByRole('region', { name: 'Needs you' });
     await expect(memberAttention).toBeVisible();
-    await expect(memberAttention.getByText('1 mention', { exact: true })).toBeVisible();
+    await expect(memberAttention.getByText(/mentioned you|1 mention for you/)).toBeVisible();
     await expect(memberAttention.getByText(new RegExp(`@you ${mentionPhrase}`))).toBeVisible();
     await dismissOnboarding(memberPage);
 
@@ -492,7 +492,7 @@ test('restored backup replaces live history for connected browsers without a rel
     // Newer activity is actually live in both clients before the cutover.
     await expect(ownerPage.getByText(new RegExp(signalPhrase))).toBeVisible();
     await expect(ownerPage.getByText('after-backup').first()).toBeVisible();
-    await expect(memberAttention.getByText('2 mentions', { exact: true })).toBeVisible();
+    await expect(memberAttention.getByText(/mentioned you|2 mentions for you/)).toBeVisible();
     await ownerPage.screenshot({ path: testInfo.outputPath('restore-before-owner.png'), fullPage: true });
     await memberPage.screenshot({ path: testInfo.outputPath('restore-before-member.png'), fullPage: true });
 
@@ -550,9 +550,12 @@ test('restored backup replaces live history for connected browsers without a rel
     await expect(ownerPage.getByText(new RegExp(signalPhrase))).toHaveCount(0);
     await expect(ownerPage.getByText(new RegExp(`post-backup-drift-\\d-${unique}`))).toHaveCount(0);
     await expect(ownerPage.getByText('after-backup')).toHaveCount(0);
-    await expect(memberAttention.getByText('1 mention', { exact: true })).toBeVisible();
+    await expect(memberAttention.getByText(/mentioned you|1 mention for you/)).toBeVisible();
     await expect(memberAttention.getByText(new RegExp(`@you ${mentionPhrase}`))).toBeVisible();
-    await expect(memberAttention.getByText('2 mentions', { exact: true })).toHaveCount(0);
+    // The post-backup mention is gone with its message, so the room is one row
+    // again. §7.5 names the author rather than the count, so the count itself is
+    // no longer on the surface to assert — the row's preview above is.
+    await expect(memberAttention.getByRole('listitem')).toHaveCount(1);
     await expect(memberPage.getByText(new RegExp(signalPhrase))).toHaveCount(0);
 
     // Both clients are still signed in: URLs never left /app, READY carried
@@ -591,8 +594,11 @@ test('restored backup replaces live history for connected browsers without a rel
     expect(deleteLedger.ok(), await deleteLedger.text()).toBe(true);
     const afterDeletes = await (await ownerApi.get(`${BASE}/api/v1/channels/${channel.id}`)).json();
     expect(afterDeletes.message_revision).toBe('4');
-    await expect(memberHome.getByRole('region', { name: 'Needs you' })).toHaveCount(0);
-    await expect(memberHome.getByText(/Restore verification is quiet/)).toBeVisible();
+    // §7.5 keeps the Needs-you section on the surface and lets it say so:
+    // "Nothing is waiting on you right now." It is no longer removed when
+    // empty, because an absent section cannot tell you it checked.
+    await expect(memberHome.getByRole('region', { name: 'Needs you' }).getByRole('listitem')).toHaveCount(0);
+    await expect(memberHome.getByText('Nothing is waiting on you right now.')).toBeVisible();
     await expect(ownerPage.getByText(ledgerPhrase)).toHaveCount(0);
     await memberPage.screenshot({ path: testInfo.outputPath('restore-quiet-member.png'), fullPage: true });
 

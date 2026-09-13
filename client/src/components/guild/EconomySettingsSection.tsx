@@ -3,9 +3,17 @@ import { Plus, Trash2, TrendingUp } from 'lucide-react';
 import { economyApi, type LevelRoleMapping } from '../../api/economy';
 import { extractApiError } from '../../api/client';
 import type { Role } from '../../types';
-import { Button } from '../ui/Button';
-import { Input, Select } from '../ui/Input';
-import { EmptyState, LoadingSpinner } from '../ui/Feedback';
+import {
+  Button,
+  Divider,
+  EmptyState,
+  ErrorBanner,
+  IconButton,
+  Input,
+  LoadingSpinner,
+  Select,
+  Well,
+} from '../ui';
 import { toast } from '../../stores/toastStore';
 import { SectionHeader, FieldLabel, GroupLabel } from './SettingsPrimitives';
 
@@ -96,6 +104,7 @@ export function EconomySettingsSection({ guildId, roles }: EconomySettingsSectio
   }
 
   const roleNameById = new Map(roles.map((r) => [r.id, r.name]));
+  // A role's colour is the member's own choice — data, not a theme token.
   const roleColorHex = (roleId: string) => {
     const role = roles.find((r) => r.id === roleId);
     if (!role?.color) return 'var(--text-muted)';
@@ -110,28 +119,26 @@ export function EconomySettingsSection({ guildId, roles }: EconomySettingsSectio
           <>
             Reward activity with level-up roles. XP rates and cooldowns are tuned server-side via the
             {' '}
-            <code className="font-code text-[12px] text-text-secondary">PARACORD_XP_COOLDOWN_SECONDS</code>
+            <code className="pc-mono text-meta text-text-secondary">PARACORD_XP_COOLDOWN_SECONDS</code>
             {' '}
             environment variable.
           </>
         }
         action={
-          <Button onClick={() => void onSave()} loading={saving} disabled={saving}>
+          <Button variant="primary" onClick={() => void onSave()} loading={saving} disabled={saving}>
             Save changes
           </Button>
         }
       />
 
-      {error && (
-        <div className="rounded-md border border-accent-danger/35 bg-danger-tint px-4 py-3 text-label text-accent-danger">
-          {error}
-        </div>
-      )}
+      {error && <ErrorBanner message={error} multiline />}
+
+      <Divider />
 
       {/* Level-role rewards */}
-      <section className="border-t border-border-subtle pt-6">
+      <section>
         <GroupLabel>Level-up role rewards</GroupLabel>
-        <p className="mt-2 text-[13.5px] leading-relaxed text-text-secondary">
+        <p className="mt-2 text-body leading-relaxed text-text-secondary">
           Members automatically earn the mapped role the moment they cross the given level.
         </p>
 
@@ -139,35 +146,30 @@ export function EconomySettingsSection({ guildId, roles }: EconomySettingsSectio
           <EmptyState
             className="!py-6"
             icon={<TrendingUp size={20} />}
-            title="No level rewards yet"
-            description="Pair a level with a role below and members will unlock it as they climb."
+            title="Levels don't unlock anything yet"
+            description="Pair a level with a role below and members earn it the moment they climb past it."
           />
         ) : (
           <ul className="mt-4 divide-y divide-border-subtle">
             {mappings.map((m) => {
               const roleName = roleNameById.get(m.role_id) ?? m.role_id;
               return (
-                <li
-                  key={`${m.level}-${m.role_id}`}
-                  className="group flex items-center gap-3 py-2.5"
-                >
-                  <span className="min-w-[4.5rem] font-code text-meta tabular-nums text-text-muted">
+                <li key={`${m.level}-${m.role_id}`} className="flex items-center gap-3 py-2">
+                  <span className="min-w-[4.5rem] pc-mono text-meta text-text-muted">
                     LVL {m.level}
                   </span>
                   <span
-                    className="h-2.5 w-2.5 shrink-0 rounded-full"
+                    className="h-2.5 w-2.5 shrink-0 rounded-[var(--radius-full)]"
                     style={{ backgroundColor: roleColorHex(m.role_id) }}
                     aria-hidden
                   />
                   <span className="flex-1 truncate text-label text-text-primary">{roleName}</span>
-                  <button
-                    type="button"
+                  <IconButton
+                    label={`Remove level ${m.level} reward for ${roleName}`}
                     onClick={() => removeMapping(m.level, m.role_id)}
-                    className="icon-btn opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
-                    aria-label={`Remove level ${m.level} reward for ${roleName}`}
                   >
                     <Trash2 size={15} />
-                  </button>
+                  </IconButton>
                 </li>
               );
             })}
@@ -186,7 +188,7 @@ export function EconomySettingsSection({ guildId, roles }: EconomySettingsSectio
               placeholder="5"
               value={newMappingLevel}
               onChange={(e) => setNewMappingLevel(e.target.value)}
-              className="w-24 font-code tabular-nums"
+              className="w-24 pc-mono"
             />
           </label>
           <label className="flex flex-col">
@@ -210,39 +212,43 @@ export function EconomySettingsSection({ guildId, roles }: EconomySettingsSectio
             </Select>
           </label>
           <Button
-            variant="outline"
+            variant="ghost"
             onClick={addMapping}
             disabled={!newMappingLevel || !newMappingRoleId || assignableRoles.length === 0}
           >
-            <Plus size={15} className="mr-1.5" />
+            <Plus size={15} />
             Add reward
           </Button>
         </div>
       </section>
 
-      {/* XP system info */}
-      <section className="border-t border-border-subtle pt-6">
+      <Divider />
+
+      {/* XP system info — a read-only readout, so it sits in a well. */}
+      <section>
         <GroupLabel>How XP works</GroupLabel>
-        <dl className="mt-4 divide-y divide-border-subtle text-label">
-          <div className="flex items-baseline justify-between gap-4 py-2.5">
-            <dt className="text-text-secondary">XP per message</dt>
-            <dd className="text-right text-text-primary">
-              <span className="font-code tabular-nums">15–25</span> XP, scaled by length
-            </dd>
-          </div>
-          <div className="flex items-baseline justify-between gap-4 py-2.5">
-            <dt className="text-text-secondary">Cooldown</dt>
-            <dd className="text-right text-text-primary">
-              <span className="font-code tabular-nums">45s</span> default, env-configurable
-            </dd>
-          </div>
-          <div className="flex items-baseline justify-between gap-4 py-2.5">
-            <dt className="text-text-secondary">Level formula</dt>
-            <dd className="text-right font-code text-[12.5px] tabular-nums text-text-primary">
-              floor(sqrt(total_xp / 100))
-            </dd>
-          </div>
-        </dl>
+        <Well bare className="mt-4 px-5 py-2">
+          <dl className="divide-y divide-border-subtle text-label">
+            <div className="flex items-baseline justify-between gap-4 py-3">
+              <dt className="text-text-secondary">XP per message</dt>
+              <dd className="text-right text-text-primary">
+                <span className="pc-mono">15–25</span> XP, scaled by length
+              </dd>
+            </div>
+            <div className="flex items-baseline justify-between gap-4 py-3">
+              <dt className="text-text-secondary">Cooldown</dt>
+              <dd className="text-right text-text-primary">
+                <span className="pc-mono">45s</span> default, env-configurable
+              </dd>
+            </div>
+            <div className="flex items-baseline justify-between gap-4 py-3">
+              <dt className="text-text-secondary">Level formula</dt>
+              <dd className="pc-mono text-right text-meta text-text-primary">
+                floor(sqrt(total_xp / 100))
+              </dd>
+            </div>
+          </dl>
+        </Well>
       </section>
     </div>
   );

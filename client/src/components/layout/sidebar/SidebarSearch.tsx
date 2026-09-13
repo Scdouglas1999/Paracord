@@ -1,16 +1,20 @@
 import { Search } from 'lucide-react';
+
+import { Kbd } from '../../ui';
 import { formatModShortcut } from '../../../lib/keyboardShortcuts';
 import { useUIStore } from '../../../stores/uiStore';
 
 /**
- * Sidebar search field (layout-spec §1, design-spec §7 Input recipe). This IS the
- * ⌘K entry — not a separate search implementation: focus/click opens the Command
- * Palette (`uiStore.setCommandPaletteOpen(true)`), which owns all fuzzy nav/search.
+ * The search well at the top of the Buildings column
+ * (docs/lantern-stage-spec.md §7.1, §8 SearchWell).
  *
- * Rendered as a button styled to the Input recipe (inset bg `--bg-tertiary`, 1px
- * `--border-subtle`, `--radius-sm`, focus `--focus-ring-input`) rather than a real
- * text input so it can never trap focus in a reopen loop with the palette it summons.
- * A trailing ⌘K hint advertises the canonical shortcut (kill-list clean — tokens only).
+ * This IS the ⌘K entry — not a second search implementation: activating it opens
+ * the Command palette, which owns all fuzzy navigation and search.
+ *
+ * It is rendered as a `<button>` wearing the well recipe rather than WP0's
+ * `SearchWell` input, because a real input inside the column would trap focus in
+ * a reopen loop with the palette it summons (the palette takes focus, returns it
+ * on close, and the input opens it again).
  */
 export function SidebarSearch() {
   const openPalette = () => useUIStore.getState().setCommandPaletteOpen(true);
@@ -21,13 +25,15 @@ export function SidebarSearch() {
       onClick={openPalette}
       aria-label="Search — open command palette"
       aria-keyshortcuts="Meta+K Control+K"
-      className="flex h-9 w-full items-center gap-2 rounded-sm border border-border-subtle bg-bg-tertiary px-2.5 text-left text-text-muted outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] hover:border-border-strong focus-visible:border-accent-primary focus-visible:shadow-[var(--focus-ring-input)]"
+      className={
+        'pc-well pc-focusable flex h-[var(--h-search-well)] w-full items-center gap-2.5 px-3 text-left ' +
+        'text-text-faint transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] ' +
+        'hover:text-text-secondary'
+      }
     >
       <Search size={16} aria-hidden className="shrink-0" />
-      <span className="flex-1 truncate text-label">Search or jump to…</span>
-      <kbd className="shrink-0 rounded-xs border border-border-subtle bg-bg-mod-subtle px-1.5 py-0.5 text-meta font-semibold text-text-secondary">
-        {formatModShortcut('K')}
-      </kbd>
+      <span className="min-w-0 flex-1 truncate text-label">Search</span>
+      <Kbd>{formatModShortcut('K')}</Kbd>
     </button>
   );
 }

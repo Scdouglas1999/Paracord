@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Plus, ShieldAlert, Trash2, FlaskConical, Loader2 } from 'lucide-react';
+import { Check, Plus, ShieldAlert, Trash2, FlaskConical, Loader2 } from 'lucide-react';
 
 import {
   ACTION_LABELS,
@@ -17,7 +17,20 @@ import {
 } from '../../api/automod';
 import { extractApiError } from '../../api/client';
 import { toast } from '../../stores/toastStore';
-import { Button } from '../ui/Button';
+import {
+  Button,
+  Chip,
+  Divider,
+  EmptyState,
+  IconButton,
+  Input,
+  Raised,
+  Select,
+  Tabs,
+  Textarea,
+  Well,
+  type TabItem,
+} from '../ui';
 import { Skeleton } from '../ui/Skeleton';
 import { FieldLabel, GroupLabel, SectionHeader, Switch, ToggleRow } from './SettingsPrimitives';
 
@@ -160,7 +173,7 @@ export function AutomodSection({ guildId, channels, roles }: AutomodSectionProps
   const availablePresets = PRESETS.filter((p) => !existingNames.has(p.name));
 
   return (
-    <div className="space-y-8">
+    <div className="flex flex-col gap-8">
       <SectionHeader
         title="AutoMod"
         description="Rules that check every message before it posts. Members who can manage this space are never filtered."
@@ -185,28 +198,35 @@ export function AutomodSection({ guildId, channels, roles }: AutomodSectionProps
       )}
 
       {/* Rules */}
-      <div>
+      <section className="flex flex-col gap-3">
         <GroupLabel>Active rules</GroupLabel>
         {rules === null ? (
-          <div className="mt-3 space-y-3">
+          <div className="flex flex-col gap-3">
             {Array.from({ length: 2 }).map((_, i) => (
-              <Skeleton key={i} height={56} borderRadius="var(--radius-sm)" />
+              <Skeleton key={i} height={56} borderRadius="var(--radius-well)" />
             ))}
           </div>
         ) : rules.length === 0 ? (
-          <p className="mt-3 max-w-prose text-[13.5px] leading-relaxed text-text-secondary">
-            No rules yet. Add one below, or write your own — nothing is filtered until you do.
-          </p>
+          <EmptyState
+            icon={<ShieldAlert size={20} />}
+            title="Nothing is filtered yet"
+            description="AutoMod checks every message against the rules listed here. Add one of the ready-made rules below, or write your own."
+            action={
+              <Button variant="ghost" onClick={() => setCreating(true)} disabled={creating}>
+                <Plus size={15} /> Write a rule
+              </Button>
+            }
+          />
         ) : (
-          <div className="mt-3 divide-y divide-border-subtle border-y border-border-subtle">
+          <Well bare className="divide-y divide-border-subtle px-4">
             {rules.map((rule) => (
               <div key={rule.id} className="flex items-center justify-between gap-4 py-3.5">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="truncate text-label text-text-primary">{rule.name}</span>
-                    <span className="shrink-0 rounded-xs bg-bg-mod-subtle px-1.5 py-0.5 text-meta text-text-muted">
-                      {TRIGGER_LABELS[rule.trigger_type] ?? 'Rule'}
+                    <span className="pc-display truncate text-name text-text-primary">
+                      {rule.name}
                     </span>
+                    <Chip size="sm">{TRIGGER_LABELS[rule.trigger_type] ?? 'Rule'}</Chip>
                   </div>
                   <div className="mt-0.5 truncate text-meta text-text-secondary">
                     {describeTrigger(rule)} → {describeActions(rule.actions)}
@@ -217,69 +237,76 @@ export function AutomodSection({ guildId, channels, roles }: AutomodSectionProps
                     checked={rule.enabled}
                     onChange={() => void toggleRule(rule)}
                     disabled={busyId === rule.id}
-                    aria-label={`Enable ${rule.name}`}
+                    label={`Enable ${rule.name}`}
                   />
-                  <button
-                    type="button"
+                  <IconButton
+                    label={`Delete ${rule.name}`}
                     onClick={() => void removeRule(rule)}
                     disabled={busyId === rule.id}
-                    aria-label={`Delete ${rule.name}`}
-                    className="rounded-xs p-1.5 text-text-muted outline-none transition-colors hover:bg-bg-mod-subtle hover:text-accent-danger focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
+                    className="hover:text-accent-danger"
                   >
                     <Trash2 size={15} />
-                  </button>
+                  </IconButton>
                 </div>
               </div>
             ))}
-          </div>
+          </Well>
         )}
-      </div>
+      </section>
 
       {/* Presets */}
       {availablePresets.length > 0 && (
-        <div>
+        <section className="flex flex-col gap-3">
           <GroupLabel>Add a common rule</GroupLabel>
-          <div className="mt-3 divide-y divide-border-subtle border-y border-border-subtle">
+          <Well bare className="divide-y divide-border-subtle px-4">
             {availablePresets.map((preset) => (
               <div key={preset.key} className="flex items-center justify-between gap-4 py-3.5">
                 <div className="min-w-0">
-                  <div className="text-label text-text-primary">{preset.name}</div>
-                  <div className="mt-0.5 text-meta text-text-secondary">{preset.blurb}</div>
+                  <div className="pc-display text-name text-text-primary">{preset.name}</div>
+                  <div className="mt-0.5 text-meta leading-relaxed text-text-secondary">
+                    {preset.blurb}
+                  </div>
                 </div>
                 <Button
-                  variant="secondary"
+                  variant="ghost"
                   onClick={() => void addPreset(preset)}
                   disabled={busyId === preset.key}
                 >
-                  {busyId === preset.key ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+                  {busyId === preset.key ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : (
+                    <Plus size={14} />
+                  )}
                   Add
                 </Button>
               </div>
             ))}
-          </div>
-        </div>
+          </Well>
+        </section>
       )}
 
       {/* Recent activity */}
-      <div>
+      <section className="flex flex-col gap-3">
         <GroupLabel>Recent activity</GroupLabel>
         {hits.length === 0 ? (
-          <p className="mt-3 text-[13.5px] leading-relaxed text-text-secondary">
-            Nothing caught yet. Every action AutoMod takes shows up here.
-          </p>
+          <EmptyState
+            icon={<ShieldAlert size={20} />}
+            title="AutoMod has not acted yet"
+            description="Every message AutoMod blocks, and every member it times out, is logged here with the rule that caught it."
+          />
         ) : (
-          <div className="mt-3 divide-y divide-border-subtle border-y border-border-subtle">
+          <Well bare className="divide-y divide-border-subtle px-4">
             {hits.map((hit) => (
               <div key={hit.id} className="flex items-start gap-3 py-3">
-                <ShieldAlert size={15} className="mt-0.5 shrink-0 text-accent-warning" />
+                <ShieldAlert size={15} className="mt-0.5 shrink-0 text-accent-warning" aria-hidden />
                 <div className="min-w-0 flex-1">
-                  <div className="text-label text-text-primary">
-                    {hit.rule_name}
-                    <span className="ml-2 text-meta font-normal text-text-muted">
+                  <div className="flex flex-wrap items-baseline gap-2">
+                    <span className="pc-display text-name text-text-primary">{hit.rule_name}</span>
+                    <span className="pc-mono text-meta text-text-faint">
                       {new Date(hit.created_at).toLocaleString()}
                     </span>
                   </div>
-                  <div className="mt-0.5 text-meta text-text-secondary">
+                  <div className="mt-0.5 text-meta leading-relaxed text-text-secondary">
                     {hit.matched_excerpt}
                     {hit.actions_taken.length > 0 && (
                       <>
@@ -289,16 +316,16 @@ export function AutomodSection({ guildId, channels, roles }: AutomodSectionProps
                     )}
                   </div>
                   {hit.content_excerpt && (
-                    <div className="mt-1 truncate rounded-xs bg-bg-mod-subtle px-2 py-1 text-meta text-text-muted">
+                    <div className="mt-1.5 rounded-[var(--radius-chip)] bg-bg-mod-subtle px-2 py-1 text-meta leading-relaxed text-text-muted">
                       {hit.content_excerpt}
                     </div>
                   )}
                 </div>
               </div>
             ))}
-          </div>
+          </Well>
         )}
-      </div>
+      </section>
     </div>
   );
 }
@@ -339,6 +366,11 @@ function RuleEditor({ guildId, channels, roles, onCancel, onCreated }: RuleEdito
     setMeta(defaultTriggerMetadata(next));
     setTestResult(null);
   };
+
+  const triggerTabs = useMemo<TabItem[]>(
+    () => TRIGGER_ORDER.map((t) => ({ value: String(t), label: TRIGGER_LABELS[t] })),
+    [],
+  );
 
   const buildActions = (): RuleAction[] => {
     const actions: RuleAction[] = [];
@@ -402,224 +434,218 @@ function RuleEditor({ guildId, channels, roles, onCancel, onCreated }: RuleEdito
     }
   };
 
-  const inputClass =
-    'w-full rounded-sm border border-border-subtle bg-bg-tertiary px-3 py-2 text-body text-text-primary outline-none transition-colors placeholder:text-text-muted focus:border-accent-primary focus-visible:shadow-[var(--focus-ring)]';
-
   return (
-    <div className="rounded-md border border-border-strong bg-bg-secondary p-5 shadow-sm">
-      <div className="space-y-5">
-        <div>
-          <FieldLabel>Rule name</FieldLabel>
-          <input
-            className={inputClass}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="No advertising"
-            maxLength={100}
-          />
-        </div>
-
-        <div>
-          <FieldLabel>What it looks for</FieldLabel>
-          <div className="flex flex-wrap gap-2">
-            {TRIGGER_ORDER.map((t) => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => changeTrigger(t)}
-                className={`rounded-sm border px-3 py-1.5 text-label outline-none transition-colors focus-visible:shadow-[var(--focus-ring)] ${
-                  triggerType === t
-                    ? 'border-accent-primary bg-accent-primary/10 text-text-primary'
-                    : 'border-border-subtle text-text-secondary hover:border-border-strong hover:text-text-primary'
-                }`}
-              >
-                {TRIGGER_LABELS[t]}
-              </button>
-            ))}
-          </div>
-          <p className="mt-2 text-meta text-text-secondary">
-            {TRIGGER_DESCRIPTIONS[triggerType]}
-          </p>
-        </div>
-
-        <TriggerFields meta={meta} onChange={setMeta} inputClass={inputClass} />
-
-        {/* Dry run */}
-        <div className="rounded-sm border border-border-subtle bg-bg-tertiary/60 p-3">
-          <FieldLabel>Try it before you enable it</FieldLabel>
-          <div className="flex gap-2">
-            <input
-              className={inputClass}
-              value={sample}
-              onChange={(e) => {
-                setSample(e.target.value);
-                setTestResult(null);
-              }}
-              placeholder="Paste a message to check…"
-            />
-            <Button variant="secondary" onClick={() => void runTest()} disabled={testing || !sample}>
-              {testing ? <Loader2 size={14} className="animate-spin" /> : <FlaskConical size={14} />}
-              Test
-            </Button>
-          </div>
-          {testResult && (
-            <p
-              className={`mt-2 text-meta ${
-                testResult.matched ? 'text-accent-warning' : 'text-accent-success'
-              }`}
-            >
-              {testResult.matched
-                ? `Would trigger — ${testResult.excerpt}`
-                : 'Would not trigger.'}
-            </p>
-          )}
-        </div>
-
-        {/* Actions */}
-        <div>
-          <FieldLabel>What happens</FieldLabel>
-          <div className="divide-y divide-border-subtle border-y border-border-subtle">
-            <ToggleRow
-              label="Block the message"
-              description="The sender sees your reason and the message is never posted."
-              checked={block}
-              onChange={setBlock}
-            />
-            {block && (
-              <div className="py-3">
-                <input
-                  className={inputClass}
-                  value={blockReason}
-                  onChange={(e) => setBlockReason(e.target.value)}
-                  placeholder="Reason shown to the sender (optional)"
-                  maxLength={200}
-                />
-              </div>
-            )}
-            <ToggleRow
-              label="Time the member out"
-              description="Temporarily stops them from sending messages."
-              checked={timeoutEnabled}
-              onChange={setTimeoutEnabled}
-            />
-            {timeoutEnabled && (
-              <div className="flex items-center gap-2 py-3">
-                <input
-                  type="number"
-                  min={1}
-                  max={40320}
-                  className={`${inputClass} w-28`}
-                  value={timeoutMinutes}
-                  onChange={(e) => setTimeoutMinutes(Number(e.target.value))}
-                />
-                <span className="text-meta text-text-secondary">minutes</span>
-              </div>
-            )}
-            <div className="py-3">
-              <FieldLabel>Alert a channel (optional)</FieldLabel>
-              <select
-                className={inputClass}
-                value={alertChannelId}
-                onChange={(e) => setAlertChannelId(e.target.value)}
-              >
-                <option value="">Don’t post an alert</option>
-                {channels.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    #{c.name ?? 'channel'}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-        </div>
-
-        {/* Exemptions */}
-        {roles.length > 0 && (
-          <div>
-            <FieldLabel>Roles this never applies to</FieldLabel>
-            <div className="flex flex-wrap gap-2">
-              {roles.map((role) => {
-                const on = exemptRoleIds.includes(role.id);
-                return (
-                  <button
-                    key={role.id}
-                    type="button"
-                    onClick={() =>
-                      setExemptRoleIds((prev) =>
-                        on ? prev.filter((id) => id !== role.id) : [...prev, role.id],
-                      )
-                    }
-                    className={`rounded-sm border px-2.5 py-1 text-meta outline-none transition-colors focus-visible:shadow-[var(--focus-ring)] ${
-                      on
-                        ? 'border-accent-primary bg-accent-primary/10 text-text-primary'
-                        : 'border-border-subtle text-text-secondary hover:border-border-strong'
-                    }`}
-                  >
-                    {role.name ?? 'role'}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        <div className="flex justify-end gap-2 border-t border-border-subtle pt-4">
-          <Button variant="secondary" onClick={onCancel} disabled={saving}>
-            Cancel
-          </Button>
-          <Button onClick={() => void save()} disabled={saving}>
-            {saving && <Loader2 size={14} className="animate-spin" />}
-            Create rule
-          </Button>
-        </div>
+    <Raised bare lifted className="flex flex-col gap-5 p-5">
+      <div>
+        <FieldLabel>Rule name</FieldLabel>
+        <Input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="No advertising"
+          maxLength={100}
+          aria-label="Rule name"
+        />
       </div>
-    </div>
+
+      <div>
+        <FieldLabel>What it looks for</FieldLabel>
+        <Tabs
+          label="What the rule looks for"
+          items={triggerTabs}
+          value={String(triggerType)}
+          onChange={(next) => changeTrigger(Number(next))}
+          size="sm"
+          className="w-full overflow-x-auto"
+        />
+        <p className="mt-2 text-meta leading-relaxed text-text-secondary">
+          {TRIGGER_DESCRIPTIONS[triggerType]}
+        </p>
+      </div>
+
+      <TriggerFields meta={meta} onChange={setMeta} />
+
+      {/* Dry run */}
+      <div>
+        <FieldLabel>Try it before you enable it</FieldLabel>
+        <div className="flex gap-2">
+          <Input
+            value={sample}
+            onChange={(e) => {
+              setSample(e.target.value);
+              setTestResult(null);
+            }}
+            placeholder="Paste a message to check…"
+            aria-label="Message to check"
+          />
+          <Button variant="ghost" onClick={() => void runTest()} disabled={testing || !sample}>
+            {testing ? (
+              <Loader2 size={14} className="animate-spin" />
+            ) : (
+              <FlaskConical size={14} />
+            )}
+            Test
+          </Button>
+        </div>
+        {testResult && (
+          <p
+            className={`mt-2 text-meta leading-relaxed ${
+              testResult.matched ? 'text-accent-warning' : 'text-accent-success'
+            }`}
+          >
+            {testResult.matched
+              ? `Would trigger — ${testResult.excerpt}`
+              : 'Would not trigger.'}
+          </p>
+        )}
+      </div>
+
+      {/* Actions */}
+      <div>
+        <FieldLabel>What happens</FieldLabel>
+        <Well bare className="divide-y divide-border-subtle px-4">
+          <ToggleRow
+            label="Block the message"
+            description="The sender sees your reason and the message is never posted."
+            checked={block}
+            onChange={setBlock}
+          />
+          {block && (
+            <div className="py-3">
+              <Input
+                value={blockReason}
+                onChange={(e) => setBlockReason(e.target.value)}
+                placeholder="Reason shown to the sender (optional)"
+                maxLength={200}
+                aria-label="Reason shown to the sender"
+              />
+            </div>
+          )}
+          <ToggleRow
+            label="Time the member out"
+            description="Temporarily stops them from sending messages."
+            checked={timeoutEnabled}
+            onChange={setTimeoutEnabled}
+          />
+          {timeoutEnabled && (
+            <div className="flex items-center gap-2 py-3">
+              <Input
+                type="number"
+                min={1}
+                max={40320}
+                className="w-28"
+                value={timeoutMinutes}
+                onChange={(e) => setTimeoutMinutes(Number(e.target.value))}
+                aria-label="Timeout length in minutes"
+              />
+              <span className="text-meta text-text-secondary">minutes</span>
+            </div>
+          )}
+          <div className="py-3">
+            <FieldLabel>Alert a channel (optional)</FieldLabel>
+            <Select
+              value={alertChannelId}
+              onChange={(e) => setAlertChannelId(e.target.value)}
+              aria-label="Channel to alert"
+            >
+              <option value="">Don’t post an alert</option>
+              {channels.map((c) => (
+                <option key={c.id} value={c.id}>
+                  #{c.name ?? 'channel'}
+                </option>
+              ))}
+            </Select>
+          </div>
+        </Well>
+      </div>
+
+      {/* Exemptions */}
+      {roles.length > 0 && (
+        <div>
+          <FieldLabel>Roles this never applies to</FieldLabel>
+          <div className="flex flex-wrap gap-2">
+            {roles.map((role) => {
+              const on = exemptRoleIds.includes(role.id);
+              return (
+                <Chip
+                  key={role.id}
+                  as="button"
+                  aria-pressed={on}
+                  onClick={() =>
+                    setExemptRoleIds((prev) =>
+                      on ? prev.filter((id) => id !== role.id) : [...prev, role.id],
+                    )
+                  }
+                  className={on ? 'bg-bg-mod-strong text-text-primary' : undefined}
+                >
+                  {on && <Check size={12} aria-hidden />}
+                  {role.name ?? 'role'}
+                </Chip>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <Divider />
+
+      <div className="flex justify-end gap-2">
+        <Button variant="ghost" onClick={onCancel} disabled={saving}>
+          Cancel
+        </Button>
+        <Button onClick={() => void save()} disabled={saving}>
+          {saving && <Loader2 size={14} className="animate-spin" />}
+          Create rule
+        </Button>
+      </div>
+    </Raised>
   );
 }
 
 function TriggerFields({
   meta,
   onChange,
-  inputClass,
 }: {
   meta: TriggerMetadata;
   onChange: (next: TriggerMetadata) => void;
-  inputClass: string;
 }) {
   switch (meta.kind) {
     case 'keyword':
       return (
-        <div className="space-y-3">
+        <div className="flex flex-col gap-3">
           <div>
             <FieldLabel>Keywords</FieldLabel>
-            <textarea
-              className={`${inputClass} min-h-[84px] resize-y`}
+            <Textarea
+              className="min-h-[84px] resize-y"
               value={meta.keywords.join('\n')}
               onChange={(e) => onChange({ ...meta, keywords: textAreaList(e.target.value) })}
               placeholder={'One per line, or comma separated'}
+              aria-label="Keywords"
             />
           </div>
-          <ToggleRow
-            label="Whole words only"
-            description="“ass” won’t flag “assignment”."
-            checked={meta.whole_word ?? false}
-            onChange={(v) => onChange({ ...meta, whole_word: v })}
-          />
+          <Well bare className="px-4">
+            <ToggleRow
+              label="Whole words only"
+              description="“ass” won’t flag “assignment”."
+              checked={meta.whole_word ?? false}
+              onChange={(v) => onChange({ ...meta, whole_word: v })}
+            />
+          </Well>
         </div>
       );
     case 'regex':
       return (
         <div>
           <FieldLabel>Patterns</FieldLabel>
-          <textarea
-            className={`${inputClass} min-h-[84px] resize-y font-mono text-[13px]`}
+          <Textarea
+            className="pc-mono min-h-[84px] resize-y text-meta"
             value={meta.patterns.join('\n')}
             onChange={(e) =>
               onChange({ ...meta, patterns: e.target.value.split('\n').map((v) => v.trim()).filter(Boolean) })
             }
             placeholder={'\\bfree\\s+nitro\\b'}
+            aria-label="Patterns"
           />
-          <p className="mt-1.5 text-meta text-text-secondary">
+          <p className="mt-1.5 text-meta leading-relaxed text-text-secondary">
             One pattern per line. Case-insensitive. Invalid patterns are rejected when you save.
           </p>
         </div>
@@ -628,13 +654,14 @@ function TriggerFields({
       return (
         <div>
           <FieldLabel>Maximum mentions per message</FieldLabel>
-          <input
+          <Input
             type="number"
             min={1}
             max={100}
-            className={`${inputClass} w-32`}
+            className="w-32"
             value={meta.max_mentions}
             onChange={(e) => onChange({ ...meta, max_mentions: Number(e.target.value) })}
+            aria-label="Maximum mentions per message"
           />
         </div>
       );
@@ -643,32 +670,34 @@ function TriggerFields({
         <div className="flex flex-wrap items-end gap-3">
           <div>
             <FieldLabel>Messages</FieldLabel>
-            <input
+            <Input
               type="number"
               min={1}
               max={100}
-              className={`${inputClass} w-28`}
+              className="w-28"
               value={meta.max_messages}
               onChange={(e) => onChange({ ...meta, max_messages: Number(e.target.value) })}
+              aria-label="Messages"
             />
           </div>
           <div>
             <FieldLabel>Within (seconds)</FieldLabel>
-            <input
+            <Input
               type="number"
               min={2}
               max={3600}
-              className={`${inputClass} w-28`}
+              className="w-28"
               value={meta.window_seconds}
               onChange={(e) => onChange({ ...meta, window_seconds: Number(e.target.value) })}
+              aria-label="Within (seconds)"
             />
           </div>
         </div>
       );
     case 'link':
       return (
-        <div className="space-y-1">
-          <div className="divide-y divide-border-subtle border-y border-border-subtle">
+        <div className="flex flex-col gap-3">
+          <Well bare className="divide-y divide-border-subtle px-4">
             <ToggleRow
               label="Block invite links"
               description="Invites to other spaces on any Paracord server."
@@ -681,19 +710,20 @@ function TriggerFields({
               checked={meta.block_all ?? false}
               onChange={(v) => onChange({ ...meta, block_all: v })}
             />
-          </div>
+          </Well>
           {meta.block_all && (
-            <div className="pt-3">
+            <div>
               <FieldLabel>Allowed domains</FieldLabel>
-              <textarea
-                className={`${inputClass} min-h-[64px] resize-y`}
+              <Textarea
+                className="min-h-[64px] resize-y"
                 value={(meta.allowed_domains ?? []).join('\n')}
                 onChange={(e) =>
                   onChange({ ...meta, allowed_domains: textAreaList(e.target.value) })
                 }
                 placeholder={'example.com'}
+                aria-label="Allowed domains"
               />
-              <p className="mt-1.5 text-meta text-text-secondary">
+              <p className="mt-1.5 text-meta leading-relaxed text-text-secondary">
                 Subdomains are included automatically.
               </p>
             </div>

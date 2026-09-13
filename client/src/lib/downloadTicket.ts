@@ -38,7 +38,7 @@ function originOfApiBase(base: string): string | null {
  * A per-server client is built with a fixed base URL paired to that server's
  * own token, so its `defaults.baseURL` is authoritative. With no per-server
  * client, `getApi()` falls back to the LOCAL singleton, which re-resolves its
- * base URL inside its request interceptor (so "Add Server" applies without a
+ * base URL inside its request interceptor (so "Add server" applies without a
  * reload) — its `defaults.baseURL` is a stale snapshot, so ask the resolver.
  */
 function mintingOrigin(): string | null {

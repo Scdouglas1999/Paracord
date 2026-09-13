@@ -15,17 +15,10 @@ import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { cn } from '../lib/utils';
 import { displayName } from '../lib/displayName';
+import { presenceLight } from '../lib/presence';
 import { UserProfilePopup } from '../components/user/UserProfile';
 
 type FriendsTab = 'online' | 'all' | 'requests' | 'blocked';
-
-const STATUS_COLOR: Record<string, string> = {
-  online: 'bg-status-online',
-  idle: 'bg-status-idle',
-  dnd: 'bg-status-dnd',
-  streaming: 'bg-status-streaming',
-  offline: 'bg-status-offline',
-};
 
 const STATUS_LABEL: Record<string, string> = {
   online: 'Online',
@@ -35,7 +28,7 @@ const STATUS_LABEL: Record<string, string> = {
   offline: 'Offline',
 };
 
-// Icon action button (design-spec §7 Icon button). Revealed on row hover AND
+// Icon action button (lantern-stage-spec §8). Revealed on row hover AND
 // keyboard focus so hover-only actions stay reachable (§8).
 function ActionButton({
   label,
@@ -60,7 +53,7 @@ function ActionButton({
       title={label}
       aria-label={label}
       className={cn(
-        'flex h-9 w-9 shrink-0 items-center justify-center rounded-sm bg-bg-mod-subtle text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50',
+        'flex h-9 w-9 shrink-0 items-center justify-center rounded-chip bg-bg-mod-subtle text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50',
         !alwaysVisible && 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 sm:focus-visible:opacity-100',
         tone === 'success' && 'text-accent-success hover:text-accent-success',
         tone === 'danger' && 'hover:text-accent-danger',
@@ -72,7 +65,7 @@ function ActionButton({
   );
 }
 
-// A single person row (design-spec §7 List item): avatar + optional presence dot,
+// A single person row (lantern-stage-spec §8): avatar + optional presence dot,
 // name + subtitle, then row actions supplied by the caller.
 function PersonRow({
   name,
@@ -96,18 +89,20 @@ function PersonRow({
         aria-label={`Open profile for ${name}`}
         onClick={(event) => onOpenProfile?.(event.currentTarget)}
         disabled={!onOpenProfile}
-        className="flex min-w-0 flex-1 items-center gap-3 rounded-sm px-2 py-1 text-left outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-default"
+        className="flex min-w-0 flex-1 items-center gap-3 rounded-chip px-2 py-1 text-left outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-default"
       >
         <div className="relative shrink-0">
-          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-accent-tint text-label font-semibold text-accent-primary">
+          {/* §1.5: presence is a rim of light on the avatar, never a coloured
+              dot. The status word itself is already in the row subtitle. */}
+          <div
+            className={cn(
+              'flex h-10 w-10 items-center justify-center rounded-full bg-accent-tint text-label font-semibold text-accent-primary',
+              showPresence && presenceLight(status).avatarClass,
+              showPresence && presenceLight(status).dnd && 'pc-dnd',
+            )}
+          >
             {name.charAt(0).toUpperCase()}
           </div>
-          {showPresence && status && status !== 'offline' && (
-            <span
-              className={cn('absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full', STATUS_COLOR[status] ?? 'bg-status-offline')}
-              style={{ boxShadow: '0 0 0 2.5px var(--bg-secondary)' }}
-            />
-          )}
         </div>
         <div className="min-w-0 flex-1">
           <div className="truncate text-label font-semibold text-text-primary">{name}</div>
@@ -298,11 +293,11 @@ export function FriendsPage() {
   const sectionLabel = activeTab === 'all' ? 'All' : activeTab === 'blocked' ? 'Blocked' : 'Online';
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-bg-primary">
+    <div className="flex h-full min-h-0 flex-col bg-bg-plate">
       {/* Solid header — title + primary Add-friend action (no gradient hero, §6.1). */}
-      <header className="shrink-0 border-b border-border-subtle bg-bg-secondary px-4 py-4 sm:px-6">
+      <header className="shrink-0 border-b border-border-subtle bg-bg-raised px-4 py-4 sm:px-6">
         <div className="flex items-center gap-3">
-          <span className="flex h-10 w-10 items-center justify-center rounded-md bg-accent-tint text-accent-primary">
+          <span className="flex h-10 w-10 items-center justify-center rounded-well bg-accent-tint text-accent-primary">
             <Users size={19} />
           </span>
           <div className="min-w-0 flex-1">
@@ -321,8 +316,8 @@ export function FriendsPage() {
 
         {/* Inline add-friend input — the primary action, not a hidden tab (§ task 1). */}
         {showAddFriend && (
-          <div className="mt-4 rounded-md border border-border-subtle bg-bg-primary p-4">
-            <div className="text-section uppercase text-text-muted">Add a friend</div>
+          <div className="mt-4 rounded-well border border-border-subtle bg-bg-plate p-4">
+            <div className="text-section text-text-muted">Add a friend</div>
             <p className="mt-1 text-meta text-text-secondary">
               Send a request with someone's exact username, or their numeric user ID if you have it.
             </p>
@@ -345,14 +340,14 @@ export function FriendsPage() {
                 disabled={!addFriendInput.trim() || isActionPending('add')}
                 className="sm:w-auto"
               >
-                {isActionPending('add') ? 'Sending...' : 'Send Friend Request'}
+                {isActionPending('add') ? 'Sending...' : 'Send friend request'}
               </Button>
             </div>
             {addFriendStatus && (
               <div
                 role={addFriendStatus.type === 'error' ? 'alert' : 'status'}
                 className={cn(
-                  'mt-3 flex items-center gap-2 rounded-sm border px-3.5 py-2.5 text-label font-medium',
+                  'mt-3 flex items-center gap-2 rounded-chip border px-3.5 py-2.5 text-label font-medium',
                   addFriendStatus.type === 'success'
                     ? 'border-accent-success/35 bg-success-tint text-accent-success'
                     : 'border-accent-danger/35 bg-danger-tint text-accent-danger',
@@ -401,7 +396,7 @@ export function FriendsPage() {
       <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
         <div className="px-4 py-4 sm:px-6">
           {relationshipError && (
-            <div role="alert" className="mb-4 flex items-center gap-2 rounded-md border border-accent-danger/35 bg-danger-tint px-3.5 py-2.5 text-label font-medium text-accent-danger">
+            <div role="alert" className="mb-4 flex items-center gap-2 rounded-well border border-accent-danger/35 bg-danger-tint px-3.5 py-2.5 text-label font-medium text-accent-danger">
               <X size={16} />
               <span>{relationshipError}</span>
             </div>
@@ -445,10 +440,10 @@ export function FriendsPage() {
                 />
               ) : (
                 <>
-                  <div className="mb-2 px-1 text-section uppercase text-text-muted">
+                  <div className="mb-2 px-1 text-section text-text-muted">
                     {sectionLabel} — {filteredList.length}
                   </div>
-                  <div className="divide-y divide-border-subtle overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
+                  <div className="divide-y divide-border-subtle overflow-hidden rounded-well border border-border-subtle bg-bg-raised shadow-[var(--shadow-chip)]">
                     {filteredList.map((rel) => {
                       const status = getPresence(rel.user.id, scope)?.status || 'offline';
                       const isFriend = rel.type === 1;
@@ -493,10 +488,10 @@ export function FriendsPage() {
           )}
         </div>
       </div>
-      {profile && createPortal(
+      {createPortal(
         <UserProfilePopup
-          user={profile.user}
-          position={profile.position}
+          user={profile?.user ?? null}
+          position={profile?.position ?? null}
           onClose={() => setProfile(null)}
         />,
         document.body,
@@ -543,8 +538,8 @@ function RequestsView({
     <div className="flex flex-col gap-6">
       {incoming.length > 0 && (
         <section>
-          <div className="mb-2 px-1 text-section uppercase text-text-muted">Incoming — {incoming.length}</div>
-          <div className="divide-y divide-border-subtle overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
+          <div className="mb-2 px-1 text-section text-text-muted">Incoming — {incoming.length}</div>
+          <div className="divide-y divide-border-subtle overflow-hidden rounded-well border border-border-subtle bg-bg-raised shadow-[var(--shadow-chip)]">
             {incoming.map((rel) => (
               <PersonRow
                 key={rel.id}
@@ -579,8 +574,8 @@ function RequestsView({
 
       {outgoing.length > 0 && (
         <section>
-          <div className="mb-2 px-1 text-section uppercase text-text-muted">Outgoing — {outgoing.length}</div>
-          <div className="divide-y divide-border-subtle overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
+          <div className="mb-2 px-1 text-section text-text-muted">Outgoing — {outgoing.length}</div>
+          <div className="divide-y divide-border-subtle overflow-hidden rounded-well border border-border-subtle bg-bg-raised shadow-[var(--shadow-chip)]">
             {outgoing.map((rel) => (
               <PersonRow
                 key={rel.id}
@@ -667,12 +662,18 @@ function FriendsEmptyState({
           description="People you block won't be able to message you or add you as a friend. Anyone you block will appear here so you can undo it later."
         />
       );
+    case 'requests':
     default:
       return (
         <EmptyState
           icon={<ArrowUpRight size={20} />}
-          title="Nothing here yet"
-          description="There's nobody in this list right now."
+          title="No requests waiting"
+          description="Nobody has asked to be friends, and you have no invitations out. Send one with the Add friend button up top — you only need their handle."
+          action={
+            <Button size="sm" onClick={onAdd}>
+              Add a friend
+            </Button>
+          }
         />
       );
   }

@@ -10,7 +10,7 @@ function nonBlank(value: string | null | undefined): string | null {
 
 /** Visible identity: server nickname, then profile display name, then handle. */
 export function displayName(user: DisplayIdentity | null | undefined, nick?: string | null): string {
-  return nonBlank(nick) ?? nonBlank(user?.display_name) ?? nonBlank(user?.username) ?? 'Unknown User';
+  return nonBlank(nick) ?? nonBlank(user?.display_name) ?? nonBlank(user?.username) ?? 'Unknown user';
 }
 
 /** Stable account handle used for search, mentions, and security-sensitive labels. */

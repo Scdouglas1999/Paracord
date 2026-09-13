@@ -7,16 +7,16 @@ import { Button } from '../../components/ui/Button';
 function SkeletonMessage({ lines = 2, wide = false }: { lines?: number; wide?: boolean }) {
   return (
     <div className="flex gap-4 px-4 py-2">
-      <div className="h-10 w-10 shrink-0 animate-pulse rounded-full bg-bg-mod-subtle" />
+      <div className="h-10 w-10 shrink-0 pc-skeleton rounded-full bg-bg-mod-subtle" />
       <div className="flex min-w-0 flex-1 flex-col gap-2 pt-1">
         <div className="flex items-center gap-2">
-          <div className="h-3.5 w-28 animate-pulse rounded-xs bg-bg-mod-subtle" />
-          <div className="h-2.5 w-14 animate-pulse rounded-xs bg-bg-mod-subtle/70" />
+          <div className="h-3.5 w-28 pc-skeleton rounded-window bg-bg-mod-subtle" />
+          <div className="h-2.5 w-14 pc-skeleton rounded-window bg-bg-mod-subtle/70" />
         </div>
         {Array.from({ length: lines }, (_, i) => (
           <div
             key={i}
-            className="h-3 animate-pulse rounded-xs bg-bg-mod-subtle/70"
+            className="h-3 pc-skeleton rounded-window bg-bg-mod-subtle/70"
             style={{ width: wide && i === 0 ? '82%' : `${68 - i * 16}%` }}
           />
         ))}
@@ -27,13 +27,13 @@ function SkeletonMessage({ lines = 2, wide = false }: { lines?: number; wide?: b
 
 /**
  * Loading state — a skeleton of the real channel layout (message stream +
- * composer), never a bare centered spinner (design-spec kill-list #4).
+ * composer), never a bare centered spinner (lantern-stage-spec §6).
  */
 export function GuildLoadingScreen() {
   return (
     <div className="flex h-full min-h-0 flex-col" role="status" aria-busy="true">
       <TopBar channelName="Loading..." />
-      <div className="flex min-h-0 flex-1 flex-col bg-bg-primary">
+      <div className="flex min-h-0 flex-1 flex-col bg-bg-plate">
         <div className="flex min-h-0 flex-1 flex-col justify-end gap-1 overflow-hidden py-3">
           <SkeletonMessage lines={1} />
           <SkeletonMessage lines={2} wide />
@@ -43,7 +43,7 @@ export function GuildLoadingScreen() {
           <SkeletonMessage lines={2} />
         </div>
         <div className="shrink-0 px-4 pb-6 pt-1">
-          <div className="h-11 animate-pulse rounded-md border border-border-subtle bg-bg-secondary" />
+          <div className="h-11 pc-skeleton rounded-well border border-border-subtle bg-bg-raised" />
         </div>
       </div>
       <span className="sr-only">Loading channels...</span>
@@ -62,9 +62,9 @@ export function ChannelNotFoundScreen({ guildId }: { guildId: string | undefined
   return (
     <div className="flex h-full min-h-0 flex-col">
       <TopBar channelName="Channel not found" />
-      <div className="flex flex-1 items-center bg-bg-primary px-6 sm:px-10">
+      <div className="flex flex-1 items-center bg-bg-plate px-6 sm:px-10">
         <div className="w-full max-w-md">
-          <div className="mb-5 flex h-11 w-11 items-center justify-center rounded-sm bg-accent-tint text-accent-primary">
+          <div className="mb-5 flex h-11 w-11 items-center justify-center rounded-chip bg-accent-tint text-accent-primary">
             <Compass size={20} strokeWidth={2} />
           </div>
           <h2 className="font-display text-heading text-text-primary">Channel not found</h2>
@@ -89,7 +89,7 @@ export function ChannelLoadErrorScreen({ error, onRetry }: { error: string; onRe
   return (
     <div className="flex h-full min-h-0 flex-col">
       <TopBar channelName="Channels unavailable" />
-      <div className="flex flex-1 items-center bg-bg-primary px-6 sm:px-10">
+      <div className="flex flex-1 items-center bg-bg-plate px-6 sm:px-10">
         <div className="w-full max-w-md">
           <h2 className="font-display text-heading text-text-primary">Couldn't load channels</h2>
           <p role="alert" className="mt-2 break-words text-body text-text-secondary">{error}</p>

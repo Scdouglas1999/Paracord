@@ -2,24 +2,19 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
-  Database,
-  HardDrive,
   Info,
   Loader2,
-  MessageSquare,
   RefreshCw,
-  Server,
   ShieldAlert,
-  Users,
 } from 'lucide-react';
 import { adminApi, type HealthCheck, type HealthReport } from '../../api/admin';
 import { extractApiError } from '../../api/client';
 import { toast } from '../../stores/toastStore';
 import { Skeleton } from '../../components/ui/Skeleton';
-import { Button } from '../../components/ui/Button';
+import { Button, Divider, SettingsSectionHeader, Well } from '../../components/ui';
 
 function formatBytes(bytes: number | null | undefined): string {
-  if (bytes == null) return '—';
+  if (bytes == null) return 'not measured';
   if (bytes === 0) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
@@ -44,7 +39,8 @@ function formatAge(hours: number | null): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-const SEVERITY_STYLE: Record<
+// §9: colour is never the only cue — every severity carries its own word.
+const SEVERITY: Record<
   HealthCheck['severity'],
   { icon: typeof AlertTriangle; tone: string; label: string }
 > = {
@@ -76,27 +72,25 @@ export function OverviewPanel() {
 
   return (
     <div>
-      <header className="mb-7 flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h2 className="font-display text-heading text-text-primary">Server health</h2>
-          <p className="mt-1 text-body text-text-secondary">
-            What this deployment looks like right now, and anything worth acting on.
-          </p>
-        </div>
-        <Button variant="secondary" onClick={() => void load(true)} disabled={refreshing}>
-          {refreshing ? (
-            <Loader2 size={14} className="animate-spin" />
-          ) : (
-            <RefreshCw size={14} />
-          )}
-          Refresh
-        </Button>
-      </header>
+      <SettingsSectionHeader
+        title="Server health"
+        description="What this deployment looks like right now, and anything worth acting on."
+        action={
+          <Button variant="ghost" onClick={() => void load(true)} disabled={refreshing}>
+            {refreshing ? (
+              <Loader2 size={14} className="animate-spin" />
+            ) : (
+              <RefreshCw size={14} />
+            )}
+            Refresh
+          </Button>
+        }
+      />
 
       {!health ? (
-        <div className="space-y-4">
-          <Skeleton height={110} borderRadius="var(--radius-md)" />
-          <Skeleton height={160} borderRadius="var(--radius-md)" />
+        <div className="flex flex-col gap-4">
+          <Skeleton height={110} borderRadius="var(--radius-well)" />
+          <Skeleton height={160} borderRadius="var(--radius-well)" />
         </div>
       ) : (
         <HealthBody health={health} />
@@ -105,178 +99,163 @@ export function OverviewPanel() {
   );
 }
 
+type FactRow = [label: string, value: string, mono?: boolean];
+
 function HealthBody({ health }: { health: HealthReport }) {
   const { counts, checks } = health;
 
+  const groups: Array<{ title: string; rows: FactRow[] }> = [
+    {
+      title: 'Database',
+      rows: [
+        ['Engine', health.database.engine === 'postgres' ? 'PostgreSQL' : 'SQLite'],
+        ['Size on disk', formatBytes(health.database.size_bytes), true],
+        ['Channels', counts.channels.toLocaleString(), true],
+      ],
+    },
+    {
+      title: 'Backups',
+      rows: [
+        ['Automatic backups', health.backups.auto_enabled ? 'On' : 'Off'],
+        ['Archives kept', String(health.backups.count), true],
+        [
+          'Latest archive',
+          health.backups.count > 0 ? formatAge(health.backups.latest_age_hours) : 'none yet',
+        ],
+        ['Total size', formatBytes(health.backups.total_bytes), true],
+      ],
+    },
+    {
+      title: 'Access',
+      rows: [
+        ['Version', health.version, true],
+        ['Uptime', formatUptime(health.uptime_seconds), true],
+        [
+          'HTTPS',
+          health.network.tls_enabled
+            ? health.network.tls_self_signed
+              ? 'On (self-signed)'
+              : 'On'
+            : 'Off',
+        ],
+        ['Public URL', health.network.public_url ?? 'not set', true],
+        ['Registration', health.network.registration_open ? 'Open' : 'Closed'],
+      ],
+    },
+    {
+      title: 'Voice and video',
+      rows: [
+        [
+          'Native media',
+          health.media.native_enabled ? `On, UDP ${health.media.native_port}` : 'Off',
+        ],
+        ['LiveKit', health.media.livekit_available ? 'Available' : 'Not configured'],
+      ],
+    },
+    {
+      title: 'Files',
+      rows: [
+        ['Uploads', formatBytes(health.storage.uploads_bytes), true],
+        ['Media', formatBytes(health.storage.media_bytes), true],
+      ],
+    },
+    {
+      title: 'Federation',
+      rows: [['Status', health.network.federation_enabled ? 'Enabled' : 'Disabled']],
+    },
+  ];
+
   return (
-    <div className="space-y-5">
+    <div className="flex flex-col gap-8">
       {/* Findings lead — the operator's to-do list, not buried under stats. */}
-      {checks.length === 0 ? (
-        <div className="flex items-center gap-3 rounded-md border border-border-subtle bg-bg-secondary px-5 py-4 shadow-sm">
-          <CheckCircle2 size={18} className="shrink-0 text-accent-success" />
-          <div>
-            <div className="text-label text-text-primary">Everything looks healthy</div>
-            <div className="mt-0.5 text-meta text-text-secondary">
-              Backups, transport security, and capacity all check out.
+      <section>
+        {checks.length === 0 ? (
+          <Well className="flex items-start gap-3 px-4 py-3.5">
+            <CheckCircle2 size={18} className="mt-0.5 shrink-0 text-accent-success" />
+            <div className="min-w-0">
+              <p className="text-label text-text-primary">Everything looks healthy</p>
+              <p className="mt-0.5 text-meta text-text-secondary">
+                Backups, transport security and capacity all check out.
+              </p>
             </div>
-          </div>
-        </div>
-      ) : (
-        <div className="overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
-          <div className="border-b border-border-subtle px-5 py-3">
-            <span className="text-section uppercase text-text-muted">
+          </Well>
+        ) : (
+          <>
+            <p className="text-section text-text-faint">
               {checks.length} thing{checks.length === 1 ? '' : 's'} to look at
-            </span>
-          </div>
-          <div className="divide-y divide-border-subtle">
-            {checks.map((check) => {
-              const style = SEVERITY_STYLE[check.severity];
-              const Icon = style.icon;
-              return (
-                <div key={check.id} className="flex items-start gap-3 px-5 py-4">
-                  <Icon size={17} className={`mt-0.5 shrink-0 ${style.tone}`} />
-                  <div className="min-w-0">
-                    <div className="text-label text-text-primary">{check.title}</div>
-                    <p className="mt-1 max-w-prose text-[13.5px] leading-relaxed text-text-secondary">
-                      {check.detail}
-                    </p>
-                  </div>
+            </p>
+            <Divider className="mt-2" />
+            <ul className="flex flex-col">
+              {checks.map((check) => {
+                const severity = SEVERITY[check.severity];
+                const Icon = severity.icon;
+                return (
+                  <li
+                    key={check.id}
+                    className="flex items-start gap-3 border-b border-border-subtle py-3.5 last:border-b-0"
+                  >
+                    <Icon size={17} className={`mt-0.5 shrink-0 ${severity.tone}`} aria-hidden />
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                        <span className="text-label text-text-primary">{check.title}</span>
+                        <span className={`text-meta ${severity.tone}`}>{severity.label}</span>
+                      </div>
+                      <p className="mt-1 max-w-prose text-body leading-relaxed text-text-secondary">
+                        {check.detail}
+                      </p>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </>
+        )}
+      </section>
+
+      {/* Activity counters — one recessed readout, not four tiled cards. */}
+      <Well className="grid grid-cols-2 gap-x-6 gap-y-5 px-5 py-5 sm:grid-cols-4">
+        <Stat label="Messages sent" value={counts.messages} />
+        <Stat label="Registered users" value={counts.users} />
+        <Stat label="Spaces" value={counts.guilds} />
+        <Stat label="Online now" value={counts.online_users} />
+      </Well>
+
+      {/* Deployment facts — rows parted by hairlines, never tiled cards (§6.8). */}
+      <section className="grid gap-x-10 gap-y-7 sm:grid-cols-2">
+        {groups.map((group) => (
+          <div key={group.title}>
+            <h3 className="pc-display text-heading text-text-primary">{group.title}</h3>
+            <dl className="mt-1.5">
+              {group.rows.map(([label, value, mono]) => (
+                <div
+                  key={label}
+                  className="flex items-baseline justify-between gap-4 border-b border-border-subtle py-2 last:border-b-0"
+                >
+                  <dt className="shrink-0 text-label text-text-secondary">{label}</dt>
+                  <dd
+                    className={`min-w-0 break-all text-right text-meta text-text-primary ${
+                      mono ? 'pc-mono' : ''
+                    }`}
+                  >
+                    {value}
+                  </dd>
                 </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* Activity counters */}
-      <div className="grid grid-cols-2 divide-border-subtle rounded-md border border-border-subtle bg-bg-secondary shadow-sm sm:grid-cols-4 sm:divide-x">
-        <Stat label="Messages sent" value={counts.messages} icon={MessageSquare} lead />
-        <Stat label="Registered users" value={counts.users} icon={Users} />
-        <Stat label="Spaces" value={counts.guilds} icon={Server} />
-        <Stat label="Online now" value={counts.online_users} icon={Users} />
-      </div>
-
-      {/* Deployment facts */}
-      <div className="grid gap-4 lg:grid-cols-3">
-        <FactCard
-          title="Database"
-          icon={Database}
-          rows={[
-            ['Engine', health.database.engine === 'postgres' ? 'PostgreSQL' : 'SQLite'],
-            ['Size', formatBytes(health.database.size_bytes)],
-            ['Channels', counts.channels.toLocaleString()],
-          ]}
-        />
-        <FactCard
-          title="Backups"
-          icon={HardDrive}
-          rows={[
-            ['Automatic', health.backups.auto_enabled ? 'On' : 'Off'],
-            ['Archives', String(health.backups.count)],
-            [
-              'Latest',
-              health.backups.count > 0 ? formatAge(health.backups.latest_age_hours) : 'none yet',
-            ],
-            ['Total size', formatBytes(health.backups.total_bytes)],
-          ]}
-        />
-        <FactCard
-          title="Access"
-          icon={Server}
-          rows={[
-            ['Version', health.version],
-            ['Uptime', formatUptime(health.uptime_seconds)],
-            [
-              'HTTPS',
-              health.network.tls_enabled
-                ? health.network.tls_self_signed
-                  ? 'On (self-signed)'
-                  : 'On'
-                : 'Off',
-            ],
-            ['Public URL', health.network.public_url ?? 'not set'],
-            ['Registration', health.network.registration_open ? 'Open' : 'Closed'],
-          ]}
-        />
-        <FactCard
-          title="Voice & video"
-          icon={Server}
-          rows={[
-            ['Native media', health.media.native_enabled ? `On (UDP ${health.media.native_port})` : 'Off'],
-            ['LiveKit', health.media.livekit_available ? 'Available' : 'Not configured'],
-          ]}
-        />
-        <FactCard
-          title="Files"
-          icon={HardDrive}
-          rows={[
-            ['Uploads', formatBytes(health.storage.uploads_bytes)],
-            ['Media', formatBytes(health.storage.media_bytes)],
-          ]}
-        />
-        <FactCard
-          title="Federation"
-          icon={Server}
-          rows={[['Status', health.network.federation_enabled ? 'Enabled' : 'Disabled']]}
-        />
-      </div>
-    </div>
-  );
-}
-
-function Stat({
-  label,
-  value,
-  icon: Icon,
-  lead,
-}: {
-  label: string;
-  value: number;
-  icon: typeof Users;
-  lead?: boolean;
-}) {
-  return (
-    <div className="flex flex-col gap-2 p-6">
-      <div className="flex items-center justify-between">
-        <span className="text-section uppercase text-text-muted">{label}</span>
-        <Icon size={15} className={lead ? 'text-accent-primary' : 'text-text-muted'} />
-      </div>
-      <span
-        className={`font-display tabular-nums leading-none text-text-primary ${
-          lead ? 'text-[2.4rem]' : 'text-[1.85rem]'
-        }`}
-      >
-        {value.toLocaleString()}
-      </span>
-    </div>
-  );
-}
-
-function FactCard({
-  title,
-  icon: Icon,
-  rows,
-}: {
-  title: string;
-  icon: typeof Database;
-  rows: Array<[string, string]>;
-}) {
-  return (
-    <div className="rounded-md border border-border-subtle bg-bg-secondary p-5 shadow-sm">
-      <div className="mb-3 flex items-center gap-2">
-        <Icon size={15} className="text-text-muted" />
-        <span className="text-section uppercase text-text-muted">{title}</span>
-      </div>
-      <dl className="space-y-2">
-        {rows.map(([k, v]) => (
-          <div key={k} className="flex items-baseline justify-between gap-4">
-            <dt className="text-meta text-text-secondary">{k}</dt>
-            <dd className="truncate text-label tabular-nums text-text-primary" title={v}>
-              {v}
-            </dd>
+              ))}
+            </dl>
           </div>
         ))}
-      </dl>
+      </section>
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      <span className="truncate text-section text-text-faint">{label}</span>
+      <span className="pc-display text-display tabular-nums text-text-primary">
+        {value.toLocaleString()}
+      </span>
     </div>
   );
 }

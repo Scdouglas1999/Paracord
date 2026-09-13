@@ -5,30 +5,12 @@ import type { Message } from '../../types';
 import { MessageType } from '../../types';
 import { MessageList } from './MessageList';
 
-// Render framer-motion's Modal shell synchronously in jsdom.
-vi.mock('framer-motion', async () => {
-  const React = await import('react');
-  return {
-    AnimatePresence: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-    useReducedMotion: () => true,
-    motion: {
-      div: React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
-        ({ children, ...props }, ref) => (
-          <div ref={ref} {...props}>
-            {children}
-          </div>
-        ),
-      ),
-      button: React.forwardRef<HTMLButtonElement, React.ButtonHTMLAttributes<HTMLButtonElement>>(
-        ({ children, ...props }, ref) => (
-          <button ref={ref} {...props}>
-            {children}
-          </button>
-        ),
-      ),
-    },
-  };
-});
+// Render the Modal shell synchronously in jsdom (no presence hold).
+// The light seam is stubbed here: this suite mocks the stores down to the
+// fields its subject needs, and light reads half a dozen more. Light itself is
+// covered in messageLight.test.tsx and TextRoom.test.tsx.
+vi.mock('./messageLight', () => import('../../test/messageLightMock'));
+vi.mock('../../hooks/useLights', () => import('../../test/messageLightMock'));
 
 const mocks = vi.hoisted(() => ({
   deleteContexts: [] as AbortController[],
@@ -293,7 +275,7 @@ async function openDeleteConfirm(messageId: string) {
   const row = document.getElementById(`msg-${messageId}`);
   expect(row).not.toBeNull();
   fireEvent.contextMenu(row!);
-  fireEvent.click(await screen.findByRole('menuitem', { name: 'Delete Message' }));
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'Delete message' }));
   return screen.findByRole('alertdialog');
 }
 

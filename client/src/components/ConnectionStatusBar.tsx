@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
-import { Loader2, Wifi, WifiOff } from 'lucide-react';
+// §5.1/§5.3: the shared banner recipe (pc-banner-in / pc-banner-out) and the
+// ONE reduced-motion switch — the presence hook keeps the bar mounted for its
+// --duration-fast leave.
+import { usePresence } from '../lib/motion';
+import { Wifi, WifiOff } from 'lucide-react';
 import { gateway } from '../gateway/manager';
 import { useUIStore } from '../stores/uiStore';
 import { useServerListStore } from '../stores/serverListStore';
 import { useVoiceStore } from '../stores/voiceStore';
+import { cn } from '../lib/utils';
 
 type BannerTone = 'warning' | 'danger' | 'success';
 
@@ -13,17 +17,17 @@ const TONE: Record<
   { surface: string; edge: string; fg: string }
 > = {
   warning: {
-    surface: 'color-mix(in srgb, var(--accent-warning) 16%, var(--bg-secondary))',
+    surface: 'color-mix(in srgb, var(--accent-warning) 16%, var(--bg-raised))',
     edge: 'color-mix(in srgb, var(--accent-warning) 45%, transparent)',
     fg: 'var(--accent-warning)',
   },
   danger: {
-    surface: 'color-mix(in srgb, var(--accent-danger) 16%, var(--bg-secondary))',
+    surface: 'color-mix(in srgb, var(--accent-danger) 16%, var(--bg-raised))',
     edge: 'color-mix(in srgb, var(--accent-danger) 45%, transparent)',
     fg: 'var(--accent-danger)',
   },
   success: {
-    surface: 'color-mix(in srgb, var(--accent-success) 16%, var(--bg-secondary))',
+    surface: 'color-mix(in srgb, var(--accent-success) 16%, var(--bg-raised))',
     edge: 'color-mix(in srgb, var(--accent-success) 45%, transparent)',
     fg: 'var(--accent-success)',
   },
@@ -35,7 +39,7 @@ const MESSAGES: Record<string, { tone: BannerTone; text: string }> = {
 };
 
 const RETRY_BUTTON =
-  'ml-1 inline-flex h-7 items-center rounded-sm border border-current/30 px-2.5 text-meta font-semibold ' +
+  'ml-1 inline-flex h-7 items-center rounded-chip border border-current/30 px-2.5 text-meta font-semibold ' +
   'outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-current/10 ' +
   'focus-visible:shadow-[var(--focus-ring)]';
 
@@ -45,7 +49,6 @@ export function ConnectionStatusBar() {
     s.activeServerId ? s.servers.find((server) => server.id === s.activeServerId) : undefined
   );
   const voiceConnected = useVoiceStore((s) => s.connected);
-  const reduceMotion = useReducedMotion();
 
   const hasConnected = useRef(false);
   const [showBanner, setShowBanner] = useState(false);
@@ -84,54 +87,56 @@ export function ConnectionStatusBar() {
     status !== 'connected' && showBanner && !apiReachable && !voiceConnected && Boolean(info);
   const visible = offlineVisible || showConnected;
 
-  const reconnecting = status === 'reconnecting';
   const tone = showConnected
     ? TONE.success
     : info
       ? TONE[info.tone]
       : TONE.danger;
   const message = showConnected ? 'Back online' : info?.text ?? '';
+  const { mounted, exiting, scenery } = usePresence(visible && Boolean(message));
+
+  if (!mounted) return null;
 
   return (
-    <AnimatePresence>
-      {visible && message && (
-        <motion.div
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-          initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -20 }}
-          transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-          className="fixed inset-x-0 top-0 z-[9999] flex items-center justify-center gap-2 px-4 py-2"
-          style={{
-            backgroundColor: tone.surface,
-            borderBottom: `1px solid ${tone.edge}`,
-            boxShadow: 'var(--shadow-md)',
-          }}
-        >
-          {showConnected ? (
-            <Wifi size={15} style={{ color: tone.fg }} />
-          ) : reconnecting ? (
-            <Loader2 size={15} className="animate-spin" style={{ color: tone.fg }} />
-          ) : (
-            <WifiOff size={15} style={{ color: tone.fg }} />
-          )}
-          <span className="text-label" style={{ color: tone.fg }}>
-            {message}
-          </span>
-          {!showConnected && status === 'disconnected' && (
-            <button
-              type="button"
-              className={RETRY_BUTTON}
-              style={{ color: tone.fg }}
-              onClick={() => void gateway.connectAll()}
-            >
-              Retry
-            </button>
-          )}
-        </motion.div>
+    <div
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+      className={cn(
+        'fixed inset-x-0 top-0 z-[9999] flex items-center justify-center gap-2 px-4 py-2',
+        exiting ? 'pc-banner-out' : 'pc-banner-in',
       )}
-    </AnimatePresence>
+      style={{
+        backgroundColor: tone.surface,
+        borderBottom: `1px solid ${tone.edge}`,
+        boxShadow: 'var(--shadow-lifted)',
+      }}
+      {...scenery}
+    >
+      {/* §5.1 / WP9d: never a spinner on the street. A gateway that is
+          away is drawn on the building — the whole thing dims 30% and holds
+          there (`lib/motion/lights.ts`, played by `MotionDirector`) — and
+          this banner says the words. A spinning ring next to them would be
+          a second, decorative answer to the same question, and §5's law is
+          that only light and the things people do move. */}
+      {showConnected ? (
+        <Wifi size={15} style={{ color: tone.fg }} />
+      ) : (
+        <WifiOff size={15} style={{ color: tone.fg }} />
+      )}
+      <span className="text-label" style={{ color: tone.fg }}>
+        {message}
+      </span>
+      {!showConnected && status === 'disconnected' && (
+        <button
+          type="button"
+          className={RETRY_BUTTON}
+          style={{ color: tone.fg }}
+          onClick={() => void gateway.connectAll()}
+        >
+          Retry
+        </button>
+      )}
+    </div>
   );
 }

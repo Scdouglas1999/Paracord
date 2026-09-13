@@ -67,6 +67,11 @@ function makeMessage(over: Partial<Message> = {}): Message {
   };
 }
 
+// The light seam is stubbed here: this suite mocks the stores down to the
+// fields its subject needs, and light reads half a dozen more. Light itself is
+// covered in messageLight.test.tsx and TextRoom.test.tsx.
+vi.mock('./messageLight', () => import('../../test/messageLightMock'));
+vi.mock('../../hooks/useLights', () => import('../../test/messageLightMock'));
 vi.mock('@tanstack/react-virtual', () => ({
   useVirtualizer: (options: { count: number }) => ({
     getVirtualItems: () =>

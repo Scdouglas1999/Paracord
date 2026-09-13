@@ -81,8 +81,8 @@ describe('uiStore', () => {
   // --- contextPanelMode: single source of truth ---
 
   it('setContextPanelMode drives the active mode', () => {
-    useUIStore.getState().setContextPanelMode('members');
-    expect(useUIStore.getState().contextPanelMode).toBe('members');
+    useUIStore.getState().setContextPanelMode('pins');
+    expect(useUIStore.getState().contextPanelMode).toBe('pins');
 
     useUIStore.getState().setContextPanelMode('threads');
     expect(useUIStore.getState().contextPanelMode).toBe('threads');
@@ -99,16 +99,16 @@ describe('uiStore', () => {
   });
 
   it('toggleContextPanelMode switches directly between modes', () => {
-    useUIStore.getState().toggleContextPanelMode('members');
-    expect(useUIStore.getState().contextPanelMode).toBe('members');
+    useUIStore.getState().toggleContextPanelMode('pins');
+    expect(useUIStore.getState().contextPanelMode).toBe('pins');
     useUIStore.getState().toggleContextPanelMode('search');
     expect(useUIStore.getState().contextPanelMode).toBe('search');
   });
 
   it('only one panel is ever open (single source of truth)', () => {
-    useUIStore.getState().setContextPanelMode('members');
-    expect(useUIStore.getState().contextPanelMode).toBe('members');
-    // Opening economy must replace members — never coexist
+    useUIStore.getState().setContextPanelMode('pins');
+    expect(useUIStore.getState().contextPanelMode).toBe('pins');
+    // Opening economy must replace pins — never coexist
     useUIStore.getState().setContextPanelMode('economy');
     expect(useUIStore.getState().contextPanelMode).toBe('economy');
   });
@@ -130,7 +130,7 @@ describe('uiStore', () => {
   });
 
   it('persists sidebar geometry but not transient contextPanelMode', () => {
-    useUIStore.getState().setContextPanelMode('members');
+    useUIStore.getState().setContextPanelMode('pins');
     useUIStore.getState().setSidebarWidth(360);
     useUIStore.getState().setSidebarCollapsed(true);
     const raw = localStorage.getItem('ui-storage');

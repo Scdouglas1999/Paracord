@@ -1,9 +1,8 @@
 import type { ReactNode } from 'react';
 import { Bot, Check, ChevronDown, ChevronRight, Copy, Key, RefreshCw, Trash2, ShieldAlert, ExternalLink } from 'lucide-react';
 import type { BotApplication } from '../../api/bots';
-import { cn } from '../../lib/utils';
-import { Button } from '../../components/ui/Button';
-import { Input } from '../../components/ui/Input';
+import { getIdentityColor } from '../../lib/colors';
+import { Button, Divider, TextField, Well } from '../../components/ui';
 
 interface BotAppCardProps {
   app: BotApplication;
@@ -30,9 +29,11 @@ interface BotAppCardProps {
   metrics: ReactNode;
 }
 
-const actionBtn =
-  'inline-flex items-center gap-1.5 rounded-sm px-3 py-1.5 text-label font-semibold text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]';
-
+/**
+ * One application, as the content of the developer portal's plate — so it is
+ * not a plate itself (spec §4). Secrets and links sit in wells; the actions are
+ * a single row of ghost controls with the destructive one in the danger well.
+ */
 export function BotAppCard({
   app,
   isEditing,
@@ -58,109 +59,143 @@ export function BotAppCard({
   metrics,
 }: BotAppCardProps) {
   return (
-    <div className="space-y-4 rounded-md border border-border-subtle bg-bg-secondary p-5 shadow-sm">
+    <div className="flex flex-col gap-5">
       <div className="flex flex-wrap items-start gap-3">
-        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-accent-tint text-accent-primary">
+        <span
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[var(--radius-well)] text-text-on-light"
+          style={{ backgroundColor: getIdentityColor(app.id) }}
+          aria-hidden
+        >
           <Bot size={22} />
-        </div>
+        </span>
         <div className="min-w-0 flex-1">
           {isEditing ? (
-            <div className="space-y-2">
-              <Input value={editName} maxLength={80} onChange={(e) => onEditNameChange(e.target.value)} autoFocus />
-              <Input value={editDescription} maxLength={400} placeholder="Description" onChange={(e) => onEditDescriptionChange(e.target.value)} />
+            <div className="flex flex-col gap-2">
+              <TextField
+                label="Application name"
+                hideLabel
+                value={editName}
+                maxLength={80}
+                onChange={(e) => onEditNameChange(e.target.value)}
+                autoFocus
+              />
+              <TextField
+                label="Application description"
+                hideLabel
+                value={editDescription}
+                maxLength={400}
+                placeholder="Description"
+                onChange={(e) => onEditDescriptionChange(e.target.value)}
+              />
             </div>
           ) : (
             <>
-              <p className="text-label font-semibold text-text-primary">{app.name}</p>
-              {app.description && <p className="mt-0.5 text-body text-text-secondary">{app.description}</p>}
+              <h2 className="pc-display text-title text-text-primary">{app.name}</h2>
+              {app.description && (
+                <p className="mt-1 max-w-prose text-body text-text-secondary">{app.description}</p>
+              )}
             </>
           )}
-          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 font-code text-meta text-text-muted">
+          <div className="pc-mono mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-text-muted">
             <span>ID {app.id}</span>
-            <span aria-hidden className="text-border-strong">·</span>
+            <span aria-hidden className="text-text-faint">·</span>
             <span>Bot {app.bot_user_id}</span>
-            <span aria-hidden className="text-border-strong">·</span>
+            <span aria-hidden className="text-text-faint">·</span>
             <span>Created {new Date(app.created_at).toLocaleDateString()}</span>
           </div>
         </div>
       </div>
 
       {/* Token area — secret, mono, reveal/copy + a security warning. */}
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <span className="text-section uppercase text-text-secondary">Bot token</span>
+      <div className="flex flex-col gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-section text-text-faint">Bot token</span>
           {token && (
             <span className="inline-flex items-center gap-1 text-meta font-medium text-accent-warning">
-              <ShieldAlert size={13} />
+              <ShieldAlert size={13} aria-hidden />
               Treat like a password
             </span>
           )}
         </div>
-        <div className="flex flex-wrap items-center gap-2 rounded-sm border border-border-subtle bg-bg-tertiary px-3 py-2">
+        <Well className="flex flex-wrap items-center gap-2 px-3 py-2">
           {token ? (
             <>
-              <code className="flex-1 break-all font-code text-meta text-text-secondary">{token}</code>
-              <button type="button" aria-label="Copy bot token" className={actionBtn} onClick={onCopyToken}>
+              <code className="pc-mono min-w-0 flex-1 break-all text-meta text-text-secondary">
+                {token}
+              </code>
+              <Button variant="ghost" size="sm" aria-label="Copy bot token" onClick={onCopyToken}>
                 {copied ? (<><Check size={13} /> Copied</>) : (<><Copy size={13} /> Copy</>)}
-              </button>
+              </Button>
             </>
           ) : (
-            <span className="font-code text-meta text-text-muted">
+            <span className="pc-mono text-meta text-text-muted">
               Token hidden — regenerate to reveal a new one.
             </span>
           )}
-        </div>
+        </Well>
       </div>
 
       {/* Install / OAuth link */}
-      <div className="space-y-2">
-        <span className="text-section uppercase text-text-secondary">Install link</span>
-        <div className="flex flex-wrap items-center gap-2 rounded-sm border border-border-subtle bg-bg-tertiary px-3 py-2">
-          <code className="flex-1 break-all font-code text-meta text-text-secondary">{installUrl}</code>
-          <button type="button" aria-label="Copy install link" className={actionBtn} onClick={onCopyInstallUrl}>
+      <div className="flex flex-col gap-2">
+        <span className="text-section text-text-faint">Install link</span>
+        <Well className="flex flex-wrap items-center gap-2 px-3 py-2">
+          <code className="pc-mono min-w-0 flex-1 break-all text-meta text-text-secondary">
+            {installUrl}
+          </code>
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label="Copy install link"
+            onClick={onCopyInstallUrl}
+          >
             {copiedInvite ? (<><Check size={13} /> Copied</>) : (<><Copy size={13} /> Copy Link</>)}
-          </button>
-          <a href={installUrl} target="_blank" rel="noreferrer" className={actionBtn}>
-            <ExternalLink size={13} /> Open
+          </Button>
+          <a
+            href={installUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="pc-focusable inline-flex h-[var(--h-control-sm)] items-center gap-1.5 rounded-[var(--radius-control)] px-2.5 text-meta font-medium text-text-secondary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary"
+          >
+            <ExternalLink size={13} aria-hidden /> Open
           </a>
-        </div>
+        </Well>
       </div>
 
       {/* Actions */}
-      <div className="flex flex-wrap items-center gap-1 border-t border-border-subtle pt-3">
-        {isEditing ? (
-          <>
-            <Button size="sm" onClick={onSaveEdit}>Save</Button>
-            <button type="button" className={actionBtn} onClick={onCancelEdit}>Cancel</button>
-          </>
-        ) : (
-          <button type="button" className={actionBtn} onClick={onStartEditing}>Edit</button>
-        )}
-        <button type="button" className={actionBtn} onClick={onRegenerateToken}>
-          <Key size={14} />
-          Regen Token
-        </button>
-        <button
-          type="button"
-          className={cn(actionBtn, isExpanded && 'bg-bg-mod-subtle text-text-primary')}
-          onClick={onToggleAdvanced}
-          aria-expanded={isExpanded}
-        >
-          {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-          Advanced
-        </button>
-        <button type="button" className={actionBtn} onClick={onReload}>
-          <RefreshCw size={14} />
-          Reload
-        </button>
-        <button
-          type="button"
-          className="ml-auto inline-flex items-center gap-1.5 rounded-sm px-3 py-1.5 text-label font-semibold text-accent-danger outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-danger-tint focus-visible:shadow-[var(--focus-ring)]"
-          onClick={onDelete}
-        >
-          <Trash2 size={14} />
-          Delete
-        </button>
+      <div className="flex flex-col gap-3">
+        <Divider />
+        <div className="flex flex-wrap items-center gap-1">
+          {isEditing ? (
+            <>
+              <Button size="sm" onClick={onSaveEdit}>Save</Button>
+              <Button variant="ghost" size="sm" onClick={onCancelEdit}>Cancel</Button>
+            </>
+          ) : (
+            <Button variant="ghost" size="sm" onClick={onStartEditing}>Edit</Button>
+          )}
+          <Button variant="ghost" size="sm" onClick={onRegenerateToken}>
+            <Key size={14} />
+            Regen token
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onToggleAdvanced}
+            aria-expanded={isExpanded}
+            className={isExpanded ? 'bg-bg-mod-strong text-text-primary' : undefined}
+          >
+            {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            Advanced
+          </Button>
+          <Button variant="ghost" size="sm" onClick={onReload}>
+            <RefreshCw size={14} />
+            Reload
+          </Button>
+          <Button variant="danger" size="sm" className="ml-auto" onClick={onDelete}>
+            <Trash2 size={14} />
+            Delete
+          </Button>
+        </div>
       </div>
 
       {/* Advanced expansion with tabs */}

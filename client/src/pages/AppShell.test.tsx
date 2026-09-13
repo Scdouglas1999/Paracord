@@ -17,8 +17,8 @@ vi.mock('../components/layout/sidebar/UnifiedSidebar', () => ({
 vi.mock('../components/layout/ContextPanel', () => ({
   ContextPanel: () => <div data-testid="context-panel" />,
 }));
-vi.mock('../components/voice/MiniVoiceBar', () => ({
-  MiniVoiceBar: () => <div data-testid="mini-voice-bar" />,
+vi.mock('../components/voice/OnAirDock', () => ({
+  OnAirDock: () => <div data-testid="on-air-dock" />,
 }));
 vi.mock('../components/layout/MobileBottomNav', () => ({
   MobileBottomNav: () => <div data-testid="mobile-bottom-nav" />,
@@ -102,7 +102,7 @@ describe('AppShell', () => {
     const { rerender } = renderShell('/app/guilds/g1/channels/c1');
     expect(screen.queryByTestId('context-panel')).not.toBeInTheDocument();
 
-    act(() => useUIStore.setState({ contextPanelMode: 'members' }));
+    act(() => useUIStore.setState({ contextPanelMode: 'pins' }));
     rerender(
       <MemoryRouter initialEntries={['/app/guilds/g1/channels/c1']}>
         <Routes>
@@ -140,38 +140,38 @@ describe('AppShell', () => {
     });
   });
 
-  it('mounts the mobile MiniVoiceBar dock when mobile + connected off the voice channel page', () => {
+  it('mounts the mobile on-air dock when mobile + connected off the voice channel page', () => {
     mockedUseMobile.mockReturnValue(true);
     useUIStore.setState({ sidebarCollapsed: true });
     useVoiceStore.setState({ connected: true, channelId: '999' });
 
     renderShell('/app');
 
-    expect(screen.getByTestId('mini-voice-bar')).toBeInTheDocument();
+    expect(screen.getByTestId('on-air-dock')).toBeInTheDocument();
     expect(screen.getByTestId('mobile-bottom-nav')).toBeInTheDocument();
   });
 
-  it('never mounts the AppShell MiniVoiceBar dock on desktop (the sidebar CallDock is the sole persistent call surface)', () => {
+  it('never mounts the AppShell on-air dock on desktop (the sidebar CallDock is the sole persistent call surface)', () => {
     // CHAT-4 invariant: on desktop the persistent call dock lives in the
-    // UnifiedSidebar footer (CallDock). The AppShell-level MiniVoiceBar is a
+    // UnifiedSidebar footer (CallDock). The AppShell-level on-air dock is a
     // MOBILE-only dock, so it must stay unmounted on desktop even while
-    // connected — otherwise two persistent voice bars would show at once.
+    // connected — otherwise two persistent on-air pills would show at once.
     mockedUseMobile.mockReturnValue(false);
     useVoiceStore.setState({ connected: true, channelId: '999' });
 
     renderShell('/app');
 
-    expect(screen.queryByTestId('mini-voice-bar')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('on-air-dock')).not.toBeInTheDocument();
   });
 
-  it('does not mount the mobile MiniVoiceBar dock while viewing the active voice channel page', () => {
+  it('does not mount the mobile on-air dock while viewing the active voice channel page', () => {
     mockedUseMobile.mockReturnValue(true);
     useUIStore.setState({ sidebarCollapsed: true });
     useVoiceStore.setState({ connected: true, channelId: 'c1' });
 
     renderShell('/app/guilds/g1/channels/c1');
 
-    expect(screen.queryByTestId('mini-voice-bar')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('on-air-dock')).not.toBeInTheDocument();
   });
 
   it('opens the user and guild settings overlays from uiStore flags', () => {

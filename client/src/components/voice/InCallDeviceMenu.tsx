@@ -221,7 +221,7 @@ export function InCallDeviceMenu(props: InCallDeviceMenuProps) {
         aria-haspopup="dialog"
         title="Audio devices"
         onClick={toggleOpen}
-        className="flex h-11 w-7 items-center justify-center rounded-r-sm text-text-muted outline-none transition-colors hover:bg-bg-mod-subtle hover:text-interactive-hover focus-visible:shadow-[var(--focus-ring)]"
+        className="pc-focusable flex h-[var(--h-stage-control)] w-7 items-center justify-center rounded-r-[var(--radius-stage-control)] bg-bg-raised text-text-secondary shadow-[var(--shadow-lifted)] transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
       >
         <ChevronUp size={14} className={cn('transition-transform', open && 'rotate-180')} />
       </button>
@@ -234,7 +234,7 @@ export function InCallDeviceMenu(props: InCallDeviceMenuProps) {
           aria-label="Audio devices and microphone check"
           tabIndex={-1}
           data-native-overlay-occlude=""
-          className="fixed z-[80] w-[min(20rem,calc(100vw-1rem))] rounded-md border border-border-subtle bg-bg-secondary p-3 shadow-lg outline-none"
+          className="pc-floating fixed z-[80] w-[min(20rem,calc(100vw-1rem))] p-3 outline-none"
           style={{
             bottom: coords?.bottom ?? 72,
             left: coords?.left ?? 8,
@@ -242,7 +242,7 @@ export function InCallDeviceMenu(props: InCallDeviceMenuProps) {
         >
           <div className="mb-3 flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <div className="text-section uppercase text-text-muted">Audio devices</div>
+              <div className="text-section text-text-faint">Audio devices</div>
               <p className="mt-1 text-meta text-text-secondary">
                 Changes apply immediately and carry into your next call.
               </p>
@@ -251,24 +251,24 @@ export function InCallDeviceMenu(props: InCallDeviceMenuProps) {
               type="button"
               aria-label="Close audio devices"
               onClick={close}
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-text-muted outline-none transition-colors hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+              className="pc-focusable flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"
             >
               <X size={16} />
             </button>
           </div>
 
           <div className={cn(
-            'rounded-sm border px-3 py-2.5',
-            status.warning ? 'border-accent-warning/40 bg-warning-tint' : 'border-border-subtle bg-bg-tertiary',
+            'rounded-[var(--radius-well)] px-3 py-2.5',
+            status.warning ? 'bg-warning-tint' : 'pc-well',
           )}>
             <div className="flex items-start gap-2.5">
               {status.warning
                 ? <AlertTriangle size={17} className="mt-0.5 shrink-0 text-accent-warning" />
-                : <Mic size={17} className="mt-0.5 shrink-0 text-accent-primary" />}
+                : <Mic size={17} className="mt-0.5 shrink-0 text-text-secondary" />}
               <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-3 text-label">
                   <span className="font-semibold text-text-primary">{status.label}</span>
-                  <span className="tabular-nums text-text-muted">{levelPercent}%</span>
+                  <span className="pc-mono text-text-faint">{levelPercent}%</span>
                 </div>
                 <div
                   role="meter"

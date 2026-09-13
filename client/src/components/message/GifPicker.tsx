@@ -3,7 +3,7 @@ import { Search, WifiOff, RotateCw } from 'lucide-react';
 import { tenorApi } from '../../api/tenor';
 import { safeExternalUrl } from '../../lib/security';
 import { EmptyState } from '../ui/Feedback';
-import { Skeleton } from '../ui/Skeleton';
+import { Skeleton, SkeletonSwap } from '../ui/Skeleton';
 
 /** Keystroke settle time before a Tenor search is issued. */
 const GIF_SEARCH_DEBOUNCE_MS = 300;
@@ -132,11 +132,11 @@ export function GifPicker({ onSelect, onClose }: GifPickerProps) {
   return (
     <div
       ref={pickerRef}
-      className="popup-enter flex w-[min(25rem,calc(100vw-1rem))] max-h-[min(28.75rem,calc(100dvh-1rem))] flex-col overflow-hidden rounded-md border border-border-subtle bg-bg-floating shadow-lg"
+      className="pc-enter flex w-[min(25rem,calc(100vw-1rem))] max-h-[min(28.75rem,calc(100dvh-1rem))] flex-col overflow-hidden rounded-well border border-border-subtle bg-bg-floating shadow-[var(--shadow-plate)]"
     >
       {/* Inset search */}
       <div className="shrink-0 px-3 pb-1.5 pt-3">
-        <div className="flex items-center gap-2 rounded-sm border border-border-subtle bg-bg-tertiary px-2.5 py-2 transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus-within:border-accent-primary focus-within:shadow-[var(--focus-ring-input)]">
+        <div className="flex items-center gap-2 rounded-chip border border-border-subtle bg-bg-well px-2.5 py-2 transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus-within:border-accent-primary focus-within:shadow-[var(--focus-ring-input)]">
           <Search size={16} className="shrink-0 text-text-muted" />
           <input
             type="text"
@@ -149,8 +149,11 @@ export function GifPicker({ onSelect, onClose }: GifPickerProps) {
         </div>
       </div>
 
-      {/* GIF grid */}
-      <div className="scrollbar-thin flex-1 overflow-y-auto px-2 pb-2 pt-1">
+      {/* GIF grid — the placeholder crossfades to the results (§5.3). */}
+      <SkeletonSwap
+        busy={loading && visibleGifs.length === 0 && !error}
+        className="scrollbar-thin flex-1 overflow-y-auto px-2 pb-2 pt-1"
+      >
         {error ? (
           <EmptyState
             role="alert"
@@ -161,7 +164,7 @@ export function GifPicker({ onSelect, onClose }: GifPickerProps) {
               <button
                 type="button"
                 onClick={() => void fetchGifs(query)}
-                className="inline-flex items-center gap-1.5 rounded-sm bg-accent-primary px-3.5 py-2 text-label font-semibold text-text-on-accent shadow-sm outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)]"
+                className="inline-flex items-center gap-1.5 rounded-chip bg-accent-primary px-3.5 py-2 text-label font-semibold text-text-on-accent shadow-[var(--shadow-chip)] outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)]"
               >
                 <RotateCw size={15} />
                 Try again
@@ -172,7 +175,7 @@ export function GifPicker({ onSelect, onClose }: GifPickerProps) {
           <div className="p-1 [column-gap:0.5rem] [columns:2]" aria-busy="true" aria-label="Loading GIFs">
             {[168, 120, 148, 132, 176, 112].map((h, i) => (
               <div key={i} className="mb-2 [break-inside:avoid]">
-                <Skeleton height={h} borderRadius="var(--radius-sm)" />
+                <Skeleton height={h} borderRadius="var(--radius-chip)" />
               </div>
             ))}
           </div>
@@ -195,20 +198,20 @@ export function GifPicker({ onSelect, onClose }: GifPickerProps) {
                 onClick={() => handleSelect(gif)}
                 title={gif.title || 'GIF'}
                 aria-label={`Select GIF ${gif.title || gif.id}`}
-                className="mb-2 block w-full overflow-hidden rounded-sm outline-none transition-[box-shadow] duration-[140ms] ease-[var(--ease-out)] [break-inside:avoid] hover:shadow-md focus-visible:shadow-[var(--focus-ring)]"
+                className="mb-2 block w-full overflow-hidden rounded-chip outline-none transition-[box-shadow] duration-[140ms] ease-[var(--ease-out)] [break-inside:avoid] hover:shadow-[var(--shadow-lifted)] focus-visible:shadow-[var(--focus-ring)]"
                 style={{ aspectRatio: String(renderData.aspectRatio) }}
               >
                 <img
                   src={renderData.thumbUrl}
                   alt={gif.title || 'GIF'}
                   loading="lazy"
-                  className="block h-full w-full rounded-sm object-cover"
+                  className="block h-full w-full rounded-chip object-cover"
                 />
               </button>
             ))}
           </div>
         )}
-      </div>
+      </SkeletonSwap>
 
       {/* Attribution */}
       <div className="shrink-0 border-t border-border-subtle px-3 py-1.5 text-right text-[10px] text-text-muted">

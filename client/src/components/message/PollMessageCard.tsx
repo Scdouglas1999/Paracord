@@ -95,14 +95,14 @@ export function PollMessageCard({ channelId, poll, canVote }: PollMessageCardPro
   };
 
   return (
-    <div className="mt-2 max-w-[480px] rounded-md border border-border-subtle bg-bg-secondary p-4 shadow-sm">
+    <div className="mt-2 max-w-[480px] rounded-well border border-border-subtle bg-bg-raised p-4 shadow-[var(--shadow-chip)]">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="flex min-w-0 items-start gap-2">
           <BarChart3 size={16} className="mt-0.5 shrink-0 text-accent-primary" />
-          <p className="text-subhead text-text-primary">{livePoll.question}</p>
+          <p className="text-heading text-text-primary">{livePoll.question}</p>
         </div>
-        <span className="shrink-0 rounded-xs bg-bg-mod-strong px-2 py-0.5 text-section uppercase text-text-secondary">
-          {livePoll.allow_multiselect ? 'Multi Select' : 'Single Select'}
+        <span className="shrink-0 rounded-window bg-bg-mod-strong px-2 py-0.5 text-section text-text-secondary">
+          {livePoll.allow_multiselect ? 'Multi select' : 'Single select'}
         </span>
       </div>
 
@@ -116,7 +116,7 @@ export function PollMessageCard({ channelId, poll, canVote }: PollMessageCardPro
               type="button"
               disabled={!canToggle || pendingOptionId === option.id}
               onClick={() => void applyVoteChange(option)}
-              className="relative overflow-hidden rounded-sm border border-border-subtle bg-bg-tertiary px-3 py-2.5 text-left transition-colors duration-[140ms] ease-[var(--ease-out)] hover:border-border-strong focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-75"
+              className="relative overflow-hidden rounded-chip border border-border-subtle bg-bg-well px-3 py-2.5 text-left transition-colors duration-[140ms] ease-[var(--ease-out)] hover:border-border-strong focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-75"
             >
               <span
                 className="pointer-events-none absolute inset-y-0 left-0 bg-accent-tint"
@@ -147,11 +147,11 @@ export function PollMessageCard({ channelId, poll, canVote }: PollMessageCardPro
           {formatExpiryLabel(livePoll.expires_at, nowMs)}
         </span>
         {isExpired ? (
-          <span className="rounded-xs bg-bg-mod-strong px-2 py-0.5 text-section uppercase text-text-secondary">
+          <span className="rounded-window bg-bg-mod-strong px-2 py-0.5 text-section text-text-secondary">
             Closed
           </span>
         ) : (
-          <span className="rounded-xs bg-success-tint px-2 py-0.5 text-section uppercase text-accent-success">
+          <span className="rounded-window bg-success-tint px-2 py-0.5 text-section text-accent-success">
             Open
           </span>
         )}

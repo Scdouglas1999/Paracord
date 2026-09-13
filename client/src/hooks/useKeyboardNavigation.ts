@@ -16,7 +16,7 @@ import { isTauri } from '../lib/tauriEnv';
  * - Mod+F: open channel message search (ContextPanel search mode)
  * - Ctrl+B: toggle Unified Sidebar collapse
  * - ArrowUp/Down + Home/End: roving-tabindex nav within the sidebar row list
- * - Escape: Command Palette → ContextPanel → narrow sidebar overlay (§5 precedence)
+ * - Escape: Command palette → ContextPanel → narrow sidebar overlay (§5 precedence)
  *
  * Mute/deafen keybinds are owned by useVoiceKeybinds (not duplicated here).
  */
@@ -48,7 +48,7 @@ export function useKeyboardNavigation() {
         target.isContentEditable;
 
       // -- Escape: close panels regardless of focus (layout-spec §5 precedence) --
-      // Command Palette → ContextPanel (contextPanelMode) → narrow sidebar overlay.
+      // Command palette → ContextPanel (contextPanelMode) → narrow sidebar overlay.
       // Settings overlays keep their own Esc handler (useFocusTrap), so we defer to
       // them by not swallowing Escape here.
       if (e.key === 'Escape') {

@@ -53,6 +53,11 @@ const messages: Message[] = [
   },
 ];
 
+// The light seam is stubbed here: this suite mocks the stores down to the
+// fields its subject needs, and light reads half a dozen more. Light itself is
+// covered in messageLight.test.tsx and TextRoom.test.tsx.
+vi.mock('./messageLight', () => import('../../test/messageLightMock'));
+vi.mock('../../hooks/useLights', () => import('../../test/messageLightMock'));
 vi.mock('@tanstack/react-virtual', () => ({
   useVirtualizer: (options: { count: number }) => ({
     getVirtualItems: () =>
@@ -280,7 +285,7 @@ describe('MessageList anonymous and disappearing message display', () => {
       clientX: 16,
       clientY: 16,
     });
-    await user.click(await screen.findByRole('menuitem', { name: /Pin Message/ }));
+    await user.click(await screen.findByRole('menuitem', { name: /Pin message/ }));
 
     expect(mocks.toastError).toHaveBeenCalledWith(
       'Failed to pin message: Missing manage messages',
@@ -332,7 +337,7 @@ describe('MessageList anonymous and disappearing message display', () => {
     expect(container.querySelector('img[src="//evil.example/unsafe.png"]')).toBeNull();
   });
 
-  it('offers Reveal Author when can_deanonymize is true', async () => {
+  it('offers Reveal author when can_deanonymize is true', async () => {
     const user = userEvent.setup();
     mocks.permissionsState.isAdmin = true;
 
@@ -346,7 +351,7 @@ describe('MessageList anonymous and disappearing message display', () => {
       clientX: 16,
       clientY: 16,
     });
-    await user.click(await screen.findByRole('menuitem', { name: /Reveal Author/ }));
+    await user.click(await screen.findByRole('menuitem', { name: /Reveal author/ }));
 
     expect(await screen.findByText(/Real author:/)).toBeInTheDocument();
     expect(screen.getByText(/alice/)).toBeInTheDocument();

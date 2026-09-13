@@ -203,9 +203,9 @@ export function ScheduledMessagesPanel({
             <div className="flex flex-col" aria-busy="true" aria-label="Loading scheduled messages">
               {[0, 1, 2].map((i) => (
                 <div key={i} className="border-t border-border-subtle py-3 first:border-t-0 first:pt-1">
-                  <Skeleton width="42%" height={12} borderRadius="var(--radius-xs)" />
+                  <Skeleton width="42%" height={12} borderRadius="var(--radius-window)" />
                   <div className="mt-2.5">
-                    <Skeleton width="85%" height={14} borderRadius="var(--radius-xs)" />
+                    <Skeleton width="85%" height={14} borderRadius="var(--radius-window)" />
                   </div>
                 </div>
               ))}
@@ -237,7 +237,7 @@ export function ScheduledMessagesPanel({
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <div className="flex items-center gap-2 text-section uppercase text-text-secondary">
+                      <div className="flex items-center gap-2 text-section text-text-secondary">
                         <span>{statusLabel(item.status)}</span>
                         <span aria-hidden>·</span>
                         <span className="font-code normal-case tabular-nums tracking-normal text-text-muted">
@@ -282,7 +282,7 @@ export function ScheduledMessagesPanel({
                         aria-label="Scheduled message content"
                       />
                       <label className="block">
-                        <span className="text-section uppercase text-text-secondary">
+                        <span className="text-section text-text-secondary">
                           Send at
                         </span>
                         <input
@@ -297,7 +297,7 @@ export function ScheduledMessagesPanel({
                       {editError && (
                         <div
                           role="alert"
-                          className="rounded-sm border border-accent-danger/35 bg-accent-danger/10 px-3 py-2 text-meta font-semibold text-accent-danger"
+                          className="rounded-chip border border-accent-danger/35 bg-accent-danger/10 px-3 py-2 text-meta font-semibold text-accent-danger"
                         >
                           {editError}
                         </div>

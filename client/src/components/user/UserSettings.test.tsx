@@ -238,12 +238,12 @@ describe('UserSettings session management', () => {
     expect(screen.getByText('Session revoked.')).toBeInTheDocument();
   });
 
-  it('logs out and closes the panel from the Log Out control', async () => {
+  it('logs out and closes the panel from the Log out control', async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
     renderSettings(onClose);
 
-    await user.click(await screen.findByRole('button', { name: 'Log Out' }));
+    await user.click(await screen.findByRole('button', { name: 'Log out' }));
 
     expect(logout).toHaveBeenCalledTimes(1);
     expect(onClose).toHaveBeenCalledTimes(1);

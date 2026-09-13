@@ -19,8 +19,8 @@ export default defineConfig(({ mode }) => {
           name: "Paracord",
           short_name: "Paracord",
           description: "A decentralized, self-hostable chat platform",
-          theme_color: "#1a1a2e",
-          background_color: "#1a1a2e",
+          theme_color: "#0a0c10",
+          background_color: "#0a0c10",
           icons: [
             { src: "pwa-64x64.png", sizes: "64x64", type: "image/png" },
             { src: "pwa-192x192.png", sizes: "192x192", type: "image/png" },
@@ -112,7 +112,6 @@ export default defineConfig(({ mode }) => {
             if (normalized.includes("/livekit-client/")) return "vendor-livekit";
             if (normalized.includes("/@noble/")) return "vendor-crypto";
             if (normalized.includes("/lucide-react/")) return "vendor-icons";
-            if (normalized.includes("/framer-motion/")) return "vendor-motion";
             if (normalized.includes("/highlight.js/") || normalized.includes("/dompurify/")) {
               return "vendor-markdown";
             }

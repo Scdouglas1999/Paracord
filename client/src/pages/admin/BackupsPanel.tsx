@@ -3,8 +3,16 @@ import { Download, Loader2, Plus, BookOpen, Trash2, AlertTriangle, Archive } fro
 import { adminApi } from '../../api/admin';
 import { extractApiError } from '../../api/client';
 import { toast } from '../../stores/toastStore';
-import { Button } from '../../components/ui/Button';
-import { EmptyState, LoadingSpinner } from '../../components/ui/Feedback';
+import {
+  Button,
+  Divider,
+  EmptyState,
+  IconButton,
+  LoadingSpinner,
+  SettingsSectionHeader,
+  Switch,
+  Well,
+} from '../../components/ui';
 import { confirm } from '../../stores/confirmStore';
 
 type BackupRow = {
@@ -112,132 +120,167 @@ export function BackupsPanel() {
 
   return (
     <div>
-      <header className="mb-6 flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h2 className="font-display text-heading text-text-primary">Backups</h2>
-          <p className="mt-1 text-body text-text-secondary">
-            Create database snapshots with optional media and prepare offline recovery.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <label className="inline-flex cursor-pointer items-center gap-2 text-body text-text-secondary">
-            <input
-              type="checkbox"
-              checked={includeMedia}
-              onChange={(e) => setIncludeMedia(e.target.checked)}
-              className="h-4 w-4 rounded-xs border-border-subtle accent-accent-primary"
-            />
-            Include media files
-          </label>
+      <SettingsSectionHeader
+        title="Backups"
+        description="Create database snapshots with optional media and prepare offline recovery."
+        action={
           <Button onClick={handleCreate} loading={creating} disabled={creating} className="gap-2">
             {!creating && <Plus size={16} />}
             {creating ? 'Creating…' : 'Create backup'}
           </Button>
-        </div>
-      </header>
+        }
+      />
 
-      <div className="mb-6 flex items-start gap-3 rounded-md border border-accent-warning/30 bg-warning-tint px-4 py-3">
-        <AlertTriangle size={18} className="mt-0.5 shrink-0 text-accent-warning" />
-        <p className="text-body text-text-secondary">
-          <span className="font-semibold text-text-primary">Recovery is an offline operation.</span>{' '}
-          Download an archive and retain the server configuration, encryption key environment, TLS keys and federation signing key separately. The restore command verifies a new database and media directory before you select its configuration. Stop every old server instance before activation.
-        </p>
+      <div className="mb-5 flex items-center justify-between gap-4">
+        <span id="backup-include-media" className="text-label text-text-primary">
+          Include media files in the next snapshot
+        </span>
+        <Switch
+          checked={includeMedia}
+          onChange={setIncludeMedia}
+          labelledBy="backup-include-media"
+        />
       </div>
 
+      <Well className="mb-6 flex items-start gap-3 px-4 py-3.5">
+        <AlertTriangle size={18} className="mt-0.5 shrink-0 text-accent-warning" aria-hidden />
+        <p className="text-body leading-relaxed text-text-secondary">
+          <span className="font-semibold text-accent-warning">
+            Recovery is an offline operation.
+          </span>{' '}
+          Download an archive and retain the server configuration, encryption key environment, TLS
+          keys and federation signing key separately. The restore command verifies a new database
+          and media directory before you select its configuration. Stop every old server instance
+          before activation.
+        </p>
+      </Well>
+
       {recovery && (
-        <section aria-label="Recovery instructions" className="mb-6 rounded-md border border-border-subtle bg-bg-secondary p-5">
-          <h3 className="text-heading text-text-primary">Recover {recovery.filename}</h3>
+        <section aria-label="Recovery instructions" className="mb-8">
+          <h3 className="pc-display text-heading text-text-primary">
+            Recover <span className="pc-mono text-name">{recovery.filename}</span>
+          </h3>
           <p className="mt-2 text-body text-text-secondary">{recovery.message}</p>
-          <ol className="mt-3 list-decimal space-y-2 pl-5 text-body text-text-secondary">
+          <ol className="mt-3 flex list-decimal flex-col gap-2 pl-5 text-body text-text-secondary">
             {recovery.steps.map(step => <li key={step}>{step}</li>)}
           </ol>
-          <pre className="mt-4 overflow-x-auto rounded-sm bg-bg-tertiary p-3 text-meta"><code>{recovery.command}</code></pre>
-          <p className="mt-2 text-meta text-text-secondary">For PostgreSQL, also supply <code>{recovery.postgres_argument}</code> after creating a separate empty database.</p>
-          <Button className="mt-3 gap-2" onClick={() => handleDownload(recovery.filename)} loading={downloadingName === recovery.filename}><Download size={16} />Download archive</Button>
+          <Well bare className="mt-4 overflow-x-auto p-3">
+            <pre className="pc-mono text-meta text-text-secondary"><code>{recovery.command}</code></pre>
+          </Well>
+          <p className="mt-2 text-meta text-text-secondary">
+            For PostgreSQL, also supply{' '}
+            <code className="pc-mono text-text-primary">{recovery.postgres_argument}</code> after
+            creating a separate empty database.
+          </p>
+          <Button
+            className="mt-3 gap-2"
+            variant="ghost"
+            onClick={() => handleDownload(recovery.filename)}
+            loading={downloadingName === recovery.filename}
+          >
+            <Download size={16} />
+            Download archive
+          </Button>
+          <Divider className="mt-8" />
         </section>
       )}
 
       {loading ? (
-        <div className="rounded-md border border-border-subtle bg-bg-secondary px-6 py-10 shadow-sm">
+        <Well className="px-6 py-10">
           <LoadingSpinner size="sm" label="Loading backups…" />
-        </div>
+        </Well>
       ) : backups.length === 0 ? (
-        <div className="rounded-md border border-border-subtle bg-bg-secondary px-4 shadow-sm">
-          <EmptyState
-            icon={<Archive size={20} />}
-            title="No backups yet"
-            description="You haven't captured a snapshot of this server. Create one now so you can roll back if something goes wrong."
-            action={
-              <Button onClick={handleCreate} loading={creating} disabled={creating} className="gap-2">
-                {!creating && <Plus size={16} />}
-                {creating ? 'Creating…' : 'Create first backup'}
-              </Button>
-            }
-          />
-        </div>
+        <EmptyState
+          icon={<Archive size={20} />}
+          title="No backups yet"
+          description="You haven't captured a snapshot of this server. Create one now so you can roll back if something goes wrong."
+          action={
+            <Button
+              variant="ghost"
+              onClick={handleCreate}
+              loading={creating}
+              disabled={creating}
+              className="gap-2"
+            >
+              {!creating && <Plus size={16} />}
+              {creating ? 'Creating…' : 'Create first backup'}
+            </Button>
+          }
+        />
       ) : (
-        <div className="overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[720px] text-left">
-              <thead>
-                <tr className="border-b border-border-subtle bg-bg-tertiary/40">
-                  <th scope="col" className="px-5 py-3 text-section uppercase text-text-secondary">Filename</th>
-                  <th scope="col" className="px-5 py-3 text-section uppercase text-text-secondary">Created</th>
-                  <th scope="col" className="px-5 py-3 text-section uppercase text-text-secondary">Size</th>
-                  <th scope="col" className="px-5 py-3 text-right text-section uppercase text-text-secondary">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {backups.map((b) => (
-                  <tr
-                    key={b.name}
-                    className="group/row border-b border-border-subtle/60 transition-colors last:border-b-0 hover:bg-bg-mod-subtle"
-                  >
-                    <td className="px-5 py-3">
-                      <span className="font-code text-meta text-text-primary">{b.name}</span>
-                    </td>
-                    <td className="px-5 py-3 font-code text-meta tabular-nums text-text-secondary">
-                      {b.created_at ? new Date(b.created_at).toLocaleString() : '—'}
-                    </td>
-                    <td className="px-5 py-3 font-code text-meta tabular-nums text-text-secondary">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[560px] text-left">
+            <thead>
+              <tr>
+                <th scope="col" className="px-3 pb-2 text-section text-text-faint">Filename</th>
+                <th scope="col" className="px-3 pb-2 text-section text-text-faint">Created</th>
+                <th scope="col" className="px-3 pb-2 text-section text-text-faint">Size</th>
+                <th scope="col" className="px-3 pb-2 text-right text-section text-text-faint">
+                  Actions
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {backups.map((b) => (
+                <tr
+                  key={b.name}
+                  className="border-t border-border-subtle transition-colors hover:bg-bg-mod-subtle"
+                >
+                  <td className="px-3 py-2.5">
+                    <span className="pc-mono break-all text-meta text-text-primary">{b.name}</span>
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <span className="pc-mono text-meta tabular-nums text-text-secondary">
+                      {b.created_at ? new Date(b.created_at).toLocaleString() : 'unknown'}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <span className="pc-mono text-meta tabular-nums text-text-secondary">
                       {formatBytes(b.size_bytes)}
-                    </td>
-                    <td className="px-5 py-3">
-                      <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity duration-[140ms] focus-within:opacity-100 group-hover/row:opacity-100">
-                        <button
-                          onClick={() => handlePrepareRestore(b.name)}
-                          disabled={preparingName === b.name}
-                          className="flex h-8 w-8 items-center justify-center rounded-sm text-interactive-normal outline-none transition-colors hover:bg-warning-tint hover:text-accent-warning focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
-                          title="Recovery instructions"
-                          aria-label={`Recovery instructions for ${b.name}`}
-                        >
-                          {preparingName === b.name ? <Loader2 size={16} className="animate-spin" /> : <BookOpen size={16} />}
-                        </button>
-                        <button
-                          onClick={() => handleDownload(b.name)}
-                          disabled={downloadingName === b.name}
-                          className="flex h-8 w-8 items-center justify-center rounded-sm text-interactive-normal outline-none transition-colors hover:bg-bg-mod-strong hover:text-text-primary focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
-                          title="Download backup"
-                          aria-label={`Download backup ${b.name}`}
-                        >
-                          {downloadingName === b.name ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
-                        </button>
-                        <button
-                          onClick={() => handleDelete(b.name)}
-                          disabled={deletingName === b.name}
-                          className="flex h-8 w-8 items-center justify-center rounded-sm text-interactive-normal outline-none transition-colors hover:bg-danger-tint hover:text-accent-danger focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
-                          title="Delete backup"
-                          aria-label={`Delete backup ${b.name}`}
-                        >
-                          {deletingName === b.name ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <div className="flex items-center justify-end gap-1">
+                      <IconButton
+                        label={`Recovery instructions for ${b.name}`}
+                        onClick={() => handlePrepareRestore(b.name)}
+                        disabled={preparingName === b.name}
+                      >
+                        {preparingName === b.name ? (
+                          <Loader2 size={16} className="animate-spin" />
+                        ) : (
+                          <BookOpen size={16} />
+                        )}
+                      </IconButton>
+                      <IconButton
+                        label={`Download backup ${b.name}`}
+                        onClick={() => handleDownload(b.name)}
+                        disabled={downloadingName === b.name}
+                      >
+                        {downloadingName === b.name ? (
+                          <Loader2 size={16} className="animate-spin" />
+                        ) : (
+                          <Download size={16} />
+                        )}
+                      </IconButton>
+                      <IconButton
+                        label={`Delete backup ${b.name}`}
+                        onClick={() => handleDelete(b.name)}
+                        disabled={deletingName === b.name}
+                        className="hover:bg-danger-well hover:text-accent-danger"
+                      >
+                        {deletingName === b.name ? (
+                          <Loader2 size={16} className="animate-spin" />
+                        ) : (
+                          <Trash2 size={16} />
+                        )}
+                      </IconButton>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </div>

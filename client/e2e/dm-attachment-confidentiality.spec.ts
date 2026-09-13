@@ -36,7 +36,7 @@ async function account(browser: Browser, playwright: Playwright, name: string) {
   await page.goto(`${origin}/login`);
   await page.locator('input[autocomplete="username"]').fill(email);
   await page.locator('input[autocomplete="current-password"]').fill(password);
-  await page.getByRole('button', { name: 'Log In', exact: true }).click();
+  await page.getByRole('button', { name: 'Log in', exact: true }).click();
   await expect(page).toHaveURL(/\/app/);
   return { context, page, api, user: credentials.user };
 }
@@ -50,11 +50,11 @@ async function dismiss(page: Page) {
 
 async function setup(page: Page, id: string, returnTo: string) {
   await page.goto(`${origin}/setup?${new URLSearchParams({ migrate: '1', server: '__local__', user: id, returnTo })}`);
-  await page.getByLabel('New Encryption Password', { exact: false }).fill(encryptionPassword);
-  await page.getByLabel('Confirm Password', { exact: false }).fill(encryptionPassword);
-  await page.getByLabel('Current Server Password', { exact: false }).fill(password);
-  await page.getByRole('button', { name: 'Secure Account' }).click();
-  await expect(page.getByRole('heading', { name: 'Recovery Phrase' }).or(page.getByRole('alert'))).toBeVisible();
+  await page.getByLabel('New encryption password', { exact: false }).fill(encryptionPassword);
+  await page.getByLabel('Confirm password', { exact: false }).fill(encryptionPassword);
+  await page.getByLabel('Current server password', { exact: false }).fill(password);
+  await page.getByRole('button', { name: 'Secure account' }).click();
+  await expect(page.getByRole('heading', { name: 'Recovery phrase' }).or(page.getByRole('alert'))).toBeVisible();
   if (await page.getByRole('alert').isVisible()) throw new Error(await page.getByRole('alert').innerText());
   await page.getByRole('checkbox').check(); await page.getByRole('button', { name: 'Continue', exact: true }).click();
   await expect(page).toHaveURL(new RegExp(returnTo));
@@ -108,7 +108,7 @@ test('a direct-message attachment reaches the recipient without the server ever 
     const dm = await created.json(); const route = `/app/dms/${dm.id}`;
     await setup(bob.page, bob.user.id, route); await setup(alice.page, alice.user.id, route);
 
-    const composer = alice.page.getByRole('textbox', { name: /Message/ }).last();
+    const composer = alice.page.getByRole('textbox', { name: /Say something/ }).last();
     await composer.fill('sending the file now');
     // The attach action is only offered once the encrypted producer can run:
     // unlocked storage, a verified identity and a ready recipient.

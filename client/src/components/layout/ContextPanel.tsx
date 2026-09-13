@@ -1,14 +1,14 @@
 import { useCurrentChannelStore, useChannelActions } from '../../hooks/useChannels';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
-import { AlertCircle, Archive, Coins, Loader2, MessageSquare, Users, X } from 'lucide-react';
+import { AlertCircle, Archive, Coins, Loader2, MessageSquare, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import type { Channel, Message } from '../../types';
 import { useUIStore } from '../../stores/uiStore';
+import type { ContextPanelMode } from '../../stores/uiStore';
 import { channelApi } from '../../api/channels';
 import { extractApiError } from '../../api/client';
-import { MemberList } from './MemberList';
 import { GroupDmMembersPanel } from './GroupDmMembersPanel';
 import { ThreadPanel } from '../message/ThreadPanel';
 import { PinnedMessagesOverlay } from './overlays/PinnedMessagesOverlay';
@@ -50,9 +50,8 @@ export interface ContextPanelProps {
 }
 
 /** Panel-native surfaces render inside the shared right-panel chrome. */
-const PANEL_HEADERS: Record<'members' | 'economy', { title: string; icon: LucideIcon }> = {
-  members: { title: 'Members', icon: Users },
-  economy: { title: 'Server Economy', icon: Coins },
+const PANEL_HEADERS: Record<'economy', { title: string; icon: LucideIcon }> = {
+  economy: { title: 'Server economy', icon: Coins },
 };
 
 const isThreadChannel = (channel: Channel | undefined): boolean =>
@@ -97,7 +96,7 @@ function sortThreads(threads: Channel[]): Channel[] {
 }
 
 const CLOSE_BUTTON =
-  'inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-sm text-text-muted ' +
+  'inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-chip text-text-muted ' +
   'outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] ' +
   'hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]';
 
@@ -106,21 +105,21 @@ const CLOSE_BUTTON =
  * `contextPanelMode` from `uiStore` — the single source of truth — and switches
  * across the already-built surfaces without rebuilding any of them:
  *
- *   members  → components/layout/MemberList.tsx
+ *   recipients → components/layout/GroupDmMembersPanel.tsx (group DMs only)
  *   threads  → active ThreadPanel, or a channel-scoped thread list
  *   pins     → components/layout/overlays/PinnedMessagesOverlay.tsx
  *   search   → components/layout/overlays/SearchOverlay.tsx
  *   economy  → components/guild/GuildEconomyPanel.tsx
  *   null     → nothing
  *
- * Visual law: Card/panel recipe (design-spec §7) — `bg-bg-secondary`, a
+ * Visual law: Card/panel recipe (lantern-stage-spec §8) — `bg-bg-raised`, a
  * `border-border-subtle` hairline on the left edge, real elevation, and no
- * gradient hero (kill-list #1). `members` and `economy` are wrapped in the
- * shared panel chrome (title + close, focus-visible ring on close). `threads`,
+ * gradient hero (kill-list #1). `economy` is wrapped in the shared panel chrome
+ * (title + close, focus-visible ring on close). `recipients`, `threads`,
  * `pins`, and `search` are self-chromed panel-native surfaces; the AppShell
  * supplies their modal containment only on narrow screens. ContextPanel wires
  * each surface's close to clear `contextPanelMode`. Esc-to-close is wired only where the panel owns focus and
- * contains no text input (members/economy); global Esc precedence is SHELL-5.
+ * contains no text input (economy); global Esc precedence is SHELL-5.
  */
 export function ContextPanel({
   guildId,
@@ -136,6 +135,13 @@ export function ContextPanel({
 }: ContextPanelProps) {
   const mode = useUIStore((s) => s.contextPanelMode);
   const setContextPanelMode = useUIStore((s) => s.setContextPanelMode);
+  /* While the shell plays this plate's leave, `contextPanelMode` is already
+     null — the panel must keep rendering the surface it was showing or it
+     slides out empty. `shown` is the last real mode; the presence window is
+     --duration-fast, so nothing but the exit ever sees it. */
+  const [lastMode, setLastMode] = useState<ContextPanelMode>(null);
+  if (mode !== null && mode !== lastMode) setLastMode(mode);
+  const shown = mode ?? lastMode;
   const channelActions = useChannelActions();
   const channelsById = useCurrentChannelStore((s) => s.channelsById);
   const navigate = useNavigate();
@@ -157,7 +163,7 @@ export function ContextPanel({
     channelName ?? (channelId ? channelsById[channelId]?.name ?? null : null);
   const activeChannel = channelId ? channelsById[channelId] : undefined;
   const threadListParentId =
-    mode === 'threads' && isThreadableChannel(activeChannel, channelId) ? channelId! : null;
+    shown === 'threads' && isThreadableChannel(activeChannel, channelId) ? channelId! : null;
   const channelThreads = useMemo(
     () =>
       sortThreads(
@@ -257,11 +263,11 @@ export function ContextPanel({
     };
   }, [manageFocus]);
 
-  if (mode === null) return null;
+  if (shown === null) return null;
 
   // Panel-native query surfaces bring their own chrome; their close button is
   // wired to clear the shared panel mode.
-  if (mode === 'pins') {
+  if (shown === 'pins') {
     return (
       <PinnedMessagesOverlay
         open
@@ -277,7 +283,7 @@ export function ContextPanel({
     );
   }
 
-  if (mode === 'search') {
+  if (shown === 'search') {
     return (
       <SearchOverlay
         open
@@ -291,21 +297,21 @@ export function ContextPanel({
     );
   }
 
-  // Group-DM recipients live in the shared `members` surface (layout-spec §2).
-  // The panel is self-chromed (own header + Add + close), so short-circuit before
-  // the guild MemberList chrome below.
-  if (mode === 'members') {
+  // A group message's recipients are the one list that is not a member list:
+  // it is who this conversation is addressed to, and it is editable
+  // (lantern-stage-spec §6.5, §7.6). The panel is self-chromed (own header +
+  // Add + close), so it short-circuits before the shared chrome below.
+  if (shown === 'recipients') {
     const activeChannel = channelId ? channelsById[channelId] : undefined;
-    if (isGroupDmChannel(activeChannel)) {
-      return <GroupDmMembersPanel channelId={channelId as string} onClose={close} />;
-    }
+    if (!isGroupDmChannel(activeChannel)) return null;
+    return <GroupDmMembersPanel channelId={channelId as string} onClose={close} />;
   }
 
   // ThreadPanel is a self-chromed inline panel (its own header + close). Give it
   // the panel width and let its own left hairline serve as the divider. The
   // active thread is supplied by the ChatView or derived from the current
   // (thread) channel.
-  if (mode === 'threads') {
+  if (shown === 'threads') {
     const thread = activeThread ?? deriveActiveThread(channelId, channelsById);
     const threadGuildId = guildId ?? (channelId ? channelsById[channelId]?.guild_id ?? null : null);
     if (!thread && threadListParentId && threadGuildId) {
@@ -323,8 +329,8 @@ export function ContextPanel({
           onKeyDown={onAsideKeyDown}
           data-testid="context-panel"
           data-mode="threads"
-          className="flex h-full shrink-0 flex-col overflow-hidden border-l border-border-subtle bg-bg-secondary shadow-sm outline-none"
-          style={{ width: 'var(--member-list-width)' }}
+          className="pc-plate flex h-[calc(100%-var(--gutter)*2)] shrink-0 flex-col overflow-hidden outline-none my-[var(--gutter)] mr-[var(--gutter)]"
+          style={{ width: 'var(--w-context-panel)' }}
         >
           <header className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-4 py-3">
             <MessageSquare size={18} className="shrink-0 text-text-secondary" aria-hidden />
@@ -346,7 +352,7 @@ export function ContextPanel({
           {threadsError ? (
             <div className="flex min-h-0 flex-1 flex-col items-start justify-center px-5 text-left">
               <AlertCircle size={22} className="mb-3 text-danger" aria-hidden />
-              <h3 className="text-subhead text-text-primary">Threads unavailable</h3>
+              <h3 className="text-heading text-text-primary">Threads unavailable</h3>
               <p className="mt-1 text-label text-text-secondary">{threadsError}</p>
             </div>
           ) : (threadsLoading || !hasFetchedThreads) && channelThreads.length === 0 ? (
@@ -356,7 +362,7 @@ export function ContextPanel({
           ) : channelThreads.length === 0 ? (
             <div className="flex min-h-0 flex-1 flex-col items-start justify-center px-5 text-left">
               <MessageSquare size={24} className="mb-3 text-text-muted" aria-hidden />
-              <h3 className="text-subhead text-text-primary">No threads yet</h3>
+              <h3 className="text-heading text-text-primary">No threads yet</h3>
               <p className="mt-1 text-label text-text-secondary">Threaded conversations will appear here.</p>
             </div>
           ) : (
@@ -369,7 +375,7 @@ export function ContextPanel({
                       key={thread.id}
                       type="button"
                       onClick={() => openThread(thread.id)}
-                      className="flex min-h-[44px] w-full items-center gap-2 rounded-sm px-2.5 py-2 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
+                      className="flex min-h-[44px] w-full items-center gap-2 rounded-chip px-2.5 py-2 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
                     >
                       {isArchived ? (
                         <Archive size={16} className="shrink-0 text-text-muted" aria-hidden />
@@ -381,7 +387,7 @@ export function ContextPanel({
                           {thread.name || 'Thread'}
                         </span>
                         {isArchived && (
-                          <span className="text-meta uppercase text-text-muted">Archived</span>
+                          <span className="text-meta text-text-muted">Archived</span>
                         )}
                       </span>
                     </button>
@@ -396,8 +402,8 @@ export function ContextPanel({
     if (!thread || !threadGuildId) return null;
     return (
       <div
-        className="flex h-full shrink-0 flex-col"
-        style={{ width: 'var(--member-list-width)' }}
+        className="flex h-[calc(100%-var(--gutter)*2)] shrink-0 flex-col my-[var(--gutter)] mr-[var(--gutter)]"
+        style={{ width: 'var(--w-context-panel)' }}
         data-testid="context-panel"
         data-mode="threads"
       >
@@ -413,9 +419,9 @@ export function ContextPanel({
   }
 
   // Economy needs a guild to resolve a leaderboard.
-  if (mode === 'economy' && !guildId) return null;
+  if (shown === 'economy' && !guildId) return null;
 
-  const header = PANEL_HEADERS[mode];
+  const header = PANEL_HEADERS[shown];
 
   return (
     <aside
@@ -425,13 +431,13 @@ export function ContextPanel({
       tabIndex={-1}
       onKeyDown={onAsideKeyDown}
       data-testid="context-panel"
-      data-mode={mode}
-      className="flex h-full shrink-0 flex-col overflow-hidden border-l border-border-subtle bg-bg-secondary shadow-sm outline-none"
-      style={{ width: 'var(--member-list-width)' }}
+      data-mode={shown}
+      className="pc-plate flex h-[calc(100%-var(--gutter)*2)] shrink-0 flex-col overflow-hidden outline-none my-[var(--gutter)] mr-[var(--gutter)]"
+      style={{ width: 'var(--w-context-panel)' }}
     >
       <header className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-4 py-3">
         <header.icon size={18} className="shrink-0 text-text-secondary" aria-hidden />
-        <h2 className="min-w-0 flex-1 truncate text-subhead text-text-primary">{header.title}</h2>
+        <h2 className="min-w-0 flex-1 truncate text-heading text-text-primary">{header.title}</h2>
         <button
           type="button"
           onClick={close}
@@ -443,7 +449,7 @@ export function ContextPanel({
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
-        {mode === 'members' ? <MemberList hideStatsHeader /> : <GuildEconomyPanel guildId={guildId as string} />}
+        <GuildEconomyPanel guildId={guildId as string} />
       </div>
     </aside>
   );

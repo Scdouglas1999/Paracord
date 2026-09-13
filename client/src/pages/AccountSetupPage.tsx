@@ -12,6 +12,7 @@ import { extractApiError } from '../api/client';
 import { MIN_PASSWORD_LENGTH } from '../lib/constants';
 import { ErrorBanner } from '../components/ui/Feedback';
 import { Button } from '../components/ui/Button';
+import { Input } from '../components/ui/Input';
 import { AuthCanvas, AuthCard, AuthHeading, Field } from './authScaffold';
 
 export function AccountSetupPage() {
@@ -26,11 +27,27 @@ export function AccountSetupPage() {
   if (params.get('migrate') === '1') {
     const expectedUser = params.get('user');
     if (!user || (expectedUser && expectedUser !== user.id)) {
-      return <AuthCanvas><AuthCard className="max-w-md p-8">
-        <AuthHeading title={user ? 'Account changed' : 'Waiting for your server account'} subtitle="Sign in to the intended server account before setting up encryption." />
-        <p className="mt-4 text-label text-text-secondary">Setup continues when that account is available.</p>
-        <Link to="/app" className="mt-4 inline-block text-text-link underline">Return to Paracord</Link>
-      </AuthCard></AuthCanvas>;
+      return (
+        <AuthCanvas>
+          <AuthCard className="max-w-md">
+            <div className="flex flex-col items-start gap-4 p-7 sm:p-8">
+              <AuthHeading
+                title={user ? 'Account changed' : 'Waiting for your server account'}
+                subtitle="Sign in to the intended server account before setting up encryption."
+              />
+              <p className="text-label text-text-secondary">
+                Setup continues when that account is available.
+              </p>
+              <Link
+                to="/app"
+                className="pc-focusable rounded-[var(--radius-chip)] text-label font-semibold text-text-link underline underline-offset-4"
+              >
+                Return to Paracord
+              </Link>
+            </div>
+          </AuthCard>
+        </AuthCanvas>
+      );
     }
   }
   return <OwnedAccountSetupPage key={`${serverId}:${user?.id ?? 'new'}`} />;
@@ -153,12 +170,12 @@ function OwnedAccountSetupPage() {
     return (
       <AuthCanvas>
         <AuthCard className="max-w-lg">
-          <div className="flex flex-col gap-6 p-8">
+          <div className="flex flex-col gap-6 p-7 sm:p-8">
             <div>
-              <p className="text-section uppercase text-accent-primary">Step 2 of 2</p>
+              <p className="text-section text-text-faint">Step 2 of 2</p>
               <AuthHeading
                 mark={false}
-                title="Recovery Phrase"
+                title="Recovery phrase"
                 subtitle={
                   <>
                     These 24 words restore your identity key. They do not contain your encrypted messages or their session keys.
@@ -168,22 +185,26 @@ function OwnedAccountSetupPage() {
               />
             </div>
 
-            <div className="flex items-start gap-2.5 rounded-md border border-accent-warning/30 bg-warning-tint px-4 py-3 text-label text-accent-warning">
+            {/* A caution is a well carrying warning ink, never a tinted box
+                with a coloured border (spec §1.1, §1.6). */}
+            <div className="pc-well flex items-start gap-2.5 px-4 py-3 text-label text-accent-warning">
               <ShieldAlert size={16} className="mt-px shrink-0" />
-              <span>Never share these words. Anyone who has them can take over your account.</span>
+              <span className="leading-relaxed">
+                Never share these words. Anyone who has them can take over your account.
+              </span>
             </div>
 
             <div>
-              <div className="grid grid-cols-2 gap-2 rounded-md border border-border-subtle bg-bg-tertiary/50 p-4 sm:grid-cols-3">
+              <div className="pc-well grid grid-cols-2 gap-2 p-4 sm:grid-cols-3">
                 {words.map((word, i) => (
                   <div
                     key={i}
-                    className="flex items-center gap-2 rounded-sm bg-bg-secondary px-2.5 py-1.5"
+                    className="flex items-center gap-2 rounded-[var(--radius-chip)] bg-bg-raised px-2.5 py-1.5 shadow-[var(--shadow-chip)]"
                   >
-                    <span className="font-code text-meta text-text-muted tabular-nums">
+                    <span className="pc-mono text-meta text-text-faint">
                       {String(i + 1).padStart(2, '0')}
                     </span>
-                    <span className="font-code text-label text-text-primary">{word}</span>
+                    <span className="pc-mono text-label text-text-primary">{word}</span>
                   </div>
                 ))}
               </div>
@@ -191,26 +212,26 @@ function OwnedAccountSetupPage() {
                 type="button"
                 aria-label={copied ? 'Recovery phrase copied' : 'Copy recovery phrase'}
                 onClick={handleCopyPhrase}
-                className="mt-3 inline-flex items-center gap-1.5 rounded-sm px-2 py-1 text-meta font-semibold text-text-link transition-colors hover:bg-accent-tint"
+                className="pc-focusable mt-3 inline-flex h-[var(--h-control)] items-center gap-1.5 rounded-[var(--radius-control)] px-2.5 text-meta font-semibold text-text-link transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle"
               >
                 {copied ? <Check size={14} /> : <Copy size={14} />}
                 {copied ? 'Copied to clipboard' : 'Copy phrase'}
               </button>
             </div>
 
-            <label className="flex cursor-pointer items-start gap-2.5 rounded-md border border-border-subtle bg-bg-mod-subtle px-4 py-3.5 transition-colors hover:border-border-strong">
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-[var(--radius-control)] bg-bg-raised px-4 py-3.5 shadow-[var(--shadow-raised)] transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong">
               <input
                 type="checkbox"
                 checked={savedPhrase}
                 onChange={(e) => setSavedPhrase(e.target.checked)}
-                className="mt-0.5 h-4 w-4 accent-[var(--accent-primary)]"
+                className="pc-checkbox mt-0.5"
               />
               <span className="text-label leading-relaxed text-text-secondary">
                 I’ve written down my recovery phrase and stored it somewhere safe.
               </span>
             </label>
 
-            <Button onClick={handleContinue} disabled={!savedPhrase} className="w-full">
+            <Button onClick={handleContinue} size="lg" disabled={!savedPhrase} className="w-full">
               Continue
             </Button>
           </div>
@@ -222,9 +243,9 @@ function OwnedAccountSetupPage() {
   return (
     <AuthCanvas>
       <AuthCard className="max-w-md">
-        <form onSubmit={handleCreate} className="flex flex-col gap-6 p-8">
+        <form onSubmit={handleCreate} className="flex flex-col gap-6 p-7 sm:p-8">
           <div>
-            <p className="text-section uppercase text-accent-primary">Step 1 of 2</p>
+            <p className="text-section text-text-faint">Step 1 of 2</p>
             <AuthHeading
               mark={false}
               title={isMigration ? 'Secure your account' : 'Set up a local identity'}
@@ -237,37 +258,39 @@ function OwnedAccountSetupPage() {
           </div>
 
           {isMigration && scope && <p className="text-label text-text-secondary">Server account: {targetUser?.username} ({serverName})</p>}
-          {existingIdentity && <p className="text-meta text-text-secondary">Using saved identity {existingIdentity.slice(0, 12)}…</p>}
-          {error && <ErrorBanner message={error} />}
+          {existingIdentity && (
+            <p className="text-meta text-text-secondary">
+              Using saved identity <span className="pc-mono">{existingIdentity.slice(0, 12)}…</span>
+            </p>
+          )}
+          {error && <ErrorBanner multiline message={error} />}
 
           <div className="flex flex-col gap-5">
             <Field label="Username" required>
-              <input
+              <Input
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 required
                 minLength={2}
                 maxLength={32}
-                className="input-field"
                 placeholder="ada"
                 autoComplete="username"
                 autoFocus
               />
             </Field>
 
-            <Field label="Display Name" hint="How others see you. You can change it later.">
-              <input
+            <Field label="Display name" hint="How others see you. You can change it later.">
+              <Input
                 type="text"
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
-                className="input-field"
                 placeholder="Ada Lovelace"
               />
             </Field>
 
             {(!hasSavedIdentity || !identityUnlocked) && <Field
-              label={hasSavedIdentity ? 'Encryption Password' : isMigration ? 'New Encryption Password' : 'Password'}
+              label={hasSavedIdentity ? 'Encryption password' : isMigration ? 'New encryption password' : 'Password'}
               required
               hint={
                 hasSavedIdentity ? 'Unlocks the identity already saved on this device.' : isMigration
@@ -275,52 +298,50 @@ function OwnedAccountSetupPage() {
                   : 'Encrypts your account key on this device. At least 10 characters.'
               }
             >
-              <input
+              <Input
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 minLength={hasSavedIdentity ? undefined : MIN_PASSWORD_LENGTH}
-                className="input-field"
                 placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
                 autoComplete={hasSavedIdentity ? "current-password" : "new-password"}
               />
             </Field>}
 
-            {!hasSavedIdentity && <Field label="Confirm Password" required>
-              <input
+            {!hasSavedIdentity && <Field label="Confirm password" required>
+              <Input
                 type="password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 required
-                className="input-field"
                 placeholder="Type your password again"
                 autoComplete="new-password"
               />
             </Field>}
 
             {isMigration && <>
-              <Field label="Current Server Password" required hint="Authenticates this change on the server. It can differ from your encryption password.">
-                <input type="password" value={serverPassword} onChange={e => setServerPassword(e.target.value)} required autoComplete="current-password" className="input-field" />
+              <Field label="Current server password" required hint="Authenticates this change on the server. It can differ from your encryption password.">
+                <Input type="password" value={serverPassword} onChange={e => setServerPassword(e.target.value)} required autoComplete="current-password" />
               </Field>
               <Field label="Two-factor or backup code" hint="Required if two-factor authentication is enabled on this server account.">
-                <input value={mfaCode} onChange={e => setMfaCode(e.target.value)} autoComplete="one-time-code" className="input-field" />
+                <Input value={mfaCode} onChange={e => setMfaCode(e.target.value)} autoComplete="one-time-code" className="pc-mono" />
               </Field>
             </>}
           </div>
 
-          <Button type="submit" loading={loading} disabled={loading} className="w-full">
-            <KeyRound size={16} className="mr-1.5" />
-            {isMigration ? 'Secure Account' : 'Create Identity'}
+          <Button type="submit" size="lg" loading={loading} disabled={loading} className="w-full">
+            <KeyRound size={16} aria-hidden />
+            {isMigration ? 'Secure account' : 'Create identity'}
           </Button>
 
           {!isMigration ? (
-            <p className="text-label text-text-secondary">
+            <p className="text-meta text-text-secondary">
               Already have an account?{' '}
               <button
                 type="button"
                 onClick={() => navigate('/login')}
-                className="font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+                className="pc-focusable rounded-[var(--radius-chip)] font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
               >
                 Sign in
               </button>
@@ -328,17 +349,17 @@ function OwnedAccountSetupPage() {
               <button
                 type="button"
                 onClick={() => navigate('/recover')}
-                className="font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+                className="pc-focusable rounded-[var(--radius-chip)] font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
               >
                 Recover from phrase
               </button>
             </p>
           ) : (
-            <p className="text-label text-text-secondary">
+            <p className="text-meta text-text-secondary">
               <button
                 type="button"
                 onClick={() => navigate('/app')}
-                className="font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+                className="pc-focusable rounded-[var(--radius-chip)] font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
               >
                 Skip for now
               </button>

@@ -94,7 +94,11 @@ describe('ChannelPermissionsEditor', () => {
     const viewRow = screen.getByTestId('permission-row-VIEW_CHANNEL');
     expect(within(viewRow).getByText('Inherited → denied')).toBeInTheDocument();
 
-    await user.click(within(viewRow).getByRole('button', { name: 'Allow View Channel' }));
+    // The tri-state picker is the shared segmented control, so the permission
+    // it governs names the group rather than each option (same intent as the
+    // old per-button "Allow View Channel" label).
+    const viewState = within(viewRow).getByRole('tablist', { name: 'View Channel in this channel' });
+    await user.click(within(viewState).getByRole('tab', { name: 'Allow' }));
     expect(within(viewRow).getByText('Effective → allowed')).toBeInTheDocument();
     expect(screen.getByText('1 allowed · 14 denied')).toBeInTheDocument();
   });

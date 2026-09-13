@@ -11,7 +11,7 @@ import { useChannelStore } from '../stores/channelStore';
  * useKeyboardNavigation owns two flagship new-IA behaviors (layout-spec §5):
  *   (a) roving-tabindex movement across the flat sidebar row list
  *       (ArrowUp/Down/Home/End over [data-nav-index] inside [data-roving-container]),
- *   (b) the Escape precedence Command Palette → ContextPanel → narrow sidebar overlay.
+ *   (b) the Escape precedence Command palette → ContextPanel → narrow sidebar overlay.
  * These tests exercise the actual key handling so a regression (off-by-one,
  * container-selector drift, precedence reorder) fails loudly instead of shipping green.
  */
@@ -133,8 +133,8 @@ describe('useKeyboardNavigation — Mod+F search', () => {
 });
 
 describe('useKeyboardNavigation — Escape precedence (§5)', () => {
-  it('closes the Command Palette first, leaving the ContextPanel open', () => {
-    useUIStore.setState({ commandPaletteOpen: true, contextPanelMode: 'members' });
+  it('closes the Command palette first, leaving the ContextPanel open', () => {
+    useUIStore.setState({ commandPaletteOpen: true, contextPanelMode: 'pins' });
     renderHarness();
 
     fireEvent.keyDown(document.body, { key: 'Escape' });
@@ -142,11 +142,11 @@ describe('useKeyboardNavigation — Escape precedence (§5)', () => {
     const ui = useUIStore.getState();
     expect(ui.commandPaletteOpen).toBe(false);
     // Precedence: the panel is NOT also closed in the same keystroke.
-    expect(ui.contextPanelMode).toBe('members');
+    expect(ui.contextPanelMode).toBe('pins');
   });
 
   it('closes the ContextPanel next when the palette is already closed', () => {
-    useUIStore.setState({ commandPaletteOpen: false, contextPanelMode: 'members' });
+    useUIStore.setState({ commandPaletteOpen: false, contextPanelMode: 'pins' });
     renderHarness();
 
     fireEvent.keyDown(document.body, { key: 'Escape' });
@@ -155,7 +155,7 @@ describe('useKeyboardNavigation — Escape precedence (§5)', () => {
   });
 
   it('leaves the ContextPanel open while a modal dialog owns Escape', () => {
-    useUIStore.setState({ commandPaletteOpen: false, contextPanelMode: 'members' });
+    useUIStore.setState({ commandPaletteOpen: false, contextPanelMode: 'pins' });
     renderHarness();
     const dialog = document.createElement('div');
     dialog.setAttribute('role', 'dialog');
@@ -164,12 +164,12 @@ describe('useKeyboardNavigation — Escape precedence (§5)', () => {
 
     fireEvent.keyDown(dialog, { key: 'Escape' });
 
-    expect(useUIStore.getState().contextPanelMode).toBe('members');
+    expect(useUIStore.getState().contextPanelMode).toBe('pins');
     dialog.remove();
   });
 
   it('leaves the ContextPanel open while a transient menu owns Escape', () => {
-    useUIStore.setState({ commandPaletteOpen: false, contextPanelMode: 'members' });
+    useUIStore.setState({ commandPaletteOpen: false, contextPanelMode: 'pins' });
     renderHarness();
     const menu = document.createElement('div');
     menu.setAttribute('role', 'menu');
@@ -177,7 +177,7 @@ describe('useKeyboardNavigation — Escape precedence (§5)', () => {
 
     fireEvent.keyDown(menu, { key: 'Escape' });
 
-    expect(useUIStore.getState().contextPanelMode).toBe('members');
+    expect(useUIStore.getState().contextPanelMode).toBe('pins');
     menu.remove();
   });
 

@@ -4,10 +4,21 @@ import type { ScopedGuild } from '../../lib/guildScope';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import { useEffect, useState } from 'react';
 import { Upload, LayoutTemplate, Hash, Volume2, Folder, ChevronLeft, ArrowRight } from 'lucide-react';
-import { Modal, ModalTitle } from '../ui/Modal';
+import {
+  Modal,
+  ModalBody,
+  ModalDescription,
+  ModalFooter,
+  ModalHeader,
+  ModalTitle,
+} from '../ui/Modal';
 import { Button } from '../ui/Button';
-import { ErrorBanner, EmptyState } from '../ui/Feedback';
-import { FieldLabel } from './SettingsPrimitives';
+import { Chip } from '../ui/Chip';
+import { Divider } from '../ui/Divider';
+import { Input } from '../ui/Input';
+import { Tabs } from '../ui/Tabs';
+import { ErrorBanner, EmptyState, LoadingSpinner } from '../ui/Feedback';
+import { FieldLabel, GroupLabel } from './SettingsPrimitives';
 import { useGuildStore } from '../../stores/guildStore';
 import { extractApiError } from '../../api/client';
 import { getApi } from '../../api/activeClient';
@@ -35,10 +46,10 @@ interface CreateGuildModalProps {
 
 type Tab = 'create' | 'join' | 'template';
 
-const TABS: { id: Tab; label: string }[] = [
-  { id: 'create', label: 'Create' },
-  { id: 'join', label: 'Join' },
-  { id: 'template', label: 'Template' },
+const TABS: { value: Tab; label: string }[] = [
+  { value: 'create', label: 'Create' },
+  { value: 'join', label: 'Join' },
+  { value: 'template', label: 'Template' },
 ];
 
 export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
@@ -178,38 +189,30 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
       open
       onClose={onClose}
       labelledBy="create-guild-modal-title"
+      describedBy="create-guild-modal-description"
       showCloseButton
       panelClassName="w-[min(92vw,32rem)]"
     >
-      <div className="max-h-[min(86dvh,42rem)] overflow-auto">
-        {/* Header */}
-        <div className="border-b border-border-subtle px-6 pb-5 pt-6 pr-14">
+      <div className="flex max-h-[min(86dvh,42rem)] flex-col">
+        <ModalHeader className="pb-4 pr-14">
           <ModalTitle id="create-guild-modal-title">{tabTitle}</ModalTitle>
-          <p className="mt-1.5 text-sm leading-relaxed text-text-secondary">{tabSubtitle}</p>
+          <ModalDescription id="create-guild-modal-description">{tabSubtitle}</ModalDescription>
 
-          {/* Mode selector — a segmented control, the active step in emerald */}
-          <div className="mt-4 flex gap-1 rounded-sm bg-bg-tertiary p-1">
-            {TABS.map(({ id, label }) => (
-              <button
-                key={id}
-                type="button"
-                onClick={() => { setTab(id); setError(''); }}
-                className={cn(
-                  'flex-1 rounded-sm px-3 py-1.5 text-label font-semibold outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
-                  tab === id
-                    ? 'bg-accent-primary text-text-on-accent shadow-sm'
-                    : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
-                )}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
+          {/* Mode switch — a segmented control: the active step is a raised
+              surface, never the emerald (that is reserved for the one action). */}
+          <Tabs
+            className="mt-4"
+            label="How to add a space"
+            items={TABS}
+            value={tab}
+            onChange={(next) => { setTab(next); setError(''); }}
+            fill
+          />
+        </ModalHeader>
+        <Divider />
 
-        {/* Body */}
-        <div className="px-6 py-5">
-          {error && <ErrorBanner message={error} className="mb-5" />}
+        <ModalBody className="min-h-0 flex-1 overflow-auto py-5">
+          {error && <ErrorBanner message={error} multiline className="mb-5" />}
 
           {tab === 'create' ? (
             <div className="space-y-5">
@@ -223,20 +226,21 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
                     processIconFile(e.dataTransfer.files?.[0]);
                   }}
                   className={cn(
-                    'group flex h-24 w-24 cursor-pointer flex-col items-center justify-center overflow-hidden rounded-md border-2 border-dashed text-center transition-colors duration-[140ms] ease-[var(--ease-out)]',
-                    iconDragActive
-                      ? 'border-accent-primary bg-accent-tint'
-                      : 'border-border-strong hover:border-accent-primary hover:bg-accent-tint',
+                    'pc-well group flex h-24 w-24 cursor-pointer flex-col items-center justify-center gap-1',
+                    'overflow-hidden rounded-[var(--radius-card)] p-2 text-center',
+                    'transition-[box-shadow,color] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+                    'focus-within:shadow-[var(--shadow-well),var(--focus-ring)]',
+                    iconDragActive && 'shadow-[var(--shadow-well),0_0_0_1px_var(--accent-primary)]',
                   )}
                 >
-                  <input type="file" accept="image/*" className="hidden" onChange={handleIconChange} />
+                  <input type="file" accept="image/*" className="sr-only" onChange={handleIconChange} aria-label="Space icon" />
                   {iconPreview ? (
                     <img src={iconPreview} alt="Space icon preview" className="h-full w-full object-cover" />
                   ) : (
                     <>
-                      <Upload size={20} className="text-text-muted transition-colors group-hover:text-accent-primary" />
-                      <span className="mt-1 text-[10px] font-semibold uppercase tracking-[0.06em] text-text-muted">
-                        Upload
+                      <Upload size={20} className="text-text-muted transition-colors group-hover:text-text-primary" />
+                      <span className="text-section text-text-faint">
+                        {iconDragActive ? 'Drop to upload' : 'Upload'}
                       </span>
                     </>
                   )}
@@ -245,11 +249,10 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
 
               <label className="block">
                 <FieldLabel>Space name</FieldLabel>
-                <input
+                <Input
                   type="text"
                   value={serverName}
                   onChange={(e) => setServerName(e.target.value)}
-                  className="input-field"
                   aria-label="Space name"
                 />
               </label>
@@ -257,18 +260,17 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
           ) : tab === 'join' ? (
             <div className="space-y-5">
               <label className="block">
-                <FieldLabel>Invite Link</FieldLabel>
-                <input
+                <FieldLabel>Invite link</FieldLabel>
+                <Input
                   type="text"
                   value={inviteCode}
                   onChange={(e) => setInviteCode(e.target.value)}
                   placeholder="https://paracord.gg/hTKzmak"
-                  className="input-field"
                 />
               </label>
-              <div className="rounded-md border border-border-subtle bg-bg-tertiary px-4 py-3">
-                <div className="text-section uppercase text-text-secondary">Invites look like</div>
-                <div className="mt-1.5 space-y-0.5 font-code text-sm text-text-muted">
+              <div className="pc-well px-4 py-3">
+                <GroupLabel>Invites look like</GroupLabel>
+                <div className="mt-1.5 space-y-0.5 pc-mono text-meta text-text-muted">
                   <div>hTKzmak</div>
                   <div>https://paracord.gg/hTKzmak</div>
                 </div>
@@ -278,12 +280,17 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
             /* Template tab */
             <div className="space-y-4">
               {templatesLoading ? (
-                <p className="py-6 text-center text-sm text-text-muted">Loading templates…</p>
+                <LoadingSpinner className="py-6" label="Loading templates…" />
               ) : templates.length === 0 ? (
                 <EmptyState
                   icon={<LayoutTemplate size={20} />}
-                  title="No templates yet"
-                  description="Templates come from existing spaces — open a space's settings and save its structure to reuse it here."
+                  title="Save a space as a template first"
+                  description="A template copies an existing space's channels and roles. Open that space's settings, save its structure, and it shows up here for every new space you start."
+                  action={
+                    <Button variant="ghost" onClick={() => { setTab('create'); setError(''); }}>
+                      Build one from scratch
+                    </Button>
+                  }
                 />
               ) : !selectedTemplate ? (
                 <div className="max-h-60 space-y-2 overflow-y-auto">
@@ -291,7 +298,10 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
                     <button
                       key={t.id}
                       type="button"
-                      className="w-full rounded-sm border border-border-subtle bg-bg-tertiary p-3 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:border-accent-primary hover:bg-accent-tint focus-visible:shadow-[var(--focus-ring)]"
+                      className={cn(
+                        'pc-raised pc-focusable w-full p-3 text-left',
+                        'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong',
+                      )}
                       aria-label={`Use template ${t.name}`}
                       onClick={() => {
                         setSelectedTemplate(t);
@@ -300,15 +310,15 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
                       }}
                     >
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-label font-semibold text-text-primary">{t.name}</span>
-                        <span className="shrink-0 text-meta tabular-nums text-text-muted">
+                        <span className="pc-display text-name text-text-primary">{t.name}</span>
+                        <span className="pc-mono shrink-0 text-meta text-text-faint">
                           {t.template_data.channels.length} channels
                         </span>
                       </div>
                       {t.description && (
                         <p className="mt-1 line-clamp-2 text-meta text-text-secondary">{t.description}</p>
                       )}
-                      <p className="mt-1 text-meta text-text-muted">
+                      <p className="mt-1 text-meta text-text-faint">
                         Used {t.usage_count} {t.usage_count === 1 ? 'time' : 'times'}
                       </p>
                     </button>
@@ -316,19 +326,21 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
                 </div>
               ) : (
                 <div className="space-y-4">
-                  <button
-                    type="button"
-                    className="inline-flex items-center gap-1 rounded-sm text-meta font-semibold text-accent-primary outline-none transition-colors hover:text-accent-primary-hover focus-visible:shadow-[var(--focus-ring)]"
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     onClick={() => { setSelectedTemplate(null); setError(''); }}
                   >
                     <ChevronLeft size={14} />
                     Back to templates
-                  </button>
+                  </Button>
 
-                  <div className="rounded-md border border-border-subtle bg-bg-tertiary p-3">
-                    <p className="text-label font-semibold text-text-primary">{selectedTemplate.name}</p>
+                  <div className="pc-well p-3">
+                    <p className="pc-display text-name text-text-primary">{selectedTemplate.name}</p>
                     {selectedTemplate.description && (
-                      <p className="mt-1 text-meta text-text-secondary">{selectedTemplate.description}</p>
+                      <p className="mt-1 text-meta leading-relaxed text-text-secondary">
+                        {selectedTemplate.description}
+                      </p>
                     )}
 
                     {/* Channel preview */}
@@ -350,15 +362,15 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
                     {selectedTemplate.template_data.roles.length > 0 && (
                       <div className="mt-3 flex flex-wrap gap-1.5">
                         {selectedTemplate.template_data.roles.map((r, i) => (
-                          <span
+                          <Chip
                             key={i}
-                            className="inline-block rounded-xs bg-bg-mod-strong px-2 py-0.5 text-meta font-medium"
+                            size="sm"
                             style={{
                               color: r.color ? `#${r.color.toString(16).padStart(6, '0')}` : 'var(--text-secondary)',
                             }}
                           >
                             {r.name}
-                          </span>
+                          </Chip>
                         ))}
                       </div>
                     )}
@@ -366,22 +378,21 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
 
                   <label className="block">
                     <FieldLabel>Space name</FieldLabel>
-                    <input
+                    <Input
                       type="text"
                       aria-label="Template space name"
                       value={templateGuildName}
                       onChange={(e) => setTemplateGuildName(e.target.value)}
-                      className="input-field"
                     />
                   </label>
                 </div>
               )}
             </div>
           )}
-        </div>
+        </ModalBody>
 
-        {/* Footer */}
-        <div className="flex items-center justify-end gap-3 border-t border-border-subtle bg-bg-secondary px-6 py-4">
+        <Divider />
+        <ModalFooter className="items-center gap-3 pt-4">
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
           <Button
             onClick={footerAction}
@@ -392,7 +403,7 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
             {footerLabel}
             {!loading && <ArrowRight size={16} />}
           </Button>
-        </div>
+        </ModalFooter>
       </div>
     </Modal>
   );

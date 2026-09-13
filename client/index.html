@@ -7,7 +7,7 @@
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob: https: http:; connect-src 'self' ipc: http://ipc.localhost ws: wss: http: https:; media-src 'self' data: blob: https: http:"
     />
-    <meta name="theme-color" content="#0d1211">
+    <meta name="theme-color" content="#0a0c10">
     <meta name="description" content="Paracord - a decentralized, self-hostable chat platform">
     <script src="/tauri-sw-cleanup.js"></script>
     <link rel="icon" href="/favicon.ico">
@@ -15,23 +15,23 @@
     <link rel="apple-touch-icon" href="/apple-touch-icon-180x180.png">
     <title>Paracord</title>
     <!--
-      Critical first-paint styles: pin the deepest Emerald Commons surface
-      (--bg-tertiary #0d1211), the Inter body stack, and the primary text color
+      Critical first-paint styles: pin the Lantern Stage street surface
+      (--bg-base #0a0c10), the Onest body stack and the primary text color
       before the app bundle's CSS parses, so the very first frame already matches
       the app shell — no white flash, no font swap. Inline (no external font/CDN
-      link) to stay CSP-safe; the runtime theme is re-applied by useTheme.ts.
+      link) to stay CSP-safe; the theme attribute is applied by useTheme.ts.
     -->
     <style>
-      html, body { background-color: #0d1211; }
+      html, body { background-color: #0a0c10; }
       body {
         margin: 0;
-        color: #eaf2ed;
-        font-family: 'Inter Variable', 'Inter', -apple-system, BlinkMacSystemFont,
+        color: #f1eee7;
+        font-family: 'Onest Variable', 'Onest', -apple-system, BlinkMacSystemFont,
           'Segoe UI', Helvetica, Arial, sans-serif;
       }
     </style>
   </head>
-  <body class="bg-bg-tertiary text-text-primary">
+  <body class="bg-bg-base text-text-primary">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

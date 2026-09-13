@@ -33,20 +33,20 @@ beforeEach(() => {
 it('keeps the created key after a failed attach and retries with the separate server password', async () => {
   enrollment.attach.mockRejectedValueOnce(new Error('Server password rejected'));
   setup(); const user = userEvent.setup();
-  await user.type(screen.getByLabelText('New Encryption Password', { exact: false }), 'local encryption password');
-  await user.type(screen.getByLabelText('Confirm Password', { exact: false }), 'local encryption password');
-  await user.type(screen.getByLabelText('Current Server Password', { exact: false }), 'wrong server password');
+  await user.type(screen.getByLabelText('New encryption password', { exact: false }), 'local encryption password');
+  await user.type(screen.getByLabelText('Confirm password', { exact: false }), 'local encryption password');
+  await user.type(screen.getByLabelText('Current server password', { exact: false }), 'wrong server password');
   await user.type(screen.getByLabelText('Two-factor or backup code'), '123456');
-  await user.click(screen.getByRole('button', { name: 'Secure Account' }));
+  await user.click(screen.getByRole('button', { name: 'Secure account' }));
   expect(await screen.findByText('Server password rejected')).toBeInTheDocument();
-  expect(screen.queryByText('Recovery Phrase', { exact: true })).not.toBeInTheDocument();
+  expect(screen.queryByText('Recovery phrase', { exact: true })).not.toBeInTheDocument();
   expect(create).toHaveBeenCalledWith('alice', 'local encryption password', undefined);
   expect(enrollment.attach.mock.calls[0][1]).toBe('wrong server password');
   expect(enrollment.attach.mock.calls[0][2]).toBe('123456');
-  await user.clear(screen.getByLabelText('Current Server Password', { exact: false }));
-  await user.type(screen.getByLabelText('Current Server Password', { exact: false }), 'correct server password');
-  await user.click(screen.getByRole('button', { name: 'Secure Account' }));
-  expect(await screen.findByText('Recovery Phrase', { exact: true })).toBeInTheDocument();
+  await user.clear(screen.getByLabelText('Current server password', { exact: false }));
+  await user.type(screen.getByLabelText('Current server password', { exact: false }), 'correct server password');
+  await user.click(screen.getByRole('button', { name: 'Secure account' }));
+  expect(await screen.findByText('Recovery phrase', { exact: true })).toBeInTheDocument();
   expect(create).toHaveBeenCalledTimes(1);
   expect(enrollment.attach.mock.calls[1][0].scope).toEqual({ serverId: 'a', userId: '42' });
   expect(enrollment.attach.mock.calls[1][1]).toBe('correct server password');
@@ -58,10 +58,10 @@ it('keeps the created key after a failed attach and retries with the separate se
 it('unlocks a saved identity instead of replacing it after reopening setup', async () => {
   useAccountStore.setState({ publicKey: 'a'.repeat(64), isUnlocked: false });
   setup(); const user = userEvent.setup();
-  await user.type(screen.getByLabelText('Encryption Password', { exact: false }), 'existing encryption password');
-  await user.type(screen.getByLabelText('Current Server Password', { exact: false }), 'server password');
-  await user.click(screen.getByRole('button', { name: 'Secure Account' }));
-  expect(await screen.findByText('Recovery Phrase', { exact: true })).toBeInTheDocument();
+  await user.type(screen.getByLabelText('Encryption password', { exact: false }), 'existing encryption password');
+  await user.type(screen.getByLabelText('Current server password', { exact: false }), 'server password');
+  await user.click(screen.getByRole('button', { name: 'Secure account' }));
+  expect(await screen.findByText('Recovery phrase', { exact: true })).toBeInTheDocument();
   expect(unlock).toHaveBeenCalledWith('existing encryption password'); expect(create).not.toHaveBeenCalled();
 });
 
@@ -79,5 +79,5 @@ it('waits for profile hydration before binding a reloaded setup page', async () 
   expect(screen.getByText('Waiting for your server account')).toBeInTheDocument();
   act(() => useServerListStore.setState({ servers: [server] }));
   expect(await screen.findByLabelText('Username', { exact: false })).toHaveValue('alice');
-  expect(screen.getByRole('button', { name: 'Secure Account' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Secure account' })).toBeInTheDocument();
 });

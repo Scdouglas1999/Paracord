@@ -1,25 +1,41 @@
-import { useServerListStore } from '../../../stores/serverListStore';
-import { act, render, screen, fireEvent } from '@testing-library/react';
-import { MemoryRouter, Routes, Route, useLocation } from 'react-router';
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { UnifiedSidebar } from './UnifiedSidebar';
-import { useVoiceStore } from '../../../stores/voiceStore';
 import { useAuthStore } from '../../../stores/authStore';
-import { useUIStore } from '../../../stores/uiStore';
 import { usePresenceStore } from '../../../stores/presenceStore';
+import { useServerListStore } from '../../../stores/serverListStore';
+import { useUIStore } from '../../../stores/uiStore';
+import { useVoiceStore } from '../../../stores/voiceStore';
+import { useBuildingLights } from '../../../hooks/useLights';
 import { useUnifiedConversations } from '../../../hooks/useUnifiedConversations';
-import type { ConversationEntry } from '../../../lib/attention/conversationModel';
-import type { UnifiedConversations, FriendRequestEntry } from '../../../hooks/useUnifiedConversations';
+import {
+  buildingLight,
+  personLight,
+  textRoomLight,
+  voiceRoomLight,
+  type RoomLight,
+} from '../../../lib/attention/light';
+import type { UnifiedConversations } from '../../../hooks/useUnifiedConversations';
 
-// MiniVoiceBar pulls in livekit-client + the full voice pipeline; stub it so the
-// CallDock behaviour (renders only when connected) can be asserted in isolation.
-vi.mock('../../voice/MiniVoiceBar', () => ({
-  MiniVoiceBar: () => <div data-testid="mini-voice-bar" />,
+/**
+ * The sidebar container (docs/lantern-stage-spec.md §7.1).
+ *
+ * What is asserted here is the wiring the column cannot see: that the buildings
+ * come from WP1's light selector, that the counts come from the conversation
+ * merge, that Needs-you has left the column for Home, that opening a building
+ * activates its account first, and that the mute / mark-read / leave menu the
+ * deleted `SpacesList` owned still exists.
+ */
+
+vi.mock('../../../hooks/useLights', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../hooks/useLights')>()),
+  useBuildingLights: vi.fn(),
 }));
-
-// The create/join-server modal is heavy (fetches templates on mount); stub it so the
-// "Add a space" affordance can be asserted to OPEN it without its side effects.
+vi.mock('../../../hooks/useUnifiedConversations', () => ({
+  useUnifiedConversations: vi.fn(),
+}));
 vi.mock('../../guild/CreateGuildModal', () => ({
   CreateGuildModal: ({ onClose }: { onClose: () => void }) => (
     <div data-testid="create-guild-modal">
@@ -29,53 +45,55 @@ vi.mock('../../guild/CreateGuildModal', () => ({
     </div>
   ),
 }));
+// The call dock is WP3's surface (it renders their on-air pill); the column
+// only owns the slot it sits in, so it is stubbed out here.
+vi.mock('./CallDock', () => ({ CallDock: () => null }));
 
-vi.mock('../../../hooks/useUnifiedConversations', () => ({
-  useUnifiedConversations: vi.fn(),
-}));
+const SCOPE = { serverId: 'srv', userId: 'user-1' };
+const NOW = 1_800_000_000_000;
+const MARA = personLight({ userId: '101', name: 'Mara', status: 'online' });
 
-function entry(over: Partial<ConversationEntry> & { key: string }): ConversationEntry {
-  return {
-    serverId: 'srv',
-    scope: { serverId: 'srv', userId: 'user-1' },
-    channelId: over.key.split(':')[1] ?? '0',
+function text(name: string, channelId: string, over: Partial<Parameters<typeof textRoomLight>[0]> = {}): RoomLight {
+  return textRoomLight({
+    scope: SCOPE,
     guildId: 'g1',
-    userId: null,
-    kind: 'guild_text',
-    title: 'channel',
-    contextLabel: null,
-    lastActivityId: null,
-    unread: false,
-    mentionCount: 0,
-    isDMUnread: false,
-    isThreadReply: false,
-    hasVoiceActivity: false,
-    pinned: false,
+    channelId,
+    name,
+    candidates: [],
+    nowMs: NOW,
     ...over,
-    key: JSON.stringify([(over.scope?.serverId ?? 'srv'), (over.scope?.userId ?? 'user-1'), over.channelId ?? over.key.split(':')[1] ?? '0']),
-  };
+  });
 }
 
-function request(over: Partial<FriendRequestEntry> & { userId: string }): FriendRequestEntry {
-  return { key: `request:${over.userId}`, username: 'friend', createdMs: null, ...over };
-}
+const LIT_VOICE = voiceRoomLight({
+  scope: SCOPE,
+  guildId: 'g1',
+  channelId: '2002',
+  name: 'Shop floor',
+  occupants: [{ person: MARA, speaking: true }],
+  nowMs: NOW,
+});
+
+const KESTREL = buildingLight({
+  scope: SCOPE,
+  guildId: 'g1',
+  name: 'Kestrel Robotics',
+  rooms: [LIT_VOICE, text('build-log', '2001')],
+  members: [MARA],
+  memberCount: 24,
+});
 
 function conversations(over: Partial<UnifiedConversations> = {}): UnifiedConversations {
   return {
-    needsYou: [entry({ key: 'srv:1', title: 'urgent-channel', mentionCount: 3 })],
+    needsYou: [],
     needsYouOverflowCount: 0,
-    pinned: [entry({ key: 'srv:2', title: 'pinned-channel', pinned: true })],
-    recent: [entry({ key: 'srv:3', title: 'lounge-channel' })],
-    spaces: [
-      { scope: { serverId: 'srv', userId: 'user-1' }, key: JSON.stringify(['srv', 'user-1', 'g1']), id: 'g1', name: 'Emerald HQ', icon: null, serverId: 'srv' },
-      { scope: { serverId: 'srv', userId: 'user-1' }, key: JSON.stringify(['srv', 'user-1', 'g2']), id: 'g2', name: 'Side Space', icon: null, serverId: 'srv' },
-    ],
+    pinned: [],
+    recent: [],
+    spaces: [],
     requests: [],
     ...over,
   };
 }
-
-const mockedHook = vi.mocked(useUnifiedConversations);
 
 function LocationProbe() {
   const loc = useLocation();
@@ -96,188 +114,90 @@ function renderSidebar(initialPath = '/app') {
 }
 
 beforeEach(() => {
-  mockedHook.mockReturnValue(conversations());
+  vi.mocked(useBuildingLights).mockReturnValue([KESTREL]);
+  vi.mocked(useUnifiedConversations).mockReturnValue(conversations());
   usePresenceStore.setState({ presences: new Map(), presenceOrder: new Map() });
-  useAuthStore.setState({ user: { id: 'u1', username: 'Wren', flags: 0 } as never });
-  useUIStore.setState({ sidebarCollapsed: false, sidebarWidth: 300 });
+  useAuthStore.setState({
+    user: { id: 'user-1', username: 'sam.douglas', flags: 0 } as never,
+    settings: { status: 'online', custom_status: null } as never,
+  });
+  useUIStore.setState({ sidebarCollapsed: false });
   useVoiceStore.setState({ connected: false });
-  useServerListStore.setState({ activeServerId: 'srv', servers: [{ id: 'srv', url: 'https://srv.example', name: 'Test', token: 'token', userId: 'user-1', user: { id: 'user-1', username: 'Wren', flags: 0 } as never, connected: true }] });
+  useServerListStore.setState({
+    activeServerId: 'srv',
+    servers: [
+      {
+        id: 'srv',
+        url: 'https://srv.example',
+        name: 'Test',
+        token: 'token',
+        userId: 'user-1',
+        user: { id: 'user-1', username: 'sam.douglas', flags: 0 } as never,
+        connected: true,
+      },
+    ],
+  });
 });
 
 describe('UnifiedSidebar', () => {
-  it('renders the search entry and every conversation section from the unified hook', () => {
+  it('is a 276px buildings column on the street, fed by the light selector', () => {
     renderSidebar();
-
-    expect(screen.getByRole('complementary', { name: 'Navigation' })).toHaveClass(
-      'w-[88vw]',
-      'md:w-[min(var(--preferred-sidebar-width),32vw)]',
-    );
-    expect(screen.getByRole('button', { name: /open command palette/i })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Needs you' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Pinned' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Recent' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Spaces' })).toBeInTheDocument();
-
-    expect(screen.getByText('urgent-channel')).toBeInTheDocument();
-    expect(screen.getByText('pinned-channel')).toBeInTheDocument();
-    expect(screen.getByText('lounge-channel')).toBeInTheDocument();
-    expect(screen.getByText('Emerald HQ')).toBeInTheDocument();
+    const column = screen.getByRole('complementary', { name: 'Navigation' });
+    expect(column).toHaveClass('md:w-[calc(var(--w-buildings-column)+var(--gutter)+var(--gutter))]');
+    expect(screen.getByRole('listbox', { name: 'Buildings and rooms' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Kestrel Robotics' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Shop floor/ })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /build-log/ })).toBeInTheDocument();
   });
 
-  it('renders the three fixed anchor rows above the ranked sections', () => {
-    renderSidebar();
-    const home = screen.getByRole('option', { name: /^Home$/ });
-    const friends = screen.getByRole('option', { name: /^Friends$/ });
-    const messages = screen.getByRole('option', { name: /^Messages$/ });
-    // Anchors take the first three flat roving ordinals.
-    expect(home).toHaveAttribute('data-nav-index', '0');
-    expect(friends).toHaveAttribute('data-nav-index', '1');
-    expect(messages).toHaveAttribute('data-nav-index', '2');
-    // No friend requests → no badge on Friends.
-    expect(screen.queryByTestId('anchor-badge-friends')).not.toBeInTheDocument();
-  });
-
-  it('marks the anchor whose route is active', () => {
-    renderSidebar('/app/friends');
-    expect(screen.getByRole('option', { name: /^Friends$/ })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByRole('option', { name: /^Home$/ })).toHaveAttribute('aria-selected', 'false');
-  });
-
-  it('navigates when an anchor is clicked', () => {
-    renderSidebar('/app');
-    fireEvent.click(screen.getByRole('option', { name: /^Messages$/ }));
-    expect(screen.getByTestId('pathname')).toHaveTextContent('/app/dms');
-  });
-
-  it('shows an emerald request badge on Friends and a request row in Needs-you', () => {
-    mockedHook.mockReturnValue(
-      conversations({
-        requests: [
-          request({ userId: 'a', username: 'Ada' }),
-          request({ userId: 'b', username: 'Bo' }),
-        ],
-      }),
+  it('has no Needs-you section — Home owns the list and keeps the count', () => {
+    vi.mocked(useUnifiedConversations).mockReturnValue(
+      conversations({ needsYouOverflowCount: 3 }),
     );
     renderSidebar();
-
-    expect(screen.getByTestId('anchor-badge-friends')).toHaveTextContent('2');
-    // A request row surfaces in Needs-you and routes to the friends surface on click.
-    const row = screen.getByRole('option', { name: /Ada sent a friend request/ });
-    expect(row).toBeInTheDocument();
-    fireEvent.click(row);
-    expect(screen.getByTestId('pathname')).toHaveTextContent('/app/friends');
+    expect(screen.queryByRole('heading', { name: 'Needs you' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('3 conversations need you')).toHaveTextContent('3');
   });
 
-  it('renders a persistent "Add a space" row that opens the create-guild modal', () => {
+  it('pins the account plate to the bottom with its light in words', () => {
     renderSidebar();
-    expect(screen.queryByTestId('create-guild-modal')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('option', { name: 'Add a space' }));
+    expect(
+      screen.getByRole('button', { name: /sam\.douglas — Lights on\. Open account menu/ }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open user settings' })).toBeInTheDocument();
+  });
+
+  it('opens a building Lobby, and a room inside it', () => {
+    renderSidebar();
+    fireEvent.click(screen.getByRole('option', { name: /Kestrel Robotics lobby/ }));
+    expect(screen.getByTestId('pathname')).toHaveTextContent('/app/guilds/g1');
+
+    fireEvent.click(screen.getByRole('option', { name: /build-log/ }));
+    expect(screen.getByTestId('pathname')).toHaveTextContent('/app/guilds/g1/channels/2001');
+  });
+
+  it('keeps the building context menu the old Spaces list owned', () => {
+    renderSidebar();
+    fireEvent.contextMenu(screen.getByRole('option', { name: /Kestrel Robotics lobby/ }));
+    const menu = screen.getByRole('menu');
+    expect(within(menu).getByText('Mute building')).toBeInTheDocument();
+    expect(within(menu).getByText('Mark as read')).toBeInTheDocument();
+    expect(within(menu).getByText('Leave building')).toBeInTheDocument();
+  });
+
+  it('offers the create/join flow from the persistent Add a building row', () => {
+    renderSidebar();
+    fireEvent.click(screen.getByRole('option', { name: 'Add a building' }));
     expect(screen.getByTestId('create-guild-modal')).toBeInTheDocument();
   });
 
-  it('renders UserPanel in the footer', () => {
-    renderSidebar();
-    // UserPanel exposes the status/menu control + settings control.
-    expect(screen.getByRole('button', { name: /change status/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /open user settings/i })).toBeInTheDocument();
-  });
-
-  it('shows the CallDock only when voice is connected', () => {
-    const { rerender } = renderSidebar();
-    expect(screen.queryByTestId('call-dock')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('mini-voice-bar')).not.toBeInTheDocument();
-
-    act(() => {
-      useVoiceStore.setState({ connected: true });
-    });
-    rerender(
-      <MemoryRouter>
-        <UnifiedSidebar />
-      </MemoryRouter>,
-    );
-
-    expect(screen.getByTestId('call-dock')).toBeInTheDocument();
-    expect(screen.getByTestId('mini-voice-bar')).toBeInTheDocument();
-  });
-
-  it('assigns flat roving-tabindex ordinals across sections (Anchors → Needs-you → Pinned → Recent → Spaces → Add a space)', () => {
-    renderSidebar();
-    const rows = screen.getAllByRole('option');
-    const indices = rows.map((r) => r.getAttribute('data-nav-index'));
-    // 3 anchors + 1 needsYou + 1 pinned + 1 recent + 2 spaces + 1 add-a-space, contiguous.
-    expect(indices).toEqual(['0', '1', '2', '3', '4', '5', '6', '7', '8']);
-  });
-
-  it('caps Recent at five rows by default and expands the list in place', () => {
-    const recent = Array.from({ length: 11 }, (_, i) =>
-      entry({ key: `srv:r${i}`, title: `recent-${i}` }),
-    );
-    mockedHook.mockReturnValue(conversations({ recent }));
-    renderSidebar();
-
-    expect(screen.getAllByRole('option', { name: /recent-/ })).toHaveLength(5);
-    expect(screen.getByRole('heading', { name: 'Spaces' })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Show 6 more' }));
-    expect(screen.getAllByRole('option', { name: /recent-/ })).toHaveLength(11);
-    expect(screen.getByRole('button', { name: 'Show fewer' })).toBeInTheDocument();
-  });
-
-  it('collapses to the 64px icon rail with anchors, space avatars and a mini CallDock', () => {
+  it('keeps the buildings reachable when collapsed to the rail', () => {
     useUIStore.setState({ sidebarCollapsed: true });
-    useVoiceStore.setState({ connected: true });
     renderSidebar();
-
     const rail = screen.getByRole('complementary', { name: 'Navigation' });
     expect(rail).toHaveAttribute('data-collapsed', 'true');
-
-    // Full list sections are gone; anchors + space avatars + collapsed call dock remain.
-    expect(screen.queryByRole('heading', { name: 'Recent' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Home' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Friends' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Add a space' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'Emerald HQ' })).toBeInTheDocument();
-    expect(screen.getByTestId('call-dock-collapsed')).toBeInTheDocument();
+    const mark = within(rail).getByRole('option', { name: /Kestrel Robotics/ });
+    fireEvent.click(mark);
+    expect(screen.getByTestId('pathname')).toHaveTextContent('/app/guilds/g1');
   });
-
-  it('flags spaces with a live attention signal in the collapsed rail', () => {
-    // needsYou entry belongs to g1 → g1 avatar shows an attention dot, g2 does not.
-    useUIStore.setState({ sidebarCollapsed: true });
-    renderSidebar();
-    expect(screen.getAllByTestId('space-attention-dot')).toHaveLength(1);
-  });
-
-  it('flags the collapsed Friends anchor with a dot when requests are pending', () => {
-    useUIStore.setState({ sidebarCollapsed: true });
-    mockedHook.mockReturnValue(conversations({ requests: [request({ userId: 'a' })] }));
-    renderSidebar();
-    expect(screen.getByTestId('anchor-attention-dot')).toBeInTheDocument();
-  });
-});
-
-
-it('separates collapsed selection and attention for colliding guild IDs', () => {
-  useUIStore.setState({ sidebarCollapsed: true });
-  useServerListStore.setState(state => ({ servers: [...state.servers, {
-    ...state.servers[0], id: 'other', url: 'https://other.example', name: 'Other',
-  }] }));
-  const otherScope = { serverId: 'other', userId: 'user-1' };
-  mockedHook.mockReturnValue(conversations({
-    needsYou: [entry({ key: 'other:1', scope: otherScope, serverId: 'other', guildId: 'same', mentionCount: 2 })],
-    recent: [], pinned: [],
-    spaces: [
-      { scope: { serverId: 'srv', userId: 'user-1' }, key: JSON.stringify(['srv', 'user-1', 'same']), id: 'same', name: 'Active space', icon: null, serverId: 'srv' },
-      { scope: otherScope, key: JSON.stringify(['other', 'user-1', 'same']), id: 'same', name: 'Background space', icon: null, serverId: 'other' },
-    ],
-  }));
-  renderSidebar('/app/guilds/same');
-  const active = screen.getByRole('option', { name: 'Active space' });
-  const background = screen.getByRole('option', { name: 'Background space' });
-  expect(active).toHaveAttribute('aria-selected', 'true');
-  expect(background).toHaveAttribute('aria-selected', 'false');
-  expect(screen.getAllByTestId('space-attention-dot')).toHaveLength(1);
-  expect(background).toContainElement(screen.getByTestId('space-attention-dot'));
-  fireEvent.click(background);
-  expect(useServerListStore.getState().activeServerId).toBe('other');
-  expect(background).toHaveAttribute('aria-selected', 'true');
 });

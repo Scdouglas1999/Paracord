@@ -8,6 +8,16 @@ import { isGuildDetail, isGuildSummaryList } from '../src/api/generated/validato
 // client/dist/ and a throwaway SQLite database. This is the only E2E coverage
 // that exercises embedded-asset serving, real auth, and real REST contract
 // shapes end to end. Keep it lean — the mocked smoke remains the fast gate.
+//
+// Every case here registers its own account, because the real server has real
+// accounts and sharing one between cases would make them order-dependent. Added
+// up across the whole real-server project that is more `/api/v1/auth/*` traffic
+// per minute from 127.0.0.1 than the product's per-IP auth ceiling allows for a
+// single client, so the harness raises that ceiling for its throwaway instance
+// (see PARACORD_HTTP_RATE_LIMIT_* in e2e/real-server-harness.mjs). Do not
+// respond to a 429 here by sleeping or retrying: a 429 in this project means the
+// traffic shape changed, and the number that needs looking at is the request
+// count, not the wait.
 
 const PORT = process.env.PARACORD_E2E_PORT ?? '18150';
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -102,31 +112,31 @@ test('real identity setup survives rejected credentials and reload, then adopts 
   await page.goto('/login');
   await page.locator('input[autocomplete="username"]').fill(email);
   await page.locator('input[autocomplete="current-password"]').fill(password);
-  await page.getByRole('button', { name: 'Log In', exact: true }).click();
+  await page.getByRole('button', { name: 'Log in', exact: true }).click();
   await expect(page).toHaveURL(/\/app/);
   await page.goto(`/setup?migrate=1&server=__local__&user=${account.id}`);
-  await page.getByLabel('New Encryption Password', { exact: false }).fill('Separate encryption password');
-  await page.getByLabel('Confirm Password', { exact: false }).fill('Separate encryption password');
-  await page.getByLabel('Current Server Password', { exact: false }).fill('Wrong-Server-Password-123!');
-  await page.getByRole('button', { name: 'Secure Account' }).click();
+  await page.getByLabel('New encryption password', { exact: false }).fill('Separate encryption password');
+  await page.getByLabel('Confirm password', { exact: false }).fill('Separate encryption password');
+  await page.getByLabel('Current server password', { exact: false }).fill('Wrong-Server-Password-123!');
+  await page.getByRole('button', { name: 'Secure account' }).click();
   await expect(page.getByText('Server authentication was rejected.', { exact: false })).toBeVisible();
   const original = await page.evaluate(() => localStorage.getItem('paracord:encrypted-identity:v1'));
   expect(original).toBeTruthy();
   await page.reload();
-  await page.getByLabel('Encryption Password', { exact: false }).fill('Separate encryption password');
-  await page.getByLabel('Current Server Password', { exact: false }).fill(password);
+  await page.getByLabel('Encryption password', { exact: false }).fill('Separate encryption password');
+  await page.getByLabel('Current server password', { exact: false }).fill(password);
   const profiles: Array<{ status: number; authorization?: string }> = [];
   page.on('response', response => {
     if (response.url().endsWith('/api/v1/users/@me')) profiles.push({ status: response.status(), authorization: response.request().headers().authorization });
   });
   const attached = page.waitForResponse(response => response.url().endsWith('/api/v1/auth/attach-public-key'));
-  await page.getByRole('button', { name: 'Secure Account' }).click();
+  await page.getByRole('button', { name: 'Secure account' }).click();
   const response = await attached;
   expect(response.status()).toBe(200);
   const result = await response.json();
   expect(result.user.id).toBe(account.id);
   expect(result.user.public_key).toBe(JSON.parse(original!).publicKey);
-  await expect(page.getByRole('heading', { name: 'Recovery Phrase' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Recovery phrase' })).toBeVisible();
   await expect.poll(() => profiles.some(profile => profile.status === 200 && profile.authorization === `Bearer ${result.token}`)).toBe(true);
   expect(await page.evaluate(() => localStorage.getItem('paracord:encrypted-identity:v1'))).toBe(original);
   await page.getByRole('checkbox').check(); await page.getByRole('button', { name: 'Continue' }).click();
@@ -141,7 +151,7 @@ test('real identity setup survives rejected credentials and reload, then adopts 
   });
   async function logout() {
     await page.getByRole('button', { name: 'Open user settings', exact: true }).click();
-    await page.getByRole('button', { name: 'Log Out', exact: true }).click();
+    await page.getByRole('button', { name: 'Log out', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Welcome back' })).toBeVisible();
   }
   await logout();
@@ -151,7 +161,7 @@ test('real identity setup survives rejected credentials and reload, then adopts 
   await page.getByLabel('Email', { exact: false }).fill(secondEmail);
   await page.getByLabel('Username', { exact: false }).fill(`second${unique}`);
   await page.getByLabel('Password', { exact: false }).first().fill(password);
-  await page.getByLabel('Confirm Password', { exact: false }).fill(password);
+  await page.getByLabel('Confirm password', { exact: false }).fill(password);
   await page.getByRole('checkbox').check();
   const registrationResponse = page.waitForResponse(response => response.url().endsWith('/auth/register'));
   await page.getByRole('button', { name: 'Continue', exact: true }).click();
@@ -164,7 +174,7 @@ test('real identity setup survives rejected credentials and reload, then adopts 
   await logout();
   await page.locator('input[autocomplete="username"]').fill(secondEmail);
   await page.locator('input[autocomplete="current-password"]').fill(password);
-  await page.getByRole('button', { name: 'Log In', exact: true }).click();
+  await page.getByRole('button', { name: 'Log in', exact: true }).click();
   await expect(page).toHaveURL(/\/app/);
   await page.getByRole('button', { name: 'Open user settings', exact: true }).click();
   expect(implicitAttachments).toEqual([]);
@@ -249,13 +259,13 @@ test('real message edits retain readable history after reload', async ({ page, r
     await page.goto('/login');
     await page.locator('input[autocomplete="username"]').fill(email);
     await page.locator('input[autocomplete="current-password"]').fill(password);
-    await page.getByRole('button', { name: 'Log In', exact: true }).click();
+    await page.getByRole('button', { name: 'Log in', exact: true }).click();
     await expect(page).toHaveURL(/\/app/);
     await page.goto(`/app/guilds/${guild.id}/channels/${channel.id}`);
     await page.getByRole('button', { name: 'Skip tour', exact: true }).click();
     await page.getByRole('button', { name: 'Close welcome screen', exact: true }).click();
     const original = 'First version from the real composer';
-    await page.getByPlaceholder('Message #edit-history', { exact: true }).fill(original);
+    await page.getByPlaceholder('Say something in edit-history', { exact: true }).fill(original);
     const creation = page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith(`/channels/${channel.id}/messages`));
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
     const created = await creation; expect(created.status()).toBe(201);
@@ -266,7 +276,7 @@ test('real message edits retain readable history after reload', async ({ page, r
     const feed = page.getByLabel('Message history');
     for (const content of ['Second version from the real editor', 'Final version after two edits']) {
       await feed.getByText(preceding, { exact: true }).click({ button: 'right' });
-      await page.getByRole('menuitem', { name: 'Edit Message', exact: true }).click();
+      await page.getByRole('menuitem', { name: 'Edit message', exact: true }).click();
       await page.getByRole('textbox', { name: /Edit message from/ }).fill(content);
       const update = page.waitForResponse(response => response.request().method() === 'PATCH' && response.url().endsWith(`/messages/${message.id}`));
       await page.getByRole('button', { name: 'Save', exact: true }).click();
@@ -279,10 +289,11 @@ test('real message edits retain readable history after reload', async ({ page, r
     const historyResponse = page.waitForResponse(response => response.url().endsWith(`/messages/${message.id}/edits`));
     await page.getByRole('button', { name: `Show edit history for message ${message.id}`, exact: true }).click();
     expect((await historyResponse).status()).toBe(200);
-    const history = page.getByRole('dialog', { name: 'Edit History', exact: true });
+    const history = page.getByRole('dialog', { name: 'Edit history', exact: true });
     await expect(history.getByText(original, { exact: true })).toBeVisible();
     await expect(history.getByText('Second version from the real editor', { exact: true })).toBeVisible();
-    await expect(history.getByText(/Version [12] --/)).toHaveCount(2);
+    // WP7 restyled the dialog: each version is "Version N · <time>" in the mono meta face.
+    await expect(history.getByText(/Version [12] ·/)).toHaveCount(2);
     await page.screenshot({ path: testInfo.outputPath('edit-history.png'), fullPage: true });
     await page.keyboard.press('Escape'); await expect(history).not.toBeVisible();
     // Real network loss must report failure, never an empty successful history.
@@ -401,14 +412,21 @@ test('Home follows live mention creation, edits and deletion and opens the survi
     await page.goto('/login');
     await page.locator('input[autocomplete="username"]').fill(member.email);
     await page.locator('input[autocomplete="current-password"]').fill(password);
-    await page.getByRole('button', { name: 'Log In', exact: true }).click();
+    await page.getByRole('button', { name: 'Log in', exact: true }).click();
     await expect(page).toHaveURL(/\/app/);
     await page.goto('/app');
     const home = page.getByRole('main');
     await expect(home.getByRole('heading', { level: 1 })).toBeVisible();
     // Give the live transport an observed authenticated READY before emitting
     // the mention. No reload or mocked gateway event is used for this check.
-    await expect(home.getByRole('region', { name: 'Continue in Attention verification' })).toBeVisible();
+    // §7.5 replaced the per-room "Continue in <room>" region. The building the
+    // member just joined is the landmark that is always there — a dark building
+    // is a `group`, a lit one an `article` — and it is enough to know Home has
+    // rendered before the wire check below.
+    await expect(
+      home.getByRole('group', { name: 'Attention verification' })
+        .or(home.getByRole('article', { name: 'Attention verification' })),
+    ).toBeVisible();
     await page.waitForFunction(id => (window as unknown as { attentionWire: { readyUser: string } }).attentionWire.readyUser === id, member.user.id);
     const sent = await ownerApi.post(`${BASE}/api/v1/channels/${channel.id}/messages`, { data: { content: `<@${member.user.id}> Please review the original design`, nonce: 'real-home-attention' } });
     expect(sent.status()).toBe(201);
@@ -417,7 +435,9 @@ test('Home follows live mention creation, edits and deletion and opens the survi
     expect(tail.status()).toBe(201);
     const attention = home.getByRole('region', { name: 'Needs you' });
     await page.waitForFunction(id => (window as unknown as { attentionWire: { mentions: string[] } }).attentionWire.mentions.includes(id), message.id);
-    await expect(attention.getByText('1 mention', { exact: true })).toBeVisible();
+    // §7.5 names WHO, not how many: "<author> mentioned you", with the count
+    // kept only when the author cannot be named (`needsYouReason`).
+    await expect(attention.getByText(/mentioned you/)).toBeVisible();
     await expect(attention.getByText(/@you Please review the original design/)).toBeVisible();
     await expect(attention.getByText(/Later unrelated chatter/)).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath('home-exact-mention.png'), fullPage: true });
@@ -426,14 +446,16 @@ test('Home follows live mention creation, edits and deletion and opens the survi
     const survivor = await second.json();
     const later = await ownerApi.post(`${BASE}/api/v1/channels/${channel.id}/messages`, { data: { content: 'Still later unrelated chatter', nonce: 'real-home-later' } });
     expect(later.status()).toBe(201);
-    await expect(attention.getByText('2 mentions', { exact: true })).toBeVisible();
+    // A second mention in the same room is the same row, still previewing the
+    // oldest unread mention — the row is one piece of work, not two.
+    await expect(attention.getByRole('listitem')).toHaveCount(1);
     await expect(attention.getByText(/@you Please review the original design/)).toBeVisible();
     const edited = await ownerApi.patch(`${BASE}/api/v1/channels/${channel.id}/messages/${message.id}`, { data: { content: `<@${member.user.id}> Review the revised original design` } });
     expect(edited.ok(), await edited.text()).toBe(true);
     await expect(attention.getByText(/Review the revised original design/)).toBeVisible();
     const deleted = await ownerApi.delete(`${BASE}/api/v1/channels/${channel.id}/messages/${message.id}`);
     expect(deleted.ok(), await deleted.text()).toBe(true);
-    await expect(attention.getByText('1 mention', { exact: true })).toBeVisible();
+    await expect(attention.getByText(/mentioned you/)).toBeVisible();
     await expect(attention.getByText(/The surviving design decision/)).toBeVisible();
     await expect(attention.getByText(/Review the revised original design/)).toHaveCount(0);
     await expect(attention.getByText(/Still later unrelated chatter/)).toHaveCount(0);
@@ -441,7 +463,8 @@ test('Home follows live mention creation, edits and deletion and opens the survi
     if (await homeTour.isVisible()) await homeTour.click();
     await page.screenshot({ path: testInfo.outputPath('home-surviving-mention.png'), fullPage: true });
     const jump = page.waitForURL(new RegExp(`/channels/${channel.id}\\?message=${survivor.id}`));
-    await attention.getByRole('button', { name: /Review mentions/ }).click();
+    // §7.5: a Needs-you row carries one action, labelled for the room it opens.
+    await attention.getByRole('button', { name: 'Open decisions', exact: true }).click();
     await jump;
     const skip = page.getByRole('button', { name: 'Skip tour', exact: true });
     if (await skip.isVisible()) await skip.click();
@@ -454,16 +477,22 @@ test('Home follows live mention creation, edits and deletion and opens the survi
     expect(read.ok(), await read.text()).toBe(true);
     await page.goto('/app');
     await page.waitForFunction(id => (window as unknown as { attentionWire: { readyUser: string } }).attentionWire.readyUser === id, member.user.id);
-    await expect(page.getByRole('main').getByRole('region', { name: 'Needs you' })).toHaveCount(0);
-    await expect(page.getByRole('main').getByText(/Attention verification is quiet/)).toBeVisible();
+    // §7.5 keeps the Needs-you section on the surface and lets it say so:
+    // "Nothing is waiting on you right now." It is no longer removed when
+    // empty, because an absent section cannot tell you it checked.
+    await expect(page.getByRole('main').getByRole('region', { name: 'Needs you' }).getByRole('listitem')).toHaveCount(0);
+    await expect(page.getByRole('main').getByText('Nothing is waiting on you right now.')).toBeVisible();
     const finalSend = await ownerApi.post(`${BASE}/api/v1/channels/${channel.id}/messages`, { data: { content: `<@${member.user.id}> Only unread tail`, nonce: 'real-home-only-tail' } });
     expect(finalSend.status()).toBe(201);
     const finalMessage = await finalSend.json();
     await expect(page.getByRole('main').getByRole('region', { name: 'Needs you' }).getByText(/Only unread tail/)).toBeVisible();
     const finalDelete = await ownerApi.delete(`${BASE}/api/v1/channels/${channel.id}/messages/${finalMessage.id}`);
     expect(finalDelete.ok(), await finalDelete.text()).toBe(true);
-    await expect(page.getByRole('main').getByRole('region', { name: 'Needs you' })).toHaveCount(0);
-    await expect(page.getByRole('main').getByText(/Attention verification is quiet/)).toBeVisible();
+    // §7.5 keeps the Needs-you section on the surface and lets it say so:
+    // "Nothing is waiting on you right now." It is no longer removed when
+    // empty, because an absent section cannot tell you it checked.
+    await expect(page.getByRole('main').getByRole('region', { name: 'Needs you' }).getByRole('listitem')).toHaveCount(0);
+    await expect(page.getByRole('main').getByText('Nothing is waiting on you right now.')).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath('home-deleted-tail-cleared.png'), fullPage: true });
 
   } finally {
@@ -520,7 +549,7 @@ test('real guild contracts keep the welcome member count correct after join and 
     await page.goto('/login');
     await page.locator('input[autocomplete="username"]').fill(member.email);
     await page.locator('input[autocomplete="current-password"]').fill(password);
-    await page.getByRole('button', { name: 'Log In', exact: true }).click();
+    await page.getByRole('button', { name: 'Log in', exact: true }).click();
     await expect(page).toHaveURL(/\/app/);
     await page.goto(`/app/guilds/${guild.id}/channels/${channel.id}`);
     await expect(page.getByText('Welcome aboard', { exact: true })).toBeVisible();

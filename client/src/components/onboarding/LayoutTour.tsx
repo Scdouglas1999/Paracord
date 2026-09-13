@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { motion } from 'framer-motion';
 import { useLocation } from 'react-router';
 import {
   getVersionedStorageItem,
@@ -12,8 +11,8 @@ import {
  * the novel IA introduced in the v1.0 overhaul (layout-spec §1: unified attention
  * sidebar + presence-first guild homes). It is NOT a modal wizard: no full-app
  * dimming overlay — the app stays fully interactive and each step simply anchors a
- * small popover (design-spec §7 Popover) beside an existing landmark and paints a
- * soft emerald focus ring (design-spec §4 `--focus-ring`) over it.
+ * small popover (lantern-stage-spec §8) beside an existing landmark and paints a
+ * soft emerald focus ring (lantern-stage-spec §9 focus ring) over it.
  *
  * Two independent, separately-persisted tours run from this single mount:
  *   • the SHELL tour (steps a + b) fires on the first authenticated shell mount —
@@ -27,8 +26,8 @@ import {
  * silently. Dismissal ("Skip tour", "Done", or Esc) persists via the shared
  * versioned-storage helper so the tour never re-appears.
  *
- * Motion follows design-spec §5 (≤180ms ease-out enter) and inherits AppShell's
- * `MotionConfig reducedMotion="user"`, so reduced-motion users get the fade only.
+ * Motion is the shared §5.1 pc-enter recipe; the app's one reduced-motion
+ * switch (utilities.css's `data-motion` rule) stills it.
  */
 
 type TourName = 'shell' | 'guild';
@@ -60,8 +59,9 @@ const SHELL_STEPS: TourStepDef[] = [
 const GUILD_STEPS: TourStepDef[] = [
   {
     id: 'rooms',
-    // LiveRoomsGrid labels its section "Live rooms" when occupied, else "Rooms".
-    selector: 'section[aria-label="Live rooms"], section[aria-label="Rooms"]',
+    // The Lobby's rooms grid (§7.3). The older "Live rooms" label is kept in
+    // the selector so a tour started against a stale bundle still finds it.
+    selector: 'section[aria-label="Rooms"], section[aria-label="Live rooms"]',
     body: "Spaces open on who's around — jump into a room or pick a channel below.",
     side: 'top',
   },
@@ -267,22 +267,19 @@ export function LayoutTour() {
           left: rect.left - 4,
           width: rect.width + 8,
           height: rect.height + 8,
-          borderRadius: 'var(--radius-md)',
+          borderRadius: 'var(--radius-well)',
           boxShadow: 'var(--focus-ring)',
           pointerEvents: 'none',
           zIndex: 118,
         }}
       />
 
-      <motion.div
+      <div
         ref={tooltipRef}
         role="dialog"
         aria-label="Get to know your workspace"
         aria-describedby={BODY_ID}
         tabIndex={-1}
-        initial={{ opacity: 0, y: 6 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
         onKeyDown={(e) => {
           if (e.key === 'Escape') {
             e.stopPropagation();
@@ -290,13 +287,13 @@ export function LayoutTour() {
           }
         }}
         style={{ position: 'fixed', top: pos.top, left: pos.left, width: TOOLTIP_W }}
-        className="z-[120] rounded-md border border-border-subtle bg-bg-floating p-3 shadow-lg outline-none"
+        className="pc-enter pc-floating z-[120] p-3 outline-none"
       >
-        <p id={BODY_ID} className="text-meta leading-relaxed text-text-primary">
+        <p id={BODY_ID} className="text-label leading-relaxed text-text-primary">
           {step.body}
         </p>
         <div className="mt-3 flex items-center justify-between gap-2">
-          <span className="text-meta tabular-nums text-text-muted">
+          <span className="pc-mono text-meta text-text-faint">
             {steps.length > 1 ? `${active.index + 1} of ${steps.length}` : ''}
           </span>
           <div className="flex items-center gap-1">
@@ -304,7 +301,7 @@ export function LayoutTour() {
               <button
                 type="button"
                 onClick={skip}
-                className="rounded-sm px-2 py-1 text-meta font-medium text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+                className="pc-focusable inline-flex h-[var(--h-control)] items-center rounded-[var(--radius-control)] px-2.5 text-meta font-medium text-text-secondary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary"
               >
                 Skip tour
               </button>
@@ -312,13 +309,13 @@ export function LayoutTour() {
             <button
               type="button"
               onClick={next}
-              className="rounded-sm bg-accent-tint px-2.5 py-1 text-meta font-semibold text-accent-primary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-tint-strong focus-visible:shadow-[var(--focus-ring)]"
+              className="pc-focusable inline-flex h-[var(--h-control)] items-center rounded-[var(--radius-control)] bg-accent-primary px-3 text-meta font-semibold text-text-on-accent transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active"
             >
               {hasMore ? 'Next' : 'Done'}
             </button>
           </div>
         </div>
-      </motion.div>
+      </div>
     </>,
     document.body,
   );

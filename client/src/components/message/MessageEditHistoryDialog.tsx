@@ -58,13 +58,13 @@ function HistoryContents({ scope, channelId, messageId, onClose, onRetry }: Omit
   if (state.kind === 'error') return <div role="alert" className="space-y-3 px-3 py-4 text-sm">
     <p className="font-semibold text-accent-danger">Couldn’t load edit history</p>
     <p className="break-words text-text-secondary">{state.message}</p>
-    <button type="button" onClick={onRetry} className="min-h-11 rounded-sm border border-border-subtle px-3 font-semibold text-text-primary hover:bg-bg-mod-subtle focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]">Retry</button>
+    <button type="button" onClick={onRetry} className="min-h-11 rounded-[var(--radius-control)] bg-bg-raised px-3 text-label font-semibold text-text-primary shadow-[var(--shadow-chip)] hover:bg-bg-mod-strong focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]">Retry</button>
   </div>;
   if (state.entries.length === 0) return <p className="px-3 py-4 text-meta text-text-muted">No earlier versions are available.</p>;
   return <div className="flex flex-col">
-    {state.entries.map((entry, index) => <div key={entry.id} className="border-b border-border-subtle/50 px-3 py-2 last:border-b-0">
-      <div className="mb-0.5 text-[11px] text-text-muted">Version {index + 1} -- {formatTimestamp(entry.edited_at)}</div>
-      <div className="break-words text-sm text-text-secondary">{entry.content}</div>
+    {state.entries.map((entry, index) => <div key={entry.id} className="border-b border-border-subtle px-3 py-2.5 last:border-b-0">
+      <div className="pc-mono mb-0.5 text-meta text-text-faint">Version {index + 1} · {formatTimestamp(entry.edited_at)}</div>
+      <div className="break-words text-body leading-relaxed text-text-secondary">{entry.content}</div>
     </div>)}
   </div>;
 }
@@ -77,12 +77,12 @@ function OwnedHistoryDialog({ scope, channelId, messageId, position, onClose }: 
   useFocusTrap(dialog, true, onClose);
   return createPortal(<div className="fixed inset-0 z-[100]" onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
     <div ref={dialog} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}
-      className="glass-modal absolute max-h-[min(20rem,calc(100dvh-1rem))] w-[min(20rem,calc(100vw-1rem))] overflow-y-auto rounded-md border border-border-subtle shadow-xl backdrop-blur-md focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+      className="pc-dialog absolute max-h-[min(20rem,calc(100dvh-1rem))] w-[min(20rem,calc(100vw-1rem))] overflow-y-auto focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
       style={{ left: `clamp(8px, ${position.x}px, calc(100vw - min(20rem, calc(100vw - 1rem)) - 8px))`,
-        top: `clamp(8px, ${position.y}px, calc(100dvh - min(20rem, calc(100dvh - 1rem)) - 8px))`, boxShadow: 'var(--shadow-lg)' }}>
+        top: `clamp(8px, ${position.y}px, calc(100dvh - min(20rem, calc(100dvh - 1rem)) - 8px))` }}>
       <div className="flex items-center justify-between gap-2 border-b border-border-subtle pl-3 pr-1 text-label font-semibold text-text-primary">
-        <h2 id={titleId}>Edit History</h2>
-        <button type="button" aria-label="Close edit history" onClick={onClose} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-sm hover:bg-bg-mod-subtle focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"><X size={16} /></button>
+        <h2 id={titleId} className="pc-display py-2.5">Edit history</h2>
+        <button type="button" aria-label="Close edit history" onClick={onClose} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-text-muted hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"><X size={16} /></button>
       </div>
       <HistoryContents key={attempt} scope={scope} channelId={channelId} messageId={messageId} onClose={onClose} onRetry={retry} />
     </div>

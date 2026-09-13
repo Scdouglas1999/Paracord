@@ -13,6 +13,7 @@ import {
 } from '../lib/registrationPassword';
 import { ErrorBanner } from '../components/ui/Feedback';
 import { Button } from '../components/ui/Button';
+import { Input } from '../components/ui/Input';
 import { AuthCanvas, AuthCard, AuthHeading, AppMark, Field } from './authScaffold';
 import type { User } from '../types';
 
@@ -37,7 +38,13 @@ export function passwordRulesMismatch(requirements: PasswordRequirements | null)
   return null;
 }
 
-/** Numbered section heading, so the four things being asked for read as steps. */
+/**
+ * Numbered section, so the four things being asked for read as steps.
+ *
+ * A well inside the page's one plate (spec §4): depth is the inset shadow, not
+ * a border. The step number is quiet mono meta, not a filled circle — a badge
+ * that loud would outrank the thing it counts.
+ */
 function Step({
   index,
   title,
@@ -50,18 +57,15 @@ function Step({
   children: React.ReactNode;
 }) {
   return (
-    <section className="flex flex-col gap-4 rounded-md border border-border-subtle bg-bg-mod-subtle p-4 sm:p-5">
-      <div className="flex items-start gap-3">
-        <span
-          aria-hidden="true"
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent-primary text-label font-semibold text-white"
-        >
-          {index}
-        </span>
-        <div className="min-w-0">
-          <h2 className="text-base font-semibold text-text-primary">{title}</h2>
-          <p className="mt-1 text-meta leading-relaxed text-text-secondary">{description}</p>
+    <section className="pc-well flex flex-col gap-4 p-4 sm:p-5">
+      <div className="min-w-0">
+        <div className="flex items-baseline gap-2">
+          <span aria-hidden="true" className="pc-mono text-meta text-text-faint">
+            {index}
+          </span>
+          <h2 className="pc-display text-heading text-text-primary">{title}</h2>
         </div>
+        <p className="mt-1.5 text-meta leading-relaxed text-text-secondary">{description}</p>
       </div>
       <div className="flex flex-col gap-5">{children}</div>
     </section>
@@ -247,8 +251,8 @@ export function InstanceSetupPage() {
   if (checking) {
     return (
       <AuthCanvas>
-        <AuthCard className="max-w-xl">
-          <div className="p-8 sm:p-10">
+        <AuthCard className="max-w-md">
+          <div className="p-7 sm:p-8">
             <AppMark size={40} />
             <p className="mt-6 text-body text-text-secondary">Checking this server…</p>
           </div>
@@ -259,17 +263,12 @@ export function InstanceSetupPage() {
 
   return (
     <AuthCanvas>
-      <AuthCard className="max-w-2xl overflow-hidden">
-        <form onSubmit={handleSubmit} className="flex flex-col gap-6 p-6 sm:p-10">
-          <div className="mb-1">
-            <AppMark size={40} />
-          </div>
-          <AuthHeading mark={false} title="Set up your Paracord server" />
-          <p className="-mt-3 text-body leading-relaxed text-text-secondary">
-            You’re setting up the server itself, not joining one. This creates the owner account —
-            the person who runs this machine — names the server and opens its first space. Everyone
-            who arrives later signs up normally and joins as a member.
-          </p>
+      <AuthCard className="max-w-xl">
+        <form onSubmit={handleSubmit} className="flex flex-col gap-6 p-7 sm:p-8">
+          <AuthHeading
+            title="Set up your Paracord server"
+            subtitle="You’re setting up the server itself, not joining one. This creates the owner account — the person who runs this machine — names the server and opens its first space. Everyone who arrives later signs up normally and joins as a member."
+          />
 
           {/* These messages are instructions, not labels: they must wrap rather
               than ellipsize, or the operator is told something went wrong and
@@ -291,12 +290,12 @@ export function InstanceSetupPage() {
               hint="Paste it exactly as printed — it is used once and then stops working."
               descriptionId={tokenHintId}
             >
-              <input
+              <Input
                 type="text"
                 value={token}
                 onChange={(e) => setToken(e.target.value)}
                 required
-                className="input-field font-mono"
+                className="pc-mono"
                 placeholder="A1B2C3…"
                 autoComplete="off"
                 spellCheck={false}
@@ -311,23 +310,21 @@ export function InstanceSetupPage() {
             description="This account administers the server: settings, moderation, backups. It is a normal account too — you can chat with it."
           >
             <Field label="Username" required hint="Your unique @handle on this server.">
-              <input
+              <Input
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 required
-                className="input-field"
                 placeholder="ada"
                 autoComplete="username"
               />
             </Field>
 
-            <Field label="Display Name" hint="How people see you. You can change it anytime.">
-              <input
+            <Field label="Display name" hint="How people see you. You can change it anytime.">
+              <Input
                 type="text"
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
-                className="input-field"
                 placeholder="Ada Lovelace"
               />
             </Field>
@@ -338,12 +335,11 @@ export function InstanceSetupPage() {
               error={emailError}
               hint={requireEmail ? undefined : 'Optional — used only for password recovery.'}
             >
-              <input
+              <Input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required={requireEmail}
-                className="input-field"
                 placeholder={requireEmail ? 'you@example.com' : 'you@example.com (optional)'}
                 autoComplete="email"
               />
@@ -355,12 +351,11 @@ export function InstanceSetupPage() {
               hint={PASSWORD_REQUIREMENTS_HINT}
               descriptionId={passwordHintId}
             >
-              <input
+              <Input
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
-                className="input-field"
                 placeholder="Choose a strong password"
                 autoComplete="new-password"
                 aria-describedby={passwordHintId}
@@ -368,17 +363,16 @@ export function InstanceSetupPage() {
             </Field>
 
             <Field
-              label="Confirm Password"
+              label="Confirm password"
               required
               error={confirmError}
               descriptionId={confirmErrorId}
             >
-              <input
+              <Input
                 type="password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 required
-                className="input-field"
                 placeholder="Re-enter your password"
                 autoComplete="new-password"
                 aria-describedby={confirmError ? confirmErrorId : undefined}
@@ -393,13 +387,12 @@ export function InstanceSetupPage() {
             description="Shown to everyone who signs in here, so it should say whose community this is."
           >
             <Field label="Server name" required hint="For example: Riverside Studio.">
-              <input
+              <Input
                 type="text"
                 value={instanceName}
                 onChange={(e) => setInstanceName(e.target.value)}
                 required
                 maxLength={100}
-                className="input-field"
                 placeholder="Riverside Studio"
               />
             </Field>
@@ -411,24 +404,23 @@ export function InstanceSetupPage() {
             description="A space is where conversations live. This one is created with a #general channel and a voice room; you can add more later."
           >
             <Field label="First space name" required hint="For example: The Lounge.">
-              <input
+              <Input
                 type="text"
                 value={spaceName}
                 onChange={(e) => setSpaceName(e.target.value)}
                 required
                 minLength={2}
                 maxLength={100}
-                className="input-field"
                 placeholder="The Lounge"
               />
             </Field>
           </Step>
 
-          <Button type="submit" loading={loading} disabled={loading} className="w-full">
+          <Button type="submit" size="lg" loading={loading} disabled={loading} className="w-full">
             Claim this server
           </Button>
 
-          <p className="text-label leading-relaxed text-text-secondary">
+          <p className="text-meta leading-relaxed text-text-secondary">
             Joining someone else’s community instead? You don’t need a claim token — ask them for an
             invite link and sign up there as a member.
           </p>

@@ -6,6 +6,8 @@ import { economyApi, type EconomyLeaderboardEntry, type EconomyProgressResponse 
 import { extractApiError } from '../../api/client';
 import { cn } from '../../lib/utils';
 import { displayName } from '../../lib/displayName';
+import { Chip, EmptyState, ErrorBanner, Well } from '../ui';
+import { Skeleton } from '../ui/Skeleton';
 
 interface GuildEconomyPanelProps {
   guildId: string;
@@ -70,111 +72,113 @@ export function GuildEconomyPanel({ guildId }: GuildEconomyPanelProps) {
   );
 
   return (
-    <div className="flex min-h-full min-w-0 w-full flex-col bg-bg-secondary">
+    <div className="flex min-h-full min-w-0 w-full flex-col bg-bg-plate">
       <div className="flex min-w-0 flex-1 flex-col gap-4 p-4">
         <div>
-          <div className="flex items-center gap-2 text-label text-text-primary">
-            <TrendingUp size={16} className="text-accent-primary" />
-            <span className="font-display text-[15px] font-semibold tracking-[-0.01em]">Guild Leaderboard</span>
+          <div className="flex items-center gap-2 text-text-primary">
+            <TrendingUp size={16} className="text-accent-primary" aria-hidden />
+            <span className="pc-display text-name">Guild leaderboard</span>
           </div>
-          <div className="mt-1 text-meta text-text-muted">
+          <div className="mt-1 text-meta leading-relaxed text-text-muted">
             Activity XP, streaks, and levels update live.
           </div>
         </div>
 
         {loading ? (
           <div className="flex flex-col gap-2.5">
-            <div className="h-24 rounded-md bg-bg-mod-subtle" style={{ animation: 'skeleton-pulse 1.8s ease-in-out infinite' }} />
-            <div className="h-40 rounded-md bg-bg-mod-subtle" style={{ animation: 'skeleton-pulse 1.8s ease-in-out infinite' }} />
+            <Skeleton height={96} borderRadius="var(--radius-well)" />
+            <Skeleton height={160} borderRadius="var(--radius-well)" />
           </div>
         ) : error ? (
-          <div className="rounded-md border border-accent-danger/35 bg-danger-tint px-3 py-3 text-meta text-accent-danger">
-            {error}
-          </div>
+          <ErrorBanner message={error} multiline />
         ) : (
           <>
-            <div className="rounded-md border border-border-subtle bg-bg-accent p-3.5 shadow-sm">
+            {/* Your own standing — a recessed readout inside the panel. */}
+            <Well bare className="px-4 py-3.5">
               <div className="flex items-center justify-between gap-2">
-                <span className="text-label text-text-primary">Your Progress</span>
-                <span className="font-code text-meta tabular-nums text-text-muted">
+                <span className="text-label text-text-primary">Your progress</span>
+                <span className="pc-mono text-meta text-text-muted">
                   {progress?.rank != null ? `Rank #${progress.rank}` : 'Unranked'}
                 </span>
               </div>
-              <div className="mt-2.5 flex items-center gap-2.5 text-meta text-text-secondary">
-                <span className="rounded-xs bg-accent-tint px-2 py-1 text-label font-semibold text-accent-primary">
-                  Level {progress?.level ?? 0}
-                </span>
-                <span className="font-code tabular-nums">{progress?.xp ?? 0} XP</span>
-                <span className="inline-flex items-center gap-1 font-code tabular-nums text-accent-warning">
-                  <Flame size={13} />
+              <div className="mt-2.5 flex flex-wrap items-center gap-2.5 text-meta text-text-secondary">
+                <Chip tone="accent">Level {progress?.level ?? 0}</Chip>
+                <span className="pc-mono">{progress?.xp ?? 0} XP</span>
+                <span className="inline-flex items-center gap-1 pc-mono text-accent-warning">
+                  <Flame size={13} aria-hidden />
                   {progress?.streak.days ?? 0}d
                 </span>
               </div>
-              <div className="mt-3 h-2 overflow-hidden rounded-full bg-bg-mod-strong">
+              <div
+                className="mt-3 h-2 overflow-hidden rounded-[var(--radius-full)] bg-bg-mod-strong"
+                role="progressbar"
+                aria-valuenow={progressPercent}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-label="Progress through this level"
+              >
                 <div
-                  className="h-full rounded-full bg-accent-primary transition-[width] duration-300"
+                  className="h-full rounded-[var(--radius-full)] bg-accent-primary transition-[width] duration-[var(--duration-normal)]"
                   style={{ width: `${progressPercent}%` }}
                 />
               </div>
-              <div className="mt-2 font-code text-[11px] tabular-nums text-text-muted">
+              {/* §9: the meter is never the only cue — the count reads it out. */}
+              <div className="mt-2 pc-mono text-meta text-text-muted">
                 {progress?.progress.xp_into_level ?? 0}/{progress?.progress.xp_required_this_level ?? 0} XP this level
               </div>
               {progress && progress.achievements.length > 0 && (
                 <div className="mt-3 flex flex-wrap gap-1.5">
                   {progress.achievements.slice(-4).map((achievement) => (
-                    <span
-                      key={achievement.key}
-                      className="inline-flex items-center gap-1 rounded-full bg-bg-mod-strong px-2 py-0.5 text-[11px] text-text-secondary"
-                      title={achievement.key}
-                    >
-                      <Medal size={10} className="text-accent-warning" />
+                    <Chip key={achievement.key} size="sm" title={achievement.key}>
+                      <Medal size={10} className="text-accent-warning" aria-hidden />
                       {achievement.key}
-                    </span>
+                    </Chip>
                   ))}
                 </div>
               )}
-            </div>
+            </Well>
 
-            <div className="min-h-0 flex-1 overflow-auto rounded-md border border-border-subtle bg-bg-primary">
-              {entries.length === 0 ? (
-                <div className="px-3 py-6 text-meta text-text-secondary">
-                  No one's earned XP here yet — be the first to break the ice.
-                </div>
-              ) : (
-                <ul className="divide-y divide-border-subtle">
-                  {entries.map((entry) => {
-                    const isMe = currentUserId != null && entry.user.id === currentUserId;
-                    return (
-                      <li
-                        key={entry.user.id}
-                        className={cn(
-                          'flex items-center justify-between gap-2 px-3 py-2.5',
-                          isMe && 'bg-accent-tint',
-                        )}
-                      >
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5 text-label text-text-primary">
-                            {entry.rank === 1 && <Crown size={12} className="text-accent-warning" />}
-                            #{entry.rank} {displayName(entry.user)}
-                          </div>
-                          <div className="font-code text-[11px] tabular-nums text-text-muted">
-                            L{entry.level} &middot; {entry.xp} XP &middot; {entry.streak_days}d streak
-                          </div>
+            {entries.length === 0 ? (
+              <EmptyState
+                className="!py-6"
+                icon={<TrendingUp size={20} />}
+                title="No XP earned here yet"
+                description="Post in a channel and you'll be the first name on this board."
+              />
+            ) : (
+              <ul className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto">
+                {entries.map((entry) => {
+                  const isMe = currentUserId != null && entry.user.id === currentUserId;
+                  return (
+                    <li
+                      key={entry.user.id}
+                      className={cn(
+                        'flex items-center justify-between gap-2 rounded-[var(--radius-control)] px-3 py-2.5',
+                        isMe && 'bg-bg-raised shadow-[var(--shadow-raised)]',
+                      )}
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 text-label text-text-primary">
+                          {entry.rank === 1 && <Crown size={12} className="text-accent-warning" aria-hidden />}
+                          #{entry.rank} {displayName(entry.user)}
                         </div>
-                        <span className="rounded-xs bg-bg-mod-strong px-2 py-0.5 font-code text-meta font-semibold tabular-nums text-text-secondary">
-                          L{entry.level}
-                        </span>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </div>
+                        <div className="pc-mono text-meta text-text-muted">
+                          L{entry.level} &middot; {entry.xp} XP &middot; {entry.streak_days}d streak
+                        </div>
+                      </div>
+                      <Chip size="sm" className="pc-mono">
+                        L{entry.level}
+                      </Chip>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
 
             {highlighted == null && currentUserId != null && progress != null && progress.rank != null && entries.length > 0 && (
-              <div className="rounded-md border border-border-subtle bg-bg-mod-subtle px-3 py-2 text-meta text-text-secondary">
+              <Well bare className="px-3 py-2.5 text-meta leading-relaxed text-text-secondary">
                 You're just outside the top 8 — currently rank #{progress.rank}.
-              </div>
+              </Well>
             )}
           </>
         )}

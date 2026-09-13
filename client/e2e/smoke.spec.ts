@@ -2,6 +2,18 @@ import { expect, test } from '@playwright/test';
 import { guildDetailFixture, guildSummaryFixture } from '../src/test/guildContractFixtures';
 import { isGuildDetail, isGuildSummaryList } from '../src/api/generated/validators';
 
+/**
+ * The fixture building is deliberately long: the Buildings column has to
+ * truncate it without breaking the layout. Every locator that names it uses
+ * this constant, so an assertion matches the *whole* accessible name rather
+ * than a prefix that silently stops matching.
+ */
+const GUILD_NAME =
+  'QA Guild With A Very Long Name That Should Truncate Instead Of Breaking Layout';
+
+/** `name:` accepts a RegExp; a literal fixture string has to be escaped for it. */
+const literal = (value: string) => new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+
 test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo) => {
   const guildId = '1001';
   const textChannelId = '2001';
@@ -163,7 +175,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
       return json(200, [
         guildSummaryFixture({
           id: guildId,
-          name: 'QA Guild With A Very Long Name That Should Truncate Instead Of Breaking Layout',
+          name: GUILD_NAME,
           server_url: 'https://smoke.paracord.local',
           owner_id: userPayload.id,
           member_count: 4,
@@ -222,7 +234,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
     if (path === `/api/v1/guilds/${guildId}` && method === 'GET') {
       return json(200, guildDetailFixture({
         id: guildId,
-        name: 'QA Guild With A Very Long Name That Should Truncate Instead Of Breaking Layout',
+        name: GUILD_NAME,
         server_url: 'https://smoke.paracord.local',
         owner_id: userPayload.id,
         member_count: 4,
@@ -232,7 +244,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
     if (path === `/api/v1/guilds/${guildId}/onboarding/me` && method === 'GET') {
       return json(200, {
         settings: {
-          welcome_title: 'Welcome to QA Guild With A Very Long Name That Should Truncate Instead Of Breaking Layout',
+          welcome_title: `Welcome to ${GUILD_NAME}`,
           welcome_body: 'Quick start onboarding',
           rules_text: null,
           role_prompt: null,
@@ -395,7 +407,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   for (const width of responsiveWidths) {
     await page.setViewportSize({ width, height: 900 });
     await expect(page.getByRole('main')).toBeVisible();
-    await expect(page.getByPlaceholder(/Message #qa-general-channel/)).toBeVisible();
+    await expect(page.getByPlaceholder(/Say something (in qa-general-channel|to the)/)).toBeVisible();
     await expect
       .poll(async () =>
         page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
@@ -411,7 +423,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   for (const viewport of desktopViewports) {
     await page.setViewportSize(viewport);
     await expect(page.getByRole('main')).toBeVisible();
-    await expect(page.getByPlaceholder(/Message #qa-general-channel/)).toBeVisible();
+    await expect(page.getByPlaceholder(/Say something (in qa-general-channel|to the)/)).toBeVisible();
     await expect
       .poll(async () =>
         page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
@@ -421,12 +433,12 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   await page.setViewportSize({ width: 1280, height: 900 });
 
   const lazyRoutes = [
-    { path: '/app', text: /New message/i },
+    { path: '/app', text: /Your buildings/i },
     { path: '/app/friends', text: /Friends/i },
     { path: '/app/dms', text: /Pick up a conversation/i },
     { path: '/app/discovery', text: /Discover spaces/i },
     { path: '/app/templates', text: /Template Gallery/i },
-    { path: '/app/developers', text: /Developer Portal/i },
+    { path: '/app/developers', text: /Developer portal/i },
   ];
   for (const lazyRoute of lazyRoutes) {
     await page.goto(lazyRoute.path);
@@ -479,9 +491,17 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   const conversationHeader = page.locator('.chat-header');
   for (const width of [320, 390, 767, 768, 1280]) {
     await page.setViewportSize({ width, height: 800 });
-    await expect(conversationHeader.getByRole('button', { name: 'Search Messages' })).toBeVisible();
-    await expect(conversationHeader.getByRole('button', { name: 'Member List' })).toBeVisible();
-    await expect(conversationHeader.locator('.chat-header-actions button')).toHaveCount(3);
+    await expect(conversationHeader.getByRole('button', { name: 'Search messages' })).toBeVisible();
+    // lantern-stage-spec §6.5: no docked member list anywhere — the people who
+    // are here now are the header's lit strip, and its sheet is the only full
+    // list. §7.4 puts search, pins and threads in the header; below the small
+    // breakpoint pins and threads fold into the overflow menu (layout-spec §7.8).
+    await expect(conversationHeader.getByRole('button', { name: 'Member List' })).toHaveCount(0);
+    // Search, pins, threads and the overflow menu. Pins and threads are in the
+    // DOM at every width and hidden below the small breakpoint, where the
+    // overflow menu carries them (layout-spec §7.8).
+    await expect(conversationHeader.locator('.chat-header-actions button')).toHaveCount(4);
+    await expect(conversationHeader.getByRole('button', { name: 'Threads' })).toBeVisible({ visible: width >= 640 });
     const moreActions = conversationHeader.getByRole('button', { name: 'More channel actions' });
     await moreActions.focus();
     await page.keyboard.press('ArrowDown');
@@ -494,7 +514,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
     await actionMenu.getByRole('menuitem', { name: 'Pinned messages' }).click();
     const pinsPanel = page.getByRole('complementary', { name: 'Pinned messages' });
     await expect(pinsPanel).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Close Pinned messages panel' })).toBeInViewport();
+    await expect(page.getByRole('button', { name: 'Close pinned messages panel' })).toBeInViewport();
     if (width >= 768) {
       const activePanel = conversationHeader.getByRole('button', { name: 'Close Pinned messages', exact: true });
       await expect(activePanel).toBeInViewport();
@@ -502,7 +522,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
       if (width === 1280) await page.screenshot({ path: testInfo.outputPath('header-active-panel-desktop.png'), fullPage: true });
       await activePanel.click();
     } else {
-      await page.getByRole('button', { name: 'Close Pinned messages panel' }).click();
+      await page.getByRole('button', { name: 'Close pinned messages panel' }).click();
     }
     await expect(pinsPanel).toBeHidden();
     await expect(moreActions).toBeFocused();
@@ -536,29 +556,32 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   for (const dm of dmFixtures) {
     await page.goto(`/app/dms/${dm.id}`);
     const dmHeader = page.locator('.chat-header');
-    await expect(dmHeader.getByRole('button', { name: 'Back to Messages' })).toBeVisible();
+    await expect(dmHeader.getByRole('button', { name: 'Back to messages' })).toBeVisible();
     for (const width of [320, 390, 768, 1280]) {
       await page.setViewportSize({ width, height: 800 });
-      await expect(dmHeader.getByRole('button', { name: 'Search Messages' })).toBeInViewport();
+      await expect(dmHeader.getByRole('button', { name: 'Search messages' })).toBeInViewport();
       await expect(dmHeader.getByRole('button', { name: 'Start direct message voice call' })).toBeInViewport();
-      if (dm.type === 3) {
-        await expect(dmHeader.getByRole('button', { name: 'Member List' })).toBeInViewport();
-        if (width < 480) await expect(dmHeader.locator('.chat-header-mobile-dm-title')).toBeInViewport();
+      // A group DM is a room too (§7.6): its people live in the header's strip
+      // and its sheet, never in a docked list.
+      await expect(dmHeader.getByRole('button', { name: 'Member List' })).toHaveCount(0);
+      if (dm.type === 3 && width < 480) {
+        await expect(dmHeader.locator('.chat-header-mobile-dm-title')).toBeInViewport();
       }
-      else await expect(dmHeader.getByRole('button', { name: 'Member List' })).toHaveCount(0);
       await expect.poll(async () => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
       if (width === 390) await page.screenshot({ path: testInfo.outputPath(`header-dm-${dm.type}-mobile.png`), fullPage: true });
     }
     if (dm.type === 3) {
-      await dmHeader.getByRole('button', { name: 'Member List' }).click();
-      await expect(page.getByRole('button', { name: /Close.*members.*panel/i })).toBeVisible();
+      await page.setViewportSize({ width: 1280, height: 800 });
+      // The strip's sheet is the only full list of people in the product.
+      await dmHeader.getByRole('button', { name: /reading/ }).click();
+      await expect(page.getByRole('dialog', { name: 'People here now' })).toBeVisible();
       await page.keyboard.press('Escape');
     }
   }
   showDmFixtures = false;
   await page.goto(`/app/guilds/${guildId}/channels/${textChannelId}`);
 
-  const composer = page.getByPlaceholder(/Message #qa-general-channel/);
+  const composer = page.getByPlaceholder(/Say something (in qa-general-channel|to the)/);
   for (const width of [320, 390, 768]) {
     await page.setViewportSize({ width, height: 800 });
     await expect(composer).toBeVisible();
@@ -649,17 +672,16 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   await page.keyboard.press('Enter');
   await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}/channels/${voiceChannelId}`));
 
-  // Guild Home = Rooms view — the presence-first map that replaces the old
-  // channel column (layout-spec §1/§2). Voice/stage channels render as room
-  // cards; text channels group below; the server-settings entry lives in the
-  // guild-home header.
+  // Guild Home = the Lobby, the building seen from the street
+  // (lantern-stage-spec §7.3). Voice/stage channels render as room cards in the
+  // "Rooms" grid; text rooms are rows below; the space-settings entry lives in
+  // the Lobby header.
   await page.goto(`/app/guilds/${guildId}`);
   await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}$`));
   await expect(page.getByRole('heading', { name: /QA Guild/i })).toBeVisible();
-  // Quiet guild → the section reserves "Live rooms" for occupied rooms and
-  // reads "Rooms" while every voice room is empty (layout-spec §1.2).
-  await expect(page.getByRole('region', { name: 'Rooms' })).toBeVisible();
-  const textChannelsRegion = page.getByRole('region', { name: 'Text channels' });
+  // `exact` because "Text rooms" is the landmark right below it.
+  await expect(page.getByRole('region', { name: 'Rooms', exact: true })).toBeVisible();
+  const textChannelsRegion = page.getByRole('region', { name: 'Text rooms' });
   await expect(textChannelsRegion).toBeVisible();
 
   // Space settings now open from the guild-home header (MANAGE_GUILD-gated),
@@ -670,7 +692,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   await page.keyboard.press('Escape');
   await expect(serverSettingsDialog).toBeHidden();
 
-  // Text-channel navigation + keyboard activation from the Rooms view.
+  // Text-room navigation + keyboard activation from the Lobby.
   const textChannelButton = textChannelsRegion.getByRole('button', {
     name: /qa-general-channel/i,
   });
@@ -679,34 +701,42 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   await page.keyboard.press('Enter');
   await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}/channels/${textChannelId}`));
 
-  // The unified sidebar merges every connected server's guilds into "Spaces";
-  // the guild is reachable there as a roving-tabindex option row.
-  // The expanded sidebar is one roving listbox with grouped options; "Spaces" is
-  // the "Joined spaces" group inside it (single-listbox composite, not four).
-  const spacesList = page.getByRole('group', { name: 'Joined spaces' });
-  await expect(spacesList.getByRole('option', { name: /QA Guild/i })).toBeVisible();
+  // The Buildings column merges every connected server's guilds into buildings
+  // (lantern-stage-spec §7.1). The expanded column is one roving listbox whose
+  // grouped options are the buildings and their rooms; a building's window-map
+  // plate is its front door and opens the Lobby.
+  const buildingsColumn = page.getByRole('listbox', { name: 'Buildings and rooms' });
+  const building = buildingsColumn.getByRole('group', { name: literal(GUILD_NAME) });
+  // The lobby option is labelled "<building> lobby — <caption>", so the name to
+  // match is the building's full name, not a prefix of it.
+  await expect(
+    building.getByRole('option', { name: literal(`${GUILD_NAME} lobby`) }),
+  ).toBeVisible();
 
   await page.goto(`/app/guilds/${guildId}/channels/999999999`);
   await expect(page.getByRole('heading', { name: 'Channel not found' })).toBeVisible();
-  // Home must prioritize unread work over presence-based quiet copy.
+  // Home must prioritize unread work over presence-based quiet copy (§7.5:
+  // Needs-you is the right column, and it never calls an unknown state quiet).
   headerAttention = 'mentions';
   showHomeFixtures = true;
   await page.goto('/app');
   const home = page.getByRole('main');
+  await expect(home.getByText('Your buildings')).toBeVisible();
   const attention = home.getByRole('region', { name: 'Needs you' });
-  await expect(attention.getByText('3 mentions', { exact: true })).toBeVisible();
+  // The attention preview's author is the reader, so the row keeps the count.
+  await expect(attention.getByText('3 mentions for you', { exact: true })).toBeVisible();
   await expect(attention.getByText(/An update waiting for you/)).toBeVisible();
-  await expect(home.getByText('3 conversations need your attention')).toBeVisible();
-  await expect(attention.getByText('Design', { exact: true })).toBeVisible();
-  await expect(attention.getByText('Support', { exact: true })).toBeVisible();
-  await expect(home.getByText(/is quiet/)).toHaveCount(0);
+  await expect(attention.getByText(/^Design · /)).toBeVisible();
+  await expect(attention.getByText(/^Support · /)).toBeVisible();
+  await expect(home.getByText(/is quiet|No data|Nothing is waiting on you/)).toHaveCount(0);
+  const openAttention = attention.getByRole('button', { name: `Open ${attentionChannel.name}` });
   for (const width of [320, 390, 768, 1280]) {
     await page.setViewportSize({ width, height: 900 });
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
-    await expect(attention.getByRole('button', { name: /Review mentions/ })).toBeVisible();
+    await expect(openAttention).toBeVisible();
     if (width === 320 || width === 1280) await page.screenshot({ path: testInfo.outputPath(`home-needs-you-${width}.png`), fullPage: true });
   }
-  await attention.getByRole('button', { name: /Review mentions/ }).click();
+  await openAttention.click();
   await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}/channels/${attentionChannel.id}`));
   expect(pageErrors).toEqual([]);
 });

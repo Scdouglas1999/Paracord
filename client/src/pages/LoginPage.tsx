@@ -16,8 +16,6 @@ import {
   AuthCanvas,
   AuthCard,
   AuthHeading,
-  AppMark,
-  BrandAside,
   Field,
   SuccessNote,
 } from './authScaffold';
@@ -320,13 +318,13 @@ export function LoginPage() {
         <AuthCard className="max-w-md">
           <form onSubmit={handleMfaSubmit} className="flex flex-col gap-6 p-8">
             <AuthHeading
-              title="Two-Factor Authentication"
+              title="Two-factor authentication"
               subtitle="Enter the 6-digit code from your authenticator app, or one of your backup codes."
             />
 
             {error && <ErrorBanner message={error} />}
 
-            <Field label="Authentication Code" required>
+            <Field label="Authentication code" required>
               <input
                 type="text"
                 inputMode="numeric"
@@ -378,7 +376,7 @@ export function LoginPage() {
             </Field>
 
             <Button type="submit" loading={loading} disabled={loading} className="w-full">
-              Request Reset Token
+              Request reset token
             </Button>
 
             <div className="flex items-center justify-between text-label text-text-muted">
@@ -404,7 +402,7 @@ export function LoginPage() {
         <AuthCard className="max-w-md">
           <form onSubmit={handleResetPassword} className="flex flex-col gap-6 p-8">
             <AuthHeading
-              title="Set New Password"
+              title="Set new password"
               subtitle="Paste the reset token from your administrator, then choose a new password."
             />
 
@@ -412,7 +410,7 @@ export function LoginPage() {
             {successMsg && <SuccessNote>{successMsg}</SuccessNote>}
 
             <div className="flex flex-col gap-5">
-              <Field label="Reset Token" required>
+              <Field label="Reset token" required>
                 <input
                   type="text"
                   value={resetToken}
@@ -423,7 +421,7 @@ export function LoginPage() {
                 />
               </Field>
 
-              <Field label="New Password" required hint={`At least ${MIN_PASSWORD_LENGTH} characters.`}>
+              <Field label="New password" required hint={`At least ${MIN_PASSWORD_LENGTH} characters.`}>
                 <input
                   type="password"
                   value={resetNewPassword}
@@ -435,7 +433,7 @@ export function LoginPage() {
                 />
               </Field>
 
-              <Field label="Confirm Password" required>
+              <Field label="Confirm password" required>
                 <input
                   type="password"
                   value={resetConfirmPassword}
@@ -449,7 +447,7 @@ export function LoginPage() {
             </div>
 
             <Button type="submit" loading={loading} disabled={loading} className="w-full">
-              Set New Password
+              Set new password
             </Button>
 
             <div className="flex items-center justify-between text-label text-text-muted">
@@ -474,14 +472,14 @@ export function LoginPage() {
         <AuthCard className="max-w-md">
           <form onSubmit={handleVerifyEmail} className="flex flex-col gap-6 p-8">
             <AuthHeading
-              title="Verify Email"
+              title="Verify email"
               subtitle="Enter the verification token your server administrator issued for your account."
             />
 
             {error && <ErrorBanner message={error} />}
             {successMsg && <SuccessNote>{successMsg}</SuccessNote>}
 
-            <Field label="Verification Token" required>
+            <Field label="Verification token" required>
               <input
                 type="text"
                 value={verifyEmailToken}
@@ -493,7 +491,7 @@ export function LoginPage() {
             </Field>
 
             <Button type="submit" loading={loading} disabled={loading || !verifyEmailToken.trim()} className="w-full">
-              Verify Email
+              Verify email
             </Button>
 
             {backToLogin}
@@ -505,15 +503,10 @@ export function LoginPage() {
 
   return (
     <AuthCanvas>
-      <AuthCard className="max-w-4xl overflow-hidden">
-        <div className="flex">
-          <BrandAside />
-          <form onSubmit={handleSubmit} className="flex flex-1 flex-col gap-6 p-8 sm:p-10">
-            <div className="mb-1 lg:hidden">
-              <AppMark size={40} />
-            </div>
+      <AuthCard className="max-w-md">
+        <div>
+          <form onSubmit={handleSubmit} className="flex flex-1 flex-col gap-6 p-7 sm:p-8">
             <AuthHeading
-              mark={false}
               title="Welcome back"
               subtitle="Sign in to pick up where you left off across your spaces."
             />
@@ -554,7 +547,7 @@ export function LoginPage() {
               >
                 Forgot your password?
               </button>
-              <span className="text-border-strong" aria-hidden="true">
+              <span className="text-text-faint" aria-hidden="true">
                 &middot;
               </span>
               <button
@@ -572,7 +565,7 @@ export function LoginPage() {
               disabled={loading || Date.now() < cooldownUntil}
               className="w-full"
             >
-              Log In
+              Log in
             </Button>
 
             <p className="text-label text-text-secondary">
@@ -589,7 +582,7 @@ export function LoginPage() {
               <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border-subtle pt-5 text-meta text-text-muted">
                 <span>Connected to</span>
                 <span className="font-code text-text-secondary">{serverUrl}</span>
-                <span className="text-border-strong" aria-hidden="true">
+                <span className="text-text-faint" aria-hidden="true">
                   &middot;
                 </span>
                 <button

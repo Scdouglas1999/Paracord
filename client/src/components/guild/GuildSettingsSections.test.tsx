@@ -83,7 +83,7 @@ function renderOverview(
   return handlers;
 }
 
-const deleteConfirmButton = () => screen.getByRole('button', { name: 'Delete Server' });
+const deleteConfirmButton = () => screen.getByRole('button', { name: 'Delete server' });
 
 describe('OverviewSection danger zone', () => {
   it('hides the danger zone for non-owners', () => {

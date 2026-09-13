@@ -40,7 +40,7 @@ export const moderationTemplateApi = {
 
 export const ACTION_TYPE_LABELS: Record<number, string> = {
   1: 'Warn',
-  2: 'Timed Mute',
+  2: 'Timed mute',
   3: 'Kick',
   4: 'Ban',
 };

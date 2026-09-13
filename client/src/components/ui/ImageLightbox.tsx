@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { X, ChevronLeft, ChevronRight, Download, ZoomIn, ZoomOut } from 'lucide-react';
 import { useLightboxStore } from '../../stores/lightboxStore';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { usePresence } from '../../lib/motion';
 import { safeClientResourceUrl } from '../../lib/security';
 import { cn } from '../../lib/utils';
 
@@ -20,6 +21,7 @@ export function ImageLightbox() {
 
   const [zoom, setZoom] = useState(1);
   const backdropRef = useRef<HTMLDivElement>(null);
+  const { mounted, exiting, scenery } = usePresence(isOpen);
 
   const currentImage = images[currentIndex];
   const safeImageSrc = currentImage ? safeClientResourceUrl(currentImage.src) : null;
@@ -88,56 +90,57 @@ export function ImageLightbox() {
     a.click();
   }, [currentImage, safeImageSrc]);
 
-  if (!isOpen || !currentImage || !safeImageSrc) return null;
+  if (!mounted || !currentImage || !safeImageSrc) return null;
 
-  // Floating control chip — 36px, radius-sm, shadow-md, visible focus ring (§7).
+  // A control over arbitrary imagery is a name tag (spec §8 `pc-tag`): the tag
+  // fill plus the primary ink. That is the system's answer to "ink over a
+  // photo", so nothing here has to invent a literal white.
   const controlClass =
-    'flex h-9 w-9 items-center justify-center rounded-sm text-white/85 shadow-md outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:text-white focus-visible:shadow-[var(--focus-ring)]';
-  const chipStyle = { backgroundColor: 'rgba(0,0,0,0.45)' } as const;
+    'pc-tag pc-focusable flex h-9 w-9 items-center justify-center transition-[filter] duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:brightness-125';
 
   return createPortal(
     <div
       ref={backdropRef}
-      className="fixed inset-0 z-[10000] flex items-center justify-center"
+      className={cn(
+        'fixed inset-0 z-[10000] flex items-center justify-center',
+        exiting ? 'pc-fade-out' : 'pc-fade-in',
+      )}
       role="dialog"
       aria-modal="true"
       aria-label="Image viewer"
       tabIndex={-1}
       style={{
         backgroundColor: 'var(--overlay-backdrop)',
-        animation: 'overlay-enter 0.15s ease-out',
       }}
       onClick={handleBackdropClick}
+      {...scenery}
     >
       {/* Top bar */}
       <div className="absolute left-0 right-0 top-0 z-10 flex items-center justify-between gap-3 p-3">
-        <span
-          className="truncate rounded-sm px-2.5 py-1 text-meta text-white/85 shadow-md"
-          style={chipStyle}
-        >
+        <span className="pc-tag truncate px-2.5 py-1 text-meta">
           {currentImage.filename}
           {images.length > 1 && (
-            <span className="ml-2 font-code text-white/55">
+            <span className="pc-mono ml-2 text-text-secondary">
               {currentIndex + 1} / {images.length}
             </span>
           )}
         </span>
         <div className="flex items-center gap-1.5">
-          <div className="flex items-center gap-1 rounded-sm px-1 shadow-md" style={chipStyle}>
+          <div className="pc-tag flex items-center gap-1 px-1">
             <button
               onClick={() => setZoom((z) => Math.max(z - ZOOM_STEP, MIN_ZOOM))}
-              className="flex h-8 w-8 items-center justify-center rounded-sm text-white/80 outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-white/10 hover:text-white focus-visible:shadow-[var(--focus-ring)]"
+              className="pc-focusable flex h-8 w-8 items-center justify-center rounded-[var(--radius-chip)] text-text-secondary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-text-primary"
               title="Zoom out"
               aria-label="Zoom out"
             >
               <ZoomOut size={18} />
             </button>
-            <span className="min-w-[3rem] text-center font-code text-meta text-white/60">
+            <span className="pc-mono min-w-[3rem] text-center text-meta text-text-secondary">
               {Math.round(zoom * 100)}%
             </span>
             <button
               onClick={() => setZoom((z) => Math.min(z + ZOOM_STEP, MAX_ZOOM))}
-              className="flex h-8 w-8 items-center justify-center rounded-sm text-white/80 outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-white/10 hover:text-white focus-visible:shadow-[var(--focus-ring)]"
+              className="pc-focusable flex h-8 w-8 items-center justify-center rounded-[var(--radius-chip)] text-text-secondary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-text-primary"
               title="Zoom in"
               aria-label="Zoom in"
             >
@@ -147,7 +150,6 @@ export function ImageLightbox() {
           <button
             onClick={handleDownload}
             className={controlClass}
-            style={chipStyle}
             title="Download"
             aria-label="Download image"
           >
@@ -156,7 +158,6 @@ export function ImageLightbox() {
           <button
             onClick={close}
             className={controlClass}
-            style={chipStyle}
             title="Close (Esc)"
             aria-label="Close image viewer"
           >
@@ -170,7 +171,6 @@ export function ImageLightbox() {
         <button
           onClick={prev}
           className={cn(controlClass, 'absolute left-3 top-1/2 z-10 -translate-y-1/2')}
-          style={chipStyle}
           title="Previous"
           aria-label="Previous image"
         >
@@ -181,7 +181,6 @@ export function ImageLightbox() {
         <button
           onClick={next}
           className={cn(controlClass, 'absolute right-3 top-1/2 z-10 -translate-y-1/2')}
-          style={chipStyle}
           title="Next"
           aria-label="Next image"
         >
@@ -201,7 +200,7 @@ export function ImageLightbox() {
           draggable={false}
           style={{
             transform: `scale(${zoom})`,
-            transition: 'transform 0.15s ease-out',
+            transition: 'transform var(--duration-fast) var(--ease-out)',
             maxWidth: '90vw',
             maxHeight: '85vh',
             objectFit: 'contain',

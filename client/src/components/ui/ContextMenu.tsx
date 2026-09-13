@@ -1,5 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
+// §5.1/§5.3: the shared overlay recipe (pc-enter / pc-exit); the presence hook
+// keeps the menu mounted for its --duration-fast leave.
+import { usePresence } from '../../lib/motion';
 import { cn } from '../../lib/utils';
 
 export interface ContextMenuItem {
@@ -17,14 +20,31 @@ interface ContextMenuProps {
   label?: string;
   anchorRef?: RefObject<HTMLElement | null>;
   items: ContextMenuItem[];
-  position: { x: number; y: number };
+  /**
+   * Menu visibility (default true). Drive it rather than unmounting so the
+   * shared exit can keep the node mounted for one beat.
+   */
+  open?: boolean;
+  /** Where the menu opens. May go undefined while `open` is false — the last
+   *  position is kept so the leave plays where the menu was. */
+  position?: { x: number; y: number };
   onClose: () => void;
 }
 
-export function ContextMenu({ items, position, onClose, label = 'Context menu', anchorRef }: ContextMenuProps) {
+export function ContextMenu({ items, position, open = true, onClose, label = 'Context menu', anchorRef }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const [focusedIndex, setFocusedIndex] = useState(-1);
-  const [adjustedPosition, setAdjustedPosition] = useState(position);
+  const { mounted, exiting, scenery } = usePresence(open);
+  // The caller drops `position` when it closes the menu, and the menu is still
+  // on screen for the beat its leave takes — so the last one it was opened at
+  // is kept, and the exit plays where the menu actually is. Adjusted during
+  // render rather than in an effect: a menu that placed itself one commit late
+  // would be drawn at the previous spot for a frame.
+  const [anchor, setAnchor] = useState(position ?? { x: 0, y: 0 });
+  if (position && (position.x !== anchor.x || position.y !== anchor.y)) {
+    setAnchor(position);
+  }
+  const [adjustedPosition, setAdjustedPosition] = useState(anchor);
 
   // Measure before paint and after content/viewport changes. Explanations can
   // wrap after a width change; a one-time measurement leaves the menu clipped.
@@ -39,9 +59,9 @@ export function ContextMenu({ items, position, onClose, label = 'Context menu', 
       const height = viewport?.height ?? window.innerHeight;
       menu.style.maxHeight = `${Math.max(0, height - 16)}px`;
       menu.style.maxWidth = `${Math.max(0, width - 16)}px`;
-      const anchor = anchorRef?.current?.getBoundingClientRect();
-      const targetX = anchor ? anchor.right - menu.offsetWidth : position.x;
-      const targetY = anchor ? anchor.bottom + 6 : position.y;
+      const anchorRect = anchorRef?.current?.getBoundingClientRect();
+      const targetX = anchorRect ? anchorRect.right - menu.offsetWidth : anchor.x;
+      const targetY = anchorRect ? anchorRect.bottom + 6 : anchor.y;
       const x = Math.max(left + 8, Math.min(targetX, left + width - menu.offsetWidth - 8));
       const y = Math.max(top + 8, Math.min(targetY, top + height - menu.offsetHeight - 8));
       setAdjustedPosition(previous => previous.x === x && previous.y === y ? previous : { x, y });
@@ -60,7 +80,7 @@ export function ContextMenu({ items, position, onClose, label = 'Context menu', 
       window.visualViewport?.removeEventListener('resize', place);
       window.visualViewport?.removeEventListener('scroll', place);
     };
-  }, [position.x, position.y, anchorRef]);
+  }, [anchor.x, anchor.y, anchorRef]);
 
   useLayoutEffect(() => {
     const menu = menuRef.current;
@@ -74,6 +94,7 @@ export function ContextMenu({ items, position, onClose, label = 'Context menu', 
 
   // Close on click outside, scroll, or Escape
   useEffect(() => {
+    if (!open) return;
     const handleClick = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         onClose();
@@ -135,23 +156,29 @@ export function ContextMenu({ items, position, onClose, label = 'Context menu', 
       document.removeEventListener('scroll', handleScroll, true);
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [items, focusedIndex, onClose, anchorRef]);
+  }, [items, focusedIndex, onClose, anchorRef, open]);
 
-  // Focus menu on mount for keyboard navigation
+  // Focus menu when it opens for keyboard navigation
   useEffect(() => {
-    menuRef.current?.focus({ preventScroll: true });
-  }, []);
+    if (open) menuRef.current?.focus({ preventScroll: true });
+  }, [open]);
+
+  if (!mounted) return null;
 
   return createPortal(
     <div
       ref={menuRef}
-      className="fixed z-[100] min-w-[min(13rem,calc(100vw-1rem))] max-w-[calc(100vw-1rem)] max-h-[calc(100dvh-1rem)] overflow-y-auto rounded-md border border-border-subtle bg-bg-floating p-1 shadow-lg outline-none"
+      className={cn(
+        'pc-floating fixed z-[100] min-w-[min(13rem,calc(100vw-1rem))] max-w-[calc(100vw-1rem)] max-h-[calc(100dvh-1rem)] overflow-y-auto p-1.5 outline-none',
+        exiting ? 'pc-exit' : 'pc-enter',
+      )}
       style={{ left: adjustedPosition.x, top: adjustedPosition.y }}
       tabIndex={-1}
       role="menu"
       aria-label={label}
       data-native-overlay-occlude=""
       aria-activedescendant={focusedIndex >= 0 ? `context-menu-item-${focusedIndex}` : undefined}
+      {...scenery}
     >
       {items.map((item, i) => {
         if (item.divider) {
@@ -165,14 +192,13 @@ export function ContextMenu({ items, position, onClose, label = 'Context menu', 
             id={`context-menu-item-${i}`}
             role="menuitem"
             className={cn(
-              'flex w-full items-center justify-between gap-3 rounded-sm px-2.5 py-1.5 text-left text-sm outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] [@media(pointer:coarse)]:min-h-11',
+              'flex w-full items-center justify-between gap-3 rounded-[var(--radius-chip)] px-2.5 py-1.5 text-left text-label outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] [@media(pointer:coarse)]:min-h-11',
+              // A destructive item takes danger INK, never a red fill (§1.3).
               item.danger ? 'text-accent-danger' : 'text-text-secondary',
               item.disabled && 'cursor-not-allowed text-text-muted',
               active &&
                 !item.disabled &&
-                (item.danger
-                  ? 'bg-accent-danger text-text-on-danger'
-                  : 'bg-accent-tint text-text-primary'),
+                (item.danger ? 'bg-bg-mod-subtle' : 'bg-bg-mod-subtle text-text-primary'),
             )}
             disabled={item.disabled}
             onClick={() => {

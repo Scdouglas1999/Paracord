@@ -1,71 +1,16 @@
-import { useState, useEffect, type ReactNode } from 'react';
+import { useState, useEffect } from 'react';
 import { Check } from 'lucide-react';
 import { adminApi } from '../../api/admin';
 import { extractApiError } from '../../api/client';
 import { toast } from '../../stores/toastStore';
-import { Button } from '../../components/ui/Button';
-import { Input, Textarea } from '../../components/ui/Input';
-
-function Field({
-  label,
-  htmlFor,
-  hint,
-  children,
-}: {
-  label: string;
-  htmlFor: string;
-  hint?: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="space-y-2">
-      <label htmlFor={htmlFor} className="block text-label font-medium text-text-secondary">
-        {label}
-      </label>
-      {children}
-      {hint && <p className="text-meta text-text-muted">{hint}</p>}
-    </div>
-  );
-}
-
-function Toggle({
-  checked,
-  onChange,
-  label,
-  description,
-  ariaLabel,
-}: {
-  checked: boolean;
-  onChange: () => void;
-  label: string;
-  description: string;
-  ariaLabel: string;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-4 py-1">
-      <div className="min-w-0">
-        <p className="text-label font-semibold text-text-primary">{label}</p>
-        <p className="text-meta text-text-muted">{description}</p>
-      </div>
-      <button
-        onClick={onChange}
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        aria-label={ariaLabel}
-        className={`relative h-6 w-11 shrink-0 rounded-full outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] ${
-          checked ? 'bg-accent-primary' : 'bg-bg-mod-strong'
-        }`}
-      >
-        <span
-          className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-[140ms] ease-[var(--ease-out)] ${
-            checked ? 'translate-x-[1.375rem]' : 'translate-x-0.5'
-          }`}
-        />
-      </button>
-    </div>
-  );
-}
+import {
+  Button,
+  Divider,
+  SettingsSectionHeader,
+  TextField,
+  ToggleRow,
+} from '../../components/ui';
+import { Textarea } from '../../components/ui/Input';
 
 export function SettingsPanel() {
   const [settings, setSettings] = useState<Record<string, string>>({});
@@ -102,140 +47,123 @@ export function SettingsPanel() {
 
   return (
     <div>
-      <header className="mb-6">
-        <h2 className="font-display text-heading text-text-primary">Server settings</h2>
-        <p className="mt-1 text-body text-text-secondary">
-          Configure how this deployment behaves for everyone on it.
-        </p>
-      </header>
+      <SettingsSectionHeader
+        title="Server settings"
+        description="Configure how this deployment behaves for everyone on it."
+      />
 
-      <div className="max-w-xl space-y-8">
-        <section className="space-y-5">
-          <Field label="Server name" htmlFor="setting-server-name">
-            <Input
-              id="setting-server-name"
-              aria-label="Server Name"
-              type="text"
-              value={settings.server_name || ''}
-              onChange={(e) => update('server_name', e.target.value)}
-            />
-          </Field>
+      <div className="flex max-w-xl flex-col gap-8">
+        <section className="flex flex-col gap-5">
+          <TextField
+            id="setting-server-name"
+            label="Server name"
+            type="text"
+            value={settings.server_name || ''}
+            onChange={(e) => update('server_name', e.target.value)}
+          />
 
-          <Field label="Server description" htmlFor="setting-server-description">
+          <div className="flex flex-col gap-1.5">
+            <label
+              htmlFor="setting-server-description"
+              className="text-label font-medium text-text-secondary"
+            >
+              Server description
+            </label>
             <Textarea
               id="setting-server-description"
-              aria-label="Server Description"
               value={settings.server_description || ''}
               onChange={(e) => update('server_description', e.target.value)}
               rows={3}
               className="resize-none"
             />
-          </Field>
-
-          <div className="rounded-md border border-border-subtle bg-bg-tertiary/40 px-4 py-3">
-            <Toggle
-              checked={settings.registration_enabled === 'true'}
-              onChange={() =>
-                update('registration_enabled', settings.registration_enabled === 'true' ? 'false' : 'true')
-              }
-              label="Open registration"
-              description="Allow anyone to create a new account on this server."
-              ariaLabel="Toggle open registration"
-            />
           </div>
 
+          <ToggleRow
+            label="Open registration"
+            description="Allow anyone to create a new account on this server."
+            checked={settings.registration_enabled === 'true'}
+            onChange={(next) => update('registration_enabled', next ? 'true' : 'false')}
+          />
+
           <div className="grid gap-5 sm:grid-cols-2">
-            <Field label="Max guilds per user" htmlFor="setting-max-guilds">
-              <Input
-                id="setting-max-guilds"
-                aria-label="Max Guilds Per User"
-                type="number"
-                value={settings.max_guilds_per_user || '100'}
-                onChange={(e) => update('max_guilds_per_user', e.target.value)}
-              />
-            </Field>
-            <Field label="Max members per guild" htmlFor="setting-max-members">
-              <Input
-                id="setting-max-members"
-                aria-label="Max Members Per Guild"
-                type="number"
-                value={settings.max_members_per_guild || '1000'}
-                onChange={(e) => update('max_members_per_guild', e.target.value)}
-              />
-            </Field>
+            <TextField
+              id="setting-max-guilds"
+              label="Max guilds per user"
+              type="number"
+              value={settings.max_guilds_per_user || '100'}
+              onChange={(e) => update('max_guilds_per_user', e.target.value)}
+            />
+            <TextField
+              id="setting-max-members"
+              label="Max members per guild"
+              type="number"
+              value={settings.max_members_per_guild || '1000'}
+              onChange={(e) => update('max_members_per_guild', e.target.value)}
+            />
           </div>
         </section>
 
-        <section className="space-y-5 border-t border-border-subtle pt-7">
-          <h3 className="text-section uppercase text-text-secondary">Guild storage limits</h3>
-          <Field
+        <section className="flex flex-col gap-5">
+          <Divider />
+          <h3 className="pc-display text-heading text-text-primary">Guild storage limits</h3>
+          <TextField
+            id="setting-storage-quota"
             label="Max guild storage quota (MB)"
-            htmlFor="setting-storage-quota"
             hint="Upper limit for per-guild storage quotas. Guild owners cannot set a quota higher than this."
-          >
-            <Input
-              id="setting-storage-quota"
-              aria-label="Max Guild Storage Quota in MB"
+            type="number"
+            value={settings.max_guild_storage_quota || ''}
+            onChange={(e) => update('max_guild_storage_quota', e.target.value)}
+            placeholder="No limit"
+          />
+        </section>
+
+        <section className="flex flex-col gap-5">
+          <Divider />
+          <h3 className="pc-display text-heading text-text-primary">Federation file cache</h3>
+
+          <ToggleRow
+            label="Cache federated files"
+            description="Store files fetched from federated servers locally to serve them faster."
+            checked={settings.federation_file_cache_enabled === 'true'}
+            onChange={(next) =>
+              update('federation_file_cache_enabled', next ? 'true' : 'false')
+            }
+          />
+
+          <div className="grid gap-5 sm:grid-cols-2">
+            <TextField
+              id="setting-cache-size"
+              label="Cache max size (MB)"
               type="number"
-              value={settings.max_guild_storage_quota || ''}
-              onChange={(e) => update('max_guild_storage_quota', e.target.value)}
+              value={settings.federation_file_cache_max_size || ''}
+              onChange={(e) => update('federation_file_cache_max_size', e.target.value)}
               placeholder="No limit"
             />
-          </Field>
-        </section>
-
-        <section className="space-y-5 border-t border-border-subtle pt-7">
-          <h3 className="text-section uppercase text-text-secondary">Federation file cache</h3>
-          <div className="rounded-md border border-border-subtle bg-bg-tertiary/40 px-4 py-3">
-            <Toggle
-              checked={settings.federation_file_cache_enabled === 'true'}
-              onChange={() =>
-                update('federation_file_cache_enabled', settings.federation_file_cache_enabled === 'true' ? 'false' : 'true')
-              }
-              label="Cache federated files"
-              description="Store files fetched from federated servers locally to serve them faster."
-              ariaLabel="Toggle federation file cache"
+            <TextField
+              id="setting-cache-ttl"
+              label="Cache TTL (hours)"
+              hint="How long cached files are kept before re-fetching from the origin."
+              type="number"
+              value={settings.federation_file_cache_ttl_hours || ''}
+              onChange={(e) => update('federation_file_cache_ttl_hours', e.target.value)}
+              placeholder="Default"
             />
           </div>
-
-          <div className="grid gap-5 sm:grid-cols-2">
-            <Field label="Cache max size (MB)" htmlFor="setting-cache-size">
-              <Input
-                id="setting-cache-size"
-                aria-label="Federation Cache Max Size in MB"
-                type="number"
-                value={settings.federation_file_cache_max_size || ''}
-                onChange={(e) => update('federation_file_cache_max_size', e.target.value)}
-                placeholder="No limit"
-              />
-            </Field>
-            <Field
-              label="Cache TTL (hours)"
-              htmlFor="setting-cache-ttl"
-              hint="How long cached files are kept before re-fetching from the origin."
-            >
-              <Input
-                id="setting-cache-ttl"
-                aria-label="Federation Cache TTL in hours"
-                type="number"
-                value={settings.federation_file_cache_ttl_hours || ''}
-                onChange={(e) => update('federation_file_cache_ttl_hours', e.target.value)}
-                placeholder="Default"
-              />
-            </Field>
-          </div>
         </section>
 
-        <div className="flex items-center gap-3 border-t border-border-subtle pt-6">
-          <Button onClick={handleSave} loading={saving} disabled={saving}>
-            {saving ? 'Saving…' : 'Save changes'}
-          </Button>
-          {saved && (
-            <span className="inline-flex items-center gap-1.5 text-label font-medium text-accent-success">
-              <Check size={16} />
-              Saved
-            </span>
-          )}
+        <div className="flex flex-col gap-5">
+          <Divider />
+          <div className="flex items-center gap-3">
+            <Button onClick={handleSave} loading={saving} disabled={saving}>
+              {saving ? 'Saving…' : 'Save changes'}
+            </Button>
+            {saved && (
+              <span className="inline-flex items-center gap-1.5 text-label font-medium text-accent-success">
+                <Check size={16} aria-hidden />
+                Saved
+              </span>
+            )}
+          </div>
         </div>
       </div>
     </div>

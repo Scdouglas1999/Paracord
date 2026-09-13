@@ -10,7 +10,7 @@ import {
 } from '../lib/registrationPassword';
 import { ErrorBanner } from '../components/ui/Feedback';
 import { Button } from '../components/ui/Button';
-import { AuthCanvas, AuthCard, AuthHeading, AppMark, BrandAside, Field } from './authScaffold';
+import { AuthCanvas, AuthCard, AuthHeading, Field } from './authScaffold';
 
 export function RegisterPage() {
   const passwordHintId = useId();
@@ -111,15 +111,10 @@ export function RegisterPage() {
 
   return (
     <AuthCanvas>
-      <AuthCard className="max-w-4xl overflow-hidden">
-        <div className="flex">
-          <BrandAside />
-          <form onSubmit={handleSubmit} className="flex flex-1 flex-col gap-6 p-8 sm:p-10">
-            <div className="mb-1 lg:hidden">
-              <AppMark size={40} />
-            </div>
+      <AuthCard className="max-w-md">
+        <div>
+          <form onSubmit={handleSubmit} className="flex flex-1 flex-col gap-6 p-7 sm:p-8">
             <AuthHeading
-              mark={false}
               title="Create your account"
               subtitle="Claim a username, and you’re in — you can add servers and a recovery identity next."
             />
@@ -144,7 +139,7 @@ export function RegisterPage() {
                 />
               </Field>
 
-              <Field label="Display Name" hint="How people see you. You can change it anytime.">
+              <Field label="Display name" hint="How people see you. You can change it anytime.">
                 <input
                   type="text"
                   value={displayName}
@@ -179,7 +174,7 @@ export function RegisterPage() {
                 />
               </Field>
 
-              <Field label="Confirm Password" required error={confirmError} descriptionId={confirmErrorId}>
+              <Field label="Confirm password" required error={confirmError} descriptionId={confirmErrorId}>
                 <input
                   type="password"
                   value={confirmPassword}
@@ -194,12 +189,12 @@ export function RegisterPage() {
               </Field>
             </div>
 
-            <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border-subtle bg-bg-mod-subtle px-4 py-3.5 transition-colors hover:border-border-strong">
+            <label className="flex cursor-pointer items-start gap-3 rounded-well border border-border-subtle bg-bg-mod-subtle px-4 py-3.5 transition-colors hover:border-border-strong">
               <input
                 type="checkbox"
                 checked={agreed}
                 onChange={(e) => setAgreed(e.target.checked)}
-                className="mt-0.5 h-4 w-4 accent-[var(--accent-primary)]"
+                className="pc-checkbox mt-0.5"
               />
               <span className="text-meta leading-relaxed text-text-secondary">
                 I have read and agree to the{' '}

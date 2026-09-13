@@ -22,7 +22,7 @@ export function isVirtualGroup(id: string): boolean {
  *
  * - If the guild has real category channels (type 4): group children by
  *   `parent_id`. Orphaned channels go into an "Uncategorized" group at the top.
- * - If no categories exist: auto-create "Text Channels" and "Voice Channels"
+ * - If no categories exist: auto-create "Text rooms" and "Voice rooms"
  *   virtual groups.
  */
 export function buildChannelGroups(channels: Channel[]): ChannelGroup[] {
@@ -57,7 +57,7 @@ function buildVirtualGroups(channels: Channel[]): ChannelGroup[] {
   if (textChannels.length > 0) {
     groups.push({
       id: VIRTUAL_TEXT_ID,
-      name: 'Text Channels',
+      name: 'Text rooms',
       isReal: false,
       position: 0,
       channels: textChannels,
@@ -67,7 +67,7 @@ function buildVirtualGroups(channels: Channel[]): ChannelGroup[] {
   if (voiceChannels.length > 0) {
     groups.push({
       id: VIRTUAL_VOICE_ID,
-      name: 'Voice Channels',
+      name: 'Voice rooms',
       isReal: false,
       position: 1,
       channels: voiceChannels,

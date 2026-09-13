@@ -10,20 +10,6 @@ import { LayoutTour } from './LayoutTour';
 
 // Reduced-motion-agnostic stub: render motion.div as a plain div so the coach-mark
 // is present synchronously (mirrors CommandPalette.test).
-vi.mock('framer-motion', async () => {
-  const React = await import('react');
-  return {
-    motion: {
-      div: React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
-        ({ children, ...props }, ref) => (
-          <div ref={ref} {...props}>
-            {children}
-          </div>
-        ),
-      ),
-    },
-  };
-});
 
 const SHELL_KEY = 'layout-tour-shell';
 const GUILD_KEY = 'layout-tour-guild-home';

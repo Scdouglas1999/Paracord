@@ -8,8 +8,13 @@ import { persist } from 'zustand/middleware';
  * Pinned-conversation persistence (layout-spec §3.4).
  *
  * Keys are JSON tuples of server, account and channel (see conversationModel)
- * so pins survive across servers and reconnects. `PinnedRail` renders entries
- * in `pinnedKeys` order.
+ * so pins survive across servers and reconnects.
+ *
+ * NOTE: nothing renders these. `useUnifiedConversations` reads `pinnedKeys` and
+ * partitions the merged list by it, but no surface in the Lantern Stage UI
+ * offers a pin affordance — §7.1's column orders buildings by brightness and
+ * recency instead. Either a surface gains one or this store goes; see
+ * docs/design/wp8-checkpoint.md.
  */
 interface PinnedState {
   pinnedKeys: string[];

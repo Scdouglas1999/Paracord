@@ -116,7 +116,7 @@ async function signIn(page: Page): Promise<void> {
   await page.goto(`${BASE}/login`);
   await page.locator('input[autocomplete="username"]').fill(email);
   await page.locator('input[autocomplete="current-password"]').fill(password);
-  await page.getByRole('button', { name: 'Log In', exact: true }).click();
+  await page.getByRole('button', { name: 'Log in', exact: true }).click();
   await expect(page).toHaveURL(/\/app/);
 
   await dismissLayoutTour(page);
@@ -141,7 +141,7 @@ async function openConnectionCheck(page: Page): Promise<void> {
       ? page.getByRole('button', { name: 'Settings', exact: true })
       : page.getByRole('button', { name: 'Open user settings', exact: true });
   await entry.click();
-  await page.getByRole('button', { name: 'Voice & Video', exact: true }).click();
+  await page.getByRole('button', { name: 'Voice & video', exact: true }).click();
   await page.getByRole('button', { name: /Run connection check/i }).click();
   await expect(page.getByRole('dialog').filter({ hasText: 'Voice connection check' })).toBeVisible();
 }

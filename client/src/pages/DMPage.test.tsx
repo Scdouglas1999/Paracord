@@ -168,7 +168,7 @@ describe('DMPage — all-conversations index (/app/dms)', () => {
     expect(newMessageButtons.length).toBeGreaterThan(0);
 
     // Designed empty state pointing at friends (left-aligned, warm copy).
-    expect(screen.getByText('No conversations yet')).toBeInTheDocument();
+    expect(screen.getByText('Nobody has said anything to you yet')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /find friends/i })).toBeInTheDocument();
 
     // The header primary action opens the shared DM picker.
@@ -204,7 +204,8 @@ describe('DMPage — all-conversations index (/app/dms)', () => {
 
     renderDmPage('/app/dms');
 
-    expect(screen.getByText('Conversations — 2')).toBeInTheDocument();
+    expect(screen.getByText('Conversations')).toBeInTheDocument();
+    expect(screen.getByText('2')).toBeInTheDocument();
 
     const rows = screen
       .getAllByRole('button')
@@ -240,7 +241,8 @@ describe('DMPage — all-conversations index (/app/dms)', () => {
     renderDmPage('/app/dms');
     await user.type(screen.getByRole('searchbox', { name: 'Filter conversations' }), 'nova');
 
-    expect(screen.getByText('Conversations — 1 of 2')).toBeInTheDocument();
+    expect(screen.getByText('Conversations')).toBeInTheDocument();
+    expect(screen.getByText('1 of 2')).toBeInTheDocument();
     expect(screen.getByText('Nova')).toBeInTheDocument();
     expect(screen.queryByText('Launch group')).not.toBeInTheDocument();
 

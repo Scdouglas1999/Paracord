@@ -1431,6 +1431,74 @@ fn record_status_code(status: u16) {
     }
 }
 
+/// Per-IP HTTP request ceilings.
+///
+/// The defaults are the product policy and are what an unconfigured server
+/// enforces. They assume the thing behind an IP is *one* client: a browser, a
+/// desktop app, a bot. That assumption breaks whenever many clients share one
+/// egress address — an office or campus NAT, a CGNAT pool, and, most sharply,
+/// an end-to-end suite that drives a whole product's worth of traffic through
+/// loopback. Those deployments need to raise the ceiling without patching the
+/// binary, so each tier reads an environment override.
+///
+/// Resolved once per process behind a `OnceLock`, like the other environment
+/// knobs in this crate (`PARACORD_HTTP_SLOW_MS`): the limiter itself is a
+/// process-global singleton, so a per-router value would have nowhere to live.
+struct RateLimitPolicy {
+    /// Every request from one IP, per second. `PARACORD_HTTP_RATE_LIMIT_GLOBAL_PER_SECOND`.
+    global_per_second: u32,
+    /// `/api/v1/auth/*` from one IP, per minute. `PARACORD_HTTP_RATE_LIMIT_AUTH_PER_MINUTE`.
+    auth_per_minute: u32,
+    /// Requests bearing one bot token, per minute. `PARACORD_HTTP_RATE_LIMIT_BOT_PER_MINUTE`.
+    bot_per_minute: u32,
+    /// Writes bearing one bot token, per second. `PARACORD_HTTP_RATE_LIMIT_BOT_WRITE_PER_SECOND`.
+    bot_write_per_second: u32,
+}
+
+const DEFAULT_GLOBAL_LIMIT_PER_SECOND: u32 = 120;
+const DEFAULT_AUTH_LIMIT_PER_MINUTE: u32 = 60;
+const DEFAULT_BOT_LIMIT_PER_MINUTE: u32 = 300;
+const DEFAULT_BOT_WRITE_LIMIT_PER_SECOND: u32 = 5;
+
+/// Parse one ceiling override.
+///
+/// Anything that is not a positive integer — empty, negative, `0`, a typo —
+/// leaves the default in place. `0` in particular must not mean "unlimited":
+/// read literally it would mean "refuse everything", and silently disabling a
+/// limiter because someone wrote a zero is the worse of the two readings.
+fn parse_rate_limit_override(raw: Option<&str>, default: u32) -> u32 {
+    raw.and_then(|value| value.trim().parse::<u32>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
+}
+
+fn env_rate_limit(name: &str, default: u32) -> u32 {
+    parse_rate_limit_override(std::env::var(name).ok().as_deref(), default)
+}
+
+static HTTP_RATE_LIMIT_POLICY: OnceLock<RateLimitPolicy> = OnceLock::new();
+
+fn rate_limit_policy() -> &'static RateLimitPolicy {
+    HTTP_RATE_LIMIT_POLICY.get_or_init(|| RateLimitPolicy {
+        global_per_second: env_rate_limit(
+            "PARACORD_HTTP_RATE_LIMIT_GLOBAL_PER_SECOND",
+            DEFAULT_GLOBAL_LIMIT_PER_SECOND,
+        ),
+        auth_per_minute: env_rate_limit(
+            "PARACORD_HTTP_RATE_LIMIT_AUTH_PER_MINUTE",
+            DEFAULT_AUTH_LIMIT_PER_MINUTE,
+        ),
+        bot_per_minute: env_rate_limit(
+            "PARACORD_HTTP_RATE_LIMIT_BOT_PER_MINUTE",
+            DEFAULT_BOT_LIMIT_PER_MINUTE,
+        ),
+        bot_write_per_second: env_rate_limit(
+            "PARACORD_HTTP_RATE_LIMIT_BOT_WRITE_PER_SECOND",
+            DEFAULT_BOT_WRITE_LIMIT_PER_SECOND,
+        ),
+    })
+}
+
 pub fn install_http_rate_limiter() {
     let _ = HTTP_RATE_LIMITER.set(HttpRateLimiter::new());
 }
@@ -1518,10 +1586,11 @@ async fn request_timeout_middleware(timeout: Duration, req: Request, next: Next)
 }
 
 async fn rate_limit_middleware(req: Request, next: Next) -> Response {
-    const GLOBAL_LIMIT_PER_SECOND: u32 = 120;
-    const AUTH_LIMIT_PER_MINUTE: u32 = 60;
-    const BOT_LIMIT_PER_MINUTE: u32 = 300;
-    const BOT_WRITE_LIMIT_PER_SECOND: u32 = 5;
+    let policy = rate_limit_policy();
+    let global_limit_per_second = policy.global_per_second;
+    let auth_limit_per_minute = policy.auth_per_minute;
+    let bot_limit_per_minute = policy.bot_per_minute;
+    let bot_write_limit_per_second = policy.bot_write_per_second;
 
     if req.method() == Method::OPTIONS {
         return next.run(req).await;
@@ -1566,7 +1635,7 @@ async fn rate_limit_middleware(req: Request, next: Next) -> Response {
 
     if let Some(limiter) = HTTP_RATE_LIMITER.get() {
         let global_key = format!("http:global:{key}");
-        if let Some(retry_after) = limiter.check_rate_limit(&global_key, 1, GLOBAL_LIMIT_PER_SECOND)
+        if let Some(retry_after) = limiter.check_rate_limit(&global_key, 1, global_limit_per_second)
         {
             RATE_LIMITED_COUNT.fetch_add(1, Ordering::Relaxed);
             return crate::error::ApiError::RateLimited(retry_after).into_response();
@@ -1582,7 +1651,7 @@ async fn rate_limit_middleware(req: Request, next: Next) -> Response {
         {
             let token_hash = paracord_db::bot_applications::hash_token(bot_token);
             let bot_key = format!("http:bot:{}", &token_hash[..24]);
-            if let Some(retry_after) = limiter.check_rate_limit(&bot_key, 60, BOT_LIMIT_PER_MINUTE)
+            if let Some(retry_after) = limiter.check_rate_limit(&bot_key, 60, bot_limit_per_minute)
             {
                 RATE_LIMITED_COUNT.fetch_add(1, Ordering::Relaxed);
                 return crate::error::ApiError::RateLimited(retry_after).into_response();
@@ -1592,7 +1661,7 @@ async fn rate_limit_middleware(req: Request, next: Next) -> Response {
             if is_write_method {
                 let bot_write_key = format!("http:bot:write:{}", &token_hash[..24]);
                 if let Some(retry_after) =
-                    limiter.check_rate_limit(&bot_write_key, 1, BOT_WRITE_LIMIT_PER_SECOND)
+                    limiter.check_rate_limit(&bot_write_key, 1, bot_write_limit_per_second)
                 {
                     RATE_LIMITED_COUNT.fetch_add(1, Ordering::Relaxed);
                     return crate::error::ApiError::RateLimited(retry_after).into_response();
@@ -1603,7 +1672,7 @@ async fn rate_limit_middleware(req: Request, next: Next) -> Response {
         if is_auth_path {
             let auth_key = format!("http:auth:{key}");
             if let Some(retry_after) =
-                limiter.check_rate_limit(&auth_key, 60, AUTH_LIMIT_PER_MINUTE)
+                limiter.check_rate_limit(&auth_key, 60, auth_limit_per_minute)
             {
                 RATE_LIMITED_COUNT.fetch_add(1, Ordering::Relaxed);
                 return crate::error::ApiError::RateLimited(retry_after).into_response();
@@ -1847,4 +1916,40 @@ async fn request_trace_middleware(mut req: Request, next: Next) -> Response {
     }
 
     response
+}
+
+#[cfg(test)]
+mod rate_limit_policy_tests {
+    use super::{
+        parse_rate_limit_override, DEFAULT_AUTH_LIMIT_PER_MINUTE, DEFAULT_GLOBAL_LIMIT_PER_SECOND,
+    };
+
+    #[test]
+    fn unset_override_keeps_the_product_default() {
+        assert_eq!(
+            parse_rate_limit_override(None, DEFAULT_AUTH_LIMIT_PER_MINUTE),
+            DEFAULT_AUTH_LIMIT_PER_MINUTE
+        );
+    }
+
+    #[test]
+    fn a_positive_override_replaces_the_default() {
+        assert_eq!(
+            parse_rate_limit_override(Some(" 4000 "), DEFAULT_AUTH_LIMIT_PER_MINUTE),
+            4000
+        );
+    }
+
+    #[test]
+    fn junk_and_zero_leave_the_limiter_armed() {
+        // A zero read literally would refuse every request, and a typo must not
+        // be able to switch a limiter off by accident: both keep the default.
+        for raw in ["", "   ", "0", "-1", "lots", "12.5"] {
+            assert_eq!(
+                parse_rate_limit_override(Some(raw), DEFAULT_GLOBAL_LIMIT_PER_SECOND),
+                DEFAULT_GLOBAL_LIMIT_PER_SECOND,
+                "override {raw:?} should have been ignored"
+            );
+        }
+    }
 }

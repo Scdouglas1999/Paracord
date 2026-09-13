@@ -8,11 +8,15 @@ import { defineConfig, devices } from '@playwright/test';
  * the shared messaging gate is occupied. The spec itself is part of that gate;
  * this config exists to run it in isolation.
  */
-// The spec reads these to find the isolated harness; set them for the test
-// workers here so the config is self-contained.
-process.env.PARACORD_E2E_PORT ??= '18170';
-process.env.PARACORD_E2E_CONTROL_PORT ??= '18171';
-process.env.PARACORD_E2E_APP_ORIGIN ??= 'http://127.0.0.1:4176';
+// The spec reads its ports from the environment (defaults match
+// `playwright.messaging.config.ts`). A `webServer.env` reaches only the spawned
+// process, so the ports are set HERE, in the config module, where both the
+// harness and the test process see them — otherwise `npx playwright test -c
+// playwright.dm-attachments.config.ts` starts a server on 18170 and points the
+// spec at 18160.
+process.env.PARACORD_E2E_PORT = '18170';
+process.env.PARACORD_E2E_CONTROL_PORT = '18171';
+process.env.PARACORD_E2E_APP_ORIGIN = 'http://127.0.0.1:4176';
 
 export default defineConfig({
   // Generous timeouts: this config exists to run beside other work on the same

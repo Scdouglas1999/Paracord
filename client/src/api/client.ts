@@ -216,7 +216,7 @@ function markRequestApiReachable(baseURL: string | undefined, reachable: boolean
 
 // Auth interceptor for legacy client
 apiClient.interceptors.request.use((config) => {
-  // Resolve at request time so "Add Server" updates apply without full reload.
+  // Resolve at request time so "Add server" updates apply without full reload.
   config._paracordContext?.assertCurrent();
   if (config._paracordContext) {
     if (config._paracordContext.historyEpoch) config.headers.set(DATABASE_HISTORY_HEADER, config._paracordContext.historyEpoch);

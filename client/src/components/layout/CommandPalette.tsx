@@ -121,7 +121,7 @@ export function CommandPalette() {
     // Navigation items
     items.push({
       id: 'nav-home',
-      label: 'Go to Home',
+      label: 'Go to home',
       sublabel: 'Calls, friends around, and recent DMs',
       icon: <Home size={16} />,
       action: () => {
@@ -134,7 +134,7 @@ export function CommandPalette() {
 
     items.push({
       id: 'nav-settings',
-      label: 'User Settings',
+      label: 'User settings',
       sublabel: 'Account, appearance, notifications',
       icon: <Settings size={16} />,
       action: () => useUIStore.getState().setUserSettingsOpen(true),
@@ -144,7 +144,7 @@ export function CommandPalette() {
 
     items.push({
       id: 'nav-developers',
-      label: 'Developer Portal',
+      label: 'Developer portal',
       sublabel: 'Bot applications and API access',
       icon: <Bot size={16} />,
       action: () => navigate('/app/developers'),
@@ -155,7 +155,7 @@ export function CommandPalette() {
     if (user && isAdmin(user.flags)) {
       items.push({
         id: 'nav-admin',
-        label: 'Admin Dashboard',
+        label: 'Admin dashboard',
         sublabel: 'Instance administration',
         icon: <Shield size={16} />,
         action: () => navigate('/app/admin'),
@@ -219,18 +219,18 @@ export function CommandPalette() {
 
     availableChannels.filter(channel => !channel.guild_id).forEach(dm => {
       const serverId = dm.scope.serverId;
-      const recipientName = dm.recipient ? displayName(dm.recipient) : 'Direct Message';
+      const recipientName = dm.recipient ? displayName(dm.recipient) : 'Direct message';
       items.push({
         id: `dm-${serverId}-${dm.id}`,
         label: recipientName,
-        sublabel: 'Direct Message',
+        sublabel: 'Direct message',
         icon: <MessageCircle size={16} />,
         action: () => {
           activateChannel(dm);
           selectGuild(null);
           navigate(`/app/dms/${dm.id}`);
         },
-        category: 'Direct Messages',
+        category: 'Direct messages',
         keywords: `${recipientName} dm direct message`,
       });
     });
@@ -251,7 +251,7 @@ export function CommandPalette() {
   // Group filtered items by category
   const groupedItems = useMemo(() => {
     const groups: { category: string; items: PaletteItem[] }[] = [];
-    const categoryOrder = ['Actions', 'Navigation', 'Channels', 'Spaces', 'Direct Messages'];
+    const categoryOrder = ['Actions', 'Navigation', 'Channels', 'Spaces', 'Direct messages'];
     const categoryMap = new Map<string, PaletteItem[]>();
 
     filteredItems.forEach((item) => {
@@ -350,9 +350,8 @@ export function CommandPalette() {
       labelledBy="command-palette-title"
       placement="top"
       size="md"
-      panelClassName="border-border-strong"
     >
-      <h2 id="command-palette-title" className="sr-only">Command Palette</h2>
+      <h2 id="command-palette-title" className="sr-only">Command palette</h2>
       {/* Search input — top inset, on the deeper tertiary surface */}
       <div className="flex items-center gap-3 border-b border-border-subtle px-4 py-3.5">
         <Search size={18} className="shrink-0 text-text-muted" />
@@ -370,7 +369,7 @@ export function CommandPalette() {
             setSelectedIndex(0);
           }}
         />
-        <kbd className="rounded-xs bg-bg-mod-strong px-1.5 py-0.5 font-code text-meta font-semibold text-text-muted">
+        <kbd className="rounded-window bg-bg-mod-strong px-1.5 py-0.5 font-code text-meta font-semibold text-text-muted">
           ESC
         </kbd>
       </div>
@@ -386,7 +385,7 @@ export function CommandPalette() {
         {groupedItems.length > 0 ? (
           groupedItems.map((group) => (
             <div key={group.category} className="mb-1.5 last:mb-0">
-              <div className="px-3 pb-1 pt-3 text-section uppercase text-text-muted first:pt-1">
+              <div className="px-3 pb-1 pt-3 text-section text-text-muted first:pt-1">
                 {group.category}
               </div>
               {group.items.map((item) => {
@@ -403,7 +402,7 @@ export function CommandPalette() {
                     onClick={() => handleSelect(item)}
                     onMouseEnter={() => setSelectedIndex(currentIndex)}
                     className={cn(
-                      'flex w-full items-center gap-3 rounded-sm px-3 py-2.5 text-left transition-colors duration-[140ms] ease-[var(--ease-out)]',
+                      'flex w-full items-center gap-3 rounded-chip px-3 py-2.5 text-left transition-colors duration-[140ms] ease-[var(--ease-out)]',
                       isSelected
                         ? 'bg-accent-tint text-text-primary'
                         : 'text-text-secondary hover:bg-bg-mod-subtle'
@@ -422,7 +421,7 @@ export function CommandPalette() {
                       )}
                     </span>
                     {isSelected ? (
-                      <kbd className="shrink-0 rounded-xs bg-bg-mod-strong px-1.5 py-0.5 font-code text-meta tabular-nums text-text-secondary">
+                      <kbd className="shrink-0 rounded-window bg-bg-mod-strong px-1.5 py-0.5 font-code text-meta tabular-nums text-text-secondary">
                         ↵
                       </kbd>
                     ) : (
@@ -449,12 +448,12 @@ export function CommandPalette() {
       <div className="flex items-center justify-between border-t border-border-subtle px-4 py-2">
         <div className="flex items-center gap-3 text-meta text-text-muted">
           <span className="flex items-center gap-1">
-            <kbd className="rounded-xs bg-bg-mod-strong px-1 py-0.5 font-code text-[10px] text-text-secondary">&uarr;</kbd>
-            <kbd className="rounded-xs bg-bg-mod-strong px-1 py-0.5 font-code text-[10px] text-text-secondary">&darr;</kbd>
+            <kbd className="rounded-window bg-bg-mod-strong px-1 py-0.5 font-code text-[10px] text-text-secondary">&uarr;</kbd>
+            <kbd className="rounded-window bg-bg-mod-strong px-1 py-0.5 font-code text-[10px] text-text-secondary">&darr;</kbd>
             navigate
           </span>
           <span className="flex items-center gap-1">
-            <kbd className="rounded-xs bg-bg-mod-strong px-1 py-0.5 font-code text-[10px] text-text-secondary">&crarr;</kbd>
+            <kbd className="rounded-window bg-bg-mod-strong px-1 py-0.5 font-code text-[10px] text-text-secondary">&crarr;</kbd>
             select
           </span>
         </div>

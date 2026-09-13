@@ -30,7 +30,7 @@ export function ConfirmDialog() {
           <ModalHeader
             icon={
               options.variant === 'danger' ? (
-                <div className="flex h-10 w-10 items-center justify-center rounded-md bg-danger-tint text-accent-danger">
+                <div className="flex h-10 w-10 items-center justify-center rounded-[var(--radius-well)] bg-danger-well text-accent-danger shadow-[var(--shadow-well)]">
                   <AlertTriangle size={20} />
                 </div>
               ) : undefined
@@ -44,11 +44,11 @@ export function ConfirmDialog() {
             )}
           </ModalHeader>
           <ModalFooter>
-            <Button variant="secondary" onClick={() => close(false)}>
+            <Button variant="ghost" onClick={() => close(false)}>
               {options.cancelLabel || 'Cancel'}
             </Button>
             <Button
-              variant={options.variant === 'danger' ? 'destructive' : 'default'}
+              variant={options.variant === 'danger' ? 'danger' : 'primary'}
               onClick={() => close(true)}
               autoFocus
             >

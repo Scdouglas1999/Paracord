@@ -7,6 +7,8 @@ import { hasAccount } from '../lib/account';
 import { getStoredServerUrl, getCurrentOriginServerUrl, setStoredServerUrl } from '../lib/config/apiBaseUrl';
 import { gateway } from '../gateway/manager';
 import { ErrorBanner } from '../components/ui/Feedback';
+import { Divider } from '../components/ui/Divider';
+import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
 import { AuthCanvas, AuthCard, AuthHeading, Field } from './authScaffold';
 
@@ -93,30 +95,29 @@ export function AccountUnlockPage() {
   return (
     <AuthCanvas>
       <AuthCard className="max-w-md">
-        <form onSubmit={handleSubmit} className="flex flex-col gap-6 p-8">
+        <form onSubmit={handleSubmit} className="flex flex-col gap-6 p-7 sm:p-8">
           <AuthHeading title="Welcome back" subtitle="Unlock your local identity to pick up where you left off." />
 
           {username && (
-            <div className="flex items-center gap-3 rounded-md border border-border-subtle bg-bg-tertiary/50 px-4 py-3">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent-tint text-heading font-display font-semibold text-accent-primary">
+            <div className="pc-well flex items-center gap-3 px-4 py-3">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[var(--radius-full)] bg-bg-raised pc-display text-heading font-semibold text-text-primary">
                 {username[0].toUpperCase()}
               </div>
               <div className="min-w-0">
-                <p className="truncate text-label font-semibold text-text-primary">{username}</p>
-                <p className="truncate font-code text-meta text-text-muted">{shortKey}</p>
+                <p className="truncate pc-display text-name text-text-primary">{username}</p>
+                <p className="truncate pc-mono text-meta text-text-faint">{shortKey}</p>
               </div>
             </div>
           )}
 
-          {error && <ErrorBanner message={error} />}
+          {error && <ErrorBanner multiline message={error} />}
 
           <Field label="Password" required>
-            <input
+            <Input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
-              className="input-field"
               placeholder="Enter your password"
               autoComplete="current-password"
               autoFocus
@@ -125,6 +126,7 @@ export function AccountUnlockPage() {
 
           <Button
             type="submit"
+            size="lg"
             loading={loading}
             disabled={loading || Date.now() < cooldownUntil}
             className="w-full"
@@ -132,18 +134,20 @@ export function AccountUnlockPage() {
             Unlock
           </Button>
 
-          <div className="flex flex-col gap-2 border-t border-border-subtle pt-5 text-label text-text-secondary">
+          <Divider />
+
+          <div className="flex flex-col items-start gap-2 text-meta text-text-secondary">
             <button
               type="button"
               onClick={() => navigate('/recover')}
-              className="self-start font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+              className="pc-focusable rounded-[var(--radius-chip)] font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
             >
               Forgot password? Recover from phrase
             </button>
             <button
               type="button"
               onClick={() => navigate('/app?settings=identity')}
-              className="self-start font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+              className="pc-focusable rounded-[var(--radius-chip)] font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
             >
               Import account from file
             </button>

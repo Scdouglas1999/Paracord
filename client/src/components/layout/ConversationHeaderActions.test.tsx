@@ -6,7 +6,7 @@ import { Search, Users, Pin } from 'lucide-react';
 import { ConversationHeaderActions, attentionDescription } from './ConversationHeaderActions';
 
 const primary = [
-  { label: 'Search Messages', icon: Search, onClick: vi.fn(), controlsPanel: true },
+  { label: 'Search messages', icon: Search, onClick: vi.fn(), controlsPanel: true },
   { label: 'Member List', icon: Users, onClick: vi.fn(), controlsPanel: true },
 ];
 const items = [{ label: 'Pinned messages', action: vi.fn() }, { label: 'Inbox', action: vi.fn() }];
@@ -16,7 +16,7 @@ describe('conversation header hierarchy', () => {
     const user = userEvent.setup();
     render(<ConversationHeaderActions primary={primary} items={items} unread={0} mentions={0} />);
     expect(screen.getAllByRole('button')).toHaveLength(3);
-    expect(screen.getByRole('button', { name: 'Search Messages' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Search messages' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Member List' })).toBeVisible();
     expect(screen.queryByText('Pinned messages')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'More channel actions' }));
@@ -73,10 +73,10 @@ describe('conversation header hierarchy', () => {
 
   it('preserves primary button identity and focus across realtime count changes', () => {
     const view = render(<ConversationHeaderActions primary={primary} items={items} unread={0} mentions={0} />);
-    const search = screen.getByRole('button', { name: 'Search Messages' });
+    const search = screen.getByRole('button', { name: 'Search messages' });
     act(() => search.focus());
     view.rerender(<ConversationHeaderActions primary={primary.map(item => ({ ...item }))} items={items} unread={9} mentions={120} />);
-    expect(screen.getByRole('button', { name: 'Search Messages' })).toBe(search);
+    expect(screen.getByRole('button', { name: 'Search messages' })).toBe(search);
     expect(search).toHaveFocus();
     expect(screen.getByText('@99+')).toBeVisible();
   });
@@ -85,7 +85,7 @@ describe('conversation header hierarchy', () => {
     const view = render(<ConversationHeaderActions primary={primary} items={items} unread={0} mentions={0} />);
     fireEvent.click(screen.getByRole('button', { name: 'More channel actions' }));
     expect(screen.getByRole('menu')).toBeInTheDocument();
-    view.rerender(<ConversationHeaderActions primary={primary.map(item => ({ ...item, active: item.label === 'Search Messages' }))} items={items} unread={0} mentions={0} />);
+    view.rerender(<ConversationHeaderActions primary={primary.map(item => ({ ...item, active: item.label === 'Search messages' }))} items={items} unread={0} mentions={0} />);
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
   });
 

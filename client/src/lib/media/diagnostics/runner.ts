@@ -459,8 +459,8 @@ export async function runVoiceConnectionCheck(
       return {
         status: 'fail',
         code: 'MIC_SELECTED_DEVICE_MISSING',
-        summary: 'The microphone chosen in Voice & Video is no longer connected.',
-        remedy: 'Open Voice & Video and choose an input that is plugged in, then run the check again.',
+        summary: 'The microphone chosen in Voice & video is no longer connected.',
+        remedy: 'Open Voice & video and choose an input that is plugged in, then run the check again.',
         detail: { permission, input_count: inputs.length },
       };
     }
@@ -486,7 +486,7 @@ export async function runVoiceConnectionCheck(
           code: 'MIC_SILENT',
           summary: `The microphone opened, but no sound reached it while the check listened for ${Math.round(measurement.sampledMs / 100) / 10} seconds.`,
           remedy:
-            'Check that the right input is selected in Voice & Video and that it is not muted in your operating system, then run the check again and speak while it listens.',
+            'Check that the right input is selected in Voice & video and that it is not muted in your operating system, then run the check again and speak while it listens.',
           detail,
         };
       }
@@ -517,7 +517,7 @@ export async function runVoiceConnectionCheck(
           status: 'fail',
           code: 'MIC_NOT_FOUND',
           summary: 'The selected microphone could not be opened because it is no longer present.',
-          remedy: 'Choose a different input in Voice & Video, then run the check again.',
+          remedy: 'Choose a different input in Voice & video, then run the check again.',
           detail,
         };
       }
@@ -554,8 +554,8 @@ export async function runVoiceConnectionCheck(
       return {
         status: 'fail',
         code: 'SPEAKER_SELECTED_DEVICE_MISSING',
-        summary: 'The speaker or headset chosen in Voice & Video is no longer connected.',
-        remedy: 'Open Voice & Video and choose an output that is plugged in, then run the check again.',
+        summary: 'The speaker or headset chosen in Voice & video is no longer connected.',
+        remedy: 'Open Voice & video and choose an output that is plugged in, then run the check again.',
         detail: { output_count: outputs.length },
       };
     }
@@ -576,7 +576,7 @@ export async function runVoiceConnectionCheck(
           code: 'SPEAKER_NOT_HEARD',
           summary: 'You did not hear the test tone, so you would not hear anyone in a call either.',
           remedy:
-            'Raise the system volume, check that the right output is chosen in Voice & Video, and confirm this browser is not muted in your operating system’s volume mixer.',
+            'Raise the system volume, check that the right output is chosen in Voice & video, and confirm this browser is not muted in your operating system’s volume mixer.',
           detail,
         };
       }
@@ -681,7 +681,7 @@ export async function runVoiceConnectionCheck(
           status: 'fail',
           code: 'CAMERA_NOT_FOUND',
           summary: 'The selected camera could not be opened because it is no longer present.',
-          remedy: 'Choose a different camera in Voice & Video, then run the check again.',
+          remedy: 'Choose a different camera in Voice & video, then run the check again.',
           detail,
         };
       }

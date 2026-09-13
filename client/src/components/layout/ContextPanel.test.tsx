@@ -22,8 +22,12 @@ vi.mock('../../api/channels', () => ({
   },
 }));
 
-vi.mock('./MemberList', () => ({
-  MemberList: () => <div data-testid="surface-members" />,
+vi.mock('./GroupDmMembersPanel', () => ({
+  GroupDmMembersPanel: (props: { channelId: string; onClose: () => void }) => (
+    <button type="button" data-testid="surface-recipients" data-channel={props.channelId} onClick={props.onClose}>
+      recipients
+    </button>
+  ),
 }));
 vi.mock('../message/ThreadPanel', () => ({
   ThreadPanel: (props: { onClose: () => void }) => (
@@ -110,11 +114,31 @@ describe('ContextPanel', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('renders the members surface with panel chrome', () => {
-    setMode('members');
+  // lantern-stage-spec §6.5: there is no docked member list. A group message's
+  // recipients are who it is addressed to, and that surface is editable — the
+  // one list the panel still opens, and only for a group DM.
+  it('renders the group-DM recipients surface, self-chromed', () => {
+    useChannelStore.getState().addChannel(makeChannel({ id: 'chan-1', type: 3, channel_type: 3 }), {
+      serverId: '__local__',
+      userId: 'me',
+    });
+    setMode('recipients');
     render(<ContextPanel {...baseProps} />);
-    expect(screen.getByTestId('surface-members')).toBeInTheDocument();
-    expect(screen.getByRole('complementary', { name: 'Members' })).toBeInTheDocument();
+    expect(screen.getByTestId('surface-recipients')).toHaveAttribute('data-channel', 'chan-1');
+  });
+
+  it('renders nothing for recipients outside a group DM', () => {
+    useChannelStore.getState().addChannel(makeChannel(), { serverId: '__local__', userId: 'me' });
+    setMode('recipients');
+    const { container } = render(<ContextPanel {...baseProps} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('has no member-list mode at all', () => {
+    // The type no longer admits one; this pins the DOM consequence too.
+    setMode('economy');
+    render(<ContextPanel {...baseProps} />);
+    expect(screen.queryByRole('complementary', { name: 'Members' })).not.toBeInTheDocument();
   });
 
   it('renders the economy surface and forwards the guild id', () => {
@@ -181,9 +205,9 @@ describe('ContextPanel', () => {
   });
 
   it('close control clears contextPanelMode (panel-chrome header)', () => {
-    setMode('members');
+    setMode('economy');
     render(<ContextPanel {...baseProps} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Close Members panel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close Server economy panel' }));
     expect(useUIStore.getState().contextPanelMode).toBeNull();
   });
 
@@ -195,9 +219,9 @@ describe('ContextPanel', () => {
   });
 
   it('Escape clears contextPanelMode when the panel owns focus', () => {
-    setMode('members');
+    setMode('economy');
     render(<ContextPanel {...baseProps} />);
-    fireEvent.keyDown(screen.getByRole('complementary', { name: 'Members' }), { key: 'Escape' });
+    fireEvent.keyDown(screen.getByRole('complementary', { name: 'Server economy' }), { key: 'Escape' });
     expect(useUIStore.getState().contextPanelMode).toBeNull();
   });
 });

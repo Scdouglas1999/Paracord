@@ -43,7 +43,7 @@ export type IncomingMessagePayload = Partial<Message> & {
 function synthesizeAuthor(authorId: string): MessageAuthor {
   return {
     id: authorId,
-    username: 'Unknown User',
+    username: 'Unknown user',
     discriminator: '0000',
     display_name: null,
     avatar_hash: null,
@@ -71,7 +71,7 @@ export function normalizeIncomingMessage(raw: IncomingMessagePayload | null | un
     author = {
       ...rawAuthor,
       id: String(rawAuthor.id),
-      username: rawAuthor.username ?? 'Unknown User',
+      username: rawAuthor.username ?? 'Unknown user',
       discriminator: rawAuthor.discriminator ?? '0000',
     };
   } else {

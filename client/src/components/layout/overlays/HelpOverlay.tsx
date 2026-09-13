@@ -55,7 +55,7 @@ export function HelpOverlay({ open, onClose }: HelpOverlayProps) {
       onClose={onClose}
       dialogRef={dialogRef as RefObject<HTMLDivElement | null>}
       titleId="topbar-help-title"
-      title="Keyboard Shortcuts"
+      title="Keyboard shortcuts"
       icon={Keyboard}
       closeLabel="Close keyboard shortcuts"
       panelClassName="max-h-[min(82dvh,34rem)] w-full max-w-2xl"
@@ -64,7 +64,7 @@ export function HelpOverlay({ open, onClose }: HelpOverlayProps) {
       <div className="grid gap-x-10 gap-y-6 sm:grid-cols-2">
         {SHORTCUT_GROUPS.map((group) => (
           <section key={group.title}>
-            <h3 className="mb-2.5 text-section uppercase text-text-muted">{group.title}</h3>
+            <h3 className="mb-2.5 text-section text-text-muted">{group.title}</h3>
             <dl className="space-y-2">
               {group.shortcuts.map((item) => (
                 <div key={item.label} className="flex items-center justify-between gap-4">
@@ -73,7 +73,7 @@ export function HelpOverlay({ open, onClose }: HelpOverlayProps) {
                     {item.keys.map((k) => (
                       <kbd
                         key={k}
-                        className="inline-flex min-w-[1.75rem] items-center justify-center rounded-xs bg-bg-mod-strong px-1.5 py-1 font-code text-meta font-semibold text-text-secondary"
+                        className="inline-flex min-w-[1.75rem] items-center justify-center rounded-window bg-bg-mod-strong px-1.5 py-1 font-code text-meta font-semibold text-text-secondary"
                       >
                         {formatShortcutKey(k)}
                       </kbd>

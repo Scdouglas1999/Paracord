@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { botStoreApi } from '../api/botStore';
 import { botApi } from '../api/bots';
@@ -40,9 +41,37 @@ vi.mock('../lib/clipboard', () => ({
   writeClipboardText: vi.fn(),
 }));
 
+// The portal is a settings surface: the shell owns a close control (which
+// navigates) and a phone breakpoint, so it needs a router and matchMedia.
+function renderDeveloperPage() {
+  render(
+    <MemoryRouter initialEntries={['/app/developers']}>
+      <DeveloperPage />
+    </MemoryRouter>,
+  );
+}
+
+/** Open an application's section from the portal index. */
+async function openApp(user: ReturnType<typeof userEvent.setup>, name: string) {
+  await user.click(screen.getByRole('button', { name }));
+}
+
 describe('DeveloperPage metrics', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    Object.defineProperty(window, 'matchMedia', {
+      writable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: false,
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    });
     vi.mocked(writeClipboardText).mockResolvedValue(undefined);
     vi.mocked(confirm).mockResolvedValue(true);
     vi.mocked(botApi.list).mockResolvedValue({
@@ -86,7 +115,7 @@ describe('DeveloperPage metrics', () => {
   it('labels and trims the create-bot form', async () => {
     const user = userEvent.setup();
 
-    render(<DeveloperPage />);
+    renderDeveloperPage();
 
     expect(await screen.findByText('Release Helper')).toBeInTheDocument();
 
@@ -106,7 +135,7 @@ describe('DeveloperPage metrics', () => {
     const user = userEvent.setup();
     vi.mocked(botApi.create).mockRejectedValueOnce(new Error('Name is already reserved'));
 
-    render(<DeveloperPage />);
+    renderDeveloperPage();
 
     expect(await screen.findByText('Release Helper')).toBeInTheDocument();
     await user.type(screen.getByRole('textbox', { name: 'Bot name' }), 'Release Helper');
@@ -131,12 +160,13 @@ describe('DeveloperPage metrics', () => {
       },
     } as never);
 
-    render(<DeveloperPage />);
+    renderDeveloperPage();
 
     expect(await screen.findByText('Release Helper')).toBeInTheDocument();
-    expect(screen.getByText('No metrics loaded yet.')).toBeInTheDocument();
+    await openApp(user, 'Release Helper');
+    expect(screen.getByText('No metrics loaded yet')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'Refresh Metrics' }));
+    await user.click(screen.getByRole('button', { name: 'Refresh metrics' }));
 
     await waitFor(() => {
       expect(botStoreApi.getDeveloperMetrics).toHaveBeenCalledWith('app-1');
@@ -152,15 +182,16 @@ describe('DeveloperPage metrics', () => {
     const user = userEvent.setup();
     vi.mocked(botStoreApi.getDeveloperMetrics).mockRejectedValue(new Error('metrics unavailable'));
 
-    render(<DeveloperPage />);
+    renderDeveloperPage();
 
     expect(await screen.findByText('Release Helper')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Refresh Metrics' }));
+    await openApp(user, 'Release Helper');
+    await user.click(screen.getByRole('button', { name: 'Refresh metrics' }));
 
     await waitFor(() => {
       expect(botStoreApi.getDeveloperMetrics).toHaveBeenCalledWith('app-1');
     });
-    expect(screen.getByText('No metrics loaded yet.')).toBeInTheDocument();
+    expect(screen.getByText('No metrics loaded yet')).toBeInTheDocument();
     expect(screen.queryByText('Failed to load bot applications')).not.toBeInTheDocument();
   });
 
@@ -168,10 +199,11 @@ describe('DeveloperPage metrics', () => {
     const user = userEvent.setup();
     vi.mocked(writeClipboardText).mockRejectedValue(new Error('Clipboard permission denied.'));
 
-    render(<DeveloperPage />);
+    renderDeveloperPage();
 
     expect(await screen.findByText('Release Helper')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Regen Token' }));
+    await openApp(user, 'Release Helper');
+    await user.click(screen.getByRole('button', { name: 'Regen token' }));
     expect(await screen.findByText('regenerated-token')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Copy bot token' }));

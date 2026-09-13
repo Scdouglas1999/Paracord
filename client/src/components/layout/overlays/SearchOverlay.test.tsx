@@ -5,22 +5,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { channelApi } from '../../../api/channels';
 import { SearchOverlay } from './SearchOverlay';
 
-vi.mock('framer-motion', async () => {
-  const React = await import('react');
-  return {
-    AnimatePresence: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-    motion: {
-      div: React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
-        ({ children, ...props }, ref) => (
-          <div ref={ref} {...props}>
-            {children}
-          </div>
-        ),
-      ),
-    },
-  };
-});
-
 vi.mock('../../../api/channels', () => ({
   channelApi: {
     searchMessages: vi.fn(),
@@ -53,7 +37,7 @@ describe('SearchOverlay', () => {
   it('opens as a named dialog with a labeled search field and close action', async () => {
     const { onClose } = renderSearchOverlay();
 
-    expect(screen.getByRole('dialog', { name: 'Search Messages' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Search messages' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Search messages' })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: 'Close search' }));

@@ -17,7 +17,7 @@ import {
   arrayMove,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { GripVertical, Hash, Volume2, MessageSquare, Megaphone, Radio, Trash2, Plus, Shield, ChevronDown, ChevronRight, SlidersHorizontal } from 'lucide-react';
+import { Check, GripVertical, Hash, Volume2, MessageSquare, Megaphone, Radio, Trash2, Plus, Shield, ChevronDown, ChevronRight, SlidersHorizontal } from 'lucide-react';
 import type { Channel, Role } from '../../types';
 import { guildApi } from '../../api/guilds';
 import { channelApi, type ChannelFeatureSettings } from '../../api/channels';
@@ -26,9 +26,19 @@ import { buildChannelGroups, isVirtualGroup, type ChannelGroup } from '../../lib
 import { cn } from '../../lib/utils';
 import { ChannelPermissionsEditor } from './ChannelPermissionsEditor';
 import { confirm } from '../../stores/confirmStore';
-import { Button } from '../ui/Button';
-import { ErrorBanner } from '../ui/Feedback';
-import { FieldLabel } from './SettingsPrimitives';
+import {
+  Button,
+  Chip,
+  Divider,
+  ErrorBanner,
+  IconButton,
+  Input,
+  LoadingSpinner,
+  Select,
+  Switch,
+  Well,
+} from '../ui';
+import { FieldLabel, GroupLabel, SectionHeader, ToggleRow } from './SettingsPrimitives';
 import { toast } from '../../stores/toastStore';
 
 interface ChannelManagerProps {
@@ -62,6 +72,62 @@ function channelTypeBadge(type: number) {
   if (type === 4) return 'Category';
   return 'Text';
 }
+
+// A role's own colour is data, not design (spec §1 exception): the hex comes
+// from the role, and a role with no colour falls back to a text token rather
+// than a literal.
+function roleSwatch(role: Role): string {
+  return role.color ? `#${role.color.toString(16).padStart(6, '0')}` : 'var(--text-faint)';
+}
+
+/**
+ * A role you can switch on or off — the chip recipe (spec §3 radius 7) on the
+ * well → raised step: unselected is recessed, selected is raised and carries a
+ * check, so selection is never colour alone (§9).
+ */
+function RoleToggle({
+  role,
+  active,
+  onToggle,
+}: {
+  role: Role;
+  active: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={active}
+      // The visible label is the role's own name, which is dynamic; naming the
+      // control explicitly says what pressing it decides (§9), and keeps the
+      // visible text at the head of the accessible name (WCAG 2.5.3).
+      aria-label={`${role.name} can see this channel`}
+      className={cn(
+        'pc-focusable inline-flex h-[var(--h-control)] max-w-full items-center gap-1.5 rounded-[var(--radius-chip)] px-2.5',
+        'text-meta font-medium transition-[background-color,color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+        active
+          ? 'bg-bg-raised text-text-primary shadow-[var(--shadow-raised)]'
+          : 'bg-bg-mod-subtle text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary',
+      )}
+    >
+      <span
+        aria-hidden
+        className="inline-block h-2 w-2 shrink-0 rounded-[var(--radius-full)]"
+        style={{ backgroundColor: roleSwatch(role) }}
+      />
+      <span className="min-w-0 truncate">{role.name}</span>
+      {active && <Check size={13} className="shrink-0 text-accent-primary" aria-hidden />}
+    </button>
+  );
+}
+
+const CHANNEL_TYPE_OPTIONS = [
+  { value: 'text', label: 'Text', icon: Hash, hint: 'Send messages' },
+  { value: 'voice', label: 'Voice', icon: Volume2, hint: 'Talk and video' },
+  { value: 'forum', label: 'Forum', icon: MessageSquare, hint: 'Threaded posts' },
+  { value: 'stage', label: 'Stage', icon: Radio, hint: 'Audience and speakers' },
+] as const;
 
 export function ChannelManager({ guildId, channels, roles, canManageRoles, highlightedChannelId, onRefresh }: ChannelManagerProps) {
   const reorderChannels = useCurrentChannelStore((s) => s.reorderChannels);
@@ -366,9 +432,6 @@ export function ChannelManager({ guildId, channels, roles, canManageRoles, highl
   const toggleRoleId = (arr: string[], id: string) =>
     arr.includes(id) ? arr.filter((x) => x !== id) : [...arr, id];
 
-  const roleColorHex = (role: Role) =>
-    role.color ? `#${role.color.toString(16).padStart(6, '0')}` : '#99aab5';
-
   // Find the active item for DragOverlay
   const activeDragItem = useMemo(() => {
     if (!activeId) return null;
@@ -386,37 +449,43 @@ export function ChannelManager({ guildId, channels, roles, canManageRoles, highl
   }, [activeId, channels]);
 
   return (
-    <div className="settings-surface-card min-h-[calc(100dvh-13.5rem)] space-y-6 !p-8 max-sm:!p-6">
-      <div>
-        <h2 className="font-display text-heading text-text-primary">Channels</h2>
-        <p className="mt-1 text-sm leading-relaxed text-text-secondary">
-          Organize your server into categories and channels. Drag to reorder.
-        </p>
-      </div>
+    <div className="flex flex-col gap-8">
+      <SectionHeader
+        title="Channels"
+        description="Categories group related channels. Drag a row by its handle to change where it sits."
+      />
 
-      {error && <ErrorBanner message={error} />}
+      {error && <ErrorBanner message={error} multiline />}
 
       {/* Create Category */}
-      <div className="rounded-sm border border-border-subtle bg-bg-tertiary p-4">
-        <FieldLabel>New category</FieldLabel>
+      <section className="flex flex-col gap-3">
+        <FieldLabel className="mb-0">New category</FieldLabel>
         <div className="flex flex-col gap-2 sm:flex-row">
-          <input
-            className="input-field flex-1"
+          <Input
+            className="flex-1"
             placeholder="Category name"
+            aria-label="Category name"
             value={newCategoryName}
             onChange={(e) => setNewCategoryName(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') void handleCreateCategory(); }}
           />
-          <Button onClick={() => void handleCreateCategory()} disabled={!newCategoryName.trim()}>
+          <Button
+            variant="ghost"
+            size="lg"
+            onClick={() => void handleCreateCategory()}
+            disabled={!newCategoryName.trim()}
+          >
             Create
           </Button>
         </div>
         {!hasRealCategories && (
-          <p className="mt-2 text-meta leading-relaxed text-text-muted">
+          <p className="text-meta leading-relaxed text-text-secondary">
             Categories let you group related channels — like “Support”, “Off-topic”, or a project name.
           </p>
         )}
-      </div>
+      </section>
+
+      <Divider />
 
       {/* Channel groups with drag-and-drop */}
       <DndContext
@@ -427,7 +496,7 @@ export function ChannelManager({ guildId, channels, roles, canManageRoles, highl
       >
         {/* Category-level sorting */}
         <SortableContext items={categoryIds} strategy={verticalListSortingStrategy}>
-          <div className="card-stack">
+          <div className="flex flex-col gap-4">
             {groups.map((group) => (
               <CategoryGroupSection
                 key={group.id}
@@ -470,15 +539,15 @@ export function ChannelManager({ guildId, channels, roles, canManageRoles, highl
 
         <DragOverlay>
           {activeDragItem && (
-            <div className="flex scale-[1.02] items-center gap-2 rounded-sm border border-accent-primary bg-bg-accent px-3 py-2 text-sm text-text-primary shadow-md">
+            <div className="flex items-center gap-2 rounded-[var(--radius-control)] bg-bg-raised px-3 py-2 text-label text-text-primary shadow-[var(--shadow-lifted)]">
               {activeDragItem.type === 'category' ? (
-                <span className="text-section uppercase text-text-secondary">
+                <span className="text-section text-text-secondary">
                   {activeDragItem.channel.name}
                 </span>
               ) : (
                 <>
                   {channelTypeIcon(activeDragItem.channel.type)}
-                  <span>{activeDragItem.channel.name}</span>
+                  <span className="pc-display text-name">{activeDragItem.channel.name}</span>
                 </>
               )}
             </div>
@@ -486,18 +555,15 @@ export function ChannelManager({ guildId, channels, roles, canManageRoles, highl
         </DragOverlay>
       </DndContext>
 
-      {/* Create Channel form */}
-      <div className="space-y-4 rounded-sm border border-border-subtle bg-bg-tertiary p-4">
-        <FieldLabel className="!mb-0">New channel</FieldLabel>
+      <Divider />
 
-        {/* Type picker — selectable tiles */}
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {([
-            { value: 'text', label: 'Text', icon: Hash, hint: 'Send messages' },
-            { value: 'voice', label: 'Voice', icon: Volume2, hint: 'Talk & video' },
-            { value: 'forum', label: 'Forum', icon: MessageSquare, hint: 'Threaded posts' },
-            { value: 'stage', label: 'Stage', icon: Radio, hint: 'Audience & speakers' },
-          ] as const).map(({ value, label, icon: Icon, hint }) => {
+      {/* Create Channel form */}
+      <section className="flex flex-col gap-4">
+        <FieldLabel className="mb-0">New channel</FieldLabel>
+
+        {/* Type picker — a recessed tile per type; the chosen one lifts. */}
+        <div role="group" aria-label="Channel type" className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {CHANNEL_TYPE_OPTIONS.map(({ value, label, icon: Icon, hint }) => {
             const active = newChannelType === value;
             return (
               <button
@@ -506,30 +572,39 @@ export function ChannelManager({ guildId, channels, roles, canManageRoles, highl
                 onClick={() => setNewChannelType(value)}
                 aria-pressed={active}
                 className={cn(
-                  'flex flex-col items-start gap-1 rounded-sm border p-3 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
+                  'pc-focusable flex flex-col items-start gap-1 rounded-[var(--radius-well)] p-3 text-left',
+                  'transition-[background-color,color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
                   active
-                    ? 'border-accent-primary bg-accent-tint'
-                    : 'border-border-subtle bg-bg-secondary hover:border-border-strong hover:bg-bg-mod-subtle',
+                    ? 'bg-bg-raised shadow-[var(--shadow-raised)]'
+                    : 'bg-bg-well shadow-[var(--shadow-well)] hover:bg-bg-mod-subtle',
                 )}
               >
-                <Icon size={18} className={active ? 'text-accent-primary' : 'text-channel-icon'} />
-                <span className="text-label font-medium text-text-primary">{label}</span>
-                <span className="text-meta text-text-muted">{hint}</span>
+                <Icon size={18} className={active ? 'text-accent-primary' : 'text-channel-icon'} aria-hidden />
+                <span
+                  className={cn(
+                    'text-label font-medium',
+                    active ? 'text-text-primary' : 'text-text-secondary',
+                  )}
+                >
+                  {label}
+                </span>
+                <span className="text-meta text-text-faint">{hint}</span>
               </button>
             );
           })}
         </div>
 
         <div className="flex flex-col gap-2 sm:flex-row">
-          <input
-            className="input-field flex-1"
+          <Input
+            className="flex-1"
             placeholder="Channel name"
+            aria-label="Channel name"
             value={newChannelName}
             onChange={(e) => setNewChannelName(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') void handleCreateChannel(); }}
           />
-          <select
-            className="select-field sm:w-48"
+          <Select
+            className="sm:w-48"
             value={newChannelCategoryId}
             onChange={(e) => setNewChannelCategoryId(e.target.value)}
             aria-label="Parent category"
@@ -538,46 +613,32 @@ export function ChannelManager({ guildId, channels, roles, canManageRoles, highl
             {categories.map((cat) => (
               <option key={cat.id} value={cat.id}>{cat.name}</option>
             ))}
-          </select>
-          <Button onClick={() => void handleCreateChannel()} disabled={!newChannelName.trim()}>
+          </Select>
+          <Button size="lg" onClick={() => void handleCreateChannel()} disabled={!newChannelName.trim()}>
             Create
           </Button>
         </div>
 
         {canManageRoles && assignableRoles.length > 0 && (
-          <div className="space-y-2 border-t border-border-subtle pt-3">
-            <div className="text-section uppercase text-text-muted">Restrict to roles (optional)</div>
+          <div className="flex flex-col gap-2 pt-1">
+            <GroupLabel>Restrict to roles (optional)</GroupLabel>
             <div className="flex flex-wrap gap-1.5">
-              {assignableRoles.map((role) => {
-                const active = newChannelRequiredRoleIds.includes(role.id);
-                return (
-                  <button
-                    key={role.id}
-                    type="button"
-                    onClick={() => setNewChannelRequiredRoleIds((prev) => toggleRoleId(prev, role.id))}
-                    aria-pressed={active}
-                    className={cn(
-                      'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-meta font-medium outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
-                      active
-                        ? 'border-accent-primary bg-accent-tint text-text-primary'
-                        : 'border-border-subtle bg-bg-secondary text-text-secondary hover:border-border-strong hover:text-text-primary',
-                    )}
-                  >
-                    <span
-                      className="inline-block h-2 w-2 shrink-0 rounded-full"
-                      style={{ backgroundColor: roleColorHex(role) }}
-                    />
-                    {role.name}
-                  </button>
-                );
-              })}
+              {assignableRoles.map((role) => (
+                <RoleToggle
+                  key={role.id}
+                  role={role}
+                  active={newChannelRequiredRoleIds.includes(role.id)}
+                  onToggle={() => setNewChannelRequiredRoleIds((prev) => toggleRoleId(prev, role.id))}
+                />
+              ))}
             </div>
-            <p className="text-meta leading-relaxed text-text-muted">
-              Only members with a selected role will see this channel. Leave empty to make it public.
+            <p className="text-meta leading-relaxed text-text-secondary">
+              Only members with a selected role will see this channel. Leave every role off to make
+              it public.
             </p>
           </div>
         )}
-      </div>
+      </section>
 
       {permissionsChannel && (
         <ChannelPermissionsEditor
@@ -683,30 +744,30 @@ function CategoryGroupSection({
   return (
     <div ref={setNodeRef} style={style}>
       {/* Category header */}
-      <div className="group/cat flex items-center gap-1.5 rounded-sm px-1.5 py-1.5 transition-colors hover:bg-bg-mod-subtle">
+      <div className="group/cat flex items-center gap-1 rounded-[var(--radius-control)] px-1.5 py-1 transition-colors hover:bg-bg-mod-subtle">
         {isSortableCategory && (
-          <button
-            className="cursor-grab text-text-muted opacity-0 outline-none transition-opacity hover:text-text-secondary focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] active:cursor-grabbing group-hover/cat:opacity-100"
-            aria-label={`Reorder ${group.name} category`}
-            title={`Reorder ${group.name} category`}
+          <IconButton
+            label={`Reorder ${group.name} category`}
+            size="md"
+            className="cursor-grab opacity-0 focus-visible:opacity-100 active:cursor-grabbing group-hover/cat:opacity-100"
             {...attributes}
             {...listeners}
           >
             <GripVertical size={14} />
-          </button>
+          </IconButton>
         )}
-        <button
-          type="button"
+        <IconButton
+          label={collapsed ? `Expand ${group.name}` : `Collapse ${group.name}`}
+          size="md"
           onClick={() => setCollapsed((c) => !c)}
-          className="flex h-5 w-5 shrink-0 items-center justify-center rounded-xs text-text-muted outline-none transition-colors hover:text-text-secondary focus-visible:shadow-[var(--focus-ring)]"
-          aria-label={collapsed ? `Expand ${group.name}` : `Collapse ${group.name}`}
           aria-expanded={!collapsed}
         >
           {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
-        </button>
+        </IconButton>
         {isEditing ? (
-          <input
-            className="input-field flex-1 !min-h-0 !py-1 text-sm"
+          <Input
+            className="h-[var(--h-control)] flex-1"
+            aria-label={`Rename ${group.name}`}
             value={editingCategoryName}
             onChange={(e) => onEditCategoryNameChange(e.target.value)}
             onKeyDown={(e) => {
@@ -718,8 +779,8 @@ function CategoryGroupSection({
         ) : (
           <span
             className={cn(
-              'flex-1 truncate text-section uppercase',
-              group.isReal ? 'cursor-pointer text-text-secondary' : 'text-text-muted'
+              'flex-1 truncate px-1 text-section',
+              group.isReal ? 'cursor-pointer text-text-secondary' : 'text-text-faint'
             )}
             onDoubleClick={() => {
               if (group.isReal) onStartEditCategory(group.id, group.name);
@@ -733,7 +794,7 @@ function CategoryGroupSection({
           <>
             {isEditing ? (
               <div className="flex items-center gap-1">
-                <Button size="sm" onClick={() => void onSaveRename(group.id)}>
+                <Button variant="ghost" size="sm" onClick={() => void onSaveRename(group.id)}>
                   Save
                 </Button>
                 <Button variant="ghost" size="sm" onClick={onCancelEdit}>
@@ -742,37 +803,37 @@ function CategoryGroupSection({
               </div>
             ) : (
               <div className="flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/cat:opacity-100">
-                <button
-                  className="flex h-7 w-7 items-center justify-center rounded-sm text-text-muted outline-none transition-colors hover:bg-bg-mod-strong hover:text-text-primary focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)]"
-                  title="Add channel"
-                  aria-label={`Add channel to ${group.name}`}
+                <IconButton
+                  label={`Add channel to ${group.name}`}
+                  size="md"
                   onClick={() => onStartInlineAdd(group.id)}
                 >
                   <Plus size={15} />
-                </button>
-                <button
-                  className="flex h-7 w-7 items-center justify-center rounded-sm text-text-muted outline-none transition-colors hover:bg-danger-tint hover:text-accent-danger focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)]"
-                  title="Delete category"
-                  aria-label={`Delete ${group.name} category`}
+                </IconButton>
+                <IconButton
+                  label={`Delete ${group.name} category`}
+                  size="md"
+                  className="hover:bg-danger-well hover:text-accent-danger"
                   onClick={() => void onDeleteCategory(group.id)}
                 >
                   <Trash2 size={15} />
-                </button>
+                </IconButton>
               </div>
             )}
           </>
         )}
         {!group.isReal && !isVirtualGroup(group.id) && (
-          <span className="text-meta text-text-muted">Uncategorized</span>
+          <span className="text-meta text-text-faint">Uncategorized</span>
         )}
       </div>
 
       {/* Inline add channel */}
       {isAddingInline && !collapsed && (
-        <div className="ml-6 mt-1.5 space-y-2 rounded-sm border border-border-subtle bg-bg-tertiary p-2.5">
-          <input
-            className="w-full rounded-sm border border-border-subtle bg-bg-tertiary px-2.5 py-1.5 text-sm text-text-primary outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] placeholder:text-text-muted focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
+        <Well className="ml-6 mt-1.5 flex flex-col gap-2 p-2.5">
+          <Input
+            className="h-[var(--h-control)] bg-bg-plate shadow-none"
             placeholder="Channel name"
+            aria-label={`Name the new channel in ${group.name}`}
             value={inlineName}
             onChange={(e) => onInlineNameChange(e.target.value)}
             onKeyDown={(e) => {
@@ -782,23 +843,23 @@ function CategoryGroupSection({
             autoFocus
           />
           <div className="flex items-center gap-2">
-            <select
-              className="rounded-sm border border-border-subtle bg-bg-tertiary px-2 py-1.5 text-meta text-text-secondary outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
+            <Select
+              className="h-[var(--h-control)] w-28 bg-bg-plate text-meta shadow-none"
               value={inlineType}
               onChange={(e) => onInlineTypeChange(e.target.value as 'text' | 'voice')}
               aria-label="Channel type"
             >
               <option value="text">Text</option>
               <option value="voice">Voice</option>
-            </select>
-            <Button size="sm" onClick={() => void onInlineCreate(parentIdForCreate)}>
+            </Select>
+            <Button variant="ghost" size="sm" onClick={() => void onInlineCreate(parentIdForCreate)}>
               Create
             </Button>
             <Button variant="ghost" size="sm" onClick={onCancelInlineAdd}>
               Cancel
             </Button>
           </div>
-        </div>
+        </Well>
       )}
 
       {/* Channels in this group */}
@@ -820,9 +881,11 @@ function CategoryGroupSection({
             />
           ))}
           {group.channels.length === 0 && (
-            <div className="px-6 py-1.5 text-meta text-text-muted">
-              {group.isReal ? 'No channels here yet — add one with the + above.' : 'No channels here yet.'}
-            </div>
+            <p className="px-6 py-1.5 text-meta leading-relaxed text-text-secondary">
+              {group.isReal
+                ? `Nothing in ${group.name} yet — add the first channel with the plus above.`
+                : 'Every channel in this space already belongs to a category.'}
+            </p>
           )}
         </div>
       </SortableContext>
@@ -1054,43 +1117,43 @@ function SortableChannelItem({
         data-channel-id={channel.id}
         data-highlighted-channel={isHighlighted ? channel.id : undefined}
         className={cn(
-          'group/row flex items-center gap-2 rounded-sm px-2 py-1.5 transition-colors hover:bg-bg-mod-subtle',
-          isHighlighted && 'bg-accent-tint ring-1 ring-inset ring-accent-primary',
+          'group/row flex flex-wrap items-center gap-2 rounded-[var(--radius-control)] px-2 py-1.5 transition-colors hover:bg-bg-mod-subtle',
+          isHighlighted && 'bg-bg-raised shadow-[var(--shadow-raised)]',
         )}
       >
-        <button
-          className="cursor-grab text-text-muted opacity-0 outline-none transition-opacity hover:text-text-secondary focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] active:cursor-grabbing group-hover/row:opacity-100"
-          aria-label={`Reorder ${channel.name || 'channel'}`}
-          title={`Reorder ${channel.name || 'channel'}`}
+        <IconButton
+          label={`Reorder ${channel.name || 'channel'}`}
+          size="md"
+          className="cursor-grab opacity-0 focus-visible:opacity-100 active:cursor-grabbing group-hover/row:opacity-100"
           {...attributes}
           {...listeners}
         >
           <GripVertical size={14} />
-        </button>
+        </IconButton>
         {channelTypeIcon(channel.type)}
-        <span className="flex-1 truncate text-label text-text-primary">{channel.name || 'unnamed'}</span>
-        <span className="rounded-xs bg-bg-mod-strong px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.04em] text-text-secondary">
-          {channelTypeBadge(channel.type)}
+        <span className="pc-display min-w-0 flex-1 truncate text-name text-text-primary">
+          {channel.name || 'unnamed'}
         </span>
+        <Chip size="sm">{channelTypeBadge(channel.type)}</Chip>
         {roleCount > 0 && (
-          <span className="rounded-xs bg-accent-tint px-1.5 py-0.5 text-[10px] font-semibold text-accent-primary">
+          <Chip size="sm" tone="accent">
             {roleCount} role{roleCount !== 1 ? 's' : ''}
-          </span>
+          </Chip>
         )}
         {isAnnouncement && (
           <div className="ml-1 flex items-center gap-1.5">
-            <span className="text-meta tabular-nums text-text-muted">
+            <span className="pc-mono text-meta text-text-faint">
               {followers.length} following
             </span>
-            <select
-              className="rounded-sm border border-border-subtle bg-bg-tertiary px-1.5 py-1 text-meta text-text-secondary outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
+            <Select
+              className="h-[var(--h-control)] w-36 text-meta"
               value={followTargetId}
               onChange={(e) => setFollowTargetId(e.target.value)}
               disabled={followTargets.length === 0 || followersLoading || followBusy}
-              title="Target channel"
+              aria-label={`Channel that should follow ${channel.name || 'this channel'}`}
             >
               {followTargets.length === 0 ? (
-                <option value="">No target channels</option>
+                <option value="">No text channel to follow</option>
               ) : (
                 followTargets.map((target) => (
                   <option key={target.id} value={target.id}>
@@ -1098,32 +1161,34 @@ function SortableChannelItem({
                   </option>
                 ))
               )}
-            </select>
+            </Select>
             {activeFollow ? (
-              <button
-                type="button"
-                className="rounded-sm border border-accent-danger/40 bg-danger-tint px-2 py-1 text-meta font-semibold text-accent-danger outline-none transition-colors hover:bg-danger-tint focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
+              <Button
+                variant="danger"
+                size="sm"
                 onClick={() => void removeFollow()}
                 disabled={!followTargetId || followBusy || followersLoading}
+                loading={followBusy}
               >
-                {followBusy ? '…' : 'Unfollow'}
-              </button>
+                Unfollow
+              </Button>
             ) : (
-              <button
-                type="button"
-                className="rounded-sm border border-accent-primary/40 bg-accent-tint px-2 py-1 text-meta font-semibold text-accent-primary outline-none transition-colors hover:bg-accent-tint-strong focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={() => void addFollow()}
                 disabled={!followTargetId || followBusy || followersLoading}
+                loading={followBusy}
               >
-                {followBusy ? '…' : 'Follow'}
-              </button>
+                Follow
+              </Button>
             )}
           </div>
         )}
         {isVoice && (
           <div className="ml-1 flex items-center gap-3">
-            <label className="flex items-center gap-1.5" title="Audio bitrate">
-              <span className="text-meta font-medium text-text-muted">Bitrate</span>
+            <label className="flex items-center gap-1.5">
+              <span className="text-meta text-text-secondary">Bitrate</span>
               <input
                 type="range"
                 min={8000}
@@ -1133,196 +1198,168 @@ function SortableChannelItem({
                 onChange={(e) => setDraftBitrate(Number(e.target.value))}
                 onMouseUp={() => void onUpdateVoiceSettings(channel.id, draftBitrate, draftUserLimit)}
                 onTouchEnd={() => void onUpdateVoiceSettings(channel.id, draftBitrate, draftUserLimit)}
-                className="w-16 accent-accent-primary"
+                className="pc-focusable h-[var(--h-control)] w-16 accent-accent-primary"
               />
-              <span className="w-8 text-meta tabular-nums text-text-muted">
+              <span className="pc-mono w-8 text-meta text-text-faint">
                 {Math.round(draftBitrate / 1000)}k
               </span>
             </label>
-            <label className="flex items-center gap-1.5" title="User limit (0 = unlimited)">
-              <span className="text-meta font-medium text-text-muted">Limit</span>
-              <input
+            <label className="flex items-center gap-1.5">
+              <span className="text-meta text-text-secondary">People allowed in</span>
+              <Input
                 type="number"
                 min={0}
                 max={99}
                 value={draftUserLimit}
                 onChange={(e) => setDraftUserLimit(Number(e.target.value))}
                 onBlur={() => void onUpdateVoiceSettings(channel.id, draftBitrate, draftUserLimit)}
-                className="w-11 rounded-sm border border-border-subtle bg-bg-tertiary px-1 py-1 text-center text-meta text-text-secondary outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
+                className="pc-mono h-[var(--h-control)] w-14 px-2 text-center text-meta"
               />
             </label>
           </div>
         )}
         {!isVoice && channel.type !== 4 && (
           <>
-            <label className="flex cursor-pointer items-center gap-1.5" title="NSFW channel">
-              <input
-                type="checkbox"
+            <span className="flex items-center gap-1.5">
+              <span className="text-meta text-text-secondary">Not safe for work</span>
+              <Switch
+                size="sm"
                 checked={channel.nsfw ?? false}
-                onChange={(e) => void onToggleNsfw(channel.id, e.target.checked)}
-                className="h-3.5 w-3.5 rounded-xs border-border-subtle accent-accent-danger"
+                onChange={(next) => void onToggleNsfw(channel.id, next)}
+                label={`Mark ${channel.name || 'this channel'} not safe for work`}
+                // §9 hit target: the 22px track carries an invisible 32px
+                // pointer area rather than growing into a fat toggle.
+                className="after:absolute after:-inset-[5px] after:content-['']"
               />
-              <span className="text-meta font-medium text-text-muted">NSFW</span>
-            </label>
-            <label className="flex items-center gap-1.5" title="Slowmode">
-              <span className="text-meta font-medium text-text-muted">Slow</span>
-              <select
-                className="rounded-sm border border-border-subtle bg-bg-tertiary px-1.5 py-1 text-meta text-text-secondary outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
+            </span>
+            <label className="flex items-center gap-1.5">
+              <span className="text-meta text-text-secondary">Slowmode</span>
+              <Select
+                className="h-[var(--h-control)] w-24 text-meta"
                 value={channel.rate_limit_per_user ?? 0}
                 onChange={(e) => void onUpdateSlowmode(channel.id, Number(e.target.value))}
               >
                 {SLOWMODE_OPTIONS.map((opt) => (
                   <option key={opt.value} value={opt.value}>{opt.label}</option>
                 ))}
-              </select>
+              </Select>
             </label>
           </>
         )}
         {/* Advanced feature settings toggle (text/forum channels only) */}
         {channel.type !== 4 && !isVoice && (
-          <button
-            className={cn(
-              'flex h-7 items-center gap-1.5 rounded-sm px-2 text-meta font-semibold text-text-muted outline-none transition-colors hover:bg-bg-mod-strong hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]',
-              featuresExpanded && 'bg-accent-tint text-accent-primary',
-            )}
+          <Button
+            variant="ghost"
+            size="sm"
+            className={cn('gap-1.5', featuresExpanded && 'bg-bg-mod-strong text-text-primary')}
             onClick={() => void handleToggleFeatures()}
-            title="Advanced channel features"
+            aria-expanded={featuresExpanded}
             aria-label={`${featuresExpanded ? 'Hide' : 'Show'} advanced features for ${channel.name || 'channel'}`}
           >
             <SlidersHorizontal size={14} aria-hidden />
             <span>Features</span>
             {activeFeatureCount > 0 && (
-              <span className="rounded-full bg-accent-primary/15 px-1.5 text-[10px] tabular-nums text-accent-primary">
+              <Chip size="sm" tone="accent" className="pc-mono">
                 {activeFeatureCount}
-              </span>
+              </Chip>
             )}
-            {featuresExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-          </button>
+            {featuresExpanded ? <ChevronDown size={15} aria-hidden /> : <ChevronRight size={15} aria-hidden />}
+          </Button>
         )}
-        <button
-          className="flex h-7 w-7 items-center justify-center rounded-sm text-text-muted outline-none transition-colors hover:bg-bg-mod-strong hover:text-accent-primary focus-visible:shadow-[var(--focus-ring)]"
+        <IconButton
+          label={`Edit permissions for ${channel.name || 'channel'}`}
+          size="md"
+          className="hover:text-accent-primary"
           onClick={() => onEditPermissions(channel)}
-          title="Edit permissions"
-          aria-label={`Edit permissions for ${channel.name || 'channel'}`}
         >
           <Shield size={15} />
-        </button>
-        <button
-          className="flex h-7 w-7 items-center justify-center rounded-sm text-text-muted outline-none transition-colors hover:bg-danger-tint hover:text-accent-danger focus-visible:shadow-[var(--focus-ring)]"
+        </IconButton>
+        <IconButton
+          label={`Delete ${channel.name || 'channel'}`}
+          size="md"
+          className="hover:bg-danger-well hover:text-accent-danger"
           onClick={() => void onDelete(channel.id)}
-          title="Delete channel"
-          aria-label={`Delete ${channel.name || 'channel'}`}
         >
           <Trash2 size={15} />
-        </button>
+        </IconButton>
       </div>
 
       {/* Advanced feature settings panel */}
       {featuresExpanded && channel.type !== 4 && !isVoice && (
-        <div className="ml-6 mt-1 space-y-3 rounded-sm border border-border-subtle bg-bg-tertiary px-4 py-3">
-          <div className="flex items-start gap-2.5 border-b border-border-subtle pb-3">
+        <Well className="ml-6 mt-1 flex flex-col gap-3 px-4 py-3">
+          <div className="flex items-start gap-2.5">
             <SlidersHorizontal size={16} className="mt-0.5 shrink-0 text-accent-primary" aria-hidden />
             <div>
-              <h4 className="text-label font-semibold text-text-primary">Channel features</h4>
+              <h4 className="pc-display text-name text-text-primary">Channel features</h4>
               <p className="mt-0.5 text-meta leading-relaxed text-text-secondary">
                 Automation and privacy controls that apply only to #{channel.name || 'this channel'}.
               </p>
             </div>
           </div>
+          <Divider />
           {featuresBusy && (
-            <p className="text-meta text-text-muted">Loading…</p>
+            <LoadingSpinner size="sm" label="Loading this channel's features…" className="justify-start" />
           )}
           {!featuresBusy && featureSettings && (
             <>
               {/* Disappearing messages */}
               <div className="flex items-center gap-3">
-                <span className="w-36 shrink-0 text-meta font-medium text-text-secondary">
+                <span className="w-36 shrink-0 text-meta text-text-secondary">
                   Disappearing messages
                 </span>
-                <select
-                  className="rounded-sm border border-border-subtle bg-bg-tertiary px-2 py-1 text-meta text-text-primary outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
+                <Select
+                  className="h-[var(--h-control)] w-32 bg-bg-plate text-meta shadow-none"
+                  aria-label={`How long messages stay in #${channel.name || 'this channel'}`}
                   value={featureSettings.disappearing_seconds}
                   onChange={(e) => void patchFeatureSettings({ disappearing_seconds: Number(e.target.value) })}
                 >
                   {DISAPPEARING_OPTIONS.map((opt) => (
                     <option key={opt.value} value={opt.value}>{opt.label}</option>
                   ))}
-                </select>
+                </Select>
               </div>
 
-              {/* Anonymous posting */}
-              <label className="flex items-center gap-3 cursor-pointer">
-                <span className="w-36 shrink-0 text-meta font-medium text-text-secondary">
-                  Anonymous posting
-                </span>
-                <input
-                  type="checkbox"
-                  checked={featureSettings.anonymous_posting_enabled}
-                  onChange={(e) => void patchFeatureSettings({ anonymous_posting_enabled: e.target.checked })}
-                  className="h-4 w-4 rounded-xs border-border-subtle accent-accent-primary"
-                />
-                <span className="text-meta text-text-muted">
-                  {featureSettings.anonymous_posting_enabled ? 'Enabled' : 'Disabled'}
-                </span>
-              </label>
+              <ToggleRow
+                label="Anonymous posting"
+                description="Members can post here without their name attached."
+                checked={featureSettings.anonymous_posting_enabled}
+                onChange={(next) => void patchFeatureSettings({ anonymous_posting_enabled: next })}
+                className="py-0"
+              />
 
-              {/* Adaptive slowmode */}
-              <label className="flex items-center gap-3 cursor-pointer">
-                <span className="w-36 shrink-0 text-meta font-medium text-text-secondary">
-                  Adaptive slowmode
-                </span>
-                <input
-                  type="checkbox"
-                  checked={featureSettings.adaptive_slowmode_enabled}
-                  onChange={(e) => void patchFeatureSettings({ adaptive_slowmode_enabled: e.target.checked })}
-                  className="h-4 w-4 rounded-xs border-border-subtle accent-accent-primary"
-                />
-                <span className="text-meta text-text-muted">
-                  {featureSettings.adaptive_slowmode_enabled ? 'Enabled' : 'Disabled'}
-                </span>
-              </label>
+              <ToggleRow
+                label="Adaptive slowmode"
+                description="Paracord raises the wait between messages on its own when the channel gets busy."
+                checked={featureSettings.adaptive_slowmode_enabled}
+                onChange={(next) => void patchFeatureSettings({ adaptive_slowmode_enabled: next })}
+                className="py-0"
+              />
 
               {/* Slowmode exempt roles */}
               {assignableRoles.length > 0 && (
-                <div className="space-y-1.5">
-                  <span className="text-meta font-medium text-text-secondary">
-                    Slowmode exempt roles
-                  </span>
+                <div className="flex flex-col gap-1.5">
+                  <GroupLabel>Roles slowmode skips</GroupLabel>
                   <div className="flex flex-wrap gap-1.5">
-                    {assignableRoles.map((role) => {
-                      const isExempt = featureSettings.slowmode_exempt_role_ids.includes(role.id);
-                      const colorHex = role.color
-                        ? `#${role.color.toString(16).padStart(6, '0')}`
-                        : '#99aab5';
-                      return (
-                        <button
-                          key={role.id}
-                          type="button"
-                          onClick={() => toggleExemptRole(role.id)}
-                          className={cn(
-                            'flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-meta font-medium outline-none transition-colors focus-visible:shadow-[var(--focus-ring)]',
-                            isExempt
-                              ? 'border-accent-primary bg-accent-tint text-accent-primary'
-                              : 'border-border-subtle bg-bg-secondary text-text-muted hover:border-border-strong hover:text-text-secondary',
-                          )}
-                        >
-                          <span
-                            className="inline-block h-2 w-2 rounded-full shrink-0"
-                            style={{ backgroundColor: colorHex }}
-                          />
-                          {role.name}
-                        </button>
-                      );
-                    })}
+                    {assignableRoles.map((role) => (
+                      <RoleToggle
+                        key={role.id}
+                        role={role}
+                        active={featureSettings.slowmode_exempt_role_ids.includes(role.id)}
+                        onToggle={() => toggleExemptRole(role.id)}
+                      />
+                    ))}
                   </div>
                 </div>
               )}
             </>
           )}
           {!featuresBusy && !featureSettings && (
-            <p className="text-meta text-text-muted">Could not load feature settings.</p>
+            <ErrorBanner
+              multiline
+              message={`Paracord couldn't read the feature settings for #${channel.name || 'this channel'}. Check your connection and your Manage Channels permission, then open Features again.`}
+            />
           )}
-        </div>
+        </Well>
       )}
     </div>
   );

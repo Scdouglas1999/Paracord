@@ -1,6 +1,6 @@
 {
-  "captured_at": "2026-07-26",
-  "release": "v2.0.0",
+  "captured_at": "2026-09-13",
+  "release": "2.0.0",
   "folder": "docs/images/readme",
   "viewport": {
     "width": 1440,
@@ -8,13 +8,14 @@
     "device_scale_factor": 2
   },
   "output_width": 1760,
-  "theme": "dark",
+  "theme": "night",
   "accent": "emerald",
+  "design": "lantern-stage",
   "files": [
     "home.jpg",
-    "rooms.jpg",
+    "lobby.jpg",
     "messaging.jpg",
-    "members.jpg",
+    "people.jpg",
     "engineering.jpg",
     "command-palette.jpg",
     "appearance.jpg",

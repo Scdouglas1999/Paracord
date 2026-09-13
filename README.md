@@ -28,47 +28,47 @@
 
 ---
 
-Paracord is a source-available, Discord-style community platform that you run yourself. One server hosts spaces, text and voice rooms, direct messages, roles, moderation, bots, events, and community tools — without renting a third-party media service or handing your members' conversations to someone else.
+Paracord is a source-available, Discord-style community platform that you run yourself. One server hosts buildings, text and voice rooms, direct messages, roles, moderation, bots, events, and community tools — without renting a third-party media service or handing your members' conversations to someone else.
 
-The client opens on a single Home rather than a wall of server icons. Mentions, unread conversations, live rooms, and direct messages are ranked together, so you see what actually wants your attention instead of sweeping each space by hand.
+The client is a building at night, and light means people. Every community you belong to is a building; every room in it is a window, lit while somebody is in there. The app opens on Home — the street outside your buildings — rather than a wall of server icons, so you can see where people are before you go looking.
 
-![Paracord Home: live rooms, the space you were last in, and channels to pick back up](docs/images/readme/home.jpg)
+![Home: the buildings you belong to, which of their rooms are lit, and the work waiting on you](docs/images/readme/home.jpg)
 
 ## Why Paracord
 
 - **Own the deployment.** One server binary, or Docker Compose. SQLite works out of the box; PostgreSQL is there when the instance outgrows it.
 - **Own the media path.** Voice, video, and screen share run on Paracord's native QUIC/WebTransport stack by default. LiveKit is an option, not a dependency.
 - **Start without a configuration ceremony.** First run writes the config, generates a JWT signing secret and SQLite database, and — for the standalone binary — issues a self-signed certificate. Then it prints the URL to open.
-- **Use one client everywhere.** Connect to several Paracord servers and move between their spaces, conversations, and notifications without switching apps.
+- **Use one client everywhere.** Connect to several Paracord servers and move between their buildings, conversations, and notifications without switching apps.
 - **Shape the community.** Roles, permissions, onboarding, moderation, AutoMod, bots, webhooks, storage policy, events, and audit logs are all managed in the app.
 - **See what the server is doing.** A built-in health view reports backups, database size, transport security, and capacity — and tells you what to fix, not just what broke.
 
 ## A look around
 
-Spaces open on the people who are already there. Rooms that have someone in them come first; the rest stay one click away.
+A building's lobby is what you see from the street: who has their lights on, which rooms are lit right now and who is in them, what is coming up, and the text rooms below. A lit room shows you what is happening in it before you decide to walk in.
 
-![A space opening on its rooms, two of them occupied](docs/images/readme/rooms.jpg)
+![A building's lobby: two rooms lit with the people in them, one dark, and an event coming up](docs/images/readme/lobby.jpg)
 
-Conversations carry what you would expect them to: replies, reactions, threads, polls, attachments, and code that arrives readable.
-
-| | |
-| :--- | :--- |
-| ![A text channel with replies, reactions, inline code, and an open poll](docs/images/readme/messaging.jpg) | ![A syntax-highlighted code block and the thread branching off it](docs/images/readme/engineering.jpg) |
-| Markdown, attachments, reactions, polls, scheduled messages, commands, GIFs, stickers, and embeds. | Syntax-highlighted code blocks, and threads that split a tangent off without derailing the channel. |
-
-Context panels stay out of the way until you ask for them, and the command palette reaches anything you can name.
+Conversations carry what you would expect them to: replies, reactions, threads, polls, attachments, and code that arrives readable. The header counts the people reading rather than listing everyone who ever joined.
 
 | | |
 | :--- | :--- |
-| ![The Members panel open beside a channel, grouped by role](docs/images/readme/members.jpg) | ![The command palette](docs/images/readme/command-palette.jpg) |
-| Members, threads, pins, inbox, search, and summaries open beside the conversation rather than on top of it. | Jump to any action, space, channel, DM, or setting with <kbd>Ctrl</kbd>/<kbd>⌘</kbd> + <kbd>K</kbd>. |
+| ![A text room with replies, reactions, inline code, and an open poll](docs/images/readme/messaging.jpg) | ![A syntax-highlighted code block and the thread branching off it](docs/images/readme/engineering.jpg) |
+| Markdown, attachments, reactions, polls, scheduled messages, commands, GIFs, stickers, and embeds. | Syntax-highlighted code blocks, and threads that split a tangent off without derailing the room. |
 
-The client is yours to set up, and so is the space.
+There is no member list pinned to the side of every room. The people who are here *now* are a lit strip in the header, and its sheet is the one place a full list lives.
 
 | | |
 | :--- | :--- |
-| ![Appearance settings: themes, accent colors, and message density](docs/images/readme/appearance.jpg) | ![The space administration overview](docs/images/readme/space-settings.jpg) |
-| Dark, light, AMOLED, and high-contrast themes; accent colors; message density; locale; and guarded custom CSS. | Roles, channels, invites, bots, events, onboarding, economy, storage, moderation, reports, and audit logs. |
+| ![The header's people sheet, showing who is reading and who has their lights on](docs/images/readme/people.jpg) | ![The command palette](docs/images/readme/command-palette.jpg) |
+| Who is reading, who is in a room, and who is simply around — on request, not permanently docked. | Jump to any action, building, room, DM, or setting with <kbd>Ctrl</kbd>/<kbd>⌘</kbd> + <kbd>K</kbd>. |
+
+The client is yours to set up, and so is the building.
+
+| | |
+| :--- | :--- |
+| ![Appearance settings: Night, Daylight, AMOLED and high-contrast themes, accent colours and message density](docs/images/readme/appearance.jpg) | ![The building's administration overview](docs/images/readme/space-settings.jpg) |
+| Night, Daylight, AMOLED, and high-contrast themes; accent colours; message density; locale; and guarded custom CSS. The accent recolours the actions you can take — never the light that says who is present. | Roles, rooms, invites, bots, events, onboarding, economy, storage, moderation, reports, and audit logs. |
 
 ## What Paracord includes
 
@@ -334,7 +334,7 @@ npx tauri build
 | [Known Limitations](docs/known-limitations.md) | Platform and operational support boundaries |
 | [Bot Development](docs/bot-development.md) | Bots, commands, interactions, and webhooks |
 | [Federation Protocol](docs/federation-protocol.md) | Signed federation envelopes and the trust model |
-| [Design Spec](docs/design-spec.md) | The Emerald Commons visual system |
+| [Design language](docs/lantern-stage-spec.md) | The Lantern Stage visual system — light means people |
 | [Layout Spec](docs/layout-spec.md) | Unified navigation, Home, Rooms, and context panels |
 | [API Contracts](docs/api-contracts.md) | API and realtime interface notes |
 | [Release Notes](RELEASE_NOTES.md) | What changed in the current release |

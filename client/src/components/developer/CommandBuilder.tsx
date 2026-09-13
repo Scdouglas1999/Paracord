@@ -10,8 +10,8 @@ import {
 import { commandApi, type CreateCommandRequest } from '../../api/commands';
 import { extractApiError } from '../../api/client';
 import { cn } from '../../lib/utils';
-import { Button } from '../ui/Button';
-import { Input, Select } from '../ui/Input';
+import { Button, Divider, ErrorBanner, IconButton, Raised, Switch, TextField } from '../ui';
+import { Select } from '../ui/Input';
 
 interface CommandBuilderProps {
   appId: string;
@@ -22,13 +22,13 @@ interface CommandBuilderProps {
 
 const COMMAND_TYPE_LABELS: Record<number, string> = {
   [ApplicationCommandType.ChatInput]: 'Chat Input (Slash)',
-  [ApplicationCommandType.User]: 'User Context Menu',
-  [ApplicationCommandType.Message]: 'Message Context Menu',
+  [ApplicationCommandType.User]: 'User context menu',
+  [ApplicationCommandType.Message]: 'Message context menu',
 };
 
 const OPTION_TYPE_LABELS: Record<number, string> = {
-  [CommandOptionType.SubCommand]: 'Sub Command',
-  [CommandOptionType.SubCommandGroup]: 'Sub Command Group',
+  [CommandOptionType.SubCommand]: 'Sub command',
+  [CommandOptionType.SubCommandGroup]: 'Sub command group',
   [CommandOptionType.String]: 'String',
   [CommandOptionType.Integer]: 'Integer',
   [CommandOptionType.Boolean]: 'Boolean',
@@ -60,19 +60,20 @@ function supportsNestedOptions(type: CommandOptionType): boolean {
 // A quiet inline "add" affordance shared by choices/sub-options.
 function AddButton({ label, onClick }: { label: string; onClick: () => void }) {
   return (
-    <button
-      type="button"
+    <Button
+      variant="ghost"
+      size="sm"
       aria-label={label}
       onClick={onClick}
-      className="inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-meta font-semibold text-accent-primary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-tint focus-visible:shadow-[var(--focus-ring)]"
+      className="text-accent-primary"
     >
-      <Plus size={12} /> {label}
-    </button>
+      <Plus size={12} aria-hidden /> {label}
+    </Button>
   );
 }
 
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return <span className="text-section uppercase text-text-muted">{children}</span>;
+function FieldLabel({ children }: { children: React.ReactNode }) {
+  return <span className="text-section text-text-faint">{children}</span>;
 }
 
 // ---- Option Editor ----
@@ -87,6 +88,7 @@ interface OptionEditorProps {
 
 function OptionEditor({ option, index, depth, onChange, onRemove }: OptionEditorProps) {
   const [expanded, setExpanded] = useState(true);
+  const requiredId = useId();
 
   const updateField = <K extends keyof CommandOption>(key: K, val: CommandOption[K]) => {
     onChange({ ...option, [key]: val });
@@ -132,53 +134,52 @@ function OptionEditor({ option, index, depth, onChange, onRemove }: OptionEditor
   return (
     <div
       className={cn(
-        'space-y-3 rounded-sm border border-border-subtle bg-bg-mod-subtle p-3',
+        // Parted by a hairline, never boxed: depth in this form belongs to the
+        // fields, which already carry the well recipe (§1.6, §6.8).
+        'flex flex-col gap-3 border-t border-border-subtle pt-3',
         depth > 0 && 'ml-4',
       )}
     >
       <div className="flex items-center gap-2">
-        <button
-          type="button"
-          aria-label={`${expanded ? 'Collapse' : 'Expand'} option ${index + 1}`}
-          className="flex h-6 w-6 items-center justify-center rounded-sm text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+        <IconButton
+          label={`${expanded ? 'Collapse' : 'Expand'} option ${index + 1}`}
           onClick={() => setExpanded(!expanded)}
         >
           {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-        </button>
+        </IconButton>
         <span className="text-label text-text-primary">Option {index + 1}</span>
-        {option.name && (
-          <code className="font-code text-meta text-text-muted">{option.name}</code>
-        )}
-        <button
-          type="button"
-          aria-label={`Remove option ${index + 1}`}
-          className="ml-auto flex h-6 w-6 items-center justify-center rounded-sm text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-danger hover:text-text-on-danger focus-visible:shadow-[var(--focus-ring)]"
+        {option.name && <code className="pc-mono text-meta text-text-muted">{option.name}</code>}
+        <IconButton
+          label={`Remove option ${index + 1}`}
+          className="ml-auto hover:bg-danger-well hover:text-accent-danger"
           onClick={onRemove}
         >
           <Trash2 size={13} />
-        </button>
+        </IconButton>
       </div>
 
       {expanded && (
-        <div className="space-y-3">
-          <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto_auto]">
-            <Input
-              className="h-9"
-              error={nameInvalid}
+        <div className="flex flex-col gap-3">
+          <div className="grid items-end gap-2 sm:grid-cols-[1fr_1fr_auto_auto]">
+            <TextField
+              label={`Option ${index + 1} name`}
+              hideLabel
+              error={nameInvalid ? 'Lowercase letters, numbers, hyphens and underscores only' : undefined}
               placeholder="Name (lowercase, no spaces)"
               value={option.name}
               maxLength={32}
               onChange={(e) => updateField('name', e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '-'))}
             />
-            <Input
-              className="h-9"
+            <TextField
+              label={`Option ${index + 1} description`}
+              hideLabel
               placeholder="Description"
               value={option.description}
               maxLength={100}
               onChange={(e) => updateField('description', e.target.value)}
             />
             <Select
-              className="h-9"
+              aria-label={`Option ${index + 1} type`}
               value={option.type}
               onChange={(e) => {
                 const newType = Number(e.target.value) as CommandOptionType;
@@ -201,34 +202,39 @@ function OptionEditor({ option, index, depth, onChange, onRemove }: OptionEditor
                 <option key={val} value={val}>{label}</option>
               ))}
             </Select>
-            <label className="flex items-center gap-1.5 px-1 text-label text-text-secondary">
-              <input
-                type="checkbox"
+            <div className="flex h-[var(--h-control-phone)] items-center gap-2 px-1">
+              <span id={requiredId} className="text-label text-text-secondary">Required</span>
+              <Switch
+                size="sm"
                 checked={option.required ?? false}
-                onChange={(e) => updateField('required', e.target.checked)}
-                className="accent-accent-primary"
+                onChange={(next) => updateField('required', next)}
+                labelledBy={requiredId}
               />
-              Required
-            </label>
+            </div>
           </div>
 
           {/* Choices */}
           {supportsChoices(option.type) && (
-            <div className="space-y-2 border-t border-border-subtle pt-3">
+            <div className="flex flex-col gap-2">
+              <Divider />
               <div className="flex items-center gap-2">
-                <SectionLabel>Choices (optional)</SectionLabel>
+                <FieldLabel>Choices (optional)</FieldLabel>
                 <AddButton label="Add" onClick={addChoice} />
               </div>
               {(option.choices ?? []).map((choice, ci) => (
                 <div key={ci} className="flex items-center gap-2">
-                  <Input
-                    className="h-9 flex-1"
+                  <TextField
+                    label={`Choice ${ci + 1} name for option ${index + 1}`}
+                    hideLabel
+                    className="flex-1"
                     placeholder="Choice name"
                     value={choice.name}
                     onChange={(e) => updateChoice(ci, 'name', e.target.value)}
                   />
-                  <Input
-                    className="h-9 flex-1"
+                  <TextField
+                    label={`Choice ${ci + 1} value for option ${index + 1}`}
+                    hideLabel
+                    className="flex-1"
                     placeholder="Choice value"
                     value={String(choice.value)}
                     onChange={(e) => {
@@ -241,14 +247,13 @@ function OptionEditor({ option, index, depth, onChange, onRemove }: OptionEditor
                       updateChoice(ci, 'value', val);
                     }}
                   />
-                  <button
-                    type="button"
-                    aria-label={`Remove choice ${ci + 1} from option ${index + 1}`}
-                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-danger hover:text-text-on-danger focus-visible:shadow-[var(--focus-ring)]"
+                  <IconButton
+                    label={`Remove choice ${ci + 1} from option ${index + 1}`}
+                    className="hover:bg-danger-well hover:text-accent-danger"
                     onClick={() => removeChoice(ci)}
                   >
                     <Trash2 size={13} />
-                  </button>
+                  </IconButton>
                 </div>
               ))}
             </div>
@@ -256,9 +261,10 @@ function OptionEditor({ option, index, depth, onChange, onRemove }: OptionEditor
 
           {/* Nested options for SubCommand / SubCommandGroup */}
           {supportsNestedOptions(option.type) && depth < 2 && (
-            <div className="space-y-2 border-t border-border-subtle pt-3">
+            <div className="flex flex-col gap-2">
+              <Divider />
               <div className="flex items-center gap-2">
-                <SectionLabel>Sub-options</SectionLabel>
+                <FieldLabel>Sub-options</FieldLabel>
                 <AddButton label="Add" onClick={addNestedOption} />
               </div>
               {(option.options ?? []).map((sub, oi) => (
@@ -339,52 +345,45 @@ export function CommandBuilder({ appId, editingCommand, onSaved, onCancel }: Com
   };
 
   return (
-    <div className="space-y-5 rounded-md border border-border-subtle bg-bg-secondary p-5 shadow-sm">
-      <h3 className="font-display text-heading text-text-primary">
+    <Raised className="flex flex-col gap-5 p-5">
+      <h3 className="pc-display text-heading text-text-primary">
         {editingCommand ? 'Edit command' : 'Create command'}
       </h3>
 
-      {error && (
-        <div
-          role="alert"
-          className="flex items-start gap-2 rounded-sm bg-danger-tint px-3 py-2 text-meta font-medium text-accent-danger"
-        >
-          {error}
-        </div>
-      )}
+      {error && <ErrorBanner message={error} multiline />}
 
       <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
-        <div>
-          <label htmlFor={`${formId}-command-name`} className="mb-1.5 block text-section uppercase text-text-muted">Name</label>
-          <Input
-            id={`${formId}-command-name`} aria-label="Command name"
-            error={name.length > 0 && !nameValid}
-            placeholder="command-name"
-            value={name}
-            maxLength={32}
-            onChange={(e) => setName(e.target.value.toLowerCase().replace(/\s/g, '-'))}
-          />
-          {name.length > 0 && !nameValid && (
-            <p className="mt-1 text-meta text-accent-danger">
-              Letters, numbers, hyphens, underscores only (1–32 chars)
-            </p>
-          )}
-        </div>
-        <div>
-          <label htmlFor={`${formId}-command-description`} className="mb-1.5 block text-section uppercase text-text-muted">Description</label>
-          <Input
-            id={`${formId}-command-description`} aria-label="Command description"
-            placeholder="A brief description"
-            value={description}
-            maxLength={100}
-            onChange={(e) => setDescription(e.target.value)}
-          />
-          <p className="mt-1 text-meta tabular-nums text-text-muted">{description.length}/100</p>
-        </div>
-        <div>
-          <label htmlFor={`${formId}-command-type`} className="mb-1.5 block text-section uppercase text-text-muted">Type</label>
+        <TextField
+          id={`${formId}-command-name`}
+          label="Command name"
+          error={
+            name.length > 0 && !nameValid
+              ? 'Letters, numbers, hyphens, underscores only (1–32 chars)'
+              : undefined
+          }
+          placeholder="command-name"
+          value={name}
+          maxLength={32}
+          onChange={(e) => setName(e.target.value.toLowerCase().replace(/\s/g, '-'))}
+        />
+        <TextField
+          id={`${formId}-command-description`}
+          label="Command description"
+          hint={`${description.length}/100`}
+          placeholder="A brief description"
+          value={description}
+          maxLength={100}
+          onChange={(e) => setDescription(e.target.value)}
+        />
+        <div className="flex flex-col gap-1.5">
+          <label
+            htmlFor={`${formId}-command-type`}
+            className="text-label font-medium text-text-secondary"
+          >
+            Command type
+          </label>
           <Select
-            id={`${formId}-command-type`} aria-label="Command type"
+            id={`${formId}-command-type`}
             value={type}
             onChange={(e) => setType(Number(e.target.value) as ApplicationCommandType)}
           >
@@ -397,11 +396,12 @@ export function CommandBuilder({ appId, editingCommand, onSaved, onCancel }: Com
 
       {/* Options builder - only for ChatInput */}
       {type === ApplicationCommandType.ChatInput && (
-        <div className="space-y-2.5 border-t border-border-subtle pt-4">
-          <div className="flex items-center justify-between">
-            <SectionLabel>Options</SectionLabel>
-            <Button size="sm" variant="secondary" onClick={addOption}>
-              <Plus size={13} className="mr-1" /> Add Option
+        <div className="flex flex-col gap-2.5">
+          <Divider />
+          <div className="flex items-center justify-between gap-3">
+            <FieldLabel>Options</FieldLabel>
+            <Button size="sm" variant="ghost" onClick={addOption}>
+              <Plus size={13} aria-hidden /> Add Option
             </Button>
           </div>
           {options.map((opt, i) => (
@@ -415,21 +415,25 @@ export function CommandBuilder({ appId, editingCommand, onSaved, onCancel }: Com
             />
           ))}
           {options.length === 0 && (
-            <p className="text-meta text-text-muted">
-              No parameters yet. Add an option to accept arguments from users.
+            <p className="max-w-prose text-meta text-text-secondary">
+              No parameters yet. Add an option to accept arguments from the person running the
+              command.
             </p>
           )}
         </div>
       )}
 
-      <div className="flex items-center justify-end gap-2.5 border-t border-border-subtle pt-4">
-        <Button variant="ghost" onClick={onCancel}>
-          Cancel
-        </Button>
-        <Button disabled={!canSubmit} loading={saving} onClick={() => void submit()}>
-          {saving ? 'Saving…' : editingCommand ? 'Update Command' : 'Create Command'}
-        </Button>
+      <div className="flex flex-col gap-4">
+        <Divider />
+        <div className="flex items-center justify-end gap-2.5">
+          <Button variant="ghost" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button disabled={!canSubmit} loading={saving} onClick={() => void submit()}>
+            {saving ? 'Saving…' : editingCommand ? 'Update command' : 'Create command'}
+          </Button>
+        </div>
       </div>
-    </div>
+    </Raised>
   );
 }

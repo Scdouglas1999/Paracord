@@ -6,11 +6,10 @@ import {
   Volume1,
   Volume2,
   VolumeX,
-  Monitor,
   MonitorOff,
+  MonitorUp,
   Eye,
   EyeOff,
-  Signal,
   X,
 } from 'lucide-react';
 import { RoomEvent, Track, VideoQuality } from 'livekit-client';
@@ -21,6 +20,16 @@ import {
   useAnchoredOverlayCoords,
   useOverlayDismiss,
 } from './streamOverlayPortal';
+import { LiveDot } from '../light';
+import { cn } from '../../lib/utils';
+
+/**
+ * A control on the tile itself: the name-tag fill, so it stays readable over
+ * live video without a gradient wash across the frame (§6.2).
+ */
+const TILE_BTN =
+  'pc-tag pc-focusable inline-flex h-9 w-9 items-center justify-center text-text-primary ' +
+  'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong';
 
 interface StreamViewerProps {
   streamerId: string;
@@ -29,6 +38,12 @@ interface StreamViewerProps {
   onStopStream?: () => void;
   onStopWatching?: () => void;
   issueMessage?: string | null;
+  /**
+   * The transport readout for the tile's top-right corner — "QUIC", "WebRTC".
+   * Built by `components/voice/stage/transportReadout.ts`, which never invents
+   * a number the engines do not report.
+   */
+  transport?: string | null;
   /** When true, skip managing screen share subscriptions (managed externally). */
   skipSubscriptionManagement?: boolean;
 }
@@ -54,6 +69,7 @@ export function StreamViewer({
   onStopStream,
   onStopWatching,
   issueMessage = null,
+  transport = null,
   skipSubscriptionManagement = false,
 }: StreamViewerProps) {
   const [volume, setVolume] = useState(1);
@@ -721,17 +737,20 @@ export function StreamViewer({
          transparent hole down to the GL video; otherwise it keeps its opaque
          black backdrop. */
       data-native-underlay-clear=""
-      className={`group ${isMaximized
+      className={cn(
+        'group',
+        isMaximized
           ? 'fixed inset-0 z-50 flex flex-col overflow-hidden'
-          : 'relative flex h-full w-full flex-col overflow-hidden rounded-md'
-        } ${underlaySurfaceLive ? 'bg-transparent' : 'bg-black'}`}
+          : 'relative flex h-full w-full flex-col overflow-hidden rounded-[var(--radius-card)]',
+        underlaySurfaceLive ? 'bg-transparent' : 'bg-bg-well',
+      )}
     >
       {issueMessage && (
         <div className="absolute left-3 top-3 z-30" data-stream-issue-popover="">
           <button
             ref={issueTriggerRef}
             onClick={() => setShowIssueDetails((prev) => !prev)}
-            className="flex h-8 w-8 items-center justify-center rounded-sm border border-accent-warning/45 bg-warning-tint text-accent-warning outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-warning/25 focus-visible:shadow-[var(--focus-ring)]"
+            className="pc-focusable inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-chip)] bg-warning-tint text-accent-warning transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:brightness-125"
             title="Stream warning"
             aria-label={showIssueDetails ? 'Hide stream warning' : 'Show stream warning'}
             aria-expanded={showIssueDetails}
@@ -742,7 +761,7 @@ export function StreamViewer({
             <StreamOverlayPortal
               panelRef={issuePanelRef}
               role="status"
-              className="w-[min(18rem,calc(100vw-1rem))] rounded-md border border-border-subtle bg-bg-floating px-3 py-2 text-meta font-medium leading-relaxed text-text-primary shadow-lg"
+              className="pc-floating w-[min(18rem,calc(100vw-1rem))] px-3 py-2 text-meta font-medium leading-relaxed text-text-primary"
               style={{
                 top: issueCoords?.top ?? 48,
                 left: issueCoords?.left ?? 12,
@@ -756,7 +775,7 @@ export function StreamViewer({
       {showSystemAudioPrivacyWarning && (
         <StreamOverlayPortal
           panelRef={privacyPanelRef}
-          className="max-w-xl rounded-md border border-accent-warning/45 bg-bg-floating p-3 shadow-lg"
+          className="pc-floating max-w-xl p-3"
           style={{
             top: privacyCoords?.top ?? 72,
             left: privacyCoords?.left ?? 12,
@@ -766,7 +785,7 @@ export function StreamViewer({
           <div className="flex items-start gap-2.5">
             <AlertTriangle size={16} className="mt-0.5 shrink-0 text-accent-warning" />
             <div className="flex-1">
-              <div className="text-label text-text-primary">System Audio Capture Is Active</div>
+              <div className="text-label text-text-primary">Your share is carrying system audio</div>
               <div className="mt-1 text-meta text-text-secondary">
                 Your stream can include audio from other apps and meetings. Stop streaming
                 immediately if private audio is playing.
@@ -775,44 +794,41 @@ export function StreamViewer({
             <button
               type="button"
               onClick={acknowledgeSystemAudioPrivacyWarning}
-              className="shrink-0 rounded-sm border border-accent-warning/50 px-2.5 py-1 text-meta font-semibold text-accent-warning outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-warning/20 focus-visible:shadow-[var(--focus-ring)]"
+              className="pc-focusable shrink-0 rounded-[var(--radius-chip)] bg-warning-tint px-2.5 py-1 text-meta font-semibold text-accent-warning transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:brightness-125"
             >
               I understand
             </button>
           </div>
         </StreamOverlayPortal>
       )}
-      <div
-        className="absolute inset-x-0 top-0 z-20 flex flex-wrap items-center justify-between gap-2 p-4 bg-gradient-to-b from-black/80 via-black/40 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100 group-focus-within:opacity-100"
-      >
-        <div className="min-w-0 flex items-center gap-2 sm:gap-3 pointer-events-none">
-          <div
-            className="flex items-center gap-1.5 rounded-xs px-2 py-1"
-            style={{
-              backgroundColor: 'var(--danger-tint)',
-              border: '1px solid color-mix(in srgb, var(--accent-danger) 45%, transparent)',
-            }}
-          >
-            <Signal size={11} style={{ color: 'var(--accent-danger)' }} className="animate-pulse" />
-            <span className="text-meta font-semibold uppercase tracking-wider" style={{ color: 'var(--accent-danger)' }}>
-              Live
-            </span>
-          </div>
-          <span className="truncate text-label text-text-primary">
-            {displayName}
-            {displayName !== 'You' && "'s stream"}
-          </span>
-          <span className="hidden font-code text-meta tabular-nums text-text-secondary sm:inline">
-            {formatTime(elapsedSeconds)}
-          </span>
-          {systemAudioCaptureActive && (
-            <span className="inline-flex items-center gap-1 rounded-xs border border-accent-warning/50 bg-warning-tint px-2 py-0.5 text-meta font-semibold uppercase tracking-wide text-accent-warning">
-              <AlertTriangle size={11} />
-              System Audio
-            </span>
-          )}
-        </div>
+      {/* The name tag, bottom-left, exactly like every other Stage tile (§8). */}
+      <span className="pc-tag absolute bottom-2.5 left-2.5 z-20 inline-flex h-6 max-w-[calc(100%-1.25rem)] items-center gap-1.5 px-2 text-meta font-medium">
+        <LiveDot />
+        <MonitorUp size={13} className="shrink-0" aria-hidden />
+        <span className="truncate">
+          {displayName}
+          {displayName !== 'You' && "\u2019s screen"}
+        </span>
+        <span className="pc-mono shrink-0 text-text-secondary">{formatTime(elapsedSeconds)}</span>
+      </span>
+      {systemAudioCaptureActive && (
+        <span className="pc-tag absolute bottom-2.5 left-2.5 z-20 inline-flex h-6 translate-y-[-1.9rem] items-center gap-1.5 px-2 text-meta font-medium text-accent-warning">
+          <AlertTriangle size={12} aria-hidden />
+          Sharing system audio
+        </span>
+      )}
 
+      {/* The transport readout, top-right, in the mono face. The hover controls
+          take the same corner, so nothing jumps when they appear. */}
+      {transport && (
+        <span className="pc-tag pc-mono absolute right-2.5 top-2.5 z-20 inline-flex h-6 items-center px-2 text-[11.5px] text-text-secondary transition-opacity duration-[var(--duration-fast)] group-hover:opacity-0 group-focus-within:opacity-0">
+          {transport}
+        </span>
+      )}
+
+      <div
+        className="absolute right-2.5 top-2.5 z-20 flex flex-wrap items-center justify-end gap-1.5 opacity-0 transition-opacity duration-[var(--duration-normal)] group-hover:opacity-100 group-focus-within:opacity-100"
+      >
         <div className="flex flex-wrap items-center justify-end gap-1.5 sm:gap-2">
           {!isOwnStream && !isCompactLayout && (
             <select
@@ -822,7 +838,7 @@ export function StreamViewer({
                   e.target.value as 'auto' | 'low' | 'medium' | 'high' | 'source'
                 )
               }
-              className="h-9 rounded-sm bg-black/40 px-3 text-meta font-medium text-white/80 outline-none backdrop-blur-md transition-[color,background-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] hover:bg-black/60 hover:text-white hover:shadow-md focus-visible:shadow-[var(--focus-ring)]"
+              className="pc-tag pc-select pc-focusable h-9 appearance-none py-0 pl-3 pr-7 text-meta font-medium text-text-primary"
               title="Viewing quality"
             >
               <option value="auto">Auto</option>
@@ -848,7 +864,7 @@ export function StreamViewer({
               onClick={() => {
                 updateStreamVolume(isMuted ? 1 : 0);
               }}
-              className="flex h-9 w-9 items-center justify-center rounded-sm bg-black/40 text-white/80 outline-none backdrop-blur-md transition-[color,background-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] hover:bg-black/60 hover:text-white hover:shadow-md focus-visible:shadow-[var(--focus-ring)]"
+              className={TILE_BTN}
               title={isMuted ? 'Unmute' : 'Mute'}
             >
               {isMuted ? <VolumeX size={16} /> : volume < 0.5 ? <Volume1 size={16} /> : <Volume2 size={16} />}
@@ -856,12 +872,10 @@ export function StreamViewer({
             {showVolumeSlider && (
               <StreamOverlayPortal
                 panelRef={volumePanelRef}
-                className="flex min-w-44 items-center gap-2 rounded-md border border-border-subtle px-3 py-2 shadow-lg"
+                className="pc-floating flex min-w-44 items-center gap-2 px-3 py-2"
                 style={{
                   top: volumeCoords?.top ?? 48,
                   left: volumeCoords?.left ?? 8,
-                  backgroundColor: 'var(--bg-floating)',
-                  backdropFilter: 'blur(12px)',
                 }}
                 onMouseEnter={() => {
                   if (volumeTimerRef.current) clearTimeout(volumeTimerRef.current);
@@ -873,7 +887,7 @@ export function StreamViewer({
                 onPointerDown={(event) => event.stopPropagation()}
                 onClick={(event) => event.stopPropagation()}
               >
-                <VolumeX size={13} className="shrink-0 text-text-muted" />
+                <VolumeX size={13} className="shrink-0 text-text-faint" />
                 <input
                   type="range"
                   min="0"
@@ -887,8 +901,8 @@ export function StreamViewer({
                   className="h-1.5 w-28 cursor-pointer appearance-none rounded-full bg-bg-mod-strong accent-accent-primary [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent-primary"
                   title={`Volume: ${Math.round(volume * 100)}%`}
                 />
-                <Volume2 size={13} className="shrink-0 text-text-muted" />
-                <span className="w-8 text-right text-[10px] font-medium tabular-nums text-text-muted">
+                <Volume2 size={13} className="shrink-0 text-text-faint" />
+                <span className="pc-mono w-8 text-right text-[10px] font-medium text-text-faint">
                   {Math.round(volume * 100)}%
                 </span>
               </StreamOverlayPortal>
@@ -898,7 +912,7 @@ export function StreamViewer({
           {isOwnStream && (
             <button
               onClick={() => setHideSelfPreview((prev) => !prev)}
-              className="flex h-9 w-9 items-center justify-center rounded-sm bg-black/40 text-white/80 outline-none backdrop-blur-md transition-[color,background-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] hover:bg-black/60 hover:text-white hover:shadow-md focus-visible:shadow-[var(--focus-ring)]"
+              className={TILE_BTN}
               title={hideSelfPreview ? 'Show your stream preview' : 'Hide your stream preview (saves resources)'}
               aria-label={hideSelfPreview ? 'Show your stream preview' : 'Hide your stream preview'}
             >
@@ -908,7 +922,7 @@ export function StreamViewer({
 
           <button
             onClick={toggleMaximized}
-            className="flex h-9 w-9 items-center justify-center rounded-sm bg-black/40 text-white/80 outline-none backdrop-blur-md transition-[color,background-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] hover:bg-black/60 hover:text-white hover:shadow-md focus-visible:shadow-[var(--focus-ring)]"
+            className={TILE_BTN}
             title={isMaximized ? 'Restore' : 'Maximize'}
             aria-label={isMaximized ? 'Restore stream viewer' : 'Maximize stream viewer'}
           >
@@ -918,7 +932,7 @@ export function StreamViewer({
           {onStopWatching && (
             <button
               onClick={onStopWatching}
-              className="flex h-9 w-9 items-center justify-center rounded-sm bg-black/40 text-white/80 outline-none backdrop-blur-md transition-[color,background-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] hover:bg-black/60 hover:text-white hover:shadow-md focus-visible:shadow-[var(--focus-ring)]"
+              className={TILE_BTN}
               title="Stop watching"
               aria-label="Stop watching stream"
             >
@@ -929,11 +943,7 @@ export function StreamViewer({
           {(selfStream || isOwnStream) && onStopStream && (
             <button
               onClick={onStopStream}
-              className="ml-1 flex h-9 items-center gap-2 rounded-sm px-2.5 text-label text-accent-danger outline-none transition-[color,background-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-danger/20 hover:shadow-md focus-visible:shadow-[var(--focus-ring)] sm:px-3.5"
-              style={{
-                backgroundColor: 'var(--danger-tint)',
-                border: '1px solid color-mix(in srgb, var(--accent-danger) 38%, transparent)',
-              }}
+              className="pc-focusable ml-1 inline-flex h-9 items-center gap-2 rounded-[var(--radius-chip)] bg-danger-well px-2.5 text-label text-accent-danger transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:brightness-125 sm:px-3.5"
               title="Stop streaming"
               aria-label="Stop streaming"
             >
@@ -955,7 +965,7 @@ export function StreamViewer({
           playsInline
           muted
           style={{
-            backgroundColor: 'var(--bg-tertiary)',
+            backgroundColor: 'var(--bg-well)',
             opacity: showVideo && !usingNativeCanvas ? 1 : 0,
             position: showVideo && !usingNativeCanvas ? 'relative' : 'absolute',
             pointerEvents: 'none',
@@ -975,7 +985,7 @@ export function StreamViewer({
             // element must stop painting (opacity 0) while the native surface
             // is live; it keeps its layout box, which is what the surface
             // geometry mirrors.
-            backgroundColor: underlaySurfaceLive ? 'transparent' : 'var(--bg-tertiary)',
+            backgroundColor: underlaySurfaceLive ? 'transparent' : 'var(--bg-well)',
             opacity: showVideo && usingNativeCanvas && !underlaySurfaceLive ? 1 : 0,
             position: showVideo && usingNativeCanvas ? 'relative' : 'absolute',
             pointerEvents: 'none',
@@ -984,68 +994,45 @@ export function StreamViewer({
         />
 
         {!showVideo && (
-          <div className="absolute inset-0 flex items-center justify-center"
-            style={{ backgroundColor: 'var(--bg-tertiary)' }}>
-            <div className="flex flex-col items-center gap-4">
+          <div
+            className="absolute inset-0 flex items-center bg-bg-well px-6 sm:px-10"
+          >
+            <div className="flex max-w-[42ch] flex-col items-start gap-2">
               {isOwnStream && hideSelfPreview ? (
                 <>
-                  <div className="flex h-16 w-16 items-center justify-center rounded-md bg-accent-tint text-accent-primary">
-                    <Monitor size={28} />
-                  </div>
-                  <div className="text-center">
-                    <div className="text-subhead text-text-primary">
-                      Stream preview hidden
-                    </div>
-                    <div className="mt-1 text-meta text-text-muted">
-                      Your stream is still live. Others can see it.
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setHideSelfPreview(false)}
-                      className="mt-4 inline-flex h-9 items-center gap-2 rounded-sm border border-border-subtle bg-bg-mod-subtle px-3 text-label text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
-                    >
-                      <Eye size={15} />
-                      Show preview
-                    </button>
-                  </div>
+                  <span className="pc-display text-heading text-text-primary">
+                    Your share is live — the preview is off
+                  </span>
+                  <p className="text-label text-text-secondary">
+                    Everyone in the room still sees it. Turning the preview off saves your
+                    machine a decode of your own frames.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setHideSelfPreview(false)}
+                    className="pc-focusable mt-1 inline-flex h-8 items-center gap-2 rounded-[var(--radius-control)] bg-bg-raised px-3 text-label text-text-primary shadow-[var(--shadow-raised)] transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong"
+                  >
+                    <Eye size={15} />
+                    Show the preview
+                  </button>
                 </>
               ) : expectingStream ? (
                 <>
-                  <div className="relative flex h-16 w-16 items-center justify-center">
-                    <div
-                      className="absolute inset-0 animate-spin rounded-full"
-                      style={{
-                        border: '2px solid transparent',
-                        borderTopColor: 'var(--accent-primary)',
-                        borderRightColor: 'var(--accent-primary)',
-                      }}
-                    />
-                    <div className="flex h-12 w-12 items-center justify-center rounded-full bg-accent-tint text-accent-primary">
-                      <Monitor size={22} />
-                    </div>
-                  </div>
-                  <div className="text-center">
-                    <div className="text-subhead text-text-primary">
-                      Starting stream...
-                    </div>
-                    <div className="mt-1 text-meta text-text-muted">
-                      Connecting to the media server
-                    </div>
-                  </div>
+                  <span className="pc-display text-heading text-text-primary">
+                    Opening your share
+                  </span>
+                  <p className="text-label text-text-secondary">
+                    The first frames are on their way to the room.
+                  </p>
                 </>
               ) : (
                 <>
-                  <div className="flex h-16 w-16 items-center justify-center rounded-md bg-bg-mod-subtle text-text-muted">
-                    <Monitor size={26} />
-                  </div>
-                  <div className="text-center">
-                    <div className="text-subhead text-text-secondary">
-                      Stream is not available
-                    </div>
-                    <div className="mt-1 text-meta text-text-muted">
-                      {displayName} is not currently publishing a stream track.
-                    </div>
-                  </div>
+                  <span className="pc-display text-heading text-text-primary">
+                    {displayName === 'You' ? 'You are not sharing' : `${displayName} is not sharing`}
+                  </span>
+                  <p className="text-label text-text-secondary">
+                    No screen track is reaching this room right now.
+                  </p>
                 </>
               )}
             </div>

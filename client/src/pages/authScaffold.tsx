@@ -1,22 +1,25 @@
-import { useId, type ReactNode } from 'react';
-import { AlertCircle, CheckCircle2, ShieldCheck, Server, Radio } from 'lucide-react';
+import type { ReactNode } from 'react';
+import { AlertCircle, CheckCircle2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 /**
- * Shared building blocks for the unauthenticated entry surfaces (login, register,
- * connect, invite, account setup/recover/unlock, bot authorize). These consume
- * the Emerald Commons tokens directly — solid `--bg-primary` canvas, a single
- * raised `--bg-secondary` panel, Fraunces headings, emerald focus — so the first
- * screens a new user sees read as one intentional system, never marketing slop.
+ * Shared building blocks for the unauthenticated entry surfaces (login,
+ * register, connect, invite, account setup/recover/unlock, first-owner setup,
+ * bot authorize).
+ *
+ * These are the first screens anyone sees, so they are held to the same law as
+ * the rest of the app (docs/lantern-stage-spec.md §4): **one plate, centred on
+ * the street.** Gabarito for the title, Onest for the body, the emerald for the
+ * one action. No gradient hero, no marketing rail, no illustration filler —
+ * the building is dark until somebody is in it.
  */
 
 /**
- * The one rationed brand moment: the app mark carries the teal→emerald duotone
- * (see design-spec §1.2). Two interlocking links nod to Paracord's federated,
- * server-to-server nature. Used nowhere as a decorative fill.
+ * The app mark: a solid emerald tile with two interlocking links, a nod to the
+ * server-to-server nature of the thing. Solid, because a gradient across a
+ * surface is a kill-list item (§6.2) and the emerald already means "Paracord".
  */
 export function AppMark({ size = 44, className }: { size?: number; className?: string }) {
-  const gradientId = useId();
   return (
     <svg
       width={size}
@@ -27,13 +30,7 @@ export function AppMark({ size = 44, className }: { size?: number; className?: s
       aria-label="Paracord"
       className={cn('shrink-0', className)}
     >
-      <defs>
-        <linearGradient id={gradientId} x1="4" y1="4" x2="40" y2="40" gradientUnits="userSpaceOnUse">
-          <stop stopColor="var(--accent-secondary)" />
-          <stop offset="1" stopColor="var(--accent-primary)" />
-        </linearGradient>
-      </defs>
-      <rect width="44" height="44" rx="12" fill={`url(#${gradientId})`} />
+      <rect width="44" height="44" rx="12" fill="var(--accent-primary)" />
       <rect
         x="9.5"
         y="15"
@@ -52,17 +49,22 @@ export function AppMark({ size = 44, className }: { size?: number; className?: s
         rx="7"
         stroke="var(--text-on-accent)"
         strokeWidth="3"
-        opacity="0.62"
+        opacity="0.55"
       />
     </svg>
   );
 }
 
-/** Full-page canvas: a solid, warm-neutral `--bg-primary` field — no gradient hero. */
+/** Full-page canvas: the street (`--bg-base`), flat and matte. */
 export function AuthCanvas({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- Keyboard users must be able to scroll this viewport with Page Up/Down and Home/End.
-    <div role="region" aria-label="Account access" tabIndex={0} className={cn('h-dvh w-full overflow-y-auto bg-bg-primary', className)}>
+    <div
+      role="region"
+      aria-label="Account access"
+      // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- Keyboard users must be able to scroll this viewport with Page Up/Down and Home/End.
+      tabIndex={0}
+      className={cn('h-dvh w-full overflow-y-auto bg-bg-base', className)}
+    >
       <div className="flex min-h-full w-full items-center justify-center px-4 py-10">
         {children}
       </div>
@@ -70,23 +72,14 @@ export function AuthCanvas({ children, className }: { children: ReactNode; class
   );
 }
 
-/** A single raised panel: `--bg-secondary`, radius-lg, hairline border, shadow-md. */
+/** One plate on the street: `--bg-plate`, the plate radius and the plate shadow. */
 export function AuthCard({ children, className }: { children: ReactNode; className?: string }) {
-  return (
-    <div
-      className={cn(
-        'w-full rounded-lg border border-border-subtle bg-bg-secondary shadow-md',
-        className,
-      )}
-    >
-      {children}
-    </div>
-  );
+  return <div className={cn('pc-plate w-full p-0', className)}>{children}</div>;
 }
 
 /**
- * Heading block: optional brand mark, a Fraunces title, and `--text-secondary`
- * subcopy. Establishes the Display/Title → body hierarchy the spec demands.
+ * Heading block: optional app mark, a Gabarito title, and one specific line of
+ * `--text-secondary` subcopy.
  */
 export function AuthHeading({
   title,
@@ -102,15 +95,13 @@ export function AuthHeading({
   return (
     <div className={cn(align === 'center' && 'flex flex-col items-center text-center')}>
       {mark && <AppMark size={40} className="mb-4" />}
-      <h1 className="font-display text-title text-text-primary">{title}</h1>
-      {subtitle && (
-        <p className="mt-2 max-w-sm text-body text-text-secondary">{subtitle}</p>
-      )}
+      <h1 className="pc-display text-title text-text-primary">{title}</h1>
+      {subtitle && <p className="mt-2 max-w-prose text-body text-text-secondary">{subtitle}</p>}
     </div>
   );
 }
 
-/** Uppercase section label above a control (design-spec Section step). */
+/** Sentence-case label above a control (spec §2 Label step, §6.8). */
 export function FieldLabel({
   children,
   required,
@@ -119,9 +110,13 @@ export function FieldLabel({
   required?: boolean;
 }) {
   return (
-    <span className="mb-2 flex items-center gap-1 text-section uppercase text-text-secondary">
+    <span className="mb-1.5 flex items-center gap-1 text-label font-medium text-text-secondary">
       {children}
-      {required && <span className="text-accent-danger">*</span>}
+      {required && (
+        <span className="text-accent-danger" aria-hidden>
+          *
+        </span>
+      )}
     </span>
   );
 }
@@ -129,7 +124,7 @@ export function FieldLabel({
 /**
  * A labelled field wrapper. The `<label>` wraps its control so the accessible
  * name comes from the label text; hint/error render outside the label so they
- * never pollute that name. Errors use specific, warm copy in `--accent-danger`.
+ * never pollute that name.
  */
 export function Field({
   label,
@@ -156,78 +151,25 @@ export function Field({
       {error ? (
         <p id={descriptionId} className="mt-2 flex items-start gap-1.5 text-meta text-accent-danger">
           <AlertCircle size={13} className="mt-px shrink-0" />
-          <span>{error}</span>
+          <span className="leading-relaxed">{error}</span>
         </p>
       ) : (
-        hint && <p id={descriptionId} className="mt-2 text-meta text-text-muted">{hint}</p>
+        hint && (
+          <p id={descriptionId} className="mt-2 text-meta leading-relaxed text-text-faint">
+            {hint}
+          </p>
+        )
       )}
     </div>
   );
 }
 
-/** Success callout — `--success-tint` background with solid success text. */
+/** Success callout — a well carrying the emerald ink, never a green fill. */
 export function SuccessNote({ children }: { children: ReactNode }) {
   return (
-    <div className="flex items-start gap-2.5 rounded-md border border-accent-success/30 bg-success-tint px-4 py-3 text-label text-accent-success">
+    <div className="pc-well flex items-start gap-2.5 px-4 py-3 text-label text-accent-success">
       <CheckCircle2 size={16} className="mt-px shrink-0" />
-      <span className="[&_strong]:font-semibold">{children}</span>
+      <span className="leading-relaxed [&_strong]:font-semibold">{children}</span>
     </div>
-  );
-}
-
-/**
- * Brand rail shown beside the login/register forms on wide screens. Gives the
- * first impression real content and hierarchy instead of dead-centered
- * whitespace — the value props are specific, not placeholder copy.
- */
-const BRAND_POINTS = [
-  {
-    icon: ShieldCheck,
-    title: 'Your server, your data',
-    body: 'Everything lives on the server you or a friend runs — no third party in the middle. Direct messages can be end-to-end encrypted, and calls always are.',
-  },
-  {
-    icon: Server,
-    title: 'Self-hosted and federated',
-    body: 'Run your own server or join a friend’s. Identities travel across servers, so there’s no lock-in.',
-  },
-  {
-    icon: Radio,
-    title: 'Voice and video that keep up',
-    body: 'A native QUIC media engine built in-house for low-latency rooms, screen share, and live video.',
-  },
-];
-
-export function BrandAside() {
-  return (
-    <aside className="hidden w-[22rem] shrink-0 flex-col border-r border-border-subtle bg-bg-tertiary/40 p-9 lg:flex">
-      <div>
-        <div className="flex items-center gap-3">
-          <AppMark size={40} />
-          <span className="font-display text-heading text-text-primary">Paracord</span>
-        </div>
-        <p className="mt-5 font-display text-title leading-tight text-text-primary">
-          A home for your people, on your terms.
-        </p>
-      </div>
-
-      <ul className="mt-10 space-y-6">
-        {BRAND_POINTS.map(({ icon: Icon, title, body }) => (
-          <li key={title} className="flex gap-3.5">
-            <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-accent-tint text-accent-primary">
-              <Icon size={18} />
-            </span>
-            <div>
-              <p className="text-label font-semibold text-text-primary">{title}</p>
-              <p className="mt-1 text-meta leading-relaxed text-text-secondary">{body}</p>
-            </div>
-          </li>
-        ))}
-      </ul>
-
-      <p className="mt-auto pt-10 text-meta text-text-muted">
-        Decentralized, self-hostable, private by design.
-      </p>
-    </aside>
   );
 }

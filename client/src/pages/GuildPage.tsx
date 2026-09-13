@@ -64,7 +64,7 @@ export function GuildPage() {
 
   const { permissions, isAdmin: isGuildAdmin } = usePermissions(guildId || null);
 
-  const channelName = channel?.name || 'Unknown Channel';
+  const channelName = channel?.name || 'Unknown channel';
   const isVoice = channel?.type === 2;
   const isStage = channel?.type === 13 || channel?.channel_type === 13;
   const isVoiceLike = isVoice || isStage;
@@ -143,17 +143,22 @@ export function GuildPage() {
     return <ChannelNotFoundScreen guildId={guildId} />;
   }
 
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <TopBar
-        channelName={channelName}
-        channelTopic={channel?.topic}
-        isVoice={isVoiceLike}
-        isForum={isForum}
-        guildId={guildId}
-        guildName={currentGuild?.name}
-      />
-
+  /* The Stage carries its own header (spec §7.2: room name, building and
+     duration, the here-now strip, Invite / Layout / more), so the app's top bar
+     would be a second title for the same room. Every other channel type keeps
+     it. */
+  const header = !isVoiceLike && (
+    <TopBar
+      channelName={channelName}
+      channelTopic={channel?.topic}
+      isVoice={isVoiceLike}
+      isForum={isForum}
+      guildId={guildId}
+      guildName={currentGuild?.name}
+    />
+  );
+  const entryChrome = (
+    <>
       {showWelcome && currentGuild && (
         <GuildWelcomeScreen
           guild={currentGuild}
@@ -162,6 +167,35 @@ export function GuildPage() {
         />
       )}
       {!showWelcome && guildId && <GuildOnboardingGate guildId={guildId} />}
+    </>
+  );
+
+  // A text room is a full-width PLATE on the street (spec §7.4): its header,
+  // timeline and composer are one surface sitting on the 12px gutter. The voice
+  // route is WP3's Stage plate and the forum keeps its own shell, so both stay
+  // on the plain column below.
+  if (!isVoiceLike && !isForum) {
+    return (
+      <div className="flex h-full min-h-0 flex-col bg-bg-base p-[var(--gutter)]">
+        <div className="pc-plate flex min-h-0 flex-1 flex-col overflow-hidden">
+          {header}
+          {entryChrome}
+          <TextChannelView
+            guildId={guildId}
+            channelId={channelId!}
+            channelName={channelName}
+            channel={channel}
+            channels={channels}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      {header}
+      {entryChrome}
       {isVoiceLike ? (
         <VoiceStageChannel
           guildId={guildId}
@@ -172,16 +206,8 @@ export function GuildPage() {
           currentUserId={currentUserId}
           isPhoneLayout={isPhoneLayout}
         />
-      ) : isForum ? (
-        <ForumView channelId={channelId!} channelName={channelName} />
       ) : (
-        <TextChannelView
-          guildId={guildId}
-          channelId={channelId!}
-          channelName={channelName}
-          channel={channel}
-          channels={channels}
-        />
+        <ForumView channelId={channelId!} channelName={channelName} />
       )}
     </div>
   );

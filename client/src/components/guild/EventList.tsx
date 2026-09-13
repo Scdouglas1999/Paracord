@@ -6,8 +6,20 @@ import { getApi } from '../../api/activeClient';
 import { usePermissions } from '../../hooks/usePermissions';
 import { Permissions, hasPermission } from '../../types';
 import { Modal, ModalTitle } from '../ui/Modal';
-import { Button } from '../ui/Button';
-import { EmptyState, ErrorBanner } from '../ui/Feedback';
+import {
+  Button,
+  Chip,
+  ChipTone,
+  Divider,
+  EmptyState,
+  ErrorBanner,
+  Input,
+  Select,
+  Tabs,
+  Textarea,
+  Well,
+} from '../ui';
+import { Skeleton } from '../ui/Skeleton';
 import { FieldLabel } from './SettingsPrimitives';
 import { toast } from '../../stores/toastStore';
 import { cn } from '../../lib/utils';
@@ -44,28 +56,14 @@ const STATUS_LABELS: Record<number, string> = {
   4: 'Cancelled',
 };
 
-const STATUS_COLORS: Record<number, string> = {
-  1: 'border-accent-primary/40 bg-accent-tint text-accent-primary',
-  2: 'border-accent-success/40 bg-success-tint text-accent-success',
-  3: 'border-border-subtle bg-bg-mod-strong text-text-muted',
-  4: 'border-accent-danger/40 bg-danger-tint text-accent-danger',
+// Status is carried by the word first; the chip's ink only seconds it (§9 —
+// colour is never the only cue).
+const STATUS_TONES: Record<number, ChipTone> = {
+  1: 'neutral',
+  2: 'accent',
+  3: 'neutral',
+  4: 'danger',
 };
-
-// Compact management-action button: quiet neutral by default, semantic tint variants.
-const eventActionBtn = (variant: 'neutral' | 'primary' | 'success' | 'warning' | 'danger') =>
-  cn(
-    'inline-flex shrink-0 items-center gap-1.5 rounded-sm border px-3 py-1.5 text-meta font-semibold outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
-    variant === 'neutral' &&
-      'border-border-subtle bg-bg-mod-subtle text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary',
-    variant === 'primary' &&
-      'border-accent-primary/40 bg-accent-tint text-accent-primary hover:bg-accent-tint-strong',
-    variant === 'success' &&
-      'border-accent-success/40 bg-success-tint text-accent-success hover:bg-success-tint',
-    variant === 'warning' &&
-      'border-accent-warning/40 bg-warning-tint text-accent-warning hover:bg-warning-tint',
-    variant === 'danger' &&
-      'border-accent-danger/40 bg-danger-tint text-accent-danger hover:bg-danger-tint',
-  );
 
 function pathSegment(value: string): string {
   return encodeURIComponent(value);
@@ -84,6 +82,17 @@ function formatEventDate(dateStr: string): string {
   } catch {
     return dateStr;
   }
+}
+
+/** The day tile on an event card (spec §8): mono weekday over a Gabarito date. */
+function eventDayTile(dateStr: string): { weekday: string; day: string; month: string } | null {
+  const date = new Date(dateStr);
+  if (Number.isNaN(date.getTime())) return null;
+  return {
+    weekday: date.toLocaleDateString(undefined, { weekday: 'short' }),
+    day: date.toLocaleDateString(undefined, { day: 'numeric' }),
+    month: date.toLocaleDateString(undefined, { month: 'short' }),
+  };
 }
 
 function eventListError(action: string, err: unknown): string {
@@ -115,6 +124,11 @@ function toReminderSelectValue(
   }
   return isEditing ? 'none' : '30';
 }
+
+const ENTITY_TABS = [
+  { value: '1', label: 'Voice room' },
+  { value: '2', label: 'External' },
+] as const;
 
 function EventFormModal({ guildId, event, onClose, onSaved }: EventFormModalProps) {
   const [name, setName] = useState(event?.name ?? '');
@@ -177,134 +191,119 @@ function EventFormModal({ guildId, event, onClose, onSaved }: EventFormModalProp
       panelClassName="w-[min(92vw,32rem)]"
     >
       <div className="max-h-[min(86dvh,42rem)] overflow-auto">
-        <div className="border-b border-border-subtle px-6 pb-5 pt-6 pr-14">
+        <div className="px-6 pb-5 pr-14 pt-6">
           <ModalTitle id="event-form-title">
             {isEditing ? 'Edit event' : 'Create an event'}
           </ModalTitle>
-          <p className="mt-1.5 text-sm leading-relaxed text-text-secondary">
+          <p className="mt-1.5 text-body leading-relaxed text-text-secondary">
             {isEditing
               ? 'Update the details and everyone who RSVP’d gets the change.'
               : 'Give people a reason to show up — a time, a place, and what to expect.'}
           </p>
-          {error && <ErrorBanner message={error} className="mt-3" />}
+          {error && <ErrorBanner message={error} multiline className="mt-3" />}
         </div>
 
-        <div className="space-y-5 px-6 py-5">
+        <Divider />
+
+        <div className="flex flex-col gap-5 px-6 py-5">
           <label className="block">
             <FieldLabel>Event Name *</FieldLabel>
-            <input
+            <Input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
               maxLength={100}
               placeholder="Movie Night"
-              className="input-field"
             />
           </label>
 
           <label className="block">
             <FieldLabel>Description</FieldLabel>
-            <textarea
+            <Textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               maxLength={1000}
               rows={3}
               placeholder="What's this event about?"
-              className="input-field resize-none"
+              className="resize-none"
             />
           </label>
 
           <div className="flex gap-3">
             <label className="block flex-1">
               <FieldLabel>Start *</FieldLabel>
-              <input
+              <Input
                 type="datetime-local"
                 value={scheduledStart}
                 onChange={(e) => setScheduledStart(e.target.value)}
-                className="input-field"
               />
             </label>
             <label className="block flex-1">
               <FieldLabel>End</FieldLabel>
-              <input
+              <Input
                 type="datetime-local"
                 value={scheduledEnd}
                 onChange={(e) => setScheduledEnd(e.target.value)}
-                className="input-field"
               />
             </label>
           </div>
 
           <div>
-            <FieldLabel>Event Type</FieldLabel>
-            <div className="flex gap-2">
-              {([
-                { type: 1, label: 'Voice Channel' },
-                { type: 2, label: 'External' },
-              ] as const).map(({ type, label }) => (
-                <button
-                  key={type}
-                  type="button"
-                  onClick={() => setEntityType(type)}
-                  className={cn(
-                    'flex-1 rounded-sm border px-3 py-2.5 text-label font-medium outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
-                    entityType === type
-                      ? 'border-accent-primary bg-accent-tint text-text-primary'
-                      : 'border-border-subtle bg-bg-tertiary text-text-secondary hover:border-border-strong hover:bg-bg-mod-subtle',
-                  )}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+            <FieldLabel>Event type</FieldLabel>
+            <Tabs
+              label="Event type"
+              items={ENTITY_TABS}
+              value={String(entityType) as '1' | '2'}
+              onChange={(next) => setEntityType(Number(next))}
+              fill
+            />
           </div>
 
           <div className="flex gap-3">
             <label className="block flex-1">
               <FieldLabel>Repeat</FieldLabel>
-              <select
+              <Select
                 value={recurrenceRule}
                 onChange={(e) => setRecurrenceRule(e.target.value as 'none' | 'daily' | 'weekly' | 'monthly')}
-                className="select-field"
               >
                 <option value="none">Does not repeat</option>
                 <option value="daily">Daily</option>
                 <option value="weekly">Weekly</option>
                 <option value="monthly">Monthly</option>
-              </select>
+              </Select>
             </label>
             <label className="block flex-1">
               <FieldLabel>Reminder</FieldLabel>
-              <select
+              <Select
                 value={reminderMinutes}
                 onChange={(e) => setReminderMinutes(e.target.value as 'none' | '10' | '30' | '60' | '1440')}
-                className="select-field"
               >
                 <option value="none">No reminder</option>
                 <option value="10">10 min before</option>
                 <option value="30">30 min before</option>
                 <option value="60">1 hour before</option>
                 <option value="1440">1 day before</option>
-              </select>
+              </Select>
             </label>
           </div>
 
           {entityType === 2 && (
             <label className="block">
               <FieldLabel>Location</FieldLabel>
-              <input
+              <Input
                 type="text"
                 value={location}
                 onChange={(e) => setLocation(e.target.value)}
                 maxLength={200}
                 placeholder="Where is this event?"
-                className="input-field"
               />
             </label>
           )}
         </div>
 
-        <div className="flex items-center justify-end gap-3 border-t border-border-subtle bg-bg-secondary px-6 py-4">
+        <Divider />
+
+        <div className="flex items-center justify-end gap-3 px-6 py-4">
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
           <Button
             onClick={() => void handleSubmit()}
@@ -312,7 +311,7 @@ function EventFormModal({ guildId, event, onClose, onSaved }: EventFormModalProp
             loading={loading}
             className="min-w-[9rem]"
           >
-            {loading ? (isEditing ? 'Saving…' : 'Creating…') : isEditing ? 'Save Changes' : 'Create Event'}
+            {loading ? (isEditing ? 'Saving…' : 'Creating…') : isEditing ? 'Save changes' : 'Create event'}
           </Button>
         </div>
       </div>
@@ -425,31 +424,28 @@ export function EventList({ guildId }: EventListProps) {
 
   if (loading) {
     return (
-      <div className="space-y-3 p-4">
+      <div className="flex flex-col gap-3">
         {Array.from({ length: 3 }, (_, i) => (
-          <div key={i} className="h-24 animate-pulse rounded-md border border-border-subtle bg-bg-secondary" />
+          <Skeleton key={i} height={104} borderRadius="var(--radius-well)" />
         ))}
       </div>
     );
   }
 
   return (
-    <div className="space-y-6 p-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-md border border-border-subtle bg-bg-secondary text-accent-primary shadow-sm">
-            <Calendar size={18} />
-          </div>
-          <div>
-            <h2 className="font-display text-heading text-text-primary">Events</h2>
-            <p className="text-meta text-text-muted">
-              {upcoming.length} upcoming event{upcoming.length !== 1 ? 's' : ''}
-            </p>
-          </div>
+    <div className="flex flex-col gap-6">
+      <header className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h2 className="pc-display text-title text-text-primary">Events</h2>
+          <p className="mt-1.5 max-w-prose text-body text-text-secondary">
+            <span className="pc-mono">{upcoming.length}</span>
+            {upcoming.length === 1 ? ' event is' : ' events are'} still to come. Everyone who marks
+            themselves interested gets the reminder.
+          </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           <Button
-            variant="secondary"
+            variant="ghost"
             size="sm"
             onClick={() =>
               window.open(
@@ -458,23 +454,22 @@ export function EventList({ guildId }: EventListProps) {
                 'noopener,noreferrer',
               )
             }
-            className="gap-1.5"
             title="Export calendar (.ics)"
           >
             <Download size={15} />
             Export
           </Button>
           {canManageEvents && (
-            <Button size="sm" onClick={() => setShowCreateModal(true)} className="gap-1.5">
+            <Button size="sm" onClick={() => setShowCreateModal(true)}>
               <Plus size={15} />
-              New Event
+              New event
             </Button>
           )}
         </div>
-      </div>
+      </header>
 
       {loadError ? (
-        <ErrorBanner message={loadError} onRetry={fetchEvents} />
+        <ErrorBanner message={loadError} multiline onRetry={fetchEvents} />
       ) : events.length === 0 ? (
         <EmptyState
           icon={<Calendar size={20} />}
@@ -486,7 +481,7 @@ export function EventList({ guildId }: EventListProps) {
           }
           action={
             canManageEvents ? (
-              <Button onClick={() => setShowCreateModal(true)} className="gap-1.5">
+              <Button variant="ghost" onClick={() => setShowCreateModal(true)}>
                 <Plus size={16} />
                 Create event
               </Button>
@@ -496,8 +491,8 @@ export function EventList({ guildId }: EventListProps) {
       ) : (
         <>
           {upcoming.length > 0 && (
-            <div className="space-y-3">
-              <h3 className="px-0.5 text-section uppercase text-text-muted">Upcoming</h3>
+            <section className="flex flex-col gap-3">
+              <h3 className="text-section text-text-faint">Upcoming</h3>
               {upcoming.map((event) => (
                 <EventCard
                   key={event.id}
@@ -512,12 +507,12 @@ export function EventList({ guildId }: EventListProps) {
                   onDeleteEvent={deleteEvent}
                 />
               ))}
-            </div>
+            </section>
           )}
 
           {past.length > 0 && (
-            <div className="space-y-3">
-              <h3 className="px-0.5 text-section uppercase text-text-muted">Past events</h3>
+            <section className="flex flex-col gap-3">
+              <h3 className="text-section text-text-faint">Past events</h3>
               {past.map((event) => (
                 <EventCard
                   key={event.id}
@@ -532,7 +527,7 @@ export function EventList({ guildId }: EventListProps) {
                   onDeleteEvent={deleteEvent}
                 />
               ))}
-            </div>
+            </section>
           )}
         </>
       )}
@@ -571,6 +566,11 @@ interface EventCardProps {
   onDeleteEvent: (eventId: string) => void;
 }
 
+/**
+ * EventCard — spec §8: a **well**, with a day tile (mono weekday over a
+ * Gabarito date), the name, the meta line, and the actions. No bordered box,
+ * no status dot: the status is a word in a chip.
+ */
 function EventCard({
   guildId,
   event,
@@ -584,111 +584,112 @@ function EventCard({
 }: EventCardProps) {
   const isPast = event.status === 3 || event.status === 4;
   const imageUrl = safeClientResourceUrl(event.image_url ?? '');
+  const day = eventDayTile(event.scheduled_start);
 
   return (
-    <article
-      className={cn(
-        'group overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm transition-colors duration-[140ms] ease-[var(--ease-out)] hover:border-border-strong',
-        isPast && 'opacity-60'
-      )}
-    >
+    <Well as="section" bare className={cn('flex flex-col gap-3 p-4', isPast && 'opacity-60')}>
       {/* Cover image — framed intentionally, not a full-bleed hero */}
       {imageUrl && (
         <img
           src={imageUrl}
           alt=""
-          className="h-32 w-full border-b border-border-subtle object-cover"
+          className="h-32 w-full rounded-[var(--radius-card)] object-cover"
         />
       )}
 
-      <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0 flex-1 space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <h4 className="text-label font-semibold text-text-primary">{event.name}</h4>
-            <span
-              className={cn(
-                'inline-flex items-center rounded-xs border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em]',
-                STATUS_COLORS[event.status] || STATUS_COLORS[1]
-              )}
-            >
-              {STATUS_LABELS[event.status] || 'Unknown'}
-            </span>
-          </div>
-
-          {event.description && (
-            <p className="text-meta leading-relaxed text-text-secondary">{event.description}</p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex min-w-0 flex-1 gap-3">
+          {day && (
+            <div className="flex h-14 w-14 shrink-0 flex-col items-center justify-center rounded-[var(--radius-card)] bg-bg-raised shadow-[var(--shadow-raised)]">
+              <span className="pc-mono text-meta text-text-faint">{day.weekday}</span>
+              <span className="pc-display text-name text-text-primary">{day.day}</span>
+              <span className="pc-mono text-meta text-text-faint">{day.month}</span>
+            </div>
           )}
 
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-meta text-text-muted">
-            <span className="inline-flex items-center gap-1.5">
-              <Clock size={13} className="shrink-0" />
-              <span className="font-code tabular-nums">
-                {formatEventDate(event.scheduled_start)}
-                {event.scheduled_end && ` – ${formatEventDate(event.scheduled_end)}`}
-              </span>
-            </span>
-            {event.recurrence_rule && (
+          <div className="flex min-w-0 flex-1 flex-col gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <h4 className="pc-display min-w-0 text-name text-text-primary">{event.name}</h4>
+              <Chip size="sm" tone={STATUS_TONES[event.status] ?? 'neutral'}>
+                {STATUS_LABELS[event.status] || 'Unknown'}
+              </Chip>
+            </div>
+
+            {event.description && (
+              <p className="text-body leading-relaxed text-text-secondary">{event.description}</p>
+            )}
+
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-meta text-text-faint">
               <span className="inline-flex items-center gap-1.5">
-                <Repeat size={13} className="shrink-0" />
-                repeats {event.recurrence_rule}
+                <Clock size={13} className="shrink-0" aria-hidden />
+                <span className="pc-mono">
+                  {formatEventDate(event.scheduled_start)}
+                  {event.scheduled_end && ` – ${formatEventDate(event.scheduled_end)}`}
+                </span>
               </span>
-            )}
-            {event.reminder_minutes && (
+              {event.recurrence_rule && (
+                <span className="inline-flex items-center gap-1.5">
+                  <Repeat size={13} className="shrink-0" aria-hidden />
+                  repeats {event.recurrence_rule}
+                </span>
+              )}
+              {event.reminder_minutes && (
+                <span className="inline-flex items-center gap-1.5">
+                  <Bell size={13} className="shrink-0" aria-hidden />
+                  <span className="pc-mono">{event.reminder_minutes}m</span> before
+                </span>
+              )}
+              {event.location && (
+                <span className="inline-flex items-center gap-1.5">
+                  <MapPin size={13} className="shrink-0" aria-hidden />
+                  {event.location}
+                </span>
+              )}
+              {event.event_channel_id && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() =>
+                    window.location.assign(
+                      `/app/guilds/${pathSegment(guildId)}/channels/${pathSegment(event.event_channel_id || '')}`,
+                    )
+                  }
+                >
+                  event chat
+                </Button>
+              )}
               <span className="inline-flex items-center gap-1.5">
-                <Bell size={13} className="shrink-0" />
-                {event.reminder_minutes}m before
+                <Users size={13} className="shrink-0" aria-hidden />
+                <span className="pc-mono">{`${event.user_count} interested`}</span>
               </span>
-            )}
-            {event.location && (
-              <span className="inline-flex items-center gap-1.5">
-                <MapPin size={13} className="shrink-0" />
-                {event.location}
-              </span>
-            )}
-            {event.event_channel_id && (
-              <button
-                type="button"
-                onClick={() =>
-                  window.location.assign(
-                    `/app/guilds/${pathSegment(guildId)}/channels/${pathSegment(event.event_channel_id || '')}`,
-                  )
-                }
-                className="inline-flex items-center gap-1.5 rounded-sm border border-border-subtle px-2 py-0.5 text-meta text-text-secondary outline-none transition-colors hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
-              >
-                event chat
-              </button>
-            )}
-            <span className="inline-flex items-center gap-1.5">
-              <Users size={13} className="shrink-0" />
-              {event.user_count} interested
-            </span>
+            </div>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
           {!isPast && currentUserId && (
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-pressed={event.user_rsvp}
               onClick={() => onRsvp(event.id, event.user_rsvp)}
-              className={cn(
-                'inline-flex shrink-0 items-center gap-1.5 rounded-sm border px-3 py-1.5 text-meta font-semibold outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
-                event.user_rsvp
-                  ? 'border-accent-success/50 bg-success-tint text-accent-success hover:bg-success-tint'
-                  : 'border-border-subtle bg-bg-mod-subtle text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary'
-              )}
+              className={event.user_rsvp ? 'bg-bg-mod-strong text-text-primary' : undefined}
             >
-              <Check size={14} />
-              {event.user_rsvp ? 'Interested' : 'Mark Interested'}
-            </button>
+              <Check size={14} aria-hidden />
+              {event.user_rsvp ? 'Interested' : 'Mark interested'}
+            </Button>
           )}
           {canManageEvents && (
             <>
-              <button onClick={() => onEditEvent(event)} className={eventActionBtn('neutral')}>
+              <Button variant="ghost" size="sm" onClick={() => onEditEvent(event)}>
                 Edit
-              </button>
-              <button onClick={() => onRefreshEvent(event.id)} className={eventActionBtn('neutral')}>
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => onRefreshEvent(event.id)}>
                 Refresh
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={() =>
                   window.open(
                     `/api/v1/guilds/${pathSegment(guildId)}/events/${pathSegment(event.id)}/ical`,
@@ -696,34 +697,33 @@ function EventCard({
                     'noopener,noreferrer',
                   )
                 }
-                className={eventActionBtn('neutral')}
               >
-                <Download size={13} />
+                <Download size={13} aria-hidden />
                 iCal
-              </button>
+              </Button>
               {event.status === 1 && (
-                <button onClick={() => onUpdateEventStatus(event.id, 2)} className={eventActionBtn('primary')}>
+                <Button variant="ghost" size="sm" onClick={() => onUpdateEventStatus(event.id, 2)}>
                   Start
-                </button>
+                </Button>
               )}
               {event.status === 2 && (
-                <button onClick={() => onUpdateEventStatus(event.id, 3)} className={eventActionBtn('success')}>
+                <Button variant="ghost" size="sm" onClick={() => onUpdateEventStatus(event.id, 3)}>
                   Complete
-                </button>
+                </Button>
               )}
               {(event.status === 1 || event.status === 2) && (
-                <button onClick={() => onUpdateEventStatus(event.id, 4)} className={eventActionBtn('warning')}>
+                <Button variant="ghost" size="sm" onClick={() => onUpdateEventStatus(event.id, 4)}>
                   Cancel
-                </button>
+                </Button>
               )}
-              <button onClick={() => onDeleteEvent(event.id)} className={eventActionBtn('danger')}>
+              <Button variant="danger" size="sm" onClick={() => onDeleteEvent(event.id)}>
                 Delete
-              </button>
+              </Button>
             </>
           )}
         </div>
       </div>
-    </article>
+    </Well>
   );
 }
 
@@ -761,8 +761,8 @@ export function EventsIndicator({ guildId }: { guildId: string }) {
   if (count === 0) return null;
 
   return (
-    <span className="inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-accent-primary px-1 text-[9px] font-bold tabular-nums text-text-on-accent">
+    <Chip size="sm" tone="accent" className="pc-mono">
       {count}
-    </span>
+    </Chip>
   );
 }

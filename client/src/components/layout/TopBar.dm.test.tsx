@@ -38,6 +38,11 @@ const mockPermissions = vi.hoisted(() => ({
   isLoading: false,
 }));
 
+// The light seam is stubbed here: this suite mocks the stores down to the
+// fields the header's menus need, and light reads half a dozen more. Light
+// itself is covered in components/message/TextRoom.test.tsx.
+vi.mock('../message/messageLight', () => import('../../test/messageLightMock'));
+vi.mock('../../hooks/useLights', () => import('../../test/messageLightMock'));
 vi.mock('../../hooks/useVoice', () => ({
   useVoice: () => ({
     connected: mockVoiceState.connected,
@@ -79,7 +84,7 @@ vi.mock('../../api/auth', () => ({
 
 vi.mock('../../api/channels', () => ({
   channelApi: {
-    getPins: vi.fn(),
+    getPins: vi.fn().mockResolvedValue({ data: [] }),
     summarizeChannel: vi.fn(),
     getFollowers: vi.fn(),
     addFollower: vi.fn(),
@@ -136,18 +141,37 @@ describe('TopBar DM voice calls', () => {
     });
   });
 
-  it('keeps the member control visible for a group DM', async () => {
-    const user = userEvent.setup();
+  // §6.5: there is no docked member list anywhere. The people who are here now
+  // are the header's lit strip, and its sheet is the only full list — for a
+  // group DM exactly as for a room.
+  it('offers no member-list control, in a group DM or a one-to-one', () => {
     mockChannelState.channelsById = { 'dm-1': { id: 'dm-1', type: 3, channel_type: 3, name: 'Group' } };
     renderDmTopBar();
-    await user.click(screen.getByRole('button', { name: 'Member List' }));
-    expect(mockUIState.toggleContextPanelMode).toHaveBeenCalledWith('members');
-  });
+    expect(screen.queryByRole('button', { name: 'Member List' })).not.toBeInTheDocument();
 
-  it('does not offer a member panel for a one-to-one DM', () => {
     mockChannelState.channelsById = { 'dm-1': { id: 'dm-1', type: 1, channel_type: 1 } };
     renderDmTopBar();
     expect(screen.queryByRole('button', { name: 'Member List' })).not.toBeInTheDocument();
+  });
+
+  // The one list that survives §6.5: who a group message is addressed to, which
+  // is editable. It lives in the labelled overflow, never docked, and a
+  // one-to-one has no such list — there is one other person and the header
+  // strip already names them.
+  it('offers the group message its people, from the overflow, and only there', async () => {
+    const user = userEvent.setup();
+    mockChannelState.channelsById = { 'dm-1': { id: 'dm-1', type: 3, channel_type: 3, name: 'Group' } };
+    renderDmTopBar();
+    await user.click(screen.getByRole('button', { name: 'More channel actions' }));
+    expect(screen.getByRole('menuitem', { name: 'People in this message' })).toBeInTheDocument();
+  });
+
+  it('offers no people list for a one-to-one message', async () => {
+    const user = userEvent.setup();
+    mockChannelState.channelsById = { 'dm-1': { id: 'dm-1', type: 1, channel_type: 1 } };
+    renderDmTopBar();
+    await user.click(screen.getByRole('button', { name: 'More channel actions' }));
+    expect(screen.queryByRole('menuitem', { name: 'People in this message' })).not.toBeInTheDocument();
   });
 
   it('announces active system audio capture separately from conversation actions', () => {
@@ -161,7 +185,7 @@ describe('TopBar DM voice calls', () => {
     const user = userEvent.setup();
     renderDmTopBar();
 
-    await user.click(screen.getByRole('button', { name: 'Back to Messages' }));
+    await user.click(screen.getByRole('button', { name: 'Back to messages' }));
 
     expect(screen.getByText('Messages index')).toBeInTheDocument();
   });

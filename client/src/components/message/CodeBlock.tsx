@@ -123,10 +123,10 @@ export default function CodeBlock({ code, language }: CodeBlockProps) {
       style={{
         margin: '6px 0',
         border: '1px solid var(--border-subtle)',
-        borderRadius: 'var(--radius-sm)',
+        borderRadius: 'var(--radius-chip)',
         overflow: 'hidden',
         backgroundColor: 'var(--bg-code)',
-        boxShadow: 'var(--shadow-sm)',
+        boxShadow: 'var(--shadow-chip)',
       }}
     >
       <div
@@ -140,8 +140,6 @@ export default function CodeBlock({ code, language }: CodeBlockProps) {
       >
         <span
           style={{
-            textTransform: 'uppercase',
-            letterSpacing: '0.06em',
             fontSize: 'var(--text-section)',
             fontWeight: 600,
             fontFamily: 'var(--font-code)',
@@ -165,7 +163,7 @@ export default function CodeBlock({ code, language }: CodeBlockProps) {
             fontSize: 'var(--text-meta)',
             fontWeight: 500,
             padding: '3px 7px',
-            borderRadius: 'var(--radius-sm)',
+            borderRadius: 'var(--radius-chip)',
             outline: 'none',
             transition: 'color 140ms var(--ease-out), background-color 140ms var(--ease-out), box-shadow 140ms var(--ease-out)',
           }}

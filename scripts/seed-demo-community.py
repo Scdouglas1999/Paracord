@@ -153,7 +153,7 @@ OUT = {}
 # Space, roles, members
 # --------------------------------------------------------------------------
 print("creating space ...")
-guild = req("POST", "/guilds", token=OT, json={"name": "Emerald Commons"})
+guild = req("POST", "/guilds", token=OT, json={"name": "Lantern Works"})
 GID = str(guild["id"])
 OUT["guild_id"] = GID
 req("PATCH", f"/guilds/{GID}", token=OT, json={
@@ -216,7 +216,7 @@ for cid in default_channels:
 
 for cid, topic in [
     (ch_general, "Anything and everything. Be decent to each other."),
-    (ch_design, "Emerald Commons design system — tokens, layout, motion."),
+    (ch_design, "The Lantern Stage design system — tokens, light, motion."),
     (ch_eng, "Server, client, transport. Bring stack traces."),
     (ch_show, "Show what you built or what you are running."),
     (ch_announce, "Releases and things worth reading."),

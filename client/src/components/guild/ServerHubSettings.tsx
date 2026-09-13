@@ -5,8 +5,7 @@ import { isAllowedImageMimeType, isSafeImageDataUrl, safeStoredImageDataUrl } fr
 import { cn } from '../../lib/utils';
 import { guildApi } from '../../api/guilds';
 import { extractApiError } from '../../api/client';
-import { Button } from '../ui/Button';
-import { Input, Textarea } from '../ui/Input';
+import { Button, Divider, Input, Textarea } from '../ui';
 import { SectionHeader, FieldLabel, GroupLabel, ToggleRow } from './SettingsPrimitives';
 
 type VisibilityMode = 'private' | 'public' | 'roles';
@@ -18,6 +17,17 @@ interface ServerHubSettingsProps {
     onUpdate: () => void;
     setError: (msg: string | null) => void;
 }
+
+// A picked option is a raised row inside the settings plate (§4); an unpicked
+// one is bare ground with a hover wash. Never a bordered tint box.
+const optionRow = (selected: boolean) =>
+    cn(
+        'flex cursor-pointer items-center gap-2.5 rounded-[var(--radius-control)] px-3 py-2.5 text-label',
+        'transition-[background-color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+        selected
+            ? 'bg-bg-raised text-text-primary shadow-[var(--shadow-raised)]'
+            : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
+    );
 
 export function ServerHubSettings({ guild, channels, roles = [], onUpdate, setError }: ServerHubSettingsProps) {
     const [loading, setLoading] = useState(false);
@@ -109,194 +119,195 @@ export function ServerHubSettings({ guild, channels, roles = [], onUpdate, setEr
     const bannerSrc = safeStoredImageDataUrl(hubSettings.banner_hash);
 
     return (
-        <div className="settings-surface-card min-h-[calc(100dvh-13.5rem)] !p-8 max-sm:!p-6">
-            <div className="flex flex-col gap-8">
-                <SectionHeader
-                    title="Space Hub"
-                    description="Design the landing page members see before they join — a banner, a welcome, and the channels you want front and center."
-                    action={
-                        <Button onClick={handleSave} loading={loading} disabled={loading}>
-                            Save changes
-                        </Button>
-                    }
-                />
+        <div className="flex flex-col gap-8">
+            <SectionHeader
+                title="Space hub"
+                description="Design the landing page members see before they join — a banner, a welcome, and the channels you want front and center."
+                action={
+                    <Button variant="primary" onClick={handleSave} loading={loading} disabled={loading}>
+                        Save changes
+                    </Button>
+                }
+            />
 
-                {/* Banner */}
-                <section className="border-t border-border-subtle pt-6">
-                    <GroupLabel>Hub banner</GroupLabel>
-                    <p className="mt-2 text-[13.5px] leading-relaxed text-text-secondary">
-                        A wide image sets the tone. Aim for 1200×480 — PNG, JPG, or WEBP up to 2 MB.
-                    </p>
-                    <div className="mt-4">
-                        {bannerSrc ? (
-                            <div className="group relative h-44 w-full overflow-hidden rounded-md border border-border-subtle bg-bg-tertiary shadow-sm">
+            <Divider />
+
+            {/* Banner */}
+            <section>
+                <GroupLabel>Hub banner</GroupLabel>
+                <p className="mt-2 text-body leading-relaxed text-text-secondary">
+                    A wide image sets the tone. Aim for 1200×480 — PNG, JPG, or WEBP up to 2 MB.
+                </p>
+                <div className="mt-4">
+                    {bannerSrc ? (
+                        <div className="flex flex-col items-start gap-3">
+                            <div className="pc-well h-44 w-full overflow-hidden p-0">
                                 <img
                                     src={bannerSrc}
                                     alt="Hub banner preview"
                                     className="h-full w-full object-cover"
                                 />
-                                <div className="absolute inset-0 flex items-center justify-center bg-black/55 opacity-0 transition-opacity duration-[140ms] ease-[var(--ease-out)] group-focus-within:opacity-100 group-hover:opacity-100">
-                                    <Button variant="destructive" onClick={removeBanner}>
-                                        <X size={16} className="mr-1.5" /> Remove banner
-                                    </Button>
-                                </div>
                             </div>
+                            <Button variant="danger" onClick={removeBanner}>
+                                <X size={16} /> Remove banner
+                            </Button>
+                        </div>
+                    ) : (
+                        <label
+                            className={cn(
+                                'pc-well flex h-36 w-full cursor-pointer flex-col items-center justify-center gap-1.5',
+                                'text-text-muted transition-[box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+                                'focus-within:shadow-[var(--shadow-well),var(--focus-ring)]',
+                            )}
+                        >
+                            <Upload size={22} aria-hidden />
+                            <span className="text-label text-text-secondary">Upload a banner image</span>
+                            <span className="pc-mono text-meta">PNG, JPG, or WEBP · 2 MB max</span>
+                            <input type="file" className="sr-only" accept="image/*" onChange={handleBannerUpload} />
+                        </label>
+                    )}
+                </div>
+            </section>
+
+            <Divider />
+
+            {/* Welcome copy */}
+            <section>
+                <GroupLabel>Welcome copy</GroupLabel>
+                <div className="mt-4 flex flex-col gap-5">
+                    <label className="block">
+                        <FieldLabel>Headline</FieldLabel>
+                        <Input
+                            value={hubSettings.welcome_text || ''}
+                            onChange={e => handleTextChange('welcome_text', e.target.value)}
+                            placeholder="A short, warm one-liner"
+                            maxLength={100}
+                        />
+                    </label>
+                    <label className="block">
+                        <FieldLabel>About this space</FieldLabel>
+                        <Textarea
+                            value={hubSettings.description || ''}
+                            onChange={e => handleTextChange('description', e.target.value)}
+                            className="min-h-[100px] resize-y"
+                            placeholder="What is this community for? Who is it for?"
+                            maxLength={2000}
+                        />
+                    </label>
+                </div>
+            </section>
+
+            <Divider />
+
+            {/* Discovery / visibility */}
+            <section>
+                <GroupLabel>Visibility</GroupLabel>
+                <div className="mt-2">
+                    <ToggleRow
+                        label="List this space publicly"
+                        description="Public spaces can surface in discovery. Leave off for invite-only communities."
+                        checked={visibility === 'public'}
+                        onChange={(checked) => setVisibility(checked ? 'public' : 'private')}
+                    />
+                    <Divider />
+                    <ToggleRow
+                        label="Role-gated sidebar"
+                        description="Only members with one of the selected roles see this space in their list. Not listed in discovery."
+                        checked={visibility === 'roles'}
+                        onChange={(checked) =>
+                            setVisibility(checked ? 'roles' : visibility === 'public' ? 'public' : 'private')
+                        }
+                    />
+                </div>
+                {visibility === 'roles' && (
+                    <div className="mt-5">
+                        <FieldLabel>Allowed roles</FieldLabel>
+                        <p className="mt-2 text-meta leading-relaxed text-text-muted">
+                            Members need at least one of these roles to see the server.
+                        </p>
+                        {assignableRoles.length === 0 ? (
+                            <p className="mt-3 text-body leading-relaxed text-text-secondary">
+                                Create a role first, then pick it here.
+                            </p>
                         ) : (
-                            <label className="flex h-36 w-full cursor-pointer flex-col items-center justify-center gap-1.5 rounded-md border border-dashed border-border-strong bg-bg-tertiary text-text-muted transition-colors hover:border-accent-primary/60 hover:bg-bg-mod-subtle">
-                                <Upload size={22} />
-                                <span className="text-label text-text-secondary">Upload a banner image</span>
-                                <span className="text-meta">PNG, JPG, or WEBP · 2 MB max</span>
-                                <input type="file" className="hidden" accept="image/*" onChange={handleBannerUpload} />
-                            </label>
+                            <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                                {assignableRoles.map((role) => {
+                                    const selected = allowedRoleIds.includes(role.id);
+                                    return (
+                                        <label key={role.id} className={optionRow(selected)}>
+                                            <input
+                                                type="checkbox"
+                                                checked={selected}
+                                                onChange={() => toggleAllowedRole(role.id)}
+                                                className="pc-checkbox"
+                                            />
+                                            <span
+                                                className="h-3 w-3 shrink-0 rounded-[var(--radius-full)]"
+                                                aria-hidden
+                                                style={{
+                                                    // A role's colour is the member's own choice — data.
+                                                    backgroundColor: role.color
+                                                        ? `#${role.color.toString(16).padStart(6, '0')}`
+                                                        : 'var(--text-muted)',
+                                                }}
+                                            />
+                                            <span className="truncate">{role.name}</span>
+                                        </label>
+                                    );
+                                })}
+                            </div>
                         )}
                     </div>
-                </section>
-
-                {/* Welcome copy */}
-                <section className="border-t border-border-subtle pt-6">
-                    <GroupLabel>Welcome copy</GroupLabel>
-                    <div className="mt-4 flex flex-col gap-5">
-                        <label className="block">
-                            <FieldLabel>Headline</FieldLabel>
-                            <Input
-                                value={hubSettings.welcome_text || ''}
-                                onChange={e => handleTextChange('welcome_text', e.target.value)}
-                                placeholder="A short, warm one-liner"
-                                maxLength={100}
-                            />
-                        </label>
-                        <label className="block">
-                            <FieldLabel>About this space</FieldLabel>
-                            <Textarea
-                                value={hubSettings.description || ''}
-                                onChange={e => handleTextChange('description', e.target.value)}
-                                className="min-h-[100px] resize-y"
-                                placeholder="What is this community for? Who is it for?"
-                                maxLength={2000}
-                            />
-                        </label>
-                    </div>
-                </section>
-
-                {/* Discovery / visibility */}
-                <section className="border-t border-border-subtle pt-6">
-                    <GroupLabel>Visibility</GroupLabel>
-                    <div className="mt-2 divide-y divide-border-subtle">
-                        <ToggleRow
-                            label="List this space publicly"
-                            description="Public spaces can surface in discovery. Leave off for invite-only communities."
-                            checked={visibility === 'public'}
-                            onChange={(checked) => setVisibility(checked ? 'public' : 'private')}
+                )}
+                <div className="mt-5">
+                    <label className="block">
+                        <FieldLabel>Discovery tags</FieldLabel>
+                        <Input
+                            value={discoveryTags}
+                            onChange={e => setDiscoveryTags(e.target.value)}
+                            placeholder="gaming, open-source, friends"
+                            maxLength={240}
+                            disabled={visibility !== 'public'}
                         />
-                        <ToggleRow
-                            label="Role-gated sidebar"
-                            description="Only members with one of the selected roles see this space in their list. Not listed in discovery."
-                            checked={visibility === 'roles'}
-                            onChange={(checked) =>
-                                setVisibility(checked ? 'roles' : visibility === 'public' ? 'public' : 'private')
-                            }
-                        />
-                    </div>
-                    {visibility === 'roles' && (
-                        <div className="mt-5">
-                            <FieldLabel>Allowed roles</FieldLabel>
-                            <p className="mt-2 text-meta text-text-muted">
-                                Members need at least one of these roles to see the server.
-                            </p>
-                            {assignableRoles.length === 0 ? (
-                                <p className="mt-3 text-[13.5px] leading-relaxed text-text-secondary">
-                                    Create a role first, then pick it here.
-                                </p>
-                            ) : (
-                                <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                                    {assignableRoles.map((role) => {
-                                        const selected = allowedRoleIds.includes(role.id);
-                                        return (
-                                            <label
-                                                key={role.id}
-                                                className={cn(
-                                                    'flex cursor-pointer items-center gap-2.5 rounded-sm border px-3 py-2.5 text-label transition-colors',
-                                                    selected
-                                                        ? 'border-accent-primary/50 bg-accent-tint text-text-primary'
-                                                        : 'border-border-subtle text-text-secondary hover:bg-bg-mod-subtle'
-                                                )}
-                                            >
-                                                <input
-                                                    type="checkbox"
-                                                    checked={selected}
-                                                    onChange={() => toggleAllowedRole(role.id)}
-                                                    className="h-4 w-4 rounded-sm border-border-subtle accent-accent-primary"
-                                                />
-                                                <span
-                                                    className="h-3 w-3 shrink-0 rounded-full"
-                                                    style={{
-                                                        backgroundColor: role.color
-                                                            ? `#${role.color.toString(16).padStart(6, '0')}`
-                                                            : 'var(--text-muted)',
-                                                    }}
-                                                />
-                                                <span className="truncate">{role.name}</span>
-                                            </label>
-                                        );
-                                    })}
-                                </div>
-                            )}
-                        </div>
-                    )}
-                    <div className="mt-5">
-                        <label className="block">
-                            <FieldLabel>Discovery tags</FieldLabel>
-                            <Input
-                                value={discoveryTags}
-                                onChange={e => setDiscoveryTags(e.target.value)}
-                                placeholder="gaming, open-source, friends"
-                                maxLength={240}
-                                disabled={visibility !== 'public'}
-                            />
-                        </label>
-                        <p className="mt-2 text-meta text-text-muted">Comma-separated — helps the right people find you.</p>
-                    </div>
-                </section>
-
-                {/* Pinned channels */}
-                <section className="border-t border-border-subtle pt-6">
-                    <GroupLabel>Pinned channels</GroupLabel>
-                    <p className="mt-2 text-[13.5px] leading-relaxed text-text-secondary">
-                        Feature a few channels on the hub — rules, announcements, or wherever newcomers should land first.
+                    </label>
+                    <p className="mt-2 text-meta leading-relaxed text-text-muted">
+                        Comma-separated — helps the right people find you.
                     </p>
-                    {textChannels.length === 0 ? (
-                        <p className="mt-4 text-[13.5px] leading-relaxed text-text-secondary">
-                            No text channels yet. Create one and it'll be pinnable here.
-                        </p>
-                    ) : (
-                        <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                            {textChannels.map(channel => {
-                                const isPinned = (hubSettings.pinned_channels || []).includes(channel.id);
-                                return (
-                                    <label
-                                        key={channel.id}
-                                        className={cn(
-                                            'flex cursor-pointer items-center gap-2.5 rounded-sm border px-3 py-2.5 text-label transition-colors',
-                                            isPinned
-                                                ? 'border-accent-primary/50 bg-accent-tint text-text-primary'
-                                                : 'border-border-subtle text-text-secondary hover:bg-bg-mod-subtle'
-                                        )}
-                                    >
-                                        <input
-                                            type="checkbox"
-                                            checked={isPinned}
-                                            onChange={() => togglePinnedChannel(channel.id)}
-                                            className="h-4 w-4 rounded-sm border-border-subtle accent-accent-primary"
-                                        />
-                                        <Hash size={15} className="shrink-0 text-channel-icon" />
-                                        <span className="truncate">{channel.name}</span>
-                                    </label>
-                                );
-                            })}
-                        </div>
-                    )}
-                </section>
-            </div>
+                </div>
+            </section>
+
+            <Divider />
+
+            {/* Pinned channels */}
+            <section>
+                <GroupLabel>Pinned channels</GroupLabel>
+                <p className="mt-2 text-body leading-relaxed text-text-secondary">
+                    Feature a few channels on the hub — rules, announcements, or wherever newcomers should land first.
+                </p>
+                {textChannels.length === 0 ? (
+                    <p className="mt-4 text-body leading-relaxed text-text-secondary">
+                        No text channels yet. Create one and it'll be pinnable here.
+                    </p>
+                ) : (
+                    <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        {textChannels.map(channel => {
+                            const isPinned = (hubSettings.pinned_channels || []).includes(channel.id);
+                            return (
+                                <label key={channel.id} className={optionRow(isPinned)}>
+                                    <input
+                                        type="checkbox"
+                                        checked={isPinned}
+                                        onChange={() => togglePinnedChannel(channel.id)}
+                                        className="pc-checkbox"
+                                    />
+                                    <Hash size={15} className="shrink-0 text-channel-icon" aria-hidden />
+                                    <span className="truncate">{channel.name}</span>
+                                </label>
+                            );
+                        })}
+                    </div>
+                )}
+            </section>
         </div>
     );
 }

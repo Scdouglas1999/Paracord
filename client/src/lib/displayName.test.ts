@@ -9,7 +9,7 @@ describe('displayName', () => {
   it('falls back through display name, username, and a safe unknown label', () => {
     expect(displayName({ username: 'handle', display_name: 'Profile' })).toBe('Profile');
     expect(displayName({ username: 'handle' })).toBe('handle');
-    expect(displayName(undefined)).toBe('Unknown User');
+    expect(displayName(undefined)).toBe('Unknown user');
   });
 
   it('keeps the username as the account handle', () => {

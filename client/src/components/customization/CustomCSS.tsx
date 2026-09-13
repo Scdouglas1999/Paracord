@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { RotateCcw, Save, ShieldAlert, Code2, AlertTriangle } from 'lucide-react';
 import { sanitizeCustomCss } from '../../lib/security';
 import { toast } from '../../stores/toastStore';
+import { Button } from '../ui/Button';
 
 // Shared with useTheme(): the single <style> element that owns rendered custom CSS.
 const CUSTOM_CSS_STYLE_ID = 'paracord-custom-css';
@@ -95,87 +96,70 @@ export function CustomCSS({ initialCSS = '', onSave }: CustomCSSProps) {
     setCss('');
   };
 
-  const FOCUS_RING =
-    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-secondary';
-
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-end gap-2">
-        <button
-          onClick={handleReset}
-          className={`inline-flex items-center gap-1.5 rounded-sm border border-border-subtle px-3 py-2 text-label font-medium text-text-secondary transition-colors duration-150 hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[.97] ${FOCUS_RING}`}
-        >
-          <RotateCcw size={15} />
+        <Button variant="ghost" onClick={handleReset}>
+          <RotateCcw size={15} aria-hidden />
           Reset
-        </button>
-        <button
+        </Button>
+        <Button
           onClick={handleSave}
           aria-label={saved ? 'Custom CSS saved' : 'Save custom CSS'}
-          className={cnSaveButton(saved, FOCUS_RING)}
         >
-          <Save size={15} />
+          <Save size={15} aria-hidden />
           {saved ? 'Saved' : 'Save'}
-        </button>
+        </Button>
       </div>
 
-      <div
-        className="flex gap-2.5 rounded-md px-3.5 py-3"
-        style={{ background: 'var(--warning-tint)' }}
-        role="note"
-      >
-        <ShieldAlert size={16} className="mt-px shrink-0 text-accent-warning" />
+      {/* A caution is a well carrying warning ink, not a tinted panel. */}
+      <div className="pc-well flex gap-2.5 px-3.5 py-3" role="note">
+        <ShieldAlert size={16} className="mt-px shrink-0 text-accent-warning" aria-hidden />
         <p className="text-meta leading-relaxed">
           <span className="font-semibold text-accent-warning">Only paste CSS you trust. </span>
           <span className="text-text-secondary">
-            Custom styles run against the whole interface. Unsafe directives (<code className="font-code">@import</code>,
+            Custom styles run against the whole interface. Unsafe directives (<code className="pc-mono">@import</code>,
             {' '}
-            <code className="font-code">url()</code>, <code className="font-code">behavior</code>,
+            <code className="pc-mono">url()</code>, <code className="pc-mono">behavior</code>,
             {' '}
-            <code className="font-code">expression</code>) are stripped automatically — but a theme you
+            <code className="pc-mono">expression</code>) are stripped automatically — but a theme you
             didn't write can still hide or restyle real controls.
           </span>
         </p>
       </div>
 
-      <div className="overflow-hidden rounded-md border border-border-subtle bg-bg-tertiary transition-colors duration-150 focus-within:border-accent-primary">
-        <div className="flex items-center gap-2 border-b border-border-subtle px-3.5 py-2">
-          <Code2 size={13} className="text-text-muted" />
-          <span className="font-code text-[11px] text-text-muted">custom.css</span>
+      {/* The editor is one well: recessed inside its plate, depth from the inset
+          shadow, the §9 focus ring layered over it. */}
+      <div className="pc-well overflow-hidden focus-within:shadow-[var(--shadow-well),var(--focus-ring)]">
+        <div className="flex items-center gap-2 px-3.5 py-2">
+          <Code2 size={13} className="text-text-faint" aria-hidden />
+          <span className="pc-mono text-meta text-text-faint">custom.css</span>
         </div>
         <textarea
           value={css}
           onChange={(e) => setCss(e.target.value)}
+          aria-label="Custom CSS"
           placeholder={`/* Restyle Paracord with your own CSS. */\n\n:root {\n  --accent-primary: #24d196;\n}`}
           rows={16}
-          className="block w-full resize-y bg-transparent p-4 font-code text-sm text-text-primary outline-none placeholder:text-text-muted"
-          style={{ lineHeight: '1.6', tabSize: 2, minHeight: '260px' }}
+          className="block w-full resize-y bg-transparent p-4 pc-mono text-label leading-relaxed text-text-primary outline-none placeholder:text-text-faint"
+          style={{ tabSize: 2, minHeight: '260px' }}
           spellCheck={false}
         />
       </div>
 
       {sanitized && (
         <div
-          className="flex items-center gap-2 rounded-md px-3.5 py-2.5 text-meta font-medium text-accent-danger"
-          style={{ background: 'var(--danger-tint)' }}
+          className="flex items-start gap-2 rounded-[var(--radius-well)] bg-danger-well px-3.5 py-2.5 text-meta font-medium leading-relaxed text-accent-danger shadow-[var(--shadow-well)]"
           role="alert"
         >
-          <AlertTriangle size={15} className="shrink-0" />
+          <AlertTriangle size={15} className="mt-px shrink-0" aria-hidden />
           Unsafe CSS directives were removed from preview and save output.
         </div>
       )}
 
-      <p className="text-meta text-text-muted">
+      <p className="max-w-prose text-meta leading-relaxed text-text-faint">
         Server administrators can also apply server-wide CSS that reaches every member of that server.
       </p>
     </div>
   );
-}
-
-function cnSaveButton(saved: boolean, focusRing: string): string {
-  const base =
-    'inline-flex items-center gap-1.5 rounded-sm px-3.5 py-2 text-label font-semibold text-text-on-accent shadow-sm transition-[transform,background-color] duration-150 active:scale-[.97]';
-  const color = saved
-    ? 'bg-accent-success'
-    : 'bg-accent-primary hover:bg-accent-primary-hover active:bg-accent-primary-active';
-  return `${base} ${color} ${focusRing}`;
 }

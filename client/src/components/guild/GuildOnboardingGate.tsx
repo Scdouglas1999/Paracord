@@ -7,6 +7,17 @@ import { toast } from '../../stores/toastStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { ErrorBanner } from '../ui/Feedback';
 import { Button } from '../ui/Button';
+import { Divider } from '../ui/Divider';
+import { IconButton } from '../ui/IconButton';
+import {
+  Modal,
+  ModalBody,
+  ModalDescription,
+  ModalFooter,
+  ModalHeader,
+  ModalTitle,
+} from '../ui/Modal';
+import { GroupLabel } from './SettingsPrimitives';
 import { cn } from '../../lib/utils';
 
 interface GuildOnboardingGateProps {
@@ -35,6 +46,28 @@ type OnboardingPayload = {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+/**
+ * The tick box on a choice row. A checked row is a **raised** surface carrying
+ * a real tick; an unchecked one is the well it sits in. Colour is never the
+ * only cue (§9) — the tick is.
+ */
+function TickBox({ checked }: { checked: boolean }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-[var(--radius-window)]',
+        'transition-[background-color,color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+        checked
+          ? 'bg-accent-primary text-text-on-accent'
+          : 'bg-bg-mod-strong text-transparent shadow-[var(--shadow-well)]',
+      )}
+    >
+      {checked && <Check size={11} strokeWidth={3} />}
+    </span>
+  );
 }
 
 function normalizeOnboardingPayload(raw: unknown): OnboardingPayload {
@@ -167,53 +200,67 @@ export function GuildOnboardingGate({ guildId }: GuildOnboardingGateProps) {
       : "You're all set. Continue when you're ready.";
 
   return (
-    <div className="absolute inset-0 z-40 flex items-center justify-center bg-bg-tertiary/70 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-2xl overflow-hidden rounded-lg border border-border-strong bg-bg-accent shadow-xl">
-        <div className="flex items-start justify-between gap-4 border-b border-border-subtle bg-bg-secondary px-6 py-5">
-          <div className="min-w-0">
-            <div className="text-section uppercase text-accent-primary">Getting started</div>
-            <h3 className="mt-1 font-display text-title text-text-primary">
-              {payload.settings.welcome_title || 'Welcome'}
-            </h3>
-            {payload.settings.welcome_body && (
-              <p className="mt-1.5 text-sm leading-relaxed text-text-secondary">
-                {payload.settings.welcome_body}
-              </p>
+    <Modal
+      open
+      // A required rules gate cannot be closed: Escape falls through to the same
+      // guard the Later button uses, and the backdrop was never a close affordance.
+      onClose={() => { if (canDismiss) setDismissed(true); }}
+      closeOnBackdrop={false}
+      labelledBy="guild-onboarding-title"
+      describedBy={payload.settings.welcome_body ? 'guild-onboarding-description' : undefined}
+      panelClassName="w-[min(94vw,42rem)]"
+    >
+      <div className="flex max-h-[min(86dvh,44rem)] flex-col">
+        <ModalHeader className="pb-5">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <GroupLabel>Getting started</GroupLabel>
+              <ModalTitle id="guild-onboarding-title" className="mt-1">
+                {payload.settings.welcome_title || 'Welcome'}
+              </ModalTitle>
+              {payload.settings.welcome_body && (
+                <ModalDescription id="guild-onboarding-description">
+                  {payload.settings.welcome_body}
+                </ModalDescription>
+              )}
+            </div>
+            {canDismiss && (
+              <IconButton
+                label="Dismiss onboarding"
+                onClick={() => setDismissed(true)}
+                className="-mr-1 -mt-1"
+              >
+                <X size={16} />
+              </IconButton>
             )}
           </div>
-          {canDismiss && (
-            <button
-              type="button"
-              onClick={() => setDismissed(true)}
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
-              aria-label="Dismiss onboarding"
-            >
-              <X size={16} />
-            </button>
-          )}
-        </div>
+        </ModalHeader>
+        <Divider />
 
-        <div className="space-y-6 px-6 py-5">
+        <ModalBody className="min-h-0 flex-1 space-y-6 overflow-auto py-5">
           {payload.settings.rules_text && (
             <section className="space-y-3">
-              <div className="flex items-center gap-2 text-section uppercase text-text-muted">
-                <ShieldCheck size={15} className="text-text-secondary" />
+              <GroupLabel className="flex items-center gap-2">
+                <ShieldCheck size={15} className="text-text-secondary" aria-hidden />
                 Server rules
-              </div>
-              <div className="scrollbar-thin max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md border border-border-subtle bg-bg-tertiary px-4 py-3 text-sm leading-relaxed text-text-secondary">
+              </GroupLabel>
+              <div className="scrollbar-thin pc-well max-h-40 overflow-y-auto whitespace-pre-wrap px-4 py-3 text-body leading-relaxed text-text-secondary">
                 {payload.settings.rules_text}
               </div>
               <label
                 className={cn(
-                  'flex cursor-pointer items-center gap-3 rounded-sm px-1 py-1.5 text-sm transition-colors',
+                  'flex min-h-[var(--h-control)] cursor-pointer items-center gap-3 rounded-[var(--radius-control)] px-2 py-1.5 text-label',
+                  'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+                  'focus-within:shadow-[var(--focus-ring)]',
                   acceptedRules ? 'text-text-primary' : 'text-text-secondary hover:text-text-primary',
                 )}
               >
+                <TickBox checked={acceptedRules} />
                 <input
                   type="checkbox"
                   checked={acceptedRules}
                   onChange={(event) => setAcceptedRules(event.target.checked)}
-                  className="h-4 w-4 rounded-xs border-border-subtle accent-accent-primary"
+                  className="sr-only"
                 />
                 I have read and agree to follow these rules.
               </label>
@@ -222,10 +269,10 @@ export function GuildOnboardingGate({ guildId }: GuildOnboardingGateProps) {
 
           {payload.settings.role_options.length > 0 && (
             <section className="space-y-3">
-              <div className="flex items-center gap-2 text-section uppercase text-text-muted">
-                <UserRoundCheck size={15} className="text-text-secondary" />
+              <GroupLabel className="flex items-center gap-2">
+                <UserRoundCheck size={15} className="text-text-secondary" aria-hidden />
                 {payload.settings.role_prompt || 'Pick your interests'}
-              </div>
+              </GroupLabel>
               <div className="grid gap-2 sm:grid-cols-2">
                 {payload.settings.role_options.map((option) => {
                   const checked = selectedRoleIds.includes(option.role_id);
@@ -233,22 +280,15 @@ export function GuildOnboardingGate({ guildId }: GuildOnboardingGateProps) {
                     <label
                       key={option.id}
                       className={cn(
-                        'group flex cursor-pointer items-start gap-3 rounded-sm border px-3 py-2.5 text-sm transition-colors duration-[140ms] ease-[var(--ease-out)]',
+                        'group flex cursor-pointer items-start gap-3 px-3 py-2.5 text-label',
+                        'rounded-[var(--radius-control)] transition-[background-color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+                        'focus-within:shadow-[var(--focus-ring)]',
                         checked
-                          ? 'border-accent-primary bg-accent-tint'
-                          : 'border-border-subtle bg-bg-tertiary hover:border-border-strong hover:bg-bg-mod-subtle',
+                          ? 'bg-bg-raised shadow-[var(--shadow-raised)]'
+                          : 'bg-bg-well shadow-[var(--shadow-well)] hover:bg-bg-mod-subtle',
                       )}
                     >
-                      <span
-                        className={cn(
-                          'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-xs border transition-colors',
-                          checked
-                            ? 'border-accent-primary bg-accent-primary text-text-on-accent'
-                            : 'border-border-strong bg-transparent',
-                        )}
-                      >
-                        {checked && <Check size={11} strokeWidth={3} />}
-                      </span>
+                      <TickBox checked={checked} />
                       <input
                         type="checkbox"
                         checked={checked}
@@ -266,7 +306,7 @@ export function GuildOnboardingGate({ guildId }: GuildOnboardingGateProps) {
                           {option.label || `Role ${option.role_id}`}
                         </span>
                         {option.description && (
-                          <span className="mt-0.5 block text-meta text-text-muted">
+                          <span className="mt-0.5 block text-meta leading-relaxed text-text-muted">
                             {option.description}
                           </span>
                         )}
@@ -278,11 +318,12 @@ export function GuildOnboardingGate({ guildId }: GuildOnboardingGateProps) {
             </section>
           )}
 
-          {error && <ErrorBanner message={error} />}
-        </div>
+          {error && <ErrorBanner message={error} multiline />}
+        </ModalBody>
 
-        <div className="flex flex-col gap-3 border-t border-border-subtle bg-bg-secondary px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-meta text-text-muted">{helperCopy}</p>
+        <Divider />
+        <ModalFooter className="flex-col items-stretch gap-3 pt-4 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-meta leading-relaxed text-text-muted">{helperCopy}</p>
           <div className="flex items-center justify-end gap-2">
             {canDismiss && (
               <Button variant="ghost" onClick={() => setDismissed(true)}>
@@ -290,11 +331,11 @@ export function GuildOnboardingGate({ guildId }: GuildOnboardingGateProps) {
               </Button>
             )}
             <Button onClick={() => void submit()} disabled={!canSubmit} loading={saving}>
-              {saving ? 'Saving…' : 'Complete Onboarding'}
+              {saving ? 'Saving…' : 'Complete onboarding'}
             </Button>
           </div>
-        </div>
+        </ModalFooter>
       </div>
-    </div>
+    </Modal>
   );
 }

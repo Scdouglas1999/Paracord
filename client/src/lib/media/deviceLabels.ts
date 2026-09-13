@@ -138,7 +138,7 @@ function humanizeTechnicalId(raw: string): string | null {
   if (!rest || /^[0-9a-f.\s]+$/i.test(rest)) {
     if (isHdmi) return 'HDMI Audio';
     if (isPci) return 'Built-in Audio';
-    if (isBluez) return 'Bluetooth Audio';
+    if (isBluez) return 'Bluetooth audio';
     return null;
   }
   return titleCaseWords(rest);

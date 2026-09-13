@@ -24,14 +24,14 @@ interface TopBarOverlayProps {
 }
 
 const CLOSE_BUTTON =
-  'inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-sm text-text-muted ' +
+  'inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-chip text-text-muted ' +
   'outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] ' +
   'hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]';
 
 /**
  * Shared top-anchored floating shell for the TopBar surfaces (search, inbox,
- * pins, help, summary, follows). It renders the design-spec popover recipe
- * (bg --bg-floating, radius-md, --shadow-lg) over the base Modal — one family
+ * pins, help, summary, follows). It renders the floating-surface recipe
+ * (bg --bg-floating, radius-md, --shadow-plate) over the base Modal — one family
  * of chrome for every launcher. Consumers own their own focus trap via
  * `dialogRef`, so this routes through Modal with `manageFocus={false}`.
  */
@@ -71,14 +71,14 @@ export function TopBarOverlay({
       zIndexClassName="z-50"
       backdropClassName="topbar-overlay-backdrop px-2 pb-[calc(var(--safe-bottom)+0.75rem)] pt-[calc(var(--safe-top)+3.75rem)] sm:px-4 sm:pt-20"
       panelClassName={cn(
-        'flex flex-col rounded-md border-border-subtle bg-bg-floating shadow-lg',
+        'flex flex-col rounded-well border-border-subtle bg-bg-floating shadow-[var(--shadow-plate)]',
         panelClassName,
       )}
     >
       {header ?? (
         <header className="flex shrink-0 items-center gap-2.5 border-b border-border-subtle px-5 py-3.5">
           {Icon && <Icon size={18} className="shrink-0 text-text-secondary" />}
-          <h2 id={titleId} className="min-w-0 flex-1 truncate text-subhead text-text-primary">
+          <h2 id={titleId} className="min-w-0 flex-1 truncate text-heading text-text-primary">
             {title}
           </h2>
           <button type="button" className={CLOSE_BUTTON} onClick={onClose} aria-label={closeLabel}>

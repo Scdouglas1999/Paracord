@@ -56,7 +56,7 @@ describe('EmojiPicker server emojis', () => {
 
     render(<EmojiPicker guildId="g1" onSelect={onSelect} onClose={onClose} />);
 
-    fireEvent.click(screen.getByText('Space Emojis'));
+    fireEvent.click(screen.getByText('Space emojis'));
     expect(await screen.findByRole('button', { name: /party_parrot/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /ship_it/ })).toBeInTheDocument();
 
@@ -96,7 +96,7 @@ describe('EmojiPicker server emojis', () => {
 
     await waitFor(() => expect(listGuild).toHaveBeenCalledTimes(2));
 
-    fireEvent.click(screen.getByText('Space Emojis'));
+    fireEvent.click(screen.getByText('Space emojis'));
 
     expect(await screen.findByRole('button', { name: /new_static/ })).toBeInTheDocument();
   });

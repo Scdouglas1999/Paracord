@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router';
 import { useAccountStore } from '../stores/accountStore';
 import { MIN_PASSWORD_LENGTH } from '../lib/constants';
 import { ErrorBanner } from '../components/ui/Feedback';
+import { Input, Textarea } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
 import { AuthCanvas, AuthCard, AuthHeading, Field } from './authScaffold';
 
@@ -53,73 +54,70 @@ export function AccountRecoverPage() {
   return (
     <AuthCanvas>
       <AuthCard className="max-w-md">
-        <form onSubmit={handleSubmit} className="flex flex-col gap-6 p-8">
+        <form onSubmit={handleSubmit} className="flex flex-col gap-6 p-7 sm:p-8">
           <AuthHeading
             title="Recover your account"
             subtitle="Enter your 24-word recovery phrase to restore your identity on this device."
           />
 
-          {error && <ErrorBanner message={error} />}
+          {error && <ErrorBanner multiline message={error} />}
 
           <div className="flex flex-col gap-5">
-            <Field label="Recovery Phrase" required hint="All 24 words, in order, separated by spaces.">
-              <textarea
+            <Field label="Recovery phrase" required hint="All 24 words, in order, separated by spaces.">
+              <Textarea
                 value={phrase}
                 onChange={(e) => setPhrase(e.target.value)}
                 required
                 rows={4}
-                className="input-field resize-none font-code text-body"
+                className="pc-mono resize-none"
                 placeholder="ridge harbor velvet … (24 words)"
               />
             </Field>
 
             <Field label="Username" required>
-              <input
+              <Input
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 required
-                className="input-field"
                 placeholder="ada"
                 autoComplete="username"
               />
             </Field>
 
-            <Field label="New Password" required hint={`At least ${MIN_PASSWORD_LENGTH} characters.`}>
-              <input
+            <Field label="New password" required hint={`At least ${MIN_PASSWORD_LENGTH} characters.`}>
+              <Input
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 minLength={MIN_PASSWORD_LENGTH}
-                className="input-field"
                 placeholder="Choose a strong password"
                 autoComplete="new-password"
               />
             </Field>
 
-            <Field label="Confirm Password" required>
-              <input
+            <Field label="Confirm password" required>
+              <Input
                 type="password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 required
-                className="input-field"
                 placeholder="Type your password again"
                 autoComplete="new-password"
               />
             </Field>
           </div>
 
-          <Button type="submit" loading={loading} disabled={loading} className="w-full">
-            Recover Account
+          <Button type="submit" size="lg" loading={loading} disabled={loading} className="w-full">
+            Recover account
           </Button>
 
-          <p className="text-label text-text-secondary">
+          <p className="text-meta text-text-secondary">
             <button
               type="button"
               onClick={() => navigate(-1)}
-              className="font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+              className="pc-focusable rounded-[var(--radius-chip)] font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
             >
               Go back
             </button>

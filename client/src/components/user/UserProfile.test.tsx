@@ -152,7 +152,7 @@ describe('UserProfilePopup action feedback', () => {
   it('keeps the profile surface within the viewport', () => {
     const { container } = renderProfile();
 
-    expect(container.querySelector('.popup-enter')).toHaveClass(
+    expect(container.querySelector('.pc-drawer-in-right')).toHaveClass(
       'w-[min(21.5rem,calc(100vw-1rem))]',
     );
   });
@@ -207,7 +207,7 @@ describe('UserProfilePopup action feedback', () => {
 
     await user.click(screen.getByRole('button', { name: 'Report Grace' }));
     await user.type(screen.getByPlaceholderText('Explain why this user should be reviewed...'), 'spam');
-    await user.click(screen.getByRole('button', { name: 'Submit Report' }));
+    await user.click(screen.getByRole('button', { name: 'Submit report' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Failed to submit report: Moderation queue is offline.',

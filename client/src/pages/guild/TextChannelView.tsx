@@ -66,7 +66,7 @@ function OwnedTextChannelView({
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="panel-divider flex shrink-0 items-center gap-2 border-b border-border-subtle px-4 py-2.5">
-            <span className="text-section uppercase text-text-muted">Parent channel</span>
+            <span className="text-section text-text-muted">Parent channel</span>
             <span className="text-label text-text-secondary">#{parentChannel?.name || 'unknown'}</span>
           </div>
           <ErrorBoundary variant="section" label="the message feed">

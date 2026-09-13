@@ -46,6 +46,11 @@ import { logVoiceDiagnostic } from '../lib/desktopDiagnostics';
 import type { MediaEngine } from '../lib/media/mediaEngine';
 import { createMediaEngine } from '../lib/media/mediaEngine';
 import { registerSessionReset } from './sessionReset';
+// §5.1 "speaking is a breath": where the engine reports HOW LOUD, the ring
+// brightens with the voice. The level is deliberately not store state — it
+// changes fifty times a second, and a store write would re-render the room to
+// move a glow. It goes straight to the engine's own rAF loop instead.
+import { clearVoiceLevels, levelFromAnalyser, levelFromDbov, publishVoiceLevels } from '../lib/motion/voiceLevel';
 const SYSTEM_AUDIO_PRIVACY_ACK_KEY = 'paracord:system-audio-privacy-ack';
 
 function hasAcknowledgedSystemAudioPrivacyWarning(): boolean {
@@ -631,6 +636,13 @@ function startLocalMicAnalyser(room: Room): void {
       });
       localMicSpeakingFallback = speaking;
       setSpeakingForIdentity(localUserId, speaking);
+      // Your own ring answers your own microphone: the analyser knows how loud
+      // you are ~200ms before the server's speaker report does, and this is the
+      // one ring on screen whose latency a person can feel.
+      publishVoiceLevels(
+        'self',
+        new Map(speaking ? [[localUserId, levelFromAnalyser(localMicSmoothedVolume)]] : []),
+      );
       const now = Date.now();
       if (now - localMicUiLastUpdateAt >= 200) {
         const micInputActive = localMicSmoothedVolume > onThreshold;
@@ -1512,6 +1524,13 @@ function registerRoomListeners(
     const localUserId = currentCallUser()?.id;
     const serverDetectedLocalSpeaking = !!(localUserId && speakingIds.has(localUserId));
     useVoiceStore.setState({ micServerDetected: serverDetectedLocalSpeaking });
+    // LiveKit already publishes a 0..1 level per active speaker, which is the
+    // only thing §5.1's audio-reactive ring needs.
+    const levels = new Map<string, number>();
+    for (const speaker of speakers) {
+      if (speaker.identity) levels.set(speaker.identity, speaker.audioLevel ?? 0);
+    }
+    publishVoiceLevels('room', levels);
     // Fallback to local analyser for self speaking so the local ring still
     // reflects microphone activity even when server speaker updates lag.
     if (localUserId && localMicSpeakingFallback) {
@@ -1893,6 +1912,18 @@ interface VoiceStoreState {
   participants: Map<string, VoiceState>;
   // Global voice participants across all channels, keyed by channel ID
   channelParticipants: Map<string, VoiceState[]>;
+  /**
+   * Bumped every time a whole guild's voice membership is REPLACED from a
+   * gateway snapshot rather than changed by one person moving.
+   *
+   * §5.3 forbids animating what the user did not cause and presence did not
+   * cause, and "the picture arrived" is neither: a READY that hands over three
+   * people already in a room is not three people walking in. The arrival
+   * director (`components/motion/MotionDirector`) re-baselines whenever this
+   * number moves, which is the only way a diff of memberships can tell a
+   * snapshot from an event.
+   */
+  voiceSnapshotSeq: number;
   // Set of user IDs currently speaking (from LiveKit)
   speakingUsers: Set<string>;
   // LiveKit connection info
@@ -1982,6 +2013,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
   selfVideo: false,
   participants: new Map(),
   channelParticipants: new Map(),
+  voiceSnapshotSeq: 0,
   speakingUsers: new Set(),
   livekitToken: null,
   livekitUrl: null,
@@ -2933,7 +2965,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
         channelParticipants.set(localVoiceState.channel_id, existing);
         participants.set(localVoiceState.user_id, localVoiceState);
       }
-      return { channelParticipants, participants };
+      return { channelParticipants, participants, voiceSnapshotSeq: prev.voiceSnapshotSeq + 1 };
     }),
 
   setSpeakingUsers: (userIds) =>
@@ -3035,6 +3067,10 @@ function closeCall(owner: CallSession, error?: string): Promise<void> {
   callReleasePromises.set(owner, release);
   if (closingCurrent) {
     clearActiveRoomListeners();
+    // Nobody is talking to us any more, so no ring may claim to know how loud
+    // anybody is. Straight back to resting, not a release (§0: a glow asserts
+    // something is true right now).
+    clearVoiceLevels();
     stopLocalMicAnalyser();
     stopLocalAudioUplinkMonitor();
     stopRemoteAudioReconcile();
@@ -3128,7 +3164,14 @@ function bindEngine(owner: CallSession, engine: MediaEngine): void {
     }, scope);
   }));
   engine.onSpeakingChange(owner.guard(speakers => {
-    useVoiceStore.getState().setSpeakingUsers([...speakers.keys()].map(id => id === 'local' ? owner.context.user.id : id));
+    const identify = (id: string) => (id === 'local' ? owner.context.user.id : id);
+    useVoiceStore.getState().setSpeakingUsers([...speakers.keys()].map(identify));
+    // The native engines report the RTP audio-level convention: 0..127 as
+    // -dBov, so lower is louder. `levelFromDbov` is the only thing that knows
+    // that, and it maps the window voice actually lives in (§5.1).
+    const levels = new Map<string, number>();
+    for (const [id, dbov] of speakers) levels.set(identify(id), levelFromDbov(dbov));
+    publishVoiceLevels('room', levels);
   }));
   engine.onTransportLost(owner.guard(reason => { void closeCall(owner, reason); }));
   engine.onCameraFailure?.(owner.guard(error => {

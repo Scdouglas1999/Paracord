@@ -1,6 +1,5 @@
 import { useState, useEffect, lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router';
-import { motion, useReducedMotion } from 'framer-motion';
 import { AppMark } from './pages/authScaffold';
 import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
@@ -30,6 +29,16 @@ const TemplateGalleryPage = lazy(() => import('./pages/TemplateGalleryPage').the
 // in production (import.meta.env.DEV is statically false), so Rollup drops the
 // dynamic import and the harness never ships to end users.
 const MediaTest = import.meta.env.DEV ? lazy(() => import('./pages/MediaTest')) : null;
+// The design-system reference page (docs/lantern-stage-spec.md made visible).
+// Dev builds only, by the same fold-to-null trick as the media harness.
+const DesignTokensPage = import.meta.env.DEV
+  ? lazy(() => import('./pages/DesignTokensPage'))
+  : null;
+// The Stage, at full size, from fixture models — the WP3 screenshot gate
+// (docs/design/wp3-checkpoint.md). Dev builds only, same fold-to-null.
+const StagePreviewPage = import.meta.env.DEV
+  ? lazy(() => import('./pages/StagePreviewPage'))
+  : null;
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { useAccountStore } from './stores/accountStore';
 import { useServerListStore } from './stores/serverListStore';
@@ -205,21 +214,18 @@ export function AuthRoute({ children }: { children: React.ReactNode }) {
 
 /**
  * Full-viewport branded boot state shown while auth/session resolves. A real
- * loading moment (app mark on the deepest `--bg-tertiary` base, Fraunces
+ * loading moment (app mark on the deepest `--bg-base` street, Gabarito
  * wordmark, muted status line) rather than a bare spinner — and it matches the
  * document's first-paint surface so there is no flash while the app hydrates.
- * The mark breathes gently; `useReducedMotion` collapses it to a static mark.
+ * The mark breathes on `pc-mark-breathe`; the shared reduced-motion rule in
+ * utilities.css stills it — no second switch needed here.
  */
 function BrandedSplash({ label }: { label: string }) {
-  const reduce = useReducedMotion();
   return (
-    <div className="flex min-h-screen w-full flex-col items-center justify-center gap-5 bg-bg-tertiary px-6">
-      <motion.div
-        animate={reduce ? { opacity: 1 } : { opacity: [0.6, 1, 0.6], scale: [1, 1.04, 1] }}
-        transition={reduce ? undefined : { duration: 2.2, ease: 'easeInOut', repeat: Infinity }}
-      >
+    <div className="flex min-h-screen w-full flex-col items-center justify-center gap-5 bg-bg-base px-6">
+      <div className="pc-mark-breathe">
         <AppMark size={52} />
-      </motion.div>
+      </div>
       <div className="flex flex-col items-center gap-1.5">
         <span className="font-display text-heading text-text-primary">Paracord</span>
         <p className="text-meta text-text-muted" role="status" aria-live="polite">
@@ -235,15 +241,11 @@ function BrandedSplash({ label }: { label: string }) {
  * the already-painted frame, so it stays quiet: just the mark, gently fading.
  */
 function LazyFallback() {
-  const reduce = useReducedMotion();
   return (
     <div className="flex h-full w-full items-center justify-center">
-      <motion.div
-        animate={reduce ? { opacity: 0.85 } : { opacity: [0.4, 0.9, 0.4] }}
-        transition={reduce ? undefined : { duration: 1.6, ease: 'easeInOut', repeat: Infinity }}
-      >
+      <div className="pc-mark-breathe">
         <AppMark size={32} />
-      </motion.div>
+      </div>
     </div>
   );
 }
@@ -277,7 +279,7 @@ export default function App() {
       <Route path="/setup" element={route(<AccountSetupPage />)} />
       <Route path="/unlock" element={route(<AccountUnlockPage />)} />
       <Route path="/recover" element={route(<AccountRecoverPage />)} />
-      {/* Legacy unlock-screen link; import lives in User Settings → Identity. */}
+      {/* Legacy unlock-screen link; import lives in User settings → Identity. */}
       <Route path="/import" element={<Navigate to="/app?settings=identity" replace />} />
 
       {/* Server connection */}
@@ -310,11 +312,27 @@ export default function App() {
         <Route path="templates" element={lazyRoute(<TemplateGalleryPage />)} />
         <Route path="oauth2/authorize" element={lazyRoute(<BotAuthorizePage />)} />
         <Route path="developers" element={lazyRoute(<DeveloperPage />)} />
+        {/* The Stage inside the real shell, so the Buildings column stands
+            beside it as it does in a call (lantern-stage-spec §7.1/§7.2).
+            Dev builds only, stripped from production. */}
+        {import.meta.env.DEV && StagePreviewPage && (
+          <Route path="design-stage" element={lazyRoute(<StagePreviewPage />)} />
+        )}
       </Route>
 
       {/* Media engine test harness — registered in dev builds only, stripped from production. */}
       {import.meta.env.DEV && MediaTest && (
         <Route path="/media-test" element={lazyRoute(<MediaTest />)} />
+      )}
+
+      {/* Design-system reference — dev builds only, stripped from production. */}
+      {import.meta.env.DEV && DesignTokensPage && (
+        <Route path="/design-tokens" element={lazyRoute(<DesignTokensPage />)} />
+      )}
+
+      {/* The Stage at full size — dev builds only, stripped from production. */}
+      {import.meta.env.DEV && StagePreviewPage && (
+        <Route path="/design-stage" element={lazyRoute(<StagePreviewPage />)} />
       )}
 
       {/* Default: send to app (which handles auth redirects) */}

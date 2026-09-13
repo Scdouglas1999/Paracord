@@ -136,12 +136,12 @@ export function TemplateGalleryPage() {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-bg-primary">
+    <div className="flex h-full min-h-0 flex-col bg-bg-plate">
       {/* Solid header (no gradient hero) */}
-      <header className="shrink-0 border-b border-border-subtle bg-bg-secondary px-6 py-5">
+      <header className="shrink-0 border-b border-border-subtle bg-bg-raised px-6 py-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-md bg-accent-tint text-accent-primary">
+            <span className="flex h-10 w-10 items-center justify-center rounded-well bg-accent-tint text-accent-primary">
               <FileText size={19} />
             </span>
             <div>
@@ -178,7 +178,7 @@ export function TemplateGalleryPage() {
                 disabled={busyTemplateId === createGuildId}
               >
                 <Upload size={15} />
-                {busyTemplateId === createGuildId ? 'Creating...' : 'Create Template'}
+                {busyTemplateId === createGuildId ? 'Creating...' : 'Create template'}
               </Button>
             </div>
           )}
@@ -233,7 +233,7 @@ export function TemplateGalleryPage() {
                           aria-label={`View template ${template.name}`}
                           aria-pressed={active}
                           onClick={() => setSelectedTemplateId(template.id)}
-                          className={`w-full rounded-sm px-3 py-2.5 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] ${
+                          className={`w-full rounded-chip px-3 py-2.5 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] ${
                             active
                               ? 'bg-accent-tint text-text-primary'
                               : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary'
@@ -252,7 +252,7 @@ export function TemplateGalleryPage() {
             </div>
 
             {/* Detail pane */}
-            <div className="min-h-0 rounded-md border border-border-subtle bg-bg-secondary p-5 shadow-sm">
+            <div className="min-h-0 rounded-well border border-border-subtle bg-bg-raised p-5 shadow-[var(--shadow-chip)]">
               {selectedTemplate ? (
                 <div className="flex h-full min-h-0 flex-col">
                   <div className="flex items-start justify-between gap-3">
@@ -269,7 +269,7 @@ export function TemplateGalleryPage() {
                       <button
                         type="button"
                         aria-label={`Delete template ${selectedTemplate.name}`}
-                        className="inline-flex shrink-0 items-center gap-1.5 rounded-sm border border-accent-danger/35 px-2.5 py-1.5 text-meta font-semibold text-accent-danger outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-danger hover:text-text-on-danger focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
+                        className="inline-flex shrink-0 items-center gap-1.5 rounded-chip border border-accent-danger/35 px-2.5 py-1.5 text-meta font-semibold text-accent-danger outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-danger hover:text-text-on-danger focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
                         onClick={() => void deleteTemplate(selectedTemplate.id)}
                         disabled={busyTemplateId === selectedTemplate.id}
                       >
@@ -281,11 +281,11 @@ export function TemplateGalleryPage() {
 
                   <div className="mt-5 grid min-h-0 flex-1 grid-cols-1 gap-5 lg:grid-cols-2">
                     <div className="flex min-h-0 flex-col">
-                      <div className="mb-2 flex items-center gap-1.5 text-section uppercase text-text-muted">
+                      <div className="mb-2 flex items-center gap-1.5 text-section text-text-muted">
                         <MessagesSquare size={13} />
                         Channels — {selectedTemplate.template_data.channels.length}
                       </div>
-                      <div className="min-h-0 flex-1 space-y-1 overflow-y-auto rounded-sm bg-bg-tertiary p-2 scrollbar-thin">
+                      <div className="min-h-0 flex-1 space-y-1 overflow-y-auto rounded-chip bg-bg-well p-2 scrollbar-thin">
                         {selectedTemplate.template_data.channels
                           .slice()
                           .sort((a, b) => a.position - b.position)
@@ -294,11 +294,11 @@ export function TemplateGalleryPage() {
                             return (
                               <div
                                 key={`${channel.name}-${index}`}
-                                className="flex items-center gap-2 rounded-sm px-2 py-1.5"
+                                className="flex items-center gap-2 rounded-chip px-2 py-1.5"
                               >
                                 <Icon size={14} className="shrink-0 text-text-muted" />
                                 <span className="min-w-0 flex-1 truncate text-label text-text-primary">{channel.name}</span>
-                                <span className="shrink-0 rounded-xs bg-bg-mod-strong px-1.5 py-0.5 text-meta font-semibold text-text-secondary">
+                                <span className="shrink-0 rounded-window bg-bg-mod-strong px-1.5 py-0.5 text-meta font-semibold text-text-secondary">
                                   {channelTypeLabel(channel.type)}
                                 </span>
                               </div>
@@ -308,15 +308,15 @@ export function TemplateGalleryPage() {
                     </div>
 
                     <div className="flex min-h-0 flex-col">
-                      <div className="mb-2 flex items-center gap-1.5 text-section uppercase text-text-muted">
+                      <div className="mb-2 flex items-center gap-1.5 text-section text-text-muted">
                         <Shield size={13} />
                         Roles — {selectedTemplate.template_data.roles.length}
                       </div>
-                      <div className="min-h-0 flex-1 space-y-1 overflow-y-auto rounded-sm bg-bg-tertiary p-2 scrollbar-thin">
+                      <div className="min-h-0 flex-1 space-y-1 overflow-y-auto rounded-chip bg-bg-well p-2 scrollbar-thin">
                         {selectedTemplate.template_data.roles.map((role, index) => (
                           <div
                             key={`${role.name}-${index}`}
-                            className="flex items-center gap-2 rounded-sm px-2 py-1.5"
+                            className="flex items-center gap-2 rounded-chip px-2 py-1.5"
                           >
                             <Shield size={14} className="shrink-0 text-text-muted" />
                             <span className="min-w-0 flex-1 truncate text-label text-text-primary">{role.name}</span>
@@ -348,7 +348,7 @@ export function TemplateGalleryPage() {
                       onClick={() => void applyTemplate()}
                       disabled={busyTemplateId === selectedTemplate.id || !applyName.trim()}
                     >
-                      {busyTemplateId === selectedTemplate.id ? 'Creating...' : 'Create From Template'}
+                      {busyTemplateId === selectedTemplate.id ? 'Creating...' : 'Create from template'}
                     </Button>
                   </div>
                 </div>

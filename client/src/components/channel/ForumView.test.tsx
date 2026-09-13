@@ -195,9 +195,9 @@ describe('ForumView tag accessibility', () => {
 
     render(<ForumView channelId="channel-1" channelName="forum" />);
 
-    await user.click(await screen.findByRole('button', { name: 'New Post' }));
+    await user.click(await screen.findByRole('button', { name: 'New post' }));
     await user.type(screen.getByPlaceholderText("What's this discussion about?"), 'Bad post');
-    await user.click(screen.getByRole('button', { name: 'Create Post' }));
+    await user.click(screen.getByRole('button', { name: 'Create post' }));
 
     await waitFor(() => {
       expect(mocks.toastError).toHaveBeenCalledWith(
@@ -210,7 +210,7 @@ describe('ForumView tag accessibility', () => {
     const user = userEvent.setup();
     render(<ForumView channelId="channel-1" channelName="forum" />);
 
-    await user.click(await screen.findByRole('button', { name: 'New Post' }));
+    await user.click(await screen.findByRole('button', { name: 'New post' }));
     const content = screen.getByRole('textbox', { name: 'Opening message (optional)' });
     await user.type(content, 'Launch notes');
     (content as HTMLTextAreaElement).setSelectionRange(0, 'Launch notes'.length);

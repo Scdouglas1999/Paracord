@@ -216,7 +216,7 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
       <div className="flex flex-wrap items-center gap-2 border-b border-border-subtle px-4 py-3">
         {/* Sort */}
         <button
-          className="flex items-center gap-1.5 rounded-sm border border-border-subtle px-3 py-1.5 text-label font-medium text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+          className="flex items-center gap-1.5 rounded-chip border border-border-subtle px-3 py-1.5 text-label font-medium text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
           onClick={() => void handleSortChange(sortOrder === 0 ? 1 : 0)}
           title={sortOrder === 0 ? 'Sorted by latest activity' : 'Sorted by creation date'}
         >
@@ -225,7 +225,7 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
         </button>
 
         {/* Layout toggle */}
-        <div className="flex items-center overflow-hidden rounded-sm border border-border-subtle">
+        <div className="flex items-center overflow-hidden rounded-chip border border-border-subtle">
           <button
             className={cn(
               'flex items-center gap-1 px-2.5 py-1.5 text-label font-medium outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
@@ -266,7 +266,7 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
         </label>
 
         {/* Search */}
-        <div className="relative flex items-center rounded-sm border border-border-subtle bg-bg-tertiary transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus-within:border-accent-primary focus-within:shadow-[var(--focus-ring-input)]">
+        <div className="relative flex items-center rounded-chip border border-border-subtle bg-bg-well transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus-within:border-accent-primary focus-within:shadow-[var(--focus-ring-input)]">
           <Search size={14} className="pointer-events-none absolute left-2.5 text-text-muted" />
           <input
             type="text"
@@ -293,7 +293,7 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
 
         {canManageTags && (
           <button
-            className="flex items-center gap-1.5 rounded-sm border border-border-subtle px-3 py-2 text-label font-semibold text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+            className="flex items-center gap-1.5 rounded-chip border border-border-subtle px-3 py-2 text-label font-semibold text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
             onClick={() => setShowTagManager(true)}
           >
             <Tag size={15} />
@@ -301,13 +301,13 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
           </button>
         )}
 
-        {/* New Post button — primary emerald */}
+        {/* New post button — primary emerald */}
         <button
-          className="flex items-center gap-1.5 rounded-sm bg-accent-primary px-3.5 py-2 text-label font-semibold text-text-on-accent shadow-sm outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)]"
+          className="flex items-center gap-1.5 rounded-chip bg-accent-primary px-3.5 py-2 text-label font-semibold text-text-on-accent shadow-[var(--shadow-chip)] outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)]"
           onClick={() => setShowNewPost(true)}
         >
           <Plus size={16} />
-          New Post
+          New post
         </button>
       </div>
 
@@ -341,7 +341,7 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
           {selectedTags.size > 0 && (
             <button
               onClick={() => setSelectedTags(new Set())}
-              className="rounded-sm px-1.5 py-0.5 text-meta text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:text-text-secondary focus-visible:shadow-[var(--focus-ring)]"
+              className="rounded-chip px-1.5 py-0.5 text-meta text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:text-text-secondary focus-visible:shadow-[var(--focus-ring)]"
             >
               Clear
             </button>
@@ -360,7 +360,7 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
             </span>
             <button
               onClick={clearSearch}
-              className="rounded-sm px-1.5 py-0.5 text-meta text-text-muted outline-none transition-colors hover:text-text-secondary focus-visible:shadow-[var(--focus-ring)]"
+              className="rounded-chip px-1.5 py-0.5 text-meta text-text-muted outline-none transition-colors hover:text-text-secondary focus-visible:shadow-[var(--focus-ring)]"
             >
               Clear search
             </button>
@@ -380,7 +380,7 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
                   key={msg.id}
                   type="button"
                   onClick={() => handleSearchResultClick(msg)}
-                  className="rounded-md bg-bg-mod-subtle/50 px-4 py-3 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
+                  className="rounded-well bg-bg-mod-subtle/50 px-4 py-3 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
                 >
                   <div className="flex items-center gap-2 text-meta text-text-muted">
                     <span className="font-medium text-text-secondary">
@@ -428,7 +428,7 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
             action={
               <button
                 onClick={() => setShowNewPost(true)}
-                className="flex items-center gap-1.5 rounded-sm bg-accent-primary px-3.5 py-2 text-label font-semibold text-text-on-accent shadow-sm outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)]"
+                className="flex items-center gap-1.5 rounded-chip bg-accent-primary px-3.5 py-2 text-label font-semibold text-text-on-accent shadow-[var(--shadow-chip)] outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)]"
               >
                 <Plus size={16} />
                 Start a discussion
@@ -462,7 +462,7 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
         )}
       </div>}
 
-      {/* New Post Modal */}
+      {/* New post Modal */}
       {showNewPost && (
         <NewPostModal
           channelId={channelId}
@@ -509,14 +509,14 @@ function PostCard({
   return (
     <button
       onClick={onClick}
-      className="group flex flex-col gap-2 rounded-md border border-border-subtle bg-bg-secondary p-4 text-left shadow-sm outline-none transition-shadow duration-[180ms] ease-[var(--ease-out)] hover:shadow-md focus-visible:shadow-[var(--focus-ring)]"
+      className="group flex flex-col gap-2 rounded-well border border-border-subtle bg-bg-raised p-4 text-left shadow-[var(--shadow-chip)] outline-none transition-shadow duration-[180ms] ease-[var(--ease-out)] hover:shadow-[var(--shadow-lifted)] focus-visible:shadow-[var(--focus-ring)]"
     >
       <div className="flex items-start gap-2">
-        <span className="flex-1 truncate text-subhead text-text-primary transition-colors duration-[140ms] group-hover:text-accent-primary">
+        <span className="flex-1 truncate text-heading text-text-primary transition-colors duration-[140ms] group-hover:text-accent-primary">
           {post.name || 'Untitled'}
         </span>
         {isArchived && (
-          <span className="shrink-0 rounded-xs bg-bg-mod-strong px-1.5 py-0.5 text-meta font-medium text-text-muted">
+          <span className="shrink-0 rounded-window bg-bg-mod-strong px-1.5 py-0.5 text-meta font-medium text-text-muted">
             Archived
           </span>
         )}
@@ -540,11 +540,11 @@ function PostCard({
         {post.owner_id && (
           <span className="text-meta text-text-secondary">by {authorName || 'Unknown user'}</span>
         )}
-        <span className="inline-flex items-center gap-1 rounded-xs bg-bg-mod-strong px-1.5 py-0.5 text-meta text-text-secondary">
+        <span className="inline-flex items-center gap-1 rounded-window bg-bg-mod-strong px-1.5 py-0.5 text-meta text-text-secondary">
           <MessageSquare size={12} />
           <span className="tabular-nums">{post.message_count ?? 0}</span>
         </span>
-        <span className="ml-auto inline-flex items-center rounded-xs bg-bg-mod-strong px-1.5 py-0.5 font-code text-[11px] tabular-nums text-text-muted">
+        <span className="ml-auto inline-flex items-center rounded-window bg-bg-mod-strong px-1.5 py-0.5 font-code text-[11px] tabular-nums text-text-muted">
           {new Date(post.created_at).toLocaleDateString()}
         </span>
       </div>
@@ -570,7 +570,7 @@ function PostRow({
   return (
     <button
       onClick={onClick}
-      className="group flex w-full items-center gap-3 rounded-md border border-border-subtle bg-bg-secondary px-4 py-3 text-left shadow-sm outline-none transition-shadow duration-[180ms] ease-[var(--ease-out)] hover:shadow-md focus-visible:shadow-[var(--focus-ring)]"
+      className="group flex w-full items-center gap-3 rounded-well border border-border-subtle bg-bg-raised px-4 py-3 text-left shadow-[var(--shadow-chip)] outline-none transition-shadow duration-[180ms] ease-[var(--ease-out)] hover:shadow-[var(--shadow-lifted)] focus-visible:shadow-[var(--focus-ring)]"
     >
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <div className="flex items-center gap-2">
@@ -578,7 +578,7 @@ function PostRow({
             {post.name || 'Untitled'}
           </span>
           {isArchived && (
-            <span className="shrink-0 rounded-xs bg-bg-mod-strong px-1.5 py-0.5 text-meta font-medium text-text-muted">
+            <span className="shrink-0 rounded-window bg-bg-mod-strong px-1.5 py-0.5 text-meta font-medium text-text-muted">
               Archived
             </span>
           )}
@@ -602,11 +602,11 @@ function PostRow({
         {post.owner_id && (
           <span className="text-meta text-text-secondary">by {authorName || 'Unknown user'}</span>
         )}
-        <span className="inline-flex items-center gap-1 rounded-xs bg-bg-mod-strong px-1.5 py-0.5 text-meta text-text-secondary">
+        <span className="inline-flex items-center gap-1 rounded-window bg-bg-mod-strong px-1.5 py-0.5 text-meta text-text-secondary">
           <MessageSquare size={12} />
           <span className="tabular-nums">{post.message_count ?? 0}</span>
         </span>
-        <span className="inline-flex items-center rounded-xs bg-bg-mod-strong px-1.5 py-0.5 font-code text-[11px] tabular-nums text-text-muted">
+        <span className="inline-flex items-center rounded-window bg-bg-mod-strong px-1.5 py-0.5 font-code text-[11px] tabular-nums text-text-muted">
           {new Date(post.created_at).toLocaleDateString()}
         </span>
       </div>
@@ -674,7 +674,7 @@ function TagManagerModal({
       closeLabel="Close tag manager"
     >
       <ModalHeader>
-        <ModalTitle id="forum-tag-manager-title">Manage Forum Tags</ModalTitle>
+        <ModalTitle id="forum-tag-manager-title">Manage forum tags</ModalTitle>
       </ModalHeader>
       <ModalBody className="space-y-4 pb-6">
           <div className="grid gap-2 sm:grid-cols-[1fr_8rem_auto]">
@@ -684,7 +684,7 @@ function TagManagerModal({
               onChange={(e) => setName(e.target.value)}
               maxLength={30}
               placeholder="Tag name"
-              className="w-full rounded-sm border border-border-subtle bg-bg-tertiary px-3 py-2.5 text-body text-text-primary placeholder:text-text-muted outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
+              className="w-full rounded-chip border border-border-subtle bg-bg-well px-3 py-2.5 text-body text-text-primary placeholder:text-text-muted outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
             />
             <input
               type="text"
@@ -692,12 +692,12 @@ function TagManagerModal({
               onChange={(e) => setEmoji(e.target.value)}
               maxLength={16}
               placeholder="Emoji"
-              className="w-full rounded-sm border border-border-subtle bg-bg-tertiary px-3 py-2.5 text-body text-text-primary placeholder:text-text-muted outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
+              className="w-full rounded-chip border border-border-subtle bg-bg-well px-3 py-2.5 text-body text-text-primary placeholder:text-text-muted outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
             />
             <button
               onClick={() => void createTag()}
               disabled={creating || !name.trim()}
-              className="rounded-sm bg-accent-primary px-4 py-2 text-label font-semibold text-text-on-accent shadow-sm outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-chip bg-accent-primary px-4 py-2 text-label font-semibold text-text-on-accent shadow-[var(--shadow-chip)] outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
             >
               {creating ? 'Creating…' : 'Create'}
             </button>
@@ -722,7 +722,7 @@ function TagManagerModal({
                     <button
                       onClick={() => void deleteTag(tag.id)}
                       disabled={deletingTagId === tag.id}
-                      className="rounded-sm px-2.5 py-1 text-meta font-semibold text-accent-danger outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-danger hover:text-text-on-danger focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
+                      className="rounded-chip px-2.5 py-1 text-meta font-semibold text-accent-danger outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-danger hover:text-text-on-danger focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
                     >
                       {deletingTagId === tag.id ? 'Deleting…' : 'Delete'}
                     </button>
@@ -793,11 +793,11 @@ function NewPostModal({
       closeLabel="Close new post dialog"
     >
       <ModalHeader>
-        <ModalTitle id="forum-new-post-title">New Post</ModalTitle>
+        <ModalTitle id="forum-new-post-title">New post</ModalTitle>
       </ModalHeader>
       <ModalBody className="space-y-4">
           <div>
-            <label htmlFor="forum-post-title" className="mb-1.5 block text-section uppercase text-text-muted">
+            <label htmlFor="forum-post-title" className="mb-1.5 block text-section text-text-muted">
               Title
             </label>
             <input
@@ -807,20 +807,20 @@ function NewPostModal({
               onChange={(e) => setTitle(e.target.value)}
               maxLength={100}
               placeholder="What's this discussion about?"
-              className="w-full rounded-sm border border-border-subtle bg-bg-tertiary px-3 py-2.5 text-body text-text-primary placeholder:text-text-muted outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
+              className="w-full rounded-chip border border-border-subtle bg-bg-well px-3 py-2.5 text-body text-text-primary placeholder:text-text-muted outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
               autoFocus
             />
           </div>
 
           <div>
             <div className="mb-1.5 flex items-center justify-between gap-3">
-              <label htmlFor="forum-post-content" className="text-section uppercase text-text-muted">
+              <label htmlFor="forum-post-content" className="text-section text-text-muted">
                 Opening message (optional)
               </label>
               <span className="text-meta tabular-nums text-text-muted">{content.length}/2000</span>
             </div>
-            <div className="overflow-hidden rounded-sm border border-border-subtle bg-bg-tertiary focus-within:border-accent-primary focus-within:shadow-[var(--focus-ring-input)]">
-              <div className="border-b border-border-subtle bg-bg-secondary px-2 py-1">
+            <div className="overflow-hidden rounded-chip border border-border-subtle bg-bg-well focus-within:border-accent-primary focus-within:shadow-[var(--focus-ring-input)]">
+              <div className="border-b border-border-subtle bg-bg-raised px-2 py-1">
                 <MarkdownToolbar textareaRef={contentRef} onContentChange={setContent} />
               </div>
               <textarea
@@ -847,7 +847,7 @@ function NewPostModal({
 
           {tags.length > 0 && (
             <div>
-              <div className="mb-1.5 block text-section uppercase text-text-muted">
+              <div className="mb-1.5 block text-section text-text-muted">
                 Tags
               </div>
               <div className="flex flex-wrap gap-1.5" role="toolbar" aria-label="Post tag selection">
@@ -877,16 +877,16 @@ function NewPostModal({
       <ModalFooter className="mt-2 border-t border-border-subtle">
         <button
           onClick={onClose}
-          className="rounded-sm border border-border-subtle px-4 py-2 text-label font-medium text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+          className="rounded-chip border border-border-subtle px-4 py-2 text-label font-medium text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
         >
           Cancel
         </button>
         <button
           onClick={() => void handleSubmit()}
           disabled={!title.trim() || submitting}
-          className="rounded-sm bg-accent-primary px-4 py-2 text-label font-semibold text-text-on-accent shadow-sm outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-chip bg-accent-primary px-4 py-2 text-label font-semibold text-text-on-accent shadow-[var(--shadow-chip)] outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {submitting ? 'Creating…' : 'Create Post'}
+          {submitting ? 'Creating…' : 'Create post'}
         </button>
       </ModalFooter>
     </Modal>

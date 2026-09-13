@@ -86,7 +86,7 @@ function emptySteps(): DiagnosticStepResult[] {
 export interface VoiceConnectionCheckProps {
   open: boolean;
   onClose: () => void;
-  /** Devices the user picked in Voice & Video, so the check tests those. */
+  /** Devices the user picked in Voice & video, so the check tests those. */
   selection?: DeviceSelection;
   /** Injected in tests; production uses the real browser adapters. */
   adapters?: DiagnosticsAdapters;
@@ -238,20 +238,20 @@ function ConnectionCheckPanel({
           <div
             className={
               report.overall === 'fail'
-                ? 'rounded-md border border-accent-danger/35 bg-danger-tint px-3.5 py-3'
+                ? 'rounded-[var(--radius-well)] bg-danger-well px-3.5 py-3 shadow-[var(--shadow-well)]'
                 : report.overall === 'warn'
-                  ? 'rounded-md border border-accent-warning/35 bg-bg-mod-subtle px-3.5 py-3'
-                  : 'rounded-md border border-accent-primary/35 bg-bg-mod-subtle px-3.5 py-3'
+                  ? 'rounded-[var(--radius-well)] bg-warning-tint px-3.5 py-3 shadow-[var(--shadow-well)]'
+                  : 'pc-well px-3.5 py-3'
             }
             role="status"
           >
             <p className="text-label text-text-primary">{OVERALL_COPY[report.overall].title}</p>
-            <p className="mt-1 text-meta text-text-secondary">{OVERALL_COPY[report.overall].body}</p>
+            <p className="mt-1 text-meta leading-relaxed text-text-secondary">{OVERALL_COPY[report.overall].body}</p>
           </div>
         )}
 
         {question && (
-          <div className="mt-3 rounded-md border border-border-subtle bg-bg-tertiary px-3.5 py-3">
+          <div className="pc-well mt-3 px-3.5 py-3">
             <p className="text-label text-text-primary">{question}</p>
             <div className="mt-2.5 flex flex-wrap gap-2">
               <Button size="sm" onClick={() => answerRef.current?.(true)}>
@@ -270,7 +270,7 @@ function ConnectionCheckPanel({
             return (
               <li
                 key={step.id}
-                className="flex gap-3 rounded-md px-2.5 py-2.5 odd:bg-bg-mod-subtle/40"
+                className="flex gap-3 rounded-[var(--radius-control)] px-2.5 py-2.5 odd:bg-bg-mod-subtle"
                 data-testid={`voice-check-step-${step.id}`}
                 data-status={step.status}
               >
@@ -292,13 +292,13 @@ function ConnectionCheckPanel({
                     )}
                   </div>
                   {step.summary && (
-                    <p className="mt-1 text-meta text-text-secondary">{step.summary}</p>
+                    <p className="mt-1 text-meta leading-relaxed text-text-secondary">{step.summary}</p>
                   )}
                   {step.remedy && (
-                    <p className="mt-1.5 text-meta text-text-primary">{step.remedy}</p>
+                    <p className="mt-1.5 text-meta leading-relaxed text-text-primary">{step.remedy}</p>
                   )}
                   {step.code && (
-                    <p className="mt-1 font-mono text-[11px] text-text-muted">{step.code}</p>
+                    <p className="pc-mono mt-1 text-meta text-text-faint">{step.code}</p>
                   )}
                   {step.id === 'microphone' && micRunning && (
                     <div className="mt-2">
@@ -327,6 +327,7 @@ function ConnectionCheckPanel({
         <label className="mt-3 flex items-center gap-2 text-meta text-text-secondary">
           <input
             type="checkbox"
+            className="pc-checkbox"
             checked={includeCamera}
             disabled={running}
             onChange={(event) => setIncludeCamera(event.target.checked)}

@@ -6,12 +6,13 @@ import { dmApi } from '../api/dms';
 import { FriendsPage } from './FriendsPage';
 
 vi.mock('../components/user/UserProfile', () => ({
-  UserProfilePopup: ({ user, onClose }: { user: { username: string }; onClose: () => void }) => (
-    <div data-testid="friend-profile">
-      Profile for {user.username}
-      <button type="button" onClick={onClose}>Close profile</button>
-    </div>
-  ),
+  UserProfilePopup: ({ user, onClose }: { user: { username: string } | null; onClose: () => void }) =>
+    user === null ? null : (
+      <div data-testid="friend-profile">
+        Profile for {user.username}
+        <button type="button" onClick={onClose}>Close profile</button>
+      </div>
+    ),
 }));
 
 const testData = vi.hoisted(() => ({

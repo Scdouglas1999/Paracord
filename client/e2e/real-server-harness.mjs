@@ -90,6 +90,22 @@ const env = {
   // unclaimed instance with a pinned token.
   PARACORD_SETUP_REQUIRE_CLAIM: 'false',
   PARACORD_LOG_ANSI: 'false',
+  // The product's per-IP HTTP ceilings (120 req/s overall, 60 /api/v1/auth/*
+  // per minute) assume one client behind an address. This whole project — five
+  // spec files, thirteen cases — is one client behind 127.0.0.1: it registers
+  // ~15 accounts, logs in ~11 times, and boots ~30 browser sessions that each
+  // spend three or four auth requests on /auth/refresh, /auth/options,
+  // /auth/sessions and /auth/mfa/status. That is ~78 auth requests and ~700
+  // requests in total, and Playwright runs the five files concurrently, so it
+  // arrives in roughly ten seconds. Both ceilings are legitimately exceeded by
+  // legitimate test volume — the traffic is what thirteen real end-to-end cases
+  // cost, not a client defect — so this throwaway loopback instance raises them
+  // rather than making the suite sleep off a retry_after it did nothing to earn.
+  // Everything else about the limiter stays armed and under test: the tiers
+  // themselves are covered by crates/paracord-api/tests/rate_limit_regressions.rs
+  // at the product defaults.
+  PARACORD_HTTP_RATE_LIMIT_GLOBAL_PER_SECOND: '2000',
+  PARACORD_HTTP_RATE_LIMIT_AUTH_PER_MINUTE: '1000',
   RUST_LOG: process.env.RUST_LOG ?? 'warn',
   // The native media (QUIC/UDP) listener defaults to 8443, which collides with
   // anything real running on this host. The voice connection-check specs set

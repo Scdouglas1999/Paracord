@@ -1,6 +1,10 @@
 import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { X, CheckCircle, AlertCircle, Info, AlertTriangle } from 'lucide-react';
+// §5.1: the stack is one FLIP'd list — a new toast fades+rises, a dismissed one
+// falls away as a ghost, and every toast still on screen slides to its new spot
+// on the spring-settle. Reduced motion lands all of it instantly.
+import { useFlipList } from '../../lib/motion';
 import { useToastStore, type ToastType, type ToastAction } from '../../stores/toastStore';
 
 const iconMap: Record<ToastType, typeof CheckCircle> = {
@@ -58,19 +62,17 @@ function ToastItem({
     <div
       role={type === 'error' || type === 'warning' ? 'alert' : 'status'}
       aria-live={type === 'error' || type === 'warning' ? 'assertive' : 'polite'}
-      style={{
-        animation: 'toast-slide-in var(--duration-normal) var(--ease-out)',
-      }}
-      className="pointer-events-auto relative flex w-80 max-w-[calc(100vw-2rem)] items-start gap-3 overflow-hidden rounded-md border border-border-subtle bg-bg-accent px-4 py-3 shadow-lg"
+      data-flip-key={id}
+      className="pc-floating pointer-events-auto relative flex w-80 max-w-[calc(100vw-2rem)] items-start gap-3 overflow-hidden px-4 py-3"
     >
       <Icon size={18} style={{ color, flexShrink: 0, marginTop: '1px' }} />
       <div className="min-w-0 flex-1">
-        <p className="text-label text-text-primary">{message}</p>
+        <p className="text-label leading-relaxed text-text-primary">{message}</p>
         {action && (
           <button
             type="button"
             onClick={() => void handleAction()}
-            className="mt-1 text-meta font-semibold uppercase tracking-wide text-accent-primary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:text-accent-primary-hover"
+            className="pc-focusable mt-1.5 rounded-[var(--radius-chip)] text-meta font-semibold text-accent-primary transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:text-accent-primary-hover"
           >
             {action.label}
           </button>
@@ -79,7 +81,7 @@ function ToastItem({
       <button
         onClick={() => removeToast(id)}
         aria-label="Dismiss notification"
-        className="-mr-1 flex-shrink-0 rounded-sm p-1 text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+        className="pc-focusable -mr-1 flex-shrink-0 rounded-[var(--radius-chip)] p-1 text-text-muted transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary"
       >
         <X size={14} />
       </button>
@@ -94,11 +96,14 @@ function ToastItem({
 
 export function ToastContainer() {
   const toasts = useToastStore((s) => s.toasts);
-
-  if (toasts.length === 0) return null;
+  // The container stays mounted even when empty: the FLIP hook's first commit
+  // only measures, so an always-mounted stack animates the very first toast's
+  // arrival instead of swallowing it as an initial mount.
+  const stackRef = useFlipList<HTMLDivElement>();
 
   return createPortal(
     <div
+      ref={stackRef}
       className="pointer-events-none fixed bottom-4 right-4 z-[9999] flex flex-col-reverse gap-2"
       style={{ maxHeight: 'calc(100vh - 2rem)' }}
       aria-live="polite"

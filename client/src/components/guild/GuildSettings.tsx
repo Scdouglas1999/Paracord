@@ -2,7 +2,7 @@ import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ChangeEvent, ReactNode } from 'react';
-import { X, Shield, ShieldAlert, Users, Hash, Link, Gavel, ScrollText, RefreshCw, Smile, Calendar, Bot, ArrowLeft, HardDrive, LayoutTemplate, MessageSquare, TrendingUp } from 'lucide-react';
+import { Shield, ShieldAlert, Users, Hash, Link, Gavel, ScrollText, RefreshCw, Smile, Calendar, Bot, HardDrive, LayoutTemplate, MessageSquare, TrendingUp } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router';
 import { guildApi } from '../../api/guilds';
 import { inviteApi } from '../../api/invites';
@@ -17,7 +17,6 @@ import type { AuditLogEntry, Ban, Channel, Guild, GuildBotConfig, GuildEmoji, In
 import type { Webhook } from '../../types';
 import { isAllowedImageMimeType, isSafeImageDataUrl, safeStoredImageDataUrl } from '../../lib/security';
 import { resolveApiBaseUrl } from '../../lib/config/apiBaseUrl';
-import { cn } from '../../lib/utils';
 import { writeClipboardText } from '../../lib/clipboard';
 import { confirm } from '../../stores/confirmStore';
 import { useMobile } from '../../hooks/useMobile';
@@ -44,9 +43,14 @@ import {
 } from './GuildSettingsSections';
 import { moderationTemplateApi } from '../../api/moderationTemplates';
 import type { ModerationTemplate } from '../../api/moderationTemplates';
-import { ErrorBanner, LoadingSpinner } from '../ui/Feedback';
+import {
+  ErrorBanner,
+  LoadingSpinner,
+  NavRow,
+  SettingsShell,
+  type SettingsNavGroup,
+} from '../ui';
 import { displayName } from '../../lib/displayName';
-import { Button } from '../ui/Button';
 
 interface GuildSettingsProps {
   guildId: string;
@@ -58,6 +62,8 @@ interface GuildSettingsProps {
 
 type SettingsSection = 'overview' | 'server-hub' | 'bot-store' | 'roles' | 'members' | 'channels' | 'invites' | 'emojis' | 'webhooks' | 'bots' | 'events' | 'onboarding' | 'bans' | 'reports' | 'audit-log' | 'file-storage' | 'mod-templates' | 'automod' | 'economy';
 
+import { DEFAULT_ROLE_COLOR } from '../../lib/colors';
+
 export function getGuildSettingsErrorMessage(err: unknown, fallback: string): string {
   const responseData = (err as { response?: { data?: { message?: string; error?: string } } }).response?.data;
   if (responseData?.message) return responseData.message;
@@ -66,26 +72,34 @@ export function getGuildSettingsErrorMessage(err: unknown, fallback: string): st
   return fallback;
 }
 
-const NAV_ITEMS: { id: SettingsSection; label: string; icon: ReactNode }[] = [
-  { id: 'overview', label: 'Overview', icon: <Hash size={16} /> },
-  { id: 'server-hub', label: 'Space Hub', icon: <LayoutTemplate size={16} /> },
-  { id: 'bot-store', label: 'Bot Store', icon: <Bot size={16} /> },
-  { id: 'roles', label: 'Roles', icon: <Shield size={16} /> },
-  { id: 'members', label: 'Members', icon: <Users size={16} /> },
-  { id: 'channels', label: 'Channels', icon: <Hash size={16} /> },
-  { id: 'invites', label: 'Invites', icon: <Link size={16} /> },
-  { id: 'emojis', label: 'Emojis', icon: <Smile size={16} /> },
-  { id: 'webhooks', label: 'Webhooks', icon: <Link size={16} /> },
-  { id: 'bots', label: 'Bots', icon: <Bot size={16} /> },
-  { id: 'events', label: 'Events', icon: <Calendar size={16} /> },
-  { id: 'onboarding', label: 'Onboarding', icon: <Users size={16} /> },
-  { id: 'economy', label: 'Economy', icon: <TrendingUp size={16} /> },
-  { id: 'file-storage', label: 'File Storage', icon: <HardDrive size={16} /> },
-  { id: 'bans', label: 'Bans', icon: <Gavel size={16} /> },
-  { id: 'automod', label: 'AutoMod', icon: <ShieldAlert size={16} /> },
-  { id: 'mod-templates', label: 'Mod Templates', icon: <Shield size={16} /> },
-  { id: 'reports', label: 'Reports', icon: <MessageSquare size={16} /> },
-  { id: 'audit-log', label: 'Audit Log', icon: <ScrollText size={16} /> },
+// The index of the settings plate. `group` is the sentence-case heading the row
+// sits under (spec §6.8 — never uppercase); the first group is unlabelled.
+// Section ids are load-bearing (deep links, `?section=`, the Bot Store's
+// "Open …" jumps) and never change.
+type NavGroupKey = '' | 'The space' | 'People' | 'Automation' | 'Moderation';
+
+const NAV_GROUP_ORDER: NavGroupKey[] = ['', 'The space', 'People', 'Automation', 'Moderation'];
+
+const NAV_ITEMS: { id: SettingsSection; label: string; icon: ReactNode; group: NavGroupKey }[] = [
+  { id: 'overview', label: 'Overview', icon: <Hash size={16} />, group: '' },
+  { id: 'server-hub', label: 'Space hub', icon: <LayoutTemplate size={16} />, group: 'The space' },
+  { id: 'channels', label: 'Channels', icon: <Hash size={16} />, group: 'The space' },
+  { id: 'emojis', label: 'Emojis', icon: <Smile size={16} />, group: 'The space' },
+  { id: 'events', label: 'Events', icon: <Calendar size={16} />, group: 'The space' },
+  { id: 'file-storage', label: 'File storage', icon: <HardDrive size={16} />, group: 'The space' },
+  { id: 'roles', label: 'Roles', icon: <Shield size={16} />, group: 'People' },
+  { id: 'members', label: 'Members', icon: <Users size={16} />, group: 'People' },
+  { id: 'invites', label: 'Invites', icon: <Link size={16} />, group: 'People' },
+  { id: 'onboarding', label: 'Onboarding', icon: <Users size={16} />, group: 'People' },
+  { id: 'economy', label: 'Economy', icon: <TrendingUp size={16} />, group: 'People' },
+  { id: 'bot-store', label: 'Bot store', icon: <Bot size={16} />, group: 'Automation' },
+  { id: 'bots', label: 'Bots', icon: <Bot size={16} />, group: 'Automation' },
+  { id: 'webhooks', label: 'Webhooks', icon: <Link size={16} />, group: 'Automation' },
+  { id: 'bans', label: 'Bans', icon: <Gavel size={16} />, group: 'Moderation' },
+  { id: 'automod', label: 'AutoMod', icon: <ShieldAlert size={16} />, group: 'Moderation' },
+  { id: 'mod-templates', label: 'Mod templates', icon: <Shield size={16} />, group: 'Moderation' },
+  { id: 'reports', label: 'Reports', icon: <MessageSquare size={16} />, group: 'Moderation' },
+  { id: 'audit-log', label: 'Audit log', icon: <ScrollText size={16} />, group: 'Moderation' },
 ];
 
 function isSettingsSection(value: string | null | undefined): value is SettingsSection {
@@ -94,11 +108,11 @@ function isSettingsSection(value: string | null | undefined): value is SettingsS
 
 const NATIVE_BOT_LABELS: Record<string, { name: string; description: string }> = {
   welcome_bot: {
-    name: 'Welcome Bot',
+    name: 'Welcome bot',
     description: 'Automatically greets new members.',
   },
   auto_mod: {
-    name: 'Auto-Moderator',
+    name: 'Auto-moderator',
     description: 'Filters restricted words and basic spam.',
   },
 };
@@ -153,10 +167,10 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
   const [name, setName] = useState(guildName);
   const [description, setDescription] = useState('');
   const [newRoleName, setNewRoleName] = useState('');
-  const [newRoleColor, setNewRoleColor] = useState('#99aab5');
+  const [newRoleColor, setNewRoleColor] = useState(DEFAULT_ROLE_COLOR);
   const [editingRoleId, setEditingRoleId] = useState<string | null>(null);
   const [editingRolePermissions, setEditingRolePermissions] = useState<number>(0);
-  const [editingRoleColor, setEditingRoleColor] = useState('#99aab5');
+  const [editingRoleColor, setEditingRoleColor] = useState(DEFAULT_ROLE_COLOR);
   const [editingRoleHoist, setEditingRoleHoist] = useState(false);
   const [editingRoleMentionable, setEditingRoleMentionable] = useState(false);
   const [newWebhookName, setNewWebhookName] = useState('');
@@ -454,6 +468,31 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
     canViewAuditLog,
   ]);
 
+  // The permission-gated rows, folded into the index's sentence-case groups.
+  // An empty group never renders a heading.
+  const navGroups = useMemo<SettingsNavGroup[]>(
+    () =>
+      NAV_GROUP_ORDER.map((group) => ({
+        label: group || undefined,
+        items: visibleNavItems
+          .filter((item) => item.group === group)
+          .map(({ id, label, icon }) => ({ id, label, icon })),
+      })).filter((group) => group.items.length > 0),
+    [visibleNavItems],
+  );
+
+  const handleSelectSection = useCallback(
+    (id: string) => {
+      if (!isSettingsSection(id)) return;
+      if (isMobile) {
+        selectMobileSection(id);
+        return;
+      }
+      setActiveSection(id);
+    },
+    [isMobile, selectMobileSection],
+  );
+
   useEffect(() => {
     if (visibleNavItems.length === 0) return;
     if (!visibleNavItems.some((item) => item.id === activeSection)) {
@@ -554,7 +593,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
   }, [ownershipCandidates, ownershipTargetUserId]);
 
   const roleColorHex = (role: Role) =>
-    role.color ? `#${role.color.toString(16).padStart(6, '0')}` : '#99aab5';
+    role.color ? `#${role.color.toString(16).padStart(6, '0')}` : DEFAULT_ROLE_COLOR;
 
   const saveOverview = async () => {
     await runAction(async () => {
@@ -606,7 +645,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
       await guildApi.createRole(guildId, { name: newRoleName.trim(), color: colorInt, permissions: 0 });
       invalidateGuildPermissionCache(guildId);
       setNewRoleName('');
-      setNewRoleColor('#99aab5');
+      setNewRoleColor(DEFAULT_ROLE_COLOR);
       await refreshAll();
     }, 'Failed to create role');
   };
@@ -1004,7 +1043,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
 
   const deleteModTemplate = async (templateId: string) => {
     const ok = await confirm({
-      title: 'Delete Template',
+      title: 'Delete template',
       description: 'Are you sure you want to delete this moderation template?',
       confirmLabel: 'Delete',
       variant: 'danger',
@@ -1077,441 +1116,318 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
   };
 
   return (
-    <div
-      className={cn(
-        'relative h-full min-h-0 overflow-hidden rounded-lg border border-border-subtle bg-bg-primary',
-        isMobile ? 'flex flex-col' : 'flex'
-      )}
+    <SettingsShell
+      label="Space settings"
+      title={guild?.name || guildName}
+      groups={navGroups}
+      active={activeSection}
+      onSelect={handleSelectSection}
+      onClose={onClose}
+      closeLabel="Close space settings"
+      isMobile={isMobile}
+      showIndex={mobileShowNav}
+      onShowIndex={setMobileShowNav}
       onKeyDown={handleKeyDown}
-      tabIndex={-1}
+      indexFooter={
+        <>
+          <NavRow icon={<RefreshCw size={16} />} onClick={() => void refreshAll()}>
+            Reload this space
+          </NavRow>
+          {loading && (
+            <div className="px-2.5 pt-1">
+              <LoadingSpinner size="sm" label="Reloading this space" />
+            </div>
+          )}
+        </>
+      }
     >
-      {!isMobile && (
-        <div className="absolute right-6 top-6 z-50 flex flex-col items-center gap-1">
-          <button
-            onClick={onClose}
-            className="command-icon-btn rounded-full border border-border-strong bg-bg-secondary/75 hover:bg-bg-mod-subtle"
-            aria-label="Close space settings"
-            title="Close space settings"
-          >
-            <X size={18} />
-          </button>
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">Esc</span>
-        </div>
-      )}
+      <div className="flex flex-col gap-8">
+        {error && <ErrorBanner message={error} multiline onRetry={() => void refreshAll()} />}
 
-      {isMobile ? (
-        mobileShowNav ? (
-          <div className="relative z-10 flex flex-1 flex-col overflow-y-auto bg-bg-secondary/70 pt-[calc(var(--safe-top)+0.75rem)]">
-            <div className="flex items-center justify-between px-4 pb-3">
-              <div className="truncate text-xs font-semibold uppercase tracking-wide text-text-muted">
-                {guild?.name || guildName}
-              </div>
-              <button
-                onClick={onClose}
-                className="command-icon-btn h-9 w-9 rounded-full border border-border-strong bg-bg-secondary/75"
-                aria-label="Close space settings"
-                title="Close space settings"
-              >
-                <X size={17} />
-              </button>
-            </div>
-            <div className="flex flex-col px-2 pb-[calc(var(--safe-bottom)+1rem)]">
-              {visibleNavItems.map(item => (
-                <button
-                  key={item.id}
-                  onClick={() => selectMobileSection(item.id)}
-                  className="flex w-full items-center gap-3 rounded-sm px-4 py-3.5 text-sm font-medium text-text-primary transition-colors hover:bg-bg-mod-subtle active:bg-bg-mod-strong"
-                >
-                  <span className="text-text-muted">{item.icon}</span>
-                  <span className="flex-1 text-left">{item.label}</span>
-                  <ArrowLeft size={14} className="rotate-180 text-text-muted" />
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <div className="relative z-10 flex items-center gap-2 border-b border-border-subtle/70 bg-bg-secondary/70 px-3 pb-2.5 pt-[calc(var(--safe-top)+0.75rem)]">
-            <button
-              onClick={() => setMobileShowNav(true)}
-              className="command-icon-btn h-9 w-9 rounded-full border border-border-strong bg-bg-secondary/75"
-              aria-label="Back to settings menu"
-            >
-              <ArrowLeft size={17} />
-            </button>
-            <div className="flex-1 truncate text-sm font-semibold text-text-primary">
-              {visibleNavItems.find(i => i.id === activeSection)?.label ?? activeSection}
-            </div>
-            <button
-              onClick={onClose}
-              className="command-icon-btn h-9 w-9 rounded-full border border-border-strong bg-bg-secondary/75"
-              aria-label="Close space settings"
-              title="Close space settings"
-            >
-              <X size={17} />
-            </button>
-          </div>
-        )
-      ) : (
-        <div className="relative z-10 w-[clamp(11rem,24vw,18rem)] shrink-0 overflow-y-auto border-r border-border-subtle bg-bg-secondary px-3 py-6 sm:px-5 sm:py-10">
-          <div className="ml-auto w-full max-w-[236px]">
-            <button
-              onClick={onClose}
-              className="group mb-4 flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-label text-text-muted outline-none transition-colors hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
-            >
-              <ArrowLeft size={14} className="transition-transform group-hover:-translate-x-0.5" />
-              Back
-            </button>
-            <div className="px-2 pb-3 text-section uppercase text-text-muted">
-              {guild?.name || guildName}
-            </div>
-            <div className="flex flex-col gap-1">
-              {visibleNavItems.map(item => {
-                const active = activeSection === item.id;
-                return (
-                  <button
-                    key={item.id}
-                    onClick={() => setActiveSection(item.id)}
-                    aria-current={active ? 'page' : undefined}
-                    className={`settings-nav-item relative ${active ? 'active' : ''}`}
-                  >
-                    {active && (
-                      <span
-                        aria-hidden
-                        className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-full bg-accent-secondary"
-                      />
-                    )}
-                    <span className={active ? 'text-accent-primary' : 'text-channel-icon'}>{item.icon}</span>
-                    {item.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
+        {activeSection === 'overview' && (
+          <OverviewSection
+            guild={guild}
+            authUserId={authUser?.id}
+            name={name}
+            description={description}
+            vanityCode={vanityCode}
+            savingVanity={savingVanity}
+            iconDataUrl={iconDataUrl}
+            ownershipTargetUserId={ownershipTargetUserId}
+            ownershipCandidates={ownershipCandidates}
+            transferringOwnership={transferringOwnership}
+            members={members}
+            roles={roles}
+            channels={channels}
+            invites={invites}
+            showDeleteGuildDialog={showDeleteGuildDialog}
+            deleteGuildConfirmName={deleteGuildConfirmName}
+            deletingGuild={deletingGuild}
+            onNameChange={setName}
+            onDescriptionChange={setDescription}
+            onVanityCodeChange={setVanityCode}
+            onIconChange={onGuildIconChange}
+            onOwnershipTargetChange={setOwnershipTargetUserId}
+            onDeleteGuildConfirmNameChange={setDeleteGuildConfirmName}
+            onSave={() => void saveOverview()}
+            onSaveVanity={() => void saveVanityUrl()}
+            onLeave={() => void handleLeaveGuild()}
+            onTransferOwnership={() => void transferOwnership()}
+            onShowDeleteDialog={() => { setShowDeleteGuildDialog(true); setDeleteGuildConfirmName(''); }}
+            onHideDeleteDialog={() => { setShowDeleteGuildDialog(false); setDeleteGuildConfirmName(''); }}
+            onDeleteGuild={() => void handleDeleteGuild()}
+          />
+        )}
 
-      {(!isMobile || !mobileShowNav) && (
-        <div className={cn('relative z-10 flex-1 overflow-y-auto', isMobile ? 'px-6 pb-[calc(var(--safe-bottom)+1rem)] pt-6' : 'px-10 py-8')}>
-          <div className="w-full max-w-[740px] space-y-8">
-            {!isMobile && (
-              <nav className="mb-4 flex items-center gap-1.5 text-xs text-text-muted" aria-label="Breadcrumb">
-                <span className="font-medium">{guild?.name || guildName}</span>
-                <span aria-hidden>/</span>
-                <span className="font-medium">Settings</span>
-                <span aria-hidden>/</span>
-                <span className="font-semibold text-text-secondary">
-                  {visibleNavItems.find(i => i.id === activeSection)?.label ?? activeSection}
-                </span>
-              </nav>
-            )}
-            {error && <ErrorBanner className="mb-8" message={error} onRetry={() => void refreshAll()} />}
-            <div className="flex flex-wrap items-center gap-2.5">
-              <Button
-                onClick={() => void refreshAll()}
-                variant="outline"
-                size="sm"
-                className="h-10 gap-2"
-              >
-                <RefreshCw size={15} />
-                Refresh
-              </Button>
-              {loading && <LoadingSpinner size="sm" label="Loading..." />}
-            </div>
+        {activeSection === 'server-hub' && guild && (
+          <ServerHubSettings
+            guild={guild}
+            channels={channels}
+            roles={roles}
+            onUpdate={() => refreshAll()}
+            setError={setError}
+          />
+        )}
 
-            {activeSection === 'overview' && (
-              <OverviewSection
-                guild={guild}
-                authUserId={authUser?.id}
-                name={name}
-                description={description}
-                vanityCode={vanityCode}
-                savingVanity={savingVanity}
-                iconDataUrl={iconDataUrl}
-                ownershipTargetUserId={ownershipTargetUserId}
-                ownershipCandidates={ownershipCandidates}
-                transferringOwnership={transferringOwnership}
-                members={members}
-                roles={roles}
-                channels={channels}
-                invites={invites}
-                showDeleteGuildDialog={showDeleteGuildDialog}
-                deleteGuildConfirmName={deleteGuildConfirmName}
-                deletingGuild={deletingGuild}
-                onNameChange={setName}
-                onDescriptionChange={setDescription}
-                onVanityCodeChange={setVanityCode}
-                onIconChange={onGuildIconChange}
-                onOwnershipTargetChange={setOwnershipTargetUserId}
-                onDeleteGuildConfirmNameChange={setDeleteGuildConfirmName}
-                onSave={() => void saveOverview()}
-                onSaveVanity={() => void saveVanityUrl()}
-                onLeave={() => void handleLeaveGuild()}
-                onTransferOwnership={() => void transferOwnership()}
-                onShowDeleteDialog={() => { setShowDeleteGuildDialog(true); setDeleteGuildConfirmName(''); }}
-                onHideDeleteDialog={() => { setShowDeleteGuildDialog(false); setDeleteGuildConfirmName(''); }}
-                onDeleteGuild={() => void handleDeleteGuild()}
-              />
-            )}
+        {activeSection === 'roles' && (
+          <RolesSection
+            roles={roles}
+            canManage={canManageRoles}
+            guildId={guildId}
+            newRoleName={newRoleName}
+            newRoleColor={newRoleColor}
+            editingRoleId={editingRoleId}
+            editingRolePermissions={editingRolePermissions}
+            editingRoleColor={editingRoleColor}
+            editingRoleHoist={editingRoleHoist}
+            editingRoleMentionable={editingRoleMentionable}
+            onNewRoleNameChange={setNewRoleName}
+            onNewRoleColorChange={setNewRoleColor}
+            onEditingRoleColorChange={setEditingRoleColor}
+            onEditingRolePermissionsToggle={togglePermission}
+            onEditingRoleHoistChange={setEditingRoleHoist}
+            onEditingRoleMentionableChange={setEditingRoleMentionable}
+            onCreateRole={() => void createRole()}
+            onRenameRole={(roleId, name) => void renameRole(roleId, name)}
+            onStartEditingRole={startEditingRole}
+            onSaveRoleEdits={() => void saveRoleEdits()}
+            onCancelRoleEditing={cancelRoleEditing}
+            onDeleteRole={(roleId) => void deleteRole(roleId)}
+            roleColorHex={roleColorHex}
+            memberCountByRole={memberCountByRole}
+          />
+        )}
 
-            {activeSection === 'server-hub' && guild && (
-              <ServerHubSettings
-                guild={guild}
-                channels={channels}
-                roles={roles}
-                onUpdate={() => refreshAll()}
-                setError={setError}
-              />
-            )}
+        {activeSection === 'members' && (
+          <MembersSection
+            members={members}
+            roles={roles}
+            canManage={canManageRoleSettings || canManageRoles}
+            canKick={canKick}
+            canBan={canBan}
+            memberRoleId={memberRoleId}
+            memberSearch={memberSearch}
+            editingMemberRoleUserId={editingMemberRoleUserId}
+            draftMemberRoleIds={draftMemberRoleIds}
+            banConfirmUserId={banConfirmUserId}
+            banReasonInput={banReasonInput}
+            onMemberSearchChange={setMemberSearch}
+            onStartEditingMemberRoles={startEditingMemberRoles}
+            onCancelEditingMemberRoles={() => { setEditingMemberRoleUserId(null); setDraftMemberRoleIds([]); }}
+            onToggleDraftRoleId={(roleId) => setDraftMemberRoleIds((prev) => prev.includes(roleId) ? prev.filter((id) => id !== roleId) : [...prev, roleId])}
+            onSaveMemberRoles={(userId) => void saveMemberRoles(userId)}
+            onKickMember={(userId) => void kickMember(userId)}
+            onShowBanConfirm={(userId) => { setBanConfirmUserId(userId); setBanReasonInput(''); }}
+            onCancelBanConfirm={() => setBanConfirmUserId(null)}
+            onBanReasonChange={setBanReasonInput}
+            onBanMember={(userId, reason) => void banMember(userId, reason)}
+            roleColorHex={roleColorHex}
+          />
+        )}
 
-            {activeSection === 'roles' && (
-              <RolesSection
-                roles={roles}
-                canManage={canManageRoles}
-                guildId={guildId}
-                newRoleName={newRoleName}
-                newRoleColor={newRoleColor}
-                editingRoleId={editingRoleId}
-                editingRolePermissions={editingRolePermissions}
-                editingRoleColor={editingRoleColor}
-                editingRoleHoist={editingRoleHoist}
-                editingRoleMentionable={editingRoleMentionable}
-                onNewRoleNameChange={setNewRoleName}
-                onNewRoleColorChange={setNewRoleColor}
-                onEditingRoleColorChange={setEditingRoleColor}
-                onEditingRolePermissionsToggle={togglePermission}
-                onEditingRoleHoistChange={setEditingRoleHoist}
-                onEditingRoleMentionableChange={setEditingRoleMentionable}
-                onCreateRole={() => void createRole()}
-                onRenameRole={(roleId, name) => void renameRole(roleId, name)}
-                onStartEditingRole={startEditingRole}
-                onSaveRoleEdits={() => void saveRoleEdits()}
-                onCancelRoleEditing={cancelRoleEditing}
-                onDeleteRole={(roleId) => void deleteRole(roleId)}
-                roleColorHex={roleColorHex}
-                memberCountByRole={memberCountByRole}
-              />
-            )}
+        {activeSection === 'channels' && (
+          <ChannelManager
+            guildId={guildId}
+            channels={channels}
+            roles={roles}
+            canManageRoles={canManageRoles}
+            highlightedChannelId={initialChannelId}
+            onRefresh={refreshAll}
+          />
+        )}
 
-            {activeSection === 'members' && (
-              <MembersSection
-                members={members}
-                roles={roles}
-                canManage={canManageRoleSettings || canManageRoles}
-                canKick={canKick}
-                canBan={canBan}
-                memberRoleId={memberRoleId}
-                memberSearch={memberSearch}
-                editingMemberRoleUserId={editingMemberRoleUserId}
-                draftMemberRoleIds={draftMemberRoleIds}
-                banConfirmUserId={banConfirmUserId}
-                banReasonInput={banReasonInput}
-                onMemberSearchChange={setMemberSearch}
-                onStartEditingMemberRoles={startEditingMemberRoles}
-                onCancelEditingMemberRoles={() => { setEditingMemberRoleUserId(null); setDraftMemberRoleIds([]); }}
-                onToggleDraftRoleId={(roleId) => setDraftMemberRoleIds((prev) => prev.includes(roleId) ? prev.filter((id) => id !== roleId) : [...prev, roleId])}
-                onSaveMemberRoles={(userId) => void saveMemberRoles(userId)}
-                onKickMember={(userId) => void kickMember(userId)}
-                onShowBanConfirm={(userId) => { setBanConfirmUserId(userId); setBanReasonInput(''); }}
-                onCancelBanConfirm={() => setBanConfirmUserId(null)}
-                onBanReasonChange={setBanReasonInput}
-                onBanMember={(userId, reason) => void banMember(userId, reason)}
-                roleColorHex={roleColorHex}
-              />
-            )}
+        {activeSection === 'invites' && (
+          <InvitesSection
+            invites={invites}
+            onCreateInvite={() => void createInvite()}
+            onRevokeInvite={(code) => void revokeInvite(code)}
+          />
+        )}
 
-            {activeSection === 'channels' && (
-              <ChannelManager
-                guildId={guildId}
-                channels={channels}
-                roles={roles}
-                canManageRoles={canManageRoles}
-                highlightedChannelId={initialChannelId}
-                onRefresh={refreshAll}
-              />
-            )}
+        {activeSection === 'emojis' && (
+          <EmojisSection
+            guildId={guildId}
+            emojis={emojis}
+            canManage={canManageEmojis}
+            newEmojiName={newEmojiName}
+            newEmojiFile={newEmojiFile}
+            editingEmojiId={editingEmojiId}
+            editingEmojiName={editingEmojiName}
+            onNewEmojiNameChange={setNewEmojiName}
+            onNewEmojiFileChange={(file, err) => {
+              setNewEmojiFile(file);
+              if (err) setError(err);
+              else setError(null);
+            }}
+            onEditingEmojiNameChange={setEditingEmojiName}
+            onCreateEmoji={() => void createEmoji()}
+            onStartEditingEmoji={startEditingEmoji}
+            onSaveEmojiName={(emojiId) => void saveEmojiName(emojiId)}
+            onCancelEditingEmoji={() => { setEditingEmojiId(null); setEditingEmojiName(''); }}
+            onDeleteEmoji={(emojiId) => void deleteEmoji(emojiId)}
+          />
+        )}
 
-            {activeSection === 'invites' && (
-              <InvitesSection
-                invites={invites}
-                onCreateInvite={() => void createInvite()}
-                onRevokeInvite={(code) => void revokeInvite(code)}
-              />
-            )}
+        {activeSection === 'webhooks' && (
+          <WebhooksSection
+            webhooks={webhooks}
+            channels={channels}
+            canManage={canManageWebhooks}
+            webhookFilterChannelId={webhookFilterChannelId}
+            newWebhookName={newWebhookName}
+            newWebhookChannelId={newWebhookChannelId}
+            editingWebhookId={editingWebhookId}
+            editingWebhookName={editingWebhookName}
+            issuedWebhookTokens={issuedWebhookTokens}
+            copiedWebhookId={copiedWebhookId}
+            webhookInspectingId={webhookInspectingId}
+            webhookExecutingId={webhookExecutingId}
+            webhookTestMessages={webhookTestMessages}
+            webhookBase={webhookBase}
+            onFilterChannelChange={setWebhookFilterChannelId}
+            onNewWebhookNameChange={setNewWebhookName}
+            onNewWebhookChannelChange={setNewWebhookChannelId}
+            onEditingWebhookNameChange={setEditingWebhookName}
+            onWebhookTestMessageChange={(webhookId, msg) => setWebhookTestMessages((prev) => ({ ...prev, [webhookId]: msg }))}
+            onCreateWebhook={() => void createWebhook()}
+            onStartEditingWebhook={startEditingWebhook}
+            onSaveWebhookName={(webhookId) => void saveWebhookName(webhookId)}
+            onCancelEditingWebhook={() => { setEditingWebhookId(null); setEditingWebhookName(''); }}
+            onDeleteWebhook={(webhookId) => void deleteWebhook(webhookId)}
+            onCopyWebhookUrl={(webhookId) => void copyWebhookUrl(webhookId)}
+            onInspectWebhook={(webhookId) => void inspectWebhook(webhookId)}
+            onExecuteWebhookTest={(webhookId) => void executeWebhookTest(webhookId)}
+            channelNameById={channelNameById}
+          />
+        )}
 
-            {activeSection === 'emojis' && (
-              <EmojisSection
-                guildId={guildId}
-                emojis={emojis}
-                canManage={canManageEmojis}
-                newEmojiName={newEmojiName}
-                newEmojiFile={newEmojiFile}
-                editingEmojiId={editingEmojiId}
-                editingEmojiName={editingEmojiName}
-                onNewEmojiNameChange={setNewEmojiName}
-                onNewEmojiFileChange={(file, err) => {
-                  setNewEmojiFile(file);
-                  if (err) setError(err);
-                  else setError(null);
-                }}
-                onEditingEmojiNameChange={setEditingEmojiName}
-                onCreateEmoji={() => void createEmoji()}
-                onStartEditingEmoji={startEditingEmoji}
-                onSaveEmojiName={(emojiId) => void saveEmojiName(emojiId)}
-                onCancelEditingEmoji={() => { setEditingEmojiId(null); setEditingEmojiName(''); }}
-                onDeleteEmoji={(emojiId) => void deleteEmoji(emojiId)}
-              />
-            )}
+        {activeSection === 'bots' && (
+          <BotsSection
+            guildId={guildId}
+            guildBots={guildBots}
+            nativeBotEntries={nativeBotEntries}
+            userBotApps={userBotApps}
+            selectedOwnBotId={selectedOwnBotId}
+            addBotId={addBotId}
+            canManage={canManageRoleSettings}
+            onSelectedOwnBotIdChange={setSelectedOwnBotId}
+            onAddBotIdChange={setAddBotId}
+            onAddOwnBot={() => {
+              if (!selectedOwnBotId) return;
+              void runAction(async () => {
+                await botApi.addBotToGuild(guildId, { application_id: selectedOwnBotId });
+                await refreshAll();
+              }, 'Failed to add bot');
+            }}
+            onAddBotById={() => {
+              if (!addBotId.trim()) return;
+              void runAction(async () => {
+                await botApi.addBotToGuild(guildId, { application_id: addBotId.trim() });
+                setAddBotId('');
+                await refreshAll();
+              }, 'Failed to add bot');
+            }}
+            onRemoveBot={(applicationId) => {
+              void runAction(async () => {
+                await botApi.removeBotFromGuild(guildId, applicationId);
+                await refreshAll();
+              }, 'Failed to remove bot');
+            }}
+            onRemoveNativeBot={(botId) => void removeNativeBot(botId)}
+          />
+        )}
 
-            {activeSection === 'webhooks' && (
-              <WebhooksSection
-                webhooks={webhooks}
-                channels={channels}
-                canManage={canManageWebhooks}
-                webhookFilterChannelId={webhookFilterChannelId}
-                newWebhookName={newWebhookName}
-                newWebhookChannelId={newWebhookChannelId}
-                editingWebhookId={editingWebhookId}
-                editingWebhookName={editingWebhookName}
-                issuedWebhookTokens={issuedWebhookTokens}
-                copiedWebhookId={copiedWebhookId}
-                webhookInspectingId={webhookInspectingId}
-                webhookExecutingId={webhookExecutingId}
-                webhookTestMessages={webhookTestMessages}
-                webhookBase={webhookBase}
-                onFilterChannelChange={setWebhookFilterChannelId}
-                onNewWebhookNameChange={setNewWebhookName}
-                onNewWebhookChannelChange={setNewWebhookChannelId}
-                onEditingWebhookNameChange={setEditingWebhookName}
-                onWebhookTestMessageChange={(webhookId, msg) => setWebhookTestMessages((prev) => ({ ...prev, [webhookId]: msg }))}
-                onCreateWebhook={() => void createWebhook()}
-                onStartEditingWebhook={startEditingWebhook}
-                onSaveWebhookName={(webhookId) => void saveWebhookName(webhookId)}
-                onCancelEditingWebhook={() => { setEditingWebhookId(null); setEditingWebhookName(''); }}
-                onDeleteWebhook={(webhookId) => void deleteWebhook(webhookId)}
-                onCopyWebhookUrl={(webhookId) => void copyWebhookUrl(webhookId)}
-                onInspectWebhook={(webhookId) => void inspectWebhook(webhookId)}
-                onExecuteWebhookTest={(webhookId) => void executeWebhookTest(webhookId)}
-                channelNameById={channelNameById}
-              />
-            )}
+        {activeSection === 'bot-store' && (
+          <BotStoreSection
+            guildId={guildId}
+            canManage={canManageRoleSettings}
+            onBotSettingsChanged={() => refreshAll()}
+            onOpenSettings={(section) => {
+              setActiveSection(section);
+              setMobileShowNav(false);
+            }}
+            onOpenChannel={(channelId) => {
+              onClose();
+              navigate(`/app/guilds/${guildId}/channels/${channelId}`);
+            }}
+          />
+        )}
 
-            {activeSection === 'bots' && (
-              <BotsSection
-                guildId={guildId}
-                guildBots={guildBots}
-                nativeBotEntries={nativeBotEntries}
-                userBotApps={userBotApps}
-                selectedOwnBotId={selectedOwnBotId}
-                addBotId={addBotId}
-                canManage={canManageRoleSettings}
-                onSelectedOwnBotIdChange={setSelectedOwnBotId}
-                onAddBotIdChange={setAddBotId}
-                onAddOwnBot={() => {
-                  if (!selectedOwnBotId) return;
-                  void runAction(async () => {
-                    await botApi.addBotToGuild(guildId, { application_id: selectedOwnBotId });
-                    await refreshAll();
-                  }, 'Failed to add bot');
-                }}
-                onAddBotById={() => {
-                  if (!addBotId.trim()) return;
-                  void runAction(async () => {
-                    await botApi.addBotToGuild(guildId, { application_id: addBotId.trim() });
-                    setAddBotId('');
-                    await refreshAll();
-                  }, 'Failed to add bot');
-                }}
-                onRemoveBot={(applicationId) => {
-                  void runAction(async () => {
-                    await botApi.removeBotFromGuild(guildId, applicationId);
-                    await refreshAll();
-                  }, 'Failed to remove bot');
-                }}
-                onRemoveNativeBot={(botId) => void removeNativeBot(botId)}
-              />
-            )}
+        {activeSection === 'file-storage' && (
+          <FileStorageSection
+            guildId={guildId}
+            canManage={canManageRoleSettings}
+          />
+        )}
 
-            {activeSection === 'bot-store' && (
-              <BotStoreSection
-                guildId={guildId}
-                canManage={canManageRoleSettings}
-                onBotSettingsChanged={() => refreshAll()}
-                onOpenSettings={(section) => {
-                  setActiveSection(section);
-                  setMobileShowNav(false);
-                }}
-                onOpenChannel={(channelId) => {
-                  onClose();
-                  navigate(`/app/guilds/${guildId}/channels/${channelId}`);
-                }}
-              />
-            )}
+        {activeSection === 'bans' && (
+          <BansSection bans={bans} onUnban={(userId) => unban(userId)} />
+        )}
+        {activeSection === 'automod' && (
+          <AutomodSection guildId={guildId} channels={channels} roles={roles} />
+        )}
+        {activeSection === 'mod-templates' && (
+          <ModerationTemplatesSection
+            templates={modTemplates}
+            onCreateTemplate={createModTemplate}
+            onDeleteTemplate={deleteModTemplate}
+            onApplyTemplate={applyModTemplate}
+          />
+        )}
+        {activeSection === 'reports' && (
+          <ReportsSection
+            reports={reports}
+            members={members}
+            reportStatusFilter={reportStatusFilter}
+            onReportStatusFilterChange={setReportStatusFilter}
+            reportResolvingId={reportResolvingId}
+            onResolveReport={resolveReport}
+          />
+        )}
+        {/* No wrapper surface: settings are ONE plate (§4) and these sections
+            already live inside it. A card here would be a plate in a plate. */}
+        {activeSection === 'events' && <EventList guildId={guildId} />}
 
-            {activeSection === 'file-storage' && (
-              <FileStorageSection
-                guildId={guildId}
-                canManage={canManageRoleSettings}
-              />
-            )}
+        {activeSection === 'onboarding' && (
+          <OnboardingSettingsSection guildId={guildId} roles={roles} />
+        )}
 
-            {activeSection === 'bans' && (
-              <BansSection bans={bans} onUnban={(userId) => unban(userId)} />
-            )}
-            {activeSection === 'automod' && (
-              <AutomodSection guildId={guildId} channels={channels} roles={roles} />
-            )}
-            {activeSection === 'mod-templates' && (
-              <ModerationTemplatesSection
-                templates={modTemplates}
-                onCreateTemplate={createModTemplate}
-                onDeleteTemplate={deleteModTemplate}
-                onApplyTemplate={applyModTemplate}
-              />
-            )}
-            {activeSection === 'reports' && (
-              <ReportsSection
-                reports={reports}
-                members={members}
-                reportStatusFilter={reportStatusFilter}
-                onReportStatusFilterChange={setReportStatusFilter}
-                reportResolvingId={reportResolvingId}
-                onResolveReport={resolveReport}
-              />
-            )}
-            {activeSection === 'events' && (
-              <div className="settings-surface-card min-h-[calc(100dvh-13.5rem)] !p-0 max-sm:!p-0">
-                <EventList guildId={guildId} />
-              </div>
-            )}
+        {activeSection === 'economy' && <EconomySettingsSection guildId={guildId} roles={roles} />}
 
-            {activeSection === 'onboarding' && (
-              <div className="settings-surface-card min-h-[calc(100dvh-13.5rem)] !p-8 max-sm:!p-6 card-stack">
-                <OnboardingSettingsSection guildId={guildId} roles={roles} />
-              </div>
-            )}
-
-            {activeSection === 'economy' && (
-              <div className="settings-surface-card min-h-[calc(100dvh-13.5rem)] !p-8 max-sm:!p-6 card-stack">
-                <EconomySettingsSection guildId={guildId} roles={roles} />
-              </div>
-            )}
-
-            {activeSection === 'audit-log' && (
-              <AuditLogSection
-                auditEntries={auditEntries}
-                members={members}
-                channels={channels}
-                roles={roles}
-                loadError={auditLoadError}
-                actionFilter={auditActionFilter}
-                userFilter={auditUserFilter}
-                onActionFilterChange={setAuditActionFilter}
-                onUserFilterChange={setAuditUserFilter}
-              />
-            )}
-          </div>
-        </div>
-      )}
-    </div>
+        {activeSection === 'audit-log' && (
+          <AuditLogSection
+            auditEntries={auditEntries}
+            members={members}
+            channels={channels}
+            roles={roles}
+            loadError={auditLoadError}
+            actionFilter={auditActionFilter}
+            userFilter={auditUserFilter}
+            onActionFilterChange={setAuditActionFilter}
+            onUserFilterChange={setAuditUserFilter}
+          />
+        )}
+      </div>
+    </SettingsShell>
   );
 }

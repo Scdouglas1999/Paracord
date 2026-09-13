@@ -139,14 +139,18 @@ export function ChannelSwitcher({
           // filling a block parent, so without it the trigger keeps its natural
           // width while the wrapper shrinks, and the channel name spills out
           // over the topic instead of ellipsizing.
-          'flex h-8 w-full min-w-0 max-w-[15rem] items-center gap-1.5 rounded-sm px-1.5 text-left outline-none',
+          'pc-focusable -ml-1 flex h-8 w-full min-w-0 max-w-[18rem] items-center gap-1.5 rounded-[var(--radius-control)] px-1 text-left outline-none',
           'text-text-primary transition-colors duration-[140ms] ease-[var(--ease-out)]',
-          'hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]',
+          'hover:bg-bg-mod-subtle',
           open && 'bg-bg-mod-subtle',
         )}
       >
-        <CurrentIcon size={18} className="shrink-0 text-channel-icon" aria-hidden />
-        <span className="truncate text-[15px] font-semibold">{channelName}</span>
+        {/* A text room's kind is already said by the window dot beside this
+            trigger; anything else still needs its own mark. */}
+        {channelType != null && channelType !== ChannelType.Text && (
+          <CurrentIcon size={18} className="shrink-0 text-text-muted" aria-hidden />
+        )}
+        <span className="pc-display truncate text-[20px] font-bold leading-tight tracking-[-0.01em]">{channelName}</span>
         <ChevronDown
           size={14}
           aria-hidden
@@ -164,7 +168,7 @@ export function ChannelSwitcher({
           aria-modal="true"
           tabIndex={-1}
           aria-label={`Switch room in ${guildName || 'this space'}`}
-          className="absolute left-0 top-[calc(100%+0.5rem)] z-50 w-[min(20rem,calc(100vw-4rem))] overflow-hidden rounded-md border border-border-subtle bg-bg-floating shadow-lg"
+          className="pc-floating absolute left-0 top-[calc(100%+0.5rem)] z-50 w-[min(20rem,calc(100vw-4rem))] overflow-hidden"
           onKeyDown={(event) => {
             if (event.key === 'ArrowDown') {
               event.preventDefault();
@@ -182,7 +186,7 @@ export function ChannelSwitcher({
           }}
         >
           <div className="border-b border-border-subtle p-2">
-            <label className="flex h-9 items-center gap-2 rounded-sm border border-border-subtle bg-bg-tertiary px-2.5 focus-within:border-accent-primary focus-within:shadow-[var(--focus-ring-input)]">
+            <label className="flex h-9 items-center gap-2 rounded-chip border border-border-subtle bg-bg-well px-2.5 focus-within:border-accent-primary focus-within:shadow-[var(--focus-ring-input)]">
               <Search size={15} className="shrink-0 text-text-muted" aria-hidden />
               <span className="sr-only">Find a room</span>
               <input
@@ -203,7 +207,7 @@ export function ChannelSwitcher({
                 navigate(`/app/guilds/${guildId}`);
                 close();
               }}
-              className="flex h-9 w-full items-center gap-2 rounded-sm px-2 text-left text-label font-medium text-text-secondary outline-none transition-colors hover:bg-bg-mod-subtle hover:text-text-primary focus:bg-accent-tint focus:text-text-primary"
+              className="flex h-9 w-full items-center gap-2 rounded-chip px-2 text-left text-label font-medium text-text-secondary outline-none transition-colors hover:bg-bg-mod-subtle hover:text-text-primary focus:bg-accent-tint focus:text-text-primary"
             >
               <LayoutGrid size={17} className="shrink-0 text-channel-icon" aria-hidden />
               <span className="flex-1 truncate">Rooms home</span>
@@ -216,7 +220,7 @@ export function ChannelSwitcher({
             ) : (
               groups.map((group) => (
                 <div key={group.id} className="mt-1 border-t border-border-subtle pt-1">
-                  <p className="px-2 py-1 text-section uppercase text-text-muted">{group.name}</p>
+                  <p className="px-2 py-1 text-section text-text-muted">{group.name}</p>
                   {group.channels.map((channel) => {
                     const type = channel.type ?? channel.channel_type;
                     const Icon = iconForType(type);
@@ -232,14 +236,14 @@ export function ChannelSwitcher({
                           close();
                         }}
                         className={cn(
-                          'relative flex h-9 w-full items-center gap-2 rounded-sm px-2 text-left outline-none transition-colors',
+                          'relative flex h-9 w-full items-center gap-2 rounded-chip px-2 text-left outline-none transition-colors',
                           active
                             ? 'bg-accent-tint text-text-primary'
                             : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary focus:bg-accent-tint focus:text-text-primary',
                         )}
                       >
                         {active && (
-                          <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-accent-secondary" aria-hidden />
+                          <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-accent-primary" aria-hidden />
                         )}
                         <Icon
                           size={17}

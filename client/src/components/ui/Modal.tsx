@@ -1,24 +1,25 @@
 import {
   createContext,
   useContext,
-  useEffect,
   useRef,
-  useState,
   type ReactNode,
   type RefObject,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { AnimatePresence, motion } from 'framer-motion';
 import { X } from 'lucide-react';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
+// §5.1/§5.3: enter/exit are the shared pc-enter / pc-exit / pc-fade classes —
+// the presence hook stays mounted for the --duration-fast leave and the ONE
+// reduced-motion switch lands the whole thing instantly.
+import { usePresence } from '../../lib/motion';
 import { cn } from '../../lib/utils';
 
 /**
  * Single base modal/dialog primitive for the app. Owns the portal, backdrop,
- * enter/exit motion (~240ms, matching --duration-slow/--ease-out), ARIA
- * wiring, focus trap and Escape handling. Complex consumers that already manage
- * their own focus trap can opt out with `manageFocus={false}` and pass their own
- * `panelRef`.
+ * enter/exit motion (the shared §5.1 overlay recipe: fade + 6px rise in on
+ * spring-settle, fade + 4px fall out on ease-in), ARIA wiring, focus trap and
+ * Escape handling. Complex consumers that already manage their own focus trap
+ * can opt out with `manageFocus={false}` and pass their own `panelRef`.
  *
  * Imported (not edited) by other lanes — keep this export surface stable.
  */
@@ -39,45 +40,6 @@ const PLACEMENT_CLASS: Record<ModalPlacement, string> = {
   top: 'items-start justify-center px-4 pt-[12vh]',
 };
 
-// Modal enter (design-spec §5): 240ms ease-out, scale(.96→1) + translateY(8→0) + fade.
-const PANEL_MOTION = {
-  center: {
-    initial: { opacity: 0, scale: 0.96, y: 8 },
-    animate: { opacity: 1, scale: 1, y: 0 },
-    exit: { opacity: 0, scale: 0.96, y: 8 },
-  },
-  top: {
-    initial: { opacity: 0, scale: 0.96, y: -12 },
-    animate: { opacity: 1, scale: 1, y: 0 },
-    exit: { opacity: 0, scale: 0.96, y: -12 },
-  },
-} as const;
-
-// prefers-reduced-motion (design-spec §5/§8): drop transforms, keep the fade only.
-const PANEL_MOTION_REDUCED = {
-  initial: { opacity: 0 },
-  animate: { opacity: 1 },
-  exit: { opacity: 0 },
-} as const;
-
-const MODAL_TRANSITION = { duration: 0.24, ease: [0.22, 1, 0.36, 1] as const };
-
-// Local reduced-motion probe. Modal mocks framer-motion in several consuming
-// tests to a bare { motion, AnimatePresence }, so we read the media query
-// directly instead of framer-motion's useReducedMotion. Guarded for jsdom, where
-// matchMedia is unavailable.
-function usePrefersReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(false);
-  useEffect(() => {
-    if (typeof window === 'undefined' || !window.matchMedia) return;
-    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
-    setReduced(mq.matches);
-    const onChange = () => setReduced(mq.matches);
-    mq.addEventListener('change', onChange);
-    return () => mq.removeEventListener('change', onChange);
-  }, []);
-  return reduced;
-}
 
 export interface ModalProps {
   open: boolean;
@@ -93,7 +55,7 @@ export interface ModalProps {
   ariaLabel?: string;
   placement?: ModalPlacement;
   size?: ModalSize;
-  /** Extra classes for the panel (glass-modal shell). */
+  /** Extra classes for the dialog panel. */
   panelClassName?: string;
   /** Extra classes for the backdrop container. */
   backdropClassName?: string;
@@ -144,66 +106,64 @@ export function Modal({
 }: ModalProps) {
   const internalRef = useRef<HTMLDivElement>(null);
   const ref = panelRef ?? internalRef;
-  const reduceMotion = usePrefersReducedMotion();
-  const panelMotion = reduceMotion
-    ? PANEL_MOTION_REDUCED
-    : PANEL_MOTION[placement];
+  // Stay mounted for the leave: `exiting` swaps the enter classes for the exit
+  // ones, and the hook drops the node when --duration-fast has run.
+  const { mounted, exiting, scenery } = usePresence(open);
 
   // Only trap/escape from here when the consumer hasn't taken it over.
   useFocusTrap(ref, open && manageFocus, manageFocus ? onClose : undefined);
 
+  if (!mounted) return null;
+
   return createPortal(
-    <AnimatePresence>
-      {open && (
-        // The backdrop deliberately carries NO `data-native-overlay-occlude`.
-        // Over the Linux native underlay the force-opaque rule (layout.css)
-        // repaints marked elements solid --bg-secondary; on this full-screen
-        // `inset-0` backdrop that painted the ENTIRE viewport dark whenever a
-        // stream was live, so opening any modal "blacked out" the stream and the
-        // dialog looked stuck. The backdrop stays translucent (dims the video
-        // behind); the opaque panel below carries the content and reads clearly.
-        <div
-          className={cn(
-            'fixed inset-0 flex modal-backdrop backdrop-blur-sm',
-            zIndexClassName,
-            PLACEMENT_CLASS[placement],
-            backdropClassName,
-          )}
-          onMouseDown={
-            closeOnBackdrop
-              ? (event) => {
-                  if (event.target === event.currentTarget) onClose();
-                }
-              : undefined
-          }
-        >
-          <motion.div
-            ref={ref}
-            role={role}
-            aria-modal="true"
-            aria-labelledby={labelledBy}
-            aria-describedby={describedBy}
-            aria-label={labelledBy ? undefined : ariaLabel}
-            tabIndex={-1}
-            initial={panelMotion.initial}
-            animate={panelMotion.animate}
-            exit={panelMotion.exit}
-            transition={MODAL_TRANSITION}
-            className={cn(
-              'relative max-h-[calc(100dvh-2rem)] max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border border-border-strong bg-bg-accent shadow-xl',
-              SIZE_CLASS[size],
-              panelClassName,
-            )}
-            onKeyDown={onKeyDown}
-          >
-            <ModalContext.Provider value={{ onClose, closeLabel }}>
-              {showCloseButton && <ModalCloseButton />}
-              {children}
-            </ModalContext.Provider>
-          </motion.div>
-        </div>
+    // The backdrop deliberately carries NO `data-native-overlay-occlude`.
+    // Over the Linux native underlay the force-opaque rule (layout.css)
+    // repaints marked elements solid --bg-secondary; on this full-screen
+    // `inset-0` backdrop that painted the ENTIRE viewport dark whenever a
+    // stream was live, so opening any modal "blacked out" the stream and the
+    // dialog looked stuck. The backdrop stays translucent (dims the video
+    // behind); the opaque panel below carries the content and reads clearly.
+    <div
+      className={cn(
+        'fixed inset-0 flex modal-backdrop',
+        exiting ? 'pc-fade-out' : 'pc-fade-in',
+        zIndexClassName,
+        PLACEMENT_CLASS[placement],
+        backdropClassName,
       )}
-    </AnimatePresence>,
+      onMouseDown={
+        closeOnBackdrop
+          ? (event) => {
+              if (event.target === event.currentTarget) onClose();
+            }
+          : undefined
+      }
+    >
+      <div
+        ref={ref}
+        role={role}
+        aria-modal="true"
+        aria-labelledby={labelledBy}
+        aria-describedby={describedBy}
+        aria-label={labelledBy ? undefined : ariaLabel}
+        tabIndex={-1}
+        className={cn(
+          // A dialog is a plate that floats over the street (spec §4):
+          // --bg-floating + the plate shadow, the plate's radius, no border.
+          'pc-dialog relative max-h-[calc(100dvh-2rem)] max-w-[calc(100vw-2rem)] overflow-hidden',
+          exiting ? 'pc-exit' : 'pc-enter',
+          SIZE_CLASS[size],
+          panelClassName,
+        )}
+        onKeyDown={onKeyDown}
+        {...scenery}
+      >
+        <ModalContext.Provider value={{ onClose, closeLabel }}>
+          {showCloseButton && <ModalCloseButton />}
+          {children}
+        </ModalContext.Provider>
+      </div>
+    </div>,
     document.body,
   );
 }
@@ -218,7 +178,9 @@ export function ModalCloseButton({ className }: { className?: string }) {
       onClick={ctx.onClose}
       aria-label={ctx.closeLabel}
       className={cn(
-        'absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-sm text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]',
+        'pc-focusable absolute right-4 top-4 flex h-[var(--h-control)] w-[var(--h-control)] items-center justify-center',
+        'rounded-[var(--radius-control)] text-text-muted',
+        'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary',
         className,
       )}
     >
@@ -237,7 +199,7 @@ export function ModalHeader({
   icon?: ReactNode;
 }) {
   return (
-    <div className={cn('flex items-start gap-3 px-6 pb-2 pt-6', className)}>
+    <div className={cn('flex items-start gap-3 px-6 pb-3 pt-6', className)}>
       {icon && <div className="shrink-0">{icon}</div>}
       <div className="min-w-0 flex-1">{children}</div>
     </div>
@@ -256,10 +218,7 @@ export function ModalTitle({
   return (
     <h2
       id={id}
-      className={cn(
-        'font-display text-title text-text-primary',
-        className,
-      )}
+      className={cn('pc-display text-title text-text-primary', className)}
     >
       {children}
     </h2>
@@ -278,10 +237,7 @@ export function ModalDescription({
   return (
     <p
       id={id}
-      className={cn(
-        'mt-2 text-body text-text-secondary',
-        className,
-      )}
+      className={cn('mt-2 max-w-prose text-body text-text-secondary', className)}
     >
       {children}
     </p>
@@ -295,7 +251,7 @@ export function ModalBody({
   children: ReactNode;
   className?: string;
 }) {
-  return <div className={cn('px-6 py-2', className)}>{children}</div>;
+  return <div className={cn('px-6 py-3', className)}>{children}</div>;
 }
 
 export function ModalFooter({
@@ -307,10 +263,7 @@ export function ModalFooter({
 }) {
   return (
     <div
-      className={cn(
-        'flex justify-end gap-3 px-6 pb-5 pt-4',
-        className,
-      )}
+      className={cn('flex flex-wrap justify-end gap-2 px-6 pb-6 pt-5', className)}
     >
       {children}
     </div>

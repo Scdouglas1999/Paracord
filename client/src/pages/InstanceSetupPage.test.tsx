@@ -75,7 +75,7 @@ async function fillClaimForm(user: ReturnType<typeof userEvent.setup>) {
   await user.type(screen.getByLabelText(/Claim token/), CLAIM_TOKEN);
   await user.type(screen.getByLabelText(/Username/), 'ada');
   await user.type(screen.getByLabelText(/^Password/), VALID_PASSWORD);
-  await user.type(screen.getByLabelText(/Confirm Password/), VALID_PASSWORD);
+  await user.type(screen.getByLabelText(/Confirm password/), VALID_PASSWORD);
   await user.type(screen.getByLabelText(/Server name/), 'Riverside Studio');
   await user.type(screen.getByLabelText(/First space name/), 'The Lounge');
 }
@@ -155,7 +155,7 @@ describe('InstanceSetupPage', () => {
     await user.type(screen.getByLabelText(/Claim token/), CLAIM_TOKEN);
     await user.type(screen.getByLabelText(/Username/), 'ada');
     await user.type(screen.getByLabelText(/^Password/), password);
-    await user.type(screen.getByLabelText(/Confirm Password/), password);
+    await user.type(screen.getByLabelText(/Confirm password/), password);
     await user.type(screen.getByLabelText(/Server name/), 'Riverside Studio');
     await user.type(screen.getByLabelText(/First space name/), 'The Lounge');
     await user.click(screen.getByRole('button', { name: 'Claim this server' }));
@@ -172,7 +172,7 @@ describe('InstanceSetupPage', () => {
     await user.type(screen.getByLabelText(/Claim token/), '   ');
     await user.type(screen.getByLabelText(/Username/), 'ada');
     await user.type(screen.getByLabelText(/^Password/), VALID_PASSWORD);
-    await user.type(screen.getByLabelText(/Confirm Password/), VALID_PASSWORD);
+    await user.type(screen.getByLabelText(/Confirm password/), VALID_PASSWORD);
     await user.type(screen.getByLabelText(/Server name/), 'Riverside Studio');
     await user.type(screen.getByLabelText(/First space name/), 'The Lounge');
     await user.click(screen.getByRole('button', { name: 'Claim this server' }));
@@ -196,7 +196,7 @@ describe('InstanceSetupPage', () => {
       await user.type(screen.getByLabelText(/Claim token/), CLAIM_TOKEN);
       await user.type(screen.getByLabelText(/Username/), 'ada');
       await user.type(screen.getByLabelText(/^Password/), 'nouppercase1!');
-      await user.type(screen.getByLabelText(/Confirm Password/), 'nouppercase1!');
+      await user.type(screen.getByLabelText(/Confirm password/), 'nouppercase1!');
       await user.type(screen.getByLabelText(/Server name/), 'Riverside Studio');
       await user.type(screen.getByLabelText(/First space name/), 'The Lounge');
       await user.click(screen.getByRole('button', { name: 'Claim this server' }));

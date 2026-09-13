@@ -1,20 +1,26 @@
 import { useNavigate } from 'react-router';
 import { Radio } from 'lucide-react';
 import { useVoiceStore } from '../../../stores/voiceStore';
-import { MiniVoiceBar } from '../../voice/MiniVoiceBar';
+// §5.1/§7.7: the dock is how a room folds down when you walk away from it, so
+// it arrives on the spring over --duration-move and leaves on --ease-in
+// instead of simply being there and then not.
+import { usePresence } from '../../../lib/motion';
+import { cn } from '../../../lib/utils';
+import { OnAirDock } from '../../voice/OnAirDock';
 
 /**
  * Persistent call dock for the Unified Sidebar footer (layout-spec §1, §2 — the
  * successor to the deleted channel-column voice footer). Renders ONLY when voice is
- * connected (`voiceStore.connected`); the dock body reuses the promoted `MiniVoiceBar`
- * primitive so the call surface never diverges from the mobile dock.
+ * connected (`voiceStore.connected`); the dock body is WP3's
+ * `OnAirDock` (the on-air pill, spec §7.7) so the call surface never diverges
+ * from the mobile dock.
  *
  * Collapsed (64px icon rail, §6): a compact "in call" affordance — a pulsing accent
- * indicator that routes back to the active voice channel — since the full MiniVoiceBar
- * is too wide for the rail.
+ * indicator that routes back to the active voice channel — since the pill is too
+ * wide for the rail.
  *
- * MiniVoiceBar's mute/deafen/disconnect + channel nav cover the persistent-dock
- * essentials; richer stream/video affordances live on the channel/room views.
+ * The pill's single action is "take me back to the Stage"; every call control
+ * lives on the Stage itself.
  */
 
 export interface CallDockProps {
@@ -27,8 +33,11 @@ export function CallDock({ collapsed = false }: CallDockProps) {
   const guildId = useVoiceStore((s) => s.guildId);
   const channelId = useVoiceStore((s) => s.channelId);
   const navigate = useNavigate();
+  const { mounted, exiting, scenery } = usePresence(connected);
 
-  if (!connected) return null;
+  if (!mounted) return null;
+
+  const enter = exiting ? 'pc-sheet-out' : 'pc-sheet-in';
 
   if (collapsed) {
     return (
@@ -44,20 +53,24 @@ export function CallDock({ collapsed = false }: CallDockProps) {
             navigate(`/app/guilds/${guildId}/channels/${channelId}`);
           }
         }}
-        className="relative flex h-11 w-11 items-center justify-center rounded-md bg-accent-tint text-accent-primary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-tint-strong focus-visible:shadow-[var(--focus-ring)]"
+        className={cn(
+          'pc-focusable pc-pressable relative flex h-11 w-11 items-center justify-center rounded-[var(--radius-card)] bg-bg-raised text-light-white shadow-[var(--shadow-raised)] hover:bg-bg-mod-strong',
+          enter,
+        )}
+        {...scenery}
       >
         <Radio size={18} aria-hidden />
         <span
           aria-hidden
-          className="voice-connected-pulse absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-accent-primary ring-2 ring-bg-secondary"
+          className="voice-connected-pulse absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-light-white shadow-[var(--glow-live-dot)] ring-2 ring-bg-base"
         />
       </button>
     );
   }
 
   return (
-    <div data-testid="call-dock">
-      <MiniVoiceBar />
+    <div data-testid="call-dock" className={enter} {...scenery}>
+      <OnAirDock />
     </div>
   );
 }

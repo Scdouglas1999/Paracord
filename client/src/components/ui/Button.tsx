@@ -1,51 +1,84 @@
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
-import { motion, useReducedMotion, HTMLMotionProps } from "framer-motion";
 import { Loader2 } from "lucide-react";
 import { cn } from "../../lib/utils";
 
-// Recipes: design-spec §7 (Button). Controls are radius-sm (8px), 36px tall,
-// press = scale(.97) only, hover is a bg/color change, focus-visible renders the
-// layered --focus-ring. No gradient fills, no drop-glow, no hover lift.
+/**
+ * Button — docs/lantern-stage-spec.md §2 (Label step), §3 (control heights and
+ * radii), §9 (focus ring, hit targets).
+ *
+ * Four real variants:
+ *   primary  solid emerald, near-black ink — an action you can take.
+ *   light    white-light fill, ink text — the ONE button that uses a light
+ *            token, and only inside a lit context (Join a room where people are
+ *            actually talking). It is state, not emphasis: never use it to make
+ *            a button "pop" (§0, §6.3).
+ *   ghost    text-only, wash on hover — the default for toolbar actions.
+ *   danger   the danger *well* carrying danger ink — leave, hang up, destroy.
+ *            Never a saturated red fill.
+ *
+ * Sizes are the spec's control heights: sm 28, md 32 (default), lg 44 (phone).
+ * `icon` is a square 32 and `icon-lg` a square 44, both meeting the §9 hit
+ * target floor on their platform.
+ *
+ * Legacy variant/size names (`default`, `destructive`, `secondary`, `outline`,
+ * `link`) are kept as aliases so the un-restyled app keeps building; new code
+ * uses the four above.
+ */
 const buttonVariants = cva(
-    "relative inline-flex select-none items-center justify-center whitespace-nowrap rounded-sm text-sm font-semibold outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] disabled:pointer-events-none disabled:opacity-60",
+    [
+        // pc-focusable: the §9 ring, faded in over --duration-fast (primitives).
+        // Each visual variant carries pc-pressable — the §5.1 shared press:
+        // 1px lift on hover, 0.96 for the 80ms press, a spring back on release
+        // — and the accent ones layer pc-pressable-accent's one-beat flash.
+        // `link` is underlined text, not a pressable surface, so it opts out.
+        "pc-focusable",
+        "relative inline-flex select-none items-center justify-center gap-[7px] whitespace-nowrap",
+        "rounded-[var(--radius-control)] text-label font-medium outline-none",
+        "transition-[background-color,color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]",
+        "disabled:pointer-events-none disabled:opacity-60",
+    ].join(" "),
     {
         variants: {
             variant: {
-                // Primary — solid emerald, near-black ink, resting elevation.
-                default:
-                    "bg-accent-primary text-text-on-accent shadow-sm hover:bg-accent-primary-hover active:bg-accent-primary-active",
-                // Danger — deepened fill + white text (AA), darken on hover.
-                destructive:
-                    "bg-accent-danger-fill text-text-on-danger shadow-sm hover:bg-[color-mix(in_srgb,var(--accent-danger-fill)_90%,#000)] active:bg-[color-mix(in_srgb,var(--accent-danger-fill)_82%,#000)]",
-                // Secondary — quiet raised neutral for paired actions.
-                secondary:
-                    "border border-border-subtle bg-bg-mod-subtle text-text-primary shadow-sm hover:bg-bg-mod-strong",
-                // Outline — hairline edge, transparent fill.
-                outline:
-                    "border border-border-subtle bg-transparent text-text-primary hover:bg-bg-mod-subtle",
-                // Ghost — text-only, wash on hover.
+                primary:
+                    "pc-pressable pc-pressable-accent bg-accent-primary font-semibold text-text-on-accent hover:bg-accent-primary-hover active:bg-accent-primary-active",
+                light:
+                    "pc-pressable bg-light-white font-semibold text-text-on-light shadow-[var(--glow-light-fill)] hover:brightness-[1.04] active:brightness-[0.96]",
                 ghost:
-                    "bg-transparent text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary",
-                link:
-                    "px-1 py-0 text-text-link underline-offset-4 hover:underline",
+                    "pc-pressable bg-transparent text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary active:bg-bg-mod-strong",
+                danger:
+                    "pc-pressable bg-danger-well font-semibold text-accent-danger hover:brightness-125 active:brightness-95",
+                // ---- legacy aliases (deprecated) ----
+                default:
+                    "pc-pressable pc-pressable-accent bg-accent-primary font-semibold text-text-on-accent hover:bg-accent-primary-hover active:bg-accent-primary-active",
+                destructive:
+                    "pc-pressable bg-danger-well font-semibold text-accent-danger hover:brightness-125 active:brightness-95",
+                secondary:
+                    "pc-pressable bg-bg-raised text-text-primary shadow-[var(--shadow-chip)] hover:bg-bg-mod-strong",
+                outline:
+                    "pc-pressable border border-border-subtle bg-transparent text-text-primary hover:bg-bg-mod-subtle",
+                link: "px-1 py-0 text-text-link underline-offset-4 hover:underline",
             },
             size: {
-                default: "h-9 px-3.5",
-                sm: "h-8 px-3 text-[13px]",
-                lg: "h-11 px-5 text-[15px]",
-                icon: "h-9 w-9 p-0",
+                sm: "h-[var(--h-control-sm)] px-2.5 text-meta",
+                md: "h-[var(--h-control)] px-[11px]",
+                lg: "h-[var(--h-control-phone)] px-4",
+                icon: "h-[var(--h-control)] w-[var(--h-control)] p-0",
+                "icon-lg": "h-[var(--h-control-phone)] w-[var(--h-control-phone)] p-0",
+                // ---- legacy alias (deprecated): the old 36px default ----
+                default: "h-[var(--h-control)] px-[11px]",
             },
         },
         defaultVariants: {
-            variant: "default",
-            size: "default",
+            variant: "primary",
+            size: "md",
         },
     }
 );
 
 export interface ButtonProps
-    extends Omit<HTMLMotionProps<"button">, "ref">,
+    extends Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, "ref">,
     VariantProps<typeof buttonVariants> {
     asChild?: boolean;
     loading?: boolean;
@@ -53,20 +86,17 @@ export interface ButtonProps
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     ({ className, variant, size, loading, children, disabled, type = "button", ...props }, ref) => {
-        const reduceMotion = useReducedMotion();
         return (
-            <motion.button
+            <button
                 ref={ref}
                 type={type}
-                whileTap={reduceMotion ? undefined : { scale: 0.97 }}
-                transition={{ duration: 0.14, ease: [0.22, 1, 0.36, 1] }}
                 className={cn(buttonVariants({ variant, size, className }))}
                 disabled={disabled || loading}
                 {...props}
             >
-                {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                {children as React.ReactNode}
-            </motion.button>
+                {loading && <Loader2 className="h-4 w-4 animate-spin" aria-hidden />}
+                {children}
+            </button>
         );
     }
 );

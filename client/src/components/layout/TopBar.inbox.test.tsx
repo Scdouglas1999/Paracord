@@ -5,22 +5,11 @@ import { useAuthStore } from '../../stores/authStore';
 import { useReadStateStore } from '../../stores/readStateStore';
 import { TopBar } from './TopBar';
 
-vi.mock('framer-motion', async () => {
-  const React = await import('react');
-  return {
-    AnimatePresence: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-    useReducedMotion: () => false,
-    motion: {
-      div: React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
-        ({ children, ...props }, ref) => (
-          <div ref={ref} {...props}>
-            {children}
-          </div>
-        ),
-      ),
-    },
-  };
-});
+// The light seam is stubbed here: this suite mocks the stores down to the
+// fields the header's menus need, and light reads half a dozen more. Light
+// itself is covered in components/message/TextRoom.test.tsx.
+vi.mock('../message/messageLight', () => import('../../test/messageLightMock'));
+vi.mock('../../hooks/useLights', () => import('../../test/messageLightMock'));
 
 const mockUIState = vi.hoisted(() => ({
   contextPanelMode: null as string | null,
@@ -90,7 +79,7 @@ vi.mock('../../api/auth', () => ({
 
 vi.mock('../../api/channels', () => ({
   channelApi: {
-    getPins: vi.fn(),
+    getPins: vi.fn().mockResolvedValue({ data: [] }),
     summarizeChannel: vi.fn(),
     getFollowers: vi.fn(),
     addFollower: vi.fn(),

@@ -1,10 +1,16 @@
-import { Hand, Headphones, HeadphoneOff, Mic, MicOff, Monitor, Users, Video } from 'lucide-react';
+import { Hand, Headphones, HeadphoneOff, Mic, MicOff, MonitorUp, Users, Video } from 'lucide-react';
 import type { ReactNode } from 'react';
+
 import type { StageInstance } from '../../api/stage';
 import type { VoiceState } from '../../types';
-import { Button } from '../../components/ui/Button';
+import type { RoomLight } from '../../lib/attention/light';
+import { Button, IconButton, Plate, SectionLabel, TextField, Well } from '../../components/ui';
+import { LightCaption, LiveDot, avatarInitials, roomCaptionFor } from '../../components/light';
 import { VoiceConnectionCheckButton } from '../../components/voice/VoiceConnectionCheckButton';
+import { getIdentityColor } from '../../lib/colors';
+import { cn } from '../../lib/utils';
 import { displayName } from '../../lib/displayName';
+import { RECEDE_MARK, roomSharedName, walkIntoRoom } from '../../lib/motion';
 
 interface VoiceLobbyProps {
   channelName: string;
@@ -12,6 +18,8 @@ interface VoiceLobbyProps {
   isStage: boolean;
   channelId: string | undefined;
   guildId: string | undefined;
+  /** The room, as light (WP1) — the caption and the lit Join come from here. */
+  room?: RoomLight | null;
   voiceJoinError: string | null;
   voiceJoinPending: boolean;
   onRetryJoin: () => void;
@@ -33,30 +41,37 @@ interface VoiceLobbyProps {
   lobbyParticipants: VoiceState[];
 }
 
-// Avatar with a meaning-carrying ring: teal→emerald duotone when streaming
-// (the rationed brand moment), emerald when on camera, otherwise a quiet edge.
+/**
+ * A person in the room, seen from outside it. They are in a voice room, so
+ * their lights are on — the rim has a source (§0).
+ */
 function ParticipantAvatar({ p }: { p: VoiceState }) {
-  const initial = displayName(p)[0].toUpperCase();
-  const ringClass = p.self_stream
-    ? 'bg-gradient-to-br from-accent-secondary to-accent-primary'
-    : p.self_video
-      ? 'bg-accent-primary'
-      : 'bg-border-subtle';
+  const name = displayName(p);
   return (
-    <div className={`shrink-0 rounded-full p-[2px] ${ringClass}`}>
-      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-bg-secondary text-meta font-semibold text-text-secondary">
-        {initial}
-      </div>
-    </div>
+    <span
+      className="pc-display pc-lit flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-meta font-bold text-text-on-light"
+      style={{ background: getIdentityColor(p.user_id) }}
+      aria-hidden
+    >
+      {avatarInitials(name)}
+    </span>
   );
 }
 
+/**
+ * The room you are not in yet (docs/lantern-stage-spec.md §7.2, §7.3).
+ *
+ * A lit room gets the white-light Join — somebody is in there right now; a dark
+ * one says so in its own words and offers the same door. The Stage itself takes
+ * over the moment you are in.
+ */
 export function VoiceLobby({
   channelName,
   participantCount,
   isStage,
   channelId,
   guildId,
+  room = null,
   voiceJoinError,
   voiceJoinPending,
   onRetryJoin,
@@ -78,11 +93,17 @@ export function VoiceLobby({
 }: VoiceLobbyProps) {
   const lobbySpeakers = isStage ? lobbyParticipants.filter((p) => !p.suppress) : lobbyParticipants;
   const lobbyAudience = isStage ? lobbyParticipants.filter((p) => p.suppress) : [];
+  const lit = participantCount > 0;
+  const caption = room
+    ? roomCaptionFor(room, { surface: 'card', withLastLit: !room.lit })
+    : lit
+      ? `${participantCount} in`
+      : "Dark · nobody's in";
 
   const renderParticipant = (p: VoiceState) => (
-    <div
+    <li
       key={p.user_id}
-      className="flex items-center gap-2.5 rounded-sm px-2 py-1.5 transition-colors hover:bg-bg-mod-subtle"
+      className="flex items-center gap-2.5 rounded-[var(--radius-control)] px-2 py-1.5 transition-colors hover:bg-bg-mod-subtle"
     >
       <ParticipantAvatar p={p} />
       <span className="min-w-0 flex-1 truncate text-label text-text-primary">
@@ -90,8 +111,8 @@ export function VoiceLobby({
       </span>
       <div className="flex items-center gap-1.5">
         {isStage && p.request_to_speak_at && (
-          <span className="inline-flex items-center gap-1 rounded-full bg-accent-tint px-2 py-0.5 text-[10px] font-semibold text-accent-primary" title="Requested to speak">
-            <Hand size={11} /> Raised hand
+          <span className="inline-flex items-center gap-1 rounded-[var(--radius-chip)] bg-bg-mod-strong px-2 py-0.5 text-meta text-text-secondary">
+            <Hand size={11} /> Raised a hand
           </span>
         )}
         {p.self_mute && (
@@ -101,21 +122,20 @@ export function VoiceLobby({
           <span title="Deafened"><HeadphoneOff size={14} className="text-accent-danger" /></span>
         )}
         {p.self_video && (
-          <span title="Camera on"><Video size={14} className="text-accent-primary" /></span>
+          <span title="Camera on"><Video size={14} className="text-text-secondary" /></span>
         )}
         {p.self_stream && (
           onWatchStream ? (
-            <button
-              type="button"
+            <Button
+              size="sm"
+              variant="light"
               onClick={() => onWatchStream(p.user_id)}
-              className="inline-flex items-center rounded-xs bg-danger-tint px-1.5 py-0.5 text-[10px] font-bold uppercase leading-none tracking-wide text-accent-danger outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-danger/20 focus-visible:shadow-[var(--focus-ring)]"
-              title={`Watch ${displayName(p)}'s stream`}
-              aria-label={`Watch ${displayName(p)}'s stream`}
+              aria-label={`Watch ${displayName(p)}'s screen`}
             >
-              Live
-            </button>
+              Watch
+            </Button>
           ) : (
-            <span title="Streaming"><Monitor size={14} className="text-accent-secondary" /></span>
+            <span title="Sharing a screen"><MonitorUp size={14} className="text-light-white" /></span>
           )
         )}
       </div>
@@ -127,174 +147,202 @@ export function VoiceLobby({
             </Button>
           ) : (
             <Button size="sm" variant="ghost" disabled={stageBusy} onClick={() => onRemoveSpeaker(p.user_id)}>
-              Move to audience
+              Move to the audience
             </Button>
           )}
         </div>
       )}
-    </div>
+    </li>
   );
 
   const groupLabel = (icon: ReactNode, text: string) => (
-    <div className="mb-1.5 flex items-center gap-1.5 text-section uppercase text-text-muted">
-      <span className="text-interactive-normal">{icon}</span>
+    <SectionLabel className="mb-1.5 flex items-center gap-1.5">
+      <span aria-hidden>{icon}</span>
       {text}
-    </div>
+    </SectionLabel>
   );
 
-  return (
-    <div className="shrink-0 px-5 pt-5">
-      <div className="flex flex-col gap-4">
-        {/* Channel identity + primary join */}
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md border border-border-subtle bg-bg-secondary text-text-secondary shadow-sm">
-              {isStage ? <Mic size={20} /> : <Headphones size={20} />}
-            </div>
-            <div className="min-w-0">
-              <div className="truncate text-subhead text-text-primary">{channelName}</div>
-              <div className="font-code text-meta text-text-muted">
-                {participantCount === 0
-                  ? isStage ? 'No one on stage' : 'No one connected'
-                  : `${participantCount} connected`}
-              </div>
-            </div>
-          </div>
+  /**
+   * §5.1: this plate is the room seen from outside, and it becomes the Stage's
+   * dominant tile when you walk in. The route does not change — you are already
+   * on the room's page — so the journey is the plate growing into the Stage the
+   * join renders, and everything else on the plate recedes behind it.
+   */
+  const walkIn = (origin: Element | null) => {
+    if (!channelId) {
+      onJoin();
+      return;
+    }
+    void walkIntoRoom({ channelId, origin, go: onJoin });
+  };
 
-          <div className="flex shrink-0 items-center gap-2.5">
-            {voiceJoinError ? (
-              <>
-                <VoiceConnectionCheckButton label="Run connection check" autoStart />
-                {channelId && guildId && (
-                  <Button variant="secondary" onClick={onRetryJoin}>
-                    Try joining again
-                  </Button>
-                )}
-              </>
-            ) : (
-              <Button
-                size="lg"
-                loading={voiceJoinPending}
-                disabled={voiceJoinPending || !channelId || !guildId || (isStage && !stageInstance)}
-                onClick={onJoin}
-              >
-                {!voiceJoinPending && <Headphones size={16} className="mr-1.5" />}
-                {voiceJoinPending ? 'Connecting…' : isStage ? 'Join stage' : 'Join voice'}
-              </Button>
-            )}
+  return (
+    <Plate
+      as="section"
+      bare
+      lit={lit}
+      data-motion-shared={channelId ? roomSharedName(channelId) : undefined}
+      {...{ [RECEDE_MARK]: '' }}
+      className="relative m-[var(--gutter)] flex flex-col gap-4 overflow-hidden p-5"
+    >
+      {/* The room, and the door into it. §5.1: this is the chrome that supports
+          the tile you walked into, so it rises 80ms behind it. */}
+      <div
+        data-motion-chrome=""
+        className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"
+      >
+        <div className="flex min-w-0 items-center gap-3">
+          <Well
+            bare
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[var(--radius-well)] text-text-secondary"
+          >
+            {isStage ? <Mic size={20} /> : <Headphones size={20} />}
+          </Well>
+          <div className="min-w-0">
+            <div className="pc-display truncate text-heading text-text-primary">{channelName}</div>
+            <div className="flex items-center gap-2">
+              {lit && <LiveDot />}
+              <LightCaption>{caption}</LightCaption>
+            </div>
           </div>
         </div>
 
-        {voiceJoinError && (
-          <div className="rounded-md border border-accent-danger/35 bg-danger-tint px-3.5 py-2.5 text-accent-danger">
-            <p className="text-label">
-              {isStage ? 'Stage' : 'Voice'} connection failed: {voiceJoinError}
-            </p>
-            <p className="mt-1 text-meta text-text-secondary">
-              Chat still works. Calls use a separate network path, so the connection check above
-              will say which part failed.
-            </p>
-          </div>
-        )}
+        <div className="flex shrink-0 flex-wrap items-center gap-2.5">
+          {voiceJoinError ? (
+            <>
+              <VoiceConnectionCheckButton variant="ghost" label="Run a connection check" autoStart />
+              {channelId && guildId && (
+                <Button variant="light" onClick={onRetryJoin}>
+                  Try joining again
+                </Button>
+              )}
+            </>
+          ) : (
+            <Button
+              size="lg"
+              variant={lit ? 'light' : 'primary'}
+              loading={voiceJoinPending}
+              disabled={voiceJoinPending || !channelId || !guildId || (isStage && !stageInstance)}
+              onClick={(event) => walkIn(event.currentTarget.closest('[data-motion-shared]'))}
+            >
+              {!voiceJoinPending && <Headphones size={16} className="mr-1.5" />}
+              {voiceJoinPending ? `Joining ${channelName}` : isStage ? 'Join the stage' : 'Join the room'}
+            </Button>
+          )}
+        </div>
+      </div>
 
-        {isStage && (
-          <div className="rounded-md border border-border-subtle bg-bg-secondary p-4 shadow-sm">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="text-section uppercase text-text-muted">Stage session</div>
-                {stageLoading ? (
-                  <div className="mt-1 text-label text-text-secondary">Checking for a live stage…</div>
-                ) : stageInstance ? (
-                  <div className="mt-1 text-label text-text-secondary">
-                    Live now — <span className="font-semibold text-text-primary">{stageInstance.topic || channelName}</span>
-                  </div>
-                ) : (
-                  <div className="mt-1 text-label text-text-secondary">
-                    No one has opened the stage yet.
-                  </div>
-                )}
-              </div>
-              {canManageStage && (
-                <div className="flex flex-wrap items-center gap-2">
-                  {!stageInstance ? (
-                    <Button size="sm" loading={stageBusy} disabled={stageBusy || !channelId} onClick={onCreateStage}>
-                      {stageBusy ? 'Starting…' : 'Open the stage'}
-                    </Button>
-                  ) : (
-                    <>
-                      <Button size="sm" variant="secondary" loading={stageBusy} disabled={stageBusy} onClick={onUpdateStage}>
-                        {stageBusy ? 'Saving…' : 'Save topic'}
-                      </Button>
-                      <Button size="sm" variant="destructive" disabled={stageBusy} onClick={onEndStage}>
-                        {stageBusy ? 'Ending…' : 'End stage'}
-                      </Button>
-                    </>
-                  )}
+      {voiceJoinError && (
+        <Well bare className="px-3.5 py-2.5">
+          <p className="text-label text-accent-danger">
+            {isStage ? 'The stage' : 'The room'} would not open: {voiceJoinError}
+          </p>
+          <p className="mt-1 text-meta text-text-secondary">
+            Chat still works. Calls take a separate network path, so the connection check above
+            will say which part of it failed.
+          </p>
+        </Well>
+      )}
+
+      {isStage && (
+        <Well bare className="p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <SectionLabel>Stage session</SectionLabel>
+              {stageLoading ? (
+                <div className="mt-1 text-label text-text-secondary">Looking for a live stage…</div>
+              ) : stageInstance ? (
+                <div className="mt-1 text-label text-text-secondary">
+                  Live now — <span className="font-semibold text-text-primary">{stageInstance.topic || channelName}</span>
+                </div>
+              ) : (
+                <div className="mt-1 text-label text-text-secondary">
+                  Nobody has opened the stage yet.
                 </div>
               )}
             </div>
-            {stageError && (
-              <div className="mt-3 rounded-sm border border-accent-danger/35 bg-danger-tint px-2.5 py-1.5 text-meta font-medium text-accent-danger">
-                {stageError}
+            {canManageStage && (
+              <div className="flex flex-wrap items-center gap-2">
+                {!stageInstance ? (
+                  <Button size="sm" loading={stageBusy} disabled={stageBusy || !channelId} onClick={onCreateStage}>
+                    {stageBusy ? 'Opening…' : 'Open the stage'}
+                  </Button>
+                ) : (
+                  <>
+                    <Button size="sm" variant="ghost" loading={stageBusy} disabled={stageBusy} onClick={onUpdateStage}>
+                      {stageBusy ? 'Saving…' : 'Save the topic'}
+                    </Button>
+                    <Button size="sm" variant="danger" disabled={stageBusy} onClick={onEndStage}>
+                      {stageBusy ? 'Ending…' : 'End the stage'}
+                    </Button>
+                  </>
+                )}
               </div>
             )}
-            {canManageStage && (
-              <label className="mt-3 block">
-                <span className="text-section uppercase text-text-muted">Topic</span>
-                <input
-                  type="text"
-                  className="mt-1.5 w-full rounded-sm border border-border-subtle bg-bg-tertiary px-3 py-2 text-body text-text-primary placeholder:text-text-muted outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus-visible:border-accent-primary focus-visible:shadow-[var(--focus-ring-input)]"
-                  value={stageTopicDraft}
-                  onChange={(event) => onStageTopicChange(event.target.value)}
-                  placeholder="Weekly sync, product launch, Q&A…"
-                  maxLength={160}
-                />
-              </label>
-            )}
           </div>
-        )}
-
-        {/* Who's already here */}
-        {lobbyParticipants.length > 0 ? (
-          <div className="rounded-md border border-border-subtle bg-bg-secondary p-4 shadow-sm">
-            {isStage ? (
-              <>
-                {lobbySpeakers.length > 0 && (
-                  <div className="mb-3">
-                    {groupLabel(<Mic size={12} />, `On stage — ${lobbySpeakers.length}`)}
-                    <div className="flex flex-col gap-0.5">{lobbySpeakers.map(renderParticipant)}</div>
-                  </div>
-                )}
-                {lobbySpeakers.length > 0 && lobbyAudience.length > 0 && (
-                  <div className="my-2 border-t border-border-subtle" />
-                )}
-                {lobbyAudience.length > 0 && (
-                  <div>
-                    {groupLabel(<Users size={12} />, `Audience — ${lobbyAudience.length}`)}
-                    <div className="flex flex-col gap-0.5">{lobbyAudience.map(renderParticipant)}</div>
-                  </div>
-                )}
-              </>
-            ) : (
-              <>
-                {groupLabel(<Users size={12} />, `In this channel — ${lobbyParticipants.length}`)}
-                <div className="flex flex-col gap-0.5">{lobbyParticipants.map(renderParticipant)}</div>
-              </>
-            )}
-          </div>
-        ) : (
-          <div className="flex items-center gap-3 rounded-md border border-border-subtle bg-bg-secondary px-4 py-3.5 shadow-sm">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-sm bg-accent-tint text-accent-primary">
-              {isStage ? <Mic size={16} /> : <Headphones size={16} />}
-            </div>
-            <p className="text-label text-text-secondary">
-              {isStage
-                ? 'The stage is quiet — open it and be the first voice on.'
-                : 'This voice channel is quiet — be the first to join.'}
+          {stageError && (
+            <p role="alert" className="mt-3 text-meta font-medium text-accent-danger">
+              {stageError}
             </p>
-          </div>
-        )}
-      </div>
-    </div>
+          )}
+          {canManageStage && (
+            <TextField
+              label="Topic"
+              className="mt-3"
+              value={stageTopicDraft}
+              onChange={(event) => onStageTopicChange(event.target.value)}
+              placeholder="Weekly sync, product launch, Q&A…"
+              maxLength={160}
+            />
+          )}
+        </Well>
+      )}
+
+      {/* Who is already in there. */}
+      {lobbyParticipants.length > 0 ? (
+        <Well bare data-motion-chrome="" className="p-4">
+          {isStage ? (
+            <>
+              {lobbySpeakers.length > 0 && (
+                <div className={cn(lobbyAudience.length > 0 && 'mb-3')}>
+                  {groupLabel(<Mic size={12} />, `On stage — ${lobbySpeakers.length}`)}
+                  <ul className="flex flex-col gap-0.5">{lobbySpeakers.map(renderParticipant)}</ul>
+                </div>
+              )}
+              {lobbySpeakers.length > 0 && lobbyAudience.length > 0 && (
+                <div className="my-2 border-t border-border-subtle" />
+              )}
+              {lobbyAudience.length > 0 && (
+                <div>
+                  {groupLabel(<Users size={12} />, `Listening — ${lobbyAudience.length}`)}
+                  <ul className="flex flex-col gap-0.5">{lobbyAudience.map(renderParticipant)}</ul>
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              {groupLabel(<Users size={12} />, `In this room — ${lobbyParticipants.length}`)}
+              <ul className="flex flex-col gap-0.5">{lobbyParticipants.map(renderParticipant)}</ul>
+            </>
+          )}
+        </Well>
+      ) : (
+        <Well bare data-motion-chrome="" className="flex items-center gap-3 px-4 py-3.5">
+          <IconButton
+            label={isStage ? `Open the stage ${channelName}` : `Join ${channelName}`}
+            size="md"
+            tone="raised"
+            onClick={(event) => walkIn(event.currentTarget.closest('[data-motion-shared]'))}
+          >
+            {isStage ? <Mic size={16} /> : <Headphones size={16} />}
+          </IconButton>
+          <p className="text-label text-text-secondary">
+            {isStage
+              ? 'The stage is dark — open it and be the first voice on.'
+              : `${channelName} is dark. Walk in and the window lights up.`}
+          </p>
+        </Well>
+      )}
+    </Plate>
   );
 }
