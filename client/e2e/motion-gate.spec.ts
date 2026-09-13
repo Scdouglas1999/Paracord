@@ -329,6 +329,61 @@ test.describe('the motion gate (§5.3)', () => {
   });
 
   /**
+   * WP9c's two systematic moments (§5.1): the shared overlay enter/exit that
+   * every dialog, menu, popover, tooltip and toast in the product now uses, and
+   * a list that changes order. Both are measured on `/design-tokens`, where the
+   * gesture is deterministic and a reviewer can replay exactly what was
+   * measured.
+   */
+  test('a dialog opening and closing holds the budget', async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto('/design-tokens');
+    const open = page.getByRole('button', { name: 'Open a dialog' });
+    await open.scrollIntoViewIfNeeded();
+    await expect(open).toBeVisible();
+    await page.evaluate(() => document.fonts.ready);
+    await page.waitForTimeout(600);
+
+    const dialog = page.getByRole('dialog');
+    const opening = await measureMoment(page, async () => {
+      await open.click();
+    }, 800);
+    await expect(dialog).toBeVisible();
+    expectBudget('overlay (dialog enter)', opening);
+
+    const closing = await measureMoment(page, async () => {
+      await page.getByRole('button', { name: 'Keep it' }).click();
+    }, 800);
+    // The exit is real: the panel stays in the tree for --duration-fast, is
+    // taken out of the accessibility tree for that beat, and is then gone.
+    await expect(dialog).toHaveCount(0);
+    expectBudget('overlay (dialog exit)', closing);
+  });
+
+  test('a list reordering holds the budget', async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width: 1440, height: 1200 });
+    await page.goto('/design-tokens');
+    const card = page.locator('#motion-reorder');
+    await card.scrollIntoViewIfNeeded();
+    await expect(card).toBeVisible();
+    await page.evaluate(() => document.fonts.ready);
+    await page.waitForTimeout(600);
+
+    const rows = card.locator('[data-flip-key]');
+    const before = await rows.allInnerTexts();
+    const sample = await measureMoment(page, async () => {
+      await card.getByRole('button', { name: 'Replay' }).click();
+    }, 900);
+    // The order actually changed — a still list would pass a frame budget.
+    const after = await rows.allInnerTexts();
+    expect(after).not.toEqual(before);
+    expect(after[0]).toBe(before[before.length - 1]);
+    expectBudget('list reorder (FLIP)', sample);
+  });
+
+  /**
    * The visual half of the verification (§10: "no package is done without
    * inspected screenshots"). A CDP screencast is the only way to get real
    * frames out of a 600ms moment — `page.screenshot` costs more than a frame.
@@ -461,6 +516,27 @@ test.describe('the motion gate (§5.3)', () => {
     await page.locator('#motion-settle').getByRole('button', { name: 'Replay' }).click();
     await page.waitForTimeout(120);
     expect(await page.evaluate(() => document.getAnimations().length)).toBe(0);
+
+    // WP9c's two systematic moments, under the same switch. A dialog opens and
+    // closes with nothing in flight — and the close is INSTANT: `usePresence`
+    // unmounts on the spot rather than holding the panel for an exit nobody
+    // asked to see.
+    const reorder = page.locator('#motion-reorder');
+    await reorder.scrollIntoViewIfNeeded();
+    await reorder.getByRole('button', { name: 'Replay' }).click();
+    await page.waitForTimeout(120);
+    expect(await page.evaluate(() => document.getAnimations().length)).toBe(0);
+
+    const open = page.getByRole('button', { name: 'Open a dialog' });
+    await open.scrollIntoViewIfNeeded();
+    await open.click();
+    await expect(page.getByRole('dialog')).toBeVisible();
+    await page.waitForTimeout(120);
+    expect(await page.evaluate(() => document.getAnimations().length)).toBe(0);
+    await page.getByRole('button', { name: 'Keep it' }).click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    expect(await page.evaluate(() => document.getAnimations().length)).toBe(0);
+
     expect(MOTION_CHANNEL_NAME).toBe('build-log');
   });
 });

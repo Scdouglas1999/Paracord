@@ -81,6 +81,7 @@ import {
   stagger,
   supportsLinearEasing,
   transitionWith,
+  useFlipList,
   useReducedMotion,
 } from '../lib/motion';
 import { AccountPlate } from '../components/layout/sidebar/AccountPlate';
@@ -1122,6 +1123,9 @@ function Recipe({
   );
 }
 
+/** The rows the reorder recipe shuffles — the sidebar's own shape, in miniature. */
+const REORDER_ROWS: readonly string[] = ['build-log', 'Shop floor', 'Design review', 'Announcements'];
+
 function MotionSection() {
   const reduced = useReducedMotion();
   const bloomRef = useRef<HTMLSpanElement>(null);
@@ -1134,6 +1138,8 @@ function MotionSection() {
   const [rolled, setRolled] = useState(4);
   const [walkedIn, setWalkedIn] = useState(false);
   const [engine, setEngine] = useState<string | null>(null);
+  const [order, setOrder] = useState(REORDER_ROWS);
+  const reorderRef = useFlipList<HTMLDivElement>();
 
   const walk = (force?: 'flip') => {
     void transitionWith(() => setWalkedIn((value) => !value), {
@@ -1245,6 +1251,26 @@ function MotionSection() {
           <span className="pc-display text-title text-text-primary">
             <RollingNumber value={rolled} format={(count) => `${count} reading`} />
           </span>
+        </Recipe>
+
+        <Recipe
+          id="motion-reorder"
+          name="List reorder"
+          tokens="--duration-move · spring-settle"
+          model="A list that changes order animates layout: every row travels to its new place on the same curve a plate settles on, so the row you were reaching for is somewhere you watched it go. Nothing moves on the first paint."
+          onPlay={() => setOrder((rows) => [rows[rows.length - 1], ...rows.slice(0, -1)])}
+        >
+          <div ref={reorderRef} className="flex w-full flex-col gap-1.5">
+            {order.map((row) => (
+              <div
+                key={row}
+                data-flip-key={row}
+                className="flex h-7 items-center rounded-[var(--radius-control)] bg-bg-raised px-2.5 text-meta text-text-secondary shadow-[var(--shadow-chip)]"
+              >
+                {row}
+              </div>
+            ))}
+          </div>
         </Recipe>
 
         <div
