@@ -185,6 +185,21 @@ describe('UnifiedSidebar', () => {
     expect(within(menu).getByText('Leave building')).toBeInTheDocument();
   });
 
+  it('gives a room its own menu — notifications, mark as read, copy link', () => {
+    renderSidebar();
+    fireEvent.contextMenu(screen.getByRole('option', { name: /build-log/ }));
+    const menu = screen.getByRole('menu');
+    // Three levels plus the fourth state: no opinion, follow the building.
+    expect(within(menu).getByRole('menuitemradio', { name: /Every message/ })).toBeInTheDocument();
+    expect(within(menu).getByRole('menuitemradio', { name: /Only when you.re mentioned/ })).toBeInTheDocument();
+    expect(within(menu).getByRole('menuitemradio', { name: /Nothing from this room/ })).toBeInTheDocument();
+    const follow = within(menu).getByRole('menuitemradio', { name: /Follow the building/ });
+    // With no override saved, the room follows its building — and says so.
+    expect(follow).toHaveAttribute('aria-checked', 'true');
+    expect(within(menu).getByText('Mark room as read')).toBeInTheDocument();
+    expect(within(menu).getByText('Copy link to room')).toBeInTheDocument();
+  });
+
   it('offers the create/join flow from the persistent Add a building row', () => {
     renderSidebar();
     fireEvent.click(screen.getByRole('option', { name: 'Add a building' }));

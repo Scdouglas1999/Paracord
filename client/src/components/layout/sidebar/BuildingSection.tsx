@@ -39,6 +39,8 @@ export interface BuildingSectionProps {
   onOpenLobby: (building: BuildingLight) => void;
   onOpenRoom: (room: RoomLight, origin?: Element | null) => void;
   onContextMenu?: (event: MouseEvent, building: BuildingLight) => void;
+  /** Right-click on one of this building's rooms. */
+  onRoomContextMenu?: (event: MouseEvent, room: RoomLight) => void;
   /** Flat roving-tabindex ordinal of this section's first row (the plate). */
   navIndexStart: number;
   /** The column's single Tab stop. */
@@ -58,6 +60,7 @@ export function BuildingSection({
   onOpenLobby,
   onOpenRoom,
   onContextMenu,
+  onRoomContextMenu,
   navIndexStart,
   activeNavIndex,
 }: BuildingSectionProps) {
@@ -123,6 +126,7 @@ export function BuildingSection({
           navIndex={plateIndex + 1 + index}
           tabStop={plateIndex + 1 + index === activeNavIndex}
           onOpen={onOpenRoom}
+          onContextMenu={onRoomContextMenu}
         />
       ))}
 

@@ -48,7 +48,14 @@ describe('account-owned notification preferences', () => {
   it('persists only account-qualified settings, excluding pending operations and errors', async () => {
     await state().refresh(a);
     const persisted = JSON.parse(localStorage.getItem('paracord:notification-preferences-by-account')!);
-    expect(persisted).toEqual({ version: 1, state: { byAccount: { [accountScopeKey(a)]: { '1': setting() } } } });
+    expect(persisted).toEqual({
+      version: 1,
+      state: {
+        byAccount: { [accountScopeKey(a)]: { '1': setting() } },
+        // Room-level overrides persist beside the buildings' (§7.1's room menu).
+        channelsByAccount: { [accountScopeKey(a)]: {} },
+      },
+    });
   });
   it('unmutes without clearing notification level or suppression preferences', async () => {
     await state().refresh(a);

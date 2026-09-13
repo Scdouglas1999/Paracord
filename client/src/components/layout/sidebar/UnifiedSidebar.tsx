@@ -1,20 +1,22 @@
 import { useCallback, useMemo, useState, type MouseEvent } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router';
-import { Bell, BellOff, CheckCheck, LogOut, Settings } from 'lucide-react';
+import { AtSign, Bell, BellOff, CheckCheck, Link2, LogOut, Settings } from 'lucide-react';
 
 import { extractApiError } from '../../../api/client';
 import { useCurrentAccountScope, useCurrentUser } from '../../../hooks/useCurrentUser';
 import { useBuildingRosters } from '../../../hooks/useBuildingRosters';
 import { useBuildingLights } from '../../../hooks/useLights';
 import { useMutedGuilds } from '../../../hooks/useMutedGuilds';
+import { useRoomNotifications } from '../../../hooks/useRoomNotifications';
 import { useUnifiedConversations } from '../../../hooks/useUnifiedConversations';
 import { useVoice } from '../../../hooks/useVoice';
 import { personLight, type BuildingLight, type RoomLight } from '../../../lib/attention/light';
 import { activateGuild } from '../../../lib/guildNavigation';
-import { markGuildRead } from '../../../lib/guildActions';
+import { markGuildRead, markRoomRead } from '../../../lib/guildActions';
 import { canAccessGuildSettingsSync } from '../../../lib/guildSettingsAccess';
 import { displayName } from '../../../lib/displayName';
 import { findScopedGuild } from '../../../lib/guildScope';
+import { writeClipboardText } from '../../../lib/clipboard';
 import { walkIntoRoom } from '../../../lib/motion';
 import { accountScopeKey, entityScopeKey, LOCAL_SERVER_ID } from '../../../lib/serverScope';
 import { getServerAccountScope } from '../../../lib/serverIdentity';
@@ -65,6 +67,7 @@ export function UnifiedSidebar() {
   useBuildingRosters();
   const buildings = useBuildingLights();
   const { mutedGuildKeys, toggleMute, saving } = useMutedGuilds();
+  const roomNotifications = useRoomNotifications();
   const { needsYou, needsYouOverflowCount, recent, pinned } = useUnifiedConversations(mutedGuildKeys);
 
   const mutedBuildingKeys = useMemo(() => new Set(mutedGuildKeys), [mutedGuildKeys]);
@@ -254,6 +257,74 @@ export function UnifiedSidebar() {
     [buildingMenu, onContextMenu],
   );
 
+  /**
+   * The room context menu (§7.1).
+   *
+   * Per-room notification levels have existed on both sides of the wire since
+   * the buildings did; rooms simply had nowhere to set them from. Three levels
+   * and a fourth state — "follow the building" — plus the two things you
+   * otherwise have to open the room to do.
+   */
+  const roomMenu = useCallback(
+    (room: RoomLight): ContextMenuItem[] => {
+      const reference = { id: room.channelId, scope: room.scope, name: room.name };
+      const level = roomNotifications.levelOf(reference);
+      const busy = roomNotifications.savingRoom(reference);
+      const notify = (
+        label: string,
+        icon: ContextMenuItem['icon'],
+        value: Parameters<typeof roomNotifications.setLevel>[1],
+      ): ContextMenuItem => ({
+        label,
+        icon,
+        selected: level === value,
+        disabled: busy,
+        action: () => roomNotifications.setLevel(reference, value),
+      });
+
+      return [
+        notify('Every message', <Bell size={16} />, 0),
+        notify('Only when you’re mentioned', <AtSign size={16} />, 1),
+        notify('Nothing from this room', <BellOff size={16} />, 2),
+        {
+          label: 'Follow the building',
+          description: 'Use whatever this building is set to.',
+          selected: level === null,
+          disabled: busy,
+          action: () => roomNotifications.setLevel(reference, null),
+        },
+        { divider: true, label: '', action: () => {} },
+        {
+          label: 'Mark room as read',
+          icon: <CheckCheck size={16} />,
+          action: () => {
+            void markRoomRead(reference).catch((error) =>
+              toast.error(`Failed to mark ${room.name} as read: ${extractApiError(error)}`),
+            );
+          },
+        },
+        {
+          label: 'Copy link to room',
+          icon: <Link2 size={16} />,
+          action: () => {
+            const path = `/app/guilds/${room.guildId}/channels/${room.channelId}`;
+            const link =
+              typeof window === 'undefined' ? path : new URL(path, window.location.origin).toString();
+            void writeClipboardText(link)
+              .then(() => toast.success('Link copied.'))
+              .catch((error) => toast.error(`Could not copy the link: ${extractApiError(error)}`));
+          },
+        },
+      ];
+    },
+    [roomNotifications],
+  );
+
+  const onRoomContextMenu = useCallback(
+    (event: MouseEvent, room: RoomLight) => onContextMenu(event, roomMenu(room)),
+    [onContextMenu, roomMenu],
+  );
+
   const showAdminDashboard = Boolean(user && isGlobalAdmin(user.flags ?? 0));
 
   return (
@@ -297,6 +368,7 @@ export function UnifiedSidebar() {
             onOpenRoom={openRoom}
             onAddBuilding={openCreateGuild}
             onBuildingContextMenu={onBuildingContextMenu}
+            onRoomContextMenu={onRoomContextMenu}
             footer={
               <div className="flex flex-col gap-2">
                 <CallDock />

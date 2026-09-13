@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
+import { Check } from 'lucide-react';
 // §5.1/§5.3: the shared overlay recipe (pc-enter / pc-exit); the presence hook
 // keeps the menu mounted for its --duration-fast leave.
 import { usePresence } from '../../lib/motion';
@@ -14,6 +15,12 @@ export interface ContextMenuItem {
   divider?: boolean;
   disabled?: boolean;
   shortcut?: string;
+  /**
+   * One of a set of choices, and whether this is the one in force. Set it and
+   * the row becomes a radio for a screen reader and draws a check — so a menu
+   * that changes a setting says what the setting currently is (§9).
+   */
+  selected?: boolean;
 }
 
 interface ContextMenuProps {
@@ -190,7 +197,8 @@ export function ContextMenu({ items, position, open = true, onClose, label = 'Co
             key={i}
             data-menu-index={i}
             id={`context-menu-item-${i}`}
-            role="menuitem"
+            role={item.selected === undefined ? 'menuitem' : 'menuitemradio'}
+            aria-checked={item.selected === undefined ? undefined : item.selected}
             className={cn(
               'flex w-full items-center justify-between gap-3 rounded-[var(--radius-chip)] px-2.5 py-1.5 text-left text-label outline-none transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] [@media(pointer:coarse)]:min-h-11',
               // A destructive item takes danger INK, never a red fill (§1.3).
@@ -217,6 +225,7 @@ export function ContextMenu({ items, position, open = true, onClose, label = 'Co
               )}
               <span className="min-w-0"><span className="block truncate">{item.label}</span>{item.description && <span className="mt-0.5 block max-w-56 whitespace-normal text-meta text-text-muted">{item.description}</span>}</span>
             </span>
+            {item.selected && <Check size={14} aria-hidden className="shrink-0 text-accent-primary" />}
             {item.shortcut && (
               <span className="shrink-0 text-meta text-text-muted">{item.shortcut}</span>
             )}

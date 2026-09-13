@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, type MouseEvent } from 'react';
 
 import { RollingNumber } from '../../../lib/motion';
 import { cn } from '../../../lib/utils';
@@ -40,6 +40,8 @@ export interface RoomRowProps {
   tabStop: boolean;
   /** The row hands back the element clicked, as the shared element's origin. */
   onOpen: (room: RoomLight, origin?: Element | null) => void;
+  /** Right-click / long-press: notifications, mark as read, copy link (§7.1). */
+  onContextMenu?: (event: MouseEvent, room: RoomLight) => void;
 }
 
 /** The 8px window dot that stands in for the room's window on a row. */
@@ -123,6 +125,7 @@ export const QuietRoomRow = memo(function QuietRoomRow({
   navIndex,
   tabStop,
   onOpen,
+  onContextMenu,
 }: RoomRowProps) {
   const unread = Boolean(attention?.unread) && !active;
   return (
@@ -134,6 +137,7 @@ export const QuietRoomRow = memo(function QuietRoomRow({
       icon={<WindowDot room={room} />}
       trailing={<RoomTrailing room={room} attention={attention} />}
       onClick={(event) => onOpen(room, event.currentTarget.closest('[data-motion-shared]'))}
+      onContextMenu={onContextMenu ? (event) => onContextMenu(event, room) : undefined}
       className={cn('group', unread && 'text-text-primary')}
     >
       {room.name}
@@ -156,6 +160,7 @@ export const LiveRoomRowView = memo(function LiveRoomRowView({
   navIndex,
   tabStop,
   onOpen,
+  onContextMenu,
   frame = null,
 }: LiveRoomRowProps) {
   return (
@@ -164,6 +169,7 @@ export const LiveRoomRowView = memo(function LiveRoomRowView({
       {...rowProps({ navIndex, tabStop, active, room })}
       data-motion-shared={roomSharedName(room.channelId)}
       onClick={(event) => onOpen(room, event.currentTarget)}
+      onContextMenu={onContextMenu ? (event) => onContextMenu(event, room) : undefined}
       className={cn(
         'pc-focusable flex w-full flex-col items-stretch gap-2 p-2 text-left',
         'rounded-[var(--radius-control)]',

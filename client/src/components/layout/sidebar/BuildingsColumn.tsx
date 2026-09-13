@@ -95,6 +95,8 @@ export interface BuildingsColumnProps {
   onOpenRoom: (room: RoomLight, origin?: Element | null) => void;
   onAddBuilding: () => void;
   onBuildingContextMenu?: (event: MouseEvent, building: BuildingLight) => void;
+  /** Right-click on a room row: notifications, mark as read, copy link (§7.1). */
+  onRoomContextMenu?: (event: MouseEvent, room: RoomLight) => void;
   /** The account plate, and the call dock while you are in a room. */
   footer?: ReactNode;
 }
@@ -124,6 +126,7 @@ export function BuildingsColumn({
   onOpenRoom,
   onAddBuilding,
   onBuildingContextMenu,
+  onRoomContextMenu,
   footer,
 }: BuildingsColumnProps) {
   const [openBuildings, setOpenBuildings] = useState<ReadonlySet<string>>(() => new Set<string>());
@@ -273,6 +276,7 @@ export function BuildingsColumn({
             onOpenLobby={onOpenLobby}
             onOpenRoom={onOpenRoom}
             onContextMenu={onBuildingContextMenu}
+            onRoomContextMenu={onRoomContextMenu}
             navIndexStart={section.navIndexStart}
             activeNavIndex={activeNavIndex}
           />

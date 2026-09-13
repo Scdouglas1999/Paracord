@@ -8,6 +8,7 @@ import { useReadStateStore } from '../stores/readStateStore';
 import { useAvailableAccountScopes } from './useAvailableAccountScopes';
 import { useServerListStore } from '../stores/serverListStore';
 import { useVoiceStore } from '../stores/voiceStore';
+import { useNotificationPreferenceStore } from '../stores/notificationPreferenceStore';
 import { usePinnedStore } from '../stores/pinnedStore';
 import { useRelationshipStore } from '../stores/relationshipStore';
 import { computeGuildUnread } from './useUnreadCounts';
@@ -172,6 +173,11 @@ export function useUnifiedConversations(mutedGuildKeys: string[] = []): UnifiedC
   const connectedServersKey = useServerListStore(state => JSON.stringify(state.servers.filter(server => server.connected).map(server => server.id).sort()));
   const guilds = useAvailableGuilds();
   const pinnedKeys = usePinnedStore((s) => s.pinnedKeys);
+  // Rooms muted in their own right (§7.1's room menu). A muted room keeps its
+  // place in Recent and loses its attention signals, exactly as a muted
+  // building's rooms do — a room you told to be quiet must not keep a mention
+  // chip on it.
+  const roomSettings = useNotificationPreferenceStore((s) => s.channelsByAccount);
   const relationships = useRelationshipStore((s) => s.relationships);
 
   // Verified account changes must refetch even if the server ID stays the same.
@@ -189,6 +195,15 @@ export function useUnifiedConversations(mutedGuildKeys: string[] = []): UnifiedC
 
   // A new array identity every render would bust the memo; derive a stable key.
   const mutedKey = JSON.stringify(mutedGuildKeys);
+  const mutedRoomKey = useMemo(() => {
+    const keys: string[] = [];
+    for (const [account, rooms] of Object.entries(roomSettings)) {
+      for (const [channelId, setting] of Object.entries(rooms)) {
+        if (setting.muted_now || setting.level === 2) keys.push(`${account}\u0000${channelId}`);
+      }
+    }
+    return JSON.stringify(keys.sort());
+  }, [roomSettings]);
 
   // Incoming friend requests live in their OWN memo, keyed only on `relationships`.
   // Isolating them keeps a friend-request event from re-running the O(channels)
@@ -212,6 +227,7 @@ export function useUnifiedConversations(mutedGuildKeys: string[] = []): UnifiedC
     const guildById = new Map(guilds.map(g => [g.key, g]));
     const pinnedSet = new Set(pinnedKeys);
     const mutedSet = new Set<string>(JSON.parse(mutedKey));
+    const mutedRoomSet = new Set<string>(JSON.parse(mutedRoomKey));
 
     // Convert each server's read-state Record → Map once, on demand, so
     // `computeGuildUnread` (which wants a Map) is reused without re-allocating.
@@ -235,7 +251,9 @@ export function useUnifiedConversations(mutedGuildKeys: string[] = []): UnifiedC
       if (!guild) continue;
       const serverId = ch.scope.serverId;
       const readMap = readMapFor(ch.scope);
-      const muted = mutedSet.has(guild.key);
+      const muted =
+        mutedSet.has(guild.key)
+        || mutedRoomSet.has(`${accountScopeKey(ch.scope)}\u0000${ch.id}`);
       const contextLabel = guild.name;
         const kind = guildChannelKind(ch.type);
         if (!kind) continue; // category
@@ -335,6 +353,7 @@ export function useUnifiedConversations(mutedGuildKeys: string[] = []): UnifiedC
     guilds,
     pinnedKeys,
     mutedKey,
+    mutedRoomKey,
   ]);
 
   // Combine the two isolated memos. Identity is stable whenever neither input
