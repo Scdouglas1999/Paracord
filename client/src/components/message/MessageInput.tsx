@@ -378,7 +378,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
   const liftNode = useRef<HTMLSpanElement | null>(null);
   const liftTimer = useRef<number | null>(null);
   const { upload, uploading, maxUploadSize } = useFileUpload(channelId);
-  const { triggerTyping } = useTyping(channelId);
+  const { triggerTyping, stopTyping } = useTyping(channelId);
   const reduceMotion = useReducedMotion();
   const { actions: serverActions, encrypted, encryption, error: capabilityError, refresh: refreshActions } = useConversationActions(channelId);
   const runtimeState = useStore(messagingRuntime.store);
@@ -392,6 +392,10 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
     // storage and ready peer that sending does, and group DMs stay refused
     // until their message encryption is migrated.
     attach: runtimeAttachDecision(serverActions.attach, runtimeState, encrypted, channelId, channelType) };
+  // A message that has gone out, or a composer its author emptied, ends the
+  // typing indicator at once. Every send path clears the draft, so this one
+  // place covers all of them as well as a manual clear.
+  useEffect(() => { if (!content.trim()) stopTyping(); }, [content, stopTyping]);
   const canCreatePoll = actions.poll.allowed;
   const canSendMessages = actions.send.allowed;
   const canAttachFiles = actions.attach.allowed;

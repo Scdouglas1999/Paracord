@@ -69,3 +69,37 @@ describe('typingStore', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 });
+
+describe('typingStore stop', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    useTypingStore.getState().reset();
+  });
+  afterEach(() => {
+    useTypingStore.getState().reset();
+    vi.useRealTimers();
+  });
+
+  it('drops one author on a stop without waiting out the expiry', () => {
+    useTypingStore.getState().addTyping('chan-1', 'user-1');
+    useTypingStore.getState().addTyping('chan-1', 'user-2');
+
+    useTypingStore.getState().removeTyping('chan-1', 'user-1');
+    expect(useTypingStore.getState().typingByChannel['chan-1']).toEqual(['user-2']);
+
+    // The stopped author's expiry timer went with them, so it cannot fire later
+    // and rewrite the channel behind the remaining author's back.
+    const after = useTypingStore.getState().typingByChannel;
+    vi.advanceTimersByTime(8000);
+    expect(useTypingStore.getState().typingByChannel['chan-1']).toEqual([]);
+    expect(useTypingStore.getState().typingByChannel).not.toBe(after);
+  });
+
+  it('is a no-op for somebody who was not typing', () => {
+    useTypingStore.getState().addTyping('chan-1', 'user-1');
+    const before = useTypingStore.getState().typingByChannel;
+    useTypingStore.getState().removeTyping('chan-1', 'user-2');
+    useTypingStore.getState().removeTyping('chan-2', 'user-1');
+    expect(useTypingStore.getState().typingByChannel).toBe(before);
+  });
+});

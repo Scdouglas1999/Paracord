@@ -195,7 +195,13 @@ export function createChannelApi(getApi: () => RestClient) {
         `/channels/${channelId}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}/@me`
       ),
 
-    triggerTyping: async (id: string) => getApi().post(`/channels/${id}/typing`),
+    /**
+   * `stop` ends the indicator. Without it the only thing that ever cleared
+   * "…is typing" was the recipient's own expiry timer, so it outlived the
+   * message it announced by several seconds.
+   */
+  triggerTyping: async (id: string, stop = false) =>
+    getApi().post(`/channels/${id}/typing${stop ? '?stop=true' : ''}`),
     updateReadState: async (id: string, lastMessageId?: string) =>
       getApi().put(`/channels/${id}/read`, { last_message_id: lastMessageId }),
 

@@ -72,6 +72,10 @@ pub const EVENT_MESSAGE_REACTION_REMOVE_ALL: &str = "MESSAGE_REACTION_REMOVE_ALL
 // Presence and typing
 pub const EVENT_PRESENCE_UPDATE: &str = "PRESENCE_UPDATE";
 pub const EVENT_TYPING_START: &str = "TYPING_START";
+/// Sent when the author stops composing (message sent, or the composer emptied).
+/// Without it a recipient can only wait out the client-side expiry, which left
+/// "…is typing" on screen for seconds after the message had already arrived.
+pub const EVENT_TYPING_STOP: &str = "TYPING_STOP";
 
 // Voice events
 pub const EVENT_VOICE_STATE_UPDATE: &str = "VOICE_STATE_UPDATE";

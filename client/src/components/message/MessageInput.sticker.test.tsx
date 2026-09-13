@@ -78,7 +78,7 @@ vi.mock('../../hooks/useFileUpload', () => ({
 }));
 
 vi.mock('../../hooks/useTyping', () => ({
-  useTyping: () => ({ triggerTyping: vi.fn() }),
+  useTyping: () => ({ triggerTyping: vi.fn(), stopTyping: vi.fn() }),
 }));
 
 vi.mock('../../api/channels', () => ({

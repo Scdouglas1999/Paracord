@@ -547,6 +547,14 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
       }
       break;
 
+    // The author stopped composing. Without this the indicator could only be
+    // waited out, so it survived the message it was announcing.
+    case GatewayEvents.TYPING_STOP:
+      if (data.channel_id && data.user_id) {
+        useTypingStore.getState().removeTyping(data.channel_id, data.user_id);
+      }
+      break;
+
     case GatewayEvents.USER_UPDATE: {
       // Profile identity is projected into member lists, cached messages,
       // relationships, and DM titles. Keep all of them live from one event.

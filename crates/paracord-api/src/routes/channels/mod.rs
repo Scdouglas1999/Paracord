@@ -131,6 +131,15 @@ fn parse_optional_datetime_param(
 /// A category channel; `parent_id` may point at nothing else.
 const CHANNEL_TYPE_CATEGORY: i16 = 4;
 
+/// The room kinds a space owner may create through this route.
+///
+/// Text, voice, category, announcement, forum and stage. Direct messages (1)
+/// and group DMs (3) are not a space's to create, and a thread (6) is created
+/// from the message it hangs off. Any `i16` used to be accepted and stored:
+/// `channel_type: 9999` returned 201 and the sidebar then drew it as an
+/// ordinary text room, because every reader falls back to type 0.
+const CREATABLE_CHANNEL_TYPES: [i16; 6] = [0, 2, 4, 5, 7, 13];
+
 #[derive(Deserialize)]
 pub struct CreateChannelRequest {
     pub name: String,
@@ -178,12 +187,18 @@ fn validate_overwrite_permission_bits(
     allow_perms: i64,
     deny_perms: i64,
 ) -> Result<(), ApiError> {
+    // Whoever the actor is, the bits have to be bits this server defines. The
+    // owner and every ADMINISTRATOR used to take the early return below and
+    // skip this entirely, so `allow_perms: -1` stored every unknown bit in the
+    // set and then took part in permission math forever after.
+    for bits in [allow_perms, deny_perms] {
+        Permissions::from_bits(bits)
+            .ok_or(ApiError::BadRequest("Invalid permissions bitset".into()))?;
+    }
     if actor_user_id == guild_owner_id || actor_perms.contains(Permissions::ADMINISTRATOR) {
         return Ok(());
     }
     for bits in [allow_perms, deny_perms] {
-        Permissions::from_bits(bits)
-            .ok_or(ApiError::BadRequest("Invalid permissions bitset".into()))?;
         if bits & Permissions::ADMINISTRATOR.bits() != 0 {
             return Err(ApiError::Forbidden);
         }
@@ -1000,6 +1015,12 @@ pub async fn create_channel(
     // breaks every single-line surface that renders it.
     validate_visible_label(&body.name)
         .map_err(|_| ApiError::BadRequest("name must be readable text".into()))?;
+    if !CREATABLE_CHANNEL_TYPES.contains(&body.channel_type) {
+        return Err(ApiError::BadRequest(
+            "channel_type must be a text, voice, category, announcement, forum or stage room"
+                .into(),
+        ));
+    }
     let parent_id = resolve_new_channel_parent(&state, guild_id, body.parent_id.as_deref()).await?;
     let channel_id = paracord_util::snowflake::generate(1);
     let required_role_ids = match body.required_role_ids.as_deref() {
@@ -1196,10 +1217,20 @@ pub async fn delete_channel(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// `?stop=true` ends the indicator instead of starting it. Without it the only
+/// way an indicator ever cleared was the recipient's own expiry timer, which
+/// left "…is typing" on screen for seconds after the message had landed.
+#[derive(Debug, Default, Deserialize)]
+pub struct TypingQuery {
+    #[serde(default)]
+    pub stop: bool,
+}
+
 pub async fn typing(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(channel_id): Path<i64>,
+    Query(query): Query<TypingQuery>,
 ) -> Result<StatusCode, ApiError> {
     let channel = paracord_db::channels::get_channel(&state.db, channel_id)
         .await
@@ -1218,7 +1249,12 @@ pub async fn typing(
         "user_id": auth.user_id.to_string(),
         "timestamp": chrono::Utc::now().timestamp(),
     });
-    dispatch_channel_event(&state, &channel, "TYPING_START", typing_payload).await?;
+    let event = if query.stop {
+        paracord_models::gateway::EVENT_TYPING_STOP
+    } else {
+        paracord_models::gateway::EVENT_TYPING_START
+    };
+    dispatch_channel_event(&state, &channel, event, typing_payload).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1340,6 +1376,24 @@ pub async fn upsert_channel_overwrite(
         body.allow_perms,
         body.deny_perms,
     )?;
+    // The target has to be something this space actually has. Assigning a
+    // deleted role to a member is already refused one route over; here a
+    // deleted role id, or any id at all, was stored and then silently took
+    // part in permission math against a role that resolves to nothing.
+    if body.target_type == paracord_core::permissions::OVERWRITE_TARGET_ROLE {
+        let role = paracord_db::roles::get_role(&state.db, target_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        if role.map(|role| role.guild_id()) != Some(guild_id) {
+            return Err(ApiError::BadRequest(
+                "that role does not belong to this space".into(),
+            ));
+        }
+    } else if !paracord_core::permissions::is_guild_member(&state.db, guild_id, target_id).await? {
+        return Err(ApiError::BadRequest(
+            "that member is not in this space".into(),
+        ));
+    }
     paracord_db::channel_overwrites::upsert_channel_overwrite(
         &state.db,
         channel_id,

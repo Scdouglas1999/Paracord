@@ -122,7 +122,7 @@ pub fn intent_required_for_event(event_name: &str) -> Option<GatewayIntents> {
         }
 
         // GUILD_MESSAGE_TYPING
-        EVENT_TYPING_START => Some(GatewayIntents::GUILD_MESSAGE_TYPING),
+        EVENT_TYPING_START | EVENT_TYPING_STOP => Some(GatewayIntents::GUILD_MESSAGE_TYPING),
 
         // Always dispatched (READY, RESUMED, interactions, media, etc.)
         _ => None,

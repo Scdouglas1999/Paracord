@@ -48,6 +48,7 @@ export const GatewayEvents = {
   // Presence & typing
   PRESENCE_UPDATE: 'PRESENCE_UPDATE',
   TYPING_START: 'TYPING_START',
+  TYPING_STOP: 'TYPING_STOP',
 
   // Voice events
   VOICE_STATE_UPDATE: 'VOICE_STATE_UPDATE',

@@ -5,6 +5,8 @@ const typingTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 interface TypingState {
   typingByChannel: Record<string, string[]>;
   addTyping: (channelId: string, userId: string) => void;
+  /** One author stopped composing — TYPING_STOP, or their message arriving. */
+  removeTyping: (channelId: string, userId: string) => void;
   clearChannel: (channelId: string) => void;
   reset: () => void;
 }
@@ -42,6 +44,24 @@ export const useTypingStore = create<TypingState>()((set, get) => ({
       typingByChannel: {
         ...state.typingByChannel,
         [channelId]: [...(state.typingByChannel[channelId] || []), userId],
+      },
+    }));
+  },
+
+  removeTyping: (channelId, userId) => {
+    const timeoutKey = `${channelId}:${userId}`;
+    const existing = typingTimeouts.get(timeoutKey);
+    if (existing) {
+      clearTimeout(existing);
+      typingTimeouts.delete(timeoutKey);
+    }
+    // No-op store update when they were not listed, so a stop for somebody who
+    // never started does not notify every subscriber.
+    if (!(get().typingByChannel[channelId] || []).includes(userId)) return;
+    set((state) => ({
+      typingByChannel: {
+        ...state.typingByChannel,
+        [channelId]: (state.typingByChannel[channelId] || []).filter((u) => u !== userId),
       },
     }));
   },
