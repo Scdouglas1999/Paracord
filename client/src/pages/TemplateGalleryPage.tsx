@@ -185,13 +185,18 @@ export function TemplateGalleryPage() {
         </div>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-hidden p-4 sm:p-6">
+      {/* Below `lg` the two panes stack, and pinning the stack to the viewport
+          height squeezed the channel and role lists to a couple of rows each:
+          at 400px the second channel was gone and the roles note was sliced
+          through the middle of its own sentence. Narrow gets a scrolling page;
+          the two-column desktop layout keeps its fitted panes. */}
+      <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6 lg:overflow-hidden">
         {error && <ErrorBanner message={error} className="mb-4" onRetry={() => void refreshTemplates()} />}
 
         {loading ? (
           <LoadingSpinner label="Loading templates..." className="py-16" />
         ) : (
-          <div className="grid h-full min-h-0 grid-cols-1 gap-5 lg:grid-cols-[19rem_1fr]">
+          <div className="grid min-h-0 grid-cols-1 gap-5 lg:h-full lg:grid-cols-[19rem_1fr]">
             {/* List pane */}
             <div className="flex min-h-0 flex-col">
               <div className="relative mb-3">
@@ -254,7 +259,7 @@ export function TemplateGalleryPage() {
             {/* Detail pane */}
             <div className="min-h-0 rounded-well border border-border-subtle bg-bg-raised p-5 shadow-[var(--shadow-chip)]">
               {selectedTemplate ? (
-                <div className="flex h-full min-h-0 flex-col">
+                <div className="flex min-h-0 flex-col lg:h-full">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <h2 className="font-display text-title text-text-primary">{selectedTemplate.name}</h2>
@@ -324,7 +329,7 @@ export function TemplateGalleryPage() {
                         ))}
                         {selectedTemplate.template_data.roles.length === 0 && (
                           <div className="px-2 py-2 text-meta leading-relaxed text-text-muted">
-                            This template ships with only the default @everyone role.
+                            This template ships with only the space's default role.
                           </div>
                         )}
                       </div>
