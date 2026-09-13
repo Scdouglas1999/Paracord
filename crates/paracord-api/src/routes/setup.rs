@@ -306,7 +306,9 @@ pub async fn claim_instance(
     )
     .await;
 
-    tracing::warn!(
+    // A completed setup is an audit-worthy milestone, not a warning: it was the
+    // one non-4xx WARN a healthy server ever emitted.
+    tracing::info!(
         target: "paracord::setup",
         owner_id = owner.id,
         owner_username = %owner.username,

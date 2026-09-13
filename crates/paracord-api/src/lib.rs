@@ -1069,15 +1069,29 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
                                 "server_out"
                             );
                         }
-                        if status.is_server_error() {
+                        // An optional capability this deployment never turned
+                        // on answers 503 by design. That is the operator's own
+                        // settled configuration, not a fault of the server, so
+                        // it is logged beside the 4xx it behaves like.
+                        let expected = response
+                            .extensions()
+                            .get::<crate::error::ExpectedResponse>()
+                            .is_some();
+                        if status.is_server_error() && !expected {
                             tracing::error!(status = %status.as_u16(), latency_ms, "request");
-                        } else if status.is_client_error() {
+                        } else if status.is_client_error() || status.is_server_error() {
                             tracing::warn!(status = %status.as_u16(), latency_ms, "request");
                         } else {
                             tracing::info!(status = %status.as_u16(), latency_ms, "request");
                         }
                     },
-                ),
+                )
+                // `on_response` above already records every response at the
+                // level its status earns. tower-http's default failure hook
+                // repeats each 5xx as a second ERROR line saying the same
+                // thing, which doubled the log volume of every outage and of
+                // every deliberate "not configured" answer.
+                .on_failure(()),
         )
         .layer(from_fn(request_trace_middleware))
 }

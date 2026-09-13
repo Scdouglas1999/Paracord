@@ -44,14 +44,14 @@ fn ai_config_from_state(state: &AppState) -> Result<AiRuntimeConfig, ApiError> {
         .filter(|value| !value.is_empty())
         .map(|value| value.to_ascii_lowercase())
         .ok_or_else(|| {
-            ApiError::ServiceUnavailable("AI provider is not configured on this server".to_string())
+            ApiError::NotConfigured("AI provider is not configured on this server".to_string())
         })?;
 
     if !matches!(
         provider.as_str(),
         "openai" | "openai_compatible" | "anthropic" | "ollama"
     ) {
-        return Err(ApiError::ServiceUnavailable(format!(
+        return Err(ApiError::NotConfigured(format!(
             "Unsupported AI provider '{}'",
             provider
         )));
@@ -64,7 +64,7 @@ fn ai_config_from_state(state: &AppState) -> Result<AiRuntimeConfig, ApiError> {
         .filter(|value| !value.is_empty())
         .map(str::to_string);
     if provider == "anthropic" && api_key.is_none() {
-        return Err(ApiError::ServiceUnavailable(
+        return Err(ApiError::NotConfigured(
             "Anthropic provider requires ai.api_key".into(),
         ));
     }

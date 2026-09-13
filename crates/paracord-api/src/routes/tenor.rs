@@ -35,7 +35,7 @@ pub async fn search(
         .tenor_api_key
         .as_deref()
         .filter(|k| !k.is_empty())
-        .ok_or_else(|| ApiError::ServiceUnavailable("Tenor API key not configured".to_string()))?;
+        .ok_or_else(|| ApiError::NotConfigured("Tenor API key not configured".to_string()))?;
 
     let limit = params.limit.unwrap_or(20).clamp(1, 50);
 
@@ -75,7 +75,7 @@ pub async fn trending(
         .tenor_api_key
         .as_deref()
         .filter(|k| !k.is_empty())
-        .ok_or_else(|| ApiError::ServiceUnavailable("Tenor API key not configured".to_string()))?;
+        .ok_or_else(|| ApiError::NotConfigured("Tenor API key not configured".to_string()))?;
 
     let limit = params.limit.unwrap_or(20).clamp(1, 50);
 

@@ -37,6 +37,12 @@ pub enum ApiError {
     RateLimited(i64),
     #[error("service unavailable: {0}")]
     ServiceUnavailable(String),
+    /// An optional capability this deployment has not configured. The wire
+    /// contract is the same 503 a real outage produces, but the answer is the
+    /// deployment's own settled state, so request logging records it as the
+    /// expected answer it is instead of a server fault.
+    #[error("service unavailable: {0}")]
+    NotConfigured(String),
     #[error("internal server error")]
     Internal(#[from] anyhow::Error),
 }
@@ -58,6 +64,7 @@ impl ApiError {
             ApiError::UpgradeRequired(_) => "UPGRADE_REQUIRED",
             ApiError::RateLimited(_) => "RATE_LIMITED",
             ApiError::ServiceUnavailable(_) => "SERVICE_UNAVAILABLE",
+            ApiError::NotConfigured(_) => "SERVICE_UNAVAILABLE",
             ApiError::Internal(_) => "INTERNAL_ERROR",
         }
     }
@@ -77,15 +84,23 @@ impl ApiError {
             ApiError::UpgradeRequired(_) => StatusCode::UPGRADE_REQUIRED,
             ApiError::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
             ApiError::ServiceUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+            ApiError::NotConfigured(_) => StatusCode::SERVICE_UNAVAILABLE,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }
 
+/// Marks a response whose status the deployment settled on deliberately, so
+/// request logging records it at the level the operator needs rather than the
+/// level the status code alone implies.
+#[derive(Clone, Copy, Debug)]
+pub struct ExpectedResponse;
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = self.status_code();
         let code = self.error_code();
+        let expected = matches!(self, ApiError::NotConfigured(_));
 
         let (message, retry_after) = match &self {
             ApiError::Internal(err) => {
@@ -108,6 +123,9 @@ impl IntoResponse for ApiError {
         }
 
         let mut response = (status, Json(body)).into_response();
+        if expected {
+            response.extensions_mut().insert(ExpectedResponse);
+        }
         if let Some(secs) = retry_after {
             if let Ok(value) = axum::http::HeaderValue::from_str(&secs.to_string()) {
                 response
