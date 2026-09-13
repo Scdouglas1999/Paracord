@@ -46,10 +46,28 @@ function hasTitleAttribute(openingTag) {
   return /\stitle\s*=/.test(openingTag);
 }
 
+/**
+ * Every class name an element could carry, whatever shape the `className`
+ * expression takes. A plain string is read directly; anything computed — the
+ * `cn('fixed inset-0 modal-backdrop', cond && 'x')` helper this codebase uses
+ * almost everywhere — has its string literals concatenated instead.
+ *
+ * Reading only quoted/templated attribute values made every `cn(...)` call look
+ * like it had NO classes at all, so the backdrop and icon-button exemptions
+ * below silently never fired and correct code was reported as a failure.
+ */
+function classNamesOf(openingTag) {
+  const literal = openingTag.match(/\sclassName\s*=\s*(?:"([^"]+)"|'([^']+)')/);
+  if (literal) return literal[1] ?? literal[2] ?? "";
+  const expression = openingTag.match(/\sclassName\s*=\s*\{([\s\S]*)\}/);
+  if (!expression) return "";
+  return [...expression[1].matchAll(/(?:"([^"]*)"|'([^']*)'|`([^`]*)`)/g)]
+    .map((m) => m[1] ?? m[2] ?? m[3] ?? "")
+    .join(" ");
+}
+
 function hasLikelyIconButtonClass(openingTag) {
-  const classMatch = openingTag.match(/\sclassName\s*=\s*(?:"([^"]+)"|'([^']+)'|\{`([^`]+)`\})/);
-  const className = classMatch?.[1] ?? classMatch?.[2] ?? classMatch?.[3] ?? "";
-  return /\b(?:icon-btn|command-icon-btn|hover-action-btn)\b/.test(className);
+  return /\b(?:icon-btn|command-icon-btn|hover-action-btn)\b/.test(classNamesOf(openingTag));
 }
 
 function hasDialogRole(openingTag) {
@@ -84,8 +102,7 @@ function hasStopPropagationClick(openingTag) {
 }
 
 function hasBackdropClass(openingTag) {
-  const classMatch = openingTag.match(/\sclassName\s*=\s*(?:"([^"]+)"|'([^']+)'|\{`([^`]+)`\})/s);
-  const className = classMatch?.[1] ?? classMatch?.[2] ?? classMatch?.[3] ?? "";
+  const className = classNamesOf(openingTag);
   return /\bmodal-backdrop\b/.test(className) ||
     /\bmodal-overlay\b/.test(className) ||
     /\bfixed\b/.test(className) && /\binset-0\b/.test(className) ||
@@ -132,6 +149,23 @@ function isLikelyIconOnly(buttonSource) {
     visibleText(buttonSource).length === 0;
 }
 
+/**
+ * A generic button component: it spreads its caller's props onto the element and
+ * renders `{children}` as its label. Nothing about its accessible name is decided
+ * here — the caller supplies both the name and the content — so the definition
+ * must not be reported. This mirrors `isPassThroughWrapper` for divs; call sites
+ * still carry literal attributes and are audited normally.
+ *
+ * Without it the shared `<Button>` primitive reads as an icon-only button (its
+ * only literal child is a loading spinner) and the audit fails on a component
+ * whose every caller passes a text label.
+ */
+function isForwardingButtonComponent(buttonSource) {
+  const openingTag = buttonSource.match(/^<button\b[^>]*>/)?.[0] ?? "";
+  return /\{\s*\.\.\.[A-Za-z_$][\w$]*\s*\}/.test(openingTag) &&
+    /\{\s*children\s*\}/.test(buttonSource);
+}
+
 async function auditFile(filePath) {
   const source = await readFile(filePath, "utf8");
   const nativeConfirmPattern = /\b(?:window\.)?confirm\s*\(\s*(?:`|"|')/g;
@@ -147,6 +181,7 @@ async function auditFile(filePath) {
   for (const match of source.matchAll(buttonPattern)) {
     const buttonSource = match[0];
     const openingTag = buttonSource.match(/^<button\b[^>]*>/)?.[0] ?? "";
+    if (isForwardingButtonComponent(buttonSource)) continue;
     if (!hasExplicitAccessibleName(openingTag) && isLikelyIconOnly(buttonSource)) {
       failures.push({
         filePath,
