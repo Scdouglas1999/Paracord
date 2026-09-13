@@ -1176,6 +1176,13 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
           {composerAction.reason}
           {encrypted && encryption === 'setup' && <Link className="ml-2 underline" to={`/setup?${new URLSearchParams({ migrate: '1', server: scope.serverId, user: scope.userId, returnTo: window.location.pathname + window.location.search })}`}>Set up encryption</Link>}
           {encrypted && encryption === 'unlock' && <Link className="ml-2 underline" to={`/unlock?${new URLSearchParams({ returnTo: window.location.pathname + window.location.search })}`}>Unlock encryption</Link>}
+          {/* A second device — a fresh browser, a new laptop — signs in and
+              lands here holding no identity at all. Without this it was a dead
+              end: a blocker with nothing but "Check again", and no route to
+              either restoring the enrolled identity or enrolling this device.
+              The setup page handles both: it unlocks a saved identity when
+              there is one, and creates and attaches one when there is not. */}
+          {encrypted && encryption === 'identity_mismatch' && <Link className="ml-2 underline" to={`/setup?${new URLSearchParams({ migrate: '1', server: scope.serverId, user: scope.userId, returnTo: window.location.pathname + window.location.search })}`}>Set up this device</Link>}
           {/* A blocker can be resolved by someone else (a recipient finishing
               encryption setup, a restored permission), so the check is always
               repeatable from here instead of only after a request failure. */}

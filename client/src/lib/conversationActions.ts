@@ -62,7 +62,10 @@ export function resolveConversationActions(
       } else if (server.encrypted && ['send', 'attach', 'schedule'].includes(action)) {
         if (!platform.secureContext) decision = blocked('Open Paracord over HTTPS or in the desktop app to use encryption.');
         else if (!server.own_identity_enrolled || encryption === 'setup') decision = blocked('Set up encryption before sending this direct message.');
-        else if (encryption === 'identity_mismatch') decision = blocked('Unlock the identity enrolled for this server account.');
+        // A device holding no identity, or a different one, cannot "unlock"
+        // its way out: there is nothing here to unlock. Say what is true, and
+        // the composer offers the one page that resolves both shapes of it.
+        else if (encryption === 'identity_mismatch') decision = blocked('This device does not hold the encryption identity enrolled for this account.');
         else if (encryption === 'unlock') decision = blocked('Unlock your encryption identity before sending this direct message.');
         else if (!server.peers_ready) decision = blocked('The recipient needs to finish encryption setup before you can send a message.');
       }
