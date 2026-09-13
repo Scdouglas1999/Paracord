@@ -2,6 +2,7 @@ use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use governor::clock::{Clock, DefaultClock};
 use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
+use paracord_core::events::ServerEvent;
 use paracord_core::{observability, AppState};
 use paracord_models::gateway::*;
 use paracord_models::permissions::Permissions;
@@ -2324,7 +2325,7 @@ async fn run_session_with_events(
             }
             event = event_rx.recv() => {
                 match event {
-                    Ok(event) => {
+                    Ok(mut event) => {
                         if !session.should_receive_event(event.guild_id, event.target_user_ids.as_deref()) {
                             continue;
                         }
@@ -2337,7 +2338,31 @@ async fn run_session_with_events(
                                 extract_channel_id_from_event(&event.event_type, &event.payload)
                             {
                                 if !can_receive_channel_event(&state, &session, guild_id, channel_id).await {
-                                    continue;
+                                    // A CHANNEL_UPDATE you may no longer view IS
+                                    // the news: the overwrite that just moved is
+                                    // what took the room away from you. Dropping
+                                    // it left the one person who needed telling
+                                    // as the only person not told — their client
+                                    // kept the room's name, its loaded messages
+                                    // and a composer that looked like it would
+                                    // send, until they navigated or reloaded.
+                                    //
+                                    // Every other channel event stays dropped: a
+                                    // room you cannot see is a room you are not
+                                    // told about.
+                                    if event.event_type != EVENT_CHANNEL_UPDATE {
+                                        continue;
+                                    }
+                                    event = ServerEvent {
+                                        event_type: EVENT_CHANNEL_DELETE.to_string(),
+                                        payload: Arc::new(json!({
+                                            "id": channel_id.to_string(),
+                                            "guild_id": guild_id.to_string(),
+                                        })),
+                                        guild_id: Some(guild_id),
+                                        target_user_ids: Some(vec![session.user_id]),
+                                        serialized_payload: None,
+                                    };
                                 }
                             }
                         }

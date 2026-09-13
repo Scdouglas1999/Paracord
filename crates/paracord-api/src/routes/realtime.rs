@@ -8,6 +8,7 @@ use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use futures_util::stream;
 use paracord_core::AppState;
+use paracord_models::gateway::{EVENT_CHANNEL_DELETE, EVENT_CHANNEL_UPDATE};
 use paracord_models::permissions::Permissions;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -900,7 +901,7 @@ async fn session_pump(
 ) {
     loop {
         match receiver.recv().await {
-            Ok(event) => {
+            Ok(mut event) => {
                 // The channel is only weakly held so this pump never keeps it
                 // alive; if it has been reclaimed there is nothing left to feed.
                 let Some(channel) = channel.upgrade() else {
@@ -927,7 +928,29 @@ async fn session_pump(
                         )
                         .await
                         {
-                            continue;
+                            // A CHANNEL_UPDATE you may no longer view IS the
+                            // news: the overwrite that just moved is what took
+                            // the room away from you. Dropping it left the one
+                            // person who needed telling as the only person not
+                            // told — their client kept the room's name, its
+                            // loaded messages and a composer that looked like it
+                            // would send, until they navigated or reloaded.
+                            //
+                            // Every other channel event stays dropped: a room
+                            // you cannot see is a room you are not told about.
+                            if event.event_type != EVENT_CHANNEL_UPDATE {
+                                continue;
+                            }
+                            event = paracord_core::events::ServerEvent {
+                                event_type: EVENT_CHANNEL_DELETE.to_string(),
+                                payload: Arc::new(json!({
+                                    "id": channel_id.to_string(),
+                                    "guild_id": guild_id.to_string(),
+                                })),
+                                guild_id: Some(guild_id),
+                                target_user_ids: Some(vec![user_id]),
+                                serialized_payload: None,
+                            };
                         }
                     }
                 }
