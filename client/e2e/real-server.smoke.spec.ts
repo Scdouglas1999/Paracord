@@ -8,6 +8,16 @@ import { isGuildDetail, isGuildSummaryList } from '../src/api/generated/validato
 // client/dist/ and a throwaway SQLite database. This is the only E2E coverage
 // that exercises embedded-asset serving, real auth, and real REST contract
 // shapes end to end. Keep it lean — the mocked smoke remains the fast gate.
+//
+// Every case here registers its own account, because the real server has real
+// accounts and sharing one between cases would make them order-dependent. Added
+// up across the whole real-server project that is more `/api/v1/auth/*` traffic
+// per minute from 127.0.0.1 than the product's per-IP auth ceiling allows for a
+// single client, so the harness raises that ceiling for its throwaway instance
+// (see PARACORD_HTTP_RATE_LIMIT_* in e2e/real-server-harness.mjs). Do not
+// respond to a 429 here by sleeping or retrying: a 429 in this project means the
+// traffic shape changed, and the number that needs looking at is the request
+// count, not the wait.
 
 const PORT = process.env.PARACORD_E2E_PORT ?? '18150';
 const BASE = `http://127.0.0.1:${PORT}`;
