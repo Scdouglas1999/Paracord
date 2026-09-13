@@ -1110,6 +1110,42 @@ function OwnedMessageList({
     },
   });
 
+  /**
+   * Put the timeline on its newest message and hold it there while the rows
+   * around it measure themselves.
+   *
+   * `virtualizer.scrollToIndex(rows.length - 1)` cannot do this on a channel
+   * with real history. Every row it scrolls past measures to something other
+   * than its estimate, the offset it was aiming at moves, and TanStack gives up
+   * after ten corrections ("Failed to scroll to index N after 10 attempts"). On
+   * a 600-message channel that left the reader hundreds of messages in the past
+   * on open, with "Jump to present" needing three presses to walk to the end.
+   *
+   * Driving the scroll element to its own end and re-checking until the height
+   * stops moving lands in one gesture whatever the list length. It is also
+   * instant by construction, which is the only honest option here: a smooth
+   * scroll across a list whose size changes as it travels is what the
+   * virtualizer warns about, and what it was already failing to deliver.
+   */
+  const scrollToEnd = useCallback(() => {
+    const element = scrollRef.current;
+    if (!element) return;
+    let frames = 0;
+    let settled = 0;
+    const drive = () => {
+      const target = Math.max(0, element.scrollHeight - element.clientHeight);
+      if (Math.abs(element.scrollTop - target) <= 2) {
+        // Two quiet frames in a row: nothing is still growing underneath us.
+        if (++settled >= 2) return;
+      } else {
+        settled = 0;
+        element.scrollTop = target;
+      }
+      if (++frames < 60) requestAnimationFrame(drive);
+    };
+    requestAnimationFrame(drive);
+  }, []);
+
   // Roving-tabindex bookkeeping for the message feed. Only one message row is a
   // tab stop at a time; ArrowUp/Down/Home/End move focus (and the tab stop)
   // between rows so a keyboard user is not forced to tab through every loaded
@@ -1262,8 +1298,8 @@ function OwnedMessageList({
   }, [isLoading]);
 
   // Latest scroll machinery, refreshed every render for the effect below.
-  const scrollDepsRef = useRef({ virtualizer, rows, markLatestRead, isNearBottom });
-  scrollDepsRef.current = { virtualizer, rows, markLatestRead, isNearBottom };
+  const scrollDepsRef = useRef({ virtualizer, rows, markLatestRead, isNearBottom, scrollToEnd });
+  scrollDepsRef.current = { virtualizer, rows, markLatestRead, isNearBottom, scrollToEnd };
 
   // Scroll to bottom on new messages / initial load
   useEffect(() => {
@@ -1283,16 +1319,10 @@ function OwnedMessageList({
     // reasons that have nothing to do with a new message arriving; omitting
     // them without a ref would capture stale values. The ref gives correct
     // values with the intended trigger set (channel, count, newest id).
-    const { virtualizer, rows, markLatestRead, isNearBottom } = scrollDepsRef.current;
+    const { markLatestRead, isNearBottom, scrollToEnd } = scrollDepsRef.current;
     const shouldStickToBottom = !hasHydratedChannelRef.current || isNearBottom();
     if (shouldStickToBottom) {
-      // Scroll to last row (bottom-sentinel)
-      requestAnimationFrame(() => {
-        virtualizer.scrollToIndex(rows.length - 1, {
-          align: 'end',
-          behavior: hasHydratedChannelRef.current ? 'smooth' : 'auto',
-        });
-      });
+      scrollToEnd();
       markLatestRead();
       setShowScrollButton(false);
       setNewMessageCount(0);
@@ -1575,11 +1605,11 @@ function OwnedMessageList({
   }, [hasMore, isLoading, loadMore, markLatestRead]);
 
   const scrollToBottom = useCallback(() => {
-    virtualizer.scrollToIndex(rows.length - 1, { align: 'end', behavior: 'smooth' });
+    scrollToEnd();
     markLatestRead();
     setShowScrollButton(false);
     setNewMessageCount(0);
-  }, [virtualizer, rows.length, markLatestRead]);
+  }, [scrollToEnd, markLatestRead]);
 
   const openReactionPicker = (e: React.MouseEvent, messageId: string) => {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -2717,7 +2747,13 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
 
         {isCoarsePointer && canOpenMessageMenu && (
           <button
-            className="pc-focusable absolute right-1.5 top-1.5 inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-control)] bg-bg-raised text-text-secondary shadow-[var(--shadow-lifted)] md:hidden"
+            // This is the ONLY way into a message's actions on a touch screen —
+            // the hover row beside it never appears — and at 32x32 it was under
+            // the 44px a finger needs. The chip stays 32px so the timeline is
+            // not a column of buttons; the `before` pseudo-element carries the
+            // hit area out to 44x44 around it, which is where the finger
+            // actually lands.
+            className="pc-focusable absolute right-1.5 top-1.5 inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-control)] bg-bg-raised text-text-secondary shadow-[var(--shadow-lifted)] before:absolute before:-inset-1.5 before:content-[''] md:hidden"
             title="Message actions"
             aria-label="Message actions"
             onClick={() => setMenuMessageId((curr) => (curr === msg.id ? null : msg.id))}
