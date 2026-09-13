@@ -598,9 +598,7 @@ async fn main() -> Result<()> {
     // routing: `h3` → WebTransport (browsers), anything else → raw QUIC
     // (desktop/federation). Admins only need to forward one port (TCP + UDP).
     if config.voice.native_media {
-        use paracord_transport::endpoint::{
-            certificate_hash, generate_self_signed_cert, MediaEndpoint,
-        };
+        use paracord_transport::endpoint::{generate_media_certificate, MediaEndpoint};
 
         let media_port = config.voice.port;
         let media_addr: std::net::SocketAddr = format!("0.0.0.0:{}", media_port).parse()?;
@@ -609,20 +607,26 @@ async fn main() -> Result<()> {
         // populated and the ALPN accept loop spawned; on failure we capture a
         // concrete, operator-actionable reason and decide below whether to
         // hard-fail (no fallback) or degrade to LiveKit.
-        let provisioning_error: Option<String> = match generate_self_signed_cert() {
-            Ok(tls) => {
-                // Compute SHA-256 hash of the DER certificate for WebTransport
-                // `serverCertificateHashes`. Browsers need this to trust
-                // self-signed certs.
-                let cert_hash = certificate_hash(&tls.cert_chain[0]);
+        // The certificate is valid for under 14 days, which is what browsers
+        // require of a WebTransport `serverCertificateHashes` pin; a rotation
+        // task below regenerates it before it expires.
+        let provisioning_error: Option<String> = match generate_media_certificate() {
+            Ok(generated) => {
+                // SHA-256 of the DER, for WebTransport `serverCertificateHashes`.
+                // Browsers need this to trust a self-signed cert.
+                let cert_hash = paracord_core::MediaCertHash::new(generated.hash.clone());
+                let cert_not_after = generated.not_after;
 
                 // Single unified endpoint: ALPN `h3` for WebTransport browsers,
                 // `paracord-media` for raw QUIC desktop/federation clients.
                 // Clients MUST send a matching ALPN (rustls requires it).
                 match MediaEndpoint::bind_unified(
                     media_addr,
-                    tls,
-                    vec![b"h3".to_vec(), b"paracord-media".to_vec()],
+                    generated.tls,
+                    MEDIA_ALPN_PROTOCOLS
+                        .iter()
+                        .map(|alpn| alpn.to_vec())
+                        .collect(),
                 ) {
                     Ok(endpoint) => {
                         let rooms = Arc::new(paracord_relay::room::MediaRoomManager::new());
@@ -641,8 +645,19 @@ async fn main() -> Result<()> {
                         };
                         state.native_media = Some(native_state);
                         tracing::info!(
-                            "Native QUIC media server listening on UDP port {} (unified: raw QUIC + WebTransport)",
-                            media_port
+                            "Native QUIC media server listening on UDP port {} (unified: raw QUIC + WebTransport), certificate pin {}… valid until {}",
+                            media_port,
+                            cert_hash_prefix(&generated.hash),
+                            format_timestamp(cert_not_after),
+                        );
+
+                        // Keep the certificate inside the browser's 14-day
+                        // window for as long as the process runs.
+                        spawn_media_certificate_rotation(
+                            Arc::clone(&endpoint),
+                            cert_hash.clone(),
+                            cert_not_after,
+                            shutdown_notify.clone(),
                         );
 
                         // Spawn unified accept loop — inspects ALPN to route
@@ -1479,6 +1494,100 @@ fn build_at_rest_profile(config: &config::Config) -> Result<AtRestRuntimeProfile
         file_cryptor,
         totp_cryptor,
     })
+}
+
+/// ALPN protocols the unified media port advertises: `h3` for browser
+/// WebTransport, `paracord-media` for raw QUIC desktop and federation peers.
+const MEDIA_ALPN_PROTOCOLS: [&[u8]; 2] = [b"h3", b"paracord-media"];
+
+/// Enough of a pin to correlate a rotation in the log with what a client saw,
+/// without printing a full fingerprint on every line.
+fn cert_hash_prefix(hash: &str) -> &str {
+    let end = hash
+        .char_indices()
+        .nth(12)
+        .map(|(idx, _)| idx)
+        .unwrap_or(hash.len());
+    &hash[..end]
+}
+
+fn format_timestamp(at: std::time::SystemTime) -> String {
+    chrono::DateTime::<chrono::Utc>::from(at).to_rfc3339()
+}
+
+/// Keep the media certificate inside the window browsers accept.
+///
+/// A browser accepts a WebTransport `serverCertificateHashes` pin only when the
+/// certificate is valid for at most 14 days, so the media certificate is issued
+/// for 13 (`paracord_transport::endpoint::MEDIA_CERT_LIFETIME`). A server that
+/// runs longer than that would keep presenting an expired certificate and every
+/// browser join would fail, so this task regenerates it roughly every 7 days —
+/// or immediately if the live certificate is already inside its last 3 days —
+/// and republishes the pin.
+///
+/// Sessions already established are unaffected: QUIC authenticates once, at
+/// handshake, so swapping the endpoint's server config only changes what *new*
+/// handshakes see. The endpoint swap happens before the published pin changes,
+/// so there is no window in which a client is handed a pin the port does not
+/// yet present.
+fn spawn_media_certificate_rotation(
+    endpoint: Arc<paracord_transport::endpoint::MediaEndpoint>,
+    cert_hash: paracord_core::MediaCertHash,
+    initial_not_after: std::time::SystemTime,
+    shutdown: Arc<tokio::sync::Notify>,
+) {
+    use paracord_transport::endpoint::{generate_media_certificate, media_cert_rotation_delay};
+
+    tokio::spawn(async move {
+        let mut not_after = initial_not_after;
+        loop {
+            let delay = media_cert_rotation_delay(std::time::SystemTime::now(), not_after);
+            tokio::select! {
+                _ = shutdown.notified() => break,
+                _ = tokio::time::sleep(delay) => {}
+            }
+
+            match generate_media_certificate() {
+                Ok(generated) => {
+                    // Present the new certificate first, publish the new pin
+                    // second: a client that reads the pin between the two steps
+                    // would otherwise pin a certificate the port is not serving.
+                    if let Err(err) = endpoint.set_certificate(&generated.tls) {
+                        tracing::error!(
+                            "Media certificate rotation failed to install the new certificate: {err}. \
+                             Retrying; the current certificate expires at {}.",
+                            format_timestamp(not_after)
+                        );
+                        // Back off rather than spinning on a persistent failure.
+                        tokio::select! {
+                            _ = shutdown.notified() => break,
+                            _ = tokio::time::sleep(std::time::Duration::from_secs(300)) => {}
+                        }
+                        continue;
+                    }
+                    cert_hash.store(generated.hash.clone());
+                    not_after = generated.not_after;
+                    tracing::info!(
+                        "Rotated the native media certificate: pin {}… valid until {}. \
+                         Established voice sessions are unaffected; new joins use the new pin.",
+                        cert_hash_prefix(&generated.hash),
+                        format_timestamp(not_after)
+                    );
+                }
+                Err(err) => {
+                    tracing::error!(
+                        "Media certificate rotation failed to generate a certificate: {err}. \
+                         Retrying; the current certificate expires at {}.",
+                        format_timestamp(not_after)
+                    );
+                    tokio::select! {
+                        _ = shutdown.notified() => break,
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(300)) => {}
+                    }
+                }
+            }
+        }
+    });
 }
 
 fn spawn_pending_attachment_cleanup(

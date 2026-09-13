@@ -67,7 +67,9 @@ pub async fn transport_diagnostics(
     let certificate_pin_sha256 = state
         .native_media
         .as_ref()
-        .map(|native| native.cert_hash.clone());
+        // Read at answer time: a rotation may have republished the pin since
+        // this process started, and a client that pins a stale hash is refused.
+        .map(|native| native.cert_hash.get());
 
     Ok(Json(json!({
         "transport": "native",

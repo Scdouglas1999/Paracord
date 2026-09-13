@@ -1751,7 +1751,19 @@ pub async fn security_headers_middleware(req: Request, next: Next) -> Response {
         headers.insert(
             header::CONTENT_SECURITY_POLICY,
             HeaderValue::from_static(
-                "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' wss:; media-src 'self' data: blob: https:",
+                // `connect-src` must admit `https:`, not just `'self'`: native
+                // voice opens a WebTransport session to the media endpoint,
+                // which is always an `https://` origin on the QUIC media port —
+                // a *different* port from the one serving this document, and
+                // often a different host (the LAN address or a forwarded name
+                // among `media_endpoint_candidates`). `'self'` matches only the
+                // document's own origin, so without this every browser call was
+                // refused before a packet moved, with `WebTransportError: …
+                // violates the document's Content Security Policy`. The origin
+                // set is decided per request by the client's own network, so it
+                // cannot be enumerated in a static header; `img-src` and
+                // `media-src` already admit `https:` on the same reasoning.
+                "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https: wss:; media-src 'self' data: blob: https:",
             ),
         );
     }

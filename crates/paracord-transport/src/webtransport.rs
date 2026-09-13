@@ -126,7 +126,7 @@ impl H3Session {
                 None => return Ok(None),
             };
 
-            let (request, _stream) = resolver.resolve_request().await?;
+            let (request, mut stream) = resolver.resolve_request().await?;
             let (parts, _body) = request.into_parts();
 
             // Check if this is a WebTransport CONNECT request
@@ -134,9 +134,25 @@ impl H3Session {
                 parts.extensions.get::<Protocol>() == Some(&Protocol::WEB_TRANSPORT);
 
             if is_webtransport {
+                // A WebTransport session does not exist until the server answers
+                // the extended CONNECT with a 2xx. Returning the session without
+                // responding left the browser's `WebTransport.ready` hanging
+                // until the request stream was dropped, which FINs it — and a
+                // CONNECT stream that ends without a response is a failed
+                // handshake, reported by Chromium as the bare
+                // "Opening handshake failed." So respond first, and keep the
+                // stream alive for the life of the session: closing the CONNECT
+                // stream is how either side tears a WebTransport session down.
+                let response = http::Response::builder()
+                    .status(http::StatusCode::OK)
+                    .body(())
+                    .expect("a 200 response with an empty body is always valid");
+                stream.send_response(response).await?;
+
                 return Ok(Some(WebTransportSession {
                     quinn_conn: self.quinn_conn.clone(),
                     path: parts.uri.path().to_string(),
+                    connect_stream: Some(stream),
                 }));
             }
 
@@ -156,6 +172,14 @@ impl H3Session {
 pub struct WebTransportSession {
     quinn_conn: quinn::Connection,
     path: String,
+    /// The extended-CONNECT request stream this session was established on.
+    ///
+    /// Held, never read: a WebTransport session lives exactly as long as its
+    /// CONNECT stream, so dropping this would signal the browser that the
+    /// session ended. `None` only in tests that synthesise a session over a
+    /// raw QUIC pair.
+    #[allow(dead_code, reason = "held to keep the WebTransport session open")]
+    connect_stream: Option<h3::server::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>>,
 }
 
 impl WebTransportSession {
@@ -378,6 +402,7 @@ mod tests {
         WebTransportSession {
             quinn_conn: conn,
             path: "/media".to_string(),
+            connect_stream: None,
         }
     }
 

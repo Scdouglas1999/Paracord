@@ -1261,7 +1261,7 @@ pub async fn upload_token(
     let cert_hash = state
         .native_media
         .as_ref()
-        .map(|native| native.cert_hash.clone());
+        .map(|native| native.cert_hash.get());
     let quic_available = cert_hash.is_some();
     let quic_endpoint = if quic_available {
         let host = headers

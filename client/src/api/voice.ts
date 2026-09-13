@@ -116,5 +116,27 @@ export function createCallVoiceApi(context: OperationContext, membership?: () =>
       return post<VoiceJoinResponse>(`/api/v1/voice/${encodeURIComponent(channelId)}/stream?${streamReceipt()}${fallback ? '&fallback=livekit' : ''}`, body, 45_000);
     },
     stopStream: (channelId: string) => post(`/api/v1/voice/${encodeURIComponent(channelId)}/stream/stop?${streamReceipt()}`, undefined, 5_000),
+    /**
+     * Re-read the media certificate pin the server publishes right now.
+     *
+     * The pin is not stable for the life of a server. Browsers accept a
+     * WebTransport `serverCertificateHashes` pin only for a certificate valid
+     * at most 14 days, so the server issues a short-lived one and rotates it;
+     * a pin cached across a reconnect can name a certificate the media port no
+     * longer presents, and the handshake is then refused in milliseconds with
+     * an error indistinguishable from a blocked UDP port.
+     *
+     * This route is authenticated and side-effect free: it joins nothing,
+     * creates no voice state and issues no media token.
+     */
+    mediaCertificatePin: async (): Promise<string | undefined> => {
+      const { data } = await context.requestRoot<{ certificate_pin_sha256?: string | null }>({
+        method: 'GET',
+        url: '/api/v1/voice/transport-diagnostics',
+        timeout: 10_000,
+      });
+      const pin = data?.certificate_pin_sha256;
+      return typeof pin === 'string' && pin.length > 0 ? pin : undefined;
+    },
   };
 }

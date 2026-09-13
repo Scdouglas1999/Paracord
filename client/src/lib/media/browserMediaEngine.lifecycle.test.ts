@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BrowserMediaEngine } from './browserMediaEngine';
+import { WebTransportManager } from './transport/webTransport';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -54,6 +55,48 @@ describe('BrowserMediaEngine late permission results', () => {
     permission.resolve(late.stream);
     expect((await start).name).toBe('AbortError');
     expect(late.stop).toHaveBeenCalledTimes(1);
+    await engine.disconnect();
+  });
+});
+
+describe('BrowserMediaEngine media certificate pin', () => {
+  /** A media token shaped enough for connect(): it only reads the claims. */
+  function mediaToken(): string {
+    const claims = btoa(JSON.stringify({ sid: 'session-1', sub: '7', room: '9' }))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_');
+    return `header.${claims}.signature`;
+  }
+
+  it('hands the transport a way to re-read the pin, not just the joined-with pin', async () => {
+    // The pin is a fresh fact: the server rotates its media certificate inside
+    // the 14-day window browsers require of a pinned one. An engine that only
+    // forwarded the join's pin would be refused on every reconnect afterwards.
+    const connect = vi
+      .spyOn(WebTransportManager.prototype, 'connect')
+      .mockResolvedValue(undefined);
+    // Stop the join right after the transport is up; nothing below it is under test.
+    vi.stubGlobal('navigator', {
+      mediaDevices: { getUserMedia: () => Promise.reject(new Error('no capture in tests')) },
+    });
+
+    const refreshCertHash = vi.fn().mockResolvedValue('rotated-pin');
+    const engine = new BrowserMediaEngine();
+    await engine
+      .connect('https://media.test/media', mediaToken(), 'joined-with-pin', {
+        id: 'call-1',
+        signal: new AbortController().signal,
+        refreshCertHash,
+      })
+      .catch(() => {});
+
+    expect(connect).toHaveBeenCalledWith(
+      'https://media.test/media',
+      expect.any(String),
+      'joined-with-pin',
+      refreshCertHash,
+    );
+    connect.mockRestore();
     await engine.disconnect();
   });
 });

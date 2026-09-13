@@ -474,7 +474,7 @@ export class BrowserMediaEngine implements MediaEngine {
       this.transportLostCb?.(reason);
     });
 
-    await this.transport.connect(endpoint, token, certHash);
+    await this.transport.connect(endpoint, token, certHash, session?.refreshCertHash);
     this.assertOpen();
 
     await this.transport.sendStreamControl({

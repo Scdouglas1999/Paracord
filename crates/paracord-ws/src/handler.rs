@@ -3240,7 +3240,7 @@ async fn handle_client_message(
                             "relay_endpoint": format!("quic://{}:{}", host, port),
                             "wt_endpoint": format!("https://{}:{}/media", host, port),
                             "token": token,
-                            "cert_hash": native.cert_hash,
+                            "cert_hash": native.cert_hash.get(),
                             "room_id": room_id,
                             "codecs": ["opus", "vp9"],
                             "peers": peers,

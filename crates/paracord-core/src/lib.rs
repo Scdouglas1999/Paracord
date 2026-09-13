@@ -140,7 +140,39 @@ pub struct NativeMediaState {
     /// Base64-encoded SHA-256 hash of the server's TLS certificate DER.
     /// Browsers need this for `serverCertificateHashes` when connecting
     /// to self-signed certs via WebTransport.
-    pub cert_hash: String,
+    ///
+    /// Mutable for the life of the process: the media certificate is valid for
+    /// under 14 days (a browser rule — see
+    /// `paracord_transport::endpoint::MEDIA_CERT_LIFETIME`), so a long-running
+    /// server rotates it and republishes the pin here. Read it at the moment
+    /// you hand it to a client; never cache it across a join.
+    pub cert_hash: MediaCertHash,
+}
+
+/// The media certificate pin currently published to clients.
+///
+/// Rotation replaces the whole string atomically, so a reader either sees the
+/// outgoing pin or the incoming one and never a torn value. Readers must load
+/// it at the moment they answer a client: a pin cached across a rotation points
+/// at a certificate the endpoint no longer presents, and the handshake fails
+/// with an error browsers report identically to a blocked UDP port.
+#[derive(Clone, Debug)]
+pub struct MediaCertHash(Arc<arc_swap::ArcSwap<String>>);
+
+impl MediaCertHash {
+    pub fn new(hash: impl Into<String>) -> Self {
+        Self(Arc::new(arc_swap::ArcSwap::from_pointee(hash.into())))
+    }
+
+    /// The pin as of right now.
+    pub fn get(&self) -> String {
+        self.0.load().as_ref().clone()
+    }
+
+    /// Publish a new pin. Takes effect for every subsequent read.
+    pub fn store(&self, hash: impl Into<String>) {
+        self.0.store(Arc::new(hash.into()));
+    }
 }
 
 /// Placeholder type when native-media support is disabled at compile time.

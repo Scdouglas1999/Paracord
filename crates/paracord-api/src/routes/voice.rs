@@ -680,7 +680,7 @@ pub async fn join_voice(
         .unwrap_or_default();
 
         // Include the cert hash so browsers can trust self-signed certs
-        let cert_hash = state.native_media.as_ref().map(|nm| nm.cert_hash.clone());
+        let cert_hash = state.native_media.as_ref().map(|nm| nm.cert_hash.get());
 
         tracing::info!(
             "Native media voice join issued for user={} channel={}",

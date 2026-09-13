@@ -11,6 +11,7 @@ native-media = ["dep:paracord-relay", "dep:paracord-transport"]
 backup = ["dep:rusqlite", "dep:flate2", "dep:tar", "dep:tempfile"]
 
 [dependencies]
+arc-swap = { workspace = true }
 paracord-models = { workspace = true }
 paracord-db = { workspace = true }
 paracord-util = { workspace = true }

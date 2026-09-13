@@ -258,7 +258,11 @@ describe('runVoiceConnectionCheck', () => {
     expect(byId(report.steps, 'microphone').status).toBe('pass');
   });
 
-  it('names the media certificate when a pinned handshake fails, not only the port', async () => {
+  it('leads with the route when a pinned handshake fails, and offers a re-run for a rotated pin', async () => {
+    // The server issues its media certificate for 13 days and rotates it, which
+    // is inside the window browsers accept, so a badly-dated server certificate
+    // is no longer a plausible cause here. What remains is the route — and a
+    // fingerprint this client read before a rotation, which a re-run fixes.
     const report = await runVoiceConnectionCheck({
       adapters: fakeAdapters({
         probe: { ok: false, rttMs: null, streamOpened: false, failure: 'handshake-failed', detail: 'Opening handshake failed.' },
@@ -266,8 +270,10 @@ describe('runVoiceConnectionCheck', () => {
     });
     const transport = byId(report.steps, 'transport');
     expect(transport.code).toBe('TRANSPORT_HANDSHAKE_FAILED');
-    expect(transport.remedy).toContain('14 days or less');
     expect(transport.remedy).toContain('UDP port 8443');
+    expect(transport.remedy).toContain('rotates its media certificate');
+    // It must not send an operator hunting for a certificate they cannot fix.
+    expect(transport.remedy).not.toContain('ask the operator to check the certificate');
   });
 
   it('does not blame a certificate when the server published no fingerprint to pin', async () => {

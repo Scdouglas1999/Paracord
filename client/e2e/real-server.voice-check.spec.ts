@@ -207,20 +207,17 @@ test.describe('voice connection check against a reachable media endpoint', () =>
         `https://127.0.0.1:${MEDIA_PORT}/media`,
       );
 
-      // The transport step must settle — pass or a precisely classified failure —
-      // and must never be left running or ambiguous.
+      // The media listener is bound on loopback and definitely answering, and
+      // the certificate it presents is inside the 14-day window Chromium
+      // requires of a `serverCertificateHashes` pin, so this must actually
+      // connect. Anything less is the defect this case exists to catch: before
+      // the certificate fix the handshake was refused in 1–3 ms on every
+      // network including this one, and the failure was indistinguishable from
+      // a blocked UDP port.
       const transport = step(page, 'transport');
-      await expect(transport).not.toHaveAttribute('data-status', 'pending', { timeout: 60_000 });
-      await expect(transport).not.toHaveAttribute('data-status', 'running', { timeout: 60_000 });
-      const status = await transport.getAttribute('data-status');
-      expect(['pass', 'fail']).toContain(status);
-      if (status === 'fail') {
-        // A refusal here is a certificate problem, not a reachability one: the
-        // media listener is bound on loopback and definitely answering.
-        await expect(transport).toContainText(/TRANSPORT_(CERTIFICATE_REFUSED|HANDSHAKE_FAILED)/);
-      } else {
-        await expect(transport).toContainText(/Opened a media connection/);
-      }
+      await expect(transport).toHaveAttribute('data-status', 'pass', { timeout: 60_000 });
+      await expect(transport).toContainText(/TRANSPORT_OK/);
+      await expect(transport).toContainText(/Opened a media connection/);
 
       // Export becomes available as soon as there is a report to export.
       await expect(page.getByRole('button', { name: /Export diagnostics/i })).toBeEnabled();

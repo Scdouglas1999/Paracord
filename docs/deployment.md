@@ -211,7 +211,7 @@ The check reports each cause separately:
 | Speaker | A test tone on the selected output, confirmed by the person running the check. |
 | Camera | Optional; only affects video calls. |
 | Server call settings | What this server actually configured: native QUIC, LiveKit, or nothing. Read from `GET /api/v1/voice/transport-diagnostics`, which has no side effects. |
-| Media certificate | Whether this client can pin the certificate the media port presents. |
+| Media certificate | Whether this client can pin the certificate the media port presents. The fingerprint is read live, because the server rotates that certificate. |
 | Voice connection | A real WebTransport session to the media endpoint, with a bounded timeout and a reported round-trip time. |
 
 A failing step names the cause in plain language and says what to do, for
@@ -228,13 +228,35 @@ that a user can send to you.
 2. **Forward it to the right host.** "Something answered but the QUIC handshake
    did not finish" usually means the UDP port is published to a different service
    than the one serving chat.
-3. **Certificate refusals are not network problems.** The media port always
-   presents a certificate the server generates for itself at start-up; an
+3. **The media certificate is the server's own, and it rotates.** The media
+   port always presents a certificate the server generates for itself; an
    operator's CA-issued TLS material terminates the *TCP* HTTPS listener and is
-   never presented on the QUIC port. Chromium only pins a self-signed
-   WebTransport certificate when it is ECDSA P-256 and valid for 14 days or less.
-   Firefox and Safari cannot pin one at all, so their users must use a
-   Chromium-based browser or the desktop app.
+   never presented on the QUIC port. **There is nothing for you to install,
+   renew or point a reverse proxy at here** — putting nginx, Caddy or Cloudflare
+   in front of Paracord changes nothing about it.
+
+   Chromium accepts a pinned self-signed WebTransport certificate only when it
+   is ECDSA P-256 **and valid for at most 14 days**, so Paracord issues one
+   valid for 13 days and rotates it roughly every 7 while the server runs. The
+   start-up log names the fingerprint and expiry, and each rotation logs the new
+   one:
+
+   ```
+   Native QUIC media server listening on UDP port 8443 (unified: raw QUIC +
+   WebTransport), certificate pin AbCdEfGhIjKl… valid until 2026-09-26T…
+   Rotated the native media certificate: pin MnOpQrStUvWx… valid until …
+   ```
+
+   Rotation does not drop calls: QUIC authenticates once at handshake, so live
+   sessions continue and only new joins use the new certificate. Clients read the
+   fingerprint fresh on every join and before every reconnect, so no user action
+   is needed. Do not pin this fingerprint anywhere outside Paracord — it is
+   correct for days, not forever.
+
+   Firefox and Safari cannot pin a self-signed WebTransport certificate at all,
+   so their users must use a Chromium-based browser or the desktop app. The
+   desktop app pins the raw fingerprint through its own verifier and is
+   unaffected by the 14-day rule.
 4. **The admin health view will not tell you this.** It reads local configuration
    and reports `Native media: On (UDP 8443)` as soon as the listener binds. That
    is not a reachability probe — see
