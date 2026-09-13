@@ -402,7 +402,19 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
       if (memberScope) channels.addChannel(data as Channel);
       break;
     case GatewayEvents.CHANNEL_UPDATE:
-      if (memberScope) channels.updateChannel(data as Channel);
+      if (memberScope) {
+        channels.updateChannel(data as Channel);
+        // A permission overwrite moving sends CHANNEL_UPDATE carrying only the
+        // channel's id — it is the server saying "what you can do in this room
+        // changed", and it is the only notice somebody who just lost
+        // VIEW_CHANNEL gets. Re-ask for the rooms this account can see (the
+        // refresh is debounced, so a burst of overwrite edits costs one
+        // request); a room that comes back missing leaves the screen instead of
+        // sitting there with a working-looking composer.
+        const guildId =
+          data.guild_id ?? channels.channelsById[String(data.id ?? '')]?.guild_id ?? null;
+        refreshGuildChannelVisibility(guildId, memberScope);
+      }
       break;
     case GatewayEvents.CHANNEL_DELETE:
       if (!data.id) break;

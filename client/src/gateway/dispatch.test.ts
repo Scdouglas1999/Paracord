@@ -12,13 +12,19 @@ vi.mock('../lib/accountSession', () => ({
 vi.mock('../lib/signalPrekeys', () => ({
   ensurePrekeysUploaded: vi.fn(() => Promise.resolve()),
 }));
+// The debounced visibility refetch needs a live connection; the store owns its
+// own test. Here we only care that CHANNEL_UPDATE asks for one.
+vi.mock('../stores/channelStore', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../stores/channelStore')>()),
+  refreshGuildChannelVisibility: vi.fn(),
+}));
 
 import { getTestMessagingRuntime } from '../test/messagingRuntimeMock';
 import { dispatchGatewayEvent, resolveEmojiKey } from './dispatch';
 import { useReadStateStore } from '../stores/readStateStore';
 import { GatewayEvents } from './events';
 import { useGuildStore } from '../stores/guildStore';
-import { useChannelStore } from '../stores/channelStore';
+import { refreshGuildChannelVisibility, useChannelStore } from '../stores/channelStore';
 import { getMessageStore, type MessageState } from '../stores/messageStore';
 import { useAuthStore } from '../stores/authStore';
 import { useVoiceStore } from '../stores/voiceStore';
@@ -670,5 +676,25 @@ describe('durable gateway dispatch acceptance', () => {
     const failure = expect(pending).rejects.toThrow('Transport replaced');
     await Promise.resolve(); abort.abort(new Error('Transport replaced')); commit(null); await failure;
     expect(getMessageStore(owned).getState().messages['durable-channel']).toHaveLength(1);
+  });
+});
+
+describe('CHANNEL_UPDATE and what you can still see', () => {
+  const scope = { serverId: SERVER, userId: 'viewer' };
+
+  beforeEach(() => {
+    useAuthStore.setState({ user: { id: 'viewer', username: 'viewer' } as User });
+    useChannelStore.getState().setChannels(
+      'g1',
+      [{ id: 'c1', guild_id: 'g1', type: 0, name: 'perm-loss', position: 0, nsfw: false, created_at: '' }],
+      scope,
+    );
+  });
+
+  it('re-asks which rooms you can see, so one you just lost leaves the screen', async () => {
+    // The server sends the bare channel id when an overwrite moves — it is the
+    // only notice somebody who just lost VIEW_CHANNEL gets.
+    await dispatchGatewayEvent(SERVER, GatewayEvents.CHANNEL_UPDATE, { id: 'c1' });
+    expect(refreshGuildChannelVisibility).toHaveBeenCalledWith('g1', scope);
   });
 });
