@@ -74,6 +74,26 @@ function toggleSpoiler(el: HTMLElement): void {
   el.setAttribute('aria-expanded', revealed ? 'true' : 'false');
 }
 
+/**
+ * True when a masked link's *label* reads as a web address for somewhere other
+ * than where the link actually goes — `[https://your-bank.example](http://evil.example)`,
+ * or the bare-hostname version of the same trick. Those are refused rather than
+ * rendered, because a reader who checks the label has then checked nothing.
+ * A label that is not address-shaped at all ("the docs") is not a claim about a
+ * destination, so it masks freely.
+ */
+function labelClaimsAnotherDestination(label: string, safeHref: string): boolean {
+  const claim = label.trim();
+  const addressLike = /^(?:https?:\/\/)?[a-z0-9-]+(?:\.[a-z0-9-]+)+(?::\d+)?(?:[/?#]\S*)?$/i;
+  if (!addressLike.test(claim)) return false;
+  try {
+    const claimed = new URL(/^https?:\/\//i.test(claim) ? claim : `https://${claim}`);
+    return claimed.hostname.toLowerCase() !== new URL(safeHref).hostname.toLowerCase();
+  } catch {
+    return true;
+  }
+}
+
 function tokenizeInline(text: string): Token[] {
   const tokens: Token[] = [];
   let remaining = text;
@@ -170,6 +190,17 @@ function tokenizeInline(text: string): Token[] {
       continue;
     }
 
+    // `[label](https://…)` — what the composer's own Link button (Ctrl+K)
+    // writes. The label is shown and the destination is carried in `title`, so
+    // the real target is always one hover away; a label that is itself a URL
+    // for somewhere else is refused below rather than allowed to lie.
+    const maskedLinkMatch = remaining.match(/^\[([^\][\n]+)\]\((https?:\/\/[^\s<>()]+)\)/);
+    if (maskedLinkMatch) {
+      tokens.push({ type: 'link', content: maskedLinkMatch[1], href: maskedLinkMatch[2] });
+      remaining = remaining.slice(maskedLinkMatch[0].length);
+      continue;
+    }
+
     const urlMatch = remaining.match(/^https?:\/\/[^\s<>[\]()]+/);
     if (urlMatch) {
       tokens.push({ type: 'link', content: urlMatch[0], href: urlMatch[0] });
@@ -183,7 +214,7 @@ function tokenizeInline(text: string): Token[] {
       continue;
     }
 
-    const nextSpecial = remaining.search(/[*_`~|=\n]|https?:\/\/|</);
+    const nextSpecial = remaining.search(/[*_`~|=\n[]|https?:\/\/|</);
     if (nextSpecial === -1) {
       tokens.push({ type: 'text', content: remaining });
       remaining = '';
@@ -272,6 +303,12 @@ function renderInline(text: string, guildId?: string, mentionMap?: Map<string, s
         if (!safeHref) {
           return token.content;
         }
+        const masked = token.content !== token.href;
+        if (masked && labelClaimsAnotherDestination(token.content, safeHref)) {
+          // The label names a host it does not lead to. Show the markup as
+          // typed rather than render a link that lies about where it goes.
+          return `[${token.content}](${token.href})`;
+        }
         return createElement(
           'a',
           {
@@ -280,6 +317,8 @@ function renderInline(text: string, guildId?: string, mentionMap?: Map<string, s
             target: '_blank',
             rel: 'noopener noreferrer',
             className: 'paracord-md-link',
+            // A masked label hides the destination; keep it one hover away.
+            ...(masked ? { title: safeHref } : null),
           },
           token.content,
         );
@@ -536,6 +575,7 @@ export function parseMarkdown(text: string, guildId?: string, mentionMap?: Map<s
 export function stripMarkdown(text: string): string {
   return text
     .replace(/<a?:([A-Za-z0-9_]{1,32}):([0-9]+)>/g, ':$1:')
+    .replace(/\[([^\][\n]+)\]\((https?:\/\/[^\s<>()]+)\)/g, '$1')
     .replace(/```[\s\S]*?```/g, (match) => match.replace(/```\w*\n?/, '').replace(/```$/, ''))
     .replace(/`([^`]+)`/g, '$1')
     .replace(/==(.+?)==/g, '$1')

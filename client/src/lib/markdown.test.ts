@@ -36,6 +36,10 @@ describe('stripMarkdown', () => {
     expect(stripMarkdown('```js\nconsole.log("hi")\n```')).toBe('console.log("hi")\n');
   });
 
+  it('reduces a masked link to its label', () => {
+    expect(stripMarkdown('read [the docs](https://example.com/x)')).toBe('read the docs');
+  });
+
   it('strips highlight markers', () => {
     expect(stripMarkdown('this is ==highlighted== text')).toBe('this is highlighted text');
   });
@@ -152,6 +156,57 @@ describe('parseMarkdown', () => {
     expect(link?.classList.contains('paracord-md-link')).toBe(true);
     // Hover styling now lives in CSS, so no inline style attribute is emitted.
     expect(link?.getAttribute('style')).toBeNull();
+  });
+
+  // The composer's Link button (Ctrl+K) writes `[label](url)`; before this the
+  // renderer had no rule for it and the reader saw the raw brackets.
+  it('renders the [label](url) form the composer Link button writes', () => {
+    const { container } = render(
+      createElement('div', null, parseMarkdown('read [the docs](https://example.com/path?q=1)')),
+    );
+    const link = container.querySelector('a');
+    expect(link?.textContent).toBe('the docs');
+    expect(link?.getAttribute('href')).toBe('https://example.com/path?q=1');
+    // A masked label hides the destination, so it stays one hover away.
+    expect(link?.getAttribute('title')).toBe('https://example.com/path?q=1');
+    expect(container.textContent).not.toContain('](');
+  });
+
+  it('leaves a masked link whose label names a different host as literal text', () => {
+    const { container } = render(
+      createElement('div', null, parseMarkdown('[https://your-bank.example](http://evil.example/steal)')),
+    );
+    expect(container.querySelector('a')).toBeNull();
+    expect(container.textContent).toBe('[https://your-bank.example](http://evil.example/steal)');
+  });
+
+  it('leaves a bare-hostname label that points elsewhere as literal text', () => {
+    const { container } = render(
+      createElement('div', null, parseMarkdown('[your-bank.example](http://evil.example)')),
+    );
+    expect(container.querySelector('a')).toBeNull();
+  });
+
+  it('masks freely when the label names the same host it leads to', () => {
+    const { container } = render(
+      createElement('div', null, parseMarkdown('[example.com/docs](https://example.com/docs)')),
+    );
+    expect(container.querySelector('a')?.getAttribute('href')).toBe('https://example.com/docs');
+  });
+
+  it('does not render a masked link to a non-http scheme', () => {
+    const { container } = render(
+      createElement('div', null, parseMarkdown('[click](https://ok.example) and [bad](javascript:alert(1))')),
+    );
+    const links = container.querySelectorAll('a');
+    expect(links.length).toBe(1);
+    expect(container.textContent).toContain('[bad](javascript:alert(1))');
+  });
+
+  it('leaves an unmatched bracket alone', () => {
+    const { container } = render(createElement('div', null, parseMarkdown('array[0] is first')));
+    expect(container.textContent).toBe('array[0] is first');
+    expect(container.querySelector('a')).toBeNull();
   });
 });
 
