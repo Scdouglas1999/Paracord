@@ -111,6 +111,18 @@ export interface MessageState {
   pins: Record<string, Message[]>;
   // Message IDs currently being decrypted (E2EE)
   decryptingIds: Set<string>;
+  /**
+   * Message ids this client has watched be deleted, newest last.
+   *
+   * A reply whose parent is gone and a reply whose parent is simply older than
+   * the loaded window are the same absence to the timeline, and they were told
+   * to the reader as the same sentence ("Message not loaded") — one of which is
+   * a lie the moment somebody deletes a message you are looking at. Remembering
+   * what we saw leave is the only way to tell the two apart without a request.
+   *
+   * Bounded: it is a session's worth of deletions, not a log.
+   */
+  deletedMessageIds: Set<string>;
   // Messages composed while offline and awaiting retry
   offlineQueue: OfflineQueuedMessage[];
 
@@ -170,6 +182,25 @@ export interface MessageState {
   updateUserIdentity: (user: User) => void;
   /** Drop all cached messages, pins and queues. Called on logout. */
   reset: () => void;
+}
+
+/**
+ * How many deletions one session remembers. A reply chip only ever asks about a
+ * parent the reader can see on screen, so this is generous; past it the oldest
+ * half is forgotten and those chips fall back to "Message not loaded", which is
+ * the honest thing to say once we no longer know.
+ */
+const DELETED_MEMORY = 1000;
+
+function rememberDeleted(previous: Set<string>, added: Set<string>): Set<string> {
+  const next = new Set(previous);
+  for (const id of added) {
+    // Re-insert so the id is newest in iteration order.
+    next.delete(id);
+    next.add(id);
+  }
+  if (next.size <= DELETED_MEMORY) return next;
+  return new Set([...next].slice(next.size - DELETED_MEMORY / 2));
 }
 
 function createAccountMessageStore(scope: AccountScope) {
@@ -473,6 +504,7 @@ function createAccountMessageStore(scope: AccountScope) {
       messageErrors: {},
       pins: {},
       decryptingIds: new Set<string>(),
+      deletedMessageIds: new Set<string>(),
       offlineQueue: [],
 
       fetchMessages: async (channelId, params) => {
@@ -1021,6 +1053,7 @@ function createAccountMessageStore(scope: AccountScope) {
           const decryptingIds = new Set(state.decryptingIds);
           for (const id of idSet) decryptingIds.delete(id);
           return {
+            deletedMessageIds: rememberDeleted(state.deletedMessageIds, idSet),
             messages: {
               ...state.messages,
               [channelId]: (state.messages[channelId] ?? []).filter((message) => !idSet.has(message.id)),
@@ -1096,6 +1129,7 @@ function createAccountMessageStore(scope: AccountScope) {
           messageErrors: {},
           pins: {},
           decryptingIds: new Set<string>(),
+          deletedMessageIds: new Set<string>(),
           // Durable queues belong to the account runtime, outside this cache.
           offlineQueue: [],
         });

@@ -47,7 +47,13 @@ export function GifPicker({ onSelect, onClose }: GifPickerProps) {
   const [query, setQuery] = useState('');
   const [gifs, setGifs] = useState<TenorGif[]>([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Two different facts, and they were being told as one: a server with no
+  // Tenor key is not "offline", and a "Try again" that can only fail again is
+  // not a way out. `unconfigured` explains and offers nothing; `failed` is the
+  // one that is worth retrying.
+  const [error, setError] = useState<{ kind: 'unconfigured' | 'failed'; message: string } | null>(
+    null,
+  );
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
 
@@ -62,9 +68,13 @@ export function GifPicker({ onSelect, onClose }: GifPickerProps) {
     } catch (err) {
       const status = (err as { response?: { status?: number } }).response?.status;
       if (status === 503) {
-        setError('GIF search is not available. Server admin needs to configure a Tenor API key.');
+        setError({
+          kind: 'unconfigured',
+          message:
+            'This server has no Tenor API key, so there are no GIFs to search. An admin can add one in server settings.',
+        });
       } else {
-        setError('Failed to load GIFs.');
+        setError({ kind: 'failed', message: 'The GIF service did not answer.' });
       }
       setGifs([]);
     } finally {
@@ -157,18 +167,28 @@ export function GifPicker({ onSelect, onClose }: GifPickerProps) {
         {error ? (
           <EmptyState
             role="alert"
-            icon={<WifiOff size={20} className="text-accent-danger" />}
-            title="GIF search is offline"
-            description={error}
+            icon={
+              error.kind === 'unconfigured' ? (
+                <Search size={20} className="text-text-muted" />
+              ) : (
+                <WifiOff size={20} className="text-accent-danger" />
+              )
+            }
+            title={
+              error.kind === 'unconfigured' ? 'GIFs are not set up here' : 'GIF search is offline'
+            }
+            description={error.message}
             action={
-              <button
-                type="button"
-                onClick={() => void fetchGifs(query)}
-                className="inline-flex items-center gap-1.5 rounded-chip bg-accent-primary px-3.5 py-2 text-label font-semibold text-text-on-accent shadow-[var(--shadow-chip)] outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)]"
-              >
-                <RotateCw size={15} />
-                Try again
-              </button>
+              error.kind === 'unconfigured' ? undefined : (
+                <button
+                  type="button"
+                  onClick={() => void fetchGifs(query)}
+                  className="inline-flex items-center gap-1.5 rounded-chip bg-accent-primary px-3.5 py-2 text-label font-semibold text-text-on-accent shadow-[var(--shadow-chip)] outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)]"
+                >
+                  <RotateCw size={15} />
+                  Try again
+                </button>
+              )
             }
           />
         ) : loading && visibleGifs.length === 0 ? (

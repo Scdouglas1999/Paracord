@@ -637,7 +637,11 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
     try { submittedDraft = await captureDraft(); }
     catch (error) { endSay(); setSubmitError(messageInputError(error, 'Save this draft before sending.')); return; }
     finally { sendingRef.current = false; }
-    if (!composerAction.allowed) { setSubmitError(composerAction.reason); return; }
+    // The blocker banner above the composer is already saying this, word for
+    // word, and stacking a red copy of a grey sentence tells the reader nothing
+    // they cannot see. The banner carries the way out ("Check again", "Set up
+    // encryption"), so it stays and the echo does not.
+    if (!composerAction.allowed) { setSubmitError(blockerSettled ? null : composerAction.reason); return; }
 
     if (showPollComposer) {
       const question = pollQuestion.trim();
