@@ -1,4 +1,7 @@
-import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
+// §5.3: one reduced-motion switch for the whole app (lib/motion), never
+// framer-motion's own hook — that one cannot see the user's Motion setting.
+import { useReducedMotion } from '../lib/motion';
 import { RefreshCw } from 'lucide-react';
 import { useUIStore } from '../stores/uiStore';
 

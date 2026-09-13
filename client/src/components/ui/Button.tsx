@@ -1,6 +1,9 @@
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
-import { motion, useReducedMotion, HTMLMotionProps } from "framer-motion";
+import { motion, HTMLMotionProps } from "framer-motion";
+// §5.3: one reduced-motion switch for the whole app (lib/motion), never
+// framer-motion's own hook — that one cannot see the user's Motion setting.
+import { useReducedMotion } from '../../lib/motion';
 import { Loader2 } from "lucide-react";
 import { cn } from "../../lib/utils";
 

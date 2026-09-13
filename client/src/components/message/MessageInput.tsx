@@ -6,7 +6,10 @@ import { runtimeAttachDecision, runtimeSendDecision } from '../../lib/messages/m
 import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
 import { entityScopeKey as memberScopeKey, type AccountScope } from '../../lib/serverScope';
 import { useState, useRef, useEffect, useMemo, useCallback, lazy, Suspense } from 'react';
-import { motion, useReducedMotion } from 'framer-motion';
+import { motion } from 'framer-motion';
+// §5.3: one reduced-motion switch for the whole app (lib/motion), never
+// framer-motion's own hook — that one cannot see the user's Motion setting.
+import { useReducedMotion } from '../../lib/motion';
 import { Plus, Smile, Send, X, FileText, BarChart3, PlusCircle, MinusCircle, Image, Clock3, EyeOff, Type, Loader2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Input, Select } from '../ui/Input';

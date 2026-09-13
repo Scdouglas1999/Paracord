@@ -1,6 +1,9 @@
 import { invoke } from '@tauri-apps/api/core';
 import { check, type Update } from '@tauri-apps/plugin-updater';
-import { motion, useReducedMotion } from 'framer-motion';
+import { motion } from 'framer-motion';
+// §5.3: one reduced-motion switch for the whole app (lib/motion), never
+// framer-motion's own hook — that one cannot see the user's Motion setting.
+import { useReducedMotion } from '../lib/motion';
 import { ArrowDownToLine, CheckCircle2, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { safeExternalUrl } from '../lib/security';

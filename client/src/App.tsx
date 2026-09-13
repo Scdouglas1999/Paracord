@@ -1,6 +1,9 @@
 import { useState, useEffect, lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router';
-import { motion, useReducedMotion } from 'framer-motion';
+import { motion } from 'framer-motion';
+// §5.3: one reduced-motion switch for the whole app (lib/motion), never
+// framer-motion's own hook — that one cannot see the user's Motion setting.
+import { useReducedMotion } from './lib/motion';
 import { AppMark } from './pages/authScaffold';
 import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';

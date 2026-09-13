@@ -2,6 +2,7 @@ import { useId } from 'react';
 import { Moon, Sun, Monitor, Eye, Check } from 'lucide-react';
 import { useUIStore, type AccentPreset } from '../../stores/uiStore';
 import { ACCENT_PRESETS } from '../../hooks/useTheme';
+import { useReducedMotion, type MotionPreference } from '../../lib/motion';
 import { cn } from '../../lib/utils';
 
 type ThemeId = 'dark' | 'light' | 'amoled' | 'high-contrast';
@@ -25,6 +26,17 @@ const THEME_OPTIONS: Array<{
   { id: 'light', label: 'Daylight', hint: 'Warm paper; lit rooms read as ink', icon: <Sun size={16} /> },
   { id: 'amoled', label: 'AMOLED', hint: 'A true-black street for OLED panels', icon: <Monitor size={16} /> },
   { id: 'high-contrast', label: 'High contrast', hint: 'Thicker rims, two text steps', icon: <Eye size={16} /> },
+];
+
+/**
+ * Motion (docs/lantern-stage-spec.md §5.3). The app moves for two reasons only —
+ * light, and something a person did — so the choice is about how much of that
+ * you want, not about switching a decoration off.
+ */
+const MOTION_OPTIONS: Array<{ id: MotionPreference; label: string; hint: string }> = [
+  { id: 'system', label: 'Match my system', hint: 'Follow this device\u2019s reduced-motion setting' },
+  { id: 'full', label: 'Full motion', hint: 'Lights bloom, messages lift, rooms move' },
+  { id: 'reduced', label: 'Reduced motion', hint: 'Everything lands instantly; lights still change' },
 ];
 
 const ACCENT_LABELS: Record<AccentPreset, string> = {
@@ -81,9 +93,13 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
   const setTheme = useUIStore((state) => state.setTheme);
   const accentPreset = useUIStore((state) => state.accentPreset);
   const setAccentPreset = useUIStore((state) => state.setAccentPreset);
+  const motion = useUIStore((state) => state.motion);
+  const setMotion = useUIStore((state) => state.setMotion);
+  const reduced = useReducedMotion();
   const theme = currentTheme ?? storeTheme;
   const themeLabelId = useId();
   const accentLabelId = useId();
+  const motionLabelId = useId();
 
   return (
     <div className="flex flex-col gap-7">
@@ -174,6 +190,53 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
         <p className="mt-1 max-w-prose text-meta leading-relaxed text-text-faint">
           The accent drives primary buttons, active navigation, mentions and focus rings. The
           light that shows who is in a room never changes colour.
+        </p>
+      </section>
+
+      <section aria-labelledby={motionLabelId}>
+        <h3 id={motionLabelId} className="mb-3 text-section text-text-secondary">
+          Motion
+        </h3>
+        <div
+          role="radiogroup"
+          aria-labelledby={motionLabelId}
+          className="flex flex-col gap-2 sm:flex-row"
+        >
+          {MOTION_OPTIONS.map((option) => {
+            const active = motion === option.id;
+            return (
+              <button
+                key={option.id}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                onClick={() => setMotion(option.id)}
+                className={cn(
+                  'pc-focusable flex flex-1 flex-col gap-0.5 rounded-[var(--radius-card)] p-3 text-left',
+                  'transition-[background-color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+                  active
+                    ? 'bg-bg-raised shadow-[var(--shadow-raised),0_0_0_1px_var(--accent-primary)]'
+                    : 'bg-bg-mod-subtle hover:bg-bg-mod-strong',
+                )}
+              >
+                <span className="flex items-center gap-2">
+                  <span className="pc-display text-name text-text-primary">{option.label}</span>
+                  {active && (
+                    <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-meta font-semibold text-accent-primary">
+                      <Check size={14} aria-hidden />
+                      Selected
+                    </span>
+                  )}
+                </span>
+                <span className="text-meta leading-relaxed text-text-faint">{option.hint}</span>
+              </button>
+            );
+          })}
+        </div>
+        <p className="mt-3 max-w-prose text-meta leading-relaxed text-text-faint">
+          {reduced
+            ? 'Motion is off right now: nothing lifts, slides or flickers, and lights change without a fade.'
+            : 'Motion is on right now. Only light and the things people do ever move — nothing decorative.'}
         </p>
       </section>
     </div>

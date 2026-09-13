@@ -1,7 +1,10 @@
 import * as React from "react";
 import { useState, useRef, useCallback, useLayoutEffect, useId } from "react";
 import { createPortal } from "react-dom";
-import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
+// §5.3: one reduced-motion switch for the whole app (lib/motion), never
+// framer-motion's own hook — that one cannot see the user's Motion setting.
+import { useReducedMotion } from '../../lib/motion';
 import { cn } from "../../lib/utils";
 
 interface TooltipProps {

@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
+import type { MotionPreference } from '../lib/motion/reducedMotion';
+
 type Theme = 'dark' | 'light' | 'amoled' | 'high-contrast';
 export type AccentPreset =
   | 'red'
@@ -41,6 +43,13 @@ const clampSidebarWidth = (px: number): number => {
 interface UIState {
   theme: Theme;
   accentPreset: AccentPreset;
+  /**
+   * How much this app is allowed to move (docs/lantern-stage-spec.md §5.3).
+   * `system` follows `prefers-reduced-motion`; `full` and `reduced` override
+   * it. `useTheme` hands this to `configureMotion`, which is the ONE switch —
+   * nothing reads this field to decide whether to animate.
+   */
+  motion: MotionPreference;
   customCss: string;
   serverRestarting: boolean;
   commandPaletteOpen: boolean;
@@ -58,6 +67,7 @@ interface UIState {
 
   setTheme: (theme: Theme) => void;
   setAccentPreset: (accentPreset: AccentPreset) => void;
+  setMotion: (motion: MotionPreference) => void;
   setCustomCss: (css: string) => void;
   setServerRestarting: (v: boolean) => void;
   toggleCommandPalette: () => void;
@@ -80,6 +90,7 @@ export const useUIStore = create<UIState>()(
     (set) => ({
       theme: 'dark',
       accentPreset: 'emerald',
+      motion: 'system' as MotionPreference,
       customCss: '',
       serverRestarting: false,
       commandPaletteOpen: false,
@@ -97,6 +108,7 @@ export const useUIStore = create<UIState>()(
 
       setTheme: (theme) => set({ theme }),
       setAccentPreset: (accentPreset) => set({ accentPreset }),
+      setMotion: (motion) => set({ motion }),
       setCustomCss: (customCss) => set({ customCss }),
       setServerRestarting: (serverRestarting) => set({ serverRestarting }),
       toggleCommandPalette: () => set((s) => ({ commandPaletteOpen: !s.commandPaletteOpen })),
@@ -133,6 +145,7 @@ export const useUIStore = create<UIState>()(
       partialize: (state) => ({
         theme: state.theme,
         accentPreset: state.accentPreset,
+        motion: state.motion,
         customCss: state.customCss,
         // Context panels are transient route context. Persisting one makes an
         // old Members/Search panel unexpectedly reappear after relaunch.

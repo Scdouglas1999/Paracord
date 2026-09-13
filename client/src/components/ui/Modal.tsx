@@ -1,9 +1,7 @@
 import {
   createContext,
   useContext,
-  useEffect,
   useRef,
-  useState,
   type ReactNode,
   type RefObject,
 } from 'react';
@@ -11,6 +9,11 @@ import { createPortal } from 'react-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { X } from 'lucide-react';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
+// §5.3: the app has ONE reduced-motion switch and this is it. Modal used to
+// probe the media query itself because consuming tests mock framer-motion down
+// to { motion, AnimatePresence }; lib/motion is not framer-motion, so the mock
+// no longer forces a second source of truth.
+import { useReducedMotion } from '../../lib/motion';
 import { cn } from '../../lib/utils';
 
 /**
@@ -62,22 +65,6 @@ const PANEL_MOTION_REDUCED = {
 
 const MODAL_TRANSITION = { duration: 0.24, ease: [0.22, 1, 0.36, 1] as const };
 
-// Local reduced-motion probe. Modal mocks framer-motion in several consuming
-// tests to a bare { motion, AnimatePresence }, so we read the media query
-// directly instead of framer-motion's useReducedMotion. Guarded for jsdom, where
-// matchMedia is unavailable.
-function usePrefersReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(false);
-  useEffect(() => {
-    if (typeof window === 'undefined' || !window.matchMedia) return;
-    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
-    setReduced(mq.matches);
-    const onChange = () => setReduced(mq.matches);
-    mq.addEventListener('change', onChange);
-    return () => mq.removeEventListener('change', onChange);
-  }, []);
-  return reduced;
-}
 
 export interface ModalProps {
   open: boolean;
@@ -144,7 +131,7 @@ export function Modal({
 }: ModalProps) {
   const internalRef = useRef<HTMLDivElement>(null);
   const ref = panelRef ?? internalRef;
-  const reduceMotion = usePrefersReducedMotion();
+  const reduceMotion = useReducedMotion();
   const panelMotion = reduceMotion
     ? PANEL_MOTION_REDUCED
     : PANEL_MOTION[placement];

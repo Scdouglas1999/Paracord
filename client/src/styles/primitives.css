@@ -196,19 +196,31 @@
   transition-timing-function: var(--ease-out);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  /* Warm-up and dim become instant; breathing stops with the ring at .7. */
-  .pc-lit,
-  .pc-window,
-  .pc-dimming,
-  .pc-transition {
-    transition: none;
-  }
+/* Reduced motion is the `data-motion` attribute, never a media query — see the
+   header of utilities.css. Warm-up and dim become instant; breathing stops with
+   the ring at its resting alpha. */
+:root[data-motion='reduced'] .pc-lit,
+:root[data-motion='reduced'] .pc-window,
+:root[data-motion='reduced'] .pc-dimming,
+:root[data-motion='reduced'] .pc-transition {
+  transition: none;
+}
 
-  .pc-speaking {
-    animation: none;
-    box-shadow: var(--ring-speaking);
-  }
+:root[data-motion='reduced'] .pc-speaking {
+  animation: none;
+  box-shadow: var(--ring-speaking);
+}
+
+/* -----------------------------------------------------------------------------
+   §5.1 "A message has mass" — the send control catches the light for one beat.
+   The engine (lib/motion/animate.ts `flash`) adds this class for ~80ms and the
+   spring-back is a transform; the class itself is the light. This is a LIGHT
+   element, so it is allowed to animate background and box-shadow (§5.3).
+   -------------------------------------------------------------------------- */
+.pc-flash-light {
+  background: var(--light-white) !important;
+  color: var(--text-on-light) !important;
+  box-shadow: var(--glow-control-on) !important;
 }
 
 /* -----------------------------------------------------------------------------

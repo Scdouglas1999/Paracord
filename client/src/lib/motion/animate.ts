@@ -1,0 +1,301 @@
+import { prefersReducedMotion } from './reducedMotion';
+import { springEasing, springTokens, type SpringConfig } from './spring';
+import { motionToken, ms } from './tokens';
+
+/**
+ * The engine's recipes (docs/lantern-stage-spec.md §5.1).
+ *
+ * Every one of these is Web Animations over the §5 tokens — no framework, no
+ * `framer-motion`, nothing that owns the render loop. They obey three rules:
+ *
+ *   1. **Budget (§5.3).** `transform` and `opacity` only, plus `box-shadow` and
+ *      `background` on the small light elements — a window, a rim, a dot — and
+ *      nowhere else. No layout property is ever in a keyframe.
+ *   2. **One switch (§5.3).** Under reduced motion every recipe lands its end
+ *      state on the spot and returns a finished animation, so a caller that
+ *      awaits `.finished` still resolves and a caller that cancels still can.
+ *   3. **Interruptible.** Each returns the `Animation`, and each cancels the
+ *      recipe it replaces on that element, so a second send cannot stack a
+ *      second lift on the first.
+ */
+
+/** Something to animate: an element, in a renderer with WAAPI (jsdom has none). */
+function animatable(el: Element | null | undefined): el is HTMLElement {
+  return Boolean(el) && typeof (el as HTMLElement).animate === 'function';
+}
+
+/** The finished no-op a recipe returns under reduced motion. */
+function landed(el: Element): Animation | null {
+  if (!animatable(el)) return null;
+  const animation = el.animate([], { duration: 0 });
+  animation.finish();
+  return animation;
+}
+
+/** Recipes tag their animations so a later one can cancel the earlier. */
+const RECIPE = 'data-motion-recipe';
+
+function cancelRecipe(el: Element, id: string): void {
+  if (typeof el.getAnimations !== 'function') return;
+  for (const running of el.getAnimations()) {
+    if ((running as Animation & { id?: string }).id === `${RECIPE}:${id}`) running.cancel();
+  }
+}
+
+function run(el: Element, id: string, keyframes: Keyframe[], options: KeyframeAnimationOptions): Animation | null {
+  if (!animatable(el)) return null;
+  cancelRecipe(el, id);
+  const animation = el.animate(keyframes, options);
+  animation.id = `${RECIPE}:${id}`;
+  return animation;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Light: bloom, dim, flicker                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Scale a computed `box-shadow` — every length by `spread`, every alpha by
+ * `alpha`. This is how a light blooms "20% past its resting glow" (§5.1)
+ * without the engine inventing a glow of its own: the resting recipe is
+ * whatever `tokens.css` put on the element, and the bloom is that recipe
+ * turned up.
+ */
+export function scaleShadow(shadow: string, { spread = 1, alpha = 1 } = {}): string {
+  if (!shadow || shadow === 'none') return shadow;
+  return shadow
+    .replace(/(-?\d*\.?\d+)px/g, (_, value: string) => `${Number((Number.parseFloat(value) * spread).toFixed(2))}px`)
+    .replace(/rgba?\(([^)]*)\)/g, (whole: string, body: string) => {
+      const parts = body.split(/\s*[,/]\s*/).filter(Boolean);
+      if (parts.length < 4) return whole;
+      const next = Math.min(1, Math.max(0, Number.parseFloat(parts[3]) * alpha));
+      return `rgba(${parts[0]}, ${parts[1]}, ${parts[2]}, ${Number(next.toFixed(3))})`;
+    });
+}
+
+function restingShadow(el: Element): string {
+  if (typeof getComputedStyle !== 'function') return 'none';
+  return getComputedStyle(el as HTMLElement).boxShadow || 'none';
+}
+
+/**
+ * A light coming on: 20% past its resting glow, then settle. 220ms,
+ * `--ease-out` (§5.1 "light has a source and a speed").
+ */
+export function bloom(el: Element | null | undefined, options: { delay?: number } = {}): Animation | null {
+  if (!animatable(el)) return null;
+  if (prefersReducedMotion()) return landed(el);
+  const rest = restingShadow(el);
+  if (rest === 'none') {
+    return run(el, 'bloom', [{ opacity: 0.4 }, { opacity: 1 }], {
+      duration: ms('--duration-warm-up'),
+      easing: motionToken('--ease-out'),
+      delay: options.delay ?? 0,
+      fill: 'none',
+    });
+  }
+  return run(
+    el,
+    'bloom',
+    [
+      { boxShadow: rest, offset: 0 },
+      { boxShadow: scaleShadow(rest, { spread: 1.35, alpha: 1.2 }), offset: 0.45 },
+      { boxShadow: rest, offset: 1 },
+    ],
+    {
+      duration: ms('--duration-warm-up'),
+      easing: motionToken('--ease-out'),
+      delay: options.delay ?? 0,
+      fill: 'none',
+    },
+  );
+}
+
+/**
+ * A light going out: it lingers a beat, then goes. 400ms, `--ease-in` (§5.1).
+ * The element is expected to have lost its lit class already; this animates the
+ * glow it is leaving behind.
+ */
+export function dim(el: Element | null | undefined, from?: string): Animation | null {
+  if (!animatable(el)) return null;
+  if (prefersReducedMotion()) return landed(el);
+  const rest = from ?? restingShadow(el);
+  if (rest === 'none') return landed(el);
+  return run(
+    el,
+    'dim',
+    [{ boxShadow: rest }, { boxShadow: scaleShadow(rest, { spread: 0.6, alpha: 0 }) }],
+    { duration: ms('--duration-dim'), easing: motionToken('--ease-in'), fill: 'none' },
+  );
+}
+
+/**
+ * Reading light flickers once when a message lands — two 40ms pulses (§5.1).
+ * The room's amber window is the only thing in the product that does this.
+ */
+export function flicker(el: Element | null | undefined): Animation | null {
+  if (!animatable(el)) return null;
+  if (prefersReducedMotion()) return landed(el);
+  const rest = restingShadow(el);
+  const bright = rest === 'none' ? null : scaleShadow(rest, { spread: 1.8, alpha: 1.7 });
+  const half = rest === 'none' ? null : scaleShadow(rest, { spread: 1.4, alpha: 1.35 });
+  // 200ms total: pulse (40) · fall (40) · pulse (50) · settle (70).
+  const keyframes: Keyframe[] = bright
+    ? [
+        { boxShadow: rest, offset: 0 },
+        { boxShadow: bright, offset: 0.2 },
+        { boxShadow: rest, offset: 0.4 },
+        { boxShadow: half, offset: 0.65 },
+        { boxShadow: rest, offset: 1 },
+      ]
+    : [
+        { opacity: 1, offset: 0 },
+        { opacity: 0.55, offset: 0.2 },
+        { opacity: 1, offset: 0.4 },
+        { opacity: 0.7, offset: 0.65 },
+        { opacity: 1, offset: 1 },
+      ];
+  return run(el, 'flicker', keyframes, {
+    duration: 200,
+    easing: motionToken('--ease-out'),
+    fill: 'none',
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Things that move: settle, stagger, press                                    */
+/* -------------------------------------------------------------------------- */
+
+export interface SettleOptions {
+  /** Rise distance in px. 14 for a plate entering the street (§5.1). */
+  distance?: number;
+  delay?: number;
+  /** Override `--duration-move`. */
+  duration?: number;
+  spring?: SpringConfig;
+}
+
+/**
+ * A thing arriving: it rises `distance` px onto its mark on the spring-settle
+ * curve, fading in as it comes (§5.1 "plates settle").
+ */
+export function settleIn(el: Element | null | undefined, options: SettleOptions = {}): Animation | null {
+  if (!animatable(el)) return null;
+  if (prefersReducedMotion()) return landed(el);
+  const distance = options.distance ?? 14;
+  const duration = options.duration ?? ms('--duration-move');
+  return run(
+    el,
+    'settle',
+    [
+      { transform: `translate3d(0, ${distance}px, 0)`, opacity: 0 },
+      { transform: 'translate3d(0, 0, 0)', opacity: 1 },
+    ],
+    {
+      duration,
+      delay: options.delay ?? 0,
+      easing: springEasing(options.spring ?? springTokens(), { durationMs: duration }),
+      fill: 'backwards',
+    },
+  );
+}
+
+export interface StaggerOptions extends SettleOptions {
+  /** Gap between neighbours. Defaults to `--stagger-light` (30ms). */
+  step?: number;
+}
+
+/**
+ * Neighbouring things arrive 30ms apart (§5.1). Returns one animation per
+ * element, in order, so the caller can cancel the whole run.
+ */
+export function stagger(
+  elements: Iterable<Element | null | undefined>,
+  options: StaggerOptions = {},
+): Array<Animation | null> {
+  const step = options.step ?? ms('--stagger-light');
+  const base = options.delay ?? 0;
+  return [...elements].map((el, index) => settleIn(el, { ...options, delay: base + index * step }));
+}
+
+/** A control under a finger: 0.96 scale in 80ms, then springs back (§5.1). */
+export function press(el: Element | null | undefined): Animation | null {
+  if (!animatable(el)) return null;
+  if (prefersReducedMotion()) return landed(el);
+  const back = ms('--duration-normal');
+  const down = 80;
+  return run(
+    el,
+    'press',
+    [
+      { transform: 'scale(1)', offset: 0, easing: motionToken('--ease-out') },
+      { transform: 'scale(0.96)', offset: down / (down + back), easing: motionToken('--ease-spring-settle') },
+      { transform: 'scale(1)', offset: 1 },
+    ],
+    { duration: down + back, fill: 'none' },
+  );
+}
+
+/**
+ * The send control catching the light for one beat (§5.1 "a message has
+ * mass"). `--light-white` is painted by the caller's class; this is the beat.
+ */
+export function flash(el: Element | null | undefined, className: string): Animation | null {
+  if (!animatable(el)) return null;
+  if (prefersReducedMotion()) return landed(el);
+  el.classList.add(className);
+  const animation = run(el, 'flash', [{ transform: 'scale(0.94)' }, { transform: 'scale(1)' }], {
+    duration: 80 + ms('--duration-normal'),
+    easing: motionToken('--ease-spring-settle'),
+    fill: 'none',
+  });
+  const remove = () => el.classList.remove(className);
+  if (animation) {
+    window.setTimeout(remove, 80);
+    animation.addEventListener('cancel', remove);
+  } else remove();
+  return animation;
+}
+
+/**
+ * A message leaving the composer: it lifts along the path it lands in the
+ * timeline — 220ms, `--ease-out`, transform and opacity only (§5.1).
+ */
+export function liftOut(
+  el: Element | null | undefined,
+  options: { distance?: number; duration?: number } = {},
+): Animation | null {
+  if (!animatable(el)) return null;
+  if (prefersReducedMotion()) return landed(el);
+  const distance = options.distance ?? 64;
+  return run(
+    el,
+    'lift',
+    [
+      { transform: 'translate3d(0, 0, 0)', opacity: 1 },
+      { transform: `translate3d(0, ${-distance}px, 0)`, opacity: 0 },
+    ],
+    {
+      duration: options.duration ?? ms('--duration-slow'),
+      easing: motionToken('--ease-out'),
+      fill: 'forwards',
+    },
+  );
+}
+
+/** The composer relaxing 0.8% under the send and springing back (§5.1). */
+export function relax(el: Element | null | undefined): Animation | null {
+  if (!animatable(el)) return null;
+  if (prefersReducedMotion()) return landed(el);
+  const duration = ms('--duration-move');
+  return run(
+    el,
+    'relax',
+    [
+      { transform: 'scale(1)', offset: 0, easing: motionToken('--ease-out') },
+      { transform: 'scale(0.992)', offset: 0.22 },
+      { transform: 'scale(1)', offset: 1 },
+    ],
+    { duration, easing: motionToken('--ease-spring-settle'), fill: 'none' },
+  );
+}

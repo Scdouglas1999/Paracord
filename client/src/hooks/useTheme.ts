@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useUIStore } from '../stores/uiStore';
 import { useAuthStore } from '../stores/authStore';
+import { configureMotion } from '../lib/motion/reducedMotion';
 import { sanitizeCustomCss } from '../lib/security';
 
 type ThemeName = 'dark' | 'light' | 'amoled' | 'high-contrast';
@@ -87,6 +88,7 @@ export function useTheme() {
   const accentPreset = useUIStore((s) => s.accentPreset);
   const setTheme = useUIStore((s) => s.setTheme);
   const lowBandwidthMode = useUIStore((s) => s.lowBandwidthMode);
+  const motion = useUIStore((s) => s.motion);
   const customCss = useUIStore((s) => s.customCss);
   const settings = useAuthStore((s) => s.settings);
   const initializedFromServer = useRef(false);
@@ -144,6 +146,13 @@ export function useTheme() {
       root.style.setProperty(name, value);
     }
   }, [activeTheme, accentPreset]);
+
+  // §5.3's one switch. The stored preference is the only thing that reaches it;
+  // the OS media query is read inside `configureMotion`, never here, and the
+  // answer is published as `data-motion` on <html> for CSS to follow.
+  useEffect(() => {
+    configureMotion(motion);
+  }, [motion]);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-density', densityMode);

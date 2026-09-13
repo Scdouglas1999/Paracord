@@ -92,19 +92,28 @@
   scrollbar-width: thin;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
-  }
+/* =========================================================================
+   Reduced motion (docs/lantern-stage-spec.md §5.3)
 
-  .voice-connected-pulse,
-  .popup-enter {
-    animation: none !important;
-  }
+   ONE switch, and it is not a media query. `src/lib/motion/reducedMotion.ts`
+   folds the OS setting and the user's explicit choice (Settings › Appearance ›
+   Motion) into a single answer and publishes it as `data-motion` on <html>.
+   CSS reads that attribute so a stylesheet and a script can never disagree,
+   and so "Full motion" can override an OS setting the user does not want here.
+   Do not add a `prefers-reduced-motion` media query anywhere: it would be a
+   second source of truth and the user setting could not win against it.
+   ========================================================================= */
+:root[data-motion='reduced'] *,
+:root[data-motion='reduced'] *::before,
+:root[data-motion='reduced'] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+:root[data-motion='reduced'] .voice-connected-pulse,
+:root[data-motion='reduced'] .popup-enter {
+  animation: none !important;
 }
 
