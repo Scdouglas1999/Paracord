@@ -13,6 +13,9 @@
  *                   flash · liftOut · relax
  *   sharedElement . "the thing you click becomes the thing you look at"
  *   flipCounter ... `<RollingNumber>` — "numbers re-roll"
+ *   presence ...... staying mounted for the exit; settling onto the street
+ *   flipList ...... a reordered list travels on the spring, never snaps; a tab
+ *                   indicator slides to its mark
  *   bus ........... gestures that cross a pane boundary
  *
  * There is no framework here on purpose: Web Animations plus the tokens. The
@@ -37,6 +40,23 @@ export {
 } from './animate';
 export { emitMotion, onMotion, resetMotionBusForTests, type MotionEvents } from './bus';
 export { RollingNumber, type RollingNumberProps } from './flipCounter';
+export {
+  FLIP_KEY_ATTR,
+  flipBetween,
+  useFlip,
+  useFlipList,
+  useIndicator,
+  type FlipListOptions,
+  type FlipOptions,
+  type IndicatorOptions,
+} from './flipList';
+export {
+  setStreetPaintedForTests,
+  streetIsPainted,
+  usePresence,
+  useSettleIn,
+  type Presence,
+} from './presence';
 export {
   configureMotion,
   motionPreference,
