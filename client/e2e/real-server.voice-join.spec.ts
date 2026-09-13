@@ -93,28 +93,23 @@ interface Account {
 }
 
 /**
- * Register a fresh account, waiting out the real server's registration rate
- * limit rather than failing on it.
+ * Register a fresh account.
  *
- * The whole real-server project shares one registration budget, and this file
- * runs last, so a 429 here means "the suite has been busy", not "registration is
- * broken". The server says exactly how long to wait; honour it.
+ * This used to sleep off a 429 and try again, because the whole real-server
+ * project shares one per-IP registration budget and this file runs last. That
+ * hid the actual problem — thirteen end-to-end cases legitimately cost more
+ * `/auth/*` per minute than the product's single-client ceiling allows — behind
+ * a forty-second wait. The harness now raises that ceiling for its throwaway
+ * loopback instance instead, so a 429 here is a real signal again and fails.
  */
 async function register(api: APIRequestContext): Promise<Account> {
   const unique = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
   const email = `voicejoin-${unique}@example.test`;
   const username = `vj${unique}`.slice(0, 32);
   const password = 'Voice-Join-Password-123!';
-  let response = await api.post(`${BASE}/api/v1/auth/register`, {
+  const response = await api.post(`${BASE}/api/v1/auth/register`, {
     data: { email, username, password },
   });
-  for (let attempt = 0; attempt < 3 && response.status() === 429; attempt++) {
-    const retryAfter = Number((await response.json()).retry_after) || 5;
-    await new Promise((resolve) => setTimeout(resolve, Math.min(retryAfter, 30) * 1000 + 500));
-    response = await api.post(`${BASE}/api/v1/auth/register`, {
-      data: { email, username, password },
-    });
-  }
   expect(
     response.ok(),
     `register failed: ${response.status()} ${await response.text()}`,
