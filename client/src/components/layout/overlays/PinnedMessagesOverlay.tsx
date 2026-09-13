@@ -135,7 +135,7 @@ export function PinnedMessagesOverlay({
         data-testid="context-panel"
         data-mode="pins"
         className="pc-plate flex h-[calc(100%-var(--gutter)*2)] shrink-0 flex-col overflow-hidden outline-none my-[var(--gutter)] mr-[var(--gutter)]"
-        style={{ width: 'var(--member-list-width)' }}
+        style={{ width: 'var(--w-context-panel)' }}
       >
         <header className="flex shrink-0 items-center gap-2.5 border-b border-border-subtle px-4 py-3">
           <Pin size={18} className="shrink-0 text-text-secondary" aria-hidden />

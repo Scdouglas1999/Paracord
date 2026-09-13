@@ -267,7 +267,7 @@ export function SearchOverlay({
         data-testid="context-panel"
         data-mode="search"
         className="pc-plate flex h-[calc(100%-var(--gutter)*2)] shrink-0 flex-col overflow-hidden outline-none my-[var(--gutter)] mr-[var(--gutter)]"
-        style={{ width: 'var(--member-list-width)' }}
+        style={{ width: 'var(--w-context-panel)' }}
       >
         {header}
         <div className="min-h-0 flex-1 overflow-y-auto p-2 scrollbar-thin">{content}</div>

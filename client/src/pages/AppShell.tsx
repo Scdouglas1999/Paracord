@@ -103,9 +103,10 @@ export function AppShell() {
     void useRelationshipStore.getState().fetchRelationships();
   }, []);
 
-  // Mobile swipe gestures (§6): right from the left edge opens the sidebar overlay;
-  // left from the right edge opens the ContextPanel in `members` mode (mirrors the
-  // old member-panel gesture).
+  // Mobile swipe gesture (§6): right from the left edge opens the Buildings
+  // column. The mirrored left-edge swipe used to open a docked member list;
+  // there is no member list (lantern-stage-spec §6.5), so the gesture is gone
+  // rather than repointed at some other panel a thumb did not ask for.
   useSwipeGesture(
     {
       // Keep mobile overlays mutually exclusive — stacking two z-[80] surfaces
@@ -113,10 +114,6 @@ export function AppShell() {
       onSwipeRight: () => {
         setContextPanelMode(null);
         setSidebarCollapsed(false);
-      },
-      onSwipeLeft: () => {
-        setSidebarCollapsed(true);
-        setContextPanelMode('members');
       },
     },
     isMobile,
@@ -139,7 +136,7 @@ export function AppShell() {
     || ((contextPanelMode === 'search' || contextPanelMode === 'pins') && Boolean(channelId))
     || (contextPanelMode === 'threads' && Boolean(guildId && channelId))
     || (contextPanelMode === 'economy' && Boolean(guildId))
-    || (contextPanelMode === 'members' && Boolean(guildId || isGroupDmContext));
+    || (contextPanelMode === 'recipients' && isGroupDmContext);
 
   useEffect(() => {
     if (contextPanelMode !== null && !contextPanelRouteValid) {
@@ -210,7 +207,7 @@ export function AppShell() {
           <main
             id="main-content"
             data-native-underlay-clear=""
-            className="relative flex min-w-0 flex-1 flex-col overflow-hidden bg-bg-primary"
+            className="relative flex min-w-0 flex-1 flex-col overflow-hidden bg-bg-plate"
           >
             <div className={cn('min-h-0 w-full flex-1 overflow-hidden', isSettingsRoute && 'p-3')}>
               <Outlet />
@@ -286,7 +283,7 @@ export function AppShell() {
                 aria-modal="true"
                 aria-label="Details"
                 tabIndex={-1}
-                className="context-panel-overlay h-full w-[var(--member-list-width)] max-w-[88vw] overflow-hidden shadow-[var(--shadow-plate)] outline-none"
+                className="context-panel-overlay h-full w-[var(--w-context-panel)] max-w-[88vw] overflow-hidden shadow-[var(--shadow-plate)] outline-none"
                 initial={{ x: 24, opacity: 0 }}
                 animate={{ x: 0, opacity: 1 }}
                 exit={{ x: 24, opacity: 0 }}

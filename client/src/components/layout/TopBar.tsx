@@ -27,6 +27,7 @@ import {
   Loader2,
   TrendingUp,
   Settings,
+  Users,
 } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router';
 import { extractApiError } from '../../api/client';
@@ -518,6 +519,10 @@ function OwnedTopBar({
     { label: 'Pinned messages', icon: <Pin size={17} />, action: panelToggle('pins'), disabled: !channelId },
     ...(!isDM && !isVoice ? [{ label: 'Threads', icon: <MessagesSquare size={17} />, action: panelToggle('threads') }] : []),
     ...(isAnnouncementChannel ? [{ label: 'Manage follows', icon: <Share2 size={17} />, action: () => void openFollowManager(), disabled: !channelId }] : []),
+    // A group message's recipients: who it is addressed to, and the only list
+    // the panel still opens (§6.5, §7.6). A 1:1 DM's "list" is the one person
+    // already named in the header strip.
+    ...(isGroupDm ? [{ label: 'People in this message', icon: <Users size={17} />, action: panelToggle('recipients') }] : []),
     ...(!isDM ? [{ label: 'Space leaderboard', icon: <TrendingUp size={17} />, action: panelToggle('economy') }] : []),
     ...(canOpenSpaceSettings && resolvedGuildId ? [{ label: 'Space settings', icon: <Settings size={17} />, action: openSpaceSettings }] : []),
     { label: '', action: () => {}, divider: true },
@@ -528,6 +533,7 @@ function OwnedTopBar({
     pins: { label: 'Pinned messages', icon: Pin, onClose: panelToggle('pins') },
     threads: { label: 'Threads', icon: MessagesSquare, onClose: panelToggle('threads') },
     economy: { label: 'Space leaderboard', icon: TrendingUp, onClose: panelToggle('economy') },
+    recipients: { label: 'People in this message', icon: Users, onClose: panelToggle('recipients') },
   };
   const activeSurface: ActiveHeaderSurface | undefined = showSummary
     ? { label: 'Catch up summary', icon: Sparkles, onClose: () => setShowSummary(false) }

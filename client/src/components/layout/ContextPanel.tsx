@@ -1,14 +1,13 @@
 import { useCurrentChannelStore, useChannelActions } from '../../hooks/useChannels';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
-import { AlertCircle, Archive, Coins, Loader2, MessageSquare, Users, X } from 'lucide-react';
+import { AlertCircle, Archive, Coins, Loader2, MessageSquare, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import type { Channel, Message } from '../../types';
 import { useUIStore } from '../../stores/uiStore';
 import { channelApi } from '../../api/channels';
 import { extractApiError } from '../../api/client';
-import { MemberList } from './MemberList';
 import { GroupDmMembersPanel } from './GroupDmMembersPanel';
 import { ThreadPanel } from '../message/ThreadPanel';
 import { PinnedMessagesOverlay } from './overlays/PinnedMessagesOverlay';
@@ -50,9 +49,8 @@ export interface ContextPanelProps {
 }
 
 /** Panel-native surfaces render inside the shared right-panel chrome. */
-const PANEL_HEADERS: Record<'members' | 'economy', { title: string; icon: LucideIcon }> = {
-  members: { title: 'Members', icon: Users },
-  economy: { title: 'Server Economy', icon: Coins },
+const PANEL_HEADERS: Record<'economy', { title: string; icon: LucideIcon }> = {
+  economy: { title: 'Server economy', icon: Coins },
 };
 
 const isThreadChannel = (channel: Channel | undefined): boolean =>
@@ -106,7 +104,7 @@ const CLOSE_BUTTON =
  * `contextPanelMode` from `uiStore` — the single source of truth — and switches
  * across the already-built surfaces without rebuilding any of them:
  *
- *   members  → components/layout/MemberList.tsx
+ *   recipients → components/layout/GroupDmMembersPanel.tsx (group DMs only)
  *   threads  → active ThreadPanel, or a channel-scoped thread list
  *   pins     → components/layout/overlays/PinnedMessagesOverlay.tsx
  *   search   → components/layout/overlays/SearchOverlay.tsx
@@ -115,12 +113,12 @@ const CLOSE_BUTTON =
  *
  * Visual law: Card/panel recipe (design-spec §7) — `bg-bg-secondary`, a
  * `border-border-subtle` hairline on the left edge, real elevation, and no
- * gradient hero (kill-list #1). `members` and `economy` are wrapped in the
- * shared panel chrome (title + close, focus-visible ring on close). `threads`,
+ * gradient hero (kill-list #1). `economy` is wrapped in the shared panel chrome
+ * (title + close, focus-visible ring on close). `recipients`, `threads`,
  * `pins`, and `search` are self-chromed panel-native surfaces; the AppShell
  * supplies their modal containment only on narrow screens. ContextPanel wires
  * each surface's close to clear `contextPanelMode`. Esc-to-close is wired only where the panel owns focus and
- * contains no text input (members/economy); global Esc precedence is SHELL-5.
+ * contains no text input (economy); global Esc precedence is SHELL-5.
  */
 export function ContextPanel({
   guildId,
@@ -291,14 +289,14 @@ export function ContextPanel({
     );
   }
 
-  // Group-DM recipients live in the shared `members` surface (layout-spec §2).
-  // The panel is self-chromed (own header + Add + close), so short-circuit before
-  // the guild MemberList chrome below.
-  if (mode === 'members') {
+  // A group message's recipients are the one list that is not a member list:
+  // it is who this conversation is addressed to, and it is editable
+  // (lantern-stage-spec §6.5, §7.6). The panel is self-chromed (own header +
+  // Add + close), so it short-circuits before the shared chrome below.
+  if (mode === 'recipients') {
     const activeChannel = channelId ? channelsById[channelId] : undefined;
-    if (isGroupDmChannel(activeChannel)) {
-      return <GroupDmMembersPanel channelId={channelId as string} onClose={close} />;
-    }
+    if (!isGroupDmChannel(activeChannel)) return null;
+    return <GroupDmMembersPanel channelId={channelId as string} onClose={close} />;
   }
 
   // ThreadPanel is a self-chromed inline panel (its own header + close). Give it
@@ -324,7 +322,7 @@ export function ContextPanel({
           data-testid="context-panel"
           data-mode="threads"
           className="pc-plate flex h-[calc(100%-var(--gutter)*2)] shrink-0 flex-col overflow-hidden outline-none my-[var(--gutter)] mr-[var(--gutter)]"
-          style={{ width: 'var(--member-list-width)' }}
+          style={{ width: 'var(--w-context-panel)' }}
         >
           <header className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-4 py-3">
             <MessageSquare size={18} className="shrink-0 text-text-secondary" aria-hidden />
@@ -397,7 +395,7 @@ export function ContextPanel({
     return (
       <div
         className="flex h-[calc(100%-var(--gutter)*2)] shrink-0 flex-col my-[var(--gutter)] mr-[var(--gutter)]"
-        style={{ width: 'var(--member-list-width)' }}
+        style={{ width: 'var(--w-context-panel)' }}
         data-testid="context-panel"
         data-mode="threads"
       >
@@ -427,7 +425,7 @@ export function ContextPanel({
       data-testid="context-panel"
       data-mode={mode}
       className="pc-plate flex h-[calc(100%-var(--gutter)*2)] shrink-0 flex-col overflow-hidden outline-none my-[var(--gutter)] mr-[var(--gutter)]"
-      style={{ width: 'var(--member-list-width)' }}
+      style={{ width: 'var(--w-context-panel)' }}
     >
       <header className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-4 py-3">
         <header.icon size={18} className="shrink-0 text-text-secondary" aria-hidden />
@@ -443,7 +441,7 @@ export function ContextPanel({
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
-        {mode === 'members' ? <MemberList hideStatsHeader /> : <GuildEconomyPanel guildId={guildId as string} />}
+        <GuildEconomyPanel guildId={guildId as string} />
       </div>
     </aside>
   );

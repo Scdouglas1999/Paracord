@@ -143,14 +143,6 @@ html[data-theme='high-contrast'] #root {
   overflow: hidden;
 }
 
-.member-panel {
-  width: var(--member-list-width);
-  min-width: var(--member-list-width);
-  height: 100%;
-  overflow: hidden;
-  border-radius: 20px;
-}
-
 .mobile-sidebar-overlay {
   position: fixed;
   inset: 0;

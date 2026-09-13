@@ -296,7 +296,6 @@
   --spacing-header-height: 3.5rem;
   --spacing-sidebar-width: 5rem;
   --spacing-channel-sidebar-width: var(--w-buildings-column);
-  --spacing-member-list-width: clamp(14rem, 24vw, 20rem);
   --sidebar-item-size: 3.25rem;
 }
 
@@ -476,7 +475,9 @@
   --density-space-5: 1.25rem;
 
   /* ---- Shell metrics ------------------------------------------------------ */
-  --member-list-width: var(--spacing-member-list-width);
+  /* The toggleable right panel (threads / pins / search / leaderboard / a group
+     message's people). Never a docked member list — §6.5. */
+  --w-context-panel: clamp(14rem, 24vw, 20rem);
   --sidebar-width: 72px;
   --sidebar-item-size: 52px;
   --sidebar-icon-size: 26px;
@@ -809,7 +810,7 @@
   :root {
     --spacing-sidebar-width: 4.5rem;
     --spacing-channel-sidebar-width: 15.5rem;
-    --spacing-member-list-width: 88vw;
+    --w-context-panel: 88vw;
     --sidebar-item-size: 2.75rem;
     /* §3: phone plates and controls round up; hit targets grow (§9). */
     --radius-plate: var(--radius-plate-phone);
@@ -834,7 +835,7 @@
   :root {
     --spacing-sidebar-width: 4rem;
     --spacing-channel-sidebar-width: min(88vw, 19rem);
-    --spacing-member-list-width: 88vw;
+    --w-context-panel: 88vw;
     --sidebar-item-size: 2.5rem;
   }
 }

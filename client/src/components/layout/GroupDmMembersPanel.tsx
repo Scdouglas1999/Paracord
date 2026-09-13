@@ -17,10 +17,14 @@ interface GroupDmMembersPanelProps {
 }
 
 /**
- * Group-DM recipient surface for the ContextPanel `members` mode (layout-spec §2:
- * the bespoke DMPage member <aside> is retired; recipients stay reachable and
- * manageable through the shared right panel). Self-chromed like the other
- * overlay-style ContextPanel surfaces (its own header + Add toggle + close).
+ * Who a group message is addressed to, and the one place that list is editable
+ * (lantern-stage-spec §6.5, §7.6). It is NOT a member list: a room's people are
+ * the here-now strip and its sheet, and nothing else in the product opens a
+ * docked roster. This one exists because adding and removing a recipient is a
+ * thing you do to the conversation, not a way to look at who is around.
+ *
+ * The ContextPanel `recipients` mode, self-chromed like the other overlay-style
+ * surfaces (its own header + Add toggle + close).
  */
 export function GroupDmMembersPanel({ channelId, onClose }: GroupDmMembersPanelProps) {
   const navigate = useNavigate();
@@ -96,15 +100,15 @@ export function GroupDmMembersPanel({ channelId, onClose }: GroupDmMembersPanelP
   return (
     <aside
 
-      aria-label="Members"
+      aria-label="People in this message"
       className="pc-plate flex h-[calc(100%-var(--gutter)*2)] shrink-0 flex-col overflow-hidden my-[var(--gutter)] mr-[var(--gutter)]"
-      style={{ width: 'var(--member-list-width)' }}
+      style={{ width: 'var(--w-context-panel)' }}
       data-testid="context-panel"
-      data-mode="members"
+      data-mode="recipients"
     >
       <header className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-4 py-3">
         <Users size={18} className="shrink-0 text-text-secondary" aria-hidden />
-        <h2 className="min-w-0 flex-1 truncate text-subhead text-text-primary">Members</h2>
+        <h2 className="min-w-0 flex-1 truncate text-subhead text-text-primary">People in this message</h2>
         <button
           type="button"
           className="rounded-sm px-2 py-1 text-meta font-semibold text-accent-primary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-tint focus-visible:shadow-[var(--focus-ring)]"
@@ -119,7 +123,7 @@ export function GroupDmMembersPanel({ channelId, onClose }: GroupDmMembersPanelP
           type="button"
           onClick={onClose}
           className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-sm text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
-          aria-label="Close Members panel"
+          aria-label="Close the people panel"
         >
           <X size={18} aria-hidden />
         </button>

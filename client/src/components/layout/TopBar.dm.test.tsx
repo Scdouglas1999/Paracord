@@ -154,6 +154,26 @@ describe('TopBar DM voice calls', () => {
     expect(screen.queryByRole('button', { name: 'Member List' })).not.toBeInTheDocument();
   });
 
+  // The one list that survives §6.5: who a group message is addressed to, which
+  // is editable. It lives in the labelled overflow, never docked, and a
+  // one-to-one has no such list — there is one other person and the header
+  // strip already names them.
+  it('offers the group message its people, from the overflow, and only there', async () => {
+    const user = userEvent.setup();
+    mockChannelState.channelsById = { 'dm-1': { id: 'dm-1', type: 3, channel_type: 3, name: 'Group' } };
+    renderDmTopBar();
+    await user.click(screen.getByRole('button', { name: 'More channel actions' }));
+    expect(screen.getByRole('menuitem', { name: 'People in this message' })).toBeInTheDocument();
+  });
+
+  it('offers no people list for a one-to-one message', async () => {
+    const user = userEvent.setup();
+    mockChannelState.channelsById = { 'dm-1': { id: 'dm-1', type: 1, channel_type: 1 } };
+    renderDmTopBar();
+    await user.click(screen.getByRole('button', { name: 'More channel actions' }));
+    expect(screen.queryByRole('menuitem', { name: 'People in this message' })).not.toBeInTheDocument();
+  });
+
   it('announces active system audio capture separately from conversation actions', () => {
     mockVoiceState.systemAudioCaptureActive = true;
     renderDmTopBar();

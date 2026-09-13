@@ -102,7 +102,7 @@ describe('AppShell', () => {
     const { rerender } = renderShell('/app/guilds/g1/channels/c1');
     expect(screen.queryByTestId('context-panel')).not.toBeInTheDocument();
 
-    act(() => useUIStore.setState({ contextPanelMode: 'members' }));
+    act(() => useUIStore.setState({ contextPanelMode: 'pins' }));
     rerender(
       <MemoryRouter initialEntries={['/app/guilds/g1/channels/c1']}>
         <Routes>
