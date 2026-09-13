@@ -108,6 +108,37 @@ export function shouldSendVideoFrameOnStream(
   return isKeyframe || fragmentCount > STREAM_FRAGMENT_THRESHOLD;
 }
 
+/**
+ * The wire body of a `subscribe_stream`, i.e. `paracord_transport::stream::
+ * TrackSubscription`.
+ *
+ * That struct is `#[serde(rename_all = "camelCase")]`, like the `PublishedTrack`
+ * next to it — the *field* casing of a nested control-plane struct is its own
+ * contract, independent of the snake_case variant tags and top-level fields of
+ * `ControlMessage`. This body was written in snake_case, so the relay refused
+ * every subscription with `missing field 'streamId'` and dropped it. Nothing was
+ * reported to the client: the viewer simply never became a subscriber, the relay
+ * forwarded no video to it, and the engine re-subscribed forever waiting for a
+ * `subscription_ack` that could not come.
+ */
+export function buildTrackSubscriptionWire(request: TrackSubscriptionRequest): {
+  streamId: string;
+  trackId: string;
+  requestedLayer: number | null;
+  activeLayer: number | null;
+  viewport: { width: number; height: number } | null;
+} {
+  return {
+    streamId: request.streamId,
+    trackId: request.trackId,
+    requestedLayer: request.requestedLayer ?? null,
+    activeLayer: request.activeLayer ?? null,
+    viewport: request.viewport
+      ? { width: request.viewport.width, height: request.viewport.height }
+      : null,
+  };
+}
+
 /** Bytes of encoded payload that fit in one datagram fragment. */
 export function maxVideoFragmentPayload(): number {
   return VIDEO_MAX_DATAGRAM_SIZE - HEADER_SIZE - VIDEO_GCM_TAG_SIZE - 128;
@@ -1195,15 +1226,7 @@ export class BrowserMediaEngine implements MediaEngine {
     );
     await this.transport.sendStreamControl({
       type: 'subscribe_stream',
-      subscription: {
-        stream_id: request.streamId,
-        track_id: request.trackId,
-        requested_layer: request.requestedLayer ?? null,
-        active_layer: request.activeLayer ?? null,
-        viewport: request.viewport
-          ? { width: request.viewport.width, height: request.viewport.height }
-          : null,
-      },
+      subscription: buildTrackSubscriptionWire(request),
     });
     this.assertOpen();
     await this.transport.sendStreamControl({

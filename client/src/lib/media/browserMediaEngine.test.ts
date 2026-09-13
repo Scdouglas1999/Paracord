@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildStreamFrameMessage,
+  buildTrackSubscriptionWire,
   parseStreamFrameMessage,
   readSessionParticipantWire,
   shouldSendVideoFrameOnStream,
@@ -142,5 +143,43 @@ describe('readSessionParticipantWire (media control plane)', () => {
     expect(readSessionParticipantWire({ sessionId: 'r' })).toBeNull();
     expect(readSessionParticipantWire(undefined)).toBeNull();
     expect(readSessionParticipantWire({ user_id: '1' })).toBeNull();
+  });
+});
+
+describe('subscribe_stream wire body', () => {
+  // `paracord_transport::stream::TrackSubscription` is camelCase. Written in
+  // snake_case, every subscription was refused by the relay with "missing field
+  // `streamId`" and silently dropped, so no viewer ever received video.
+  it('names every field the way the relay reads it', () => {
+    expect(
+      buildTrackSubscriptionWire({
+        streamId: 'stream:1:camera',
+        trackId: 'camera',
+        requestedLayer: 2,
+        activeLayer: 1,
+        viewport: { width: 640, height: 360 },
+      }),
+    ).toEqual({
+      streamId: 'stream:1:camera',
+      trackId: 'camera',
+      requestedLayer: 2,
+      activeLayer: 1,
+      viewport: { width: 640, height: 360 },
+    });
+  });
+
+  it('sends the optional fields as null rather than omitting them', () => {
+    expect(buildTrackSubscriptionWire({ streamId: 's', trackId: 't' })).toEqual({
+      streamId: 's',
+      trackId: 't',
+      requestedLayer: null,
+      activeLayer: null,
+      viewport: null,
+    });
+  });
+
+  it('never emits a snake_case key', () => {
+    const body = buildTrackSubscriptionWire({ streamId: 's', trackId: 't', requestedLayer: 0 });
+    expect(Object.keys(body).filter((key) => key.includes('_'))).toEqual([]);
   });
 });
