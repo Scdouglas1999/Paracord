@@ -7,16 +7,16 @@ import { Button } from '../../components/ui/Button';
 function SkeletonMessage({ lines = 2, wide = false }: { lines?: number; wide?: boolean }) {
   return (
     <div className="flex gap-4 px-4 py-2">
-      <div className="h-10 w-10 shrink-0 animate-pulse rounded-full bg-bg-mod-subtle" />
+      <div className="h-10 w-10 shrink-0 pc-skeleton rounded-full bg-bg-mod-subtle" />
       <div className="flex min-w-0 flex-1 flex-col gap-2 pt-1">
         <div className="flex items-center gap-2">
-          <div className="h-3.5 w-28 animate-pulse rounded-window bg-bg-mod-subtle" />
-          <div className="h-2.5 w-14 animate-pulse rounded-window bg-bg-mod-subtle/70" />
+          <div className="h-3.5 w-28 pc-skeleton rounded-window bg-bg-mod-subtle" />
+          <div className="h-2.5 w-14 pc-skeleton rounded-window bg-bg-mod-subtle/70" />
         </div>
         {Array.from({ length: lines }, (_, i) => (
           <div
             key={i}
-            className="h-3 animate-pulse rounded-window bg-bg-mod-subtle/70"
+            className="h-3 pc-skeleton rounded-window bg-bg-mod-subtle/70"
             style={{ width: wide && i === 0 ? '82%' : `${68 - i * 16}%` }}
           />
         ))}
@@ -43,7 +43,7 @@ export function GuildLoadingScreen() {
           <SkeletonMessage lines={2} />
         </div>
         <div className="shrink-0 px-4 pb-6 pt-1">
-          <div className="h-11 animate-pulse rounded-well border border-border-subtle bg-bg-raised" />
+          <div className="h-11 pc-skeleton rounded-well border border-border-subtle bg-bg-raised" />
         </div>
       </div>
       <span className="sr-only">Loading channels...</span>

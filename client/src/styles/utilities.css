@@ -112,8 +112,7 @@
   scroll-behavior: auto !important;
 }
 
-:root[data-motion='reduced'] .voice-connected-pulse,
-:root[data-motion='reduced'] .popup-enter {
+:root[data-motion='reduced'] .voice-connected-pulse {
   animation: none !important;
 }
 

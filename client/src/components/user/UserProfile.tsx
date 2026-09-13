@@ -27,6 +27,8 @@ import { safeExternalUrl, safeStoredImageDataUrl } from '../../lib/security';
 import { presenceLight } from '../../lib/presence';
 import { personLight } from '../../lib/attention/light';
 import { LitAvatar } from '../light';
+import { usePresence, type Presence } from '../../lib/motion';
+import { cn } from '../../lib/utils';
 import {
   buildIdentityVerificationPayload,
   formatIdentityFingerprint,
@@ -45,8 +47,9 @@ import type { PublicUserProfile } from '../../api/generated/PublicUserProfile';
 type ProfileSubject = Pick<User, 'id' | 'username'> & Partial<User>;
 
 interface UserProfilePopupProps {
-  user: ProfileSubject;
-  position: { x: number; y: number };
+  /** The subject — `null` closes the card (the presence window plays its leave). */
+  user: ProfileSubject | null;
+  position: { x: number; y: number } | null;
   onClose: () => void;
   roles?: Array<{ id: string; name: string; color: number }>;
 }
@@ -76,7 +79,55 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
+/**
+ * The popup's own presence (§5.1 — a contextual surface slides in from the
+ * edge it opened against and slides back out on --ease-in). `usePresence`
+ * keeps the card mounted for the leave; `last` holds the subject through it
+ * so the surface never exits empty. Callers render this unconditionally and
+ * pass `null` to close — same contract `Modal` and the shell overlays have.
+ */
 export function UserProfilePopup({ user, position, onClose, roles = [] }: UserProfilePopupProps) {
+  const { mounted, exiting, scenery } = usePresence(user !== null);
+  // Remembered during render (not in an effect) so the exit keeps its subject.
+  const [last, setLast] = useState<{
+    user: ProfileSubject;
+    position: { x: number; y: number };
+  } | null>(null);
+  if (
+    user !== null &&
+    position !== null &&
+    (last === null || last.user !== user || last.position.x !== position.x || last.position.y !== position.y)
+  ) {
+    setLast({ user, position });
+  }
+  if (!mounted || last === null) return null;
+  return (
+    <UserProfileCard
+      user={last.user}
+      position={last.position}
+      onClose={onClose}
+      roles={roles}
+      exiting={exiting}
+      scenery={scenery}
+    />
+  );
+}
+
+function UserProfileCard({
+  user,
+  position,
+  onClose,
+  roles = [],
+  exiting,
+  scenery,
+}: {
+  user: ProfileSubject;
+  position: { x: number; y: number };
+  onClose: () => void;
+  roles?: Array<{ id: string; name: string; color: number }>;
+  exiting: boolean;
+  scenery: Presence['scenery'];
+}) {
   const navigate = useNavigate();
   const channelScope = useCurrentAccountScope();
   const popupWidth = Math.min(21.5 * 16, window.innerWidth - 16);
@@ -409,15 +460,25 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
 
   return (
     <>
-      <div className="fixed inset-0 z-50" onClick={onClose} />
+      {/* The click-away catcher is not a surface — it leaves with the close,
+          so nothing swallows a click while the card is still sliding out. */}
+      {!exiting && <div className="fixed inset-0 z-50" onClick={onClose} />}
+      {/* §5.1: the card slides in from the edge it was opened against — from
+          the anchor's side — and slides back out that way on --ease-in. */}
       <div
-        className="pc-dialog popup-enter fixed z-50 w-[min(21.5rem,calc(100vw-1rem))] overflow-hidden"
+        className={cn(
+          'pc-dialog fixed z-50 w-[min(21.5rem,calc(100vw-1rem))] overflow-hidden',
+          fitsLeft
+            ? exiting ? 'pc-drawer-out-right' : 'pc-drawer-in-right'
+            : exiting ? 'pc-drawer-out-left' : 'pc-drawer-in-left',
+        )}
         style={{
           left,
           top,
           maxHeight: 'calc(100dvh - 1rem)',
           overflowY: 'auto',
         }}
+        {...scenery}
       >
         {/* Banner — a solid accent-tint strip (or the user's image), never a diagonal gradient wash */}
         {bannerSrc ? (

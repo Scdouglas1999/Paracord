@@ -1,10 +1,10 @@
 import * as React from "react";
 import { useState, useRef, useCallback, useLayoutEffect, useId } from "react";
 import { createPortal } from "react-dom";
-import { motion, AnimatePresence } from "framer-motion";
-// §5.3: one reduced-motion switch for the whole app (lib/motion), never
-// framer-motion's own hook — that one cannot see the user's Motion setting.
-import { useReducedMotion } from '../../lib/motion';
+// §5.1/§5.3: the shared overlay recipe (pc-enter / pc-exit) and the ONE
+// reduced-motion switch — the presence hook keeps the tooltip mounted for
+// its --duration-fast leave.
+import { usePresence } from '../../lib/motion';
 import { cn } from "../../lib/utils";
 
 interface TooltipProps {
@@ -26,7 +26,7 @@ export function Tooltip({
 }: TooltipProps) {
     const [isVisible, setIsVisible] = useState(false);
     const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
-    const reduceMotion = useReducedMotion();
+    const { mounted, exiting, scenery } = usePresence(isVisible);
     const tooltipId = useId();
     const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const triggerRef = useRef<HTMLDivElement>(null);
@@ -69,7 +69,9 @@ export function Tooltip({
         setCoords({ top, left });
     }, [side]);
 
-    // Recalculate position when tooltip becomes visible or content changes
+    // Recalculate position when tooltip becomes visible or content changes.
+    // The last coords are kept through the exit beat so the leave plays where
+    // the tooltip was — they only go stale when the node unmounts.
     useLayoutEffect(() => {
         if (isVisible) {
             updatePosition();
@@ -83,7 +85,6 @@ export function Tooltip({
     const hideTooltip = () => {
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
         setIsVisible(false);
-        setCoords(null);
     };
 
     const arrowPositions = {
@@ -105,40 +106,36 @@ export function Tooltip({
         >
             {children}
             {createPortal(
-                <AnimatePresence>
-                    {isVisible && (
-                        <motion.div
-                            ref={tooltipRef}
-                            id={tooltipId}
-                            role="tooltip"
-                            initial={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.94 }}
-                            animate={reduceMotion ? { opacity: 1 } : { opacity: 1, scale: 1 }}
-                            exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.96 }}
-                            transition={{ duration: 0.12, ease: [0.22, 1, 0.36, 1] }}
+                mounted && (
+                    <div
+                        ref={tooltipRef}
+                        id={tooltipId}
+                        role="tooltip"
+                        className={cn(
+                            // A floating surface (spec §4): --bg-floating + the plate
+                            // shadow. No backdrop blur — over Linux underlay holes a
+                            // translucent tooltip composites into the live stream and
+                            // can stick there as a ghost label.
+                            "pc-floating pointer-events-none fixed z-[9999] whitespace-nowrap px-2.5 py-1.5 text-meta font-medium text-text-primary",
+                            exiting ? "pc-exit" : "pc-enter",
+                            className
+                        )}
+                        style={{
+                            top: coords?.top ?? -9999,
+                            left: coords?.left ?? -9999,
+                        }}
+                        {...scenery}
+                    >
+                        {content}
+                        {/* Arrow */}
+                        <div
                             className={cn(
-                                // A floating surface (spec §4): --bg-floating + the plate
-                                // shadow. No backdrop blur — over Linux underlay holes a
-                                // translucent tooltip composites into the live stream and
-                                // can stick there as a ghost label.
-                                "pc-floating pointer-events-none fixed z-[9999] whitespace-nowrap px-2.5 py-1.5 text-meta font-medium text-text-primary",
-                                className
+                                "absolute h-2 w-2 rotate-45 bg-bg-floating",
+                                arrowPositions[side]
                             )}
-                            style={{
-                                top: coords?.top ?? -9999,
-                                left: coords?.left ?? -9999,
-                            }}
-                        >
-                            {content}
-                            {/* Arrow */}
-                            <div
-                                className={cn(
-                                    "absolute h-2 w-2 rotate-45 bg-bg-floating",
-                                    arrowPositions[side]
-                                )}
-                            />
-                        </motion.div>
-                    )}
-                </AnimatePresence>,
+                        />
+                    </div>
+                ),
                 document.body
             )}
         </div>

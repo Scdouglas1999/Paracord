@@ -1,6 +1,7 @@
 import { BellOff, ChevronDown, ChevronRight } from 'lucide-react';
 import type { MouseEvent } from 'react';
 
+import { RollingNumber } from '../../../lib/motion';
 import { cn } from '../../../lib/utils';
 import { NavRow, SectionLabel } from '../../ui';
 import { BuildingPlate } from '../../light';
@@ -64,12 +65,23 @@ export function BuildingSection({
   const showExpander = hiddenRoomCount > 0 || expanded;
 
   return (
-    <div role="group" aria-label={building.name} className="flex flex-col gap-0.5">
+    <div
+      role="group"
+      aria-label={building.name}
+      data-flip-key={building.key}
+      className="flex flex-col gap-0.5"
+    >
       <SectionLabel
         meta={
           <span className="flex items-center gap-1.5">
             {muted && <BellOff size={12} aria-label="Muted" className="shrink-0" />}
-            {litMembersCaption(building.lightsOn)}
+            {/* "24 in" — §5.1's re-roll; the section label is read as a
+                whole, so the number does not announce itself twice. */}
+            <RollingNumber
+              value={building.lightsOn}
+              format={litMembersCaption}
+              announce={false}
+            />
           </span>
         }
         className={cn(active && 'text-text-primary')}
@@ -120,11 +132,17 @@ export function BuildingSection({
           onClick={() => onToggleRooms(building)}
           className="text-text-faint"
         >
-          {expanded
-            ? 'Fewer rooms'
-            : hiddenRoomCount === 1
-              ? '1 more room'
-              : `${hiddenRoomCount} more rooms`}
+          {expanded ? (
+            'Fewer rooms'
+          ) : (
+            /* The number of rooms folded away changes as rooms light and go
+               dark, so it re-rolls with the rest of them (§5.1). */
+            <RollingNumber
+              value={hiddenRoomCount}
+              format={(count) => (count === 1 ? '1 more room' : `${count} more rooms`)}
+              announce={false}
+            />
+          )}
         </NavRow>
       )}
     </div>

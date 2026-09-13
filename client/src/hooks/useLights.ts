@@ -364,6 +364,13 @@ export interface OnAir {
   micOn: boolean;
   deafened: boolean;
   sharing: boolean;
+  /**
+   * Somebody in the room has the floor right now — you or anybody else.
+   * §5.1/§6.7: the pill's dot breathes only while this is true. A dot that
+   * breathes because a call is connected is decoration, and decoration does
+   * not move.
+   */
+  speaking: boolean;
 }
 
 /**
@@ -378,6 +385,7 @@ export function useOnAir(): OnAir | null {
   const selfMute = useVoiceStore((state) => state.selfMute);
   const selfDeaf = useVoiceStore((state) => state.selfDeaf);
   const selfStream = useVoiceStore((state) => state.selfStream);
+  const speakingUsers = useVoiceStore((state) => state.speakingUsers);
   const building = useBuildingLight(guildId);
   const channelName = useChannelStore((state) =>
     scope && channelId
@@ -396,8 +404,9 @@ export function useOnAir(): OnAir | null {
       micOn: !selfMute,
       deafened: selfDeaf,
       sharing: selfStream,
+      speaking: speakingUsers.size > 0,
     };
-  }, [connected, channelId, building, channelName, selfMute, selfDeaf, selfStream]);
+  }, [connected, channelId, building, channelName, selfMute, selfDeaf, selfStream, speakingUsers]);
 }
 
 /** Test seam: the account key a hook is scoped to. */

@@ -196,6 +196,30 @@
   box-shadow: var(--glow-window-amber-lg);
 }
 
+/* Somebody is writing in the room: the amber window breathes at half
+   amplitude — the speaking ring's breath, softened onto the window that
+   carries it (§5.1). The pulse is the same --duration-breathe curve; typing
+   is a form of presence, so the window is lit while it runs. */
+.pc-window.is-writing {
+  background: var(--light-amber);
+  animation: pc-window-breathe var(--duration-breathe) var(--ease-in-out) infinite;
+}
+
+@keyframes pc-window-breathe {
+  0%,
+  100% {
+    box-shadow: var(--glow-window-amber);
+  }
+
+  50% {
+    box-shadow: var(--glow-window-amber-breathe);
+  }
+}
+
+:root[data-motion='reduced'] .pc-window.is-writing {
+  animation: none;
+}
+
 /* The one permitted radial (§1.2): a lamp inside a lit building/room card, one
    per lit card, anchored to the card's top-left. Apply to a positioned child. */
 .pc-lamp {
@@ -225,6 +249,325 @@
   transition-property: background-color, color, box-shadow, border-color, opacity;
   transition-duration: var(--duration-normal);
   transition-timing-function: var(--ease-out);
+}
+
+/* -----------------------------------------------------------------------------
+   §5.1 The shared choreography — the ONLY enter/exit set in the product.
+
+   Every overlay surface (dialog, popover, menu, tooltip, toast) enters on
+   opacity + a 6px rise on the spring-settle over --duration-slow, and leaves on
+   opacity + a 4px fall on --ease-in over --duration-fast. Backdrops fade.
+   Drawers and sheets travel on --duration-move. The old ad-hoc keyframes
+   (modal-enter, overlay-enter, popup-enter, scale-in, toast-slide-in) are gone;
+   this is what replaced them.
+
+   Each keyframe declares only its OFF state, so the same pair works forwards
+   and backwards and an element that stays mounted animates exactly once.
+   -------------------------------------------------------------------------- */
+@keyframes pc-fade {
+  from { opacity: 0; }
+}
+
+@keyframes pc-enter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 6px, 0);
+  }
+}
+
+@keyframes pc-exit {
+  to {
+    opacity: 0;
+    transform: translate3d(0, 4px, 0);
+  }
+}
+
+@keyframes pc-drawer-in-left {
+  from {
+    opacity: 0;
+    transform: translate3d(-24px, 0, 0);
+  }
+}
+
+@keyframes pc-drawer-in-right {
+  from {
+    opacity: 0;
+    transform: translate3d(24px, 0, 0);
+  }
+}
+
+@keyframes pc-drawer-out-left {
+  to {
+    opacity: 0;
+    transform: translate3d(-12px, 0, 0);
+  }
+}
+
+@keyframes pc-drawer-out-right {
+  to {
+    opacity: 0;
+    transform: translate3d(12px, 0, 0);
+  }
+}
+
+@keyframes pc-sheet-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 24px, 0);
+  }
+}
+
+@keyframes pc-sheet-out {
+  to {
+    opacity: 0;
+    transform: translate3d(0, 16px, 0);
+  }
+}
+
+@keyframes pc-banner-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, -12px, 0);
+  }
+}
+
+@keyframes pc-banner-out {
+  to {
+    opacity: 0;
+    transform: translate3d(0, -8px, 0);
+  }
+}
+
+/* A hover toolbar or a small control arriving under the pointer: 4px, fast. */
+@keyframes pc-hover-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 4px, 0);
+  }
+}
+
+/* The boot/fallback mark breathing — a real loading moment, not a spinner.
+   The reduced-motion rule in utilities.css stills it to a static mark. */
+@keyframes pc-mark-breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.035);
+  }
+}
+
+.pc-fade-in {
+  animation: pc-fade var(--duration-normal) var(--ease-out) backwards;
+}
+
+.pc-fade-out {
+  animation: pc-fade var(--duration-fast) var(--ease-in) reverse forwards;
+}
+
+.pc-enter {
+  animation: pc-enter var(--duration-slow) var(--ease-spring-settle) backwards;
+}
+
+/* Everything that is leaving is scenery for the beat it takes: the pointer
+   goes through it, and `usePresence`'s `scenery` props take it out of the
+   accessibility tree and the tab order at the same moment. A dismissed
+   surface must not still be clickable on its way out. */
+.pc-exit,
+.pc-fade-out,
+.pc-sheet-out,
+.pc-banner-out,
+.pc-drawer-out-left,
+.pc-drawer-out-right {
+  pointer-events: none;
+}
+
+.pc-exit {
+  animation: pc-exit var(--duration-fast) var(--ease-in) forwards;
+}
+
+.pc-drawer-in-left {
+  animation: pc-drawer-in-left var(--duration-move) var(--ease-spring-settle) backwards;
+}
+
+.pc-drawer-in-right {
+  animation: pc-drawer-in-right var(--duration-move) var(--ease-spring-settle) backwards;
+}
+
+.pc-drawer-out-left {
+  animation: pc-drawer-out-left var(--duration-fast) var(--ease-in) forwards;
+}
+
+.pc-drawer-out-right {
+  animation: pc-drawer-out-right var(--duration-fast) var(--ease-in) forwards;
+}
+
+.pc-sheet-in {
+  animation: pc-sheet-in var(--duration-move) var(--ease-spring-settle) backwards;
+}
+
+.pc-sheet-out {
+  animation: pc-sheet-out var(--duration-fast) var(--ease-in) forwards;
+}
+
+/* A status banner pinned to the top edge drops in rather than rising — the
+   directional variant of the same recipe (spring-settle in, ease-in out). */
+.pc-banner-in {
+  animation: pc-banner-in var(--duration-normal) var(--ease-spring-settle) backwards;
+}
+
+.pc-banner-out {
+  animation: pc-banner-out var(--duration-fast) var(--ease-in) forwards;
+}
+
+.pc-hover-in {
+  animation: pc-hover-in var(--duration-fast) var(--ease-out) backwards;
+}
+
+.pc-mark-breathe {
+  animation: pc-mark-breathe var(--duration-breathe) var(--ease-in-out) infinite;
+}
+
+/* An indeterminate progress sweep — a third of a track crossing, looping. */
+@keyframes pc-sweep {
+  from {
+    transform: translate3d(-120%, 0, 0);
+  }
+  to {
+    transform: translate3d(360%, 0, 0);
+  }
+}
+
+.pc-sweep {
+  animation: pc-sweep var(--duration-breathe) linear infinite;
+}
+
+/* -----------------------------------------------------------------------------
+   §5.1 Controls are tactile (WP9c item 1).
+
+   `.pc-pressable` is the whole gesture: a 1px lift and a faint --bg-mod-subtle
+   wash on hover, 0.96 scale for the 80ms the finger is down, and a spring back
+   on release. Disabled controls get none of it. `.pc-pressable-accent` adds the
+   one-beat brighter flash primary buttons take on press — painted as an
+   opacity-only veil so the press stays inside the transform/opacity budget.
+   -------------------------------------------------------------------------- */
+.pc-pressable {
+  /* The wash is a gradient rather than a background-colour so it layers OVER
+     whatever fill the variant already carries, and so it can be interpolated:
+     `none` -> gradient is a discrete step in CSS and would snap the bloom on
+     instead of easing it over the 120ms §5.1 asks for. Transparent-to-
+     transparent is the same gradient with nothing in it, so the pair animates. */
+  background-image: linear-gradient(transparent, transparent);
+  transition:
+    transform var(--duration-normal) var(--ease-spring-settle),
+    background-image var(--duration-fast) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+@media (hover: hover) {
+  .pc-pressable:not(:disabled):not([aria-disabled='true']):hover {
+    transform: translateY(-1px);
+    background-image: linear-gradient(var(--bg-mod-subtle), var(--bg-mod-subtle));
+  }
+}
+
+.pc-pressable:not(:disabled):not([aria-disabled='true']):active {
+  transform: scale(0.96);
+  transition:
+    transform 80ms var(--ease-out),
+    background-image var(--duration-fast) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.pc-pressable-accent {
+  position: relative;
+}
+
+.pc-pressable-accent::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--light-white);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-fast) var(--ease-out);
+}
+
+.pc-pressable-accent:not(:disabled):not([aria-disabled='true']):active::after {
+  opacity: 0.28;
+  transition-duration: 80ms;
+}
+
+/* -----------------------------------------------------------------------------
+   §5 Loading and presence indicators.
+   -------------------------------------------------------------------------- */
+
+/* A matte placeholder pulse — the breath timing, like every other slow pulse
+   in the product, and it stops dead under reduced motion rather than freezing
+   wherever the global 0.01ms override happens to land. */
+.pc-skeleton {
+  animation: skeleton-pulse var(--duration-breathe) var(--ease-in-out) infinite;
+}
+
+:root[data-motion='reduced'] .pc-skeleton {
+  animation: none;
+}
+
+/* Three dots breathing while somebody types — the pc-breathe timing
+   (--duration-breathe, --ease-in-out), 200ms apart. */
+@keyframes pc-dot-breathe {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+
+  50% {
+    opacity: 1;
+    transform: translateY(-1px);
+  }
+}
+
+.pc-typing-dots {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  margin-left: 3px;
+}
+
+.pc-typing-dots > span {
+  width: 3px;
+  height: 3px;
+  border-radius: var(--radius-full);
+  background: var(--text-faint);
+  animation: pc-dot-breathe var(--duration-breathe) var(--ease-in-out) infinite;
+}
+
+.pc-typing-dots > span:nth-child(2) {
+  animation-delay: 200ms;
+}
+
+.pc-typing-dots > span:nth-child(3) {
+  animation-delay: 400ms;
+}
+
+:root[data-motion='reduced'] .pc-typing-dots > span {
+  animation: none;
+  opacity: 0.6;
+}
+
+/* The on-air pill's live dot breathes only while somebody is actually
+   speaking — never as decoration (§5.1, §6.7). */
+.pc-live-dot.is-speaking {
+  animation: pc-breathe var(--duration-breathe) var(--ease-in-out) infinite;
 }
 
 /* Reduced motion is the `data-motion` attribute, never a media query — see the
@@ -340,9 +683,23 @@
    tiles and window cells.
    -------------------------------------------------------------------------- */
 
+/* §5.3/WP9c: the ring fades in over --duration-fast rather than snapping on.
+   It is an animation, not a transition, so it never fights an element's own
+   transition list: it plays the moment :focus-visible starts matching and is
+   gone the moment it stops. 120ms still reads as instant to a keyboard user. */
+@keyframes pc-ring-in {
+  from {
+    /* Whatever shadow the element already had, and no ring. CSS pads the
+       shorter shadow list with transparent layers, so this one `from` works
+       for every rule below whatever `--focus-ring` resolves to. */
+    box-shadow: var(--pc-base-shadow, 0 0 0 0 transparent);
+  }
+}
+
 .pc-focusable:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
+  animation: pc-ring-in var(--duration-fast) var(--ease-out);
 }
 
 /* Composed focus: a surface that already carries a shadow keeps it under the
@@ -350,6 +707,7 @@
 .pc-focusable-composed:focus-visible {
   outline: none;
   box-shadow: var(--pc-base-shadow, none), var(--focus-ring);
+  animation: pc-ring-in var(--duration-fast) var(--ease-out);
 }
 
 /* A checkbox. The native control carries the platform's own semantics (and its
@@ -366,6 +724,7 @@
 .pc-checkbox:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
+  animation: pc-ring-in var(--duration-fast) var(--ease-out);
 }
 
 .pc-checkbox:disabled {

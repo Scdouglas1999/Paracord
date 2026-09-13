@@ -1,6 +1,9 @@
 import * as React from 'react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+// §5.1/§5.3: the shared overlay recipe (pc-enter / pc-exit); the presence hook
+// keeps the surface mounted for its --duration-fast leave.
+import { usePresence } from '../../lib/motion';
 import { cn } from '../../lib/utils';
 
 export type PopoverSide = 'top' | 'right' | 'bottom' | 'left';
@@ -83,6 +86,9 @@ export function Popover({
 }: PopoverProps) {
   const surfaceRef = useRef<HTMLDivElement>(null);
   const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
+  // Stay mounted for the leave; the last coords carry the exit out where the
+  // surface was.
+  const { mounted, exiting, scenery } = usePresence(open);
 
   const reposition = useCallback(() => {
     const anchorEl = anchor.current;
@@ -92,10 +98,7 @@ export function Popover({
   }, [anchor, side, align]);
 
   useLayoutEffect(() => {
-    if (!open) {
-      setCoords(null);
-      return;
-    }
+    if (!open) return;
     reposition();
   }, [open, reposition, children]);
 
@@ -127,7 +130,7 @@ export function Popover({
     };
   }, [open, onClose, reposition, anchor]);
 
-  if (!open || typeof document === 'undefined') return null;
+  if (!mounted || typeof document === 'undefined') return null;
 
   return createPortal(
     <div
@@ -137,6 +140,7 @@ export function Popover({
       data-native-overlay-occlude
       className={cn(
         'pc-floating pc-transition fixed z-[1100] min-w-[10rem] max-w-[calc(100vw-1rem)] p-1',
+        exiting ? 'pc-exit' : 'pc-enter',
         className,
       )}
       style={{
@@ -144,6 +148,7 @@ export function Popover({
         left: coords?.left ?? 0,
         visibility: coords ? 'visible' : 'hidden',
       }}
+      {...scenery}
     >
       {children}
     </div>,

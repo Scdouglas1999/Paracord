@@ -36,7 +36,7 @@ export const NavRow = React.forwardRef<HTMLElement, NavRowProps>(function NavRow
       type={href ? undefined : 'button'}
       aria-current={active ? 'page' : undefined}
       className={cn(
-        'pc-focusable flex w-full select-none items-center gap-2.5 text-left',
+        'pc-focusable pc-pressable flex w-full select-none items-center gap-2.5 text-left',
         'h-[var(--h-nav-row)] rounded-[var(--radius-control)] px-2.5',
         'text-label text-text-secondary',
         'transition-[background-color,color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 
 import { cn } from '../utils';
 import { prefersReducedMotion } from './reducedMotion';
@@ -37,7 +37,11 @@ export function RollingNumber({ value, format, className, announce = true }: Rol
   const incomingRef = useRef<HTMLSpanElement>(null);
   const outgoingRef = useRef<HTMLSpanElement>(null);
 
-  useEffect(() => {
+  // Layout effects, not effects: the ghost has to exist on the SAME frame that
+  // first paints the new value. Recording the roll showed what an ordinary
+  // effect costs — one frame of the new number alone, before the old one
+  // appears over it, so the count read "5, 4, 5" instead of "4, 5".
+  useLayoutEffect(() => {
     const from = previous.current;
     previous.current = value;
     if (from === value) return;
@@ -45,7 +49,7 @@ export function RollingNumber({ value, format, className, announce = true }: Rol
     setOutgoing(from);
   }, [value]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (outgoing === null) return;
     const incoming = incomingRef.current;
     const leaving = outgoingRef.current;

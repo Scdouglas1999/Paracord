@@ -7,7 +7,7 @@ import { resolveResourceUrl } from '../../lib/config/apiBaseUrl';
 import { getDownloadTicket } from '../../lib/downloadTicket';
 import { safeClientResourceUrl } from '../../lib/security';
 import { EmptyState } from '../ui/Feedback';
-import { Skeleton } from '../ui/Skeleton';
+import { Skeleton, SkeletonSwap } from '../ui/Skeleton';
 
 interface StickerPickerProps {
   guildId?: string;
@@ -104,7 +104,7 @@ export function StickerPicker({ guildId, onSelect, onClose }: StickerPickerProps
   return (
     <div
       ref={pickerRef}
-      className="popup-enter flex w-[min(21.25rem,calc(100vw-1rem))] max-h-[min(26.25rem,calc(100dvh-1rem))] flex-col overflow-hidden rounded-well border border-border-subtle bg-bg-floating shadow-[var(--shadow-plate)]"
+      className="pc-enter flex w-[min(21.25rem,calc(100vw-1rem))] max-h-[min(26.25rem,calc(100dvh-1rem))] flex-col overflow-hidden rounded-well border border-border-subtle bg-bg-floating shadow-[var(--shadow-plate)]"
     >
       {/* Header */}
       <div className="shrink-0 border-b border-border-subtle px-3 pb-2.5 pt-3">
@@ -122,8 +122,8 @@ export function StickerPicker({ guildId, onSelect, onClose }: StickerPickerProps
         </div>
       </div>
 
-      {/* Sticker grid */}
-      <div className="scrollbar-thin flex-1 overflow-y-auto p-2">
+      {/* Sticker grid — the placeholder crossfades to the stickers (§5.3). */}
+      <SkeletonSwap busy={loading && !error} className="scrollbar-thin flex-1 overflow-y-auto p-2">
         {error ? (
           <EmptyState
             role="alert"
@@ -195,7 +195,7 @@ export function StickerPicker({ guildId, onSelect, onClose }: StickerPickerProps
             })}
           </div>
         )}
-      </div>
+      </SkeletonSwap>
 
       {/* Footer: sticker count */}
       {stickers.length > 0 && (

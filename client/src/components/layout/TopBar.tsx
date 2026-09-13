@@ -1,7 +1,7 @@
 import { ConversationHeaderActions, attentionDescription, type HeaderAction, type ActiveHeaderSurface } from './ConversationHeaderActions';
 import type { ContextMenuItem } from '../ui/ContextMenu';
 import { useConversationActions } from '../../hooks/useConversationActions';
-import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
+import { useCurrentAccountScope, useCurrentUser } from '../../hooks/useCurrentUser';
 import { useCurrentReadStates } from '../../hooks/useReadStates';
 import { useCurrentChannelStore } from '../../hooks/useChannels';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -38,6 +38,7 @@ import { usePermissions } from '../../hooks/usePermissions';
 import { useUIStore } from '../../stores/uiStore';
 import type { ContextPanelMode } from '../../stores/uiStore';
 import { useReadStateStore } from '../../stores/readStateStore';
+import { useTypingStore } from '../../stores/typingStore';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { toast } from '../../stores/toastStore';
 import type { ReadState } from '../../types';
@@ -438,6 +439,16 @@ function OwnedTopBar({
   const peerReading = isReading(dm.room, dm.peer?.userId);
   const roomIsLit = isDM ? Boolean(dm.room?.lit) : Boolean(roomLight?.lit);
   const roomIsVoice = Boolean(isVoice);
+  /* Somebody writing in this text room is the amber window breathing at half
+     amplitude — the same breath the speaking ring takes, softened. A voice
+     room's window is white because people are in it; writing does not recolour
+     it. Refreshed TYPING_STARTs change nothing the selector returns, so the
+     pulse runs uninterrupted until typing actually stops. */
+  const meId = useCurrentUser()?.id;
+  const roomWriting = useTypingStore((state) => {
+    if (roomIsVoice || !conversationId) return false;
+    return Boolean(state.typingByChannel[conversationId]?.some((id) => id !== meId));
+  });
   /* §5.1: "reading light flickers once when a message lands". This window IS
      the room's reading light, and the message that lands is one the person at
      this keyboard just sent — so the composer says so on the motion bus and the
@@ -599,7 +610,11 @@ function OwnedTopBar({
             ) : (
               <span
                 ref={roomWindowRef}
-                className={cn('pc-window h-2.5 w-2.5 shrink-0', roomIsLit && 'is-reading')}
+                className={cn(
+                  'pc-window h-2.5 w-2.5 shrink-0',
+                  roomIsLit && 'is-reading',
+                  roomWriting && 'is-writing',
+                )}
                 aria-hidden
               />
             )}
@@ -622,6 +637,7 @@ function OwnedTopBar({
               className={cn(
                 'pc-window h-2.5 w-2.5 shrink-0',
                 roomIsLit && (roomIsVoice ? 'is-talking' : 'is-reading'),
+                roomWriting && 'is-writing',
               )}
               aria-hidden
             />

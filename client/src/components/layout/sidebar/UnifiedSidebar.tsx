@@ -311,13 +311,12 @@ export function UnifiedSidebar() {
         </aside>
       )}
 
-      {contextMenu.isOpen && (
-        <ContextMenu
-          items={contextMenu.items}
-          position={contextMenu.position}
-          onClose={closeContextMenu}
-        />
-      )}
+      <ContextMenu
+        open={contextMenu.isOpen}
+        items={contextMenu.items}
+        position={contextMenu.position}
+        onClose={closeContextMenu}
+      />
       {showCreateGuild && <CreateGuildModal onClose={() => setShowCreateGuild(false)} />}
     </>
   );

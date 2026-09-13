@@ -488,10 +488,10 @@ export function FriendsPage() {
           )}
         </div>
       </div>
-      {profile && createPortal(
+      {createPortal(
         <UserProfilePopup
-          user={profile.user}
-          position={profile.position}
+          user={profile?.user ?? null}
+          position={profile?.position ?? null}
           onClose={() => setProfile(null)}
         />,
         document.body,

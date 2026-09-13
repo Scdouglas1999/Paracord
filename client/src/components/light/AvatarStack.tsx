@@ -1,5 +1,6 @@
 import * as React from 'react';
 
+import { RollingNumber } from '../../lib/motion';
 import { cn } from '../../lib/utils';
 import { nameList, type PersonLight } from '../../lib/attention/light';
 import { STRIP_MARK } from '../../lib/motion';
@@ -72,7 +73,10 @@ export const AvatarStack = React.forwardRef<HTMLSpanElement, AvatarStackProps>(
             }}
             aria-hidden
           >
-            +{rest}
+            {/* The tail counts the faces that did not fit, so it changes every
+                time somebody arrives or leaves — §5.1, it re-rolls. The stack's
+                own sentence below is what a screen reader hears. */}
+            <RollingNumber value={rest} format={(count) => `+${count}`} announce={false} />
           </span>
         )}
         {sentence && <span className="sr-only">{sentence}</span>}

@@ -33,7 +33,7 @@ import { resolveResourceUrl } from '../../lib/config/apiBaseUrl';
 import { getDownloadTicket } from '../../lib/downloadTicket';
 import { writeClipboardText } from '../../lib/clipboard';
 import { SkeletonMessage } from '../ui/Skeleton';
-import { fadeIn, ms, onMotion, settleIn, walkIntoRoom } from '../../lib/motion';
+import { fadeIn, flicker, motionToken, ms, onMotion, prefersReducedMotion, RollingNumber, settleIn, useFlipList, walkIntoRoom } from '../../lib/motion';
 import { parseMarkdown } from '../../lib/markdown';
 import { getHighestRoleColor } from '../../lib/colors';
 import { formatFileSize, formatTimestamp, relativeTime } from '../../lib/formatters';
@@ -71,6 +71,89 @@ import { cn } from '../../lib/utils';
 import { fetchChannelOverwrites, fetchGuildRoles } from '../../lib/permissionDataCache';
 
 const EMPTY_TYPING: string[] = [];
+
+interface ReactionTally {
+  emoji: string;
+  count: number;
+  me: boolean;
+}
+
+/**
+ * The reactions under a message (§5.1: "a reaction pops").
+ *
+ * A reaction is something somebody put there, so it lands rather than slides:
+ * 0.6 to 1 on the spring-settle when it's yours — and the emoji itself
+ * over-rotates ±8° on the way — 0.8 to 1 when it arrives from somebody else.
+ * Removing fades and shrinks the chip back out the way it came. It is its own
+ * component because that is the only way the engine's list hook can watch the
+ * row — and the hook is what keeps the pop honest: nothing plays on the first
+ * commit, so a message scrolling into view with six reactions on it is still,
+ * and only a reaction that ARRIVES while you are looking pops.
+ */
+function ReactionRow({
+  reactions,
+  guildId,
+  onToggle,
+}: {
+  reactions: readonly ReactionTally[];
+  guildId: string | null | undefined;
+  onToggle: (reaction: ReactionTally) => void;
+}) {
+  const rowRef = useFlipList<HTMLDivElement>({ enter: 'pop' });
+  return (
+    <div ref={rowRef} className="mt-1 flex flex-wrap gap-1">
+      {reactions.map((r, reactionIndex) => {
+        const parsedCustomEmoji = guildId ? parseCustomEmojiToken(r.emoji) : null;
+        return (
+          <Chip
+            as="button"
+            key={`${r.emoji}-${reactionIndex}`}
+            data-flip-key={r.emoji}
+            data-flip-own={r.me || undefined}
+            onClick={() => onToggle(r)}
+            className={cn(
+              'gap-1.5 px-2.5',
+              r.me && 'bg-accent-tint text-accent-primary shadow-none hover:bg-accent-tint-strong hover:text-accent-primary',
+            )}
+          >
+            <span data-flip-glyph>
+              {parsedCustomEmoji && guildId ? (
+                <img
+                  src={buildGuildEmojiImageUrl(guildId, parsedCustomEmoji.id)}
+                  alt={parsedCustomEmoji.name}
+                  title={`:${parsedCustomEmoji.name}:`}
+                  style={{ width: 18, height: 18, objectFit: 'contain' }}
+                  loading="lazy"
+                />
+              ) : (
+                r.emoji
+              )}
+            </span>
+            {/* The tally re-rolls like every other count (§5.1). */}
+            <span className="font-medium">
+              <RollingNumber value={r.count} announce={false} />
+            </span>
+          </Chip>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Three dots breathing while somebody types (§5.1 "speaking is a breath", and
+ * the same curve): `pc-breathe` timing, 200ms apart, still under reduced
+ * motion. They are `aria-hidden` — the sentence beside them already says it.
+ */
+function TypingDots() {
+  return (
+    <span className="pc-typing-dots" aria-hidden>
+      <span />
+      <span />
+      <span />
+    </span>
+  );
+}
 const EMPTY_CHANNELS: Channel[] = [];
 const EMPTY_MEMBERS: Member[] = [];
 const EMPTY_SAVED_IDS = new Set<string>();
@@ -1366,6 +1449,113 @@ function OwnedMessageList({
     return () => mediaQuery.removeEventListener('change', updatePointerMode);
   }, []);
 
+  /* §5.1 phone pull: dragging the timeline down at its very top reveals the
+     room's lamp — a small light that brightens with the pull distance and
+     flickers once when the refresh fires. A light, never a spinner. The
+     gesture only watches: every listener is passive, the timeline's own scroll
+     is untouched, and the lamp is driven by direct style writes (no React
+     state per move). It exists only where a pull is physically possible. */
+  const pullLampRef = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    const lamp = pullLampRef.current;
+    if (!scroller || !lamp || !isCoarsePointer) return;
+
+    const DEAD_ZONE = 8; // px of slack a finger takes before the lamp answers
+    const FIRE_AT = 72; // px of pull that asks the room for what it missed
+    const RIDE = 30; // px the lamp rides down at a full pull
+    let startY = 0;
+    let pulling = false;
+    let pull = 0;
+    let settle: Animation | null = null;
+
+    const rest = () => {
+      lamp.style.opacity = '0';
+      lamp.style.transform = '';
+    };
+
+    const hide = () => {
+      pull = 0;
+      if (typeof lamp.animate !== 'function' || prefersReducedMotion()) {
+        rest();
+        return;
+      }
+      // The lamp goes out the way lights do — a fast dim, not a snap.
+      const leaving = lamp.animate(
+        [{ opacity: lamp.style.opacity || '0' }, { opacity: '0' }],
+        { duration: ms('--duration-fast'), easing: motionToken('--ease-in'), fill: 'forwards' },
+      );
+      leaving.id = 'data-motion-recipe:exit';
+      settle = leaving;
+      leaving.finished.then(
+        () => {
+          settle = null;
+          if (!pulling) rest();
+        },
+        () => {
+          settle = null;
+        },
+      );
+    };
+
+    const paint = (amount: number) => {
+      // A finger back on the lamp cancels the dim it was playing out.
+      settle?.cancel();
+      settle = null;
+      const t = Math.min(1, amount / FIRE_AT);
+      lamp.style.opacity = String(0.15 + t * 0.85);
+      lamp.style.transform = `translate3d(-50%, ${-16 + t * RIDE}px, 0)`;
+    };
+
+    const onStart = (event: TouchEvent) => {
+      startY = event.touches[0]?.clientY ?? 0;
+      pulling = scroller.scrollTop <= 0;
+      pull = 0;
+    };
+    const onMove = (event: TouchEvent) => {
+      if (!pulling) return;
+      if (scroller.scrollTop > 0) {
+        // The gesture became the timeline's own scroll — it was never ours.
+        pulling = false;
+        if (pull > 0) hide();
+        return;
+      }
+      const dy = (event.touches[0]?.clientY ?? 0) - startY;
+      pull = Math.max(0, dy - DEAD_ZONE);
+      paint(pull);
+    };
+    const onEnd = () => {
+      if (!pulling) return;
+      pulling = false;
+      if (pull >= FIRE_AT) {
+        // The refresh fires: the lamp flickers once to say so (§5.1), then
+        // goes back out.
+        const pulse = flicker(lamp);
+        void fetchMessages(channelId);
+        if (pulse) {
+          pulse.finished.then(hide, hide);
+        } else {
+          hide();
+        }
+        return;
+      }
+      hide();
+    };
+
+    scroller.addEventListener('touchstart', onStart, { passive: true });
+    scroller.addEventListener('touchmove', onMove, { passive: true });
+    scroller.addEventListener('touchend', onEnd, { passive: true });
+    scroller.addEventListener('touchcancel', onEnd, { passive: true });
+    return () => {
+      scroller.removeEventListener('touchstart', onStart);
+      scroller.removeEventListener('touchmove', onMove);
+      scroller.removeEventListener('touchend', onEnd);
+      scroller.removeEventListener('touchcancel', onEnd);
+      settle?.cancel();
+      rest();
+    };
+  }, [isCoarsePointer, channelId, fetchMessages]);
+
   const handleScroll = useCallback(() => {
     if (!scrollRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
@@ -1912,10 +2102,11 @@ function OwnedMessageList({
       const names = activeTyping.map(resolveUsername);
       return (
         <div className={cn('py-2 text-meta text-text-faint sm:pl-[82px]', TIMELINE_GUTTER)}>
-          {names.length === 1 && <><strong className="font-semibold text-text-secondary">{names[0]}</strong> is typing…</>}
-          {names.length === 2 && <><strong className="font-semibold text-text-secondary">{names[0]}</strong> and <strong className="font-semibold text-text-secondary">{names[1]}</strong> are typing…</>}
-          {names.length === 3 && <><strong className="font-semibold text-text-secondary">{names[0]}</strong>, <strong className="font-semibold text-text-secondary">{names[1]}</strong>, and <strong className="font-semibold text-text-secondary">{names[2]}</strong> are typing…</>}
-          {names.length > 3 && <>{names.length} people are typing…</>}
+          {names.length === 1 && <><strong className="font-semibold text-text-secondary">{names[0]}</strong> is typing</>}
+          {names.length === 2 && <><strong className="font-semibold text-text-secondary">{names[0]}</strong> and <strong className="font-semibold text-text-secondary">{names[1]}</strong> are typing</>}
+          {names.length === 3 && <><strong className="font-semibold text-text-secondary">{names[0]}</strong>, <strong className="font-semibold text-text-secondary">{names[1]}</strong>, and <strong className="font-semibold text-text-secondary">{names[2]}</strong> are typing</>}
+          {names.length > 3 && <>{names.length} people are typing</>}
+          <TypingDots />
         </div>
       );
     }
@@ -2171,8 +2362,8 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                 <EphemeralMessage>
                   {!msg.poll && decryptingIds.has(msg.id) ? (
                     <div className="flex flex-col gap-1.5 py-0.5" aria-label="Decrypting message">
-                      <div className="h-3.5 w-3/4 animate-pulse rounded-[var(--radius-window)] bg-bg-mod-subtle" />
-                      <div className="h-3.5 w-1/2 animate-pulse rounded-[var(--radius-window)] bg-bg-mod-subtle" />
+                      <div className="h-3.5 w-3/4 pc-skeleton rounded-[var(--radius-window)] bg-bg-mod-subtle" />
+                      <div className="h-3.5 w-1/2 pc-skeleton rounded-[var(--radius-window)] bg-bg-mod-subtle" />
                     </div>
                   ) : (
                     <div className={cn('break-words text-body text-text-body', ribbon && 'text-ribbon')}>
@@ -2189,8 +2380,8 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                 </EphemeralMessage>
               ) : !msg.poll && decryptingIds.has(msg.id) ? (
                 <div className="flex flex-col gap-1.5 py-0.5" aria-label="Decrypting message">
-                  <div className="h-3.5 w-3/4 animate-pulse rounded-[var(--radius-window)] bg-bg-mod-subtle" />
-                  <div className="h-3.5 w-1/2 animate-pulse rounded-[var(--radius-window)] bg-bg-mod-subtle" />
+                  <div className="h-3.5 w-3/4 pc-skeleton rounded-[var(--radius-window)] bg-bg-mod-subtle" />
+                  <div className="h-3.5 w-1/2 pc-skeleton rounded-[var(--radius-window)] bg-bg-mod-subtle" />
                 </div>
               ) : !msg.poll ? (
                 <div className={cn('mt-0.5 break-words text-body text-text-body', ribbon && 'text-ribbon')}>
@@ -2278,36 +2469,11 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
           )}
           {/* Reactions */}
           {msg.reactions && Array.isArray(msg.reactions) && msg.reactions.length > 0 && (
-            <div className="mt-1 flex flex-wrap gap-1">
-              {(msg.reactions as Array<{emoji: string; count: number; me: boolean}>).map((r, reactionIndex) => {
-                const parsedCustomEmoji = activeGuildId ? parseCustomEmojiToken(r.emoji) : null;
-                return (
-                <Chip
-                  as="button"
-                  key={`${r.emoji}-${reactionIndex}`}
-                  onClick={() => void toggleReaction(msg.id, r)}
-                  className={cn(
-                    'gap-1.5 px-2.5',
-                    r.me && 'bg-accent-tint text-accent-primary shadow-none hover:bg-accent-tint-strong hover:text-accent-primary',
-                  )}
-                >
-                  <span>
-                    {parsedCustomEmoji && activeGuildId ? (
-                      <img
-                        src={buildGuildEmojiImageUrl(activeGuildId, parsedCustomEmoji.id)}
-                        alt={parsedCustomEmoji.name}
-                        title={`:${parsedCustomEmoji.name}:`}
-                        style={{ width: 18, height: 18, objectFit: 'contain' }}
-                        loading="lazy"
-                      />
-                    ) : (
-                      r.emoji
-                    )}
-                  </span>
-                  <span className="font-medium">{r.count}</span>
-                </Chip>
-              )})}
-            </div>
+            <ReactionRow
+              reactions={msg.reactions as ReactionTally[]}
+              guildId={activeGuildId}
+              onToggle={(reaction) => void toggleReaction(msg.id, reaction)}
+            />
           )}
           {msg.stickers && msg.stickers.length > 0 && (
             <div className="mt-1.5 flex flex-wrap items-center gap-2">
@@ -2549,7 +2715,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
         )}
 
         {(hoveredMessageId === msg.id || focusedMessageId === msg.id) && !isCoarsePointer && (
-          <div className="pc-floating absolute -top-3.5 right-4 flex items-center gap-0.5 overflow-hidden p-0.5 sm:right-8">
+          <div className="pc-hover-in pc-floating absolute -top-3.5 right-4 flex items-center gap-0.5 overflow-hidden p-0.5 sm:right-8">
             {canAddReactions && (
               <button className="hover-action-btn rounded-chip" title="Add reaction" aria-label="Add reaction" onClick={(e) => openReactionPicker(e, msg.id)}>
                 <Smile size={16} />
@@ -2674,6 +2840,16 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
       <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {newMessageAnnouncement}
       </div>
+      {/* The pull lamp — a window the dragged-down timeline reveals. Its
+          position and glow are driven from the touch listeners above; it is
+          scenery, never interactive. */}
+      {isCoarsePointer && (
+        <span
+          ref={pullLampRef}
+          aria-hidden
+          className="pc-window is-reading pointer-events-none absolute left-1/2 top-1.5 z-10 h-2.5 w-2.5 -translate-x-1/2 opacity-0"
+        />
+      )}
       <div
         ref={scrollRef}
         className="flex h-full flex-col overflow-y-auto"
@@ -2928,9 +3104,9 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
         />,
         document.body
       )}
-      {profileUser && createPortal(
+      {createPortal(
         <UserProfilePopup
-          user={{
+          user={profileUser ? {
             id: profileUser.id,
             username: profileUser.username,
             discriminator: profileUser.discriminator,
@@ -2940,19 +3116,18 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
             system: false,
             flags: profileUser.flags ?? 0,
             created_at: '',
-          }}
+          } : null}
           position={profilePos}
           onClose={() => setProfileUser(null)}
         />,
         document.body
       )}
-      {contextMenu.isOpen && (
-        <ContextMenu
-          items={contextMenu.items}
-          position={contextMenu.position}
-          onClose={closeContextMenu}
-        />
-      )}
+      <ContextMenu
+        open={contextMenu.isOpen}
+        items={contextMenu.items}
+        position={contextMenu.position}
+        onClose={closeContextMenu}
+      />
       <Modal
         open={deleteConfirmId !== null}
         onClose={() => setDeleteConfirmId(null)}

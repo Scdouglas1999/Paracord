@@ -56,7 +56,7 @@ export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(
         title={label}
         aria-pressed={active || undefined}
         className={cn(
-          'pc-focusable inline-flex shrink-0 select-none items-center justify-center',
+          'pc-focusable pc-pressable inline-flex shrink-0 select-none items-center justify-center',
           'transition-[background-color,color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
           'disabled:pointer-events-none disabled:opacity-60',
           SIZES[size],

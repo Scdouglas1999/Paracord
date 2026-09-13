@@ -3,7 +3,7 @@ import { Search, WifiOff, RotateCw } from 'lucide-react';
 import { tenorApi } from '../../api/tenor';
 import { safeExternalUrl } from '../../lib/security';
 import { EmptyState } from '../ui/Feedback';
-import { Skeleton } from '../ui/Skeleton';
+import { Skeleton, SkeletonSwap } from '../ui/Skeleton';
 
 /** Keystroke settle time before a Tenor search is issued. */
 const GIF_SEARCH_DEBOUNCE_MS = 300;
@@ -132,7 +132,7 @@ export function GifPicker({ onSelect, onClose }: GifPickerProps) {
   return (
     <div
       ref={pickerRef}
-      className="popup-enter flex w-[min(25rem,calc(100vw-1rem))] max-h-[min(28.75rem,calc(100dvh-1rem))] flex-col overflow-hidden rounded-well border border-border-subtle bg-bg-floating shadow-[var(--shadow-plate)]"
+      className="pc-enter flex w-[min(25rem,calc(100vw-1rem))] max-h-[min(28.75rem,calc(100dvh-1rem))] flex-col overflow-hidden rounded-well border border-border-subtle bg-bg-floating shadow-[var(--shadow-plate)]"
     >
       {/* Inset search */}
       <div className="shrink-0 px-3 pb-1.5 pt-3">
@@ -149,8 +149,11 @@ export function GifPicker({ onSelect, onClose }: GifPickerProps) {
         </div>
       </div>
 
-      {/* GIF grid */}
-      <div className="scrollbar-thin flex-1 overflow-y-auto px-2 pb-2 pt-1">
+      {/* GIF grid — the placeholder crossfades to the results (§5.3). */}
+      <SkeletonSwap
+        busy={loading && visibleGifs.length === 0 && !error}
+        className="scrollbar-thin flex-1 overflow-y-auto px-2 pb-2 pt-1"
+      >
         {error ? (
           <EmptyState
             role="alert"
@@ -208,7 +211,7 @@ export function GifPicker({ onSelect, onClose }: GifPickerProps) {
             ))}
           </div>
         )}
-      </div>
+      </SkeletonSwap>
 
       {/* Attribution */}
       <div className="shrink-0 border-t border-border-subtle px-3 py-1.5 text-right text-[10px] text-text-muted">

@@ -1,6 +1,11 @@
 import { useNavigate } from 'react-router';
 import { Radio } from 'lucide-react';
 import { useVoiceStore } from '../../../stores/voiceStore';
+// §5.1/§7.7: the dock is how a room folds down when you walk away from it, so
+// it arrives on the spring over --duration-move and leaves on --ease-in
+// instead of simply being there and then not.
+import { usePresence } from '../../../lib/motion';
+import { cn } from '../../../lib/utils';
 import { OnAirDock } from '../../voice/OnAirDock';
 
 /**
@@ -28,8 +33,11 @@ export function CallDock({ collapsed = false }: CallDockProps) {
   const guildId = useVoiceStore((s) => s.guildId);
   const channelId = useVoiceStore((s) => s.channelId);
   const navigate = useNavigate();
+  const { mounted, exiting, scenery } = usePresence(connected);
 
-  if (!connected) return null;
+  if (!mounted) return null;
+
+  const enter = exiting ? 'pc-sheet-out' : 'pc-sheet-in';
 
   if (collapsed) {
     return (
@@ -45,7 +53,11 @@ export function CallDock({ collapsed = false }: CallDockProps) {
             navigate(`/app/guilds/${guildId}/channels/${channelId}`);
           }
         }}
-        className="pc-focusable relative flex h-11 w-11 items-center justify-center rounded-[var(--radius-card)] bg-bg-raised text-light-white shadow-[var(--shadow-raised)] transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong"
+        className={cn(
+          'pc-focusable pc-pressable relative flex h-11 w-11 items-center justify-center rounded-[var(--radius-card)] bg-bg-raised text-light-white shadow-[var(--shadow-raised)] hover:bg-bg-mod-strong',
+          enter,
+        )}
+        {...scenery}
       >
         <Radio size={18} aria-hidden />
         <span
@@ -57,7 +69,7 @@ export function CallDock({ collapsed = false }: CallDockProps) {
   }
 
   return (
-    <div data-testid="call-dock">
+    <div data-testid="call-dock" className={enter} {...scenery}>
       <OnAirDock />
     </div>
   );

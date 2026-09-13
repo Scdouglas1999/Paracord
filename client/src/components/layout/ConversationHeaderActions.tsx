@@ -141,6 +141,6 @@ export function ConversationHeaderActions({ primary, items, activeSurface, unrea
             : unread > 0 ? <span aria-hidden data-attention-kind="unread" className="chat-header-unread-badge" /> : null}
         </button>
     </div>
-    {position && <ContextMenu label="Channel actions" anchorRef={trigger} position={position} items={menuItems} onClose={closeMenu} />}
+    <ContextMenu label="Channel actions" anchorRef={trigger} open={position != null} position={position ?? undefined} items={menuItems} onClose={closeMenu} />
   </>;
 }

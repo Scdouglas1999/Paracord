@@ -12,6 +12,7 @@ import { useSavedMessageStore } from '../../../stores/savedMessageStore';
 import { useServerListStore } from '../../../stores/serverListStore';
 import { channelApi } from '../../../api/channels';
 import { relativeTime } from '../../../lib/formatters';
+import { RollingNumber } from '../../../lib/motion';
 import { cn } from '../../../lib/utils';
 import { TopBarOverlay } from './TopBarOverlay';
 
@@ -192,7 +193,13 @@ export function InboxOverlay({ open, onClose, unreadItems, allChannels, error }:
             {label}
             {count > 0 && (
               <span className="min-w-4 rounded-full bg-bg-mod-strong px-1 text-center text-[10px] tabular-nums text-text-secondary">
-                {count > 99 ? '99+' : count}
+                {/* §5.1: the tab's count re-rolls as mentions land and are
+                    read. The tab announces itself; the number stays silent. */}
+                <RollingNumber
+                  value={count}
+                  format={(n) => (n > 99 ? '99+' : String(n))}
+                  announce={false}
+                />
               </span>
             )}
           </button>
@@ -279,7 +286,11 @@ export function InboxOverlay({ open, onClose, unreadItems, allChannels, error }:
                       </strong>
                       {state.mention_count > 0 ? (
                         <span className="shrink-0 rounded-full bg-danger-well px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-text-on-danger">
-                          {state.mention_count > 99 ? '99+' : state.mention_count}
+                          <RollingNumber
+                            value={state.mention_count}
+                            format={(n) => (n > 99 ? '99+' : String(n))}
+                            announce={false}
+                          />
                         </span>
                       ) : (
                         <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent-primary" aria-hidden />

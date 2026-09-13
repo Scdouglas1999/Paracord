@@ -6,22 +6,20 @@ import {
   type RefObject,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { AnimatePresence, motion } from 'framer-motion';
 import { X } from 'lucide-react';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
-// §5.3: the app has ONE reduced-motion switch and this is it. Modal used to
-// probe the media query itself because consuming tests mock framer-motion down
-// to { motion, AnimatePresence }; lib/motion is not framer-motion, so the mock
-// no longer forces a second source of truth.
-import { useReducedMotion } from '../../lib/motion';
+// §5.1/§5.3: enter/exit are the shared pc-enter / pc-exit / pc-fade classes —
+// the presence hook stays mounted for the --duration-fast leave and the ONE
+// reduced-motion switch lands the whole thing instantly.
+import { usePresence } from '../../lib/motion';
 import { cn } from '../../lib/utils';
 
 /**
  * Single base modal/dialog primitive for the app. Owns the portal, backdrop,
- * enter/exit motion (~240ms, matching --duration-slow/--ease-out), ARIA
- * wiring, focus trap and Escape handling. Complex consumers that already manage
- * their own focus trap can opt out with `manageFocus={false}` and pass their own
- * `panelRef`.
+ * enter/exit motion (the shared §5.1 overlay recipe: fade + 6px rise in on
+ * spring-settle, fade + 4px fall out on ease-in), ARIA wiring, focus trap and
+ * Escape handling. Complex consumers that already manage their own focus trap
+ * can opt out with `manageFocus={false}` and pass their own `panelRef`.
  *
  * Imported (not edited) by other lanes — keep this export surface stable.
  */
@@ -41,29 +39,6 @@ const PLACEMENT_CLASS: Record<ModalPlacement, string> = {
   center: 'items-center justify-center px-4',
   top: 'items-start justify-center px-4 pt-[12vh]',
 };
-
-// Modal enter (lantern-stage-spec §5): 240ms ease-out, scale(.96→1) + translateY(8→0) + fade.
-const PANEL_MOTION = {
-  center: {
-    initial: { opacity: 0, scale: 0.96, y: 8 },
-    animate: { opacity: 1, scale: 1, y: 0 },
-    exit: { opacity: 0, scale: 0.96, y: 8 },
-  },
-  top: {
-    initial: { opacity: 0, scale: 0.96, y: -12 },
-    animate: { opacity: 1, scale: 1, y: 0 },
-    exit: { opacity: 0, scale: 0.96, y: -12 },
-  },
-} as const;
-
-// prefers-reduced-motion (lantern-stage-spec §5/§9): drop transforms, keep the fade only.
-const PANEL_MOTION_REDUCED = {
-  initial: { opacity: 0 },
-  animate: { opacity: 1 },
-  exit: { opacity: 0 },
-} as const;
-
-const MODAL_TRANSITION = { duration: 0.24, ease: [0.22, 1, 0.36, 1] as const };
 
 
 export interface ModalProps {
@@ -131,68 +106,64 @@ export function Modal({
 }: ModalProps) {
   const internalRef = useRef<HTMLDivElement>(null);
   const ref = panelRef ?? internalRef;
-  const reduceMotion = useReducedMotion();
-  const panelMotion = reduceMotion
-    ? PANEL_MOTION_REDUCED
-    : PANEL_MOTION[placement];
+  // Stay mounted for the leave: `exiting` swaps the enter classes for the exit
+  // ones, and the hook drops the node when --duration-fast has run.
+  const { mounted, exiting, scenery } = usePresence(open);
 
   // Only trap/escape from here when the consumer hasn't taken it over.
   useFocusTrap(ref, open && manageFocus, manageFocus ? onClose : undefined);
 
+  if (!mounted) return null;
+
   return createPortal(
-    <AnimatePresence>
-      {open && (
-        // The backdrop deliberately carries NO `data-native-overlay-occlude`.
-        // Over the Linux native underlay the force-opaque rule (layout.css)
-        // repaints marked elements solid --bg-secondary; on this full-screen
-        // `inset-0` backdrop that painted the ENTIRE viewport dark whenever a
-        // stream was live, so opening any modal "blacked out" the stream and the
-        // dialog looked stuck. The backdrop stays translucent (dims the video
-        // behind); the opaque panel below carries the content and reads clearly.
-        <div
-          className={cn(
-            'fixed inset-0 flex modal-backdrop',
-            zIndexClassName,
-            PLACEMENT_CLASS[placement],
-            backdropClassName,
-          )}
-          onMouseDown={
-            closeOnBackdrop
-              ? (event) => {
-                  if (event.target === event.currentTarget) onClose();
-                }
-              : undefined
-          }
-        >
-          <motion.div
-            ref={ref}
-            role={role}
-            aria-modal="true"
-            aria-labelledby={labelledBy}
-            aria-describedby={describedBy}
-            aria-label={labelledBy ? undefined : ariaLabel}
-            tabIndex={-1}
-            initial={panelMotion.initial}
-            animate={panelMotion.animate}
-            exit={panelMotion.exit}
-            transition={MODAL_TRANSITION}
-            className={cn(
-              // A dialog is a plate that floats over the street (spec §4):
-              // --bg-floating + the plate shadow, the plate's radius, no border.
-              'pc-dialog relative max-h-[calc(100dvh-2rem)] max-w-[calc(100vw-2rem)] overflow-hidden',
-              SIZE_CLASS[size],
-              panelClassName,
-            )}
-            onKeyDown={onKeyDown}
-          >
-            <ModalContext.Provider value={{ onClose, closeLabel }}>
-              {showCloseButton && <ModalCloseButton />}
-              {children}
-            </ModalContext.Provider>
-          </motion.div>
-        </div>
+    // The backdrop deliberately carries NO `data-native-overlay-occlude`.
+    // Over the Linux native underlay the force-opaque rule (layout.css)
+    // repaints marked elements solid --bg-secondary; on this full-screen
+    // `inset-0` backdrop that painted the ENTIRE viewport dark whenever a
+    // stream was live, so opening any modal "blacked out" the stream and the
+    // dialog looked stuck. The backdrop stays translucent (dims the video
+    // behind); the opaque panel below carries the content and reads clearly.
+    <div
+      className={cn(
+        'fixed inset-0 flex modal-backdrop',
+        exiting ? 'pc-fade-out' : 'pc-fade-in',
+        zIndexClassName,
+        PLACEMENT_CLASS[placement],
+        backdropClassName,
       )}
-    </AnimatePresence>,
+      onMouseDown={
+        closeOnBackdrop
+          ? (event) => {
+              if (event.target === event.currentTarget) onClose();
+            }
+          : undefined
+      }
+    >
+      <div
+        ref={ref}
+        role={role}
+        aria-modal="true"
+        aria-labelledby={labelledBy}
+        aria-describedby={describedBy}
+        aria-label={labelledBy ? undefined : ariaLabel}
+        tabIndex={-1}
+        className={cn(
+          // A dialog is a plate that floats over the street (spec §4):
+          // --bg-floating + the plate shadow, the plate's radius, no border.
+          'pc-dialog relative max-h-[calc(100dvh-2rem)] max-w-[calc(100vw-2rem)] overflow-hidden',
+          exiting ? 'pc-exit' : 'pc-enter',
+          SIZE_CLASS[size],
+          panelClassName,
+        )}
+        onKeyDown={onKeyDown}
+        {...scenery}
+      >
+        <ModalContext.Provider value={{ onClose, closeLabel }}>
+          {showCloseButton && <ModalCloseButton />}
+          {children}
+        </ModalContext.Provider>
+      </div>
+    </div>,
     document.body,
   );
 }

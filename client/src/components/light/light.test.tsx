@@ -268,6 +268,7 @@ describe('OnAirPill', () => {
     micOn: true,
     deafened: false,
     sharing: false,
+    speaking: false,
   };
 
   it('shows the room, the duration and the mic state', () => {
@@ -291,6 +292,15 @@ describe('OnAirPill', () => {
         'You are in Shop floor in Kestrel Robotics — mic off, sharing your screen. Return to the room.',
       ),
     ).toBeTruthy();
+  });
+
+  it('breathes only while somebody has the floor (§5.1, §6.7)', () => {
+    const quiet = render(<OnAirPill onAir={onAir} />);
+    expect(quiet.container.querySelector('.pc-live-dot')).not.toHaveClass('is-speaking');
+    quiet.unmount();
+
+    const talking = render(<OnAirPill onAir={{ ...onAir, speaking: true }} />);
+    expect(talking.container.querySelector('.pc-live-dot')).toHaveClass('is-speaking');
   });
 });
 
@@ -354,6 +364,7 @@ describe('no light component hard-codes a colour', () => {
             durationMs: 1_000,
             micOn: true,
             deafened: false,
+            speaking: false,
             sharing: false,
           }}
         />

@@ -1,5 +1,6 @@
 import { type ClassValue, clsx } from "clsx";
 import { extendTailwindMerge } from "tailwind-merge";
+import type React from "react";
 
 /**
  * The design system's type steps (`--text-display` … `--text-section` in
@@ -38,4 +39,19 @@ const twMerge = extendTailwindMerge({
 
 export function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs));
+}
+
+/**
+ * Fan one DOM node out to several refs — a forwarded ref plus a hook-owned
+ * ref (the motion engine's settle/FLIP hooks hand back refs a component must
+ * attach without owning the ref itself).
+ */
+export function mergeRefs<T>(...refs: Array<React.Ref<T> | undefined>) {
+    return (node: T | null) => {
+        for (const ref of refs) {
+            if (!ref) continue;
+            if (typeof ref === "function") ref(node);
+            else (ref as React.MutableRefObject<T | null>).current = node;
+        }
+    };
 }

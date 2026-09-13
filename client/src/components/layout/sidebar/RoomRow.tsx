@@ -1,5 +1,6 @@
 import { memo } from 'react';
 
+import { RollingNumber } from '../../../lib/motion';
 import { cn } from '../../../lib/utils';
 import { Chip, NavRow } from '../../ui';
 import { LightCaption, RoomThumbnail, roomCaptionFor } from '../../light';
@@ -72,7 +73,13 @@ function RoomTrailing({ room, attention }: { room: RoomLight; attention?: RoomAt
         tone="accent"
         aria-label={`${attention.mentionCount} ${attention.mentionCount === 1 ? 'mention' : 'mentions'}`}
       >
-        {attention.mentionCount > 99 ? '99+' : attention.mentionCount}
+        {/* §5.1: a mention count that changes re-rolls. The chip already
+            carries the words, so the roll itself stays silent. */}
+        <RollingNumber
+          value={attention.mentionCount}
+          format={(count) => (count > 99 ? '99+' : String(count))}
+          announce={false}
+        />
       </Chip>
     );
   }
@@ -94,11 +101,12 @@ function RoomTrailing({ room, attention }: { room: RoomLight; attention?: RoomAt
   );
 }
 
-function rowProps({ navIndex, tabStop, active }: Pick<RoomRowProps, 'navIndex' | 'tabStop'> & { active: boolean }) {
+function rowProps({ navIndex, tabStop, active, room }: Pick<RoomRowProps, 'navIndex' | 'tabStop' | 'room'> & { active: boolean }) {
   return {
     role: 'option' as const,
     'aria-selected': active,
     'data-nav-index': navIndex,
+    'data-flip-key': room.key,
     tabIndex: tabStop ? 0 : -1,
   };
 }
@@ -119,7 +127,7 @@ export const QuietRoomRow = memo(function QuietRoomRow({
   const unread = Boolean(attention?.unread) && !active;
   return (
     <NavRow
-      {...rowProps({ navIndex, tabStop, active })}
+      {...rowProps({ navIndex, tabStop, active, room })}
       data-motion-shared={roomSharedName(room.channelId)}
       active={active}
       display={room.kind === 'voice'}
@@ -153,7 +161,7 @@ export const LiveRoomRowView = memo(function LiveRoomRowView({
   return (
     <button
       type="button"
-      {...rowProps({ navIndex, tabStop, active })}
+      {...rowProps({ navIndex, tabStop, active, room })}
       data-motion-shared={roomSharedName(room.channelId)}
       onClick={(event) => onOpen(room, event.currentTarget)}
       className={cn(

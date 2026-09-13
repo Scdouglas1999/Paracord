@@ -1,6 +1,10 @@
 import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { X, CheckCircle, AlertCircle, Info, AlertTriangle } from 'lucide-react';
+// §5.1: the stack is one FLIP'd list — a new toast fades+rises, a dismissed one
+// falls away as a ghost, and every toast still on screen slides to its new spot
+// on the spring-settle. Reduced motion lands all of it instantly.
+import { useFlipList } from '../../lib/motion';
 import { useToastStore, type ToastType, type ToastAction } from '../../stores/toastStore';
 
 const iconMap: Record<ToastType, typeof CheckCircle> = {
@@ -58,9 +62,7 @@ function ToastItem({
     <div
       role={type === 'error' || type === 'warning' ? 'alert' : 'status'}
       aria-live={type === 'error' || type === 'warning' ? 'assertive' : 'polite'}
-      style={{
-        animation: 'toast-slide-in var(--duration-normal) var(--ease-out)',
-      }}
+      data-flip-key={id}
       className="pc-floating pointer-events-auto relative flex w-80 max-w-[calc(100vw-2rem)] items-start gap-3 overflow-hidden px-4 py-3"
     >
       <Icon size={18} style={{ color, flexShrink: 0, marginTop: '1px' }} />
@@ -94,11 +96,14 @@ function ToastItem({
 
 export function ToastContainer() {
   const toasts = useToastStore((s) => s.toasts);
-
-  if (toasts.length === 0) return null;
+  // The container stays mounted even when empty: the FLIP hook's first commit
+  // only measures, so an always-mounted stack animates the very first toast's
+  // arrival instead of swallowing it as an initial mount.
+  const stackRef = useFlipList<HTMLDivElement>();
 
   return createPortal(
     <div
+      ref={stackRef}
       className="pointer-events-none fixed bottom-4 right-4 z-[9999] flex flex-col-reverse gap-2"
       style={{ maxHeight: 'calc(100vh - 2rem)' }}
       aria-live="polite"

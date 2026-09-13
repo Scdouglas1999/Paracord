@@ -42,9 +42,10 @@ html[data-theme='high-contrast'] #root {
   }
 }
 
-/* Focus styles */
+/* Focus styles — the generic fallback for elements outside the pc-focusable
+   recipe. (--accent was never a token; this rule drew nothing until now.) */
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-primary);
   outline-offset: 2px;
 }
 
@@ -71,25 +72,32 @@ html[data-theme='high-contrast'] #root {
   color: var(--text-secondary);
   border: none;
   background: transparent;
+  /* The §5.1 pressable recipe: 1px lift on hover, 0.96 for the 80ms press, a
+     spring back on release (see .pc-pressable in primitives.css). */
   transition:
     background-color var(--duration-normal) var(--ease-out),
     color var(--duration-normal) var(--ease-out),
     border-color var(--duration-normal) var(--ease-out),
-    transform var(--duration-fast) var(--ease-out);
+    transform var(--duration-normal) var(--ease-spring-settle);
 }
 
-.command-icon-btn:hover {
-  color: var(--text-primary);
-  background: var(--bg-mod-subtle);
+@media (hover: hover) {
+  .command-icon-btn:hover:not(:disabled) {
+    color: var(--text-primary);
+    background: var(--bg-mod-subtle);
+    transform: translateY(-1px);
+  }
 }
 
 .command-icon-btn:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
+  animation: pc-ring-in var(--duration-fast) var(--ease-out);
 }
 
-.command-icon-btn:active {
+.command-icon-btn:active:not(:disabled) {
   transform: scale(0.96);
+  transition: transform 80ms var(--ease-out);
 }
 
 /* Universal fallback for missing bottom margins on text elements before UI components */

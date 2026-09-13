@@ -1,5 +1,9 @@
 import * as React from 'react';
-import { cn } from '../../lib/utils';
+// §5.1 "plates settle": a plate mounting into an already-rendered street
+// rises 14px on the spring-settle; the first paint of the app is exempt
+// (WP9b owns lights-on). The engine's hook decides which case a mount is.
+import { useSettleIn } from '../../lib/motion';
+import { cn, mergeRefs } from '../../lib/utils';
 
 export interface PlateProps extends React.HTMLAttributes<HTMLElement> {
   /**
@@ -31,9 +35,10 @@ export const Plate = React.forwardRef<HTMLElement, PlateProps>(function Plate(
   ref,
 ) {
   const Tag = as as React.ElementType;
+  const settleRef = useSettleIn<HTMLElement>();
   return (
     <Tag
-      ref={ref}
+      ref={mergeRefs(ref, settleRef)}
       className={cn('pc-plate', lit && 'is-lit', !bare && 'p-4', className)}
       {...props}
     >
