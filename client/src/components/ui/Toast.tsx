@@ -104,8 +104,19 @@ export function ToastContainer() {
   return createPortal(
     <div
       ref={stackRef}
-      className="pointer-events-none fixed bottom-4 right-4 z-[9999] flex flex-col-reverse gap-2"
-      style={{ maxHeight: 'calc(100vh - 2rem)' }}
+      className="pointer-events-none fixed z-[9999] flex flex-col-reverse gap-2"
+      // A toast is fixed to the viewport, and on a phone the viewport's bottom
+      // 49px belong to the tab bar — so every toast landed on top of the
+      // navigation, and none of them cleared the home-indicator inset. The
+      // stack now starts above whatever is actually down there
+      // (`--h-mobile-nav` is measured by `MobileBottomNav`, 0 when it is not
+      // on screen) and inside the safe area on all four sides.
+      style={{
+        bottom: 'calc(1rem + var(--safe-bottom, 0px) + var(--h-mobile-nav, 0px))',
+        right: 'calc(1rem + var(--safe-right, 0px))',
+        maxHeight:
+          'calc(100dvh - 2rem - var(--safe-top, 0px) - var(--safe-bottom, 0px) - var(--h-mobile-nav, 0px))',
+      }}
       aria-live="polite"
       aria-atomic="false"
     >

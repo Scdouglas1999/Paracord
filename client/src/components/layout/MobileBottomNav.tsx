@@ -1,6 +1,7 @@
 import { activateGuild } from '../../lib/guildNavigation';
 import { useSelectedGuildId } from '../../hooks/useGuilds';
 import { useCurrentGuilds } from '../../hooks/useGuilds';
+import { useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { Home, MessageSquare, Hash, Users, Settings } from 'lucide-react';
 import { useUIStore } from '../../stores/uiStore';
@@ -25,6 +26,32 @@ export function MobileBottomNav() {
   const selectedGuildId = useSelectedGuildId();
   const guilds = useCurrentGuilds();
   const userSettingsOpen = useUIStore((s) => s.userSettingsOpen);
+  const navRef = useRef<HTMLElement>(null);
+
+  /**
+   * Publish this bar's height as `--h-mobile-nav` while it is on screen.
+   *
+   * Anything fixed to the bottom of the viewport — a toast, most of all — has
+   * to start above the navigation rather than on top of it, and the bar's
+   * height is its content plus whatever safe-area inset the device has, which
+   * only the device knows. Measuring is the only honest number; the token is
+   * 0px everywhere the bar is not mounted.
+   */
+  useEffect(() => {
+    const element = navRef.current;
+    if (!element) return;
+    const root = document.documentElement;
+    const publish = () => {
+      root.style.setProperty('--h-mobile-nav', `${Math.round(element.offsetHeight)}px`);
+    };
+    publish();
+    const observer = new ResizeObserver(publish);
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+      root.style.removeProperty('--h-mobile-nav');
+    };
+  }, []);
 
   const activeTab = (() => {
     if (userSettingsOpen) return 'settings';
@@ -74,6 +101,7 @@ export function MobileBottomNav() {
 
   return (
     <nav
+      ref={navRef}
       className="mobile-bottom-nav flex items-center justify-around border-t border-border-subtle/60 md:hidden"
       style={{
         backgroundColor: 'color-mix(in srgb, var(--bg-raised) 95%, transparent)',
