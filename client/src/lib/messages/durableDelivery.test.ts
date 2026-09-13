@@ -62,6 +62,26 @@ describe('durable retry policy', () => {
   it.each([400, 401, 403, 404, 409, 413, 422])('retains HTTP %s as an explicit failed draft', status => {
     expect(classifyDeliveryFailure(failure(status), 1, 1000, 0.5)).toMatchObject({ status: 'failed', nextAttemptAt: 0, error: 'Keep my draft' });
   });
+  it('says a refused send cannot be delivered rather than repeating "forbidden"', () => {
+    // The server answers a blocked sender with a bare FORBIDDEN on purpose —
+    // being told you were blocked is the thing a block must not reveal — so the
+    // author was left with a word that explains nothing. The neutral sentence
+    // is the same for a block, a lost permission or a closed conversation.
+    const refused = (message?: string) => {
+      const error = failure(403);
+      error.response!.data = (message === undefined ? {} : { message }) as { message: string };
+      return classifyDeliveryFailure(error, 1, 1000, 0.5);
+    };
+    expect(refused('forbidden')).toMatchObject({ status: 'failed', error: 'This message can’t be delivered.' });
+    expect(refused('Forbidden')).toMatchObject({ error: 'This message can’t be delivered.' });
+    expect(refused()).toMatchObject({ error: 'This message can’t be delivered.' });
+    // A 403 that actually explains itself keeps its explanation.
+    expect(refused('This channel is read-only for your role.')).toMatchObject({
+      error: 'This channel is read-only for your role.',
+    });
+    // Nothing else is rewritten.
+    expect(classifyDeliveryFailure(failure(404), 1, 1000, 0.5).error).toBe('Keep my draft');
+  });
 });
 
 

@@ -114,11 +114,19 @@ export function classifyDeliveryFailure(error: unknown, attempts: number, now: n
   const retryAt = retryAfterAt(error, now);
   const data = http ? error.response?.data : undefined;
   const serverMessage = typeof data?.message === 'string' ? data.message : typeof data?.error === 'string' ? data.error : null;
+  // A refused send is the same sentence whatever caused it: a block, a lost
+  // permission, a conversation that closed. The server says only "forbidden" on
+  // purpose — a blocked sender must not be told they were blocked — but that
+  // word is not an explanation, and until now it was the only thing the author
+  // got. Say the one thing that is true and gives nothing away.
+  const refusedMessage = status === 403 && (!serverMessage || /^forbidden$/i.test(serverMessage.trim()))
+    ? 'This message can’t be delivered.'
+    : null;
   return {
     status: retryable ? 'pending' as const : 'failed' as const,
     nextAttemptAt: retryable ? Math.max(now + retryDelay(attempts, random), retryAt ?? 0) : 0,
     retryAfterAt: retryAt ?? 0,
-    error: serverMessage ?? (error instanceof Error ? error.message : 'Message delivery failed.'),
+    error: refusedMessage ?? serverMessage ?? (error instanceof Error ? error.message : 'Message delivery failed.'),
   };
 }
 
