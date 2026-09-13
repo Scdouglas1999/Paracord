@@ -43,7 +43,10 @@ export async function openDeviceAccountVault(scope: AccountScope) {
           await new Promise<void>((resolve, reject) => {
             const cleanup = () => context.signal.removeEventListener('abort', cancelled);
             tx.oncomplete = () => { cleanup(); resolve(); };
-            tx.onabort = () => { cleanup(); reject(tx.error ?? new Error('Device key storage was cancelled.')); };
+            // A cancelled write reports the cancellation, not a storage fault:
+            // callers tell an account's own history change from a broken device
+            // apart by the error they are handed.
+            tx.onabort = () => { cleanup(); reject(context.signal.aborted ? context.signal.reason : (tx.error ?? new Error('Device key storage was cancelled.'))); };
             tx.onerror = () => {};
             try { tx.objectStore(STORE).put(key, accountScopeKey(scope)); }
             catch (error) { cancelled(); cleanup(); reject(error); }

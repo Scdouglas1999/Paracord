@@ -14,7 +14,8 @@ import { getAccountChannelView } from '../channelView';
 import { openAccountVault } from '../crypto/accountVaultSession';
 import { openDeviceAccountVault } from '../crypto/deviceAccountVault';
 import { createAccountPrekeyEnrollment, PrekeyEnrollmentError } from '../crypto/prekeyEnrollment';
-import { subscribeDatabaseHistory } from '../databaseHistory';
+import { registerIdentityTrustVault, releaseIdentityTrustVault } from '../crypto/identityTrust';
+import { getDatabaseHistoryEpoch, subscribeDatabaseHistory } from '../databaseHistory';
 import { DatabaseHistoryExpiredError } from '../operationContext';
 import { getServerAccountScope, getServerUser } from '../serverIdentity';
 import { accountScopeKey, LOCAL_SERVER_ID, type AccountScope } from '../serverScope';
@@ -35,6 +36,9 @@ import type { VaultTransaction } from '../crypto/accountVault';
 import { createMessageRecoveryTransport, MessageRecoveryGapError, recoverChannelMessages, RECOVERY_ARCHIVE_NAMESPACE, RECOVERY_CURSOR_NAMESPACE, RECOVERY_STATE_NAMESPACE,
   stageLiveRecoveryMutation, withMessageRecoveryLock, type LiveRecoveryMutation, type RecoveryArchive, type RecoveryCursor, type RecoveryPage, type StoredRecoveryState } from './messageRecovery';
 
+/** No open is in flight, or its history could not be read. Never a real epoch. */
+const NO_OPEN_EPOCH = Symbol('no-open-epoch');
+
 export interface MessageDraft { revision: string; content: string }
 /** Files destined for an encrypted conversation, with this server's size ceiling. */
 export interface EncryptedAttachmentSubmission { files: readonly File[]; maxCiphertextBytes: number }
@@ -48,7 +52,7 @@ export interface MessagingSnapshot {
   encryption: 'setup' | 'locked' | 'enrolling' | 'ready' | 'recovery';
   error: string | null;
   encryptionError: string | null;
-  encryptionRecovery?: { kind: 'legacy-prekeys' } | { kind: 'legacy-session'; channelId: string };
+  encryptionRecovery?: { kind: 'legacy-prekeys' } | { kind: 'device-reenrollment' } | { kind: 'legacy-session'; channelId: string };
   previousEpoch: string | null;
   draftGeneration: number;
   queue: RuntimeQueueRow[];
@@ -85,6 +89,8 @@ export class AccountMessagingRuntime {
   private local: Lane | null = null;
   private identity: (Lane & { session: IdentitySession; dm: ReturnType<typeof createDurableDm> }) | null = null;
   private localOpening: Promise<void> | null = null;
+  /** The history the in-flight local open was started against. */
+  private localOpeningEpoch: string | null | typeof NO_OPEN_EPOCH = NO_OPEN_EPOCH;
   private identityOpening: Promise<void> | null = null;
   private generation = 0;
   private disposed = false;
@@ -377,12 +383,21 @@ export class AccountMessagingRuntime {
       // the generation — but that listener is only wired once a session exists,
       // so a history accepted WHILE the vault is still opening (every first
       // login, where READY carries the account's first epoch) cancels the open
-      // with the generation untouched. Recognise that cancellation by its own
-      // error too, or the handshake rejects and the gateway reconnects for a
-      // history nothing was holding.
+      // with the generation untouched.
+      //
+      // Recognise the cancellation by the authoritative fact — the history the
+      // open was started against is no longer the account's — and not only by
+      // the error that surfaced. An abort lands wherever the open happens to be
+      // and is reported by whatever that step throws: a cancelled IndexedDB key
+      // write, a vault closed under a transaction, a rejected request. Judging
+      // it by the error class alone left every step but one reporting a storage
+      // failure, which rejected READY and reconnected the gateway over a history
+      // nothing was holding.
       const pending = this.localOpening; const generation = this.generation;
+      const openedAgainst = this.localOpeningEpoch;
       try { await pending; } catch (error) {
-        const ownHistory = error instanceof DatabaseHistoryExpiredError;
+        const ownHistory = error instanceof DatabaseHistoryExpiredError
+          || (openedAgainst !== NO_OPEN_EPOCH && this.readHistoryEpoch() !== openedAgainst);
         if (!retry || this.disposed || (this.generation === generation && !ownHistory)) throw error;
       }
       if (this.local && !this.local.session.signal.aborted) return;
@@ -390,6 +405,7 @@ export class AccountMessagingRuntime {
       return this.startLocal(false);
     }
     const generation = this.generation;
+    this.localOpeningEpoch = this.readHistoryEpoch();
     this.store.setState({ storage: 'opening', error: null });
     const run = (async () => {
       let session: DeviceSession | undefined;
@@ -413,8 +429,12 @@ export class AccountMessagingRuntime {
         throw error;
       }
     })();
-    this.localOpening = run.finally(() => { if (this.localOpening === wrapped) this.localOpening = null; });
+    this.localOpening = run.finally(() => { if (this.localOpening === wrapped) { this.localOpening = null; this.localOpeningEpoch = NO_OPEN_EPOCH; } });
     const wrapped = this.localOpening; return wrapped;
+  }
+  /** The account's stored history, or a sentinel when it cannot be read. */
+  private readHistoryEpoch(): string | null | typeof NO_OPEN_EPOCH {
+    try { return getDatabaseHistoryEpoch(this.scope); } catch { return NO_OPEN_EPOCH; }
   }
   private invalidateLocal(reason: unknown) {
     if (reason instanceof DatabaseHistoryExpiredError) {
@@ -431,12 +451,15 @@ export class AccountMessagingRuntime {
   }
   private clearIdentity() {
     const identity = this.identity; this.identity = null;
+    // Peer verification lives in this vault. Releasing it turns every trust
+    // question into "unknown until unlocked" instead of a silent "unverified".
+    if (identity) releaseIdentityTrustVault(this.scope, identity.session.vault);
     identity?.driver.stop(); identity?.mutations.stop(); identity?.session.dispose();
     const setup = !getServerUser(this.scope.serverId)?.public_key;
     if (identity) for (const listener of this.listeners) listener({ kind: 'encryption-locked' });
     if (!this.disposed) this.store.setState(state => ({ encryption: setup ? 'setup' : 'locked', encryptionRecovery: undefined, queue: state.queue.filter(row => row.source !== 'identity'), mutations: state.mutations.filter(row => row.source !== 'identity') }));
   }
-  async enroll(initializeWithUnownedLegacy = false): Promise<void> {
+  async enroll({ initializeWithUnownedLegacy = false, replacePublishedBundle = false }: { initializeWithUnownedLegacy?: boolean; replacePublishedBundle?: boolean } = {}): Promise<void> {
     this.assertCurrent(); await this.startLocal();
     if (this.store.getState().storage !== 'ready') return;
     for (const [id, target] of this.pendingDeletions) {
@@ -453,7 +476,7 @@ export class AccountMessagingRuntime {
         session = await openAccountVault(this.scope);
         const history: VaultHistoryState = await bindMessagingHistory(session.vault, session.context.historyEpoch, this.initialLease);
         if (history.kind !== 'ready') throw new Error('Saved encryption keys belong to an older or unknown database history. Restore and verify the complete encrypted state before sending.');
-        await createAccountPrekeyEnrollment(session).ensure({ initializeWithUnownedLegacy });
+        await createAccountPrekeyEnrollment(session).ensure({ initializeWithUnownedLegacy, replacePublishedBundle });
         session.assertCurrent(); this.assertCurrent();
         if (generation !== this.generation) throw new Error('The messaging history changed during enrollment.');
         const identityContext = session.context;
@@ -463,6 +486,7 @@ export class AccountMessagingRuntime {
           input => uploadOpaqueCiphertext(identityContext.request, input.channelId, input.objectName, input.ciphertext));
         await this.markExistingReceipts(session, 'identity');
         this.identity = { ...this.lane(session, dm), session, dm };
+        registerIdentityTrustVault(this.scope, session.vault);
         if (this.handshakeAccepted) {
           for (const [channelId, ids] of await this.knownMessages()) if (!this.recoveredChannels.has(channelId)) await this.recoverChannel(channelId, [...ids]);
         }
@@ -476,7 +500,8 @@ export class AccountMessagingRuntime {
         await this.refresh();
       } catch (error) {
         session?.dispose(); if (!this.disposed && generation === this.generation) this.store.setState({ encryption: 'recovery', encryptionError: errorText(error),
-          encryptionRecovery: error instanceof PrekeyEnrollmentError && error.code === 'UNOWNED_LEGACY_KEYS' ? { kind: 'legacy-prekeys' } : undefined });
+          encryptionRecovery: error instanceof PrekeyEnrollmentError && error.code === 'UNOWNED_LEGACY_KEYS' ? { kind: 'legacy-prekeys' }
+            : error instanceof PrekeyEnrollmentError && error.code === 'DEVICE_NOT_ENROLLED' ? { kind: 'device-reenrollment' } : undefined });
         throw error;
       }
     })();

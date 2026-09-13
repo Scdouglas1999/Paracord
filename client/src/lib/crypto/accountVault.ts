@@ -130,8 +130,12 @@ export class AccountVault {
   };
 
   private assertCurrent(): void {
-    if (this.closed) throw new Error('Encrypted account storage is closed. Unlock the account to continue.');
+    // A vault closed *by* its lifetime reports why the lifetime ended. The
+    // cancellation arrives as an abort listener that closes this vault, so
+    // reporting "closed" first turned every account-history change into an
+    // indistinguishable storage failure.
     this.lifetime.signal.throwIfAborted();
+    if (this.closed) throw new Error('Encrypted account storage is closed. Unlock the account to continue.');
     this.lifetime.assertCurrent();
   }
 

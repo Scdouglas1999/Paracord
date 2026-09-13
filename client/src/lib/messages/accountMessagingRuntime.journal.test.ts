@@ -29,6 +29,7 @@ import { useServerListStore } from '../../stores/serverListStore';
 import { useAccountStore } from '../../stores/accountStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { DatabaseHistoryExpiredError } from '../operationContext';
+import { acceptDatabaseHistoryEpoch, clearDatabaseHistoryMemory } from '../databaseHistory';
 
 const scope = { serverId: '__local__', userId: '1' };
 const epochs = { first: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', second: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' };
@@ -92,7 +93,7 @@ beforeEach(async () => {
   fixture.openIdentity.mockReset().mockImplementation(async () => session(identity.vault));
   runtime = new AccountMessagingRuntime(scope); await runtime.startLocal(); await runtime.acceptHandshake();
 });
-afterEach(() => { runtime.dispose(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { runtime.dispose(); vi.restoreAllMocks(); vi.unstubAllGlobals(); localStorage.clear(); clearDatabaseHistoryMemory(); });
 
 describe('production encrypted event journal', () => {
   it('commits encrypted envelopes with no transport plaintext while identity is locked, idempotently', async () => {
@@ -342,6 +343,30 @@ describe('production authoritative recovery gate', () => {
     const cancelled = runtime.startLocal();
     await expect(runtime.acceptHandshake()).resolves.toBeUndefined();
     await expect(cancelled).rejects.toBeInstanceOf(DatabaseHistoryExpiredError);
+    expect(attempts).toBe(2);
+    expect(runtime.store.getState().storage).toBe('ready');
+    expect(runtime.store.getState().synchronization).toBe('ready');
+  });
+  // The abort that acceptance raises lands wherever the open happens to be, and
+  // every step reports it in its own words — a cancelled IndexedDB key write, a
+  // vault closed under a transaction. Recognising the cancellation only by its
+  // error class therefore left most of the open reporting a storage failure,
+  // and READY still reconnected the gateway, intermittently, on a fresh login.
+  it('retries an open cancelled by its own history even when the cancellation is not reported as one', async () => {
+    runtime.dispose();
+    let attempts = 0;
+    fixture.openLocal.mockReset().mockImplementation(async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        acceptDatabaseHistoryEpoch(scope, epochs.first);
+        throw new Error('Encrypted account storage is closed. Unlock the account to continue.');
+      }
+      return session(local.vault);
+    });
+    runtime = new AccountMessagingRuntime(scope);
+    const cancelled = runtime.startLocal();
+    await expect(runtime.acceptHandshake()).resolves.toBeUndefined();
+    await expect(cancelled).rejects.toThrow('Encrypted account storage is closed');
     expect(attempts).toBe(2);
     expect(runtime.store.getState().storage).toBe('ready');
     expect(runtime.store.getState().synchronization).toBe('ready');
