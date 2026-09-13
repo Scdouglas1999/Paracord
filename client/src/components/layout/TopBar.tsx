@@ -21,7 +21,6 @@ import {
   MessagesSquare,
   PanelLeftClose,
   PanelLeftOpen,
-  Wifi,
   Phone,
   PhoneOff,
   Loader2,
@@ -43,7 +42,6 @@ import { useVoiceStore } from '../../stores/voiceStore';
 import { toast } from '../../stores/toastStore';
 import type { ReadState } from '../../types';
 import { canAccessGuildSettings } from '../../lib/guildSettingsAccess';
-import { Tooltip } from '../ui/Tooltip';
 import { cn } from '../../lib/utils';
 import { HereNowStrip, LitAvatar } from '../light';
 import { Well } from '../ui';
@@ -88,34 +86,6 @@ interface TopBarProps {
 const PIN_COUNT_TTL_MS = 5 * 60_000;
 const pinCountCache = new Map<string, { count: number; atMs: number }>();
 
-/** Isolated so connectionLatency ticks don't re-render the full TopBar. */
-function ConnectionLatencyBadge() {
-  const connectionLatency = useUIStore((s) => s.connectionLatency);
-  return (
-    <Tooltip content={`Latency: ${connectionLatency}ms`} side="bottom">
-      <div className="chat-header-connection ml-1 items-center gap-1.5 rounded-[var(--radius-chip)] bg-bg-raised px-2 py-1 shadow-[var(--shadow-chip)]">
-        <Wifi size={12} className={cn(
-          connectionLatency < 100
-            ? 'text-accent-success'
-            : connectionLatency < 300
-              ? 'text-accent-warning'
-              : 'text-accent-danger'
-        )} />
-        <span className={cn(
-          'pc-mono text-[10px] font-semibold',
-          connectionLatency < 100
-            ? 'text-accent-success'
-            : connectionLatency < 300
-              ? 'text-accent-warning'
-              : 'text-accent-danger'
-        )}>
-          {connectionLatency}ms
-        </span>
-      </div>
-    </Tooltip>
-  );
-}
-
 export function TopBar(props: TopBarProps) {
   const scope = useCurrentAccountScope();
   const { channelId } = useParams();
@@ -143,7 +113,6 @@ function OwnedTopBar({
   const contextPanelMode = useUIStore((s) => s.contextPanelMode);
   const toggleContextPanelMode = useUIStore((s) => s.toggleContextPanelMode);
   const sidebarCollapsed = useUIStore((s) => s.sidebarCollapsed);
-  const connectionStatus = useUIStore((s) => s.connectionStatus);
   const channelsById = useCurrentChannelStore((s) => s.channelsById);
   const channelsByGuild = useCurrentChannelStore((s) => s.channelsByGuild);
   const systemAudioCaptureActive = useVoiceStore((s) => s.systemAudioCaptureActive);
@@ -763,9 +732,12 @@ function OwnedTopBar({
         )}
 
         <div className="ml-auto flex min-w-0 items-center gap-2">
+          {/* No transport readout here. §7.2 puts it on the Stage's share
+              tile, where a number describes a live stream; in a text room a
+              green "0ms" in the primary chrome reads as unmeasured rather than
+              fast, and it was in every room at every width ≥ 1440. */}
           <ConversationHeaderActions primary={primaryActions} items={secondaryActions}
-            activeSurface={activeSurface} unread={unreadItems.length} mentions={inboxMentions}
-            indicator={connectionStatus === 'connected' ? <ConnectionLatencyBadge /> : undefined} />
+            activeSurface={activeSurface} unread={unreadItems.length} mentions={inboxMentions} />
         </div>
 
         {/* A group DM's name is too long to sit inline on a phone, so it drops

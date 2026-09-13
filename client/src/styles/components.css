@@ -322,8 +322,6 @@
   .chat-header-more-label { display: inline; font-size: .8125rem; font-weight: 500; }
 }
 
-.chat-header-connection { display: none; }
-@container (min-width: 900px) { .chat-header-connection { display: flex; } }
 
 @container (max-width: 480px) { .chat-header-avatar { display: none; } }
 @media (pointer: coarse) { .chat-header-navigation { min-width: 2.75rem; min-height: 2.75rem; } }

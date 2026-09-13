@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -99,6 +99,13 @@ describe('TopBar context-panel toggles', () => {
     mockUIState.contextPanelMode = null;
     mockPermissions.permissions = 0n;
     mockPermissions.isAdmin = false;
+  });
+
+  it('keeps the transport readout off a text room (§7.2)', async () => {
+    renderChannelTopBar();
+    // "0ms" in the primary chrome of every text room read as unmeasured rather
+    // than fast; the readout belongs on the Stage's share tile.
+    await waitFor(() => expect(screen.queryByText(/\d+ms/)).not.toBeInTheDocument());
   });
 
   it('drives the shell ContextPanel mode from each right-cluster toggle', () => {
