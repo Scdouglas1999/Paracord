@@ -1024,64 +1024,39 @@ def run_smoke(args: argparse.Namespace) -> None:
                 expected=201,
                 label="invoke bot slash command",
             )
-            interaction_token = interaction["token"]
+            # The interaction token is a bearer credential that authorizes acting
+            # *as the bot* — posting, editing and deleting under its identity. It
+            # is deliberately absent from this response and delivered only to the
+            # bot, over the gateway, in INTERACTION_CREATE. This smoke used to
+            # read it straight out of the invoke response and drive the callback
+            # with it, which is exactly the escalation that was closed.
+            if "token" in interaction:
+                raise AssertionError(
+                    "invoke response leaked the interaction token to the invoker: "
+                    f"{sorted(interaction)}"
+                )
             if interaction.get("application_id") != bot_app_id or interaction.get("data", {}).get("id") != global_command["id"]:
                 raise AssertionError(f"slash interaction mismatch: {interaction}")
-            bot_response = request_json(
-                "POST",
-                base_url,
-                f"/api/v1/interactions/{interaction['id']}/{interaction_token}/callback",
-                body={
-                    "type": 4,
-                    "data": {
-                        "content": "release smoke bot response",
-                        "components": [
-                            {
-                                "type": 1,
-                                "components": [
-                                    {
-                                        "type": 2,
-                                        "label": "Release button",
-                                        "custom_id": "release_button",
-                                        "style": 1,
-                                    }
-                                ],
-                            }
-                        ],
-                    },
-                },
-                label="bot interaction callback",
+            # And a caller who invents one is refused rather than answered.
+            forged = requests.post(
+                f"{base_url}/api/v1/interactions/{interaction['id']}/{'0' * 64}/callback",
+                json={"type": 4, "data": {"content": "forged"}},
+                timeout=20,
             )
-            if bot_response.get("author_id") != bot_user_id or bot_response.get("message_type") != 20:
-                raise AssertionError(f"bot callback response mismatch: {bot_response}")
-            component_interaction = request_json(
-                "POST",
-                base_url,
-                "/api/v1/interactions",
-                token=admin_token,
-                body={
-                    "type": 3,
-                    "guild_id": guild_id,
-                    "channel_id": text_id,
-                    "message_id": bot_response["id"],
-                    "custom_id": "release_button",
-                    "component_type": 2,
-                },
-                expected=201,
-                label="invoke bot component interaction",
-            )
-            if component_interaction.get("application_id") != bot_app_id or component_interaction.get("type") != 3:
-                raise AssertionError(f"component interaction mismatch: {component_interaction}")
-            followup = request_json(
-                "POST",
-                base_url,
-                f"/api/v1/interactions/{bot_app_id}/{interaction_token}/followup",
-                body={"content": "release smoke bot followup"},
-                expected=201,
-                label="create bot interaction followup",
-            )
-            if followup.get("author_id") != bot_user_id or followup.get("content") != "release smoke bot followup":
-                raise AssertionError(f"bot followup mismatch: {followup}")
+            if forged.status_code != 401:
+                raise AssertionError(
+                    f"forged interaction token was not refused: {forged.status_code} {forged.text[:200]}"
+                )
+
+            # The callback, followup and component-interaction routes are the
+            # bot's half of this exchange and take the interaction token as their
+            # sole credential. An out-of-process bot cannot hold one today: the
+            # gateway's IDENTIFY validates a session JWT (paracord-ws
+            # handler.rs) while a bot's own credential is an opaque token the
+            # REST middleware accepts as `Authorization: Bot <token>`, so there
+            # is no way for this smoke to receive INTERACTION_CREATE. Those
+            # routes are covered by crates/paracord-api/tests, not from here.
+
             request_json(
                 "DELETE",
                 base_url,
