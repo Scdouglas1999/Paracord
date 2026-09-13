@@ -63,6 +63,7 @@
 .btn-primary:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
+  animation: pc-ring-in var(--duration-fast) var(--ease-out);
 }
 
 .btn-primary:disabled {
@@ -82,6 +83,7 @@
   border: none;
   border-radius: var(--radius-well);
   box-shadow: var(--shadow-well);
+  --pc-base-shadow: var(--shadow-well);
   padding: 0.6rem 0.75rem;
   font-size: var(--text-label);
   line-height: 1.4;
@@ -91,6 +93,7 @@
 
 .input-field:focus-visible {
   box-shadow: var(--shadow-well), var(--focus-ring);
+  animation: pc-ring-in var(--duration-fast) var(--ease-out);
 }
 
 .input-field::placeholder {
@@ -143,6 +146,7 @@
 .icon-btn:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
+  animation: pc-ring-in var(--duration-fast) var(--ease-out);
 }
 
 .context-menu-item {
@@ -194,6 +198,7 @@
 .context-menu-item:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
+  animation: pc-ring-in var(--duration-fast) var(--ease-out);
 }
 
 /* Someone is in the room and talking (spec §5): the rim breathes between the

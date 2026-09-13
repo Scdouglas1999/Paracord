@@ -493,9 +493,23 @@
    tiles and window cells.
    -------------------------------------------------------------------------- */
 
+/* §5.3/WP9c: the ring fades in over --duration-fast rather than snapping on.
+   It is an animation, not a transition, so it never fights an element's own
+   transition list: it plays the moment :focus-visible starts matching and is
+   gone the moment it stops. 120ms still reads as instant to a keyboard user. */
+@keyframes pc-ring-in {
+  from {
+    /* Whatever shadow the element already had, and no ring. CSS pads the
+       shorter shadow list with transparent layers, so this one `from` works
+       for every rule below whatever `--focus-ring` resolves to. */
+    box-shadow: var(--pc-base-shadow, 0 0 0 0 transparent);
+  }
+}
+
 .pc-focusable:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
+  animation: pc-ring-in var(--duration-fast) var(--ease-out);
 }
 
 /* Composed focus: a surface that already carries a shadow keeps it under the
@@ -503,6 +517,7 @@
 .pc-focusable-composed:focus-visible {
   outline: none;
   box-shadow: var(--pc-base-shadow, none), var(--focus-ring);
+  animation: pc-ring-in var(--duration-fast) var(--ease-out);
 }
 
 /* A checkbox. The native control carries the platform's own semantics (and its
@@ -519,6 +534,7 @@
 .pc-checkbox:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
+  animation: pc-ring-in var(--duration-fast) var(--ease-out);
 }
 
 .pc-checkbox:disabled {

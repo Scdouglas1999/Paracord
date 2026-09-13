@@ -92,6 +92,7 @@ html[data-theme='high-contrast'] #root {
 .command-icon-btn:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
+  animation: pc-ring-in var(--duration-fast) var(--ease-out);
 }
 
 .command-icon-btn:active:not(:disabled) {
