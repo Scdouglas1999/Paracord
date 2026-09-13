@@ -33,7 +33,7 @@ import { resolveResourceUrl } from '../../lib/config/apiBaseUrl';
 import { getDownloadTicket } from '../../lib/downloadTicket';
 import { writeClipboardText } from '../../lib/clipboard';
 import { SkeletonMessage } from '../ui/Skeleton';
-import { fadeIn, ms, onMotion, RollingNumber, settleIn, useFlipList, walkIntoRoom } from '../../lib/motion';
+import { fadeIn, flicker, motionToken, ms, onMotion, prefersReducedMotion, RollingNumber, settleIn, useFlipList, walkIntoRoom } from '../../lib/motion';
 import { parseMarkdown } from '../../lib/markdown';
 import { getHighestRoleColor } from '../../lib/colors';
 import { formatFileSize, formatTimestamp, relativeTime } from '../../lib/formatters';
@@ -1449,6 +1449,113 @@ function OwnedMessageList({
     return () => mediaQuery.removeEventListener('change', updatePointerMode);
   }, []);
 
+  /* §5.1 phone pull: dragging the timeline down at its very top reveals the
+     room's lamp — a small light that brightens with the pull distance and
+     flickers once when the refresh fires. A light, never a spinner. The
+     gesture only watches: every listener is passive, the timeline's own scroll
+     is untouched, and the lamp is driven by direct style writes (no React
+     state per move). It exists only where a pull is physically possible. */
+  const pullLampRef = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    const lamp = pullLampRef.current;
+    if (!scroller || !lamp || !isCoarsePointer) return;
+
+    const DEAD_ZONE = 8; // px of slack a finger takes before the lamp answers
+    const FIRE_AT = 72; // px of pull that asks the room for what it missed
+    const RIDE = 30; // px the lamp rides down at a full pull
+    let startY = 0;
+    let pulling = false;
+    let pull = 0;
+    let settle: Animation | null = null;
+
+    const rest = () => {
+      lamp.style.opacity = '0';
+      lamp.style.transform = '';
+    };
+
+    const hide = () => {
+      pull = 0;
+      if (typeof lamp.animate !== 'function' || prefersReducedMotion()) {
+        rest();
+        return;
+      }
+      // The lamp goes out the way lights do — a fast dim, not a snap.
+      const leaving = lamp.animate(
+        [{ opacity: lamp.style.opacity || '0' }, { opacity: '0' }],
+        { duration: ms('--duration-fast'), easing: motionToken('--ease-in'), fill: 'forwards' },
+      );
+      leaving.id = 'data-motion-recipe:exit';
+      settle = leaving;
+      leaving.finished.then(
+        () => {
+          settle = null;
+          if (!pulling) rest();
+        },
+        () => {
+          settle = null;
+        },
+      );
+    };
+
+    const paint = (amount: number) => {
+      // A finger back on the lamp cancels the dim it was playing out.
+      settle?.cancel();
+      settle = null;
+      const t = Math.min(1, amount / FIRE_AT);
+      lamp.style.opacity = String(0.15 + t * 0.85);
+      lamp.style.transform = `translate3d(-50%, ${-16 + t * RIDE}px, 0)`;
+    };
+
+    const onStart = (event: TouchEvent) => {
+      startY = event.touches[0]?.clientY ?? 0;
+      pulling = scroller.scrollTop <= 0;
+      pull = 0;
+    };
+    const onMove = (event: TouchEvent) => {
+      if (!pulling) return;
+      if (scroller.scrollTop > 0) {
+        // The gesture became the timeline's own scroll — it was never ours.
+        pulling = false;
+        if (pull > 0) hide();
+        return;
+      }
+      const dy = (event.touches[0]?.clientY ?? 0) - startY;
+      pull = Math.max(0, dy - DEAD_ZONE);
+      paint(pull);
+    };
+    const onEnd = () => {
+      if (!pulling) return;
+      pulling = false;
+      if (pull >= FIRE_AT) {
+        // The refresh fires: the lamp flickers once to say so (§5.1), then
+        // goes back out.
+        const pulse = flicker(lamp);
+        void fetchMessages(channelId);
+        if (pulse) {
+          pulse.finished.then(hide, hide);
+        } else {
+          hide();
+        }
+        return;
+      }
+      hide();
+    };
+
+    scroller.addEventListener('touchstart', onStart, { passive: true });
+    scroller.addEventListener('touchmove', onMove, { passive: true });
+    scroller.addEventListener('touchend', onEnd, { passive: true });
+    scroller.addEventListener('touchcancel', onEnd, { passive: true });
+    return () => {
+      scroller.removeEventListener('touchstart', onStart);
+      scroller.removeEventListener('touchmove', onMove);
+      scroller.removeEventListener('touchend', onEnd);
+      scroller.removeEventListener('touchcancel', onEnd);
+      settle?.cancel();
+      rest();
+    };
+  }, [isCoarsePointer, channelId, fetchMessages]);
+
   const handleScroll = useCallback(() => {
     if (!scrollRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
@@ -2733,6 +2840,16 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
       <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {newMessageAnnouncement}
       </div>
+      {/* The pull lamp — a window the dragged-down timeline reveals. Its
+          position and glow are driven from the touch listeners above; it is
+          scenery, never interactive. */}
+      {isCoarsePointer && (
+        <span
+          ref={pullLampRef}
+          aria-hidden
+          className="pc-window is-reading pointer-events-none absolute left-1/2 top-1.5 z-10 h-2.5 w-2.5 -translate-x-1/2 opacity-0"
+        />
+      )}
       <div
         ref={scrollRef}
         className="flex h-full flex-col overflow-y-auto"
