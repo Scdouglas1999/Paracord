@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// Records cancellation before the async start handler reaches its first poll.
 /// IDs are unique per adapter instance and start is invoked once per instance.
@@ -20,11 +20,16 @@ struct Ownership {
 
 impl CallOwnership {
     pub fn begin(&self, id: &str) -> Result<(), String> {
-        let mut state = self.inner.lock().map_err(|_| "media ownership lock poisoned")?;
+        let mut state = self
+            .inner
+            .lock()
+            .map_err(|_| "media ownership lock poisoned")?;
         if state.canceled.remove(id) {
             return Err("native call was canceled before connect".into());
         }
-        for (_, flag) in state.actions.values() { flag.store(true, Ordering::SeqCst); }
+        for (_, flag) in state.actions.values() {
+            flag.store(true, Ordering::SeqCst);
+        }
         state.actions.clear();
         state.requested = Some(id.to_owned());
         state.starting.insert(id.to_owned());
@@ -44,7 +49,9 @@ impl CallOwnership {
                 state.canceled.insert(id.to_owned());
             }
             if state.requested.as_deref() == Some(id) {
-                for (_, flag) in state.actions.values() { flag.store(true, Ordering::SeqCst); }
+                for (_, flag) in state.actions.values() {
+                    flag.store(true, Ordering::SeqCst);
+                }
                 state.actions.clear();
                 state.requested = None;
             }
@@ -54,12 +61,25 @@ impl CallOwnership {
     /// Revoke the prior action before waiting for the hardware transition lock.
     /// The capture worker uses the same flag, so a pending native prompt/open
     /// cannot publish after a stop, replacement action, or call cancellation.
-    pub fn action(&self, id: &str, feature: &'static str, revision: u64) -> Result<Arc<AtomicBool>, String> {
-        let mut state = self.inner.lock().map_err(|_| "media ownership lock poisoned")?;
+    pub fn action(
+        &self,
+        id: &str,
+        feature: &'static str,
+        revision: u64,
+    ) -> Result<Arc<AtomicBool>, String> {
+        let mut state = self
+            .inner
+            .lock()
+            .map_err(|_| "media ownership lock poisoned")?;
         if state.requested.as_deref() != Some(id) || state.canceled.contains(id) {
             return Err("native call ownership expired".into());
         }
-        if revision == 0 || state.actions.get(feature).is_some_and(|(old, _)| *old >= revision) {
+        if revision == 0
+            || state
+                .actions
+                .get(feature)
+                .is_some_and(|(old, _)| *old >= revision)
+        {
             return Err("native capture action was superseded".into());
         }
         let flag = Arc::new(AtomicBool::new(false));
@@ -69,20 +89,41 @@ impl CallOwnership {
         Ok(flag)
     }
 
-    pub fn current_action(&self, id: &str, feature: &'static str, revision: u64) -> Result<Arc<AtomicBool>, String> {
-        let state = self.inner.lock().map_err(|_| "media ownership lock poisoned")?;
-        if state.requested.as_deref() != Some(id) { return Err("native call ownership expired".into()); }
-        state.actions.get(feature).filter(|(current, flag)| *current == revision && !flag.load(Ordering::SeqCst))
-            .map(|(_, flag)| flag.clone()).ok_or_else(|| "native capture action was superseded".into())
+    pub fn current_action(
+        &self,
+        id: &str,
+        feature: &'static str,
+        revision: u64,
+    ) -> Result<Arc<AtomicBool>, String> {
+        let state = self
+            .inner
+            .lock()
+            .map_err(|_| "media ownership lock poisoned")?;
+        if state.requested.as_deref() != Some(id) {
+            return Err("native call ownership expired".into());
+        }
+        state
+            .actions
+            .get(feature)
+            .filter(|(current, flag)| *current == revision && !flag.load(Ordering::SeqCst))
+            .map(|(_, flag)| flag.clone())
+            .ok_or_else(|| "native capture action was superseded".into())
     }
 
     pub fn check_action(&self, id: &str, canceled: &AtomicBool) -> Result<(), String> {
         self.check(id)?;
-        if canceled.load(Ordering::SeqCst) { Err("native capture action was canceled".into()) } else { Ok(()) }
+        if canceled.load(Ordering::SeqCst) {
+            Err("native capture action was canceled".into())
+        } else {
+            Ok(())
+        }
     }
 
     pub fn check(&self, id: &str) -> Result<(), String> {
-        let state = self.inner.lock().map_err(|_| "media ownership lock poisoned")?;
+        let state = self
+            .inner
+            .lock()
+            .map_err(|_| "media ownership lock poisoned")?;
         if state.requested.as_deref() == Some(id) && !state.canceled.contains(id) {
             Ok(())
         } else {

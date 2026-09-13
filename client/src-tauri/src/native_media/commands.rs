@@ -130,82 +130,98 @@ pub async fn start_voice_session(
     // HTTP/SSE commands do with `ensure_native_fetch_target_is_trusted`.
     crate::ensure_native_media_endpoint_is_trusted(&endpoint)?;
 
-    if owner_id.is_empty() || owner_id.len() > 128 { return Err("invalid native call owner".into()); }
+    if owner_id.is_empty() || owner_id.len() > 128 {
+        return Err("invalid native call owner".into());
+    }
     state.calls.begin(&owner_id)?;
     let _transition = state.calls.transition.lock().await;
     let result = async {
-    state.calls.check(&owner_id)?;
-    // Capture is process-wide. Fully release the previous owner before acquiring devices.
-    super::screen_capture::stop_capture(state.inner()).await?;
-    super::camera_capture::stop_capture(state.inner()).await?;
-    if let Some(mut previous) = state.session.lock().await.take() { previous.disconnect().await; }
-    state.calls.check(&owner_id)?;
-    let mut session = NativeMediaSession::connect(
-        &endpoint,
-        &token,
-        &cert_hash,
-        &room_id,
-        advertised_capabilities,
-    )
-    .await?;
-    if let Err(error) = state.calls.check(&owner_id) {
-        session.disconnect().await;
-        return Err(error);
-    }
-    session.owner_id = owner_id.clone();
-    let session_id = session.session_id.clone();
-
-    // Spawn audio pipeline tasks
-    audio_pipeline::spawn_audio_send_task(&mut session);
-    audio_pipeline::spawn_screen_audio_send_task(&mut session);
-    audio_pipeline::spawn_datagram_recv_task(&mut session, app.clone());
-    audio_pipeline::spawn_uni_stream_recv_task(&mut session, app.clone());
-    audio_pipeline::spawn_playout_task(&mut session);
-    events::spawn_control_recv_task(&mut session, app.clone());
-    events::spawn_connection_monitor(&mut session, app.clone());
-
-    // Spawn event tasks
-    events::spawn_speaking_detector(&mut session, app.clone());
-
-    session
-        .send_control_message(&ControlMessage::SessionJoin {
-            room_id: session.room_id.clone(),
-            session_id: session.session_id.clone(),
-            video_capabilities: session
-                .stream_capabilities
-                .video
-                .iter()
-                .map(|capability| capability.to_transport())
-                .collect(),
-        })
+        state.calls.check(&owner_id)?;
+        // Capture is process-wide. Fully release the previous owner before acquiring devices.
+        super::screen_capture::stop_capture(state.inner()).await?;
+        super::camera_capture::stop_capture(state.inner()).await?;
+        if let Some(mut previous) = state.session.lock().await.take() {
+            previous.disconnect().await;
+        }
+        state.calls.check(&owner_id)?;
+        let mut session = NativeMediaSession::connect(
+            &endpoint,
+            &token,
+            &cert_hash,
+            &room_id,
+            advertised_capabilities,
+        )
         .await?;
+        if let Err(error) = state.calls.check(&owner_id) {
+            session.disconnect().await;
+            return Err(error);
+        }
+        session.owner_id = owner_id.clone();
+        let session_id = session.session_id.clone();
 
-    state.calls.check(&owner_id)?;
-    // Store the session, disconnecting any session already in the slot first.
-    // Overwriting it in place would leak its spawned tasks, QUIC connection, and
-    // audio thread — `Option::replace` drops the old value only after the new one
-    // is in place and does not run our async teardown. Take it out and shut it
-    // down deterministically before installing the replacement.
-    let mut guard = state.session.lock().await;
-    if let Some(mut previous) = guard.take() {
-        previous.disconnect().await;
+        // Spawn audio pipeline tasks
+        audio_pipeline::spawn_audio_send_task(&mut session);
+        audio_pipeline::spawn_screen_audio_send_task(&mut session);
+        audio_pipeline::spawn_datagram_recv_task(&mut session, app.clone());
+        audio_pipeline::spawn_uni_stream_recv_task(&mut session, app.clone());
+        audio_pipeline::spawn_playout_task(&mut session);
+        events::spawn_control_recv_task(&mut session, app.clone());
+        events::spawn_connection_monitor(&mut session, app.clone());
+
+        // Spawn event tasks
+        events::spawn_speaking_detector(&mut session, app.clone());
+
+        session
+            .send_control_message(&ControlMessage::SessionJoin {
+                room_id: session.room_id.clone(),
+                session_id: session.session_id.clone(),
+                video_capabilities: session
+                    .stream_capabilities
+                    .video
+                    .iter()
+                    .map(|capability| capability.to_transport())
+                    .collect(),
+            })
+            .await?;
+
+        state.calls.check(&owner_id)?;
+        // Store the session, disconnecting any session already in the slot first.
+        // Overwriting it in place would leak its spawned tasks, QUIC connection, and
+        // audio thread — `Option::replace` drops the old value only after the new one
+        // is in place and does not run our async teardown. Take it out and shut it
+        // down deterministically before installing the replacement.
+        let mut guard = state.session.lock().await;
+        if let Some(mut previous) = guard.take() {
+            previous.disconnect().await;
+        }
+        *guard = Some(session);
+
+        Ok(VoiceSessionInfo {
+            session_id,
+            connected: true,
+        })
     }
-    *guard = Some(session);
-
-    Ok(VoiceSessionInfo {
-        session_id,
-        connected: true,
-    })
-    }.await;
+    .await;
     state.calls.finish_start(&owner_id);
     result
 }
 
 #[tauri::command]
-pub async fn stop_voice_session(owner_id: String, state: State<'_, MediaState>) -> Result<(), String> {
+pub async fn stop_voice_session(
+    owner_id: String,
+    state: State<'_, MediaState>,
+) -> Result<(), String> {
     state.calls.cancel(&owner_id);
     let _transition = state.calls.transition.lock().await;
-    if !state.session.lock().await.as_ref().is_some_and(|session| session.owner_id == owner_id) { return Ok(()); }
+    if !state
+        .session
+        .lock()
+        .await
+        .as_ref()
+        .is_some_and(|session| session.owner_id == owner_id)
+    {
+        return Ok(());
+    }
     super::screen_capture::stop_capture(state.inner()).await?;
     // Camera capture lives in MediaState (not the session), so it must be torn
     // down here too or the nokhwa worker keeps running against a dead session.
@@ -274,7 +290,11 @@ pub async fn voice_list_input_devices() -> Result<Vec<AudioDeviceInfo>, String> 
 // ── Mute / deaf / device switching ──────────────────────────────────────────
 
 #[tauri::command]
-pub async fn voice_set_mute(muted: bool, owner_id: String, state: State<'_, MediaState>) -> Result<(), String> {
+pub async fn voice_set_mute(
+    muted: bool,
+    owner_id: String,
+    state: State<'_, MediaState>,
+) -> Result<(), String> {
     let _transition = state.calls.transition.lock().await;
     state.calls.check(&owner_id)?;
 
@@ -291,7 +311,11 @@ pub async fn voice_set_mute(muted: bool, owner_id: String, state: State<'_, Medi
 }
 
 #[tauri::command]
-pub async fn voice_set_deaf(deafened: bool, owner_id: String, state: State<'_, MediaState>) -> Result<(), String> {
+pub async fn voice_set_deaf(
+    deafened: bool,
+    owner_id: String,
+    state: State<'_, MediaState>,
+) -> Result<(), String> {
     let _transition = state.calls.transition.lock().await;
     state.calls.check(&owner_id)?;
 
@@ -312,7 +336,8 @@ pub async fn voice_set_source_volume(
     user_id: Option<String>,
     ssrc: Option<u32>,
     gain: f32,
-    owner_id: String, state: State<'_, MediaState>,
+    owner_id: String,
+    state: State<'_, MediaState>,
 ) -> Result<(), String> {
     let _transition = state.calls.transition.lock().await;
     state.calls.check(&owner_id)?;
@@ -345,7 +370,8 @@ pub async fn voice_set_source_volume(
 #[tauri::command]
 pub async fn voice_set_noise_suppression(
     enabled: bool,
-    owner_id: String, state: State<'_, MediaState>,
+    owner_id: String,
+    state: State<'_, MediaState>,
 ) -> Result<(), String> {
     let _transition = state.calls.transition.lock().await;
     state.calls.check(&owner_id)?;
@@ -361,7 +387,8 @@ pub async fn voice_set_noise_suppression(
 #[tauri::command]
 pub async fn voice_switch_input_device(
     device_id: String,
-    owner_id: String, state: State<'_, MediaState>,
+    owner_id: String,
+    state: State<'_, MediaState>,
 ) -> Result<(), String> {
     let _transition = state.calls.transition.lock().await;
     state.calls.check(&owner_id)?;
@@ -383,7 +410,8 @@ pub async fn voice_switch_input_device(
 #[tauri::command]
 pub async fn voice_switch_output_device(
     device_id: String,
-    owner_id: String, state: State<'_, MediaState>,
+    owner_id: String,
+    state: State<'_, MediaState>,
 ) -> Result<(), String> {
     let _transition = state.calls.transition.lock().await;
     state.calls.check(&owner_id)?;
@@ -448,7 +476,9 @@ pub async fn voice_enable_video(
     enabled: bool,
     device_id: Option<String>,
     quality: Option<String>,
-    owner_id: String, action_revision: u64, state: State<'_, MediaState>,
+    owner_id: String,
+    action_revision: u64,
+    state: State<'_, MediaState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let app = super::CallEventSink::new(app, owner_id.clone());
@@ -460,7 +490,13 @@ pub async fn voice_enable_video(
     if enabled {
         let request =
             super::camera_capture::StartCameraRequest::from_quality(device_id, quality.as_deref());
-        super::camera_capture::start_capture(state.inner(), app.with_cancellation(action.clone()), request, action).await
+        super::camera_capture::start_capture(
+            state.inner(),
+            app.with_cancellation(action.clone()),
+            request,
+            action,
+        )
+        .await
     } else {
         super::camera_capture::stop_capture(state.inner()).await
     }
@@ -476,7 +512,10 @@ pub async fn camera_list_devices(
 }
 
 #[tauri::command]
-pub async fn voice_stop_screen_share(owner_id: String, state: State<'_, MediaState>) -> Result<(), String> {
+pub async fn voice_stop_screen_share(
+    owner_id: String,
+    state: State<'_, MediaState>,
+) -> Result<(), String> {
     let _transition = state.calls.transition.lock().await;
     state.calls.check(&owner_id)?;
 
@@ -507,7 +546,9 @@ pub async fn screen_share_source_thumbnail(
 #[tauri::command]
 pub async fn screen_share_start(
     request: StartNativeScreenShareRequest,
-    owner_id: String, action_revision: u64, state: State<'_, MediaState>,
+    owner_id: String,
+    action_revision: u64,
+    state: State<'_, MediaState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let app = super::CallEventSink::new(app, owner_id.clone());
@@ -535,7 +576,11 @@ pub async fn screen_share_start(
 }
 
 #[tauri::command]
-pub async fn screen_share_stop(owner_id: String, action_revision: u64, state: State<'_, MediaState>) -> Result<(), String> {
+pub async fn screen_share_stop(
+    owner_id: String,
+    action_revision: u64,
+    state: State<'_, MediaState>,
+) -> Result<(), String> {
     let action = state.calls.action(&owner_id, "screen", action_revision)?;
     let _transition = state.calls.transition.lock().await;
     state.calls.check_action(&owner_id, &action)?;
@@ -546,12 +591,16 @@ pub async fn screen_share_stop(owner_id: String, action_revision: u64, state: St
 #[tauri::command]
 pub async fn voice_set_screen_audio_enabled(
     enabled: bool,
-    owner_id: String, action_revision: u64, state: State<'_, MediaState>,
+    owner_id: String,
+    action_revision: u64,
+    state: State<'_, MediaState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let app = super::CallEventSink::new(app, owner_id.clone());
 
-    let action = state.calls.current_action(&owner_id, "screen", action_revision)?;
+    let action = state
+        .calls
+        .current_action(&owner_id, "screen", action_revision)?;
     let _transition = state.calls.transition.lock().await;
     state.calls.check_action(&owner_id, &action)?;
 
@@ -580,7 +629,10 @@ pub async fn voice_set_screen_audio_enabled(
             crate::audio_capture::set_system_audio_capture_enabled(true);
             let capture_canceled = action.clone();
             tokio::task::spawn_blocking(move || {
-                crate::audio_capture::start_system_audio_capture_into(screen_audio_tx, capture_canceled)
+                crate::audio_capture::start_system_audio_capture_into(
+                    screen_audio_tx,
+                    capture_canceled,
+                )
             })
             .await
             .map_err(|e| format!("system audio capture start task failed: {e}"))??;
@@ -736,7 +788,8 @@ async fn route_keyframe_request(
 pub async fn media_request_keyframe(
     stream_id: String,
     track_id: String,
-    owner_id: String, state: State<'_, MediaState>,
+    owner_id: String,
+    state: State<'_, MediaState>,
 ) -> Result<(), String> {
     let _transition = state.calls.transition.lock().await;
     state.calls.check(&owner_id)?;
@@ -751,7 +804,8 @@ pub async fn media_set_stream_visibility(
     stream_id: String,
     track_id: String,
     visible: bool,
-    owner_id: String, state: State<'_, MediaState>,
+    owner_id: String,
+    state: State<'_, MediaState>,
 ) -> Result<(), String> {
     let _transition = state.calls.transition.lock().await;
     state.calls.check(&owner_id)?;
@@ -772,12 +826,14 @@ pub async fn media_set_stream_visibility(
 
 #[tauri::command]
 pub async fn media_get_stream_capabilities(
-    owner_id: String, state: State<'_, MediaState>,
+    owner_id: String,
+    state: State<'_, MediaState>,
 ) -> Result<super::capabilities::MediaStreamCapabilities, String> {
-
-
     let guard = state.session.lock().await;
-    if let Some(session) = guard.as_ref().filter(|session| session.owner_id == owner_id) {
+    if let Some(session) = guard
+        .as_ref()
+        .filter(|session| session.owner_id == owner_id)
+    {
         return Ok(session.stream_capabilities.clone());
     }
     Ok(super::capabilities::detect_media_stream_capabilities())
@@ -785,7 +841,8 @@ pub async fn media_get_stream_capabilities(
 
 #[tauri::command]
 pub async fn media_list_published_tracks(
-    owner_id: String, state: State<'_, MediaState>,
+    owner_id: String,
+    state: State<'_, MediaState>,
 ) -> Result<Vec<PublishedTrack>, String> {
     let _transition = state.calls.transition.lock().await;
     state.calls.check(&owner_id)?;
@@ -798,7 +855,8 @@ pub async fn media_list_published_tracks(
 
 #[tauri::command]
 pub async fn media_get_stream_diagnostics(
-    owner_id: String, state: State<'_, MediaState>,
+    owner_id: String,
+    state: State<'_, MediaState>,
 ) -> Result<StreamDiagnostics, String> {
     let _transition = state.calls.transition.lock().await;
     state.calls.check(&owner_id)?;
@@ -883,7 +941,8 @@ pub async fn media_get_stream_diagnostics(
 
 #[tauri::command]
 pub async fn media_list_session_participants(
-    owner_id: String, state: State<'_, MediaState>,
+    owner_id: String,
+    state: State<'_, MediaState>,
 ) -> Result<Vec<String>, String> {
     let _transition = state.calls.transition.lock().await;
     state.calls.check(&owner_id)?;
@@ -902,7 +961,8 @@ pub async fn media_list_session_participants(
 
 #[tauri::command]
 pub async fn media_list_session_participant_capabilities(
-    owner_id: String, state: State<'_, MediaState>,
+    owner_id: String,
+    state: State<'_, MediaState>,
 ) -> Result<Vec<SessionParticipantCapabilities>, String> {
     let _transition = state.calls.transition.lock().await;
     state.calls.check(&owner_id)?;
@@ -925,7 +985,8 @@ pub async fn media_list_session_participant_capabilities(
 
 #[tauri::command]
 pub async fn media_export_audio_sender_key(
-    owner_id: String, state: State<'_, MediaState>,
+    owner_id: String,
+    state: State<'_, MediaState>,
 ) -> Result<ExportedSenderKey, String> {
     let _transition = state.calls.transition.lock().await;
     state.calls.check(&owner_id)?;
@@ -946,7 +1007,8 @@ pub async fn media_export_audio_sender_key(
 pub async fn media_export_track_sender_key(
     stream_id: String,
     track_id: String,
-    owner_id: String, state: State<'_, MediaState>,
+    owner_id: String,
+    state: State<'_, MediaState>,
 ) -> Result<ExportedSenderKey, String> {
     let _transition = state.calls.transition.lock().await;
     state.calls.check(&owner_id)?;
@@ -985,7 +1047,8 @@ fn parse_encrypted_key_recipients(
 pub async fn media_send_audio_key_announce(
     epoch: u8,
     encrypted_keys: Vec<EncryptedKeyRecipient>,
-    owner_id: String, state: State<'_, MediaState>,
+    owner_id: String,
+    state: State<'_, MediaState>,
 ) -> Result<(), String> {
     let _transition = state.calls.transition.lock().await;
     state.calls.check(&owner_id)?;
@@ -1008,7 +1071,8 @@ pub async fn media_send_track_key_announce(
     codec: Option<String>,
     epoch: u8,
     encrypted_keys: Vec<EncryptedKeyRecipient>,
-    owner_id: String, state: State<'_, MediaState>,
+    owner_id: String,
+    state: State<'_, MediaState>,
 ) -> Result<(), String> {
     let _transition = state.calls.transition.lock().await;
     state.calls.check(&owner_id)?;
@@ -1033,7 +1097,8 @@ pub async fn media_send_track_key_announce(
 #[tauri::command]
 pub async fn media_register_track_subscription(
     request: StreamSubscriptionRequest,
-    owner_id: String, state: State<'_, MediaState>,
+    owner_id: String,
+    state: State<'_, MediaState>,
 ) -> Result<(), String> {
     let _transition = state.calls.transition.lock().await;
     state.calls.check(&owner_id)?;
@@ -1106,7 +1171,8 @@ pub async fn media_register_track_subscription(
 pub async fn media_unregister_track_subscription(
     stream_id: String,
     track_id: String,
-    owner_id: String, state: State<'_, MediaState>,
+    owner_id: String,
+    state: State<'_, MediaState>,
 ) -> Result<(), String> {
     let _transition = state.calls.transition.lock().await;
     state.calls.check(&owner_id)?;
@@ -1132,7 +1198,8 @@ pub async fn media_unregister_track_subscription(
 #[tauri::command]
 pub async fn media_subscribe_audio(
     user_id: String,
-    owner_id: String, state: State<'_, MediaState>,
+    owner_id: String,
+    state: State<'_, MediaState>,
 ) -> Result<(), String> {
     let _transition = state.calls.transition.lock().await;
     state.calls.check(&owner_id)?;
@@ -1153,7 +1220,8 @@ pub async fn media_subscribe_audio(
 #[tauri::command]
 pub async fn media_unsubscribe_audio(
     user_id: String,
-    owner_id: String, state: State<'_, MediaState>,
+    owner_id: String,
+    state: State<'_, MediaState>,
 ) -> Result<(), String> {
     let _transition = state.calls.transition.lock().await;
     state.calls.check(&owner_id)?;
@@ -1176,7 +1244,8 @@ pub async fn media_apply_audio_sender_key(
     sender_user_id: String,
     epoch: u8,
     raw_key: Vec<u8>,
-    owner_id: String, state: State<'_, MediaState>,
+    owner_id: String,
+    state: State<'_, MediaState>,
 ) -> Result<(), String> {
     let _transition = state.calls.transition.lock().await;
     state.calls.check(&owner_id)?;
@@ -1208,7 +1277,8 @@ pub async fn media_apply_track_sender_key(
     track_id: String,
     epoch: u8,
     raw_key: Vec<u8>,
-    owner_id: String, state: State<'_, MediaState>,
+    owner_id: String,
+    state: State<'_, MediaState>,
 ) -> Result<(), String> {
     let _transition = state.calls.transition.lock().await;
     state.calls.check(&owner_id)?;

@@ -1,5 +1,5 @@
-use super::CallEventSink as AppHandle;
 use super::session::NativeMediaSession;
+use super::CallEventSink as AppHandle;
 use paracord_transport::protocol::MediaHeader;
 use paracord_transport::stream::PublishedTrack;
 
@@ -1528,7 +1528,6 @@ fn warn_codec_negotiation(app: Option<&AppHandle>, codec: VideoCodec, excluded: 
         ),
     );
     if let Some(app) = app {
-
         let _ = app.emit(
             "media_codec_negotiation_warning",
             serde_json::json!({
@@ -4319,7 +4318,6 @@ pub async fn publish_camera_track_for_current_config(
         .await?;
     session.published_video_track = Some(track.clone());
     if let Some(app) = app {
-
         let _ = app.emit("media_track_publish", track);
     }
     Ok(())
@@ -4456,7 +4454,6 @@ pub async fn publish_screen_track_for_current_config(
         .await?;
     session.published_screen_track = Some(track.clone());
     if let Some(app) = app {
-
         let _ = app.emit("media_track_publish", track);
     }
     Ok(())

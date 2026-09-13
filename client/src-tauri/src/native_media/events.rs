@@ -69,8 +69,6 @@ pub fn spawn_speaking_detector(session: &mut NativeMediaSession, app: super::Cal
     let remote_audio = session.remote_audio.clone();
 
     let handle = tokio::spawn(async move {
-
-
         let mut tick = interval(Duration::from_millis(100));
         let mut hysteresis: HashMap<u32, SpeakerHysteresis> = HashMap::new();
         // Last emitted speaker set (SSRC ids only). Levels still ride along in
@@ -120,12 +118,10 @@ pub fn spawn_speaking_detector(session: &mut NativeMediaSession, app: super::Cal
 /// Emit a participant join event.
 #[allow(dead_code)]
 pub fn emit_participant_join(app: &super::CallEventSink, user_id: &str) {
-
     let _ = app.emit("media_participant_join", user_id);
 }
 
 pub fn emit_participant_join_details(app: &super::CallEventSink, participant: &SessionParticipant) {
-
     let _ = app.emit(
         "media_participant_join_details",
         serde_json::json!({
@@ -139,14 +135,15 @@ pub fn emit_participant_join_details(app: &super::CallEventSink, participant: &S
 /// Emit a participant leave event.
 #[allow(dead_code)]
 pub fn emit_participant_leave(app: &super::CallEventSink, user_id: &str, session_id: Option<&str>) {
-
-    let _ = app.emit("media_participant_leave", serde_json::json!({ "userId": user_id, "sessionId": session_id }));
+    let _ = app.emit(
+        "media_participant_leave",
+        serde_json::json!({ "userId": user_id, "sessionId": session_id }),
+    );
 }
 
 /// Emit a session error event.
 #[allow(dead_code)]
 pub fn emit_session_error(app: &super::CallEventSink, error: &str) {
-
     let _ = app.emit("media_session_error", error);
 }
 
@@ -161,7 +158,6 @@ pub fn emit_media_request_keyframe(
     track_id: &str,
     layer_id: Option<u8>,
 ) {
-
     let _ = app.emit(
         "media_request_keyframe",
         serde_json::json!({
@@ -183,7 +179,6 @@ pub fn emit_media_native_render_failed(
     track_id: &str,
     reason: &str,
 ) {
-
     let _ = app.emit(
         "media_native_render_failed",
         serde_json::json!({
@@ -203,7 +198,6 @@ pub fn emit_media_native_render_first_frame(
     stream_id: &str,
     track_id: &str,
 ) {
-
     let _ = app.emit(
         "media_native_render_first_frame",
         serde_json::json!({
@@ -276,7 +270,6 @@ pub fn note_decrypt_result(app: &super::CallEventSink, ssrc: u32, success: bool)
     // Emit exactly once at the threshold crossing so a persistently-failing SSRC
     // does not spam an event every datagram.
     if *count == DECRYPT_FAILURE_ALERT_THRESHOLD {
-
         let _ = app.emit(
             "media_decrypt_failing",
             serde_json::json!({
@@ -449,7 +442,10 @@ async fn handle_control_message(
         ControlMessage::SessionParticipantJoin { participant } => {
             if participant.user_id != local_user_id {
                 let mut known = session_participants.lock().await;
-                let inserted = known.get(&participant.user_id).is_none_or(|existing| existing.session_id != participant.session_id || existing.video_capabilities != participant.video_capabilities);
+                let inserted = known.get(&participant.user_id).is_none_or(|existing| {
+                    existing.session_id != participant.session_id
+                        || existing.video_capabilities != participant.video_capabilities
+                });
                 known.insert(
                     participant.user_id,
                     super::session::RemoteSessionParticipant {
@@ -487,10 +483,17 @@ async fn handle_control_message(
                 });
             }
         }
-        ControlMessage::SessionParticipantLeave { user_id, session_id } => {
+        ControlMessage::SessionParticipantLeave {
+            user_id,
+            session_id,
+        } => {
             if user_id != local_user_id {
                 let mut known = session_participants.lock().await;
-                if session_id.as_deref().is_some_and(|expected| known.get(&user_id).is_none_or(|participant| participant.session_id != expected)) {
+                if session_id.as_deref().is_some_and(|expected| {
+                    known
+                        .get(&user_id)
+                        .is_none_or(|participant| participant.session_id != expected)
+                }) {
                     return;
                 }
                 if let Some(previous) = known.remove(&user_id) {
@@ -705,7 +708,6 @@ async fn handle_control_message(
             epoch,
             ..
         } => {
-
             let _ = app.emit(
                 "media_stream_key_announce",
                 serde_json::json!({
@@ -777,7 +779,6 @@ async fn handle_control_message(
             track_id,
             recipient_user_id,
         } => {
-
             let _ = app.emit(
                 "media_request_stream_key",
                 serde_json::json!({
@@ -900,7 +901,13 @@ async fn apply_session_state(
         .copied()
         .collect::<Vec<_>>();
     for user_id in &departed {
-        emit_participant_leave(app, &user_id.to_string(), known.get(user_id).map(|participant| participant.session_id.as_str()));
+        emit_participant_leave(
+            app,
+            &user_id.to_string(),
+            known
+                .get(user_id)
+                .map(|participant| participant.session_id.as_str()),
+        );
     }
     *known = desired;
     SessionStateUpdate {
