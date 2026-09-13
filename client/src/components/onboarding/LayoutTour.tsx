@@ -60,8 +60,9 @@ const SHELL_STEPS: TourStepDef[] = [
 const GUILD_STEPS: TourStepDef[] = [
   {
     id: 'rooms',
-    // LiveRoomsGrid labels its section "Live rooms" when occupied, else "Rooms".
-    selector: 'section[aria-label="Live rooms"], section[aria-label="Rooms"]',
+    // The Lobby's rooms grid (§7.3). The older "Live rooms" label is kept in
+    // the selector so a tour started against a stale bundle still finds it.
+    selector: 'section[aria-label="Rooms"], section[aria-label="Live rooms"]',
     body: "Spaces open on who's around — jump into a room or pick a channel below.",
     side: 'top',
   },

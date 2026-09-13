@@ -140,8 +140,6 @@ export default function CodeBlock({ code, language }: CodeBlockProps) {
       >
         <span
           style={{
-            textTransform: 'uppercase',
-            letterSpacing: '0.06em',
             fontSize: 'var(--text-section)',
             fontWeight: 600,
             fontFamily: 'var(--font-code)',

@@ -24,9 +24,9 @@ import {
 import { roleColorToHex } from '../../lib/colors';
 import { parseMarkdown } from '../../lib/markdown';
 import { safeExternalUrl, safeStoredImageDataUrl } from '../../lib/security';
-import { resolveUserAvatarUrl } from '../../lib/userAvatar';
-import { cn } from '../../lib/utils';
 import { presenceLight } from '../../lib/presence';
+import { personLight } from '../../lib/attention/light';
+import { LitAvatar } from '../light';
 import {
   buildIdentityVerificationPayload,
   formatIdentityFingerprint,
@@ -246,10 +246,15 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
   const isStaffUser = isAdmin(profileData?.user?.flags ?? user.flags ?? 0);
   const isStreaming = activity ? getActivityType(activity) === 1 : false;
   const statusLight = presenceLight(isStreaming ? 'streaming' : status);
-  const avatarSrc = resolveUserAvatarUrl(
-    profileData?.user?.avatar_hash ?? user.avatar_hash ?? user.avatar,
-  );
   const displayName = user.display_name || user.username;
+  // The profile's face is WP1's avatar: the rim IS their light, the initials
+  // fallback is their identity hue, and the label says it in words (§1.5, §9).
+  const person = personLight({
+    userId: user.id,
+    name: displayName,
+    status: isStreaming ? 'streaming' : status,
+    avatar: profileData?.user?.avatar_hash ?? user.avatar_hash ?? user.avatar ?? null,
+  });
 
   useEffect(() => {
     try {
@@ -433,29 +438,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
         {/* Identity header — avatar overlaps the banner */}
         <div className="px-5 pb-4">
           <div className="relative -mt-9 mb-3 w-max">
-            <div
-              className={cn(
-                'rounded-full p-[3px]',
-                statusLight.avatarClass,
-                statusLight.dnd && 'pc-dnd',
-              )}
-              title={`Status: ${statusLight.label}`}
-              style={{
-                // Someone sharing their screen is LIT (§1.2), not gradient-framed.
-                background: isStreaming ? 'var(--light-white)' : 'var(--bg-floating)',
-              }}
-            >
-              {avatarSrc ? (
-                <img src={avatarSrc} alt="" className="h-[72px] w-[72px] rounded-full object-cover" />
-              ) : (
-                <div
-                  className="pc-display flex h-[72px] w-[72px] items-center justify-center rounded-full text-title"
-                  style={{ backgroundColor: 'var(--accent-tint-strong)', color: 'var(--accent-primary)' }}
-                >
-                  {user.username.charAt(0).toUpperCase()}
-                </div>
-              )}
-            </div>
+            <LitAvatar person={person} size={72} hideLabel title={`Status: ${statusLight.label}`} />
             <span className="sr-only">{statusLight.label}</span>
           </div>
 

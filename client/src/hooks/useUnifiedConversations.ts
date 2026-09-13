@@ -27,7 +27,8 @@ import { displayName } from '../lib/displayName';
  * ONE memoized hook builds the merged `{ needsYou, recent, pinned, spaces }` list
  * across every connected server from the DATA-1/2/3 primitives. It is O(channels):
  * iterate `channelsByGuild` + the per-server DM index, resolve each guild's owning
- * server (`serverResolve`), attach unread/mention by REUSING `computeGuildUnread`
+ * server from the guild's own `serverId`, attach unread/mention by REUSING
+ * `computeGuildUnread`
  * per channel (never forked), attach voice membership from `channelParticipants`,
  * then partition — pinned pulled out first, needs-you scored + capped, the rest by
  * recency.
@@ -52,7 +53,7 @@ export interface GuildSummary {
   id: string;
   name: string;
   icon: string | null;
-  /** Resolved owning server, so `SpacesList` can route without re-resolving. */
+  /** Resolved owning server, so a caller can route without re-resolving. */
   serverId: string;
 }
 

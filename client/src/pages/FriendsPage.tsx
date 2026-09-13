@@ -662,12 +662,18 @@ function FriendsEmptyState({
           description="People you block won't be able to message you or add you as a friend. Anyone you block will appear here so you can undo it later."
         />
       );
+    case 'requests':
     default:
       return (
         <EmptyState
           icon={<ArrowUpRight size={20} />}
-          title="Nothing here yet"
-          description="There's nobody in this list right now."
+          title="No requests waiting"
+          description="Nobody has asked to be friends, and you have no invitations out. Send one with the Add friend button up top — you only need their handle."
+          action={
+            <Button size="sm" onClick={onAdd}>
+              Add a friend
+            </Button>
+          }
         />
       );
   }

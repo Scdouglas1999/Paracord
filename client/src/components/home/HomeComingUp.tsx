@@ -61,9 +61,9 @@ function EventCard({
           'bg-bg-raised shadow-[var(--shadow-raised)]',
         )}
       >
-        <span className="pc-mono text-[10.5px] uppercase text-text-faint">
-          {format(start, 'EEE')}
-        </span>
+        {/* §6.8 bans uppercase; the mono face and the size already make this
+            read as a label, so "Sat" is enough. */}
+        <span className="pc-mono text-[10.5px] text-text-faint">{format(start, 'EEE')}</span>
         <span className="pc-display text-heading font-bold leading-none text-text-primary">
           {format(start, 'd')}
         </span>

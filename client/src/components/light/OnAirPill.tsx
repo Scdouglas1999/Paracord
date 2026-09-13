@@ -12,7 +12,7 @@ export interface OnAirPillProps extends Omit<React.ButtonHTMLAttributes<HTMLButt
 
 /**
  * OnAirPill — you are in a room and looking at something else
- * (docs/lantern-stage-spec.md §7.7; it replaces `MiniVoiceBar` in WP3).
+ * (docs/lantern-stage-spec.md §7.7; it replaced the v1 mini voice bar).
  *
  * A small raised pill in the header: the white dot, the room name, the
  * duration in the mono face, and the mic state. Tapping it returns to the

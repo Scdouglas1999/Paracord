@@ -368,7 +368,7 @@ export interface OnAir {
 
 /**
  * The on-air pill's model (§7.7): you are in a room and looking at something
- * else. `MiniVoiceBar` becomes this in WP3.
+ * else.
  */
 export function useOnAir(): OnAir | null {
   const scope = useCurrentAccountScope();

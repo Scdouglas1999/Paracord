@@ -17,7 +17,8 @@ export function GuildSettingsPage() {
   const overlayInitialSection = useUIStore((s) => s.guildSettingsInitialSection);
   const overlayChannelId = useUIStore((s) => s.guildSettingsChannelId);
   const setGuildSettingsId = useUIStore((s) => s.setGuildSettingsId);
-  // The overlay entry (opened from GuildHomeHeader / SpacesList via `guildSettingsId`)
+  // The overlay entry (opened from the Lobby header or the Buildings column
+  // via `guildSettingsId`)
   // takes precedence over route params. When it is set we are the windowed overlay,
   // which can be summoned from anywhere — a DM, a different guild's channel — so it
   // must only dismiss itself. Only the standalone `guilds/:id/settings` route instance

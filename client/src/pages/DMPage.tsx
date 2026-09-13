@@ -375,7 +375,8 @@ function OwnedDMPage() {
 /**
  * One conversation row. Presence and the last-message preview are read PER ROW
  * (own store selectors) so a presence tick or a new message re-renders only the
- * affected row — never the whole merged list (mirrors the sidebar ConversationRow).
+ * affected row — never the whole merged list (the same rule the Buildings
+ * column's rows keep).
  */
 function DmListRow({ row, onOpen }: { row: DmRow; onOpen: (row: DmRow) => void }) {
   const status = usePresenceStore((s) =>

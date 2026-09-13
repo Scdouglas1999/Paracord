@@ -14,7 +14,7 @@ export interface OnAirDockProps {
  *
  * You are in a room and looking at something else: a raised pill with the white
  * dot, the room name, the duration and your mic state. Tapping it takes you back
- * to the Stage. It replaces `MiniVoiceBar`, which was a second control bar in
+ * to the Stage. It replaced the v1 mini voice bar, which was a second control bar in
  * the chrome — the controls live on the Stage, and there is exactly one action
  * here.
  *

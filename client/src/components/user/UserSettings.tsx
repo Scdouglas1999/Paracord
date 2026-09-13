@@ -70,6 +70,8 @@ import { isAllowedImageMimeType, safeExternalUrl } from '../../lib/security';
 import { resolveUserAvatarUrl } from '../../lib/userAvatar';
 import { displayName as resolveDisplayName } from '../../lib/displayName';
 import { getIdentityColor } from '../../lib/colors';
+import { personLight } from '../../lib/attention/light';
+import { LitAvatar } from '../light';
 import { formatShortcut } from '../../lib/keyboardShortcuts';
 import { CustomCSS } from '../customization/CustomCSS';
 import { VoiceConnectionCheckButton } from '../voice/VoiceConnectionCheckButton';
@@ -1003,16 +1005,29 @@ export function UserSettings({ onClose }: UserSettingsProps) {
             {activeSection === 'account' && (
               <div>
                 <header className="mb-8 flex items-center gap-4">
-                  <div
-                    className="pc-display flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-full text-title text-text-on-light"
-                    style={{ backgroundColor: getIdentityColor(user?.id ?? 'me') }}
-                  >
-                    {avatarPreview ? (
+                  {/* Your own face, with your own light: you are looking at
+                      this, so your lights are on (§1.5). A preview of an avatar
+                      you have not saved yet bypasses the resolver, which only
+                      knows stored hashes. */}
+                  {avatarPreview ? (
+                    <span
+                      className="pc-lit pc-display flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-full text-title text-text-on-light"
+                      style={{ backgroundColor: getIdentityColor(user?.id ?? 'me') }}
+                    >
                       <img src={avatarPreview} alt="" className="h-full w-full object-cover" />
-                    ) : (
-                      resolveDisplayName(user).charAt(0).toUpperCase()
-                    )}
-                  </div>
+                    </span>
+                  ) : (
+                    <LitAvatar
+                      person={personLight({
+                        userId: user?.id ?? 'me',
+                        name: resolveDisplayName(user),
+                        status: 'online',
+                        avatar: user?.avatar_hash ?? null,
+                      })}
+                      size={64}
+                      hideLabel
+                    />
+                  )}
                   <div className="min-w-0">
                     <h2 className="truncate text-heading text-text-primary">{user ? resolveDisplayName(user) : 'My Account'}</h2>
                     <p className="mt-0.5 text-body text-text-secondary">
