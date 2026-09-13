@@ -1181,7 +1181,14 @@ test.describe('the motion gate (§5.3)', () => {
       await emitGateway(voiceFrame('43', null));
     }, 1_400);
 
-    await expect(page.locator(`[data-motion-person="43"]`)).toHaveCount(0);
+    // Out of the *room*, which is what leaving a room means. The Around-now
+    // well keeps them, because their lights are still on and that well is about
+    // who is around (§7.3, §8): before this it only held people who were in a
+    // room, so a building where somebody was signed in but in no room drew an
+    // empty strip beside a "+1 lights on" count of that same person.
+    await expect(
+      page.locator(`section[aria-label="Rooms"] [data-motion-person="43"]`),
+    ).toHaveCount(0);
     // The rim dims and the face slides out — as a ghost, because the store
     // update that told us has already taken the real face out of the tree.
     expectRecipes('departure', sample, ['dim', 'leave']);

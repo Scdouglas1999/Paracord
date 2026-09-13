@@ -218,14 +218,25 @@ export function Lobby({ guildId }: LobbyProps) {
    * disagreeing about the same person. `building.people` is everybody the
    * building can see, which is what the count is drawn from too.
    *
-   * Only lit people get a face. Light is state (§0): a stack of matte
-   * strangers under the words "Around now" would be five people who are not.
+   * Who gets a face: somebody whose lights are on, or somebody who is visibly
+   * in a room. Nobody else. Light is state (§0), so a stack of matte strangers
+   * under the words "Around now" would be five people who are not around — and
+   * a person standing in a voice room is around whatever their presence says.
+   *
+   * The people *in rooms* come first, because they are who the sentence beside
+   * the stack is about ("Priya and Ren are in Shop floor"); with more lit
+   * people than faces, the stack must not overflow the ones it is naming.
    */
   const litPeople = useMemo(
     () =>
       (building?.people ?? NO_PEOPLE)
-        .filter((person) => person.lit)
-        .sort((a, b) => a.name.localeCompare(b.name)),
+        .filter((person) => person.lit || inARoom(person))
+        .sort(
+          (a, b) =>
+            Number(inARoom(b)) - Number(inARoom(a)) ||
+            Number(b.lit) - Number(a.lit) ||
+            a.name.localeCompare(b.name),
+        ),
     [building],
   );
 
@@ -463,6 +474,11 @@ export function Lobby({ guildId }: LobbyProps) {
       )}
     </div>
   );
+}
+
+/** Somebody the building can actually see standing in one of its rooms. */
+function inARoom(person: PersonLight): boolean {
+  return person.live || person.roomName != null;
 }
 
 /** Paracord snowflake → ms, without throwing on anything that is not one. */
