@@ -33,12 +33,35 @@ RUN_ID = f"fed-live-{int(time.time())}-{os.getpid()}"
 BASE_DIR = ROOT / "data" / RUN_ID
 KEYS_DIR = BASE_DIR / "keys"
 LOGS_DIR = BASE_DIR / "logs"
-BINARY = ROOT / "target" / "debug" / "paracord-server.exe"
 PASSWORD = "Paracord!Federation!123"
+
+
+def resolve_server_binary() -> Path:
+    """Find the `paracord-server` this checkout built, on any platform.
+
+    These validations were written against a Windows debug build and hard-coded
+    `target/debug/paracord-server.exe`, which does not exist on Linux or macOS —
+    or in a release pipeline, which only builds `--release`. Look for both
+    profiles and both file names, preferring the release binary the rest of the
+    release smokes use, and let `PARACORD_FED_SERVER_BIN` override.
+    """
+    override = os.environ.get("PARACORD_FED_SERVER_BIN")
+    if override:
+        return Path(override)
+    name = "paracord-server.exe" if os.name == "nt" else "paracord-server"
+    for profile in ("release", "debug"):
+        candidate = ROOT / "target" / profile / name
+        if candidate.exists():
+            return candidate
+    # Nothing built: name the release path so the error points at the usual fix.
+    return ROOT / "target" / "release" / name
+
+
+BINARY = resolve_server_binary()
 LIVEKIT_PORT = 27880
 LIVEKIT_KEY = "fed-livekit-shared-key"
 LIVEKIT_SECRET = "fed-livekit-shared-secret-0123456789abcdef"
-LIVEKIT_BINARY_NAME = "livekit-server.exe"
+LIVEKIT_BINARY_NAME = "livekit-server.exe" if os.name == "nt" else "livekit-server"
 LIVEKIT_BINARY_TARGET = ROOT / LIVEKIT_BINARY_NAME
 
 # 1x1 transparent PNG
@@ -88,7 +111,12 @@ def run(cmd: list[str], cwd: Path | None = None) -> None:
 
 
 def locate_livekit_binary() -> Path:
+    # An installed copy on PATH is the ordinary case on Linux/macOS, where the
+    # Windows-shaped `dist/` and `livekit-extracted-win/` layouts below never
+    # exist.
+    on_path = shutil.which(LIVEKIT_BINARY_NAME)
     candidates = [
+        *( [Path(on_path)] if on_path else [] ),
         ROOT / LIVEKIT_BINARY_NAME,
         ROOT / "dist" / "paracord-server" / LIVEKIT_BINARY_NAME,
         ROOT / "dist" / "paracord-server-win-0.2.2" / LIVEKIT_BINARY_NAME,
@@ -102,7 +130,9 @@ def locate_livekit_binary() -> Path:
         if candidate.exists():
             return candidate
     raise RuntimeError(
-        "LiveKit binary not found; voice join/leave live validation requires livekit-server.exe"
+        f"LiveKit binary not found; voice join/leave live validation requires "
+        f"{LIVEKIT_BINARY_NAME} on PATH or in one of: "
+        + ", ".join(str(c) for c in candidates)
     )
 
 

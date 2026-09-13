@@ -30,8 +30,31 @@ ROOT = Path(__file__).resolve().parents[1]
 BASE_DIR = ROOT / "data" / "fed-e2e"
 KEYS_DIR = BASE_DIR / "keys"
 LOGS_DIR = BASE_DIR / "logs"
-BINARY = ROOT / "target" / "debug" / "paracord-server.exe"
 PASSWORD = "Paracord!Federation!123"
+
+
+def resolve_server_binary() -> Path:
+    """Find the `paracord-server` this checkout built, on any platform.
+
+    These validations were written against a Windows debug build and hard-coded
+    `target/debug/paracord-server.exe`, which does not exist on Linux or macOS —
+    or in a release pipeline, which only builds `--release`. Look for both
+    profiles and both file names, preferring the release binary the rest of the
+    release smokes use, and let `PARACORD_FED_SERVER_BIN` override.
+    """
+    override = os.environ.get("PARACORD_FED_SERVER_BIN")
+    if override:
+        return Path(override)
+    name = "paracord-server.exe" if os.name == "nt" else "paracord-server"
+    for profile in ("release", "debug"):
+        candidate = ROOT / "target" / profile / name
+        if candidate.exists():
+            return candidate
+    # Nothing built: name the release path so the error points at the usual fix.
+    return ROOT / "target" / "release" / name
+
+
+BINARY = resolve_server_binary()
 
 
 @dataclass(frozen=True)
@@ -200,6 +223,36 @@ def clone_shared_guild_and_channel(
         dst.commit()
 
 
+def room_id_for(guild_id: int, origin: Node) -> str:
+    """The federation room id the server derives for a local guild."""
+    return f"!{guild_id}:{origin.server_name}"
+
+
+def record_room_membership(
+    node_key: str,
+    guild_id: int,
+    remote_user_id: str,
+    local_user_id: int,
+) -> None:
+    """Record a remote participant of the shared room on `node_key`.
+
+    Content envelopes fan out ONLY to servers with a recorded participant in the
+    room (`federation_room_memberships`), and fail closed on an empty set — a
+    deliberate security property: without it, trusting one peer shipped that peer
+    every message in every purely-local guild. This validation stands the shared
+    guild up by cloning rows rather than by driving real joins, so it has to
+    record the same membership a real `m.member.join` would, or nothing is ever
+    eligible to be sent and the propagation cases test nothing.
+    """
+    with db_connect(node_key) as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO federation_room_memberships "
+            "(room_id, remote_user_id, local_user_id, guild_id) VALUES (?, ?, ?, ?)",
+            (room_id_for(guild_id, NODES["a"]), remote_user_id, local_user_id, guild_id),
+        )
+        conn.commit()
+
+
 def insert_row(conn: sqlite3.Connection, table: str, row: dict[str, Any]) -> None:
     cols = list(row.keys())
     placeholders = ", ".join(["?"] * len(cols))
@@ -238,10 +291,20 @@ def main() -> int:
             key_hex = os.urandom(32).hex()
             (KEYS_DIR / f"{node.key}.hex").write_text(key_hex, encoding="utf-8")
 
-        log("[2/9] Building paracord-server binary")
-        run(["cargo", "build", "-p", "paracord-server"], cwd=ROOT)
-        if not BINARY.exists():
-            raise RuntimeError(f"Missing expected server binary: {BINARY}")
+        # Build only what is missing, and build the profile that will actually
+        # run: the release binary is what the release smokes test, so when one
+        # is already there (or PARACORD_FED_SERVER_BIN names one) do not spend
+        # a debug build and then run something else.
+        if BINARY.exists():
+            log(f"[2/9] Using existing server binary {BINARY}")
+        else:
+            log("[2/9] Building paracord-server binary")
+            run(["cargo", "build", "-p", "paracord-server"], cwd=ROOT)
+            if not BINARY.exists():
+                raise RuntimeError(
+                    f"Missing expected server binary: {BINARY}. Build it with "
+                    "`cargo build --release --bin paracord-server`."
+                )
 
         cfg_paths = {k: write_config(v) for k, v in NODES.items()}
         child_env = os.environ.copy()
@@ -347,6 +410,20 @@ def main() -> int:
 
         clone_shared_guild_and_channel(guild_id, channel_id, admin_ids["b"], "b")
         clone_shared_guild_and_channel(guild_id, channel_id, admin_ids["c"], "c")
+
+        # Make the shared room an actually-federated room: every node records the
+        # other two nodes' admins as participants, exactly as a real join would.
+        # A's fan-out then reaches B (its only peer here), and B relays on to C.
+        for holder in ("a", "b", "c"):
+            for participant in ("a", "b", "c"):
+                if participant == holder:
+                    continue
+                record_room_membership(
+                    holder,
+                    guild_id,
+                    f"@admin_{participant}:{NODES[participant].server_name}",
+                    admin_ids[holder],
+                )
 
         log("[7/9] Validating cross-node message/reaction propagation and relay")
         message_text = "federation e2e message"
