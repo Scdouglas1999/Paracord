@@ -12,6 +12,7 @@ import { useUIStore } from '../stores/uiStore';
 import { useServerListStore } from '../stores/serverListStore';
 import { RestartBanner } from '../components/RestartBanner';
 import { ConnectionStatusBar } from '../components/ConnectionStatusBar';
+import { IncomingCallBanner } from '../components/dm/IncomingCallBanner';
 import { UpdateNotification } from '../components/UpdateNotification';
 import { ToastContainer } from '../components/ui/Toast';
 import { ImageLightbox } from '../components/ui/ImageLightbox';
@@ -118,6 +119,7 @@ function AppInitializer({ children }: { children: ReactNode }) {
   return (
     <>
       <ConnectionStatusBar />
+      <IncomingCallBanner />
       <RestartBanner />
       <UpdateNotification />
       <ToastContainer />
