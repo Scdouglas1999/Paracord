@@ -33,6 +33,18 @@ import { motionToken, ms } from './tokens';
 
 export const FLIP_KEY_ATTR = 'data-flip-key';
 
+/**
+ * Every animation this module creates carries the same id convention
+ * `flip.ts` uses — `data-motion-recipe:<name>` — so the frame gate can say
+ * which recipe a dropped frame belongs to instead of reporting `anonymous`.
+ */
+const RECIPE = 'data-motion-recipe';
+
+function tag(animation: Animation, recipe: string): Animation {
+  animation.id = `${RECIPE}:${recipe}`;
+  return animation;
+}
+
 const MOVED_EPSILON_PX = 0.5;
 
 /**
@@ -145,16 +157,19 @@ function playDeparture(el: HTMLElement, box: Box, frame: Frame, zIndex: string):
   (document.body ?? document.documentElement).append(clone);
   const drop = () => clone.remove();
   if (typeof clone.animate === 'function') {
-    const animation = clone.animate(
-      [
-        { opacity: 1, transform: 'translate3d(0, 0, 0)' },
-        { opacity: 0, transform: 'translate3d(0, 4px, 0)' },
-      ],
-      {
-        duration: ms('--duration-fast'),
-        easing: motionToken('--ease-in'),
-        fill: 'forwards',
-      },
+    const animation = tag(
+      clone.animate(
+        [
+          { opacity: 1, transform: 'translate3d(0, 0, 0)' },
+          { opacity: 0, transform: 'translate3d(0, 4px, 0)' },
+        ],
+        {
+          duration: ms('--duration-fast'),
+          easing: motionToken('--ease-in'),
+          fill: 'forwards',
+        },
+      ),
+      'exit',
     );
     animation.finished.then(drop, drop);
     animation.addEventListener('cancel', drop);
@@ -256,21 +271,24 @@ export function useFlipList<T extends HTMLElement = HTMLElement>(
             continue;
           }
           if (typeof el.animate !== 'function') continue;
-          el.animate(
-            enterStyle === 'pop'
-              ? [
-                  { opacity: 0, transform: 'scale(0.6)' },
-                  { opacity: 1, transform: 'scale(1)' },
-                ]
-              : [
-                  { opacity: 0, transform: `translate3d(0, ${enterDistance}px, 0)` },
-                  { opacity: 1, transform: 'translate3d(0, 0, 0)' },
-                ],
-            {
-              duration: enterDuration,
-              easing: springEasing(spring, { durationMs: enterDuration }),
-              fill: 'backwards',
-            },
+          tag(
+            el.animate(
+              enterStyle === 'pop'
+                ? [
+                    { opacity: 0, transform: 'scale(0.6)' },
+                    { opacity: 1, transform: 'scale(1)' },
+                  ]
+                : [
+                    { opacity: 0, transform: `translate3d(0, ${enterDistance}px, 0)` },
+                    { opacity: 1, transform: 'translate3d(0, 0, 0)' },
+                  ],
+              {
+                duration: enterDuration,
+                easing: springEasing(spring, { durationMs: enterDuration }),
+                fill: 'backwards',
+              },
+            ),
+            enterStyle === 'pop' ? 'pop' : 'enter',
           );
           continue;
         }
@@ -285,16 +303,19 @@ export function useFlipList<T extends HTMLElement = HTMLElement>(
         prior?.cancel();
         running.current.set(
           el,
-          el.animate(
-            [
-              { transform: `translate3d(${delta.dx}px, ${delta.dy}px, 0)` },
-              { transform: 'translate3d(0, 0, 0)' },
-            ],
-            {
-              duration: moveDuration,
-              easing: springEasing({ ...spring, velocity }, { durationMs: moveDuration }),
-              fill: 'none',
-            },
+          tag(
+            el.animate(
+              [
+                { transform: `translate3d(${delta.dx}px, ${delta.dy}px, 0)` },
+                { transform: 'translate3d(0, 0, 0)' },
+              ],
+              {
+                duration: moveDuration,
+                easing: springEasing({ ...spring, velocity }, { durationMs: moveDuration }),
+                fill: 'none',
+              },
+            ),
+            'flip',
           ),
         );
       }
@@ -344,12 +365,15 @@ export function flipBetween(
   const duration = options.duration ?? ms('--duration-move');
   const easing = options.easing ?? springEasing(springTokens(), { durationMs: duration });
   const origin = options.origin ?? 'left top';
-  return el.animate(
-    [
-      { transformOrigin: origin, transform: `translate3d(${dx}px, ${dy}px, 0) scale(${sx}, ${sy})` },
-      { transformOrigin: origin, transform: 'translate3d(0, 0, 0) scale(1, 1)' },
-    ],
-    { duration, easing, fill: 'none' },
+  return tag(
+    el.animate(
+      [
+        { transformOrigin: origin, transform: `translate3d(${dx}px, ${dy}px, 0) scale(${sx}, ${sy})` },
+        { transformOrigin: origin, transform: 'translate3d(0, 0, 0) scale(1, 1)' },
+      ],
+      { duration, easing, fill: 'none' },
+    ),
+    'flip',
   );
 }
 
@@ -466,15 +490,18 @@ export function useIndicator(
       const { velocity } = sampleRunning(prior);
       prior?.cancel();
       const duration = ms('--duration-normal');
-      running.current = indicator.animate(
-        [
-          {
-            transformOrigin: 'left top',
-            transform: `translate3d(${first.left}px, ${first.top}px, 0) scale(${box.width > 0 ? first.width / box.width : 1}, ${box.height > 0 ? first.height / box.height : 1})`,
-          },
-          { transformOrigin: 'left top', transform: `translate3d(${box.left}px, ${box.top}px, 0) scale(1, 1)` },
-        ],
-        { duration, easing: springEasing({ ...springTokens(), velocity }, { durationMs: duration }), fill: 'backwards' },
+      running.current = tag(
+        indicator.animate(
+          [
+            {
+              transformOrigin: 'left top',
+              transform: `translate3d(${first.left}px, ${first.top}px, 0) scale(${box.width > 0 ? first.width / box.width : 1}, ${box.height > 0 ? first.height / box.height : 1})`,
+            },
+            { transformOrigin: 'left top', transform: `translate3d(${box.left}px, ${box.top}px, 0) scale(1, 1)` },
+          ],
+          { duration, easing: springEasing({ ...springTokens(), velocity }, { durationMs: duration }), fill: 'backwards' },
+        ),
+        'indicator',
       );
     },
     [containerRef, options.thickness, options.insetX],
