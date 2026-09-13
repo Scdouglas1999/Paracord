@@ -1832,3 +1832,20 @@ Not complete: items 2 (remaining unowned API workflows, connection lifetime),
 6 (real device keyboard), 7 (encrypted scheduling), 13, 14 (client voiceStore
 decomposition), 15 (two servers, revoked permission, unsupported poll, mobile
 width), 16 (released SQLite upgrade fixture, encrypted-media recovery evidence).
+
+
+## 2026-09-13 — Lantern Stage + motion merged; release candidate 3.0.0
+
+- `design/lantern-stage` (WP0–WP8 UI overhaul, WP9a–d motion layer; spec
+  `docs/lantern-stage-spec.md`, per-package notes `docs/design/wp*-checkpoint.md`,
+  motion inventory `docs/design/wp9-summary.md`) merged at `1f54b40`.
+- framer-motion removed; every overlay runs on `lib/motion`.
+- HTTP rate-limiter tiers are now env-overridable (`PARACORD_HTTP_RATE_LIMIT_*`,
+  defaults unchanged); the loopback e2e harness raises them because the suite's
+  own traffic exceeded the product ceiling (13 cases ≈ 700 requests, 77 auth).
+- Release plumbing: `release.yml` creates **draft** releases; versions bumped to
+  3.0.0; `RELEASE_NOTES.md` skeleton.
+- Gate at merge: 2,374 client unit tests, 84 mocked e2e, 13/13 real-server ×3,
+  messaging 6/6, DM-attachments 1/1, motion gate 22 cases, all Rust suites,
+  fmt, clippy 1.91.
+- Next: live multi-agent QA across every domain, then tag `v3.0.0` (draft).
