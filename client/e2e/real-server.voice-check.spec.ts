@@ -132,18 +132,15 @@ async function dismissLayoutTour(page: Page): Promise<void> {
 }
 
 async function openConnectionCheck(page: Page): Promise<void> {
-  // The desktop shell has a settings button in the user panel; the phone layout
-  // reaches the same surface through the bottom navigation bar.
-  const desktopEntry = page.getByRole('button', { name: 'Open user settings', exact: true });
-  const phoneEntry = page.getByRole('button', { name: 'Settings', exact: true });
-  // Wait for whichever shell rendered before deciding, so a slow first paint
-  // does not silently send a desktop run down the phone path.
-  await expect(desktopEntry.or(phoneEntry).first()).toBeVisible();
-  if ((await desktopEntry.count()) > 0) {
-    await desktopEntry.click();
-  } else {
-    await phoneEntry.click();
-  }
+  // Pick the entry point by viewport rather than by probing: the desktop user
+  // panel and the phone navigation bar swap at Tailwind's `md` breakpoint, and
+  // the losing one is unmounted a tick later.
+  const width = page.viewportSize()?.width ?? 1280;
+  const entry =
+    width < 768
+      ? page.getByRole('button', { name: 'Settings', exact: true })
+      : page.getByRole('button', { name: 'Open user settings', exact: true });
+  await entry.click();
   await page.getByRole('button', { name: 'Voice & Video', exact: true }).click();
   await page.getByRole('button', { name: /Run connection check/i }).click();
   await expect(page.getByRole('dialog').filter({ hasText: 'Voice connection check' })).toBeVisible();
