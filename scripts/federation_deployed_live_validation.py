@@ -24,7 +24,7 @@ import sys
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
-from urllib.parse import urlencode, urlparse
+from urllib.parse import quote, urlencode, urlparse
 
 import requests
 import urllib3
@@ -800,11 +800,14 @@ def main() -> int:
             timeout_s=20.0,
         )
 
-        emoji_name = "thumbsup"
+        # A reaction has to be a real emoji; the stored emoji_name is the
+        # character itself, so the path is the percent-encoded form of it.
+        emoji_name = "\N{THUMBS UP SIGN}"
+        emoji_path = quote(emoji_name)
         request_json(
             session,
             "PUT",
-            f"{nodes['a'].url}/api/v1/channels/{text_channel_id}/messages/{message_id}/reactions/{emoji_name}/@me",
+            f"{nodes['a'].url}/api/v1/channels/{text_channel_id}/messages/{message_id}/reactions/{emoji_path}/@me",
             token=actor_a_token,
             expected=(204,),
         )
@@ -816,7 +819,7 @@ def main() -> int:
         request_json(
             session,
             "DELETE",
-            f"{nodes['a'].url}/api/v1/channels/{text_channel_id}/messages/{message_id}/reactions/{emoji_name}/@me",
+            f"{nodes['a'].url}/api/v1/channels/{text_channel_id}/messages/{message_id}/reactions/{emoji_path}/@me",
             token=actor_a_token,
             expected=(204,),
         )

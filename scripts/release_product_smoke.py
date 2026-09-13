@@ -932,6 +932,22 @@ def run_smoke(args: argparse.Namespace) -> None:
             if accepted["guild"]["id"] != guild_id:
                 raise AssertionError("accepted invite returned the wrong guild")
 
+            # The third account joins too. A group DM may only be opened with
+            # people the creator is already a friend of or shares a space with
+            # (routes/dms.rs create_group_dm, the same consent gate as a 1:1
+            # DM), and the group-DM case below names this account: without a
+            # shared space the server refuses it, correctly, with 403.
+            third_accepted = request_json(
+                "POST",
+                base_url,
+                f"/api/v1/invites/{code}",
+                token=third_user_token,
+                body={},
+                label="third user accepts invite",
+            )
+            if third_accepted["guild"]["id"] != guild_id:
+                raise AssertionError("third user's accepted invite returned the wrong guild")
+
             members = request_json(
                 "GET",
                 base_url,
@@ -1170,7 +1186,8 @@ def run_smoke(args: argparse.Namespace) -> None:
             if not any(pin.get("id") == message_id for pin in pins):
                 raise AssertionError("pinned message missing from pins response")
 
-            emoji = urllib.parse.quote("ok")
+            # A reaction has to be a real emoji, so percent-encode 👍 for the path.
+            emoji = urllib.parse.quote("\N{THUMBS UP SIGN}")
             request_json(
                 "PUT",
                 base_url,

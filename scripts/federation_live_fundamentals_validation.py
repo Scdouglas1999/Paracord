@@ -20,6 +20,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -976,10 +977,13 @@ def main() -> int:
             == "federation live message edited",
         )
 
-        emoji_name = "thumbsup"
+        # A reaction has to be a real emoji; the stored emoji_name is the
+        # character itself, so the path is the percent-encoded form of it.
+        emoji_name = "\N{THUMBS UP SIGN}"
+        emoji_path = urllib.parse.quote(emoji_name)
         request_json(
             "PUT",
-            f"{NODES['a'].url}/api/v1/channels/{text_channel_id}/messages/{message_id}/reactions/{emoji_name}/@me",
+            f"{NODES['a'].url}/api/v1/channels/{text_channel_id}/messages/{message_id}/reactions/{emoji_path}/@me",
             token=admin_tokens["a"],
             expected=(204,),
         )
@@ -1000,7 +1004,7 @@ def main() -> int:
 
         request_json(
             "DELETE",
-            f"{NODES['a'].url}/api/v1/channels/{text_channel_id}/messages/{message_id}/reactions/{emoji_name}/@me",
+            f"{NODES['a'].url}/api/v1/channels/{text_channel_id}/messages/{message_id}/reactions/{emoji_path}/@me",
             token=admin_tokens["a"],
             expected=(204,),
         )

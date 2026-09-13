@@ -516,10 +516,13 @@ def main() -> int:
         wait_until("edited message on B", lambda: mapped_message_content("b") == edited_text, 30.0)
         wait_until("edited message on C", lambda: mapped_message_content("c") == edited_text, 30.0)
 
-        emoji = "thumbsup"
+        # A reaction has to be a real emoji; the stored emoji_name is the
+        # character itself, so the path is the percent-encoded form of it.
+        emoji = "\N{THUMBS UP SIGN}"
+        emoji_path = urllib.parse.quote(emoji)
         request_json(
             "PUT",
-            f"{NODES['a'].url}/api/v1/channels/{channel_id}/messages/{message_id}/reactions/{emoji}/@me",
+            f"{NODES['a'].url}/api/v1/channels/{channel_id}/messages/{message_id}/reactions/{emoji_path}/@me",
             token=admin_tokens["a"],
             expected=(204,),
         )
@@ -542,7 +545,7 @@ def main() -> int:
 
         request_json(
             "DELETE",
-            f"{NODES['a'].url}/api/v1/channels/{channel_id}/messages/{message_id}/reactions/{emoji}/@me",
+            f"{NODES['a'].url}/api/v1/channels/{channel_id}/messages/{message_id}/reactions/{emoji_path}/@me",
             token=admin_tokens["a"],
             expected=(204,),
         )
