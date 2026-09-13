@@ -507,14 +507,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
         {bio && (
           <div className="px-5 pb-4">
             <SectionLabel>About</SectionLabel>
-            <div
-              className="rounded-md px-3.5 py-3 text-body"
-              style={{
-                background: 'var(--bg-tertiary)',
-                boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.02)',
-                color: 'var(--text-secondary)',
-              }}
-            >
+            <div className="pc-well px-3.5 py-3 text-body text-text-secondary">
               {parseMarkdown(bio)}
             </div>
           </div>

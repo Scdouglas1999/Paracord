@@ -133,6 +133,11 @@ the contrast audit's block parser still finds it.
   glyph is a name tag; the filter strip is the tab recipe.
 - `MessageEditHistoryDialog` — `.pc-dialog`, versions in the mono meta face,
   bodies wrap at `leading-relaxed`.
+- `ImageLightbox` — its controls and filename chip painted `text-white/85` on
+  `rgba(0,0,0,.45)`, which is what "ink over a photo" looked like before there
+  was an answer. There is one: `pc-tag` (spec §8), the name tag a live tile
+  already uses. The lightbox is on it now, and the last literal colour in
+  `components/ui/` went with it.
 - `DmPickerModal` — the Direct/Group tabs and the selected-recipient row now use
   the well/raised recipe instead of an accent tint.
 - `VoiceConnectionCheck` — the verdict banner and each step's readout are wells
@@ -286,8 +291,23 @@ Found and removed inside WP7's scope:
 - **Placeholder microcopy** — "Nothing detected yet" for the activity-privacy
   list became "Paracord hasn't seen you in another app yet", with the same
   follow-on line telling you how to make something appear.
+- **Status dots** — server connect drew three presence dots (`accent-success` /
+  `accent-warning` / `text-faint`) beside each saved server. §1.5 and §6.6 say
+  presence is light, never a coloured dot; the words "Connected",
+  "Saved — not connected" and "Sign-in required" carry it alone now.
+- **Identical-card tiling** — six identical stat cards in the admin overview,
+  nineteen intent tiles and thirty permission tiles in the developer pages, and
+  forty-nine checkbox tiles in the permission calculator. All are now
+  hairline-parted rows.
+- **Decorative semantics** — the onboarding wizard gave its three feature icons
+  three different semantic hues, and the admin panels filled cards with
+  `accent-tint`/`warning-tint`/`success-tint`. A semantic colour means
+  something; it is not decoration (§6.3).
+- **Emerald as emphasis** — eyebrow labels ("You're invited", "Step 1 of 2",
+  "Authorize application"), the context menu's hover fill (every item, not just
+  the selected one) and the account avatar. The emerald means an action you can
+  take.
 - **Emoji chrome** — none found in scope.
-- **Status dots** — none left in scope (WP0 removed the tokens).
 
 ---
 
@@ -299,7 +319,7 @@ Run from `client/`.
 |---|---|
 | `npx tsc --noEmit` | pass |
 | `npx eslint . --quiet` | pass, 0 findings |
-| `npx vitest run` | **249 files, 2164 tests passed** |
+| `npx vitest run` | **250 files, 2255 tests passed** |
 | `npm run build` | pass |
 | `npx playwright test` (mocked smoke) | **84 passed** |
 | `npm run test:a11y:static` | pass |
@@ -349,12 +369,22 @@ possible:
   password requirements that match what the setup page advertises, and an admin
   flag on the fixture user so the admin panel and the Server section render.
 
+### The frames
+
+Each name below exists at both `-1440x900` and `-390x844`:
+
+| Group | Frames |
+|---|---|
+| User settings | `settings-user-my-account` `-appearance` `-voice-video` `-notifications` `-activity-privacy` `-keybinds` `-identity` `-server` `-about` |
+| Other settings | `settings-space` `settings-admin` `settings-developer` |
+| Dialogs | `dialog-voice-check` (over the settings overlay) `dialog-invite` `dialog-confirm` |
+| Entry screens | `auth-login` `auth-register` `auth-setup-server` `auth-connect` `auth-account-setup` `auth-account-unlock` `auth-account-recover` `auth-invite` `auth-terms` `auth-privacy` |
+| Context (unchanged by WP7, kept for comparison) | `home` `channel` `dm` `lobby` `settings` `tokens` (+ `tokens-themes` / `tokens-primitives` at desktop only) |
+
 ---
 
 ## 8. Left for WP8
 
-- `ImageLightbox` still paints `text-white/85` over arbitrary imagery; it needs
-  a decision about what "ink over a photo" is in this system.
 - `CommandPalette` and `DiscoveryPage` still pass `panelClassName` overrides
   (`border-border-strong`, `bg-bg-secondary`) to `Modal` that the dialog recipe
   now supersedes — dead classes, harmless, worth deleting in the sweep.
