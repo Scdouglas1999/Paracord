@@ -742,7 +742,7 @@ function OwnedTopBar({
         ) : summaryError ? (
           <div
             role="alert"
-            className="rounded-md border border-accent-danger/30 bg-danger-tint px-4 py-3 text-label text-accent-danger"
+            className="rounded-well border border-accent-danger/30 bg-danger-tint px-4 py-3 text-label text-accent-danger"
           >
             {summaryError}
           </div>
@@ -757,7 +757,7 @@ function OwnedTopBar({
                 <span className="tabular-nums"><span className="font-semibold text-text-secondary">{summaryMeta.messageCount}</span> messages</span>
               </div>
             )}
-            <pre className="whitespace-pre-wrap rounded-md border border-border-subtle bg-bg-mod-subtle p-4 text-body leading-relaxed text-text-secondary">
+            <pre className="whitespace-pre-wrap rounded-well border border-border-subtle bg-bg-mod-subtle p-4 text-body leading-relaxed text-text-secondary">
               {summaryText || 'No summary available.'}
             </pre>
           </>
@@ -779,7 +779,7 @@ function OwnedTopBar({
         {followError && (
           <div
             role="alert"
-            className="mb-3 rounded-md border border-accent-danger/30 bg-danger-tint px-4 py-3 text-label text-accent-danger"
+            className="mb-3 rounded-well border border-accent-danger/30 bg-danger-tint px-4 py-3 text-label text-accent-danger"
           >
             {followError}
           </div>
@@ -802,7 +802,7 @@ function OwnedTopBar({
                   {existing ? (
                     <button
                       type="button"
-                      className="inline-flex h-8 shrink-0 items-center rounded-sm bg-bg-mod-subtle px-3 text-meta font-semibold text-accent-danger outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-danger-tint focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
+                      className="inline-flex h-8 shrink-0 items-center rounded-chip bg-bg-mod-subtle px-3 text-meta font-semibold text-accent-danger outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-danger-tint focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
                       onClick={() => void removeFollower(targetChannel.id)}
                       disabled={busy}
                     >
@@ -811,7 +811,7 @@ function OwnedTopBar({
                   ) : (
                     <button
                       type="button"
-                      className="inline-flex h-8 shrink-0 items-center rounded-sm bg-accent-primary px-3 text-meta font-semibold text-text-on-accent shadow-sm outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-primary-hover focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
+                      className="inline-flex h-8 shrink-0 items-center rounded-chip bg-accent-primary px-3 text-meta font-semibold text-text-on-accent shadow-[var(--shadow-chip)] outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-primary-hover focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
                       onClick={() => void addFollower(targetChannel.id, targetChannel.guild_id || '')}
                       disabled={busy || !targetChannel.guild_id}
                     >
@@ -824,11 +824,11 @@ function OwnedTopBar({
           </ul>
         ) : (
           <div className="flex items-start gap-3.5 py-6">
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-sm bg-accent-tint text-accent-primary">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-chip bg-accent-tint text-accent-primary">
               <Share2 size={20} />
             </span>
             <div className="min-w-0 pt-0.5">
-              <h3 className="text-subhead text-text-primary">Nothing to follow into yet</h3>
+              <h3 className="text-heading text-text-primary">Nothing to follow into yet</h3>
               <p className="mt-1 text-label text-text-secondary">
                 Create another text channel in this space to cross-post announcements from here.
               </p>

@@ -73,7 +73,7 @@ export function HelpOverlay({ open, onClose }: HelpOverlayProps) {
                     {item.keys.map((k) => (
                       <kbd
                         key={k}
-                        className="inline-flex min-w-[1.75rem] items-center justify-center rounded-xs bg-bg-mod-strong px-1.5 py-1 font-code text-meta font-semibold text-text-secondary"
+                        className="inline-flex min-w-[1.75rem] items-center justify-center rounded-window bg-bg-mod-strong px-1.5 py-1 font-code text-meta font-semibold text-text-secondary"
                       >
                         {formatShortcutKey(k)}
                       </kbd>

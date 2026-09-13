@@ -85,6 +85,13 @@
   background-color: var(--scrollbar-auto-thumb-hover);
 }
 
+/* An explicit thin scrollbar on a scroll container. The rule above already sets
+   `scrollbar-width: thin` globally; naming it at the call site says the
+   container means it, and survives any change to that default. */
+.scrollbar-thin {
+  scrollbar-width: thin;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -99,6 +106,5 @@
   .popup-enter {
     animation: none !important;
   }
-
 }
 

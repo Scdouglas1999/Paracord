@@ -35,19 +35,19 @@ interface Token {
 const MARKDOWN_STYLE_ID = 'paracord-markdown-styles';
 const MARKDOWN_STYLES = `
 .spoiler {
-  background-color: var(--spoiler-bg, #202225);
+  background-color: var(--spoiler-bg);
   color: transparent;
-  border-radius: 3px;
+  border-radius: var(--radius-window);
   padding: 0 2px;
   cursor: pointer;
   transition: all 0.1s;
 }
 .spoiler.spoiler-revealed {
-  background-color: var(--spoiler-bg-revealed, rgba(255, 255, 255, 0.1));
+  background-color: var(--spoiler-bg-revealed);
   color: inherit;
 }
 .paracord-md-link {
-  color: var(--text-link, #00aff4);
+  color: var(--text-link);
   text-decoration: none;
 }
 .paracord-md-link:hover {
@@ -257,9 +257,11 @@ function renderInline(text: string, guildId?: string, mentionMap?: Map<string, s
           {
             key: i,
             style: {
-              backgroundColor: 'rgba(255, 214, 10, 0.22)',
+              // ==highlight== is a marker pen, and the warning token is the
+              // only amber the palette has that is not a light (§1.3, §6.3).
+              backgroundColor: 'var(--warning-tint)',
               color: 'inherit',
-              borderRadius: '2px',
+              borderRadius: 'var(--radius-window)',
               paddingInline: '2px',
             },
           },
@@ -309,9 +311,10 @@ function renderInline(text: string, guildId?: string, mentionMap?: Map<string, s
           {
             key: i,
             style: {
-              backgroundColor: 'rgba(88, 101, 242, 0.3)',
-              color: '#c9d1ff',
-              borderRadius: '3px',
+              // §1.2: an @mention is the action colour, not the v1 blurple.
+              backgroundColor: 'var(--accent-tint-strong)',
+              color: 'var(--accent-primary)',
+              borderRadius: 'var(--radius-window)',
               padding: '0 2px',
               fontWeight: 500,
               cursor: onMentionClick ? 'pointer' : 'default',

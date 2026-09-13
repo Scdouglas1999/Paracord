@@ -105,7 +105,7 @@ export function ThreadPanel({
             type="button"
             onClick={openParentChannel}
             disabled={!threadChannel?.parent_id}
-            className="mt-0.5 flex max-w-full items-center gap-1.5 rounded-xs text-meta text-text-muted outline-none transition-colors hover:text-accent-primary focus-visible:shadow-[var(--focus-ring)] disabled:pointer-events-none"
+            className="mt-0.5 flex max-w-full items-center gap-1.5 rounded-window text-meta text-text-muted outline-none transition-colors hover:text-accent-primary focus-visible:shadow-[var(--focus-ring)] disabled:pointer-events-none"
             aria-label={`Open parent channel ${parentChannelName || 'parent channel'}`}
           >
             <Hash size={12} className="shrink-0" />
@@ -118,7 +118,7 @@ export function ThreadPanel({
               type="button"
               onClick={() => void restoreThread()}
               disabled={restoring}
-              className="rounded-sm border border-border-subtle bg-bg-mod-subtle px-3 py-1.5 text-label font-semibold text-text-secondary shadow-sm transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
+              className="rounded-chip border border-border-subtle bg-bg-mod-subtle px-3 py-1.5 text-label font-semibold text-text-secondary shadow-[var(--shadow-chip)] transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
             >
               Restore
             </button>
@@ -128,14 +128,14 @@ export function ThreadPanel({
               type="button"
               onClick={() => void deleteThread()}
               disabled={deleting}
-              className="rounded-sm border border-border-subtle bg-bg-mod-subtle px-3 py-1.5 text-label font-semibold text-accent-danger shadow-sm transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-danger-tint focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
+              className="rounded-chip border border-border-subtle bg-bg-mod-subtle px-3 py-1.5 text-label font-semibold text-accent-danger shadow-[var(--shadow-chip)] transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-danger-tint focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
             >
               {deleting ? 'Deleting...' : 'Delete'}
             </button>
           )}
           <button
             onClick={onClose}
-            className="command-icon-btn h-9 w-9 rounded-sm border border-border-subtle bg-bg-mod-subtle text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+            className="command-icon-btn h-9 w-9 rounded-chip border border-border-subtle bg-bg-mod-subtle text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
             aria-label="Close thread"
             title="Close thread"
           >
@@ -146,7 +146,7 @@ export function ThreadPanel({
 
       <div className="flex min-h-0 flex-1 flex-col">
         {isArchived && (
-          <div className="mx-4 mt-3 flex items-start gap-2 rounded-sm border-l-2 border-accent-warning bg-warning-tint px-3 py-2 text-meta text-text-secondary">
+          <div className="mx-4 mt-3 flex items-start gap-2 rounded-chip border-l-2 border-accent-warning bg-warning-tint px-3 py-2 text-meta text-text-secondary">
             {canRestoreThread
               ? 'This thread is archived. Restore it to send new messages.'
               : 'This thread is archived. Its owner or a moderator can restore it.'}

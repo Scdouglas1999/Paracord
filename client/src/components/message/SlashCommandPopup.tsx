@@ -22,9 +22,9 @@ export interface SlashCommandPopupProps {
 const MAX_VISIBLE = 10;
 
 // Popover recipe (design-spec §7): --bg-floating, radius-md, 1px --border-subtle,
-// --shadow-lg, 180ms rise+fade enter.
+// --shadow-plate, 180ms rise+fade enter.
 const POPOVER_CLASS =
-  'absolute bottom-full left-2 right-2 z-30 mb-2 rounded-md border border-border-subtle bg-bg-floating shadow-lg';
+  'absolute bottom-full left-2 right-2 z-30 mb-2 rounded-well border border-border-subtle bg-bg-floating shadow-[var(--shadow-plate)]';
 
 export function SlashCommandPopup({
   query,
@@ -167,7 +167,7 @@ export function SlashCommandPopup({
               <button
                 key={`${choice.name}:${String(choice.value)}`}
                 type="button"
-                className={`flex w-full items-center gap-2.5 rounded-sm px-2 py-1.5 text-left transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
+                className={`flex w-full items-center gap-2.5 rounded-chip px-2 py-1.5 text-left transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
                   selected
                     ? 'bg-accent-tint text-text-primary'
                     : 'text-text-secondary hover:bg-accent-tint hover:text-text-primary'
@@ -179,7 +179,7 @@ export function SlashCommandPopup({
                 onMouseEnter={() => setSelectedIndex(i)}
               >
                 <span
-                  className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-sm ${
+                  className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-chip ${
                     selected ? 'bg-accent-tint-strong text-accent-primary' : 'bg-bg-mod-strong text-text-muted'
                   }`}
                 >
@@ -232,7 +232,7 @@ export function SlashCommandPopup({
             <button
               key={cmd.id}
               type="button"
-              className={`flex w-full items-center gap-2.5 rounded-sm px-2 py-1.5 text-left transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
+              className={`flex w-full items-center gap-2.5 rounded-chip px-2 py-1.5 text-left transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
                 selected
                   ? 'bg-accent-tint text-text-primary'
                   : 'text-text-secondary hover:bg-accent-tint hover:text-text-primary'
@@ -244,7 +244,7 @@ export function SlashCommandPopup({
               onMouseEnter={() => setSelectedIndex(i)}
             >
               <span
-                className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-sm ${
+                className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-chip ${
                   selected ? 'bg-accent-tint-strong text-accent-primary' : 'bg-bg-mod-strong text-text-muted'
                 }`}
               >

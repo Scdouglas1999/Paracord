@@ -95,7 +95,7 @@ function sortThreads(threads: Channel[]): Channel[] {
 }
 
 const CLOSE_BUTTON =
-  'inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-sm text-text-muted ' +
+  'inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-chip text-text-muted ' +
   'outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] ' +
   'hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]';
 
@@ -111,7 +111,7 @@ const CLOSE_BUTTON =
  *   economy  → components/guild/GuildEconomyPanel.tsx
  *   null     → nothing
  *
- * Visual law: Card/panel recipe (design-spec §7) — `bg-bg-secondary`, a
+ * Visual law: Card/panel recipe (design-spec §7) — `bg-bg-raised`, a
  * `border-border-subtle` hairline on the left edge, real elevation, and no
  * gradient hero (kill-list #1). `economy` is wrapped in the shared panel chrome
  * (title + close, focus-visible ring on close). `recipients`, `threads`,
@@ -344,7 +344,7 @@ export function ContextPanel({
           {threadsError ? (
             <div className="flex min-h-0 flex-1 flex-col items-start justify-center px-5 text-left">
               <AlertCircle size={22} className="mb-3 text-danger" aria-hidden />
-              <h3 className="text-subhead text-text-primary">Threads unavailable</h3>
+              <h3 className="text-heading text-text-primary">Threads unavailable</h3>
               <p className="mt-1 text-label text-text-secondary">{threadsError}</p>
             </div>
           ) : (threadsLoading || !hasFetchedThreads) && channelThreads.length === 0 ? (
@@ -354,7 +354,7 @@ export function ContextPanel({
           ) : channelThreads.length === 0 ? (
             <div className="flex min-h-0 flex-1 flex-col items-start justify-center px-5 text-left">
               <MessageSquare size={24} className="mb-3 text-text-muted" aria-hidden />
-              <h3 className="text-subhead text-text-primary">No threads yet</h3>
+              <h3 className="text-heading text-text-primary">No threads yet</h3>
               <p className="mt-1 text-label text-text-secondary">Threaded conversations will appear here.</p>
             </div>
           ) : (
@@ -367,7 +367,7 @@ export function ContextPanel({
                       key={thread.id}
                       type="button"
                       onClick={() => openThread(thread.id)}
-                      className="flex min-h-[44px] w-full items-center gap-2 rounded-sm px-2.5 py-2 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
+                      className="flex min-h-[44px] w-full items-center gap-2 rounded-chip px-2.5 py-2 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
                     >
                       {isArchived ? (
                         <Archive size={16} className="shrink-0 text-text-muted" aria-hidden />
@@ -429,7 +429,7 @@ export function ContextPanel({
     >
       <header className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-4 py-3">
         <header.icon size={18} className="shrink-0 text-text-secondary" aria-hidden />
-        <h2 className="min-w-0 flex-1 truncate text-subhead text-text-primary">{header.title}</h2>
+        <h2 className="min-w-0 flex-1 truncate text-heading text-text-primary">{header.title}</h2>
         <button
           type="button"
           onClick={close}

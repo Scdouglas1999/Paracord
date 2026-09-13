@@ -23,6 +23,7 @@ import { buildGuildEmojiImageUrl } from '../../lib/customEmoji';
 import { cn } from '../../lib/utils';
 import { SectionHeader, GroupLabel, FieldLabel, ToggleRow, GateNotice } from './SettingsPrimitives';
 import { displayName } from '../../lib/displayName';
+import { UNSET_ROLE_COLOR } from '../../lib/colors';
 
 export type ReportStatusFilter =
   | 'all'
@@ -457,7 +458,7 @@ export function RolesSection({
                     />
                     <input
                       className="min-w-0 flex-1 bg-transparent text-label text-text-primary outline-none disabled:cursor-default"
-                      style={{ color: roleColor !== '#000000' ? roleColor : undefined }}
+                      style={{ color: roleColor !== UNSET_ROLE_COLOR ? roleColor : undefined }}
                       defaultValue={role.name}
                       disabled={!canManage || isEveryone}
                       aria-label={`Role name for ${role.name}`}

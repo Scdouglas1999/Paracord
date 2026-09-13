@@ -76,7 +76,7 @@ export function MobileBottomNav() {
     <nav
       className="mobile-bottom-nav flex items-center justify-around border-t border-border-subtle/60 md:hidden"
       style={{
-        backgroundColor: 'color-mix(in srgb, var(--bg-secondary) 95%, transparent)',
+        backgroundColor: 'color-mix(in srgb, var(--bg-raised) 95%, transparent)',
         paddingBottom: 'var(--safe-bottom, 0px)',
       }}
       aria-label="Main navigation"
@@ -87,7 +87,7 @@ export function MobileBottomNav() {
           <button
             key={id}
             onClick={() => handleTabPress(id)}
-            className="flex min-h-[44px] flex-1 flex-col items-center justify-center gap-1 rounded-sm py-1.5 outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]"
+            className="flex min-h-[44px] flex-1 flex-col items-center justify-center gap-1 rounded-chip py-1.5 outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]"
             aria-label={label}
             aria-current={isActive ? 'page' : undefined}
             style={{

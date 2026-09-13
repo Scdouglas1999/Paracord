@@ -74,7 +74,7 @@ export class ErrorBoundary extends Component<Props, State> {
           className="flex h-full w-full min-w-0 flex-col items-start justify-center gap-3 p-6"
           role="alert"
         >
-          <div className="flex h-9 w-9 items-center justify-center rounded-sm bg-danger-tint text-accent-danger">
+          <div className="flex h-9 w-9 items-center justify-center rounded-chip bg-danger-tint text-accent-danger">
             <Bug size={18} />
           </div>
           <div className="min-w-0">
@@ -102,12 +102,12 @@ export class ErrorBoundary extends Component<Props, State> {
 
     return (
       <div
-        className="flex min-h-screen items-center justify-center bg-bg-primary px-4 py-10"
+        className="flex min-h-screen items-center justify-center bg-bg-base px-4 py-10"
         role="alert"
         aria-live="assertive"
       >
-        <div className="w-full max-w-2xl rounded-md border border-border-subtle bg-bg-secondary p-8 shadow-md">
-          <div className="flex h-11 w-11 items-center justify-center rounded-sm bg-danger-tint text-accent-danger">
+        <div className="w-full max-w-2xl rounded-well border border-border-subtle bg-bg-raised p-8 shadow-[var(--shadow-lifted)]">
+          <div className="flex h-11 w-11 items-center justify-center rounded-chip bg-danger-tint text-accent-danger">
             <Bug size={22} />
           </div>
           <h1 className="mt-5 font-display text-title text-text-primary">
@@ -118,7 +118,7 @@ export class ErrorBoundary extends Component<Props, State> {
             Retry the view, head back home, or reload the app to recover.
           </p>
 
-          <details className="mt-6 overflow-hidden rounded-sm border border-border-subtle bg-bg-tertiary">
+          <details className="mt-6 overflow-hidden rounded-chip border border-border-subtle bg-bg-well">
             <summary className="cursor-pointer list-none px-3.5 py-2.5 text-label text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:text-text-primary">
               Technical details
             </summary>
@@ -146,7 +146,7 @@ export class ErrorBoundary extends Component<Props, State> {
               href={BUG_REPORT_URL}
               target="_blank"
               rel="noreferrer"
-              className="ml-auto rounded-sm px-1 text-meta font-semibold text-text-link outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:underline focus-visible:shadow-[var(--focus-ring)]"
+              className="ml-auto rounded-chip px-1 text-meta font-semibold text-text-link outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:underline focus-visible:shadow-[var(--focus-ring)]"
             >
               Report bug
             </a>

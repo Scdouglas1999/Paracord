@@ -219,7 +219,7 @@ export function MarkdownToolbar({ textareaRef, onContentChange }: MarkdownToolba
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => handleClick(button)}
               className={cn(
-                'flex h-8 w-8 items-center justify-center rounded-sm text-interactive-normal',
+                'flex h-8 w-8 items-center justify-center rounded-chip text-interactive-normal',
                 'transition-[color,background-color,transform] duration-[140ms] ease-[var(--ease-out)]',
                 'hover:bg-bg-mod-subtle hover:text-text-primary',
                 'active:scale-[0.97] active:bg-accent-tint active:text-accent-primary',

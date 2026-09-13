@@ -139,23 +139,23 @@ export default function MediaTest() {
   // idle is a quiet secondary. Consumes Emerald Commons tokens — no ad-hoc hex.
   const ctrlBtn = (active: boolean) =>
     cn(
-      'inline-flex h-9 items-center justify-center rounded-sm px-3.5 text-label font-semibold transition-colors duration-[140ms] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50',
+      'inline-flex h-9 items-center justify-center rounded-chip px-3.5 text-label font-semibold transition-colors duration-[140ms] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50',
       active
-        ? 'bg-accent-danger-fill text-text-on-danger hover:brightness-95'
+        ? 'bg-danger-well text-text-on-danger hover:brightness-95'
         : 'bg-bg-mod-subtle text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary',
     );
 
   const inputCls =
-    'h-10 rounded-sm border border-border-subtle bg-bg-tertiary px-3 font-code text-meta text-text-primary transition-colors placeholder:text-text-muted focus:border-accent-primary focus:outline-none focus:[box-shadow:var(--focus-ring-input)] disabled:opacity-60';
+    'h-10 rounded-chip border border-border-subtle bg-bg-well px-3 font-code text-meta text-text-primary transition-colors placeholder:text-text-muted focus:border-accent-primary focus:outline-none focus:[box-shadow:var(--focus-ring-input)] disabled:opacity-60';
 
-  const panelCls = 'rounded-md border border-border-subtle bg-bg-secondary p-4 shadow-sm';
+  const panelCls = 'rounded-well border border-border-subtle bg-bg-raised p-4 shadow-[var(--shadow-chip)]';
   const sectionHeadCls = 'mb-3 flex items-center gap-2 text-section text-text-muted';
 
   return (
-    <div className="min-h-screen w-full overflow-y-auto bg-bg-primary p-8 text-text-primary">
+    <div className="min-h-screen w-full overflow-y-auto bg-bg-base p-8 text-text-primary">
       <div className="mx-auto max-w-4xl">
         <header className="mb-8">
-          <p className="mb-2 text-section text-accent-secondary">Internal · Media transport</p>
+          <p className="mb-2 text-section text-accent-primary">Internal · Media transport</p>
           <h1 className="font-display text-title text-text-primary">Media engine harness</h1>
           <p className="mt-1.5 max-w-2xl text-body text-text-secondary">
             Drive the custom QUIC media server directly against a running
@@ -196,9 +196,9 @@ export default function MediaTest() {
             onClick={handleConnect}
             disabled={connecting}
             className={cn(
-              'inline-flex h-10 items-center justify-center rounded-sm px-5 text-label font-semibold shadow-sm transition-colors duration-[140ms] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)] disabled:cursor-wait disabled:opacity-70',
+              'inline-flex h-10 items-center justify-center rounded-chip px-5 text-label font-semibold shadow-[var(--shadow-chip)] transition-colors duration-[140ms] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)] disabled:cursor-wait disabled:opacity-70',
               connected
-                ? 'bg-accent-danger-fill text-text-on-danger hover:brightness-95'
+                ? 'bg-danger-well text-text-on-danger hover:brightness-95'
                 : 'bg-accent-primary text-text-on-accent hover:bg-accent-primary-hover active:bg-accent-primary-active',
             )}
           >
@@ -209,7 +209,7 @@ export default function MediaTest() {
         {/* Status bar */}
         <div
           className={cn(
-            'mb-6 flex items-center gap-3 rounded-md border border-l-[3px] border-border-subtle bg-bg-secondary px-4 py-2.5',
+            'mb-6 flex items-center gap-3 rounded-well border border-l-[3px] border-border-subtle bg-bg-raised px-4 py-2.5',
             connected ? 'border-l-accent-success' : 'border-l-interactive-muted',
           )}
         >
@@ -224,12 +224,12 @@ export default function MediaTest() {
 
         {/* Error display */}
         {error && (
-          <div className="mb-4 flex items-start gap-3 rounded-md border border-l-[3px] border-border-subtle border-l-accent-danger bg-danger-tint px-4 py-3">
+          <div className="mb-4 flex items-start gap-3 rounded-well border border-l-[3px] border-border-subtle border-l-accent-danger bg-danger-tint px-4 py-3">
             <p className="flex-1 font-code text-meta text-accent-danger">{error}</p>
             <button
               onClick={() => setError(null)}
               aria-label="Dismiss error"
-              className="rounded-sm p-1 text-accent-danger transition-colors hover:bg-bg-mod-subtle focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)]"
+              className="rounded-chip p-1 text-accent-danger transition-colors hover:bg-bg-mod-subtle focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)]"
             >
               <X size={16} />
             </button>
@@ -272,7 +272,7 @@ export default function MediaTest() {
           <section className={panelCls}>
             <h2 className={sectionHeadCls}>
               <Users size={15} /> Participants
-              <span className="ml-auto rounded-xs bg-bg-mod-strong px-1.5 py-0.5 font-code text-meta tabular-nums text-text-secondary">
+              <span className="ml-auto rounded-window bg-bg-mod-strong px-1.5 py-0.5 font-code text-meta tabular-nums text-text-secondary">
                 {participants.length}
               </span>
             </h2>
@@ -284,7 +284,7 @@ export default function MediaTest() {
                   <div
                     key={p.userId}
                     className={cn(
-                      'flex items-center gap-3 rounded-sm border px-3 py-2 transition-colors',
+                      'flex items-center gap-3 rounded-chip border px-3 py-2 transition-colors',
                       p.speaking ? 'border-accent-success/50 bg-bg-mod-subtle' : 'border-transparent',
                     )}
                   >
@@ -297,7 +297,7 @@ export default function MediaTest() {
                     <span className="flex-1 truncate font-code text-meta text-text-secondary">
                       {p.userId}
                     </span>
-                    <div className="h-1.5 w-16 overflow-hidden rounded-full bg-bg-tertiary">
+                    <div className="h-1.5 w-16 overflow-hidden rounded-full bg-bg-well">
                       <div
                         className="h-full rounded-full transition-[width] duration-100"
                         style={{
@@ -317,7 +317,7 @@ export default function MediaTest() {
             <h2 className={sectionHeadCls}>
               <Terminal size={15} /> Trace
             </h2>
-            <div className="max-h-64 overflow-auto rounded-sm bg-bg-tertiary p-3 font-code text-meta leading-relaxed">
+            <div className="max-h-64 overflow-auto rounded-chip bg-bg-well p-3 font-code text-meta leading-relaxed">
               {logs.length === 0 ? (
                 <span className="text-text-muted">No events yet — connect to start the trace.</span>
               ) : (

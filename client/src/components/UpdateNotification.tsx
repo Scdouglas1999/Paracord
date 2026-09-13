@@ -298,7 +298,7 @@ export function UpdateNotification() {
   const statusColor = downloaded ? 'var(--accent-success)' : 'var(--accent-info)';
 
   // Toast recipe (design-spec §7): bg-accent surface, hairline border, radius-md,
-  // shadow-lg, a leading semantic state icon, --text-label title and --text-meta body.
+  // shadow-[var(--shadow-plate)], a leading semantic state icon, --text-label title and --text-meta body.
   return (
     <motion.div
       role="status"
@@ -306,7 +306,7 @@ export function UpdateNotification() {
       initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-      className="fixed bottom-4 right-4 z-[140] w-[min(24rem,calc(100vw-1.5rem))] rounded-md border border-border-subtle bg-bg-accent p-4 shadow-lg"
+      className="fixed bottom-4 right-4 z-[140] w-[min(24rem,calc(100vw-1.5rem))] rounded-well border border-border-subtle bg-bg-raised p-4 shadow-[var(--shadow-plate)]"
     >
       <div className="flex items-start gap-3">
         <StatusIcon size={18} style={{ color: statusColor, flexShrink: 0, marginTop: '1px' }} />
@@ -321,7 +321,7 @@ export function UpdateNotification() {
               : ''}
           </div>
           <a
-            className="mt-1 inline-block rounded-sm text-meta font-medium text-text-link outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:underline focus-visible:shadow-[var(--focus-ring)]"
+            className="mt-1 inline-block rounded-chip text-meta font-medium text-text-link outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:underline focus-visible:shadow-[var(--focus-ring)]"
             href={updateInfo.htmlUrl}
             target="_blank"
             rel="noreferrer"
@@ -330,7 +330,7 @@ export function UpdateNotification() {
           </a>
         </div>
         <button
-          className="-mr-1 -mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+          className="-mr-1 -mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-chip text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
           onClick={onDismiss}
           type="button"
           aria-label="Dismiss update notification"
@@ -344,7 +344,7 @@ export function UpdateNotification() {
       </div>
 
       {errorText && (
-        <div className="mt-2 rounded-sm bg-danger-tint px-2.5 py-1.5 text-meta text-accent-danger">
+        <div className="mt-2 rounded-chip bg-danger-tint px-2.5 py-1.5 text-meta text-accent-danger">
           {errorText}
         </div>
       )}

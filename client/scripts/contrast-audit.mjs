@@ -124,9 +124,10 @@ const checks = [
   // The two lights must stay legible as a label as well as a fill.
   ...GROUNDS.map((bg) => ({ fg: '--light-white', bg, min: 4.5 })),
   ...GROUNDS.map((bg) => ({ fg: '--light-amber', bg, min: 4.5 })),
-  // Legacy aliases the un-restyled app still consumes.
-  { fg: '--text-primary', bg: '--bg-primary', min: 7 },
-  { fg: '--text-secondary', bg: '--bg-secondary', min: 4.5 },
+  // A lit room thumbnail carries its LIVE label and its occupants' names on a
+  // tinted frame of its own, not on any of the four grounds above.
+  { fg: '--light-white', bg: '--thumb-frame-lit', min: 4.5 },
+  { fg: '--text-primary', bg: '--thumb-frame-lit', min: 7 },
 ];
 
 let hasFailure = false;

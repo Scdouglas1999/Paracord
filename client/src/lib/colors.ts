@@ -65,3 +65,15 @@ export function getHighestRoleColor(
   if (matched.length === 0) return undefined;
   return roleColorToHex(matched[0].color);
 }
+
+/**
+ * The colour a role starts life with in the colour picker — a role's colour is
+ * DATA the operator sends to the server, not a surface this app paints, so it
+ * is a literal number and belongs here rather than in `tokens.css`. A role with
+ * this value reads as "no colour chosen"; `roleColorToHex(0)` is the token that
+ * actually paints an uncoloured role's name.
+ */
+export const DEFAULT_ROLE_COLOR = '#99aab5';
+
+/** A role colour the server has never been given; render it with the ramp. */
+export const UNSET_ROLE_COLOR = '#000000';

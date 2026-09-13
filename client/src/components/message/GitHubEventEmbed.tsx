@@ -97,7 +97,7 @@ export function GitHubEventEmbed({ content }: GitHubEventEmbedProps) {
 
   return (
     <div
-      className="mt-1.5 flex max-w-[480px] overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm"
+      className="mt-1.5 flex max-w-[480px] overflow-hidden rounded-well border border-border-subtle bg-bg-raised shadow-[var(--shadow-chip)]"
     >
       {/* Event-category accent bar */}
       <div className="w-1 shrink-0" style={{ backgroundColor: color }} />
@@ -110,7 +110,7 @@ export function GitHubEventEmbed({ content }: GitHubEventEmbedProps) {
           </svg>
           <Icon size={14} className="shrink-0" style={{ color }} />
           <span
-            className="rounded-xs px-1.5 py-0.5 text-section"
+            className="rounded-window px-1.5 py-0.5 text-section"
             style={{ backgroundColor: `color-mix(in srgb, ${color} 16%, transparent)`, color }}
           >
             {label}

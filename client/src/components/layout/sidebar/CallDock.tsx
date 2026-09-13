@@ -45,12 +45,12 @@ export function CallDock({ collapsed = false }: CallDockProps) {
             navigate(`/app/guilds/${guildId}/channels/${channelId}`);
           }
         }}
-        className="relative flex h-11 w-11 items-center justify-center rounded-md bg-accent-tint text-accent-primary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-tint-strong focus-visible:shadow-[var(--focus-ring)]"
+        className="pc-focusable relative flex h-11 w-11 items-center justify-center rounded-[var(--radius-card)] bg-bg-raised text-light-white shadow-[var(--shadow-raised)] transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong"
       >
         <Radio size={18} aria-hidden />
         <span
           aria-hidden
-          className="voice-connected-pulse absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-accent-primary ring-2 ring-bg-secondary"
+          className="voice-connected-pulse absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-light-white shadow-[var(--glow-live-dot)] ring-2 ring-bg-base"
         />
       </button>
     );

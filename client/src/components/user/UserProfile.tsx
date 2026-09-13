@@ -516,7 +516,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
         {identityFingerprint && (
           <div className="px-5 pb-4">
             <SectionLabel>Identity Verification</SectionLabel>
-            <div className="rounded-md px-3.5 py-3" style={{ background: 'var(--bg-tertiary)' }}>
+            <div className="rounded-well px-3.5 py-3" style={{ background: 'var(--bg-well)' }}>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="inline-flex items-center gap-1.5 text-meta font-semibold">
                   {identityVerified ? (
@@ -532,7 +532,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
                   )}
                 </div>
                 <button
-                  className={`inline-flex items-center gap-1.5 rounded-sm bg-bg-mod-subtle px-2 py-1 text-meta font-medium text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary ${FOCUS_RING}`}
+                  className={`inline-flex items-center gap-1.5 rounded-chip bg-bg-mod-subtle px-2 py-1 text-meta font-medium text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary ${FOCUS_RING}`}
                   onClick={() => setShowIdentityVerifyModal(true)}
                 >
                   <QrCode size={12} />
@@ -540,14 +540,14 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
                 </button>
               </div>
               <div
-                className="mt-2 break-all rounded-sm px-2 py-1.5 font-code text-[11px]"
-                style={{ background: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                className="mt-2 break-all rounded-chip px-2 py-1.5 font-code text-[11px]"
+                style={{ background: 'var(--bg-raised)', color: 'var(--text-secondary)' }}
               >
                 {identityFingerprint}
               </div>
               {identityRotationWarning && (
                 <div
-                  className="mt-2 rounded-sm px-2 py-1.5 text-[11px]"
+                  className="mt-2 rounded-chip px-2 py-1.5 text-[11px]"
                   style={{ background: 'var(--danger-tint)', color: 'var(--accent-danger)' }}
                 >
                   {identityRotationWarning}
@@ -555,7 +555,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
               )}
               {!identityVerified && (
                 <button
-                  className={`mt-2 inline-flex items-center gap-1.5 rounded-sm bg-success-tint px-2 py-1 text-meta font-medium text-accent-success transition-colors hover:bg-accent-success/20 ${FOCUS_RING}`}
+                  className={`mt-2 inline-flex items-center gap-1.5 rounded-chip bg-success-tint px-2 py-1 text-meta font-medium text-accent-success transition-colors hover:bg-accent-success/20 ${FOCUS_RING}`}
                   onClick={() => void handleMarkIdentityVerified()}
                 >
                   <ShieldCheck size={12} />
@@ -583,7 +583,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
               {displayRoles.map((role) => (
                 <span
                   key={role.id}
-                  className="inline-flex items-center gap-1.5 rounded-xs px-2 py-0.5 text-meta font-medium"
+                  className="inline-flex items-center gap-1.5 rounded-window px-2 py-0.5 text-meta font-medium"
                   style={{ background: 'var(--bg-mod-strong)', color: 'var(--text-secondary)' }}
                 >
                   <span className="h-2 w-2 rounded-full" style={{ backgroundColor: roleColorToHex(role.color) }} />
@@ -601,7 +601,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
               {mutualGuilds.slice(0, 5).map((guild) => (
                 <div
                   key={guild.id}
-                  className="flex items-center gap-2.5 rounded-sm px-1.5 py-1.5 transition-colors hover:bg-bg-mod-subtle"
+                  className="flex items-center gap-2.5 rounded-chip px-1.5 py-1.5 transition-colors hover:bg-bg-mod-subtle"
                   title={guild.name}
                 >
                   <div
@@ -638,7 +638,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
                 return (
                   <div
                     key={friend.id}
-                    className="flex items-center gap-2.5 rounded-sm px-1.5 py-1.5 transition-colors hover:bg-bg-mod-subtle"
+                    className="flex items-center gap-2.5 rounded-chip px-1.5 py-1.5 transition-colors hover:bg-bg-mod-subtle"
                     title={friend.username}
                   >
                     {friendAvatar ? (
@@ -676,7 +676,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
                   href={account.url}
                   target="_blank"
                   rel="noreferrer"
-                  className={`flex items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-meta text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary ${FOCUS_RING}`}
+                  className={`flex items-center justify-between gap-2 rounded-chip px-2 py-1.5 text-meta text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary ${FOCUS_RING}`}
                 >
                   <span className="truncate">{account.label}</span>
                   <Link2 size={12} className="shrink-0" style={{ color: 'var(--text-muted)' }} />
@@ -696,7 +696,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
           <input
             type="text"
             placeholder="Add a private note — only you can see this"
-            className={`h-10 w-full rounded-sm border border-border-subtle bg-bg-tertiary px-3 text-body text-text-primary transition-colors placeholder:text-text-muted focus:border-accent-primary ${FOCUS_RING}`}
+            className={`h-10 w-full rounded-chip border border-border-subtle bg-bg-well px-3 text-body text-text-primary transition-colors placeholder:text-text-muted focus:border-accent-primary ${FOCUS_RING}`}
             value={note}
             onChange={(e) => setNote(e.target.value)}
           />
@@ -705,7 +705,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
         {/* Actions — primary emerald message, ghost add-friend, danger block/report */}
         <div className="flex flex-col gap-2 px-5 pb-5 pt-1">
           <button
-            className={`flex h-9 w-full items-center justify-center gap-2 rounded-sm bg-accent-primary text-label font-semibold text-text-on-accent shadow-sm transition-[transform,background-color] duration-150 hover:bg-accent-primary-hover active:scale-[.97] active:bg-accent-primary-active ${FOCUS_RING}`}
+            className={`flex h-9 w-full items-center justify-center gap-2 rounded-chip bg-accent-primary text-label font-semibold text-text-on-accent shadow-[var(--shadow-chip)] transition-[transform,background-color] duration-150 hover:bg-accent-primary-hover active:scale-[.97] active:bg-accent-primary-active ${FOCUS_RING}`}
             onClick={() => void handleMessage()}
           >
             <MessageSquare size={16} />
@@ -714,7 +714,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
           <div className="flex items-center gap-2">
             {!isBotUser && relationshipType === 1 && (
               <button
-                className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-sm border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-150 hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[.97] ${FOCUS_RING}`}
+                className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-chip border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-150 hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[.97] ${FOCUS_RING}`}
                 aria-label={`Remove ${user.username} as a friend`}
                 onClick={() => void handleRemoveRelationship(`Removed ${user.username} from friends.`)}
               >
@@ -724,7 +724,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
             )}
             {!isBotUser && relationshipType === 2 && (
               <button
-                className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-sm border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-150 hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[.97] ${FOCUS_RING}`}
+                className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-chip border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-150 hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[.97] ${FOCUS_RING}`}
                 aria-label={`Unblock ${user.username}`}
                 onClick={() => void handleRemoveRelationship(`Unblocked ${user.username}.`)}
               >
@@ -735,7 +735,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
             {!isBotUser && relationshipType === 3 && (
               <>
                 <button
-                  className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-sm border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-150 hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[.97] ${FOCUS_RING}`}
+                  className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-chip border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-150 hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[.97] ${FOCUS_RING}`}
                   aria-label={`Accept friend request from ${user.username}`}
                   onClick={() => void handleAcceptFriend()}
                 >
@@ -743,7 +743,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
                   Accept
                 </button>
                 <button
-                  className={`flex h-9 items-center justify-center gap-2 rounded-sm border border-border-subtle px-3 text-label font-medium text-text-secondary transition-colors duration-150 hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[.97] ${FOCUS_RING}`}
+                  className={`flex h-9 items-center justify-center gap-2 rounded-chip border border-border-subtle px-3 text-label font-medium text-text-secondary transition-colors duration-150 hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[.97] ${FOCUS_RING}`}
                   aria-label={`Decline friend request from ${user.username}`}
                   onClick={() => void handleRemoveRelationship(`Declined friend request from ${user.username}.`)}
                 >
@@ -753,7 +753,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
             )}
             {!isBotUser && relationshipType === 4 && (
               <button
-                className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-sm border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-150 hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[.97] ${FOCUS_RING}`}
+                className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-chip border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-150 hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[.97] ${FOCUS_RING}`}
                 aria-label={`Cancel friend request to ${user.username}`}
                 onClick={() => void handleRemoveRelationship(`Cancelled friend request to ${user.username}.`)}
               >
@@ -763,7 +763,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
             )}
             {!isBotUser && relationshipType == null && (
               <button
-                className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-sm border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-150 hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[.97] ${FOCUS_RING}`}
+                className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-chip border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-150 hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[.97] ${FOCUS_RING}`}
                 aria-label={`Add ${user.username} as a friend`}
                 onClick={() => void handleAddFriend()}
               >
@@ -773,7 +773,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
             )}
             {relationshipType !== 2 && (
               <button
-                className={`flex h-9 items-center justify-center gap-2 rounded-sm border border-accent-danger/30 px-3 text-label font-medium text-accent-danger transition-colors duration-150 hover:bg-danger-tint active:scale-[.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-danger focus-visible:ring-offset-2 focus-visible:ring-offset-bg-floating ${isBotUser || relationshipType != null && relationshipType !== 1 ? 'flex-1' : ''}`}
+                className={`flex h-9 items-center justify-center gap-2 rounded-chip border border-accent-danger/30 px-3 text-label font-medium text-accent-danger transition-colors duration-150 hover:bg-danger-tint active:scale-[.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-danger focus-visible:ring-offset-2 focus-visible:ring-offset-bg-floating ${isBotUser || relationshipType != null && relationshipType !== 1 ? 'flex-1' : ''}`}
                 aria-label={`Block ${user.username}`}
                 onClick={() => void handleBlock()}
               >
@@ -783,7 +783,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
             )}
             {!isBotUser && activeGuildId && (
               <button
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-sm text-accent-danger transition-colors duration-150 hover:bg-danger-tint active:scale-[.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-danger focus-visible:ring-offset-2 focus-visible:ring-offset-bg-floating"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-chip text-accent-danger transition-colors duration-150 hover:bg-danger-tint active:scale-[.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-danger focus-visible:ring-offset-2 focus-visible:ring-offset-bg-floating"
                 title="Report user"
                 aria-label={`Report ${user.username}`}
                 onClick={() => { setShowReportDialog(true); setActionError(null); }}
@@ -815,7 +815,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
             <p className="mt-1.5 text-meta text-text-muted">
               Reports go to this server's moderators. Add concise, verifiable evidence to speed up review.
             </p>
-            <div className="mt-3 rounded-sm border border-border-subtle bg-bg-tertiary px-3 py-2 text-meta text-text-secondary">
+            <div className="mt-3 rounded-chip border border-border-subtle bg-bg-well px-3 py-2 text-meta text-text-secondary">
               <span className="font-semibold text-text-primary">{user.username}</span>
               <span className="ml-1 text-text-muted">({user.id})</span>
             </div>
@@ -856,7 +856,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
                 {reportSubmitting ? 'Submitting...' : 'Submit Report'}
               </button>
               <button
-                className={`rounded-sm px-3.5 py-2 text-label font-medium text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary ${FOCUS_RING}`}
+                className={`rounded-chip px-3.5 py-2 text-label font-medium text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary ${FOCUS_RING}`}
                 onClick={() => { setShowReportDialog(false); setActionError(null); setReportReason(''); setReportEvidence(''); }}
                 disabled={reportSubmitting}
               >
@@ -879,19 +879,19 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
             <p className="mt-1.5 mb-4 text-meta text-text-muted">
               Scan this code on your other signed-in device, confirm the fingerprints match, then mark it verified.
             </p>
-            <div className="mb-4 flex justify-center rounded-md p-3" style={{ background: 'var(--bg-tertiary)' }}>
+            <div className="mb-4 flex justify-center rounded-well p-3" style={{ background: 'var(--bg-well)' }}>
               {identityQrDataUrl ? (
-                <img src={identityQrDataUrl} alt="Identity verification QR code" className="h-52 w-52 rounded-sm" />
+                <img src={identityQrDataUrl} alt="Identity verification QR code" className="h-52 w-52 rounded-chip" />
               ) : (
                 <div className="flex h-52 w-52 items-center justify-center text-meta text-text-muted">Generating code…</div>
               )}
             </div>
             <div className="mb-2 text-section text-text-muted">Payload</div>
-            <div className="mb-3 break-all rounded-sm px-2 py-1.5 font-code text-[11px] text-text-secondary" style={{ background: 'var(--bg-tertiary)' }}>
+            <div className="mb-3 break-all rounded-chip px-2 py-1.5 font-code text-[11px] text-text-secondary" style={{ background: 'var(--bg-well)' }}>
               {verificationPayload}
             </div>
             <button
-              className={`mb-5 inline-flex items-center gap-1.5 rounded-sm bg-bg-mod-subtle px-2.5 py-1.5 text-meta font-medium text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary ${FOCUS_RING}`}
+              className={`mb-5 inline-flex items-center gap-1.5 rounded-chip bg-bg-mod-subtle px-2.5 py-1.5 text-meta font-medium text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary ${FOCUS_RING}`}
               onClick={() => {
                 if (!verificationPayload) return;
                 void writeClipboardText(verificationPayload)
@@ -905,20 +905,20 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
             <div className="mb-2 text-section text-text-muted">Verify from scanned payload</div>
             <input
               type="text"
-              className={`mb-4 h-10 w-full rounded-sm border border-border-subtle bg-bg-tertiary px-3 text-body text-text-primary transition-colors placeholder:text-text-muted focus:border-accent-primary ${FOCUS_RING}`}
+              className={`mb-4 h-10 w-full rounded-chip border border-border-subtle bg-bg-well px-3 text-body text-text-primary transition-colors placeholder:text-text-muted focus:border-accent-primary ${FOCUS_RING}`}
               placeholder="Paste scanned payload JSON"
               value={identityVerifyPayload}
               onChange={(e) => setIdentityVerifyPayload(e.target.value)}
             />
             <div className="flex items-center justify-end gap-2">
               <button
-                className={`rounded-sm px-3 py-1.5 text-label font-medium text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary ${FOCUS_RING}`}
+                className={`rounded-chip px-3 py-1.5 text-label font-medium text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary ${FOCUS_RING}`}
                 onClick={() => setShowIdentityVerifyModal(false)}
               >
                 Close
               </button>
               <button
-                className={`rounded-sm bg-success-tint px-3 py-1.5 text-label font-medium text-accent-success transition-colors hover:bg-accent-success/20 ${FOCUS_RING}`}
+                className={`rounded-chip bg-success-tint px-3 py-1.5 text-label font-medium text-accent-success transition-colors hover:bg-accent-success/20 ${FOCUS_RING}`}
                 onClick={() => void handleVerifyIdentityPayload()}
               >
                 Verify payload

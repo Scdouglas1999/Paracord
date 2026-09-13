@@ -183,7 +183,7 @@ export function InboxOverlay({ open, onClose, unreadItems, allChannels, error }:
             aria-selected={tab === value}
             onClick={() => setTab(value)}
             className={cn(
-              'inline-flex h-8 items-center gap-1.5 rounded-sm px-3 text-label font-semibold outline-none transition-colors focus-visible:shadow-[var(--focus-ring)]',
+              'inline-flex h-8 items-center gap-1.5 rounded-chip px-3 text-label font-semibold outline-none transition-colors focus-visible:shadow-[var(--focus-ring)]',
               tab === value
                 ? 'bg-accent-tint text-accent-primary'
                 : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
@@ -202,7 +202,7 @@ export function InboxOverlay({ open, onClose, unreadItems, allChannels, error }:
             type="button"
             onClick={() => void markAllRead()}
             disabled={markingAllRead}
-            className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-sm px-2.5 text-meta font-semibold text-text-secondary outline-none transition-colors hover:bg-bg-mod-subtle hover:text-accent-success focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
+            className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-chip px-2.5 text-meta font-semibold text-text-secondary outline-none transition-colors hover:bg-bg-mod-subtle hover:text-accent-success focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
           >
             {markingAllRead ? <Loader2 size={14} className="animate-spin" /> : <CheckCheck size={14} />}
             <span className="hidden sm:inline">Mark all read</span>
@@ -211,7 +211,7 @@ export function InboxOverlay({ open, onClose, unreadItems, allChannels, error }:
       </div>
 
       {error ? (
-        <div role="alert" className="m-3 rounded-md border border-accent-danger/30 bg-danger-tint px-4 py-3 text-label text-accent-danger">
+        <div role="alert" className="m-3 rounded-well border border-accent-danger/30 bg-danger-tint px-4 py-3 text-label text-accent-danger">
           {error}
         </div>
       ) : tab === 'saved' ? (
@@ -220,13 +220,13 @@ export function InboxOverlay({ open, onClose, unreadItems, allChannels, error }:
             <Loader2 size={18} className="animate-spin" /> Loading saved messages…
           </div>
         ) : savedError && savedItems.length === 0 ? (
-          <div role="alert" className="m-3 rounded-md border border-accent-danger/30 bg-danger-tint px-4 py-3 text-label text-accent-danger">
+          <div role="alert" className="m-3 rounded-well border border-accent-danger/30 bg-danger-tint px-4 py-3 text-label text-accent-danger">
             {savedError}
           </div>
         ) : savedItems.length > 0 ? (
           <ul className="space-y-1 p-2">
             {savedItems.map((item) => (
-              <li key={item.message.id} className="group flex items-start gap-3 rounded-sm px-3 py-2.5 hover:bg-bg-mod-subtle focus-within:bg-bg-mod-subtle">
+              <li key={item.message.id} className="group flex items-start gap-3 rounded-chip px-3 py-2.5 hover:bg-bg-mod-subtle focus-within:bg-bg-mod-subtle">
                 <button
                   type="button"
                   onClick={() => goToChannel(item.channel.id, item.message.id, item.channel.guild_id)}
@@ -246,7 +246,7 @@ export function InboxOverlay({ open, onClose, unreadItems, allChannels, error }:
                   type="button"
                   onClick={() => void removeSaved(item.message.id)}
                   aria-label={`Remove message from ${authorName(item.message)} from saved messages`}
-                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-text-muted opacity-0 outline-none transition-[opacity,color,background-color] hover:bg-danger-tint hover:text-accent-danger focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] group-hover:opacity-100"
+                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-chip text-text-muted opacity-0 outline-none transition-[opacity,color,background-color] hover:bg-danger-tint hover:text-accent-danger focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] group-hover:opacity-100"
                 >
                   <Trash2 size={15} />
                 </button>
@@ -263,13 +263,13 @@ export function InboxOverlay({ open, onClose, unreadItems, allChannels, error }:
             const isGuildChannel = Boolean(channel?.guild_id);
             const preview = previews[state.channel_id];
             return (
-              <li key={state.channel_id} className="group flex items-start gap-3 rounded-sm px-2.5 py-2.5 hover:bg-bg-mod-subtle focus-within:bg-bg-mod-subtle">
+              <li key={state.channel_id} className="group flex items-start gap-3 rounded-chip px-2.5 py-2.5 hover:bg-bg-mod-subtle focus-within:bg-bg-mod-subtle">
                 <button
                   type="button"
                   onClick={() => goToChannel(state.channel_id, preview?.id)}
                   className="flex min-w-0 flex-1 items-start gap-3 text-left outline-none"
                 >
-                  <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-sm bg-accent-tint text-accent-primary">
+                  <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-chip bg-accent-tint text-accent-primary">
                     {isGuildChannel ? <Hash size={16} /> : <MessageSquare size={16} />}
                   </span>
                   <span className="min-w-0 flex-1">
@@ -278,7 +278,7 @@ export function InboxOverlay({ open, onClose, unreadItems, allChannels, error }:
                         {isGuildChannel ? `#${channelName}` : channelName}
                       </strong>
                       {state.mention_count > 0 ? (
-                        <span className="shrink-0 rounded-full bg-accent-danger-fill px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-text-on-danger">
+                        <span className="shrink-0 rounded-full bg-danger-well px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-text-on-danger">
                           {state.mention_count > 99 ? '99+' : state.mention_count}
                         </span>
                       ) : (
@@ -297,7 +297,7 @@ export function InboxOverlay({ open, onClose, unreadItems, allChannels, error }:
                   type="button"
                   onClick={() => markItemRead(state.channel_id)}
                   aria-label={`Mark ${isGuildChannel ? `#${channelName}` : channelName} as read`}
-                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-text-muted opacity-0 outline-none transition-[opacity,color,background-color] hover:bg-bg-mod-strong hover:text-accent-success focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] group-hover:opacity-100"
+                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-chip text-text-muted opacity-0 outline-none transition-[opacity,color,background-color] hover:bg-bg-mod-strong hover:text-accent-success focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] group-hover:opacity-100"
                 >
                   <Check size={16} />
                 </button>
@@ -317,11 +317,11 @@ export function InboxOverlay({ open, onClose, unreadItems, allChannels, error }:
 function EmptyState({ icon: Icon, title, body }: { icon: typeof Inbox; title: string; body: string }) {
   return (
     <div className="flex items-start gap-3.5 px-5 py-10">
-      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-sm bg-accent-tint text-accent-primary">
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-chip bg-accent-tint text-accent-primary">
         <Icon size={20} />
       </span>
       <div className="min-w-0 pt-0.5">
-        <h3 className="text-subhead text-text-primary">{title}</h3>
+        <h3 className="text-heading text-text-primary">{title}</h3>
         <p className="mt-1 text-label text-text-secondary">{body}</p>
       </div>
     </div>

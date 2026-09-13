@@ -2074,13 +2074,13 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                 <button
                   onClick={() => void saveEditMessage()}
                   disabled={editSaving}
-                  className="inline-flex items-center gap-1 rounded-sm px-2 py-1 text-meta font-semibold text-accent-primary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-tint focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
+                  className="inline-flex items-center gap-1 rounded-chip px-2 py-1 text-meta font-semibold text-accent-primary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-tint focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
                 >
                   <Check size={13} /> {editSaving ? 'Saving…' : 'Save'}
                 </button>
                 <button
                   onClick={cancelEditing}
-                  className="inline-flex items-center gap-1 rounded-sm px-2 py-1 text-meta font-semibold text-text-muted transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                  className="inline-flex items-center gap-1 rounded-chip px-2 py-1 text-meta font-semibold text-text-muted transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                 >
                   <XIcon size={13} /> Cancel
                 </button>
@@ -2129,7 +2129,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                   {isGrouped && (msg.edited_timestamp || msg.edited_at) && (
                     <button
                       type="button"
-                      className="ml-1 rounded px-0 text-left text-[11px] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary"
+                      className="ml-1 rounded px-0 text-left text-[11px] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-plate"
                       style={{ color: 'var(--text-muted)' }}
                       title={`Edited: ${formatTimestamp(msg.edited_timestamp || msg.edited_at || '')}`}
                       aria-label={`Show edit history for message ${msg.id}`}
@@ -2247,12 +2247,12 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                       <img
                         src={stickerSrc}
                         alt={sticker.name}
-                        className="rounded-md object-contain"
+                        className="rounded-well object-contain"
                         style={{ width: 128, height: 128 }}
                         loading="lazy"
                       />
                     ) : (
-                      <div className="inline-flex items-center gap-1.5 rounded-md border border-border-subtle bg-bg-mod-subtle px-2.5 py-1 text-xs font-semibold text-text-secondary">
+                      <div className="inline-flex items-center gap-1.5 rounded-well border border-border-subtle bg-bg-mod-subtle px-2.5 py-1 text-xs font-semibold text-text-secondary">
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                           <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
                           <polyline points="14 2 14 8 20 8" />
@@ -2475,16 +2475,16 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
         {(hoveredMessageId === msg.id || focusedMessageId === msg.id) && !isCoarsePointer && (
           <div className="pc-floating absolute -top-3.5 right-4 flex items-center gap-0.5 overflow-hidden p-0.5 sm:right-8">
             {canAddReactions && (
-              <button className="hover-action-btn rounded-sm" title="Add Reaction" aria-label="Add Reaction" onClick={(e) => openReactionPicker(e, msg.id)}>
+              <button className="hover-action-btn rounded-chip" title="Add Reaction" aria-label="Add Reaction" onClick={(e) => openReactionPicker(e, msg.id)}>
                 <Smile size={16} />
               </button>
             )}
-            <button className="hover-action-btn rounded-sm" title="Reply" aria-label="Reply" onClick={() => onReply?.(msg)}>
+            <button className="hover-action-btn rounded-chip" title="Reply" aria-label="Reply" onClick={() => onReply?.(msg)}>
               <Reply size={16} />
             </button>
             {canOpenMessageMenu && (
               <button
-                className="hover-action-btn rounded-sm"
+                className="hover-action-btn rounded-chip"
                 title="More actions"
                 aria-label="More actions"
                 onClick={() => setMenuMessageId((curr) => (curr === msg.id ? null : msg.id))}
@@ -2705,7 +2705,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
               />
             </label>
             {threadCreateError && (
-              <div className="mt-3 rounded-sm border-l-2 border-accent-danger bg-danger-tint px-3 py-2 text-meta font-medium text-accent-danger">
+              <div className="mt-3 rounded-chip border-l-2 border-accent-danger bg-danger-tint px-3 py-2 text-meta font-medium text-accent-danger">
                 {threadCreateError}
               </div>
             )}
@@ -2718,7 +2718,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                 {threadCreating ? 'Creating…' : 'Create Thread'}
               </button>
               <button
-                className="rounded-sm px-3.5 py-2 text-label font-semibold text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                className="rounded-chip px-3.5 py-2 text-label font-semibold text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                 onClick={closeThreadCreateDialog}
               >
                 Cancel
@@ -2742,7 +2742,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
             <p className="mt-1 text-meta text-text-secondary">
               Reports go to this server's moderators. Add concise evidence when you can.
             </p>
-            <div className="mt-3 rounded-sm border border-border-subtle bg-bg-tertiary px-3 py-2 text-meta text-text-secondary">
+            <div className="mt-3 rounded-chip border border-border-subtle bg-bg-well px-3 py-2 text-meta text-text-secondary">
               <div className="font-semibold text-text-primary">
                 {displayName(
                   reportingMessage.author,
@@ -2781,7 +2781,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                 {reportSubmitting ? 'Submitting...' : 'Submit Report'}
               </button>
               <button
-                className="rounded-sm px-3.5 py-2 text-label font-semibold text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                className="rounded-chip px-3.5 py-2 text-label font-semibold text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                 onClick={closeReportDialog}
                 disabled={reportSubmitting}
               >
@@ -2809,7 +2809,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              className="rounded-sm px-3 py-1.5 text-label font-semibold text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+              className="rounded-chip px-3 py-1.5 text-label font-semibold text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
               onClick={cancelBulkDelete}
               disabled={bulkDeleting}
             >
@@ -2817,7 +2817,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
             </button>
             <button
               type="button"
-              className="rounded-sm bg-accent-danger-fill px-3 py-1.5 text-label font-semibold text-text-on-danger shadow-sm transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-[color-mix(in_srgb,var(--accent-danger-fill)_90%,#000)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
+              className="rounded-chip bg-danger-well px-3 py-1.5 text-label font-semibold text-text-on-danger shadow-[var(--shadow-chip)] transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-danger-well-hover focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
               onClick={() => void executeBulkDelete()}
               disabled={bulkDeleting || selectedMessageIds.length === 0}
             >
@@ -2870,7 +2870,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
       >
         <ModalHeader
           icon={
-            <div className="flex h-10 w-10 items-center justify-center rounded-md bg-danger-tint text-accent-danger">
+            <div className="flex h-10 w-10 items-center justify-center rounded-well bg-danger-tint text-accent-danger">
               <AlertTriangle size={20} />
             </div>
           }

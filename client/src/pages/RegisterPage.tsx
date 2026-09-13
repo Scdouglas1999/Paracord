@@ -189,7 +189,7 @@ export function RegisterPage() {
               </Field>
             </div>
 
-            <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border-subtle bg-bg-mod-subtle px-4 py-3.5 transition-colors hover:border-border-strong">
+            <label className="flex cursor-pointer items-start gap-3 rounded-well border border-border-subtle bg-bg-mod-subtle px-4 py-3.5 transition-colors hover:border-border-strong">
               <input
                 type="checkbox"
                 checked={agreed}

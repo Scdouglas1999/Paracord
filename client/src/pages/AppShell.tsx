@@ -183,7 +183,7 @@ export function AppShell() {
           tile is a real hole down to the video (see layout.css). */}
       <div
         data-native-underlay-clear=""
-        className="flex h-[100dvh] w-full flex-col overflow-hidden bg-bg-tertiary text-text-primary"
+        className="flex h-[100dvh] w-full flex-col overflow-hidden bg-bg-base text-text-primary"
       >
         {/* Skip-to-content for keyboard/screen-reader users */}
         <a

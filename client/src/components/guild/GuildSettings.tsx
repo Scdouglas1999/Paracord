@@ -62,6 +62,8 @@ interface GuildSettingsProps {
 
 type SettingsSection = 'overview' | 'server-hub' | 'bot-store' | 'roles' | 'members' | 'channels' | 'invites' | 'emojis' | 'webhooks' | 'bots' | 'events' | 'onboarding' | 'bans' | 'reports' | 'audit-log' | 'file-storage' | 'mod-templates' | 'automod' | 'economy';
 
+import { DEFAULT_ROLE_COLOR } from '../../lib/colors';
+
 export function getGuildSettingsErrorMessage(err: unknown, fallback: string): string {
   const responseData = (err as { response?: { data?: { message?: string; error?: string } } }).response?.data;
   if (responseData?.message) return responseData.message;
@@ -165,10 +167,10 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
   const [name, setName] = useState(guildName);
   const [description, setDescription] = useState('');
   const [newRoleName, setNewRoleName] = useState('');
-  const [newRoleColor, setNewRoleColor] = useState('#99aab5');
+  const [newRoleColor, setNewRoleColor] = useState(DEFAULT_ROLE_COLOR);
   const [editingRoleId, setEditingRoleId] = useState<string | null>(null);
   const [editingRolePermissions, setEditingRolePermissions] = useState<number>(0);
-  const [editingRoleColor, setEditingRoleColor] = useState('#99aab5');
+  const [editingRoleColor, setEditingRoleColor] = useState(DEFAULT_ROLE_COLOR);
   const [editingRoleHoist, setEditingRoleHoist] = useState(false);
   const [editingRoleMentionable, setEditingRoleMentionable] = useState(false);
   const [newWebhookName, setNewWebhookName] = useState('');
@@ -591,7 +593,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
   }, [ownershipCandidates, ownershipTargetUserId]);
 
   const roleColorHex = (role: Role) =>
-    role.color ? `#${role.color.toString(16).padStart(6, '0')}` : '#99aab5';
+    role.color ? `#${role.color.toString(16).padStart(6, '0')}` : DEFAULT_ROLE_COLOR;
 
   const saveOverview = async () => {
     await runAction(async () => {
@@ -643,7 +645,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
       await guildApi.createRole(guildId, { name: newRoleName.trim(), color: colorInt, permissions: 0 });
       invalidateGuildPermissionCache(guildId);
       setNewRoleName('');
-      setNewRoleColor('#99aab5');
+      setNewRoleColor(DEFAULT_ROLE_COLOR);
       await refreshAll();
     }, 'Failed to create role');
   };

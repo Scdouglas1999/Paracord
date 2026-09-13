@@ -1350,8 +1350,8 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                     <div className="mt-3 divide-y divide-border-subtle border-t border-border-subtle">
                       {sessionsLoading && sessions.length === 0 && (
                         <div className="space-y-2 py-4">
-                          <Skeleton height={40} borderRadius="var(--radius-sm)" />
-                          <Skeleton height={40} borderRadius="var(--radius-sm)" />
+                          <Skeleton height={40} borderRadius="var(--radius-chip)" />
+                          <Skeleton height={40} borderRadius="var(--radius-chip)" />
                         </div>
                       )}
                       {sessions.map((session) => (
@@ -1445,7 +1445,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                     <div className="flex items-start gap-3">
                       <ShieldAlert size={18} className="mt-0.5 shrink-0 text-accent-danger" />
                       <div className="min-w-0">
-                        <h3 className="text-subhead text-text-primary">Delete account</h3>
+                        <h3 className="text-heading text-text-primary">Delete account</h3>
                         <p className="mt-1 max-w-xl text-body leading-relaxed text-text-secondary">
                           Permanently erase your profile, messages, and memberships on this server. Friends lose the
                           connection and your username is freed. This can't be undone.
@@ -2008,7 +2008,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                     <div className="flex items-start gap-3">
                       <ShieldAlert size={18} className="mt-0.5 shrink-0 text-accent-warning" />
                       <div className="min-w-0">
-                        <h3 className="text-subhead text-text-primary">Update &amp; restart</h3>
+                        <h3 className="text-heading text-text-primary">Update &amp; restart</h3>
                         <p className="mt-1 max-w-xl text-body leading-relaxed text-text-secondary">
                           Pull the latest code, rebuild the client and server, then restart. Everyone connected is
                           briefly disconnected.

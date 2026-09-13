@@ -21,7 +21,7 @@ export function MessageEmbedCard({ embed }: MessageEmbedCardProps) {
       href={url}
       target="_blank"
       rel="noopener noreferrer"
-      className="group mt-1.5 flex max-w-[480px] overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm transition-colors duration-[140ms] ease-[var(--ease-out)] hover:border-border-strong focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+      className="group mt-1.5 flex max-w-[480px] overflow-hidden rounded-well border border-border-subtle bg-bg-raised shadow-[var(--shadow-chip)] transition-colors duration-[140ms] ease-[var(--ease-out)] hover:border-border-strong focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
     >
       {/* Accent bar — the source's own color, a single meaning marker */}
       <div className="w-1 shrink-0" style={{ backgroundColor: accentColor }} />
@@ -55,12 +55,12 @@ export function MessageEmbedCard({ embed }: MessageEmbedCardProps) {
           <img
             src={imageUrl ?? undefined}
             alt=""
-            className="h-16 w-16 shrink-0 rounded-sm object-cover"
+            className="h-16 w-16 shrink-0 rounded-chip object-cover"
             loading="lazy"
           />
         )}
         {!hasImage && lowBandwidthMode && imageUrl && (
-          <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-sm border border-border-subtle bg-bg-tertiary text-section text-text-muted">
+          <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-chip border border-border-subtle bg-bg-well text-section text-text-muted">
             Image
           </div>
         )}

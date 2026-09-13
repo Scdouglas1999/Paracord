@@ -10,6 +10,11 @@ type ThemeName = 'dark' | 'light' | 'amoled' | 'high-contrast';
  * (docs/lantern-stage-spec.md §1.7). They never touch `--light-white` /
  * `--light-amber`: light is state (a person is there right now), not style, and
  * a user's colour choice must not be able to turn it into decoration.
+ *
+ * This is the one place in `src/` outside `tokens.css` that may hold a literal
+ * colour, and `scripts/literal-colour-audit.mjs` allows it by name: the hover
+ * and active steps are COMPUTED from the picked value (`shadeHex`/`scaleHex`),
+ * so a CSS custom property cannot be the source — the numbers have to be here.
  */
 export const ACCENT_PRESETS = {
   red: '#eb4d4b',
@@ -23,19 +28,6 @@ export const ACCENT_PRESETS = {
   orange: '#d86d36',
   slate: '#7a879f',
 } as const;
-
-/**
- * Surface ramps per theme, for UI that must paint a theme it is not currently
- * in (the Settings theme previews). The live app never reads this: every theme's
- * real values live in `src/styles/tokens.css` under `:root[data-theme=…]`, which
- * is the single source of truth. Keep these four rows in step with it.
- */
-export const THEME_SURFACES: Record<ThemeName, { base: string; plate: string; raised: string; line: string }> = {
-  dark: { base: '#0a0c10', plate: '#14171c', raised: '#1a1e24', line: 'rgba(243, 234, 216, 0.34)' },
-  light: { base: '#f4f1ea', plate: '#fbf9f4', raised: '#f3efe5', line: 'rgba(23, 23, 15, 0.34)' },
-  amoled: { base: '#000000', plate: '#0b0c0f', raised: '#16181d', line: 'rgba(243, 234, 216, 0.32)' },
-  'high-contrast': { base: '#000000', plate: '#0b0d11', raised: '#1a1e24', line: 'rgba(243, 234, 216, 0.7)' },
-};
 
 /** Lighten toward white by `amount` (0–1) while preserving the hue. */
 function shadeHex(hex: string, amount: number): string {
@@ -145,7 +137,6 @@ export function useTheme() {
       ['--accent-primary-hover', accentHover],
       ['--accent-primary-active', accentActive],
       ['--accent', accentBase],
-      ['--accent-secondary', accentBase],
       ['--text-link', accentBase],
       ['--accent-primary-rgb', hexToRgbString(accentBase)],
       ['--sidebar-active-indicator', accentBase],

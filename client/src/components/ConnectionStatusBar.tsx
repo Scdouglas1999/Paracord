@@ -13,17 +13,17 @@ const TONE: Record<
   { surface: string; edge: string; fg: string }
 > = {
   warning: {
-    surface: 'color-mix(in srgb, var(--accent-warning) 16%, var(--bg-secondary))',
+    surface: 'color-mix(in srgb, var(--accent-warning) 16%, var(--bg-raised))',
     edge: 'color-mix(in srgb, var(--accent-warning) 45%, transparent)',
     fg: 'var(--accent-warning)',
   },
   danger: {
-    surface: 'color-mix(in srgb, var(--accent-danger) 16%, var(--bg-secondary))',
+    surface: 'color-mix(in srgb, var(--accent-danger) 16%, var(--bg-raised))',
     edge: 'color-mix(in srgb, var(--accent-danger) 45%, transparent)',
     fg: 'var(--accent-danger)',
   },
   success: {
-    surface: 'color-mix(in srgb, var(--accent-success) 16%, var(--bg-secondary))',
+    surface: 'color-mix(in srgb, var(--accent-success) 16%, var(--bg-raised))',
     edge: 'color-mix(in srgb, var(--accent-success) 45%, transparent)',
     fg: 'var(--accent-success)',
   },
@@ -35,7 +35,7 @@ const MESSAGES: Record<string, { tone: BannerTone; text: string }> = {
 };
 
 const RETRY_BUTTON =
-  'ml-1 inline-flex h-7 items-center rounded-sm border border-current/30 px-2.5 text-meta font-semibold ' +
+  'ml-1 inline-flex h-7 items-center rounded-chip border border-current/30 px-2.5 text-meta font-semibold ' +
   'outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-current/10 ' +
   'focus-visible:shadow-[var(--focus-ring)]';
 
@@ -107,7 +107,7 @@ export function ConnectionStatusBar() {
           style={{
             backgroundColor: tone.surface,
             borderBottom: `1px solid ${tone.edge}`,
-            boxShadow: 'var(--shadow-md)',
+            boxShadow: 'var(--shadow-lifted)',
           }}
         >
           {showConnected ? (

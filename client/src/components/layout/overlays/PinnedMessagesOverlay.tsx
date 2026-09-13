@@ -43,7 +43,7 @@ export function PinnedMessagesOverlay({
       {error && (
         <div
           role="alert"
-          className="m-4 rounded-md border border-accent-danger/30 bg-danger-tint px-4 py-3 text-label text-accent-danger"
+          className="m-4 rounded-well border border-accent-danger/30 bg-danger-tint px-4 py-3 text-label text-accent-danger"
         >
           {error}
         </div>
@@ -60,7 +60,7 @@ export function PinnedMessagesOverlay({
               >
                 <button
                   type="button"
-                  className="w-full rounded-sm text-left outline-none focus-visible:shadow-[var(--focus-ring)]"
+                  className="w-full rounded-chip text-left outline-none focus-visible:shadow-[var(--focus-ring)]"
                   onClick={() => {
                     window.location.hash = `msg-${msg.id}`;
                     onClose();
@@ -68,7 +68,7 @@ export function PinnedMessagesOverlay({
                   aria-label={`Jump to pinned message from ${displayName(msg.author)}`}
                 >
                   <div className="flex items-center gap-2.5 pr-9">
-                    <div className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-bg-tertiary text-meta font-semibold text-text-secondary">
+                    <div className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-bg-well text-meta font-semibold text-text-secondary">
                       {avatarSrc ? <img src={avatarSrc} alt="" className="h-full w-full object-cover" /> : displayName(msg.author)[0]}
                     </div>
                     <span className="text-label font-semibold text-text-primary">{displayName(msg.author)}</span>
@@ -85,7 +85,7 @@ export function PinnedMessagesOverlay({
                     type="button"
                     aria-label="Unpin this message"
                     title="Unpin this message"
-                    className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-sm text-text-muted opacity-0 outline-none transition-[opacity,color,background-color] duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-accent-danger focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] group-hover:opacity-100"
+                    className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-chip text-text-muted opacity-0 outline-none transition-[opacity,color,background-color] duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-accent-danger focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] group-hover:opacity-100"
                     onClick={async (e) => {
                       e.stopPropagation();
                       onErrorChange?.(null);
@@ -108,11 +108,11 @@ export function PinnedMessagesOverlay({
       ) : (
         !error && (
           <div className="flex items-start gap-3.5 px-5 py-8">
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-sm bg-accent-tint text-accent-primary">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-chip bg-accent-tint text-accent-primary">
               <Pin size={20} />
             </span>
             <div className="min-w-0 pt-0.5">
-              <h3 className="text-subhead text-text-primary">No pinned messages yet</h3>
+              <h3 className="text-heading text-text-primary">No pinned messages yet</h3>
               <p className="mt-1 text-label text-text-secondary">
                 Pin a message from its <span className="font-code text-text-primary">⋯</span> menu to keep
                 the important stuff one click away for everyone here.
@@ -139,12 +139,12 @@ export function PinnedMessagesOverlay({
       >
         <header className="flex shrink-0 items-center gap-2.5 border-b border-border-subtle px-4 py-3">
           <Pin size={18} className="shrink-0 text-text-secondary" aria-hidden />
-          <h2 className="min-w-0 flex-1 truncate text-subhead text-text-primary">Pinned messages</h2>
+          <h2 className="min-w-0 flex-1 truncate text-heading text-text-primary">Pinned messages</h2>
           <button
             type="button"
             onClick={onClose}
             aria-label="Close Pinned messages panel"
-            className="inline-flex h-9 w-9 items-center justify-center rounded-sm text-text-muted outline-none hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-chip text-text-muted outline-none hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
           >
             <X size={18} aria-hidden />
           </button>

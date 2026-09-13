@@ -186,7 +186,7 @@ export function ChannelSwitcher({
           }}
         >
           <div className="border-b border-border-subtle p-2">
-            <label className="flex h-9 items-center gap-2 rounded-sm border border-border-subtle bg-bg-tertiary px-2.5 focus-within:border-accent-primary focus-within:shadow-[var(--focus-ring-input)]">
+            <label className="flex h-9 items-center gap-2 rounded-chip border border-border-subtle bg-bg-well px-2.5 focus-within:border-accent-primary focus-within:shadow-[var(--focus-ring-input)]">
               <Search size={15} className="shrink-0 text-text-muted" aria-hidden />
               <span className="sr-only">Find a room</span>
               <input
@@ -207,7 +207,7 @@ export function ChannelSwitcher({
                 navigate(`/app/guilds/${guildId}`);
                 close();
               }}
-              className="flex h-9 w-full items-center gap-2 rounded-sm px-2 text-left text-label font-medium text-text-secondary outline-none transition-colors hover:bg-bg-mod-subtle hover:text-text-primary focus:bg-accent-tint focus:text-text-primary"
+              className="flex h-9 w-full items-center gap-2 rounded-chip px-2 text-left text-label font-medium text-text-secondary outline-none transition-colors hover:bg-bg-mod-subtle hover:text-text-primary focus:bg-accent-tint focus:text-text-primary"
             >
               <LayoutGrid size={17} className="shrink-0 text-channel-icon" aria-hidden />
               <span className="flex-1 truncate">Rooms home</span>
@@ -236,14 +236,14 @@ export function ChannelSwitcher({
                           close();
                         }}
                         className={cn(
-                          'relative flex h-9 w-full items-center gap-2 rounded-sm px-2 text-left outline-none transition-colors',
+                          'relative flex h-9 w-full items-center gap-2 rounded-chip px-2 text-left outline-none transition-colors',
                           active
                             ? 'bg-accent-tint text-text-primary'
                             : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary focus:bg-accent-tint focus:text-text-primary',
                         )}
                       >
                         {active && (
-                          <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-accent-secondary" aria-hidden />
+                          <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-accent-primary" aria-hidden />
                         )}
                         <Icon
                           size={17}

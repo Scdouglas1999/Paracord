@@ -223,7 +223,7 @@ export function AuthRoute({ children }: { children: React.ReactNode }) {
 function BrandedSplash({ label }: { label: string }) {
   const reduce = useReducedMotion();
   return (
-    <div className="flex min-h-screen w-full flex-col items-center justify-center gap-5 bg-bg-tertiary px-6">
+    <div className="flex min-h-screen w-full flex-col items-center justify-center gap-5 bg-bg-base px-6">
       <motion.div
         animate={reduce ? { opacity: 1 } : { opacity: [0.6, 1, 0.6], scale: [1, 1.04, 1] }}
         transition={reduce ? undefined : { duration: 2.2, ease: 'easeInOut', repeat: Infinity }}

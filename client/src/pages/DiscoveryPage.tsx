@@ -144,19 +144,19 @@ export function DiscoveryPage() {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-bg-primary">
+    <div className="flex h-full min-h-0 flex-col bg-bg-plate">
       {/* Solid header — search + category pills, no gradient hero (kill-list #1) */}
-      <header className="shrink-0 border-b border-border-subtle bg-bg-secondary px-4 py-4 sm:px-6">
+      <header className="shrink-0 border-b border-border-subtle bg-bg-raised px-4 py-4 sm:px-6">
         <div className="flex items-center gap-3">
           <button
             type="button"
             aria-label="Back to home"
             onClick={() => navigate('/app')}
-            className="flex h-9 w-9 items-center justify-center rounded-sm text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+            className="flex h-9 w-9 items-center justify-center rounded-chip text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
           >
             <ArrowLeft size={18} />
           </button>
-          <span className="flex h-10 w-10 items-center justify-center rounded-md bg-accent-tint text-accent-primary">
+          <span className="flex h-10 w-10 items-center justify-center rounded-well bg-accent-tint text-accent-primary">
             <Compass size={19} />
           </span>
           <div className="min-w-0">
@@ -202,7 +202,7 @@ export function DiscoveryPage() {
         {loading ? (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {Array.from({ length: 6 }, (_, i) => (
-              <div key={i} className="overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
+              <div key={i} className="overflow-hidden rounded-well border border-border-subtle bg-bg-raised shadow-[var(--shadow-chip)]">
                 <Skeleton height={64} borderRadius={0} />
                 <div className="flex flex-col gap-2.5 p-4">
                   <Skeleton width="55%" height={16} />
@@ -257,16 +257,16 @@ export function DiscoveryPage() {
               return (
                 <div
                   key={guild.id}
-                  className="group flex flex-col overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm transition-colors duration-[140ms] ease-[var(--ease-out)] hover:border-border-strong"
+                  className="group flex flex-col overflow-hidden rounded-well border border-border-subtle bg-bg-raised shadow-[var(--shadow-chip)] transition-colors duration-[140ms] ease-[var(--ease-out)] hover:border-border-strong"
                 >
                   {/* Framed solid banner (no gradient wash — kill-list #2) */}
                   <div
                     className="relative h-16 w-full"
-                    style={{ backgroundColor: `color-mix(in srgb, ${bannerColor} 26%, var(--bg-tertiary))` }}
+                    style={{ backgroundColor: `color-mix(in srgb, ${bannerColor} 26%, var(--bg-well))` }}
                   >
                     <div className="absolute -bottom-5 left-4">
                       <div
-                        className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-md"
+                        className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-well"
                         style={{
                           boxShadow: '0 0 0 3px var(--bg-secondary)',
                           backgroundColor: iconSrc ? 'transparent' : bannerColor,
@@ -284,7 +284,7 @@ export function DiscoveryPage() {
                   </div>
 
                   <div className="flex flex-1 flex-col px-4 pb-4 pt-7">
-                    <h3 className="truncate text-subhead text-text-primary">{guild.name}</h3>
+                    <h3 className="truncate text-heading text-text-primary">{guild.name}</h3>
                     {guild.description && (
                       <p className="mt-1 line-clamp-2 text-meta leading-relaxed text-text-secondary">
                         {guild.description}
@@ -296,7 +296,7 @@ export function DiscoveryPage() {
                         {guild.tags.slice(0, 3).map((tag) => (
                           <span
                             key={tag}
-                            className="rounded-xs bg-bg-mod-strong px-1.5 py-0.5 text-meta font-semibold text-text-secondary"
+                            className="rounded-window bg-bg-mod-strong px-1.5 py-0.5 text-meta font-semibold text-text-secondary"
                           >
                             {tag}
                           </span>
@@ -387,10 +387,10 @@ function DiscoveryPreview({
       showCloseButton
       closeOnBackdrop={!joining}
     >
-      <div className="h-24" style={{ backgroundColor: `color-mix(in srgb, ${bannerColor} 30%, var(--bg-tertiary))` }} />
+      <div className="h-24" style={{ backgroundColor: `color-mix(in srgb, ${bannerColor} 30%, var(--bg-well))` }} />
       <ModalHeader className="relative pb-1 pt-0">
         <div
-          className="-mt-7 flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-lg text-title font-bold text-white"
+          className="-mt-7 flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-plate text-title font-bold text-white"
           style={{ boxShadow: '0 0 0 4px var(--bg-secondary)', backgroundColor: iconSrc ? 'transparent' : bannerColor }}
         >
           {iconSrc ? (
@@ -424,13 +424,13 @@ function DiscoveryPreview({
             <div className="text-section text-text-muted">Topics</div>
             <div className="mt-2 flex flex-wrap gap-1.5">
               {guild.tags.map((tag) => (
-                <span key={tag} className="rounded-xs bg-bg-mod-strong px-2 py-1 text-meta font-semibold text-text-secondary">{tag}</span>
+                <span key={tag} className="rounded-window bg-bg-mod-strong px-2 py-1 text-meta font-semibold text-text-secondary">{tag}</span>
               ))}
             </div>
           </div>
         )}
 
-        <div className="rounded-md border border-border-subtle bg-bg-tertiary px-3.5 py-3">
+        <div className="rounded-well border border-border-subtle bg-bg-well px-3.5 py-3">
           <div className="text-label font-semibold text-text-primary">
             {guild.federated ? 'Remote community' : 'Ready to join?'}
           </div>
@@ -442,7 +442,7 @@ function DiscoveryPreview({
         </div>
 
         {error && (
-          <div role="alert" className="rounded-md border border-accent-danger/35 bg-danger-tint px-3.5 py-2.5 text-label text-accent-danger">
+          <div role="alert" className="rounded-well border border-accent-danger/35 bg-danger-tint px-3.5 py-2.5 text-label text-accent-danger">
             {error}
           </div>
         )}
@@ -464,7 +464,7 @@ function DiscoveryPreview({
 
 function PreviewFact({ icon, label, value, className }: { icon: ReactNode; label: string; value: string; className?: string }) {
   return (
-    <div className={cn('rounded-md border border-border-subtle bg-bg-tertiary px-3 py-2.5', className)}>
+    <div className={cn('rounded-well border border-border-subtle bg-bg-well px-3 py-2.5', className)}>
       <div className="flex items-center gap-1.5 text-meta text-text-muted">{icon}{label}</div>
       <div className="mt-1 text-label font-semibold tabular-nums text-text-primary">{value}</div>
     </div>

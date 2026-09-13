@@ -29,8 +29,8 @@ export interface DmPickerModalProps {
  * updates `channelStore`, navigates to `/app/dms/:id`, fires `onCreated`, then
  * closes. A group-DM sub-mode is preserved from the original picker.
  *
- * Reuses the design-spec §7 Modal recipe (`ui/Modal`: bg --bg-accent, --radius-lg,
- * --border-strong, --shadow-xl, 240ms enter + focus trap), Button and EmptyState.
+ * Reuses the design-spec §7 Modal recipe (`ui/Modal`: bg --bg-accent, --radius-plate,
+ * --border-strong, --shadow-plate, 240ms enter + focus trap), Button and EmptyState.
  * Consumed by HomePage and the sidebar search "new DM" affordance.
  */
 export function DmPickerModal({ open, onClose, onCreated }: DmPickerModalProps) {
@@ -227,7 +227,7 @@ export function DmPickerModal({ open, onClose, onCreated }: DmPickerModalProps) 
                   {groupMode && (
                     <div
                       className={cn(
-                        'flex h-4 w-4 shrink-0 items-center justify-center rounded-xs border',
+                        'flex h-4 w-4 shrink-0 items-center justify-center rounded-window border',
                         selected
                           ? 'border-accent-primary bg-accent-primary text-text-on-accent'
                           : 'border-border-subtle',

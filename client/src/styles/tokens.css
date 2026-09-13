@@ -45,10 +45,11 @@
    presence on a light ground. Accent presets (useTheme.ts) recolour
    --accent-primary and its derivatives ONLY; they never touch the light tokens.
 
-   LEGACY NAMES: --bg-primary/secondary/tertiary, --interactive-*, --shadow-sm…xl
-   etc. are kept as aliases onto the new surfaces so the un-restyled app (WP2–WP7)
-   still renders coherently. They are deprecated: new code consumes the names
-   above.
+   There are no deprecated aliases left. WP8 migrated every consumer of the v1
+   names (--bg-primary/secondary/tertiary/accent, --accent-secondary,
+   --accent-danger-fill, --shadow-sm…xl, --radius-xs…lg, --text-subhead,
+   --ease-spring, the --spacing-* shell metrics) onto the names above and
+   deleted them. The alias→name table is in docs/design/wp8-checkpoint.md.
    ============================================================================= */
 @theme {
   /* ---- Colour: the Tailwind namespace ------------------------------------
@@ -68,11 +69,6 @@
   --color-bg-mod-subtle: var(--bg-mod-subtle);
   --color-bg-mod-strong: var(--bg-mod-strong);
   --color-window-dark: var(--window-dark);
-  /* Legacy surface aliases (deprecated; see header). */
-  --color-bg-primary: var(--bg-primary);
-  --color-bg-secondary: var(--bg-secondary);
-  --color-bg-tertiary: var(--bg-tertiary);
-  --color-bg-accent: var(--bg-accent);
 
   /* §1.2 Light — three lights, three meanings. */
   --color-light-white: var(--light-white);
@@ -87,8 +83,7 @@
   --color-accent-info: var(--accent-info);
   --color-accent-success: var(--accent-success);
   --color-danger-well: var(--danger-well);
-  --color-accent-danger-fill: var(--accent-danger-fill);
-  --color-accent-secondary: var(--accent-secondary);
+  --color-danger-well-hover: var(--danger-well-hover);
 
   /* Tints: meaning-coloured washes (mention rows, badges). */
   --color-accent-tint: var(--accent-tint);
@@ -198,11 +193,6 @@
   --text-lg: 1.125rem;
   --text-xl: 1.25rem;
   --text-2xl: 1.5rem;
-  /* Legacy step name (design-spec v1); maps onto the v2 heading step. */
-  --text-subhead: var(--text-heading);
-  --text-subhead--line-height: 1.2;
-  --text-subhead--font-weight: 700;
-
   --leading-tight: 1.2;
   --leading-snug: 1.35;
   --leading-normal: 1.5;
@@ -252,11 +242,6 @@
   /* Phone: plates and controls round up. */
   --radius-plate-phone: 16px;
   --radius-control-phone: 16px;
-  /* Legacy radius scale (deprecated) mapped onto the v2 steps. */
-  --radius-xs: var(--radius-window);
-  --radius-sm: var(--radius-chip);
-  --radius-md: var(--radius-well);
-  --radius-lg: var(--radius-plate);
 
   /* ---- §3 Control heights and rail widths --------------------------------- */
   --h-nav-row: 34px;
@@ -289,14 +274,7 @@
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-in: cubic-bezier(0.4, 0, 1, 1);
   --ease-in-out: cubic-bezier(0.45, 0, 0.55, 1);
-  /* Deprecated: v1 spring. Light never bounces (§5). */
-  --ease-spring: var(--ease-out);
 
-  /* ---- Layout metrics (legacy names kept for the un-restyled shell) -------- */
-  --spacing-header-height: 3.5rem;
-  --spacing-sidebar-width: 5rem;
-  --spacing-channel-sidebar-width: var(--w-buildings-column);
-  --sidebar-item-size: 3.25rem;
 }
 
 /* =============================================================================
@@ -332,17 +310,10 @@
   --bg-mod-strong: rgba(243, 234, 216, 0.1);
   /* An unlit window / the matte ground a light sits on. */
   --window-dark: #1c2026;
-  /* Legacy aliases (deprecated). */
-  --bg-primary: var(--bg-plate);
-  --bg-secondary: var(--bg-raised);
-  --bg-tertiary: var(--bg-base);
-  --bg-accent: var(--bg-raised);
-  --bg-canvas: var(--bg-base);
-  --bg-panel: var(--bg-plate);
-  --bg-dock: var(--bg-base);
-  --bg-chat: var(--bg-plate);
-  --app-bg-base: var(--bg-base);
   --overlay-backdrop: rgba(10, 12, 16, 0.72);
+  /* A spoiler is a well you have not opened yet; revealed, it is a hover wash. */
+  --spoiler-bg: var(--bg-well);
+  --spoiler-bg-revealed: var(--bg-mod-strong);
   --bg-code: var(--bg-well);
   --border-code: var(--border-subtle);
 
@@ -377,8 +348,6 @@
   --accent-primary-hover: #5be0b4;
   --accent-primary-active: #1fb587;
   --accent: var(--accent-primary);
-  /* Deprecated alias: v1's teal secondary. v2 has one action colour. */
-  --accent-secondary: var(--accent-primary);
   /* Success is the emerald, and only in confirmation toasts. */
   --accent-success: var(--accent-primary);
   --accent-warning: #e8b23a;
@@ -387,8 +356,8 @@
   /* Danger as a *surface*: a deep maroon well carrying danger ink (the Leave
      control in the reference renders). Never a saturated red fill. */
   --danger-well: #2a1517;
-  /* Deprecated alias: the v1 "solid danger fill". v2's recipe is the well. */
-  --accent-danger-fill: var(--danger-well);
+  /* The same well, one step deeper — a danger control under the pointer. */
+  --danger-well-hover: #3a1d20;
   --accent-primary-rgb: 43, 211, 154;
 
   /* ---- Tints: meaning-coloured washes (badges, mention rows) --------------- */
@@ -422,11 +391,6 @@
   --shadow-chip: 0 1px 0 rgba(243, 234, 216, 0.06) inset;
   --shadow-tile: 0 1px 0 rgba(243, 234, 216, 0.05) inset;
   --shadow-floating: var(--shadow-plate);
-  /* Legacy elevation names (deprecated) mapped onto the three real layers. */
-  --shadow-sm: var(--shadow-chip);
-  --shadow-md: var(--shadow-lifted);
-  --shadow-lg: var(--shadow-plate);
-  --shadow-xl: var(--shadow-plate);
 
   /* ---- §1.2 Light effects: fixed recipes, never free values ---------------- */
   --glow-window-white: 0 0 6px rgba(243, 234, 216, 0.55);
@@ -513,10 +477,6 @@
   --color-bg-mod-subtle: var(--bg-mod-subtle);
   --color-bg-mod-strong: var(--bg-mod-strong);
   --color-window-dark: var(--window-dark);
-  --color-bg-primary: var(--bg-primary);
-  --color-bg-secondary: var(--bg-secondary);
-  --color-bg-tertiary: var(--bg-tertiary);
-  --color-bg-accent: var(--bg-accent);
   --color-light-white: var(--light-white);
   --color-light-amber: var(--light-amber);
   --color-accent-primary: var(--accent-primary);
@@ -527,8 +487,7 @@
   --color-accent-info: var(--accent-info);
   --color-accent-success: var(--accent-success);
   --color-danger-well: var(--danger-well);
-  --color-accent-danger-fill: var(--accent-danger-fill);
-  --color-accent-secondary: var(--accent-secondary);
+  --color-danger-well-hover: var(--danger-well-hover);
   --color-accent-tint: var(--accent-tint);
   --color-accent-tint-strong: var(--accent-tint-strong);
   --color-teal-tint: var(--teal-tint);
@@ -598,13 +557,12 @@
   --accent-primary-hover: #135f46;
   --accent-primary-active: #115239;
   --accent: var(--accent-primary);
-  --accent-secondary: var(--accent-primary);
   --accent-success: var(--accent-primary);
   --accent-warning: #7f570b;
   --accent-danger: #b13a3a;
   --accent-info: #40608f;
   --danger-well: #f6e3e3;
-  --accent-danger-fill: var(--danger-well);
+  --danger-well-hover: #efd2d2;
   --accent-primary-rgb: 22, 110, 80;
 
   --accent-tint: rgba(22, 110, 80, 0.12);
@@ -637,10 +595,6 @@
   --shadow-chip: 0 1px 0 rgba(255, 255, 255, 0.7) inset;
   --shadow-tile: 0 1px 0 rgba(255, 255, 255, 0.6) inset;
   --shadow-floating: var(--shadow-plate);
-  --shadow-sm: var(--shadow-chip);
-  --shadow-md: var(--shadow-lifted);
-  --shadow-lg: var(--shadow-plate);
-  --shadow-xl: var(--shadow-plate);
 
   /* Same recipes, ink instead of light, half alpha. */
   --glow-window-white: 0 0 6px rgba(23, 23, 15, 0.28);
@@ -690,9 +644,6 @@
   --shadow-well: 0 1px 2px rgba(0, 0, 0, 0.9) inset;
   --shadow-lifted: 0 1px 0 rgba(243, 234, 216, 0.08) inset, 0 6px 16px rgba(0, 0, 0, 0.6);
   --shadow-composer: 0 1px 0 rgba(243, 234, 216, 0.1) inset, 0 8px 20px rgba(0, 0, 0, 0.6);
-  --shadow-lg: var(--shadow-plate);
-  --shadow-xl: var(--shadow-plate);
-  --shadow-md: var(--shadow-lifted);
 }
 
 /* =============================================================================
@@ -724,13 +675,12 @@
   --accent-primary-hover: #6ff7c8;
   --accent-primary-active: #22d497;
   --accent: var(--accent-primary);
-  --accent-secondary: var(--accent-primary);
   --accent-success: var(--accent-primary);
   --accent-warning: #ffd23a;
   --accent-danger: #ff8f8f;
   --accent-info: #9dbcff;
   --danger-well: #3a0f12;
-  --accent-danger-fill: var(--danger-well);
+  --danger-well-hover: #4d151a;
   --accent-primary-rgb: 58, 240, 176;
 
   --accent-tint: rgba(58, 240, 176, 0.2);
@@ -758,10 +708,6 @@
   --shadow-chip: 0 0 0 1px rgba(243, 234, 216, 0.32) inset;
   --shadow-tile: 0 0 0 1px rgba(243, 234, 216, 0.32) inset;
   --shadow-floating: var(--shadow-plate);
-  --shadow-sm: var(--shadow-chip);
-  --shadow-md: var(--shadow-lifted);
-  --shadow-lg: var(--shadow-plate);
-  --shadow-xl: var(--shadow-plate);
 
   /* Rims 2px, alpha ×1.5 (clamped at 1). */
   --glow-window-white: 0 0 6px rgba(243, 234, 216, 0.82);
@@ -808,8 +754,6 @@
 
 @media (width < 768px) {
   :root {
-    --spacing-sidebar-width: 4.5rem;
-    --spacing-channel-sidebar-width: 15.5rem;
     --w-context-panel: 88vw;
     --sidebar-item-size: 2.75rem;
     /* §3: phone plates and controls round up; hit targets grow (§9). */
@@ -833,8 +777,6 @@
 
 @media (max-width: 640px) {
   :root {
-    --spacing-sidebar-width: 4rem;
-    --spacing-channel-sidebar-width: min(88vw, 19rem);
     --w-context-panel: 88vw;
     --sidebar-item-size: 2.5rem;
   }

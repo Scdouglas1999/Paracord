@@ -965,7 +965,7 @@ export function StreamViewer({
           playsInline
           muted
           style={{
-            backgroundColor: 'var(--bg-tertiary)',
+            backgroundColor: 'var(--bg-well)',
             opacity: showVideo && !usingNativeCanvas ? 1 : 0,
             position: showVideo && !usingNativeCanvas ? 'relative' : 'absolute',
             pointerEvents: 'none',
@@ -985,7 +985,7 @@ export function StreamViewer({
             // element must stop painting (opacity 0) while the native surface
             // is live; it keeps its layout box, which is what the surface
             // geometry mirrors.
-            backgroundColor: underlaySurfaceLive ? 'transparent' : 'var(--bg-tertiary)',
+            backgroundColor: underlaySurfaceLive ? 'transparent' : 'var(--bg-well)',
             opacity: showVideo && usingNativeCanvas && !underlaySurfaceLive ? 1 : 0,
             position: showVideo && usingNativeCanvas ? 'relative' : 'absolute',
             pointerEvents: 'none',

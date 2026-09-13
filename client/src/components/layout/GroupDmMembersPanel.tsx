@@ -108,10 +108,10 @@ export function GroupDmMembersPanel({ channelId, onClose }: GroupDmMembersPanelP
     >
       <header className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-4 py-3">
         <Users size={18} className="shrink-0 text-text-secondary" aria-hidden />
-        <h2 className="min-w-0 flex-1 truncate text-subhead text-text-primary">People in this message</h2>
+        <h2 className="min-w-0 flex-1 truncate text-heading text-text-primary">People in this message</h2>
         <button
           type="button"
-          className="rounded-sm px-2 py-1 text-meta font-semibold text-accent-primary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-tint focus-visible:shadow-[var(--focus-ring)]"
+          className="rounded-chip px-2 py-1 text-meta font-semibold text-accent-primary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-tint focus-visible:shadow-[var(--focus-ring)]"
           onClick={() => {
             setMemberActionError(null);
             setAddingMember((v) => !v);
@@ -122,7 +122,7 @@ export function GroupDmMembersPanel({ channelId, onClose }: GroupDmMembersPanelP
         <button
           type="button"
           onClick={onClose}
-          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-sm text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-chip text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
           aria-label="Close the people panel"
         >
           <X size={18} aria-hidden />
@@ -132,7 +132,7 @@ export function GroupDmMembersPanel({ channelId, onClose }: GroupDmMembersPanelP
       {memberActionError && (
         <div
           role="alert"
-          className="mx-4 mt-3 rounded-md border border-accent-danger/35 bg-danger-tint px-3 py-2 text-meta font-medium text-accent-danger"
+          className="mx-4 mt-3 rounded-well border border-accent-danger/35 bg-danger-tint px-3 py-2 text-meta font-medium text-accent-danger"
         >
           {memberActionError}
         </div>
@@ -145,10 +145,10 @@ export function GroupDmMembersPanel({ channelId, onClose }: GroupDmMembersPanelP
             <button
               key={rel.id}
               type="button"
-              className="flex w-full items-center gap-2.5 rounded-sm px-2 py-1.5 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
+              className="flex w-full items-center gap-2.5 rounded-chip px-2 py-1.5 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
               onClick={() => void handleAddMember(rel.user.id)}
             >
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-sm bg-bg-mod-subtle text-text-secondary">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-chip bg-bg-mod-subtle text-text-secondary">
                 <UserPlus size={13} />
               </span>
               <span className="min-w-0 flex-1 truncate text-label text-text-secondary">{displayName(rel.user)}</span>
@@ -166,7 +166,7 @@ export function GroupDmMembersPanel({ channelId, onClose }: GroupDmMembersPanelP
         {dmChannel?.recipients?.map((recipient) => (
           <div
             key={recipient.id}
-            className="group flex items-center gap-2.5 rounded-sm px-2 py-1.5 transition-colors hover:bg-bg-mod-subtle"
+            className="group flex items-center gap-2.5 rounded-chip px-2 py-1.5 transition-colors hover:bg-bg-mod-subtle"
           >
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-tint text-meta font-semibold text-accent-primary">
               {recipient.username.charAt(0).toUpperCase()}
@@ -176,7 +176,7 @@ export function GroupDmMembersPanel({ channelId, onClose }: GroupDmMembersPanelP
               <button
                 type="button"
                 aria-label={`Remove ${recipient.username} from group DM`}
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-sm text-text-muted opacity-100 outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-accent-danger focus-visible:shadow-[var(--focus-ring)] sm:opacity-0 sm:focus-visible:opacity-100 sm:group-hover:opacity-100"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-chip text-text-muted opacity-100 outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-accent-danger focus-visible:shadow-[var(--focus-ring)] sm:opacity-0 sm:focus-visible:opacity-100 sm:group-hover:opacity-100"
                 onClick={() => void handleRemoveMember(recipient.id)}
                 title="Remove from group"
               >
@@ -192,7 +192,7 @@ export function GroupDmMembersPanel({ channelId, onClose }: GroupDmMembersPanelP
           <button
             type="button"
             onClick={() => void handleLeaveGroup()}
-            className="flex h-9 w-full items-center justify-center gap-2 rounded-sm border border-accent-danger/30 text-label font-medium text-accent-danger outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-danger-tint focus-visible:shadow-[var(--focus-ring)]"
+            className="flex h-9 w-full items-center justify-center gap-2 rounded-chip border border-accent-danger/30 text-label font-medium text-accent-danger outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-danger-tint focus-visible:shadow-[var(--focus-ring)]"
           >
             <LogOut size={16} />
             Leave group

@@ -20,9 +20,9 @@ export function RestartBanner() {
           transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
           className="fixed inset-x-0 top-0 z-[100] flex items-center justify-center gap-2 px-4 py-2"
           style={{
-            backgroundColor: 'color-mix(in srgb, var(--accent-info) 16%, var(--bg-secondary))',
+            backgroundColor: 'color-mix(in srgb, var(--accent-info) 16%, var(--bg-raised))',
             borderBottom: '1px solid color-mix(in srgb, var(--accent-info) 45%, transparent)',
-            boxShadow: 'var(--shadow-md)',
+            boxShadow: 'var(--shadow-lifted)',
           }}
         >
           <RefreshCw size={15} className="animate-spin" style={{ color: 'var(--accent-info)' }} />

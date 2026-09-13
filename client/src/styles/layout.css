@@ -123,7 +123,7 @@ html[data-theme='high-contrast'] #root {
    Floating overlays that cover the hole must stay opaque: translucent
    backdrop-blur panels over a live underlay visually merge into the stream.
    Mark hosts with `data-native-overlay-occlude` (StreamOverlayPortal does)
-   and prefer solid `--bg-floating` / `--bg-accent` fills. */
+   and prefer solid `--bg-floating` / `--bg-raised` fills. */
 html[data-native-underlay],
 html[data-native-underlay] body,
 html[data-native-underlay] #root,
@@ -139,7 +139,7 @@ html[data-native-underlay] [data-native-underlay-clear] {
 
    ONLY mark opaque PANELS / small chrome with these attributes — NEVER a
    full-screen `inset-0` backdrop. This rule repaints the marked box solid
-   --bg-secondary, so a marked backdrop paints the WHOLE viewport dark and the
+   --bg-raised, so a marked backdrop paints the WHOLE viewport dark and the
    stream "blacks out" (and the dialog looks stuck) on every modal open — the
    Modal-backdrop regression fixed 2026-07. Modal / settings backdrops stay
    translucent so the video dims behind them instead of vanishing. */
@@ -148,5 +148,5 @@ html[data-native-underlay] [data-stream-overlay-portal],
 html[data-native-underlay] [role="tooltip"] {
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
-  background-color: var(--bg-secondary) !important;
+  background-color: var(--bg-raised) !important;
 }

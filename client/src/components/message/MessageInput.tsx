@@ -1207,7 +1207,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
                 type="checkbox"
                 checked={pollAllowMultiselect}
                 onChange={(e) => setPollAllowMultiselect(e.target.checked)}
-                className="h-4 w-4 rounded-xs accent-[color:var(--accent-primary)]"
+                className="h-4 w-4 rounded-window accent-[color:var(--accent-primary)]"
               />
               Allow multiple answers
             </label>
