@@ -28,6 +28,7 @@ export function FocusedWebcamView({ participantId, username, isLocal }: FocusedW
       dominant
       name={username}
       speaking={speakingUsers.has(participantId)}
+      userId={participantId}
       live={hasTrack}
       avatarSize={84}
       className="rounded-none"

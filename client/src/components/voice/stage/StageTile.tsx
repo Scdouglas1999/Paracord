@@ -4,6 +4,7 @@ import { Mic, MicOff, MonitorUp } from 'lucide-react';
 import { LitAvatar, avatarInitials } from '../../light';
 import { getIdentityColor } from '../../../lib/colors';
 import { cn } from '../../../lib/utils';
+import { SPEAKING_MARK } from '../../../lib/motion';
 import type { PersonLight } from '../../../lib/attention/light';
 
 export interface StageTileProps extends Omit<React.HTMLAttributes<HTMLDivElement>, 'children'> {
@@ -13,6 +14,15 @@ export interface StageTileProps extends Omit<React.HTMLAttributes<HTMLDivElement
   name: string;
   /** Talking right now: the tile's ring breathes (§5). */
   speaking?: boolean;
+  /**
+   * Whose voice this tile's ring belongs to.
+   *
+   * Purely a motion mark (§5.1): where the media engine reports a level, the
+   * ring brightens with the voice, and `lib/motion/voiceLevel.ts` needs to know
+   * which tile is whose. A `LitAvatar` says so itself; a tile showing a camera
+   * has no face in it to ask. Without it the tile simply breathes.
+   */
+  userId?: string | null;
   /** Muted: a danger glyph on the tag, and the word. */
   muted?: boolean;
   /** This tile is somebody's screen rather than their camera. */
@@ -52,6 +62,7 @@ export const StageTile = React.forwardRef<HTMLDivElement, StageTileProps>(functi
     person = null,
     name,
     speaking = false,
+    userId = null,
     muted = false,
     sharing = false,
     readout = null,
@@ -72,6 +83,7 @@ export const StageTile = React.forwardRef<HTMLDivElement, StageTileProps>(functi
   return (
     <div
       ref={ref}
+      {...(userId ? { [SPEAKING_MARK]: userId } : null)}
       className={cn(
         'group/tile relative isolate overflow-hidden rounded-[var(--radius-card)] bg-bg-well',
         speaking ? 'pc-speaking' : 'shadow-[var(--shadow-tile)]',

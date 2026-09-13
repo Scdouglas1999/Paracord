@@ -14,9 +14,11 @@
  *   sharedElement . "the thing you click becomes the thing you look at"
  *   marks ......... what a surface tells the engine it is holding
  *   lightsOn ...... "lights on" — the building waking up
+ *   lights ........ the theme changing, and the power going
  *   arrive ........ "someone arrives / leaves" — one path, one burst
  *   walk .......... "walk into a room / back to the pill"
  *   flip .......... the things an arrival pushed out of the way
+ *   voiceLevel .... "speaking is a breath" — the ring takes the voice
  *   flipCounter ... `<RollingNumber>` — "numbers re-roll"
  *   bus ........... gestures that cross a pane boundary
  *
@@ -61,11 +63,26 @@ export {
   LIGHTS_ON_BUDGET_MS,
   lightsOnStep,
   playLightsOn,
+  playRelight,
   type LightsOnOptions,
   type LightsOnSequence,
 } from './lightsOn';
 export {
+  buildingIsDim,
+  changeLights,
+  clearLightsForTests,
+  dimBuilding,
+  relightBuilding,
+  takeDimmedPlates,
+  OUTAGE_DIM,
+  type LightsChangeEngine,
+  type LightsChangeOptions,
+  type LightsChangeResult,
+  type OutageResult,
+} from './lights';
+export {
   EVENT_MARK,
+  SPEAKING_MARK,
   LAMP_MARK,
   LIT_MARK,
   PERSON_MARK,
@@ -107,3 +124,15 @@ export {
   type SharedTransitionResult,
 } from './sharedElement';
 export { motionToken, ms, num, parseDuration, rawToken, MOTION_TOKEN_FALLBACKS } from './tokens';
+export {
+  clearVoiceLevels,
+  levelFromAnalyser,
+  levelFromDbov,
+  publishVoiceLevels,
+  stepVoiceLevelsForTests,
+  voiceLevelsForTests,
+  VOICE_ATTACK_MS,
+  VOICE_LEVEL_VAR,
+  VOICE_RELEASE_MS,
+  type VoiceLevelSource,
+} from './voiceLevel';

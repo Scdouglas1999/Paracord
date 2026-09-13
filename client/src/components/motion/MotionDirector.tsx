@@ -7,16 +7,22 @@ import {
   mergeBurst,
   noCrossings,
   occupancyOf,
+  OUTAGE_GRACE_MS,
+  outageTracker,
   type Occupancy,
   type RoomCrossing,
 } from '../../lib/attention/light';
 import {
   BURST_WINDOW_MS,
   captureArrival,
+  dimBuilding,
   facesFor,
   playArrivals,
   playDepartures,
   playLightsOn,
+  playRelight,
+  relightBuilding,
+  takeDimmedPlates,
   type FlipCapture,
 } from '../../lib/motion';
 import { useAuthStore } from '../../stores/authStore';
@@ -53,6 +59,7 @@ import { useVoiceStore } from '../../stores/voiceStore';
 export function MotionDirector() {
   useLightsOn();
   useArrivals();
+  useConnection();
   return null;
 }
 
@@ -97,7 +104,16 @@ function useLightsOn() {
       pending.current = null;
       // One frame on top, so whatever the gather brought in is in the document
       // before the sweep looks for it.
-      requestAnimationFrame(() => playLightsOn());
+      requestAnimationFrame(() => {
+        // WP9d: a gateway that was away long enough to take the building's
+        // lights down relights exactly the plates that went dark, and they do
+        // not travel — a plate rises when it ENTERS the street, and these never
+        // left it. Anything else (the app opening, a return from an afternoon
+        // away) is the street arriving, which is the whole of WP9b's moment.
+        const dark = reason === 'reconnect' ? takeDimmedPlates() : [];
+        if (dark.length > 0) playRelight({ plates: dark });
+        else playLightsOn();
+      });
     }, GATHER_MS);
   }, [connected, presenceCount, visible]);
 
@@ -107,6 +123,54 @@ function useLightsOn() {
     },
     [],
   );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Moment 4 — the power goes, and comes back (WP9d)                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The gateway being away is the one piece of app state that is about the whole
+ * building rather than anything in it, so it is drawn on the whole building:
+ * the lights go down 30% and stay down until it is back. **Never a spinner on
+ * the street** — a spinner says "wait"; a building with its power out says what
+ * is actually true, which is that nothing on screen is answerable for right now
+ * and you can keep reading it.
+ *
+ * The edge is `lib/attention/outage.ts`, and the grace it enforces is the whole
+ * point: a gateway blips several times an hour, and a building that dims and
+ * undims for 80 ms is the flashing blocker WP9a spent a commit removing.
+ *
+ * The relight is deliberately NOT played here. A gateway coming back is already
+ * §5.1's second "lights on" trigger, and `useLightsOn` above waits for presence
+ * to actually be re-delivered before it sweeps — so this half lifts the scrim
+ * and lets that moment be the moment. What it does own is the SCOPE: the plates
+ * that were under the scrim are the ones with any lights to turn on.
+ */
+function useConnection() {
+  const status = useUIStore((state) => state.connectionStatus);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | null = null;
+
+    const look = () => {
+      if (cancelled) return;
+      const edge = outageTracker.observe({ connected: status === 'connected', nowMs: Date.now() });
+      if (edge === 'dim') dimBuilding();
+      else if (edge === 'relight') void relightBuilding();
+    };
+
+    look();
+    // The grace has to be re-observed on a clock as well as on a change: the
+    // interesting answer is "it is STILL away", and nothing else will ask.
+    if (status !== 'connected') timer = window.setTimeout(look, OUTAGE_GRACE_MS + 20);
+
+    return () => {
+      cancelled = true;
+      if (timer != null) clearTimeout(timer);
+    };
+  }, [status]);
 }
 
 /* -------------------------------------------------------------------------- */

@@ -49,6 +49,25 @@ export interface LightsOnOptions {
   root?: ParentNode;
   /** Override the §5.3 ceiling (the gate uses the default). */
   budgetMs?: number;
+  /**
+   * The plates this sequence is for. Omit for every plate on screen.
+   *
+   * WP9d: a gateway coming back is not the app opening — only the buildings
+   * that actually went dark have any lights to turn on, and a building served
+   * by a connection that never dropped must not re-wake over the top of a
+   * conversation somebody is reading. The connection director records the
+   * plates it dimmed and hands exactly those back here.
+   */
+  plates?: readonly HTMLElement[];
+  /**
+   * Whether the street ARRIVES — plates settling from 14px below (§5.1).
+   *
+   * True when the building is being seen for the first time in this run. False
+   * when the plates are already on screen and only their light changed: the
+   * theme changing, or the power coming back. Moving a plate that never went
+   * anywhere would say something untrue (§0).
+   */
+  settle?: boolean;
 }
 
 export interface LightsOnSequence {
@@ -107,10 +126,22 @@ export function playLightsOn(options: LightsOnOptions = {}): LightsOnSequence {
   // which is the order presence resolved them: `buildingLight` orders rooms
   // voice-first then by activity, and a room only has a window's worth of
   // light once its occupants or readers have arrived.
-  const windows = [...root.querySelectorAll<HTMLElement>(`[${WINDOW_MARK}][${LIT_MARK}]`)];
-  const plates = [...root.querySelectorAll<HTMLElement>(`[${PLATE_MARK}]`)];
+  const scoped = options.plates != null;
+  const plates = scoped
+    ? options.plates!.filter((plate) => plate.isConnected)
+    : [...root.querySelectorAll<HTMLElement>(`[${PLATE_MARK}]`)];
+  // A scoped sweep lights the windows inside its own plates, plus the ones that
+  // belong to no plate at all (a row's 8px dot in a flat list) — never another
+  // building's.
+  const inScope = new Set<Element>(plates);
+  const scopedTo = (el: Element) => {
+    if (!scoped) return true;
+    const plate = closestPlate(el);
+    return plate == null || inScope.has(plate);
+  };
+  const windows = [...root.querySelectorAll<HTMLElement>(`[${WINDOW_MARK}][${LIT_MARK}]`)].filter(scopedTo);
   const rims = [...root.querySelectorAll<HTMLElement>(`[${PERSON_MARK}][${LIT_MARK}]`)];
-  if (windows.length === 0 && plates.length === 0) return NOTHING;
+  if (windows.length === 0 && plates.length === 0 && rims.length === 0) return NOTHING;
 
   const animations: Animation[] = [];
   let endsAt = 0;
@@ -118,12 +149,15 @@ export function playLightsOn(options: LightsOnOptions = {}): LightsOnSequence {
     endsAt = Math.max(endsAt, delay + duration);
   };
 
-  // 1. The street arrives: plates settle from 14px below, 120ms apart.
+  // 1. The street arrives: plates settle from 14px below, 120ms apart. Not when
+  //    the plates are already standing there and only their light changed.
+  const settles = options.settle !== false;
   const pStep = plateStep(plates.length, budget);
   const plateDelay = new Map<Element, number>();
   plates.forEach((plate, index) => {
-    const delay = index * pStep;
+    const delay = settles ? index * pStep : 0;
     plateDelay.set(plate, delay);
+    if (!settles) return;
     const animation = settleIn(plate, { delay });
     if (animation) animations.push(animation);
     ends(delay, ms('--duration-move'));
@@ -131,14 +165,14 @@ export function playLightsOn(options: LightsOnOptions = {}): LightsOnSequence {
 
   // 2. The windows bloom — a window inside a plate waits for its plate to
   //    arrive, because a bloom inside something still fading in cannot be seen.
-  const platesEndAt = plates.length > 0 ? (plates.length - 1) * pStep + ms('--duration-fast') : 0;
+  const platesEndAt = settles && plates.length > 0 ? (plates.length - 1) * pStep + ms('--duration-fast') : 0;
   const step = lightsOnStep(windows.length, budget, platesEndAt);
   const firstWindowInPlate = new Map<Element, number>();
   const windowDelayByRoom = new Map<string, number>();
   windows.forEach((win, index) => {
     const plateOf = closestPlate(win);
     const base = (plateOf ? plateDelay.get(plateOf) : undefined) ?? 0;
-    const delay = base + ms('--duration-fast') + index * step;
+    const delay = base + (settles ? ms('--duration-fast') : 0) + index * step;
     const animation = bloom(win, { delay });
     if (animation) animations.push(animation);
     ends(delay, ms('--duration-warm-up'));
@@ -150,7 +184,7 @@ export function playLightsOn(options: LightsOnOptions = {}): LightsOnSequence {
   });
 
   // 3. A lamp fades in once the first window in its plate is lit.
-  for (const lamp of root.querySelectorAll<HTMLElement>(`[${LAMP_MARK}]`)) {
+  for (const lamp of [...root.querySelectorAll<HTMLElement>(`[${LAMP_MARK}]`)].filter(scopedTo)) {
     const plate = closestPlate(lamp);
     const after = (plate ? firstWindowInPlate.get(plate) : undefined) ?? 0;
     const delay = after + LAMP_AFTER_WINDOW_MS;
@@ -175,4 +209,16 @@ export function playLightsOn(options: LightsOnOptions = {}): LightsOnSequence {
   }
 
   return { animations, windows: windows.length, stepMs: step, endsAtMs: endsAt };
+}
+
+/**
+ * The same sequence, minus the street arriving (WP9d).
+ *
+ * The lights changing — a theme swapped, or the power coming back after the
+ * gateway was away — happens to a building that is already standing there. Its
+ * windows, lamps and rims come back on exactly as they do when it wakes up;
+ * its plates do not travel, because nothing moved them.
+ */
+export function playRelight(options: LightsOnOptions = {}): LightsOnSequence {
+  return playLightsOn({ ...options, settle: false });
 }

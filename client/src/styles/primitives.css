@@ -89,19 +89,34 @@
 }
 
 /* Someone is talking: the ring breathes between alpha .55 and .8 at ~1.6s.
-   Never bounce, never scale. */
+   Never bounce, never scale.
+
+   §5.1 also asks the ring to brighten WITH the voice where the media engine
+   exposes a level. That is `--ring-voice`: a second glow layer, co-located with
+   the resting one, whose alpha is `--voice-level` (0-1, written by
+   `lib/motion/voiceLevel.ts`) times 15% of the resting glow's own alpha. At
+   rest it is fully transparent, so the ring can only ever rise from where it
+   rests, never dip below it.
+
+   It is DECLARED here rather than in `tokens.css` on purpose: a custom property
+   is substituted where it is declared, so a recipe composed on `:root` would
+   read the root's level and never the level of the person this ring belongs to.
+   Every element without one inherits the inert value `tokens.css` declares
+   (`.voice-connected-pulse` borrows these keyframes and has no level of its
+   own), so the layer costs nothing where nobody is speaking. */
 .pc-speaking {
-  box-shadow: var(--ring-speaking);
+  --ring-voice: 0 0 18px rgba(var(--light-ring-rgb), calc(var(--ring-voice-a) * var(--voice-level)));
+  box-shadow: var(--ring-speaking), var(--ring-voice);
   animation: pc-breathe var(--duration-breathe) var(--ease-in-out) infinite;
 }
 
 @keyframes pc-breathe {
   0%,
   100% {
-    box-shadow: var(--ring-lit);
+    box-shadow: var(--ring-lit), var(--ring-voice);
   }
   50% {
-    box-shadow: var(--ring-speaking-peak);
+    box-shadow: var(--ring-speaking-peak), var(--ring-voice);
   }
 }
 
@@ -250,6 +265,18 @@
    browser-driven path dresses its root snapshot exactly as the Web Animations
    path dresses the live DOM (`walk.ts` → `recedeAround`) — one choreography,
    two engines. */
+/* WP9d — "theme change as the lights changing" (§5.1, `lib/motion/lights.ts`).
+   The one moment where the BASE is the thing that changes, so the root snapshot
+   is the whole of it: it crosses over `--duration-dim` rather than the plain
+   fade speed above, on `--ease-out` like every other light. Nothing travels and
+   nothing moves — the windows, lamps and rims re-bloom afterwards, from script,
+   once the new ground has settled. */
+:root[data-motion-transition='lights-change']::view-transition-old(root),
+:root[data-motion-transition='lights-change']::view-transition-new(root) {
+  animation-duration: var(--duration-dim);
+  animation-timing-function: var(--ease-out);
+}
+
 :root[data-motion-transition='walk-in']::view-transition-old(root) {
   animation-name: pc-recede;
   animation-duration: var(--duration-move);

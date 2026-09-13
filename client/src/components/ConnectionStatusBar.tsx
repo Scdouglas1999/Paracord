@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 // §5.3: one reduced-motion switch for the whole app (lib/motion), never
 // framer-motion's own hook — that one cannot see the user's Motion setting.
 import { useReducedMotion } from '../lib/motion';
-import { Loader2, Wifi, WifiOff } from 'lucide-react';
+import { Wifi, WifiOff } from 'lucide-react';
 import { gateway } from '../gateway/manager';
 import { useUIStore } from '../stores/uiStore';
 import { useServerListStore } from '../stores/serverListStore';
@@ -87,7 +87,6 @@ export function ConnectionStatusBar() {
     status !== 'connected' && showBanner && !apiReachable && !voiceConnected && Boolean(info);
   const visible = offlineVisible || showConnected;
 
-  const reconnecting = status === 'reconnecting';
   const tone = showConnected
     ? TONE.success
     : info
@@ -113,10 +112,14 @@ export function ConnectionStatusBar() {
             boxShadow: 'var(--shadow-lifted)',
           }}
         >
+          {/* §5.1 / WP9d: never a spinner on the street. A gateway that is
+              away is drawn on the building — the whole thing dims 30% and holds
+              there (`lib/motion/lights.ts`, played by `MotionDirector`) — and
+              this banner says the words. A spinning ring next to them would be
+              a second, decorative answer to the same question, and §5's law is
+              that only light and the things people do move. */}
           {showConnected ? (
             <Wifi size={15} style={{ color: tone.fg }} />
-          ) : reconnecting ? (
-            <Loader2 size={15} className="animate-spin" style={{ color: tone.fg }} />
           ) : (
             <WifiOff size={15} style={{ color: tone.fg }} />
           )}

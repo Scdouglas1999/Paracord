@@ -4,8 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   arriveIn,
   bloom,
+  buildingIsDim,
   captureFlip,
+  changeLights,
+  clearLightsForTests,
+  clearVoiceLevels,
   configureMotion,
+  dimBuilding,
   emitMotion,
   flicker,
   lightsOnStep,
@@ -16,7 +21,9 @@ import {
   playArrivals,
   playDepartures,
   playLightsOn,
+  playRelight,
   prefersReducedMotion,
+  publishVoiceLevels,
   press,
   recede,
   recedeAround,
@@ -33,8 +40,16 @@ import {
   springLinearEasing,
   springProgress,
   stagger,
+  stepVoiceLevelsForTests,
   transitionWith,
+  levelFromAnalyser,
+  levelFromDbov,
+  relightBuilding,
+  takeDimmedPlates,
+  VOICE_LEVEL_VAR,
+  voiceLevelsForTests,
 } from './index';
+import { createOutageTracker, OUTAGE_GRACE_MS } from '../attention/outage';
 import { installWaapiStub, type WaapiStub } from './waapiStub';
 
 /* -------------------------------------------------------------------------- */
@@ -874,5 +889,316 @@ describe('walking into a room', () => {
       beforeUpdate: (engine) => seen.push(engine),
     });
     expect(seen).toEqual(['flip']);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* WP9d — "speaking is a breath", and the breath takes the voice (§5.1)        */
+/* -------------------------------------------------------------------------- */
+
+describe('the speaking ring takes the voice', () => {
+  beforeEach(() => {
+    stubMatchMedia(false);
+    configureMotion('full');
+    clearVoiceLevels();
+  });
+
+  afterEach(() => {
+    clearVoiceLevels();
+  });
+
+  /** A face and a tile, both belonging to the same person. */
+  function ringsFor(userId: string) {
+    const face = document.createElement('span');
+    face.setAttribute('data-motion-person', userId);
+    const tile = document.createElement('div');
+    tile.setAttribute('data-motion-speaking', userId);
+    document.body.append(face, tile);
+    return { face, tile };
+  }
+
+  const levelOn = (el: HTMLElement) => Number(el.style.getPropertyValue(VOICE_LEVEL_VAR) || '0');
+
+  it('reaches the voice in 60ms and lets go of it over 240ms', () => {
+    const { face } = ringsFor('44');
+    publishVoiceLevels('room', new Map([['44', 1]]));
+
+    // §5.1: 60ms attack. Half way there after 30ms, on its mark at 60. The
+    // first frame after a report is the clock starting, not 16ms of travel.
+    stepVoiceLevelsForTests(0);
+    stepVoiceLevelsForTests(30);
+    expect(levelOn(face)).toBeCloseTo(0.5, 1);
+    stepVoiceLevelsForTests(60);
+    expect(levelOn(face)).toBe(1);
+
+    // …and 240ms release, which is four times as long on purpose: a ring that
+    // let go as fast as it caught would chatter on every syllable.
+    publishVoiceLevels('room', new Map());
+    // In 60ms steps: a single frame is never allowed to carry more than 64ms of
+    // the envelope, so a backgrounded tab coming back cannot snap a ring.
+    stepVoiceLevelsForTests(120);
+    stepVoiceLevelsForTests(180);
+    expect(levelOn(face)).toBeCloseTo(0.5, 1);
+    stepVoiceLevelsForTests(240);
+    stepVoiceLevelsForTests(300);
+    expect(levelOn(face)).toBe(0);
+  });
+
+  it('drives every element that draws that person, from one loop', () => {
+    const mara = ringsFor('45');
+    const ren = ringsFor('46');
+    publishVoiceLevels('room', new Map([['45', 1], ['46', 0.5]]));
+    stepVoiceLevelsForTests(0);
+    stepVoiceLevelsForTests(60);
+    // The face and the tile are the same voice; the two people are not.
+    expect(levelOn(mara.face)).toBe(1);
+    expect(levelOn(mara.tile)).toBe(1);
+    expect(levelOn(ren.face)).toBeCloseTo(0.5, 1);
+    expect(voiceLevelsForTests().size).toBe(2);
+  });
+
+  it('never writes the same step twice — a steady voice stops writing', () => {
+    const { face } = ringsFor('44');
+    const writes: string[] = [];
+    const original = face.style.setProperty.bind(face.style);
+    face.style.setProperty = ((name: string, value: string) => {
+      if (name === VOICE_LEVEL_VAR) writes.push(value);
+      original(name, value);
+    }) as typeof face.style.setProperty;
+
+    publishVoiceLevels('room', new Map([['44', 1]]));
+    stepVoiceLevelsForTests(0);
+    stepVoiceLevelsForTests(60);
+    const afterArrival = writes.length;
+    // Ten more frames of exactly the same voice.
+    for (let i = 1; i <= 10; i += 1) stepVoiceLevelsForTests(60 + i * 16);
+    expect(writes.length).toBe(afterArrival);
+  });
+
+  it('takes the loudest source, so your own mic can answer before the server does', () => {
+    const { face } = ringsFor('42');
+    publishVoiceLevels('room', new Map([['42', 0.2]]));
+    publishVoiceLevels('self', new Map([['42', 0.9]]));
+    stepVoiceLevelsForTests(0);
+    stepVoiceLevelsForTests(60);
+    expect(levelOn(face)).toBeCloseTo(0.9, 1);
+    // The room catching up does not pull the ring back down.
+    publishVoiceLevels('room', new Map([['42', 0.9]]));
+    stepVoiceLevelsForTests(120);
+    expect(levelOn(face)).toBeCloseTo(0.9, 1);
+  });
+
+  it('lets a tile that mounted since the last report join without a per-frame selector', () => {
+    publishVoiceLevels('room', new Map([['47', 1]]));
+    stepVoiceLevelsForTests(0);
+    stepVoiceLevelsForTests(60);
+    // The tile arrives AFTER the level did. A loop that re-read the DOM every
+    // frame would catch it; this one catches it on the engine's next report,
+    // which is what keeps the frame free.
+    const { face } = ringsFor('47');
+    expect(levelOn(face)).toBe(0);
+    publishVoiceLevels('room', new Map([['47', 1]]));
+    // On the report, not on the next frame: a steady voice would otherwise
+    // leave the new tile dark until the level happened to change step.
+    expect(levelOn(face)).toBe(1);
+  });
+
+  it('does nothing at all under reduced motion', () => {
+    const { face } = ringsFor('44');
+    stubMatchMedia(true);
+    configureMotion('system');
+    publishVoiceLevels('room', new Map([['44', 1]]));
+    expect(voiceLevelsForTests().size).toBe(0);
+    expect(face.style.getPropertyValue(VOICE_LEVEL_VAR)).toBe('');
+  });
+
+  it('puts the ring back at rest the moment nobody is talking to us', () => {
+    const { face, tile } = ringsFor('44');
+    publishVoiceLevels('room', new Map([['44', 1]]));
+    stepVoiceLevelsForTests(0);
+    stepVoiceLevelsForTests(60);
+    clearVoiceLevels();
+    // Not a release: a glow asserts something is true RIGHT NOW (§0), and once
+    // the call is gone we do not know how loud anybody is.
+    expect(face.style.getPropertyValue(VOICE_LEVEL_VAR)).toBe('');
+    expect(tile.style.getPropertyValue(VOICE_LEVEL_VAR)).toBe('');
+  });
+
+  it('reads the two conventions the engines actually speak', () => {
+    // RTP audio level: 0..127 as -dBov, so LOWER is louder.
+    expect(levelFromDbov(10)).toBe(1);
+    expect(levelFromDbov(45)).toBe(0);
+    expect(levelFromDbov(80)).toBe(0);
+    expect(levelFromDbov(27.5)).toBeCloseTo(0.5, 2);
+    // The local analyser's 0..1 RMS, where an ordinary voice is a quarter.
+    expect(levelFromAnalyser(0.25)).toBe(1);
+    expect(levelFromAnalyser(0)).toBe(0);
+    expect(levelFromAnalyser(0.05)).toBeCloseTo(0.2, 2);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* WP9d — the lights change, and the power goes (§5.1)                         */
+/* -------------------------------------------------------------------------- */
+
+describe('the outage edge', () => {
+  const tracker = () => createOutageTracker(OUTAGE_GRACE_MS);
+
+  it('never dims a building that has not been up yet', () => {
+    const outage = tracker();
+    expect(outage.observe({ connected: false, nowMs: 0 })).toBeNull();
+    expect(outage.observe({ connected: false, nowMs: 5_000 })).toBeNull();
+  });
+
+  it('waits out the grace, because a gateway blips several times an hour', () => {
+    const outage = tracker();
+    outage.observe({ connected: true, nowMs: 0 });
+    expect(outage.observe({ connected: false, nowMs: 100 })).toBeNull();
+    expect(outage.observe({ connected: false, nowMs: 400 })).toBeNull();
+    // Back before the grace ran out: nothing ever happened.
+    expect(outage.observe({ connected: true, nowMs: 500 })).toBeNull();
+    expect(outage.observe({ connected: false, nowMs: 600 })).toBeNull();
+    expect(outage.observe({ connected: false, nowMs: 600 + OUTAGE_GRACE_MS })).toBe('dim');
+  });
+
+  it('dims once and relights once, however often it is asked', () => {
+    const outage = tracker();
+    outage.observe({ connected: true, nowMs: 0 });
+    outage.observe({ connected: false, nowMs: 10 });
+    expect(outage.observe({ connected: false, nowMs: 10 + OUTAGE_GRACE_MS })).toBe('dim');
+    expect(outage.observe({ connected: false, nowMs: 4_000 })).toBeNull();
+    expect(outage.observe({ connected: true, nowMs: 5_000 })).toBe('relight');
+    expect(outage.observe({ connected: true, nowMs: 5_100 })).toBeNull();
+  });
+
+  it('says how long the gateway has been away', () => {
+    const outage = tracker();
+    outage.observe({ connected: true, nowMs: 0 });
+    expect(outage.awayForMs(0)).toBeNull();
+    outage.observe({ connected: false, nowMs: 100 });
+    expect(outage.awayForMs(900)).toBe(800);
+  });
+});
+
+describe('the lights changing', () => {
+  /**
+   * jsdom has no animation engine, so the stub never finishes anything on its
+   * own — and this is the one moment that AWAITS its own animations (the theme
+   * is applied between the two halves of the dip). Run the clock by hand.
+   */
+  async function settleAnimations(rounds = 10) {
+    for (let round = 0; round < rounds; round += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      for (const record of waapi.played) {
+        if (!record.finished && !record.cancelled) record.animation.finish();
+      }
+    }
+  }
+
+  beforeEach(() => {
+    stubMatchMedia(false);
+    configureMotion('full');
+    clearLightsForTests();
+  });
+
+  afterEach(() => {
+    clearLightsForTests();
+  });
+
+  function plate(lit = 2) {
+    const el = document.createElement('div');
+    el.setAttribute('data-motion-plate', '');
+    for (let i = 0; i < lit; i += 1) {
+      const win = document.createElement('span');
+      win.setAttribute('data-motion-window', `room-${i}`);
+      win.setAttribute('data-motion-lit', '');
+      el.append(win);
+    }
+    document.body.append(el);
+    return el;
+  }
+
+  it('crosses the base over and then re-blooms the lights', async () => {
+    plate(2);
+    let applied = false;
+    const running = changeLights(() => { applied = true; }, { engine: 'crossfade' });
+    await settleAnimations();
+    const result = await running;
+    expect(applied).toBe(true);
+    expect(result.engine).toBe('crossfade');
+    const ids = waapi.played.map((record) => record.animation.id);
+    // Down on --ease-in, back up on --ease-out, and the windows last.
+    expect(ids).toContain('data-motion-recipe:lights-out');
+    expect(ids).toContain('data-motion-recipe:lights-in');
+    expect(ids).toContain('data-motion-recipe:bloom');
+    const out = waapi.played.find((r) => r.animation.id === 'data-motion-recipe:lights-out')!;
+    const back = waapi.played.find((r) => r.animation.id === 'data-motion-recipe:lights-in')!;
+    // The two halves add up to --duration-dim and no more (§5.3: 500ms).
+    expect(Number(out.options.duration) + Number(back.options.duration)).toBe(400);
+    // Opacity alone: the base is never transformed and never relaid out.
+    for (const record of [out, back]) {
+      for (const frame of record.keyframes) expect(Object.keys(frame)).toEqual(['opacity']);
+    }
+  });
+
+  it('just changes the theme under reduced motion', async () => {
+    stubMatchMedia(true);
+    configureMotion('system');
+    plate(2);
+    let applied = false;
+    const result = await changeLights(() => { applied = true; }, { engine: 'crossfade' });
+    expect(applied).toBe(true);
+    expect(result.engine).toBe('none');
+    expect(waapi.played).toHaveLength(0);
+  });
+
+  it('dims the whole building 30% and holds it there', () => {
+    plate(2);
+    expect(buildingIsDim()).toBe(false);
+    const result = dimBuilding();
+    expect(result.plates).toBe(1);
+    expect(buildingIsDim()).toBe(true);
+    const record = waapi.played.find((r) => r.animation.id === 'data-motion-recipe:outage-dim')!;
+    expect(record.keyframes.at(-1)).toEqual({ opacity: 0.3 });
+    // It has to stay dark: an outage is not a pulse.
+    expect(record.options.fill).toBe('forwards');
+    expect(Number(record.options.duration)).toBe(400);
+  });
+
+  it('lifts the scrim on the way back, and hands the dark plates to the sweep', async () => {
+    const one = plate(2);
+    dimBuilding();
+    const lifting = relightBuilding();
+    await settleAnimations();
+    await lifting;
+    expect(buildingIsDim()).toBe(false);
+    // The relight itself is NOT played here: a gateway coming back is already
+    // §5.1's "lights on", and that path waits for presence to be re-delivered.
+    const taken = takeDimmedPlates();
+    expect(taken).toEqual([one]);
+    // …and only once.
+    expect(takeDimmedPlates()).toEqual([]);
+  });
+
+  it('relights only the plates that went dark, and never moves them', () => {
+    const dark = plate(2);
+    const untouched = plate(2);
+    const sequence = playRelight({ plates: [dark] });
+    // Two windows, from the one plate that was dark.
+    expect(sequence.windows).toBe(2);
+    const blooms = waapi.played.filter((r) => r.animation.id === 'data-motion-recipe:bloom');
+    expect(blooms).toHaveLength(2);
+    for (const record of blooms) expect(untouched.contains(record.target)).toBe(false);
+    // §5.1: a plate rises when it ENTERS the street. These never left it.
+    expect(waapi.played.some((r) => r.animation.id === 'data-motion-recipe:settle')).toBe(false);
+  });
+
+  it('does nothing under reduced motion', () => {
+    stubMatchMedia(true);
+    configureMotion('system');
+    plate(2);
+    expect(dimBuilding().animations).toHaveLength(0);
+    expect(buildingIsDim()).toBe(false);
+    expect(playRelight().animations).toHaveLength(0);
   });
 });

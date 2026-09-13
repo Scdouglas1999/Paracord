@@ -72,12 +72,19 @@ import {
 import { presenceLight } from '../lib/presence';
 import {
   bloom,
+  buildingIsDim,
+  changeLights,
+  clearVoiceLevels,
   dim,
+  dimBuilding,
   flicker,
   press,
+  publishVoiceLevels,
+  relightBuilding,
   RollingNumber,
   settleIn,
   springEasing,
+  SPEAKING_MARK,
   stagger,
   supportsLinearEasing,
   transitionWith,
@@ -86,6 +93,7 @@ import {
 import { AccountPlate } from '../components/layout/sidebar/AccountPlate';
 import { BuildingsColumn } from '../components/layout/sidebar/BuildingsColumn';
 import { useMobile } from '../hooks/useMobile';
+import { useUIStore } from '../stores/uiStore';
 
 /**
  * `/design-tokens` — the Lantern Stage reference page. **Dev builds only**
@@ -1121,6 +1129,61 @@ function Recipe({
   );
 }
 
+/**
+ * The audio-reactive speaking ring, driven by a made-up voice (§5.1, WP9d).
+ *
+ * A level only exists inside a call, and this page is not one — so the demo
+ * plays a two-second phrase through the real engine: the same
+ * `publishVoiceLevels` the media engines call, the same single rAF loop, the
+ * same `--voice-level` on the same marks. What is fake is the voice, and
+ * nothing else. It is also what the motion gate drives, which is why it is
+ * here rather than in a story.
+ */
+const VOICE_DEMO_ID = 'tokens-speaker';
+/** How long the made-up phrase lasts. */
+const DEMO_PHRASE_MS = 1900;
+
+function SpeakingRingDemo({ take }: { take: number }) {
+  const timer = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (take === 0) return undefined;
+    const started = performance.now();
+    // A phrase, not a sine: two syllables, a breath, and a longer one. The
+    // envelope in `voiceLevel.ts` is what makes it read as a voice rather than
+    // as a slider being dragged.
+    const shape = (t: number) =>
+      t > DEMO_PHRASE_MS ? 0 : Math.max(0, Math.sin(t / 150) * 0.55 + Math.sin(t / 420) * 0.5);
+    // The media engines report at their own cadence — a few times a second, not
+    // per frame. Publishing faster here would be measuring something the
+    // product never does.
+    timer.current = window.setInterval(() => {
+      const t = performance.now() - started;
+      publishVoiceLevels('room', new Map([[VOICE_DEMO_ID, Math.min(1, shape(t))]]));
+      if (t > DEMO_PHRASE_MS + 300 && timer.current != null) {
+        clearInterval(timer.current);
+        timer.current = null;
+        clearVoiceLevels();
+      }
+    }, 90);
+    return () => {
+      if (timer.current != null) clearInterval(timer.current);
+      timer.current = null;
+      clearVoiceLevels();
+    };
+  }, [take]);
+
+  return (
+    <span
+      {...{ [SPEAKING_MARK]: VOICE_DEMO_ID }}
+      className="pc-speaking pc-display flex h-14 w-14 items-center justify-center rounded-full bg-bg-raised text-name font-bold text-text-primary"
+      aria-hidden
+    >
+      MO
+    </span>
+  );
+}
+
 function MotionSection() {
   const reduced = useReducedMotion();
   const bloomRef = useRef<HTMLSpanElement>(null);
@@ -1133,6 +1196,28 @@ function MotionSection() {
   const [rolled, setRolled] = useState(4);
   const [walkedIn, setWalkedIn] = useState(false);
   const [engine, setEngine] = useState<string | null>(null);
+  const [speaking, setSpeaking] = useState(0);
+  const [lightsEngine, setLightsEngine] = useState<string | null>(null);
+  const [dark, setDark] = useState(false);
+  const themeOf = useUIStore((state) => state.theme);
+  const setThemeOf = useUIStore((state) => state.setTheme);
+
+  const swapTheme = (force?: 'crossfade') => {
+    const next = themeOf === 'light' ? 'dark' : 'light';
+    void changeLights(() => setThemeOf(next), {
+      engine: force ?? 'auto',
+      applied: () => document.documentElement.getAttribute('data-theme') === next,
+    }).then((result) => setLightsEngine(result.engine));
+  };
+
+  const cutPower = () => {
+    if (buildingIsDim()) {
+      void relightBuilding().then(() => setDark(false));
+      return;
+    }
+    dimBuilding();
+    setDark(true);
+  };
 
   const walk = (force?: 'flip') => {
     void transitionWith(() => setWalkedIn((value) => !value), {
@@ -1245,6 +1330,58 @@ function MotionSection() {
             <RollingNumber value={rolled} format={(count) => `${count} reading`} />
           </span>
         </Recipe>
+
+        <Recipe
+          id="motion-voice"
+          name="The ring takes the voice"
+          tokens="--voice-level · 60ms / 240ms"
+          model="Speaking is a breath, and where the engine knows how loud, the breath takes the voice: +15% of the resting glow at full voice, 60ms to reach it and 240ms to let go. One rAF loop writes one custom property for every tile on screen — never React state, never a loop per face."
+          onPlay={() => setSpeaking((value) => value + 1)}
+        >
+          <SpeakingRingDemo take={speaking} />
+        </Recipe>
+
+        <Recipe
+          id="motion-outage"
+          name="The power goes"
+          tokens="--duration-dim · --ease-in / --ease-out"
+          model="A gateway that is away is drawn on the whole building: it dims 30% and holds there until it is back. Never a spinner on the street — a spinner says wait; a dark building says what is true."
+          onPlay={cutPower}
+        >
+          <span className="text-meta text-text-faint">
+            {dark ? 'The building is dark. Replay brings it back.' : 'The lights are on.'}
+          </span>
+        </Recipe>
+
+        <div
+          id="motion-lights-change"
+          className="flex min-w-0 flex-col gap-3 rounded-[var(--radius-card)] bg-bg-well p-4 shadow-[var(--shadow-well)]"
+        >
+          <div className="flex items-baseline gap-2">
+            <span className="pc-display text-name text-text-primary">The lights change</span>
+            <code className="pc-mono ml-auto shrink-0 text-meta text-text-faint">--duration-dim</code>
+          </div>
+          <div className="flex min-h-[5.5rem] items-center justify-center">
+            <span className="text-meta text-text-faint">
+              Currently {themeOf === 'light' ? 'Daylight' : 'Night'}.
+            </span>
+          </div>
+          <p className="text-meta leading-relaxed text-text-faint">
+            Changing the theme is the lights changing: the whole shell crosses over
+            <code className="pc-mono"> --duration-dim</code>, and the windows, lamps and rims
+            re-bloom once the new ground has settled. View Transitions where the webview has
+            them, a crossfade everywhere else.{' '}
+            {lightsEngine && <span className="text-text-secondary">Last run: {lightsEngine}.</span>}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" size="sm" onClick={() => swapTheme()}>
+              Change the lights
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => swapTheme('crossfade')}>
+              Change the lights (crossfade)
+            </Button>
+          </div>
+        </div>
 
         <div
           id="motion-shared"

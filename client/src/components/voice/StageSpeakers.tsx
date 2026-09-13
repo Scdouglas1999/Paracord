@@ -75,6 +75,7 @@ export function StageSpeakers({
         person={occupant.person}
         name={isMe ? 'You' : occupant.person.name}
         speaking={occupant.speaking}
+        userId={userId}
         muted={occupant.muted}
         live={liveTiles.has(userId)}
         avatarSize={pip ? 34 : 44}

@@ -427,6 +427,24 @@
   /* A white-light fill (the Join button, the mic-on control). */
   --glow-light-fill: 0 0 16px rgba(243, 234, 216, 0.25);
   --glow-control-on: 0 0 18px rgba(243, 234, 216, 0.35);
+  /* §5.1 "speaking is a breath": where the media engine exposes a level, the
+     speaking ring brightens with the voice. `lib/motion/voiceLevel.ts` writes
+     `--voice-level` (0-1) onto the marked elements from ONE rAF loop for every
+     tile on screen, and `primitives.css` composes `--ring-voice` from it — a
+     second glow layer at 15% of the resting one's alpha, so the ring can rise
+     with the voice and can never fall below where it rests (§5.1).
+     `--ring-voice` is declared inert HERE and re-declared on `.pc-speaking`,
+     because a custom property is substituted where it is DECLARED: composed on
+     `:root` it would read the root's level and never a person's. A build with
+     no level source resolves every ring below to exactly its old value. */
+  --voice-level: 0;
+  --ring-voice: 0 0 0 transparent;
+  /* The light's own rgb, for the one recipe that has to be composed at the
+     point of use rather than written whole. */
+  --light-ring-rgb: 243, 234, 216;
+  /* 15% of --ring-speaking's outer alpha (0.25). */
+  --ring-voice-a: 0.0375;
+
   /* A lit avatar rim; `speaking` breathes between these two (see primitives.css). */
   --ring-lit: 0 0 0 1.5px rgba(243, 234, 216, 0.55), 0 0 12px rgba(243, 234, 216, 0.22);
   --ring-speaking: 0 0 0 1.5px rgba(243, 234, 216, 0.7), 0 0 18px rgba(243, 234, 216, 0.25);
@@ -629,6 +647,9 @@
   --glow-live-dot: 0 0 6px rgba(23, 23, 15, 0.4);
   --glow-light-fill: 0 0 16px rgba(23, 23, 15, 0.13);
   --glow-control-on: 0 0 18px rgba(23, 23, 15, 0.18);
+  --light-ring-rgb: 23, 23, 15;
+  /* 15% of Daylight's own --ring-speaking outer alpha (0.13). */
+  --ring-voice-a: 0.0195;
   --ring-lit: 0 0 0 1.5px rgba(23, 23, 15, 0.28), 0 0 12px rgba(23, 23, 15, 0.11);
   --ring-speaking: 0 0 0 1.5px rgba(23, 23, 15, 0.35), 0 0 18px rgba(23, 23, 15, 0.13);
   --ring-speaking-peak: 0 0 0 1.5px rgba(23, 23, 15, 0.4), 0 0 18px rgba(23, 23, 15, 0.13);
@@ -742,6 +763,8 @@
   --glow-live-dot: 0 0 6px rgba(243, 234, 216, 1);
   --glow-light-fill: 0 0 16px rgba(243, 234, 216, 0.37);
   --glow-control-on: 0 0 18px rgba(243, 234, 216, 0.52);
+  /* 15% of High contrast's own --ring-speaking outer alpha (0.37). */
+  --ring-voice-a: 0.0555;
   --ring-lit: 0 0 0 2px rgba(243, 234, 216, 0.82), 0 0 12px rgba(243, 234, 216, 0.33);
   --ring-speaking: 0 0 0 2px rgba(243, 234, 216, 1), 0 0 18px rgba(243, 234, 216, 0.37);
   --ring-speaking-peak: 0 0 0 2px rgba(243, 234, 216, 1), 0 0 18px rgba(243, 234, 216, 0.37);

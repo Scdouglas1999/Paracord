@@ -12,3 +12,4 @@ export * from './buildingLight';
 export * from './litHistory';
 export * from './lightsOn';
 export * from './arrivals';
+export * from './outage';

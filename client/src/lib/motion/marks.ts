@@ -40,6 +40,16 @@ export const EVENT_MARK = 'data-motion-event';
 export const RECEDE_MARK = 'data-motion-recede';
 /** Present only while the light is actually on. */
 export const LIT_MARK = 'data-motion-lit';
+/**
+ * One person's speaking ring, where the ring is not a face.
+ *
+ * A `LitAvatar` already says who it is with `PERSON_MARK`, and the level
+ * inherits from its root down to the rim inside it. A `StageTile` is a 12px
+ * well that carries the same ring around a whole video surface and has no face
+ * in it at all, so it says whose voice is driving it here. Both are read by
+ * `voiceLevel.ts`, and by nothing else.
+ */
+export const SPEAKING_MARK = 'data-motion-speaking';
 
 /** `data-motion-*` props for a light element, spread straight onto the DOM. */
 export function lightMarks(

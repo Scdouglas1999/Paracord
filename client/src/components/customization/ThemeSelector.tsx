@@ -2,7 +2,7 @@ import { useId } from 'react';
 import { Moon, Sun, Monitor, Eye, Check } from 'lucide-react';
 import { useUIStore, type AccentPreset } from '../../stores/uiStore';
 import { ACCENT_PRESETS } from '../../hooks/useTheme';
-import { useReducedMotion, type MotionPreference } from '../../lib/motion';
+import { changeLights, useReducedMotion, type MotionPreference } from '../../lib/motion';
 import { cn } from '../../lib/utils';
 
 type ThemeId = 'dark' | 'light' | 'amoled' | 'high-contrast';
@@ -116,8 +116,23 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
                 type="button"
                 aria-pressed={active}
                 onClick={() => {
-                  setTheme(option.id);
-                  onThemeChange?.(option.id);
+                  // §5.1, WP9d: changing the theme is the lights changing. The
+                  // whole shell crosses over `--duration-dim` and the light
+                  // elements re-bloom behind it — and the theme itself is
+                  // applied INSIDE the crossfade, by `useTheme`'s effect, which
+                  // is why the engine is told how to recognise that it landed
+                  // rather than guessing at a number of frames. Under reduced
+                  // motion `changeLights` simply calls this and returns.
+                  void changeLights(
+                    () => {
+                      setTheme(option.id);
+                      onThemeChange?.(option.id);
+                    },
+                    {
+                      applied: () =>
+                        document.documentElement.getAttribute('data-theme') === option.id,
+                    },
+                  );
                 }}
                 className={cn(
                   'pc-focusable flex flex-col rounded-[var(--radius-card)] p-2.5 text-left',
