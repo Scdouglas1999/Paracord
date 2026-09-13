@@ -752,6 +752,7 @@ const DEMO_ON_AIR = {
   micOn: true,
   deafened: false,
   sharing: true,
+  speaking: true,
 };
 
 function LightComponentsSection() {

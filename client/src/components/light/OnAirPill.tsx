@@ -41,7 +41,13 @@ export const OnAirPill = React.forwardRef<HTMLButtonElement, OnAirPillProps>(fun
       )}
       {...props}
     >
-      <span className="pc-live-dot shrink-0" aria-hidden />
+      {/* §5.1 "speaking is a breath", §6.7 "no badge louder than the room":
+          the dot breathes on pc-breathe ONLY while somebody has the floor, and
+          sits at its resting glow the rest of the call. */}
+      <span
+        className={cn('pc-live-dot shrink-0', onAir.speaking && 'is-speaking')}
+        aria-hidden
+      />
       <span className="pc-display min-w-0 truncate font-semibold">{onAir.roomName}</span>
       <span className="pc-mono shrink-0 text-meta text-text-faint">
         {callDuration(onAir.durationMs)}

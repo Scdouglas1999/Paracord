@@ -439,6 +439,12 @@
   transition-duration: 80ms;
 }
 
+/* The on-air pill's live dot breathes only while somebody is actually
+   speaking — never as decoration (§5.1, §6.7). */
+.pc-live-dot.is-speaking {
+  animation: pc-breathe var(--duration-breathe) var(--ease-in-out) infinite;
+}
+
 /* Reduced motion is the `data-motion` attribute, never a media query — see the
    header of utilities.css. Warm-up and dim become instant; breathing stops with
    the ring at its resting alpha. */
