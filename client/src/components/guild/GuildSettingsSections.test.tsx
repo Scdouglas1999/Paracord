@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { type Mock, describe, expect, it, vi } from 'vitest';
 import type { Guild, Member, Role } from '../../types';
-import { InvitesSection, OverviewSection, RolesSection } from './GuildSettingsSections';
+import { ACTION_LABELS, InvitesSection, OverviewSection, RolesSection } from './GuildSettingsSections';
 
 const guild: Guild = {
   id: 'guild-1',
@@ -315,5 +315,24 @@ describe('InvitesSection', () => {
       />,
     );
     expect(screen.getByText('No invite links yet')).toBeTruthy();
+  });
+});
+
+// ── Audit log ────────────────────────────────────────────────────────────────
+
+describe('audit log action labels', () => {
+  it('names every action type the server writes', () => {
+    // The server's `ACTION_*` constants are the whole vocabulary. Eight of them
+    // had no label, so a log of webhook, emoji and AutoMod activity read as
+    // "Action 50" / "Action 60" / "Action 100" — and since the filter dropdown
+    // is built from this map, those entries could not be filtered for either.
+    const serverActions = [
+      1, 10, 11, 12, 20, 21, 22, 23, 30, 31, 32, 40, 41, 50, 51, 52, 60, 61, 62, 71, 72, 73, 80,
+      81, 90, 91, 100, 101, 102, 103,
+    ];
+    const unlabelled = serverActions.filter((code) => !ACTION_LABELS[code]);
+    expect(unlabelled).toEqual([]);
+    // And nothing here that the server never emits.
+    expect(Object.keys(ACTION_LABELS).map(Number).sort((a, b) => a - b)).toEqual(serverActions);
   });
 });

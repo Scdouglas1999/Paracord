@@ -1754,7 +1754,13 @@ interface AuditLogSectionProps {
   onUserFilterChange?: (value: string) => void;
 }
 
-const ACTION_LABELS: Record<number, string> = {
+/// Every `ACTION_*` constant in `crates/paracord-api/src/routes/audit.rs`.
+///
+/// Eight were missing, so a log full of webhook, emoji and AutoMod activity read
+/// as "Action 50", "Action 60", "Action 100" — and because the filter dropdown
+/// is built from this same map, those entries could not be filtered for either.
+/// Adding a constant on the server means adding it here.
+export const ACTION_LABELS: Record<number, string> = {
   1: 'Guild Updated',
   10: 'Channel Created',
   11: 'Channel Updated',
@@ -1768,12 +1774,23 @@ const ACTION_LABELS: Record<number, string> = {
   32: 'Role Deleted',
   40: 'Invite Created',
   41: 'Invite Deleted',
+  50: 'Webhook Created',
+  51: 'Webhook Updated',
+  52: 'Webhook Deleted',
+  60: 'Emoji Created',
+  61: 'Emoji Renamed',
+  62: 'Emoji Deleted',
+  71: 'Message Edited',
   72: 'Message Deleted',
   73: 'Messages Bulk Deleted',
   80: 'Bot Added',
   81: 'Bot Removed',
   90: 'Report Created',
   91: 'Report Resolved',
+  100: 'AutoMod Rule Created',
+  101: 'AutoMod Rule Updated',
+  102: 'AutoMod Rule Deleted',
+  103: 'AutoMod Acted',
 };
 
 export function AuditLogSection({
