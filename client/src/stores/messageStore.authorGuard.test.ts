@@ -93,7 +93,7 @@ describe('normalizeIncomingMessage', () => {
     expect(normalized).not.toBeNull();
     expect(normalized!.author.id).toBe('987654321');
     // Every downstream consumer keys on the id; the label is corrected later.
-    expect(normalized!.author.username).toBe('Unknown User');
+    expect(normalized!.author.username).toBe('Unknown user');
     expect(normalized!.author.discriminator).toBe('0000');
   });
 
@@ -121,7 +121,7 @@ describe('normalizeIncomingMessage', () => {
 
     expect(normalized!.author).toMatchObject({
       id: 'u5',
-      username: 'Unknown User',
+      username: 'Unknown user',
       discriminator: '0000',
     });
   });

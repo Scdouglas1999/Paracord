@@ -340,7 +340,7 @@ export function FriendsPage() {
                 disabled={!addFriendInput.trim() || isActionPending('add')}
                 className="sm:w-auto"
               >
-                {isActionPending('add') ? 'Sending...' : 'Send Friend Request'}
+                {isActionPending('add') ? 'Sending...' : 'Send friend request'}
               </Button>
             </div>
             {addFriendStatus && (

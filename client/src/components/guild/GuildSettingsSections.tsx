@@ -138,7 +138,7 @@ export function OverviewSection({
                 Leave space
               </Button>
             )}
-            <Button onClick={onSave}>Save Changes</Button>
+            <Button onClick={onSave}>Save changes</Button>
           </div>
         }
       />
@@ -275,7 +275,7 @@ export function OverviewSection({
                   disabled={deletingGuild || deleteGuildConfirmName !== guild.name}
                   loading={deletingGuild}
                 >
-                  Delete Server
+                  Delete server
                 </Button>
                 <Button variant="ghost" onClick={onHideDeleteDialog}>
                   Cancel
@@ -300,7 +300,7 @@ const PERMISSION_GROUPS: { group: string; perms: { name: string; flag: number }[
       { name: 'Manage Channels', flag: 1 << 4 },
       { name: 'Manage Server', flag: 1 << 5 },
       { name: 'Manage Roles', flag: 1 << 28 },
-      { name: 'View Audit Log', flag: 1 << 7 },
+      { name: 'View Audit log', flag: 1 << 7 },
       { name: 'Create Invite', flag: 1 << 0 },
       { name: 'Change Nickname', flag: 1 << 26 },
     ],
@@ -319,7 +319,7 @@ const PERMISSION_GROUPS: { group: string; perms: { name: string; flag: number }[
       { name: 'Send Messages', flag: 1 << 11 },
       { name: 'Manage Messages', flag: 1 << 13 },
       { name: 'Attach Files', flag: 1 << 15 },
-      { name: 'Add Reactions', flag: 1 << 6 },
+      { name: 'Add reactions', flag: 1 << 6 },
     ],
   },
   {
@@ -1727,7 +1727,7 @@ export function AuditLogSection({
 }: AuditLogSectionProps) {
   return (
     <SettingsPanel>
-      <SectionHeader title="Audit Log" description="A running record of administrative actions in this space." />
+      <SectionHeader title="Audit log" description="A running record of administrative actions in this space." />
       {(onActionFilterChange || onUserFilterChange) && (
         <div className="flex flex-wrap gap-3 border-t border-border-subtle pt-4">
           {onActionFilterChange && (
@@ -1773,7 +1773,7 @@ export function AuditLogSection({
             title={loadError ? 'Could not load the audit log' : 'No admin actions yet'}
             description={
               loadError
-                ? 'You may lack the View Audit Log permission, or the request failed. Refresh and try again.'
+                ? 'You may lack the View Audit log permission, or the request failed. Refresh and try again.'
                 : 'Role edits, bans, channel changes, and other admin actions will appear here as they happen.'
             }
           />
@@ -1927,7 +1927,7 @@ export function ModerationTemplatesSection({
   return (
     <SettingsPanel>
       <SectionHeader
-        title="Mod Templates"
+        title="Mod templates"
         description="Reusable warn / mute / kick / ban actions with pre-written reasons and DMs — apply them in one step."
       />
 
@@ -1947,7 +1947,7 @@ export function ModerationTemplatesSection({
               <FieldLabel>Action</FieldLabel>
               <Select aria-label="Action type" value={actionType} onChange={(e) => setActionType(Number(e.target.value))}>
                 <option value={1}>Warn</option>
-                <option value={2}>Timed Mute</option>
+                <option value={2}>Timed mute</option>
                 <option value={3}>Kick</option>
                 <option value={4}>Ban</option>
               </Select>

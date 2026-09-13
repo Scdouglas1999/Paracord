@@ -87,7 +87,7 @@ export function BotStoreCard({ bot, onAdd, adding, canManage }: BotStoreCardProp
             onClick={() => onAdd(bot)}
             disabled={!canManage || adding}
           >
-            {adding ? 'Adding...' : 'Add to Server'}
+            {adding ? 'Adding...' : 'Add to server'}
             {!adding && <ArrowRight size={14} aria-hidden />}
           </Button>
         </div>

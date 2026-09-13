@@ -115,25 +115,25 @@ test('the setup form retries rejected server credentials after reload using the 
     await expect(page.getByRole('heading', { name: 'Secure your account' })).toBeInViewport();
     await page.screenshot({ path: `../output/improvement-program/identity-setup/setup-${width}.png` });
     await page.mouse.wheel(0, 2000);
-    await expect(page.getByRole('button', { name: 'Secure Account' })).toBeInViewport({ ratio: 1 });
+    await expect(page.getByRole('button', { name: 'Secure account' })).toBeInViewport({ ratio: 1 });
     await page.screenshot({ path: `../output/improvement-program/identity-setup/setup-${width}-submit.png` });
     expect(await region.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
     await region.focus(); await page.keyboard.press('Control+Home');
     await expect(page.getByRole('heading', { name: 'Secure your account' })).toBeInViewport();
   }
-  await page.getByLabel('New Encryption Password', { exact: false }).fill('separate local password');
-  await page.getByLabel('Confirm Password', { exact: false }).fill('separate local password');
-  await page.getByLabel('Current Server Password', { exact: false }).fill('wrong server password');
+  await page.getByLabel('New encryption password', { exact: false }).fill('separate local password');
+  await page.getByLabel('Confirm password', { exact: false }).fill('separate local password');
+  await page.getByLabel('Current server password', { exact: false }).fill('wrong server password');
   await page.getByLabel('Two-factor or backup code').fill('123456');
-  await page.getByRole('button', { name: 'Secure Account' }).click();
+  await page.getByRole('button', { name: 'Secure account' }).click();
   await expect(page.getByText('Server authentication was rejected.', { exact: false })).toBeVisible();
   const original = await page.evaluate(() => localStorage.getItem('paracord:encrypted-identity:v1'));
   expect(attempts[0]).toMatchObject({ password: 'wrong server password', mfa_code: '123456' });
   await form();
-  await page.getByLabel('Encryption Password', { exact: false }).fill('separate local password');
-  await page.getByLabel('Current Server Password', { exact: false }).fill('correct server password');
-  await page.getByRole('button', { name: 'Secure Account' }).click();
-  await expect(page.getByRole('heading', { name: 'Recovery Phrase' })).toBeVisible();
+  await page.getByLabel('Encryption password', { exact: false }).fill('separate local password');
+  await page.getByLabel('Current server password', { exact: false }).fill('correct server password');
+  await page.getByRole('button', { name: 'Secure account' }).click();
+  await expect(page.getByRole('heading', { name: 'Recovery phrase' })).toBeVisible();
   expect(attempts[1].public_key).toBe(attempts[0].public_key);
   expect(await page.evaluate(() => localStorage.getItem('paracord:encrypted-identity:v1'))).toBe(original);
   expect(await page.evaluate(async () => {

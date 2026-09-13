@@ -133,7 +133,7 @@ describe('TemplateGalleryPage', () => {
 
     await user.clear(screen.getByLabelText('New server name'));
     await user.type(screen.getByLabelText('New server name'), 'Launch HQ');
-    await user.click(screen.getByRole('button', { name: 'Create From Template' }));
+    await user.click(screen.getByRole('button', { name: 'Create from template' }));
 
     await waitFor(() => {
       expect(templateApi.apply).toHaveBeenCalledWith('tpl-1', 'Launch HQ');
@@ -156,7 +156,7 @@ describe('TemplateGalleryPage', () => {
     expect(screen.getByLabelText('Source guild')).toHaveValue('guild-1');
     expect(screen.queryByText('Other Guild')).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'Create Template' }));
+    await user.click(screen.getByRole('button', { name: 'Create template' }));
 
     await waitFor(() => {
       expect(templateApi.createFromGuild).toHaveBeenCalledWith('guild-1');
@@ -207,10 +207,10 @@ describe('TemplateGalleryPage', () => {
     await screen.findByRole('button', { name: 'View template Ops Template' });
     await user.clear(screen.getByLabelText('New server name'));
     await user.type(screen.getByLabelText('New server name'), 'Launch HQ');
-    await user.click(screen.getByRole('button', { name: 'Create From Template' }));
+    await user.click(screen.getByRole('button', { name: 'Create from template' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('template quota reached');
 
-    await user.click(screen.getByRole('button', { name: 'Create Template' }));
+    await user.click(screen.getByRole('button', { name: 'Create template' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('source guild unavailable');
 
     await user.click(screen.getByRole('button', { name: 'Delete template Ops Template' }));

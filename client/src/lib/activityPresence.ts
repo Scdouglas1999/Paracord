@@ -20,7 +20,7 @@ export function readableAppName(processName: string): string {
   const withoutExt = trimmed.replace(/\.exe$/i, '');
   const normalized = withoutExt.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ');
   const labeled = toTitleCase(normalized.trim());
-  return labeled || 'Unknown App';
+  return labeled || 'Unknown app';
 }
 
 export function readStringArray(value: unknown): string[] {

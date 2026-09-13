@@ -331,7 +331,7 @@ export function GuildOnboardingGate({ guildId }: GuildOnboardingGateProps) {
               </Button>
             )}
             <Button onClick={() => void submit()} disabled={!canSubmit} loading={saving}>
-              {saving ? 'Saving…' : 'Complete Onboarding'}
+              {saving ? 'Saving…' : 'Complete onboarding'}
             </Button>
           </div>
         </ModalFooter>

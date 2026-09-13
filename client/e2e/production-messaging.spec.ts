@@ -25,7 +25,7 @@ async function account(browser: Browser, playwright: Playwright, name: string) {
   await page.goto('http://127.0.0.1:4174/login');
   await page.locator('input[autocomplete="username"]').fill(email);
   await page.locator('input[autocomplete="current-password"]').fill(password);
-  await page.getByRole('button', { name: 'Log In', exact: true }).click();
+  await page.getByRole('button', { name: 'Log in', exact: true }).click();
   await expect(page).toHaveURL(/\/app/);
   return { context, page, api, user: credentials.user, email };
 }
@@ -37,11 +37,11 @@ async function dismiss(page: Page) {
 }
 async function setup(page: Page, id: string, returnTo: string) {
   await page.goto(`http://127.0.0.1:4174/setup?${new URLSearchParams({ migrate: '1', server: '__local__', user: id, returnTo })}`);
-  await page.getByLabel('New Encryption Password', { exact: false }).fill(encryptionPassword);
-  await page.getByLabel('Confirm Password', { exact: false }).fill(encryptionPassword);
-  await page.getByLabel('Current Server Password', { exact: false }).fill(password);
-  await page.getByRole('button', { name: 'Secure Account' }).click();
-  await expect(page.getByRole('heading', { name: 'Recovery Phrase' }).or(page.getByRole('alert'))).toBeVisible();
+  await page.getByLabel('New encryption password', { exact: false }).fill(encryptionPassword);
+  await page.getByLabel('Confirm password', { exact: false }).fill(encryptionPassword);
+  await page.getByLabel('Current server password', { exact: false }).fill(password);
+  await page.getByRole('button', { name: 'Secure account' }).click();
+  await expect(page.getByRole('heading', { name: 'Recovery phrase' }).or(page.getByRole('alert'))).toBeVisible();
   if (await page.getByRole('alert').isVisible()) throw new Error(await page.getByRole('alert').innerText());
   await page.getByRole('checkbox').check(); await page.getByRole('button', { name: 'Continue', exact: true }).click();
   await expect(page).toHaveURL(new RegExp(returnTo));
@@ -107,12 +107,12 @@ test('two fresh accounts send, receive, edit and delete the first encrypted DM t
     await b.fill('Private reply to first greeting'); await b.press('Enter');
     await expect(alice.page.getByText('Private reply to first greeting', { exact: true })).toBeVisible();
     await alice.page.getByText('First private greeting', { exact: true }).click({ button: 'right' });
-    await alice.page.getByRole('menuitem', { name: 'Edit Message', exact: true }).click();
+    await alice.page.getByRole('menuitem', { name: 'Edit message', exact: true }).click();
     await alice.page.getByRole('textbox', { name: /Edit message from/ }).fill('Edited private greeting');
     await alice.page.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(bob.page.getByText('Edited private greeting', { exact: true })).toBeVisible();
     await alice.page.getByText('Edited private greeting', { exact: true }).click({ button: 'right' });
-    await alice.page.getByRole('menuitem', { name: 'Delete Message', exact: true }).click();
+    await alice.page.getByRole('menuitem', { name: 'Delete message', exact: true }).click();
     await alice.page.getByRole('button', { name: 'Delete', exact: true }).click();
     await expect(alice.page.getByRole('alertdialog')).toHaveCount(0);
     await expect(bob.page.getByText('Edited private greeting', { exact: true })).toHaveCount(0);
@@ -157,7 +157,7 @@ test('locked recipient recovers a deleted encryption starter after a real server
     expect(firstHeader.ik).toBeTruthy(); expect(secondHeader.ik).toBeUndefined();
     expect(secondHeader.dh).toBe(firstHeader.dh); expect(secondHeader.n).toBe(firstHeader.n + 1);
     await alice.page.getByText(starter, { exact: true }).click({ button: 'right' });
-    await alice.page.getByRole('menuitem', { name: 'Delete Message', exact: true }).click();
+    await alice.page.getByRole('menuitem', { name: 'Delete message', exact: true }).click();
     const deleted = alice.page.waitForResponse(response => response.request().method() === 'DELETE' && response.url().endsWith(`/channels/${dm.id}/messages/${first.id}`));
     await alice.page.getByRole('button', { name: 'Delete', exact: true }).click();
     expect((await deleted).ok()).toBe(true); await expect(alice.page.getByRole('alertdialog')).toHaveCount(0);

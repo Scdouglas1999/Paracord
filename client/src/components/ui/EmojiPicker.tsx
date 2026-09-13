@@ -366,12 +366,12 @@ export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPicke
     }
     if (results.length > 0) return results;
 
-    // Fallback: show all as a single "Search Results" category
+    // Fallback: show all as a single "Search results" category
     const flat: string[] = [];
     for (const cat of EMOJI_CATEGORIES) {
       flat.push(...cat.emojis);
     }
-    return [{ name: 'Search Results', emojis: flat }];
+    return [{ name: 'Search results', emojis: flat }];
   }, [search]);
 
   const filteredServerEmojis = useMemo(() => {
@@ -540,7 +540,7 @@ export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPicke
                   : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
               )}
             >
-              {tab === 'unicode' ? 'Unicode' : 'Space Emojis'}
+              {tab === 'unicode' ? 'Unicode' : 'Space emojis'}
             </button>
           ))}
         </div>

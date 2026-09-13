@@ -498,7 +498,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
 
         {identityFingerprint && (
           <div className="px-5 pb-4">
-            <SectionLabel>Identity Verification</SectionLabel>
+            <SectionLabel>Identity verification</SectionLabel>
             <div className="rounded-well px-3.5 py-3" style={{ background: 'var(--bg-well)' }}>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="inline-flex items-center gap-1.5 text-meta font-semibold">
@@ -551,7 +551,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
 
         {createdAt && (
           <div className="px-5 pb-4">
-            <SectionLabel>Member Since</SectionLabel>
+            <SectionLabel>Member since</SectionLabel>
             <div className="flex items-center gap-2 text-meta" style={{ color: 'var(--text-secondary)' }}>
               <CalendarDays size={13} style={{ color: 'var(--text-muted)' }} />
               <span className="font-code">{formatDate(createdAt)}</span>
@@ -579,7 +579,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
 
         {mutualGuilds.length > 0 && (
           <div className="px-5 pb-4">
-            <SectionLabel>Mutual Servers — {mutualGuilds.length}</SectionLabel>
+            <SectionLabel>Mutual servers — {mutualGuilds.length}</SectionLabel>
             <div className="flex flex-col">
               {mutualGuilds.slice(0, 5).map((guild) => (
                 <div
@@ -651,7 +651,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
 
         {linkedAccounts.length > 0 && (
           <div className="px-5 pb-4">
-            <SectionLabel>Linked Accounts</SectionLabel>
+            <SectionLabel>Linked accounts</SectionLabel>
             <div className="flex flex-col gap-1">
               {linkedAccounts.map((account) => (
                 <a
@@ -702,7 +702,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
                 onClick={() => void handleRemoveRelationship(`Removed ${user.username} from friends.`)}
               >
                 <UserMinus size={16} />
-                Remove Friend
+                Remove friend
               </button>
             )}
             {!isBotUser && relationshipType === 2 && (
@@ -741,7 +741,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
                 onClick={() => void handleRemoveRelationship(`Cancelled friend request to ${user.username}.`)}
               >
                 <UserX size={16} />
-                Cancel Request
+                Cancel request
               </button>
             )}
             {!isBotUser && relationshipType == null && (
@@ -751,7 +751,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
                 onClick={() => void handleAddFriend()}
               >
                 <UserPlus size={16} />
-                Add Friend
+                Add friend
               </button>
             )}
             {relationshipType !== 2 && (
@@ -794,7 +794,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
           panelClassName="w-full max-w-md p-5"
         >
           <div>
-            <h3 id="report-user-title" className="font-display text-heading text-text-primary">Report User</h3>
+            <h3 id="report-user-title" className="font-display text-heading text-text-primary">Report user</h3>
             <p className="mt-1.5 text-meta text-text-muted">
               Reports go to this server's moderators. Add concise, verifiable evidence to speed up review.
             </p>
@@ -836,7 +836,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
                 onClick={() => void handleReportUser()}
                 disabled={reportSubmitting}
               >
-                {reportSubmitting ? 'Submitting...' : 'Submit Report'}
+                {reportSubmitting ? 'Submitting...' : 'Submit report'}
               </button>
               <button
                 className={`rounded-chip px-3.5 py-2 text-label font-medium text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary ${FOCUS_RING}`}
@@ -858,7 +858,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
           panelClassName="w-full max-w-md p-5"
         >
           <div>
-            <h3 id="identity-verification-title" className="font-display text-heading text-text-primary">Cross-Device Identity Verification</h3>
+            <h3 id="identity-verification-title" className="font-display text-heading text-text-primary">Cross-device identity verification</h3>
             <p className="mt-1.5 mb-4 text-meta text-text-muted">
               Scan this code on your other signed-in device, confirm the fingerprints match, then mark it verified.
             </p>

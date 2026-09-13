@@ -108,11 +108,11 @@ function isSettingsSection(value: string | null | undefined): value is SettingsS
 
 const NATIVE_BOT_LABELS: Record<string, { name: string; description: string }> = {
   welcome_bot: {
-    name: 'Welcome Bot',
+    name: 'Welcome bot',
     description: 'Automatically greets new members.',
   },
   auto_mod: {
-    name: 'Auto-Moderator',
+    name: 'Auto-moderator',
     description: 'Filters restricted words and basic spam.',
   },
 };
@@ -1043,7 +1043,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
 
   const deleteModTemplate = async (templateId: string) => {
     const ok = await confirm({
-      title: 'Delete Template',
+      title: 'Delete template',
       description: 'Are you sure you want to delete this moderation template?',
       confirmLabel: 'Delete',
       variant: 'danger',

@@ -143,7 +143,7 @@ export function PinnedMessagesOverlay({
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close Pinned messages panel"
+            aria-label="Close pinned messages panel"
             className="inline-flex h-9 w-9 items-center justify-center rounded-chip text-text-muted outline-none hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
           >
             <X size={18} aria-hidden />
@@ -160,7 +160,7 @@ export function PinnedMessagesOverlay({
       onClose={onClose}
       dialogRef={dialogRef as RefObject<HTMLDivElement | null>}
       titleId="topbar-pins-title"
-      title="Pinned Messages"
+      title="Pinned messages"
       icon={Pin}
       closeLabel="Close pinned messages"
       panelClassName="max-h-[min(82dvh,40rem)] w-full max-w-xl"

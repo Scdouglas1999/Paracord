@@ -175,7 +175,7 @@ function OwnedAccountSetupPage() {
               <p className="text-section text-text-faint">Step 2 of 2</p>
               <AuthHeading
                 mark={false}
-                title="Recovery Phrase"
+                title="Recovery phrase"
                 subtitle={
                   <>
                     These 24 words restore your identity key. They do not contain your encrypted messages or their session keys.
@@ -280,7 +280,7 @@ function OwnedAccountSetupPage() {
               />
             </Field>
 
-            <Field label="Display Name" hint="How others see you. You can change it later.">
+            <Field label="Display name" hint="How others see you. You can change it later.">
               <Input
                 type="text"
                 value={displayName}
@@ -290,7 +290,7 @@ function OwnedAccountSetupPage() {
             </Field>
 
             {(!hasSavedIdentity || !identityUnlocked) && <Field
-              label={hasSavedIdentity ? 'Encryption Password' : isMigration ? 'New Encryption Password' : 'Password'}
+              label={hasSavedIdentity ? 'Encryption password' : isMigration ? 'New encryption password' : 'Password'}
               required
               hint={
                 hasSavedIdentity ? 'Unlocks the identity already saved on this device.' : isMigration
@@ -309,7 +309,7 @@ function OwnedAccountSetupPage() {
               />
             </Field>}
 
-            {!hasSavedIdentity && <Field label="Confirm Password" required>
+            {!hasSavedIdentity && <Field label="Confirm password" required>
               <Input
                 type="password"
                 value={confirmPassword}
@@ -321,7 +321,7 @@ function OwnedAccountSetupPage() {
             </Field>}
 
             {isMigration && <>
-              <Field label="Current Server Password" required hint="Authenticates this change on the server. It can differ from your encryption password.">
+              <Field label="Current server password" required hint="Authenticates this change on the server. It can differ from your encryption password.">
                 <Input type="password" value={serverPassword} onChange={e => setServerPassword(e.target.value)} required autoComplete="current-password" />
               </Field>
               <Field label="Two-factor or backup code" hint="Required if two-factor authentication is enabled on this server account.">
@@ -332,7 +332,7 @@ function OwnedAccountSetupPage() {
 
           <Button type="submit" size="lg" loading={loading} disabled={loading} className="w-full">
             <KeyRound size={16} aria-hidden />
-            {isMigration ? 'Secure Account' : 'Create Identity'}
+            {isMigration ? 'Secure account' : 'Create identity'}
           </Button>
 
           {!isMigration ? (

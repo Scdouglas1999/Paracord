@@ -178,7 +178,7 @@ export function TemplateGalleryPage() {
                 disabled={busyTemplateId === createGuildId}
               >
                 <Upload size={15} />
-                {busyTemplateId === createGuildId ? 'Creating...' : 'Create Template'}
+                {busyTemplateId === createGuildId ? 'Creating...' : 'Create template'}
               </Button>
             </div>
           )}
@@ -348,7 +348,7 @@ export function TemplateGalleryPage() {
                       onClick={() => void applyTemplate()}
                       disabled={busyTemplateId === selectedTemplate.id || !applyName.trim()}
                     >
-                      {busyTemplateId === selectedTemplate.id ? 'Creating...' : 'Create From Template'}
+                      {busyTemplateId === selectedTemplate.id ? 'Creating...' : 'Create from template'}
                     </Button>
                   </div>
                 </div>

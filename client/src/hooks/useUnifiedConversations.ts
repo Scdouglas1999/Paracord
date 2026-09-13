@@ -115,7 +115,7 @@ function dmTitle(ch: Channel): string {
   if (ch.name) return ch.name;
   if (ch.recipient) return displayName(ch.recipient);
   if (ch.recipients?.length) return ch.recipients.map((r) => displayName(r)).join(', ');
-  return 'Direct Message';
+  return 'Direct message';
 }
 
 /**

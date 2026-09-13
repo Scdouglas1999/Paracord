@@ -81,7 +81,7 @@ function OwnedHistoryDialog({ scope, channelId, messageId, position, onClose }: 
       style={{ left: `clamp(8px, ${position.x}px, calc(100vw - min(20rem, calc(100vw - 1rem)) - 8px))`,
         top: `clamp(8px, ${position.y}px, calc(100dvh - min(20rem, calc(100dvh - 1rem)) - 8px))` }}>
       <div className="flex items-center justify-between gap-2 border-b border-border-subtle pl-3 pr-1 text-label font-semibold text-text-primary">
-        <h2 id={titleId} className="pc-display py-2.5">Edit History</h2>
+        <h2 id={titleId} className="pc-display py-2.5">Edit history</h2>
         <button type="button" aria-label="Close edit history" onClick={onClose} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-text-muted hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"><X size={16} /></button>
       </div>
       <HistoryContents key={attempt} scope={scope} channelId={channelId} messageId={messageId} onClose={onClose} onRetry={retry} />

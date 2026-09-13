@@ -458,7 +458,7 @@ export function BotAuthorizePage() {
                           rel="noopener noreferrer"
                           className="pc-focusable inline-flex h-[var(--h-control)] items-center gap-1.5 rounded-[var(--radius-control)] bg-bg-raised px-3.5 text-label font-semibold text-text-primary shadow-[var(--shadow-raised)] transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong"
                         >
-                          Continue to App
+                          Continue to app
                           <ExternalLink size={14} aria-hidden />
                         </a>
                       )}
@@ -489,7 +489,7 @@ export function BotAuthorizePage() {
                     <option value={1}>1 - Bad</option>
                   </Select>
                   <Button type="button" onClick={() => void submitReview()}>
-                    Submit Review
+                    Submit review
                   </Button>
                 </div>
                 <Textarea

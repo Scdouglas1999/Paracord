@@ -301,13 +301,13 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
           </button>
         )}
 
-        {/* New Post button — primary emerald */}
+        {/* New post button — primary emerald */}
         <button
           className="flex items-center gap-1.5 rounded-chip bg-accent-primary px-3.5 py-2 text-label font-semibold text-text-on-accent shadow-[var(--shadow-chip)] outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)]"
           onClick={() => setShowNewPost(true)}
         >
           <Plus size={16} />
-          New Post
+          New post
         </button>
       </div>
 
@@ -462,7 +462,7 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
         )}
       </div>}
 
-      {/* New Post Modal */}
+      {/* New post Modal */}
       {showNewPost && (
         <NewPostModal
           channelId={channelId}
@@ -674,7 +674,7 @@ function TagManagerModal({
       closeLabel="Close tag manager"
     >
       <ModalHeader>
-        <ModalTitle id="forum-tag-manager-title">Manage Forum Tags</ModalTitle>
+        <ModalTitle id="forum-tag-manager-title">Manage forum tags</ModalTitle>
       </ModalHeader>
       <ModalBody className="space-y-4 pb-6">
           <div className="grid gap-2 sm:grid-cols-[1fr_8rem_auto]">
@@ -793,7 +793,7 @@ function NewPostModal({
       closeLabel="Close new post dialog"
     >
       <ModalHeader>
-        <ModalTitle id="forum-new-post-title">New Post</ModalTitle>
+        <ModalTitle id="forum-new-post-title">New post</ModalTitle>
       </ModalHeader>
       <ModalBody className="space-y-4">
           <div>
@@ -886,7 +886,7 @@ function NewPostModal({
           disabled={!title.trim() || submitting}
           className="rounded-chip bg-accent-primary px-4 py-2 text-label font-semibold text-text-on-accent shadow-[var(--shadow-chip)] outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {submitting ? 'Creating…' : 'Create Post'}
+          {submitting ? 'Creating…' : 'Create post'}
         </button>
       </ModalFooter>
     </Modal>

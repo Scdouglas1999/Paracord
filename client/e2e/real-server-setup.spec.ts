@@ -249,7 +249,7 @@ test.describe('first-owner claim on a real unclaimed server', () => {
       await page.getByLabel(/Claim token/).fill('X'.repeat(CLAIM_TOKEN.length));
       await page.getByLabel(/Username/).fill(ownerName);
       await page.getByLabel(/^Password/).fill(OWNER_PASSWORD);
-      await page.getByLabel(/Confirm Password/).fill(OWNER_PASSWORD);
+      await page.getByLabel(/Confirm password/).fill(OWNER_PASSWORD);
       await page.getByLabel(/Email/).fill(`${ownerName}@example.test`);
       await page.getByLabel(/Server name/).fill('Riverside Studio');
       await page.getByLabel(/First space name/).fill('The Lounge');

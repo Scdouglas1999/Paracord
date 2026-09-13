@@ -22,13 +22,13 @@ interface CommandBuilderProps {
 
 const COMMAND_TYPE_LABELS: Record<number, string> = {
   [ApplicationCommandType.ChatInput]: 'Chat Input (Slash)',
-  [ApplicationCommandType.User]: 'User Context Menu',
-  [ApplicationCommandType.Message]: 'Message Context Menu',
+  [ApplicationCommandType.User]: 'User context menu',
+  [ApplicationCommandType.Message]: 'Message context menu',
 };
 
 const OPTION_TYPE_LABELS: Record<number, string> = {
-  [CommandOptionType.SubCommand]: 'Sub Command',
-  [CommandOptionType.SubCommandGroup]: 'Sub Command Group',
+  [CommandOptionType.SubCommand]: 'Sub command',
+  [CommandOptionType.SubCommandGroup]: 'Sub command group',
   [CommandOptionType.String]: 'String',
   [CommandOptionType.Integer]: 'Integer',
   [CommandOptionType.Boolean]: 'Boolean',
@@ -430,7 +430,7 @@ export function CommandBuilder({ appId, editingCommand, onSaved, onCancel }: Com
             Cancel
           </Button>
           <Button disabled={!canSubmit} loading={saving} onClick={() => void submit()}>
-            {saving ? 'Saving…' : editingCommand ? 'Update Command' : 'Create Command'}
+            {saving ? 'Saving…' : editingCommand ? 'Update command' : 'Create command'}
           </Button>
         </div>
       </div>

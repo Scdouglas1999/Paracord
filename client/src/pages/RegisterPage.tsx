@@ -139,7 +139,7 @@ export function RegisterPage() {
                 />
               </Field>
 
-              <Field label="Display Name" hint="How people see you. You can change it anytime.">
+              <Field label="Display name" hint="How people see you. You can change it anytime.">
                 <input
                   type="text"
                   value={displayName}
@@ -174,7 +174,7 @@ export function RegisterPage() {
                 />
               </Field>
 
-              <Field label="Confirm Password" required error={confirmError} descriptionId={confirmErrorId}>
+              <Field label="Confirm password" required error={confirmError} descriptionId={confirmErrorId}>
                 <input
                   type="password"
                   value={confirmPassword}

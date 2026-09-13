@@ -248,7 +248,7 @@ export function VoiceControlBar({
                 <Tooltip
                     content={
                         isPttMode
-                            ? pttEngaged ? 'Transmitting (PTT)' : 'Push to Talk (muted)'
+                            ? pttEngaged ? 'Transmitting (PTT)' : 'Push to talk (muted)'
                             : selfMute ? 'Unmute' : 'Mute'
                     }
                     side="top"
@@ -307,7 +307,7 @@ export function VoiceControlBar({
                 </IconButton>
             </Tooltip>
 
-            {!listenOnly && <Tooltip content={selfVideo ? 'Turn Off Camera' : 'Turn On Camera'} side="top">
+            {!listenOnly && <Tooltip content={selfVideo ? 'Turn off camera' : 'Turn on camera'} side="top">
                 <IconButton
                     label={selfVideo ? 'Turn off camera' : 'Turn on camera'}
                     size="stage"
@@ -321,7 +321,7 @@ export function VoiceControlBar({
             {/* Screen-share split control — the picker menu lives behind the chevron. */}
             {!listenOnly && <div className="relative flex items-center" ref={streamMenuRef}>
                 <div className="flex items-stretch">
-                    <Tooltip content={selfStream ? 'Stop Streaming' : 'Share Screen'} side="top">
+                    <Tooltip content={selfStream ? 'Stop streaming' : 'Share screen'} side="top">
                         <IconButton
                             label={selfStream ? 'Stop streaming' : streamStarting ? 'Starting screen share' : 'Share screen'}
                             size="stage"
@@ -439,7 +439,7 @@ export function VoiceControlBar({
             </div>}
 
             {onToggleChat && (
-                <Tooltip content={isChatOpen ? 'Hide Chat' : 'Show Chat'} side="top">
+                <Tooltip content={isChatOpen ? 'Hide chat' : 'Show chat'} side="top">
                     <IconButton
                         label={isChatOpen ? 'Hide voice chat' : 'Show voice chat'}
                         size="stage"

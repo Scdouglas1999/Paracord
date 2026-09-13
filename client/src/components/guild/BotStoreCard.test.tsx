@@ -41,14 +41,14 @@ describe('BotStoreCard', () => {
     expect(screen.getByText('12 spaces')).toBeInTheDocument();
     expect(screen.getByText('4.8 (4)')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: /Add to Server/ }));
+    await user.click(screen.getByRole('button', { name: /Add to server/ }));
 
     expect(onAdd).toHaveBeenCalledWith(publicBot);
   });
 
   it('disables add when the user cannot manage bots or an add is in progress', () => {
     const { rerender } = render(<BotStoreCard bot={publicBot} onAdd={vi.fn()} canManage={false} />);
-    expect(screen.getByRole('button', { name: /Add to Server/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Add to server/ })).toBeDisabled();
 
     rerender(<BotStoreCard bot={publicBot} onAdd={vi.fn()} canManage adding />);
     expect(screen.getByRole('button', { name: 'Adding...' })).toBeDisabled();

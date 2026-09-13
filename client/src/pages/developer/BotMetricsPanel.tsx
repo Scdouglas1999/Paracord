@@ -36,7 +36,7 @@ export function BotMetricsPanel({ metrics, onRefresh }: BotMetricsPanelProps) {
         <span className="text-section text-text-faint">Metrics · last 30 days</span>
         <Button variant="ghost" size="sm" onClick={onRefresh}>
           <RotateCw size={13} />
-          Refresh Metrics
+          Refresh metrics
         </Button>
       </div>
       {metrics ? (

@@ -109,7 +109,7 @@ describe('TopBar context-panel toggles', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Pinned messages' })[0]);
     expect(mockUIState.toggleContextPanelMode).toHaveBeenCalledWith('pins');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Search Messages' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Search messages' }));
     expect(mockUIState.toggleContextPanelMode).toHaveBeenCalledWith('search');
 
     fireEvent.click(screen.getByRole('button', { name: 'Threads' }));
@@ -132,7 +132,7 @@ describe('TopBar context-panel toggles', () => {
       'aria-expanded',
       'true',
     );
-    expect(screen.getByRole('button', { name: 'Search Messages' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: 'Search messages' })).toHaveAttribute(
       'aria-pressed',
       'false',
     );

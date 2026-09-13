@@ -102,7 +102,7 @@ export function PollMessageCard({ channelId, poll, canVote }: PollMessageCardPro
           <p className="text-heading text-text-primary">{livePoll.question}</p>
         </div>
         <span className="shrink-0 rounded-window bg-bg-mod-strong px-2 py-0.5 text-section text-text-secondary">
-          {livePoll.allow_multiselect ? 'Multi Select' : 'Single Select'}
+          {livePoll.allow_multiselect ? 'Multi select' : 'Single select'}
         </span>
       </div>
 

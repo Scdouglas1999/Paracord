@@ -62,7 +62,7 @@ function dmTitle(ch: Channel): string {
   if (ch.name) return ch.name;
   if (ch.recipient) return displayName(ch.recipient);
   if (ch.recipients?.length) return ch.recipients.map((r) => displayName(r)).join(', ');
-  return 'Direct Message';
+  return 'Direct message';
 }
 
 function activityMs(id: string | null): number {
@@ -147,7 +147,7 @@ function OwnedDMPage() {
   const isGroupDM = dmChannel?.channel_type === 3 || dmChannel?.type === 3;
   const recipientName = isGroupDM
     ? (dmChannel?.name || dmChannel?.recipients?.map((r) => r.username).join(', ') || 'Group DM')
-    : (dmChannel?.recipient ? displayName(dmChannel.recipient) : 'Direct Message');
+    : (dmChannel?.recipient ? displayName(dmChannel.recipient) : 'Direct message');
 
   // Reset transient chat state and any lingering context panel when the DM changes.
   useEffect(() => {

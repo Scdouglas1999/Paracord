@@ -53,7 +53,7 @@ const PERMISSION_GROUPS: { group: string; perms: { key: PermKey; label: string }
       { key: 'READ_MESSAGE_HISTORY', label: 'Read Message History' },
       { key: 'ATTACH_FILES', label: 'Attach Files' },
       { key: 'EMBED_LINKS', label: 'Embed Links' },
-      { key: 'ADD_REACTIONS', label: 'Add Reactions' },
+      { key: 'ADD_REACTIONS', label: 'Add reactions' },
       { key: 'MANAGE_MESSAGES', label: 'Manage Messages' },
       { key: 'MENTION_EVERYONE', label: 'Mention Everyone' },
       { key: 'USE_EXTERNAL_EMOJIS', label: 'Use External Emojis' },

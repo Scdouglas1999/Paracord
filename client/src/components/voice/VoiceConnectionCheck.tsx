@@ -86,7 +86,7 @@ function emptySteps(): DiagnosticStepResult[] {
 export interface VoiceConnectionCheckProps {
   open: boolean;
   onClose: () => void;
-  /** Devices the user picked in Voice & Video, so the check tests those. */
+  /** Devices the user picked in Voice & video, so the check tests those. */
   selection?: DeviceSelection;
   /** Injected in tests; production uses the real browser adapters. */
   adapters?: DiagnosticsAdapters;

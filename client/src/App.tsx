@@ -287,7 +287,7 @@ export default function App() {
       <Route path="/setup" element={route(<AccountSetupPage />)} />
       <Route path="/unlock" element={route(<AccountUnlockPage />)} />
       <Route path="/recover" element={route(<AccountRecoverPage />)} />
-      {/* Legacy unlock-screen link; import lives in User Settings → Identity. */}
+      {/* Legacy unlock-screen link; import lives in User settings → Identity. */}
       <Route path="/import" element={<Navigate to="/app?settings=identity" replace />} />
 
       {/* Server connection */}

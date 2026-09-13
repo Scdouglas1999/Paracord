@@ -107,7 +107,7 @@ export function OnboardingSettingsSection({ guildId, roles }: OnboardingSettings
             loading={saving}
             onClick={() => void onSave()}
           >
-            Save Onboarding Settings
+            Save onboarding settings
           </Button>
         }
       />
@@ -121,7 +121,7 @@ export function OnboardingSettingsSection({ guildId, roles }: OnboardingSettings
         <GroupLabel>Welcome</GroupLabel>
         <div className="mt-4 flex flex-col gap-5">
           <label className="block">
-            <FieldLabel>Welcome Title</FieldLabel>
+            <FieldLabel>Welcome title</FieldLabel>
             <Input
               value={welcomeTitle}
               onChange={(event) => setWelcomeTitle(event.target.value)}
@@ -130,7 +130,7 @@ export function OnboardingSettingsSection({ guildId, roles }: OnboardingSettings
             />
           </label>
           <label className="block">
-            <FieldLabel>Welcome Message</FieldLabel>
+            <FieldLabel>Welcome message</FieldLabel>
             <Textarea
               className="min-h-24 resize-y"
               value={welcomeBody}
@@ -168,7 +168,7 @@ export function OnboardingSettingsSection({ guildId, roles }: OnboardingSettings
         <GroupLabel>Self-serve roles</GroupLabel>
         <div className="mt-4 flex flex-col gap-5">
           <label className="block">
-            <FieldLabel>Role Prompt</FieldLabel>
+            <FieldLabel>Role prompt</FieldLabel>
             <Input
               value={rolePrompt}
               onChange={(event) => setRolePrompt(event.target.value)}
@@ -177,7 +177,7 @@ export function OnboardingSettingsSection({ guildId, roles }: OnboardingSettings
             />
           </label>
           <div>
-            <FieldLabel>Role Options</FieldLabel>
+            <FieldLabel>Role options</FieldLabel>
             {selectableRoles.length === 0 ? (
               <p className="text-body leading-relaxed text-text-secondary">
                 Create roles first — they'll appear here as pickable options for new members.
@@ -234,7 +234,7 @@ export function OnboardingSettingsSection({ guildId, roles }: OnboardingSettings
         <div className="mt-4">
           <div className="max-w-xs">
             <label className="block">
-              <FieldLabel>Progressive Channel Minimum Messages</FieldLabel>
+              <FieldLabel>Progressive channel minimum messages</FieldLabel>
               <Input
                 type="number"
                 min={0}

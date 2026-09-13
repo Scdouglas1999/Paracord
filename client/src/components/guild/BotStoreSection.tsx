@@ -101,14 +101,14 @@ interface BuiltInBot {
 const BUILT_IN_BOTS: BuiltInBot[] = [
   {
     id: 'welcome_bot',
-    name: 'Welcome Bot',
+    name: 'Welcome bot',
     description: 'Automatically greet new members when they join the server.',
     icon: <Smile size={22} aria-hidden />,
     features: ['Customizable welcome message', 'Channel selection'],
   },
   {
     id: 'auto_mod',
-    name: 'Auto-Moderator',
+    name: 'Auto-moderator',
     description: 'Rule-based moderation, raid protection, and verification gates.',
     icon: <Shield size={22} aria-hidden />,
     features: ['Rule engine', 'Quarantine + mod log', 'Anti-raid + verification gate'],
@@ -118,14 +118,14 @@ const BUILT_IN_BOTS: BuiltInBot[] = [
 const INCLUDED_TOOLS: BuiltInBot[] = [
   {
     id: 'system-roles',
-    name: 'Member Onboarding',
+    name: 'Member onboarding',
     description: 'Let new members choose optional roles and acknowledge community rules.',
     icon: <Zap size={22} aria-hidden />,
     features: ['Self-selected roles', 'Rules acknowledgement', 'Welcome prompts'],
   },
   {
     id: 'system-economy',
-    name: 'Economy & Levels',
+    name: 'Economy & levels',
     description: 'Gamify your server with XP, levels, and leaderboards for active members.',
     icon: <Gamepad2 size={22} aria-hidden />,
     features: ['Activity tracking', 'Level up alerts', 'Server leaderboard'],
@@ -141,8 +141,8 @@ const INCLUDED_TOOLS: BuiltInBot[] = [
 
 /** The two views of the store (spec §6.8: one Tabs recipe, sentence case). */
 const STORE_TABS: readonly TabItem<'built-in' | 'public'>[] = [
-  { value: 'built-in', label: 'Built-in Bots' },
-  { value: 'public', label: 'Public Store' },
+  { value: 'built-in', label: 'Built-in bots' },
+  { value: 'public', label: 'Public store' },
 ];
 
 /** The label above a control inside the configure panel (§2 Section step). */
@@ -174,7 +174,7 @@ const EMPTY_GUILD_CHANNELS: Channel[] = [];
 function makeRule(): AutoModRule {
   return {
     id: `rule-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
-    name: 'New Rule',
+    name: 'New rule',
     enabled: true,
     type: 'keyword',
     value: '',
@@ -199,7 +199,7 @@ function normalizeAutoMod(raw: GuildBotConfig): AutoModConfig {
       : [
           {
             ...makeRule(),
-            name: 'Restricted Words',
+            name: 'Restricted words',
             value: 'badword1,badword2',
           },
         ],
@@ -493,7 +493,7 @@ export function BotStoreSection({
                 <div>
                   <label htmlFor={`${formId}-welcome-channel`} className={fieldLabelClass}>Welcome channel</label>
                   <Select
-                    id={`${formId}-welcome-channel`} aria-label="Welcome Channel"
+                    id={`${formId}-welcome-channel`} aria-label="Welcome channel"
                     value={String(configState.channel_id || '')}
                     onChange={(e) => setConfigState({ ...configState, channel_id: e.target.value })}
                   >
@@ -505,7 +505,7 @@ export function BotStoreSection({
                 <div>
                   <label htmlFor={`${formId}-message-template`} className={fieldLabelClass}>Message template</label>
                   <Textarea
-                    id={`${formId}-message-template`} aria-label="Message Template"
+                    id={`${formId}-message-template`} aria-label="Message template"
                     value={String(configState.message_template || '')}
                     onChange={(e) => setConfigState({ ...configState, message_template: e.target.value })}
                     className="h-24 resize-none"
@@ -520,14 +520,14 @@ export function BotStoreSection({
                 <div className="grid gap-3 md:grid-cols-2">
                   <div>
                     <label htmlFor={`${formId}-mod-log-channel`} className={fieldLabelClass}>Mod log channel</label>
-                    <Select id={`${formId}-mod-log-channel`} aria-label="Mod Log Channel" value={autoModConfig.mod_log_channel_id || ''} onChange={(e) => setAutoModConfig({ ...autoModConfig, mod_log_channel_id: e.target.value || undefined })}>
+                    <Select id={`${formId}-mod-log-channel`} aria-label="Mod log channel" value={autoModConfig.mod_log_channel_id || ''} onChange={(e) => setAutoModConfig({ ...autoModConfig, mod_log_channel_id: e.target.value || undefined })}>
                       <option value="">Disabled</option>
                       {textLikeChannels.map((channel) => (<option key={channel.id} value={channel.id}>#{channel.name || channel.id}</option>))}
                     </Select>
                   </div>
                   <div>
                     <label htmlFor={`${formId}-quarantine-channel`} className={fieldLabelClass}>Quarantine channel</label>
-                    <Select id={`${formId}-quarantine-channel`} aria-label="Quarantine Channel" value={autoModConfig.quarantine_channel_id || ''} onChange={(e) => setAutoModConfig({ ...autoModConfig, quarantine_channel_id: e.target.value || undefined })}>
+                    <Select id={`${formId}-quarantine-channel`} aria-label="Quarantine channel" value={autoModConfig.quarantine_channel_id || ''} onChange={(e) => setAutoModConfig({ ...autoModConfig, quarantine_channel_id: e.target.value || undefined })}>
                       <option value="">Disabled</option>
                       {textLikeChannels.map((channel) => (<option key={channel.id} value={channel.id}>#{channel.name || channel.id}</option>))}
                     </Select>
@@ -539,7 +539,7 @@ export function BotStoreSection({
                 <section className="flex flex-col gap-3">
                   <div className="flex items-center justify-between gap-3">
                     <GroupLabel>Rules</GroupLabel>
-                    <Button size="sm" variant="ghost" onClick={() => setAutoModConfig({ ...autoModConfig, rules: [...(autoModConfig.rules || []), makeRule()] })}><Plus size={14} />Add Rule</Button>
+                    <Button size="sm" variant="ghost" onClick={() => setAutoModConfig({ ...autoModConfig, rules: [...(autoModConfig.rules || []), makeRule()] })}><Plus size={14} />Add rule</Button>
                   </div>
                   <div className="flex flex-col gap-2">
                     {(autoModConfig.rules || []).map((rule) => (
@@ -618,7 +618,7 @@ export function BotStoreSection({
                         <div className="flex gap-2"><Input aria-label={`Expected answer ${idx + 1}`} className="flex-1" value={q.answer} onChange={(e) => setAutoModConfig({ ...autoModConfig, verification_gate: { ...(autoModConfig.verification_gate || DEFAULT_VERIFICATION_GATE), questions: (autoModConfig.verification_gate?.questions || []).map((item, i) => i === idx ? { ...item, answer: e.target.value } : item) } })} placeholder="Expected answer" /><IconButton label={`Remove question ${idx + 1}`} tone="danger" size="lg" onClick={() => setAutoModConfig({ ...autoModConfig, verification_gate: { ...(autoModConfig.verification_gate || DEFAULT_VERIFICATION_GATE), questions: (autoModConfig.verification_gate?.questions || []).filter((_, i) => i !== idx) } })}><Trash2 size={14} /></IconButton></div>
                       </div>
                     ))}
-                    <Button size="sm" variant="ghost" className="self-start" onClick={() => setAutoModConfig({ ...autoModConfig, verification_gate: { ...(autoModConfig.verification_gate || DEFAULT_VERIFICATION_GATE), questions: [...(autoModConfig.verification_gate?.questions || []), { question: '', answer: '' }] } })}><Plus size={14} />Add Question</Button>
+                    <Button size="sm" variant="ghost" className="self-start" onClick={() => setAutoModConfig({ ...autoModConfig, verification_gate: { ...(autoModConfig.verification_gate || DEFAULT_VERIFICATION_GATE), questions: [...(autoModConfig.verification_gate?.questions || []), { question: '', answer: '' }] } })}><Plus size={14} />Add question</Button>
                   </div>
                 </section>
 
@@ -629,7 +629,7 @@ export function BotStoreSection({
                   {(autoModConfig.trigger_logs || []).length === 0 ? (
                     <EmptyState
                       icon={<Shield size={20} />}
-                      title="Auto-Moderator has not acted yet"
+                      title="Auto-moderator has not acted yet"
                       description="Each time a rule catches a message, the rule, the member and the channel are recorded here."
                     />
                   ) : (
@@ -654,7 +654,7 @@ export function BotStoreSection({
             <Button variant="danger" size="sm" onClick={() => configuringId && void handleUninstall(configuringId)}><Trash2 size={14} /> Remove Bot</Button>
             <div className="flex items-center gap-2">
               <Button variant="ghost" size="sm" onClick={() => setConfiguringId(null)}>Cancel</Button>
-              <Button variant="primary" size="sm" onClick={() => void saveConfig()}><Save size={14} /> Save Changes</Button>
+              <Button variant="primary" size="sm" onClick={() => void saveConfig()}><Save size={14} /> Save changes</Button>
             </div>
           </div>
         </Raised>
@@ -708,7 +708,7 @@ export function BotStoreSection({
                       size="sm"
                       variant="ghost"
                     >
-                      {installingId === bot.id ? 'Installing...' : 'Add to Server'}
+                      {installingId === bot.id ? 'Installing...' : 'Add to server'}
                       {installingId !== bot.id && <ArrowRight size={14} />}
                     </Button>
                   )}
@@ -727,9 +727,9 @@ export function BotStoreSection({
         <Well bare className="divide-y divide-border-subtle px-4">
           {INCLUDED_TOOLS.map((tool) => {
             const action = tool.id === 'system-roles'
-              ? { label: 'Open Onboarding', disabled: !onOpenSettings, run: () => onOpenSettings?.('onboarding') }
+              ? { label: 'Open onboarding', disabled: !onOpenSettings, run: () => onOpenSettings?.('onboarding') }
               : tool.id === 'system-economy'
-                ? { label: 'Open Economy', disabled: !onOpenSettings, run: () => onOpenSettings?.('economy') }
+                ? { label: 'Open economy', disabled: !onOpenSettings, run: () => onOpenSettings?.('economy') }
                 : { label: 'Open a channel', disabled: !firstTextChannel || !onOpenChannel, run: () => firstTextChannel && onOpenChannel?.(firstTextChannel.id) };
             return (
               <div key={tool.id} className="flex flex-col gap-3 py-4 sm:flex-row sm:items-start sm:justify-between">

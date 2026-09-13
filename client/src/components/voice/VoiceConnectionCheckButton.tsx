@@ -6,7 +6,7 @@ import type { DeviceSelection, DiagnosticsAdapters } from '../../lib/media/diagn
 
 // The single entry point for the guided voice check. It owns the dialog so a
 // caller only has to drop the button where a user is already stuck: the
-// Voice & Video settings pane, or a failed join.
+// Voice & video settings pane, or a failed join.
 
 export interface VoiceConnectionCheckButtonProps {
   label?: string;

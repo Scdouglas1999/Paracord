@@ -207,7 +207,7 @@ describe('UserProfilePopup action feedback', () => {
 
     await user.click(screen.getByRole('button', { name: 'Report Grace' }));
     await user.type(screen.getByPlaceholderText('Explain why this user should be reviewed...'), 'spam');
-    await user.click(screen.getByRole('button', { name: 'Submit Report' }));
+    await user.click(screen.getByRole('button', { name: 'Submit report' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Failed to submit report: Moderation queue is offline.',

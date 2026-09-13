@@ -166,7 +166,7 @@ describe('DeveloperPage metrics', () => {
     await openApp(user, 'Release Helper');
     expect(screen.getByText('No metrics loaded yet')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'Refresh Metrics' }));
+    await user.click(screen.getByRole('button', { name: 'Refresh metrics' }));
 
     await waitFor(() => {
       expect(botStoreApi.getDeveloperMetrics).toHaveBeenCalledWith('app-1');
@@ -186,7 +186,7 @@ describe('DeveloperPage metrics', () => {
 
     expect(await screen.findByText('Release Helper')).toBeInTheDocument();
     await openApp(user, 'Release Helper');
-    await user.click(screen.getByRole('button', { name: 'Refresh Metrics' }));
+    await user.click(screen.getByRole('button', { name: 'Refresh metrics' }));
 
     await waitFor(() => {
       expect(botStoreApi.getDeveloperMetrics).toHaveBeenCalledWith('app-1');
@@ -203,7 +203,7 @@ describe('DeveloperPage metrics', () => {
 
     expect(await screen.findByText('Release Helper')).toBeInTheDocument();
     await openApp(user, 'Release Helper');
-    await user.click(screen.getByRole('button', { name: 'Regen Token' }));
+    await user.click(screen.getByRole('button', { name: 'Regen token' }));
     expect(await screen.findByText('regenerated-token')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Copy bot token' }));

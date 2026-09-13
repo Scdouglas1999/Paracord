@@ -63,7 +63,7 @@ describe('CommandPalette accessibility', () => {
   it('opens as a named modal dialog and focuses the search field', async () => {
     await renderOpenPalette();
 
-    const dialog = screen.getByRole('dialog', { name: 'Command Palette' });
+    const dialog = screen.getByRole('dialog', { name: 'Command palette' });
     expect(dialog).toHaveAttribute('aria-modal', 'true');
     expect(dialog).toHaveAttribute('tabindex', '-1');
 
@@ -84,7 +84,7 @@ describe('CommandPalette accessibility', () => {
     opener.focus();
     await user.keyboard('{Control>}k{/Control}');
 
-    const dialog = await screen.findByRole('dialog', { name: 'Command Palette' });
+    const dialog = await screen.findByRole('dialog', { name: 'Command palette' });
     const search = screen.getByRole('textbox', { name: 'Search command palette' });
     await waitFor(() => expect(search).toHaveFocus());
 
@@ -92,7 +92,7 @@ describe('CommandPalette accessibility', () => {
     expect(dialog).toContainElement(document.activeElement as HTMLElement);
 
     await user.keyboard('{Escape}');
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Command Palette' })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Command palette' })).not.toBeInTheDocument());
     await waitFor(() => expect(opener).toHaveFocus());
   });
 
@@ -105,11 +105,11 @@ describe('CommandPalette accessibility', () => {
     );
 
     await user.keyboard('{Control>}k{/Control}');
-    expect(await screen.findByRole('dialog', { name: 'Command Palette' })).toBeInTheDocument();
+    expect(await screen.findByRole('dialog', { name: 'Command palette' })).toBeInTheDocument();
 
     await user.keyboard('{Control>}k{/Control}');
     await waitFor(() =>
-      expect(screen.queryByRole('dialog', { name: 'Command Palette' })).not.toBeInTheDocument(),
+      expect(screen.queryByRole('dialog', { name: 'Command palette' })).not.toBeInTheDocument(),
     );
     expect(useUIStore.getState().commandPaletteOpen).toBe(false);
   });
@@ -138,7 +138,7 @@ describe('CommandPalette social action commands', () => {
     );
     screen.getByRole('button', { name: 'Opener' }).focus();
     await user.keyboard('{Control>}k{/Control}');
-    await screen.findByRole('dialog', { name: 'Command Palette' });
+    await screen.findByRole('dialog', { name: 'Command palette' });
     return user;
   }
 
@@ -172,7 +172,7 @@ describe('CommandPalette social action commands', () => {
     const user = await openPalette();
     // Exactly one "Friends" command — Home no longer doubles as the friends link.
     expect(screen.getAllByText('Friends')).toHaveLength(1);
-    await user.click(screen.getByText('Go to Home'));
+    await user.click(screen.getByText('Go to home'));
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/app'));
     expect(navigateMock).not.toHaveBeenCalledWith('/app/friends');
   });

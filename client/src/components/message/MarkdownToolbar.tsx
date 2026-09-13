@@ -120,14 +120,14 @@ const TOOLBAR_BUTTONS: ToolbarButton[] = [
   {
     id: 'inline_code',
     icon: <Code size={16} />,
-    label: 'Inline Code',
+    label: 'Inline code',
     shortcutKey: '`',
     action: (ta, cb) => wrapSelection(ta, '`', '`', cb),
   },
   {
     id: 'code_block',
     icon: <FileCode2 size={16} />,
-    label: 'Code Block',
+    label: 'Code block',
     shortcutKey: '`',
     shortcutShift: true,
     action: (ta, cb) => wrapSelection(ta, '```\n', '\n```', cb),
@@ -157,7 +157,7 @@ const TOOLBAR_BUTTONS: ToolbarButton[] = [
   {
     id: 'quote',
     icon: <Quote size={14} />,
-    label: 'Block Quote',
+    label: 'Block quote',
     shortcutKey: 'q',
     shortcutShift: true,
     action: (ta, cb) => prefixLine(ta, '> ', cb),

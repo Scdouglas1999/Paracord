@@ -320,7 +320,7 @@ export function InstanceSetupPage() {
               />
             </Field>
 
-            <Field label="Display Name" hint="How people see you. You can change it anytime.">
+            <Field label="Display name" hint="How people see you. You can change it anytime.">
               <Input
                 type="text"
                 value={displayName}
@@ -363,7 +363,7 @@ export function InstanceSetupPage() {
             </Field>
 
             <Field
-              label="Confirm Password"
+              label="Confirm password"
               required
               error={confirmError}
               descriptionId={confirmErrorId}

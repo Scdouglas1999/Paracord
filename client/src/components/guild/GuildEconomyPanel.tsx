@@ -77,7 +77,7 @@ export function GuildEconomyPanel({ guildId }: GuildEconomyPanelProps) {
         <div>
           <div className="flex items-center gap-2 text-text-primary">
             <TrendingUp size={16} className="text-accent-primary" aria-hidden />
-            <span className="pc-display text-name">Guild Leaderboard</span>
+            <span className="pc-display text-name">Guild leaderboard</span>
           </div>
           <div className="mt-1 text-meta leading-relaxed text-text-muted">
             Activity XP, streaks, and levels update live.
@@ -96,7 +96,7 @@ export function GuildEconomyPanel({ guildId }: GuildEconomyPanelProps) {
             {/* Your own standing — a recessed readout inside the panel. */}
             <Well bare className="px-4 py-3.5">
               <div className="flex items-center justify-between gap-2">
-                <span className="text-label text-text-primary">Your Progress</span>
+                <span className="text-label text-text-primary">Your progress</span>
                 <span className="pc-mono text-meta text-text-muted">
                   {progress?.rank != null ? `Rank #${progress.rank}` : 'Unranked'}
                 </span>

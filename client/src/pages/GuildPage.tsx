@@ -64,7 +64,7 @@ export function GuildPage() {
 
   const { permissions, isAdmin: isGuildAdmin } = usePermissions(guildId || null);
 
-  const channelName = channel?.name || 'Unknown Channel';
+  const channelName = channel?.name || 'Unknown channel';
   const isVoice = channel?.type === 2;
   const isStage = channel?.type === 13 || channel?.channel_type === 13;
   const isVoiceLike = isVoice || isStage;

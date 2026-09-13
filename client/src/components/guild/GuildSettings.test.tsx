@@ -142,7 +142,7 @@ describe('GuildSettings destructive flows', () => {
     await user.click(await screen.findByRole('button', { name: 'Delete space' }));
 
     const input = await screen.findByPlaceholderText('Test Guild');
-    const confirmBtn = screen.getByRole('button', { name: 'Delete Server' });
+    const confirmBtn = screen.getByRole('button', { name: 'Delete server' });
 
     // Wrong name keeps the confirm button disabled and blocks the API.
     await user.type(input, 'Wrong');

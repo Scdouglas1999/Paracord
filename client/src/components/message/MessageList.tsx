@@ -1575,7 +1575,7 @@ function OwnedMessageList({
   const openCreateThreadDialog = (msg: Message) => {
     if (!canCreateThreads) return;
     const baseName = (msg.content || '').replace(/\s+/g, ' ').trim();
-    const nextName = baseName ? baseName.slice(0, 80) : 'New Thread';
+    const nextName = baseName ? baseName.slice(0, 80) : 'New thread';
     setThreadModalForMessageId(msg.id);
     setThreadName(nextName);
     setThreadCreateError(null);
@@ -1686,7 +1686,7 @@ function OwnedMessageList({
 
     if (canCreateThreads) {
       items.push({
-        label: 'Create Thread',
+        label: 'Create thread',
         icon: <Hash size={14} />,
         action: () => openCreateThreadDialog(msg),
       });
@@ -1710,7 +1710,7 @@ function OwnedMessageList({
 
     if (msg.anonymous?.can_deanonymize) {
       items.push({
-        label: deanonymizedById[msg.id] ? `Author: ${deanonymizedById[msg.id]}` : 'Reveal Author',
+        label: deanonymizedById[msg.id] ? `Author: ${deanonymizedById[msg.id]}` : 'Reveal author',
         icon: <Eye size={14} />,
         disabled: Boolean(deanonymizedById[msg.id]) || deanonymizingId === msg.id,
         action: () => {
@@ -1721,7 +1721,7 @@ function OwnedMessageList({
 
     if (canEditMsg) {
       items.push({
-        label: 'Edit Message',
+        label: 'Edit message',
         icon: <Pencil size={14} />,
         action: () => startEditingMessage(msg),
       });
@@ -1729,7 +1729,7 @@ function OwnedMessageList({
 
     if (canPinMsg) {
       items.push({
-        label: msg.pinned ? 'Unpin Message' : 'Pin Message',
+        label: msg.pinned ? 'Unpin message' : 'Pin message',
         icon: msg.pinned ? <PinOff size={14} /> : <Pin size={14} />,
         action: () => {
           void togglePin(msg);
@@ -1738,7 +1738,7 @@ function OwnedMessageList({
     }
 
     items.push({
-      label: savedIds.has(msg.id) ? 'Remove from Saved' : 'Save for Later',
+      label: savedIds.has(msg.id) ? 'Remove from Saved' : 'Save for later',
       icon: savedIds.has(msg.id) ? <BookmarkCheck size={14} /> : <Bookmark size={14} />,
       action: () => {
         void toggleSavedMessage(msg);
@@ -1748,7 +1748,7 @@ function OwnedMessageList({
     items.push({ label: '', action: () => {}, divider: true });
 
     items.push({
-      label: 'Copy Text',
+      label: 'Copy text',
       icon: <Copy size={14} />,
       action: () => {
         void writeClipboardText(msg.content || '')
@@ -1769,7 +1769,7 @@ function OwnedMessageList({
 
     if (activeGuildId && msg.author.id !== me) {
       items.push({
-        label: 'Report Message',
+        label: 'Report message',
         icon: <MessageSquare size={14} />,
         action: () => openReportDialog(msg),
       });
@@ -1778,7 +1778,7 @@ function OwnedMessageList({
     if (canDeleteMsg) {
       items.push({ label: '', action: () => {}, divider: true });
       items.push({
-        label: 'Delete Message',
+        label: 'Delete message',
         icon: <Trash2 size={14} />,
         danger: true,
         action: () => requestDelete(msg.id),
@@ -1788,7 +1788,7 @@ function OwnedMessageList({
     if (canManageMessages) {
       items.push({ label: '', action: () => {}, divider: true });
       items.push({
-        label: bulkDeleteMode ? 'Cancel Bulk Delete' : 'Bulk Delete Messages',
+        label: bulkDeleteMode ? 'Cancel bulk delete' : 'Bulk delete messages',
         icon: <Trash2 size={14} />,
         danger: bulkDeleteMode,
         action: () => {
@@ -1861,7 +1861,7 @@ function OwnedMessageList({
           ...row.message,
           author: {
             id: `unknown-${row.message.id}`,
-            username: 'Unknown User',
+            username: 'Unknown user',
             discriminator: '0000',
           },
         };
@@ -2475,7 +2475,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
         {(hoveredMessageId === msg.id || focusedMessageId === msg.id) && !isCoarsePointer && (
           <div className="pc-floating absolute -top-3.5 right-4 flex items-center gap-0.5 overflow-hidden p-0.5 sm:right-8">
             {canAddReactions && (
-              <button className="hover-action-btn rounded-chip" title="Add Reaction" aria-label="Add Reaction" onClick={(e) => openReactionPicker(e, msg.id)}>
+              <button className="hover-action-btn rounded-chip" title="Add reaction" aria-label="Add reaction" onClick={(e) => openReactionPicker(e, msg.id)}>
                 <Smile size={16} />
               </button>
             )}
@@ -2506,7 +2506,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                   openReactionPicker(e, msg.id);
                 }}
               >
-                Add Reaction
+                Add reaction
               </button>
             )}
             {msg.anonymous?.can_deanonymize && (
@@ -2523,7 +2523,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                 ) : deanonymizedById[msg.id] ? (
                   `Author: ${deanonymizedById[msg.id]}`
                 ) : (
-                  'Reveal Author'
+                  'Reveal author'
                 )}
               </button>
             )}
@@ -2543,7 +2543,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                 className="context-menu-item w-full text-left"
                 onClick={() => openCreateThreadDialog(msg)}
               >
-                Create Thread
+                Create thread
               </button>
             )}
             {canEditMessage && (
@@ -2567,7 +2567,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
               onClick={() => void toggleSavedMessage(msg)}
             >
               {savedIds.has(msg.id) ? <BookmarkCheck size={14} /> : <Bookmark size={14} />}
-              {savedIds.has(msg.id) ? 'Remove from Saved' : 'Save for Later'}
+              {savedIds.has(msg.id) ? 'Remove from Saved' : 'Save for later'}
             </button>
             {activeGuildId && msg.author.id !== me && (
               <button className="context-menu-item w-full text-left" onClick={() => openReportDialog(msg)}>
@@ -2683,12 +2683,12 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
             aria-labelledby="create-thread-dialog-title"
             tabIndex={-1}
           >
-            <h3 id="create-thread-dialog-title" className="text-heading text-text-primary">Create Thread</h3>
+            <h3 id="create-thread-dialog-title" className="text-heading text-text-primary">Create thread</h3>
             <p className="mt-1 text-meta text-text-secondary">
               Start a focused discussion branched off this message.
             </p>
             <label className="mt-4 block">
-              <span className="text-section text-text-secondary">Thread Name</span>
+              <span className="text-section text-text-secondary">Thread name</span>
               <input
                 className="input-field mt-2"
                 value={threadName}
@@ -2715,7 +2715,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                 onClick={() => void submitCreateThread()}
                 disabled={threadCreating}
               >
-                {threadCreating ? 'Creating…' : 'Create Thread'}
+                {threadCreating ? 'Creating…' : 'Create thread'}
               </button>
               <button
                 className="rounded-chip px-3.5 py-2 text-label font-semibold text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
@@ -2738,7 +2738,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
             aria-labelledby="report-message-dialog-title"
             tabIndex={-1}
           >
-            <h3 id="report-message-dialog-title" className="text-heading text-text-primary">Report Message</h3>
+            <h3 id="report-message-dialog-title" className="text-heading text-text-primary">Report message</h3>
             <p className="mt-1 text-meta text-text-secondary">
               Reports go to this server's moderators. Add concise evidence when you can.
             </p>
@@ -2778,7 +2778,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                 onClick={() => void submitReport()}
                 disabled={reportSubmitting}
               >
-                {reportSubmitting ? 'Submitting...' : 'Submit Report'}
+                {reportSubmitting ? 'Submitting...' : 'Submit report'}
               </button>
               <button
                 className="rounded-chip px-3.5 py-2 text-label font-semibold text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
@@ -2821,7 +2821,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
               onClick={() => void executeBulkDelete()}
               disabled={bulkDeleting || selectedMessageIds.length === 0}
             >
-              {bulkDeleting ? 'Deleting...' : 'Delete Selected'}
+              {bulkDeleting ? 'Deleting...' : 'Delete selected'}
             </button>
           </div>
         </div>

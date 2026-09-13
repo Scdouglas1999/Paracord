@@ -54,14 +54,14 @@ describe('OnboardingSettingsSection', () => {
     expect(screen.getByRole('checkbox', { name: 'Admin' })).not.toBeChecked();
     expect(screen.queryByText('@everyone')).not.toBeInTheDocument();
 
-    await user.clear(screen.getByLabelText('Welcome Title'));
-    await user.type(screen.getByLabelText('Welcome Title'), 'Launch Guide');
-    fireEvent.change(screen.getByLabelText('Progressive Channel Minimum Messages'), {
+    await user.clear(screen.getByLabelText('Welcome title'));
+    await user.type(screen.getByLabelText('Welcome title'), 'Launch Guide');
+    fireEvent.change(screen.getByLabelText('Progressive channel minimum messages'), {
       target: { value: '-5', valueAsNumber: -5 },
     });
     await user.click(screen.getByRole('checkbox', { name: 'Contributor' }));
     await user.click(screen.getByRole('checkbox', { name: 'Admin' }));
-    await user.click(screen.getByRole('button', { name: 'Save Onboarding Settings' }));
+    await user.click(screen.getByRole('button', { name: 'Save onboarding settings' }));
 
     await waitFor(() => {
       expect(guildApi.updateOnboarding).toHaveBeenCalledWith('guild-1', {

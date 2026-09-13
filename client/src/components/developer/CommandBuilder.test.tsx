@@ -47,7 +47,7 @@ describe('CommandBuilder', () => {
 
     await user.type(screen.getByRole('textbox', { name: 'Command name' }), 'deploy');
     await user.type(screen.getByRole('textbox', { name: 'Command description' }), 'Deploy the app');
-    await user.click(screen.getByRole('button', { name: 'Create Command' }));
+    await user.click(screen.getByRole('button', { name: 'Create command' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Failed to create command: Command name is already registered.',
@@ -71,7 +71,7 @@ describe('CommandBuilder', () => {
 
     await user.clear(screen.getByRole('textbox', { name: 'Command description' }));
     await user.type(screen.getByRole('textbox', { name: 'Command description' }), 'Deploy production');
-    await user.click(screen.getByRole('button', { name: 'Update Command' }));
+    await user.click(screen.getByRole('button', { name: 'Update command' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Failed to update command: Command description is too long.',

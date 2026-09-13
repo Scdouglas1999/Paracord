@@ -149,7 +149,7 @@ describe('CreateGuildModal template tab', () => {
     render(<CreateGuildModal onClose={onClose} />);
 
     await user.click(screen.getByRole('tab', { name: 'Join' }));
-    await user.type(screen.getByLabelText('Invite Link'), 'https://paracord.gg/launch');
+    await user.type(screen.getByLabelText('Invite link'), 'https://paracord.gg/launch');
     await user.click(screen.getByRole('button', { name: 'Join space' }));
 
     await waitFor(() => {

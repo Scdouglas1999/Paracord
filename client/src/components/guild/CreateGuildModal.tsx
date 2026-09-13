@@ -260,7 +260,7 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
           ) : tab === 'join' ? (
             <div className="space-y-5">
               <label className="block">
-                <FieldLabel>Invite Link</FieldLabel>
+                <FieldLabel>Invite link</FieldLabel>
                 <Input
                   type="text"
                   value={inviteCode}

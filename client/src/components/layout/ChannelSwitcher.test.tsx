@@ -59,8 +59,8 @@ describe('ChannelSwitcher', () => {
       'aria-current',
       'page',
     );
-    expect(within(dialog).getByText('Text Channels')).toBeInTheDocument();
-    expect(within(dialog).getByText('Voice Channels')).toBeInTheDocument();
+    expect(within(dialog).getByText('Text rooms')).toBeInTheDocument();
+    expect(within(dialog).getByText('Voice rooms')).toBeInTheDocument();
   });
 
   it('filters by room name and navigates without returning to the space map', async () => {

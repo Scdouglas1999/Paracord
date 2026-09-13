@@ -298,11 +298,11 @@ describe('MessageList keyboard accessibility and error state', () => {
     const row = await screen.findByRole('article', { name: /Alice/ });
 
     // Toolbar is hidden until the row is hovered or focused.
-    expect(screen.queryByRole('button', { name: 'Add Reaction' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add reaction' })).toBeNull();
 
     fireEvent.focus(row);
 
-    expect(screen.getByRole('button', { name: 'Add Reaction' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add reaction' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Reply' })).toBeInTheDocument();
   });
 

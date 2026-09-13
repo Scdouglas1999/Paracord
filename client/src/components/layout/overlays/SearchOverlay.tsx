@@ -129,7 +129,7 @@ export function SearchOverlay({
   const header = (
     <header className="shrink-0 border-b border-border-subtle">
       <div className="flex items-center gap-3 px-5 py-3.5">
-        <span id="topbar-search-title" className="sr-only">Search Messages</span>
+        <span id="topbar-search-title" className="sr-only">Search messages</span>
         <Search size={18} className="shrink-0 text-text-muted" />
         <label htmlFor="topbar-message-search" className="sr-only">Search messages</label>
         <input

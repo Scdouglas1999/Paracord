@@ -292,7 +292,7 @@ export function ServerConnectPage() {
 
             {error && <ErrorBanner multiline message={error} />}
 
-            <Field label="Server URL or Invite Link" required>
+            <Field label="Server URL or Invite link" required>
               <Input
                 type="text"
                 value={url}
@@ -325,7 +325,7 @@ export function ServerConnectPage() {
 
             <div className="flex flex-col gap-2.5">
               <Button type="submit" size="lg" loading={loading} disabled={loading} className="w-full">
-                Add Server
+                Add server
               </Button>
               <Button
                 type="button"

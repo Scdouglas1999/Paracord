@@ -106,7 +106,7 @@ describe('BotAuthorizePage review flow', () => {
 
     await user.selectOptions(screen.getByLabelText('Review rating'), '5');
     await user.type(screen.getByLabelText('Review body'), 'Solid bot for launch rehearsals.');
-    await user.click(screen.getByRole('button', { name: 'Submit Review' }));
+    await user.click(screen.getByRole('button', { name: 'Submit review' }));
 
     await waitFor(() => {
       expect(botStoreApi.upsertMyReview).toHaveBeenCalledWith('app-1', {
@@ -139,7 +139,7 @@ describe('BotAuthorizePage review flow', () => {
     renderPage();
 
     await screen.findByText('Deploy Helper');
-    await user.click(screen.getByRole('button', { name: 'Submit Review' }));
+    await user.click(screen.getByRole('button', { name: 'Submit review' }));
 
     expect(
       await screen.findByText('Failed to submit review: Reviews are temporarily unavailable.'),
@@ -183,6 +183,6 @@ describe('BotAuthorizePage review flow', () => {
 
     expect(await screen.findByText('Bot authorized successfully for server ID g1.')).toBeInTheDocument();
     expect(screen.getByText(/Redirect URL was blocked/i)).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: /Continue to App/i })).toBeNull();
+    expect(screen.queryByRole('link', { name: /Continue to app/i })).toBeNull();
   });
 });

@@ -9,7 +9,7 @@ import { useUIStore } from '../../../stores/uiStore';
  * (docs/lantern-stage-spec.md §7.1, §8 SearchWell).
  *
  * This IS the ⌘K entry — not a second search implementation: activating it opens
- * the Command Palette, which owns all fuzzy navigation and search.
+ * the Command palette, which owns all fuzzy navigation and search.
  *
  * It is rendered as a `<button>` wearing the well recipe rather than WP0's
  * `SearchWell` input, because a real input inside the column would trap focus in

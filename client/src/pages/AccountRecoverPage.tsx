@@ -63,7 +63,7 @@ export function AccountRecoverPage() {
           {error && <ErrorBanner multiline message={error} />}
 
           <div className="flex flex-col gap-5">
-            <Field label="Recovery Phrase" required hint="All 24 words, in order, separated by spaces.">
+            <Field label="Recovery phrase" required hint="All 24 words, in order, separated by spaces.">
               <Textarea
                 value={phrase}
                 onChange={(e) => setPhrase(e.target.value)}
@@ -85,7 +85,7 @@ export function AccountRecoverPage() {
               />
             </Field>
 
-            <Field label="New Password" required hint={`At least ${MIN_PASSWORD_LENGTH} characters.`}>
+            <Field label="New password" required hint={`At least ${MIN_PASSWORD_LENGTH} characters.`}>
               <Input
                 type="password"
                 value={password}
@@ -97,7 +97,7 @@ export function AccountRecoverPage() {
               />
             </Field>
 
-            <Field label="Confirm Password" required>
+            <Field label="Confirm password" required>
               <Input
                 type="password"
                 value={confirmPassword}
@@ -110,7 +110,7 @@ export function AccountRecoverPage() {
           </div>
 
           <Button type="submit" size="lg" loading={loading} disabled={loading} className="w-full">
-            Recover Account
+            Recover account
           </Button>
 
           <p className="text-meta text-text-secondary">

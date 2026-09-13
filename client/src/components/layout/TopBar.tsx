@@ -500,7 +500,7 @@ function OwnedTopBar({
       disabled: dmCallLoading || (!isInDmCall && !actions.voice.allowed),
       reason: isInDmCall ? null : actions.voice.reason,
     }] : []),
-    { label: 'Search Messages', icon: Search, onClick: panelToggle('search'),
+    { label: 'Search messages', icon: Search, onClick: panelToggle('search'),
       active: contextPanelMode === 'search', controlsPanel: true, disabled: !channelId,
       reason: channelId ? null : 'Select a channel to search' },
     // §7.4: pins and threads sit in the header with their counts. Below the
@@ -577,8 +577,8 @@ function OwnedTopBar({
               type="button"
               onClick={() => navigate('/app/dms')}
               className="pc-focusable inline-flex h-8 shrink-0 items-center gap-1 rounded-[var(--radius-control)] px-1.5 text-label font-medium text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary sm:px-2"
-              aria-label="Back to Messages"
-              title="Back to Messages"
+              aria-label="Back to messages"
+              title="Back to messages"
             >
               <ChevronLeft size={16} aria-hidden />
               <span className="hidden sm:inline">Messages</span>
@@ -728,7 +728,7 @@ function OwnedTopBar({
         onClose={() => setShowSummary(false)}
         dialogRef={summaryDialogRef as RefObject<HTMLDivElement | null>}
         titleId="topbar-summary-title"
-        title="Catch Up Summary"
+        title="Catch up summary"
         icon={Sparkles}
         closeLabel="Close summary"
         panelClassName="max-h-[min(82dvh,40rem)] w-full max-w-2xl"
@@ -770,7 +770,7 @@ function OwnedTopBar({
         onClose={() => setShowFollowManager(false)}
         dialogRef={followDialogRef as RefObject<HTMLDivElement | null>}
         titleId="topbar-follows-title"
-        title="Channel Follows"
+        title="Channel follows"
         icon={Share2}
         closeLabel="Close channel follows"
         panelClassName="max-h-[min(82dvh,40rem)] w-full max-w-xl"

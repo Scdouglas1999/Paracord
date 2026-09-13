@@ -77,7 +77,7 @@ export function AdminPage() {
             icon={<Shield size={20} />}
             title="Access denied"
             description="The control plane is limited to server administrators. Ask an admin to grant you access, then come back."
-            action={<Button onClick={goHome}>Go Back</Button>}
+            action={<Button onClick={goHome}>Go back</Button>}
           />
         </Plate>
       </div>

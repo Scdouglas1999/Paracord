@@ -121,7 +121,7 @@ export function CommandPalette() {
     // Navigation items
     items.push({
       id: 'nav-home',
-      label: 'Go to Home',
+      label: 'Go to home',
       sublabel: 'Calls, friends around, and recent DMs',
       icon: <Home size={16} />,
       action: () => {
@@ -134,7 +134,7 @@ export function CommandPalette() {
 
     items.push({
       id: 'nav-settings',
-      label: 'User Settings',
+      label: 'User settings',
       sublabel: 'Account, appearance, notifications',
       icon: <Settings size={16} />,
       action: () => useUIStore.getState().setUserSettingsOpen(true),
@@ -144,7 +144,7 @@ export function CommandPalette() {
 
     items.push({
       id: 'nav-developers',
-      label: 'Developer Portal',
+      label: 'Developer portal',
       sublabel: 'Bot applications and API access',
       icon: <Bot size={16} />,
       action: () => navigate('/app/developers'),
@@ -155,7 +155,7 @@ export function CommandPalette() {
     if (user && isAdmin(user.flags)) {
       items.push({
         id: 'nav-admin',
-        label: 'Admin Dashboard',
+        label: 'Admin dashboard',
         sublabel: 'Instance administration',
         icon: <Shield size={16} />,
         action: () => navigate('/app/admin'),
@@ -219,18 +219,18 @@ export function CommandPalette() {
 
     availableChannels.filter(channel => !channel.guild_id).forEach(dm => {
       const serverId = dm.scope.serverId;
-      const recipientName = dm.recipient ? displayName(dm.recipient) : 'Direct Message';
+      const recipientName = dm.recipient ? displayName(dm.recipient) : 'Direct message';
       items.push({
         id: `dm-${serverId}-${dm.id}`,
         label: recipientName,
-        sublabel: 'Direct Message',
+        sublabel: 'Direct message',
         icon: <MessageCircle size={16} />,
         action: () => {
           activateChannel(dm);
           selectGuild(null);
           navigate(`/app/dms/${dm.id}`);
         },
-        category: 'Direct Messages',
+        category: 'Direct messages',
         keywords: `${recipientName} dm direct message`,
       });
     });
@@ -251,7 +251,7 @@ export function CommandPalette() {
   // Group filtered items by category
   const groupedItems = useMemo(() => {
     const groups: { category: string; items: PaletteItem[] }[] = [];
-    const categoryOrder = ['Actions', 'Navigation', 'Channels', 'Spaces', 'Direct Messages'];
+    const categoryOrder = ['Actions', 'Navigation', 'Channels', 'Spaces', 'Direct messages'];
     const categoryMap = new Map<string, PaletteItem[]>();
 
     filteredItems.forEach((item) => {
@@ -351,7 +351,7 @@ export function CommandPalette() {
       placement="top"
       size="md"
     >
-      <h2 id="command-palette-title" className="sr-only">Command Palette</h2>
+      <h2 id="command-palette-title" className="sr-only">Command palette</h2>
       {/* Search input — top inset, on the deeper tertiary surface */}
       <div className="flex items-center gap-3 border-b border-border-subtle px-4 py-3.5">
         <Search size={18} className="shrink-0 text-text-muted" />

@@ -257,7 +257,7 @@ async function login(page: Page, base: string, email: string, password: string) 
   await page.goto(`${base}/login`);
   await page.locator('input[autocomplete="username"]').fill(email);
   await page.locator('input[autocomplete="current-password"]').fill(password);
-  await page.getByRole('button', { name: 'Log In', exact: true }).click();
+  await page.getByRole('button', { name: 'Log in', exact: true }).click();
   await expect(page).toHaveURL(/\/app/);
 }
 

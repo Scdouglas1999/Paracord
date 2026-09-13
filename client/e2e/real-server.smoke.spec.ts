@@ -102,31 +102,31 @@ test('real identity setup survives rejected credentials and reload, then adopts 
   await page.goto('/login');
   await page.locator('input[autocomplete="username"]').fill(email);
   await page.locator('input[autocomplete="current-password"]').fill(password);
-  await page.getByRole('button', { name: 'Log In', exact: true }).click();
+  await page.getByRole('button', { name: 'Log in', exact: true }).click();
   await expect(page).toHaveURL(/\/app/);
   await page.goto(`/setup?migrate=1&server=__local__&user=${account.id}`);
-  await page.getByLabel('New Encryption Password', { exact: false }).fill('Separate encryption password');
-  await page.getByLabel('Confirm Password', { exact: false }).fill('Separate encryption password');
-  await page.getByLabel('Current Server Password', { exact: false }).fill('Wrong-Server-Password-123!');
-  await page.getByRole('button', { name: 'Secure Account' }).click();
+  await page.getByLabel('New encryption password', { exact: false }).fill('Separate encryption password');
+  await page.getByLabel('Confirm password', { exact: false }).fill('Separate encryption password');
+  await page.getByLabel('Current server password', { exact: false }).fill('Wrong-Server-Password-123!');
+  await page.getByRole('button', { name: 'Secure account' }).click();
   await expect(page.getByText('Server authentication was rejected.', { exact: false })).toBeVisible();
   const original = await page.evaluate(() => localStorage.getItem('paracord:encrypted-identity:v1'));
   expect(original).toBeTruthy();
   await page.reload();
-  await page.getByLabel('Encryption Password', { exact: false }).fill('Separate encryption password');
-  await page.getByLabel('Current Server Password', { exact: false }).fill(password);
+  await page.getByLabel('Encryption password', { exact: false }).fill('Separate encryption password');
+  await page.getByLabel('Current server password', { exact: false }).fill(password);
   const profiles: Array<{ status: number; authorization?: string }> = [];
   page.on('response', response => {
     if (response.url().endsWith('/api/v1/users/@me')) profiles.push({ status: response.status(), authorization: response.request().headers().authorization });
   });
   const attached = page.waitForResponse(response => response.url().endsWith('/api/v1/auth/attach-public-key'));
-  await page.getByRole('button', { name: 'Secure Account' }).click();
+  await page.getByRole('button', { name: 'Secure account' }).click();
   const response = await attached;
   expect(response.status()).toBe(200);
   const result = await response.json();
   expect(result.user.id).toBe(account.id);
   expect(result.user.public_key).toBe(JSON.parse(original!).publicKey);
-  await expect(page.getByRole('heading', { name: 'Recovery Phrase' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Recovery phrase' })).toBeVisible();
   await expect.poll(() => profiles.some(profile => profile.status === 200 && profile.authorization === `Bearer ${result.token}`)).toBe(true);
   expect(await page.evaluate(() => localStorage.getItem('paracord:encrypted-identity:v1'))).toBe(original);
   await page.getByRole('checkbox').check(); await page.getByRole('button', { name: 'Continue' }).click();
@@ -141,7 +141,7 @@ test('real identity setup survives rejected credentials and reload, then adopts 
   });
   async function logout() {
     await page.getByRole('button', { name: 'Open user settings', exact: true }).click();
-    await page.getByRole('button', { name: 'Log Out', exact: true }).click();
+    await page.getByRole('button', { name: 'Log out', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Welcome back' })).toBeVisible();
   }
   await logout();
@@ -151,7 +151,7 @@ test('real identity setup survives rejected credentials and reload, then adopts 
   await page.getByLabel('Email', { exact: false }).fill(secondEmail);
   await page.getByLabel('Username', { exact: false }).fill(`second${unique}`);
   await page.getByLabel('Password', { exact: false }).first().fill(password);
-  await page.getByLabel('Confirm Password', { exact: false }).fill(password);
+  await page.getByLabel('Confirm password', { exact: false }).fill(password);
   await page.getByRole('checkbox').check();
   const registrationResponse = page.waitForResponse(response => response.url().endsWith('/auth/register'));
   await page.getByRole('button', { name: 'Continue', exact: true }).click();
@@ -164,7 +164,7 @@ test('real identity setup survives rejected credentials and reload, then adopts 
   await logout();
   await page.locator('input[autocomplete="username"]').fill(secondEmail);
   await page.locator('input[autocomplete="current-password"]').fill(password);
-  await page.getByRole('button', { name: 'Log In', exact: true }).click();
+  await page.getByRole('button', { name: 'Log in', exact: true }).click();
   await expect(page).toHaveURL(/\/app/);
   await page.getByRole('button', { name: 'Open user settings', exact: true }).click();
   expect(implicitAttachments).toEqual([]);
@@ -249,7 +249,7 @@ test('real message edits retain readable history after reload', async ({ page, r
     await page.goto('/login');
     await page.locator('input[autocomplete="username"]').fill(email);
     await page.locator('input[autocomplete="current-password"]').fill(password);
-    await page.getByRole('button', { name: 'Log In', exact: true }).click();
+    await page.getByRole('button', { name: 'Log in', exact: true }).click();
     await expect(page).toHaveURL(/\/app/);
     await page.goto(`/app/guilds/${guild.id}/channels/${channel.id}`);
     await page.getByRole('button', { name: 'Skip tour', exact: true }).click();
@@ -266,7 +266,7 @@ test('real message edits retain readable history after reload', async ({ page, r
     const feed = page.getByLabel('Message history');
     for (const content of ['Second version from the real editor', 'Final version after two edits']) {
       await feed.getByText(preceding, { exact: true }).click({ button: 'right' });
-      await page.getByRole('menuitem', { name: 'Edit Message', exact: true }).click();
+      await page.getByRole('menuitem', { name: 'Edit message', exact: true }).click();
       await page.getByRole('textbox', { name: /Edit message from/ }).fill(content);
       const update = page.waitForResponse(response => response.request().method() === 'PATCH' && response.url().endsWith(`/messages/${message.id}`));
       await page.getByRole('button', { name: 'Save', exact: true }).click();
@@ -279,7 +279,7 @@ test('real message edits retain readable history after reload', async ({ page, r
     const historyResponse = page.waitForResponse(response => response.url().endsWith(`/messages/${message.id}/edits`));
     await page.getByRole('button', { name: `Show edit history for message ${message.id}`, exact: true }).click();
     expect((await historyResponse).status()).toBe(200);
-    const history = page.getByRole('dialog', { name: 'Edit History', exact: true });
+    const history = page.getByRole('dialog', { name: 'Edit history', exact: true });
     await expect(history.getByText(original, { exact: true })).toBeVisible();
     await expect(history.getByText('Second version from the real editor', { exact: true })).toBeVisible();
     await expect(history.getByText(/Version [12] --/)).toHaveCount(2);
@@ -401,7 +401,7 @@ test('Home follows live mention creation, edits and deletion and opens the survi
     await page.goto('/login');
     await page.locator('input[autocomplete="username"]').fill(member.email);
     await page.locator('input[autocomplete="current-password"]').fill(password);
-    await page.getByRole('button', { name: 'Log In', exact: true }).click();
+    await page.getByRole('button', { name: 'Log in', exact: true }).click();
     await expect(page).toHaveURL(/\/app/);
     await page.goto('/app');
     const home = page.getByRole('main');
@@ -520,7 +520,7 @@ test('real guild contracts keep the welcome member count correct after join and 
     await page.goto('/login');
     await page.locator('input[autocomplete="username"]').fill(member.email);
     await page.locator('input[autocomplete="current-password"]').fill(password);
-    await page.getByRole('button', { name: 'Log In', exact: true }).click();
+    await page.getByRole('button', { name: 'Log in', exact: true }).click();
     await expect(page).toHaveURL(/\/app/);
     await page.goto(`/app/guilds/${guild.id}/channels/${channel.id}`);
     await expect(page.getByText('Welcome aboard', { exact: true })).toBeVisible();

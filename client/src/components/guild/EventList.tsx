@@ -126,7 +126,7 @@ function toReminderSelectValue(
 }
 
 const ENTITY_TABS = [
-  { value: '1', label: 'Voice Channel' },
+  { value: '1', label: 'Voice room' },
   { value: '2', label: 'External' },
 ] as const;
 
@@ -249,7 +249,7 @@ function EventFormModal({ guildId, event, onClose, onSaved }: EventFormModalProp
           </div>
 
           <div>
-            <FieldLabel>Event Type</FieldLabel>
+            <FieldLabel>Event type</FieldLabel>
             <Tabs
               label="Event type"
               items={ENTITY_TABS}
@@ -311,7 +311,7 @@ function EventFormModal({ guildId, event, onClose, onSaved }: EventFormModalProp
             loading={loading}
             className="min-w-[9rem]"
           >
-            {loading ? (isEditing ? 'Saving…' : 'Creating…') : isEditing ? 'Save Changes' : 'Create Event'}
+            {loading ? (isEditing ? 'Saving…' : 'Creating…') : isEditing ? 'Save changes' : 'Create event'}
           </Button>
         </div>
       </div>
@@ -462,7 +462,7 @@ export function EventList({ guildId }: EventListProps) {
           {canManageEvents && (
             <Button size="sm" onClick={() => setShowCreateModal(true)}>
               <Plus size={15} />
-              New Event
+              New event
             </Button>
           )}
         </div>
@@ -676,7 +676,7 @@ function EventCard({
               className={event.user_rsvp ? 'bg-bg-mod-strong text-text-primary' : undefined}
             >
               <Check size={14} aria-hidden />
-              {event.user_rsvp ? 'Interested' : 'Mark Interested'}
+              {event.user_rsvp ? 'Interested' : 'Mark interested'}
             </Button>
           )}
           {canManageEvents && (

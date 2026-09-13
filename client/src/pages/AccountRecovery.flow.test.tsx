@@ -90,10 +90,10 @@ describe('Account recovery setup flows', () => {
     renderSetupPage();
 
     await user.type(screen.getByLabelText(/Username/), 'alice');
-    await user.type(screen.getByLabelText(/Display Name/), 'Alice');
+    await user.type(screen.getByLabelText(/Display name/), 'Alice');
     await user.type(screen.getByLabelText(/^Password/), 'StrongPass123!');
-    await user.type(screen.getByLabelText(/Confirm Password/), 'StrongPass123!');
-    await user.click(screen.getByRole('button', { name: 'Create Identity' }));
+    await user.type(screen.getByLabelText(/Confirm password/), 'StrongPass123!');
+    await user.click(screen.getByRole('button', { name: 'Create identity' }));
 
     await waitFor(() =>
       expect(useAccountStore((state) => state.create)).toHaveBeenCalledWith(
@@ -102,7 +102,7 @@ describe('Account recovery setup flows', () => {
         'Alice',
       ),
     );
-    expect(await screen.findByRole('heading', { name: 'Recovery Phrase' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Recovery phrase' })).toBeInTheDocument();
     expect(screen.getByText('word1')).toBeInTheDocument();
     expect(screen.getByText('word24')).toBeInTheDocument();
 
@@ -122,10 +122,10 @@ describe('Account recovery setup flows', () => {
     renderSetupPage();
 
     await user.type(screen.getByLabelText(/Username/), '  alice  ');
-    await user.type(screen.getByLabelText(/Display Name/), '  Alice Example  ');
+    await user.type(screen.getByLabelText(/Display name/), '  Alice Example  ');
     await user.type(screen.getByLabelText(/^Password/), 'StrongPass123!');
-    await user.type(screen.getByLabelText(/Confirm Password/), 'StrongPass123!');
-    await user.click(screen.getByRole('button', { name: 'Create Identity' }));
+    await user.type(screen.getByLabelText(/Confirm password/), 'StrongPass123!');
+    await user.click(screen.getByRole('button', { name: 'Create identity' }));
 
     await waitFor(() =>
       expect(useAccountStore((state) => state.create)).toHaveBeenCalledWith(
@@ -141,11 +141,11 @@ describe('Account recovery setup flows', () => {
 
     renderRecoverPage();
 
-    await user.type(screen.getByLabelText(/Recovery Phrase/), 'too short');
+    await user.type(screen.getByLabelText(/Recovery phrase/), 'too short');
     await user.type(screen.getByLabelText(/Username/), 'alice');
-    await user.type(screen.getByLabelText(/^New Password/), 'StrongPass123!');
-    await user.type(screen.getByLabelText(/Confirm Password/), 'StrongPass123!');
-    await user.click(screen.getByRole('button', { name: 'Recover Account' }));
+    await user.type(screen.getByLabelText(/^New password/), 'StrongPass123!');
+    await user.type(screen.getByLabelText(/Confirm password/), 'StrongPass123!');
+    await user.click(screen.getByRole('button', { name: 'Recover account' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Recovery phrase must be exactly 24 words.');
     expect(useAccountStore((state) => state.recover)).not.toHaveBeenCalled();
@@ -156,11 +156,11 @@ describe('Account recovery setup flows', () => {
 
     renderRecoverPage();
 
-    await user.type(screen.getByLabelText(/Recovery Phrase/), recoveryPhrase);
+    await user.type(screen.getByLabelText(/Recovery phrase/), recoveryPhrase);
     await user.type(screen.getByLabelText(/Username/), '  alice  ');
-    await user.type(screen.getByLabelText(/^New Password/), 'StrongPass123!');
-    await user.type(screen.getByLabelText(/Confirm Password/), 'StrongPass123!');
-    await user.click(screen.getByRole('button', { name: 'Recover Account' }));
+    await user.type(screen.getByLabelText(/^New password/), 'StrongPass123!');
+    await user.type(screen.getByLabelText(/Confirm password/), 'StrongPass123!');
+    await user.click(screen.getByRole('button', { name: 'Recover account' }));
 
     await waitFor(() =>
       expect(useAccountStore((state) => state.recover)).toHaveBeenCalledWith(

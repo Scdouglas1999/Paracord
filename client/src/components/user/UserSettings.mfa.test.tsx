@@ -347,7 +347,7 @@ describe('UserSettings MFA controls', () => {
       </MemoryRouter>,
     );
 
-    await user.click(await screen.findByRole('button', { name: 'Save Profile' }));
+    await user.click(await screen.findByRole('button', { name: 'Save profile' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Failed to update profile: Display name contains blocked text.',
@@ -366,7 +366,7 @@ describe('UserSettings MFA controls', () => {
     );
 
     await user.click(screen.getByRole('button', { name: 'Appearance' }));
-    await user.click(await screen.findByRole('button', { name: 'Save Appearance' }));
+    await user.click(await screen.findByRole('button', { name: 'Save appearance' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Failed to save settings: Locale is not supported.',

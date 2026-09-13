@@ -185,7 +185,7 @@ describe('TopBar DM voice calls', () => {
     const user = userEvent.setup();
     renderDmTopBar();
 
-    await user.click(screen.getByRole('button', { name: 'Back to Messages' }));
+    await user.click(screen.getByRole('button', { name: 'Back to messages' }));
 
     expect(screen.getByText('Messages index')).toBeInTheDocument();
   });

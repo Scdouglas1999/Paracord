@@ -55,7 +55,7 @@ export function HelpOverlay({ open, onClose }: HelpOverlayProps) {
       onClose={onClose}
       dialogRef={dialogRef as RefObject<HTMLDivElement | null>}
       titleId="topbar-help-title"
-      title="Keyboard Shortcuts"
+      title="Keyboard shortcuts"
       icon={Keyboard}
       closeLabel="Close keyboard shortcuts"
       panelClassName="max-h-[min(82dvh,34rem)] w-full max-w-2xl"

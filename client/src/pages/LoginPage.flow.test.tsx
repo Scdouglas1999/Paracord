@@ -109,16 +109,16 @@ describe('LoginPage password reset and MFA flows', () => {
 
     await user.click(screen.getByRole('button', { name: 'Forgot your password?' }));
     await user.type(screen.getByLabelText(/Email or Username/), 'reset@example.com');
-    await user.click(screen.getByRole('button', { name: 'Request Reset Token' }));
+    await user.click(screen.getByRole('button', { name: 'Request reset token' }));
 
     await waitFor(() => expect(authApi.forgotPassword).toHaveBeenCalledWith('reset@example.com'));
-    expect(await screen.findByRole('heading', { name: 'Set New Password' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Set new password' })).toBeInTheDocument();
     expect(screen.getByText(/reset token has been generated/i)).toBeInTheDocument();
 
-    await user.type(screen.getByLabelText(/Reset Token/), 'reset-token');
-    await user.type(screen.getByLabelText(/^New Password/), 'NewPassword123!');
-    await user.type(screen.getByLabelText(/Confirm Password/), 'NewPassword123!');
-    await user.click(screen.getByRole('button', { name: 'Set New Password' }));
+    await user.type(screen.getByLabelText(/Reset token/), 'reset-token');
+    await user.type(screen.getByLabelText(/^New password/), 'NewPassword123!');
+    await user.type(screen.getByLabelText(/Confirm password/), 'NewPassword123!');
+    await user.click(screen.getByRole('button', { name: 'Set new password' }));
 
     await waitFor(() =>
       expect(authApi.resetPassword).toHaveBeenCalledWith('reset-token', 'NewPassword123!'),
@@ -132,10 +132,10 @@ describe('LoginPage password reset and MFA flows', () => {
 
     await user.click(screen.getByRole('button', { name: 'Forgot your password?' }));
     await user.click(screen.getByRole('button', { name: 'Enter token' }));
-    await user.type(screen.getByLabelText(/Reset Token/), 'reset-token');
-    await user.type(screen.getByLabelText(/^New Password/), 'NewPassword123!');
-    await user.type(screen.getByLabelText(/Confirm Password/), 'DifferentPass123!');
-    await user.click(screen.getByRole('button', { name: 'Set New Password' }));
+    await user.type(screen.getByLabelText(/Reset token/), 'reset-token');
+    await user.type(screen.getByLabelText(/^New password/), 'NewPassword123!');
+    await user.type(screen.getByLabelText(/Confirm password/), 'DifferentPass123!');
+    await user.click(screen.getByRole('button', { name: 'Set new password' }));
 
     expect(await screen.findByText('Passwords do not match.')).toBeInTheDocument();
     expect(authApi.resetPassword).not.toHaveBeenCalled();
@@ -169,10 +169,10 @@ describe('LoginPage password reset and MFA flows', () => {
 
     await user.type(screen.getByLabelText(/Email or Username/), 'reset@example.com');
     await user.type(screen.getByLabelText(/^Password/), 'OriginalPass123!');
-    await user.click(screen.getByRole('button', { name: 'Log In' }));
+    await user.click(screen.getByRole('button', { name: 'Log in' }));
 
-    expect(await screen.findByRole('heading', { name: 'Two-Factor Authentication' })).toBeInTheDocument();
-    await user.type(screen.getByLabelText(/Authentication Code/), '123456');
+    expect(await screen.findByRole('heading', { name: 'Two-factor authentication' })).toBeInTheDocument();
+    await user.type(screen.getByLabelText(/Authentication code/), '123456');
     await user.click(screen.getByRole('button', { name: 'Verify' }));
 
     await waitFor(() => expect(authApi.mfaLogin).toHaveBeenCalledWith('ticket-1', '123456'));
@@ -205,7 +205,7 @@ describe('LoginPage password reset and MFA flows', () => {
 
     await user.type(screen.getByLabelText(/Email or Username/), 'admin@example.com');
     await user.type(screen.getByLabelText(/^Password/), 'OriginalPass123!');
-    await user.click(screen.getByRole('button', { name: 'Log In' }));
+    await user.click(screen.getByRole('button', { name: 'Log in' }));
 
     expect(await screen.findByText('App shell')).toBeInTheDocument();
     expect(legacyAttachment).not.toHaveBeenCalled();
@@ -220,7 +220,7 @@ describe('LoginPage password reset and MFA flows', () => {
     const user = userEvent.setup();
     await user.type(screen.getByLabelText(/Email or Username/), 'resetuser');
     await user.type(screen.getByLabelText(/^Password/), 'OriginalPass123!');
-    await user.click(screen.getByRole('button', { name: 'Log In' }));
+    await user.click(screen.getByRole('button', { name: 'Log in' }));
     expect(await screen.findByText('App shell')).toBeInTheDocument();
     expect(setRefreshToken).toHaveBeenLastCalledWith(null);
   });

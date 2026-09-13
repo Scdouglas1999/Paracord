@@ -1029,7 +1029,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                     />
                   )}
                   <div className="min-w-0">
-                    <h2 className="truncate text-heading text-text-primary">{user ? resolveDisplayName(user) : 'My Account'}</h2>
+                    <h2 className="truncate text-heading text-text-primary">{user ? resolveDisplayName(user) : 'My account'}</h2>
                     <p className="mt-0.5 text-body text-text-secondary">
                       Manage your profile, security, and how you sign in.
                     </p>
@@ -1120,7 +1120,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                     </div>
                   </div>
                   <div className="mt-5">
-                    <Button loading={saving} onClick={() => void saveProfile()}>Save Profile</Button>
+                    <Button loading={saving} onClick={() => void saveProfile()}>Save profile</Button>
                   </div>
                 </section>
 
@@ -1162,7 +1162,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                         onClick={() => void submitEmailChange()}
                         disabled={!emailCurrentPassword.trim() || !accountNewEmail.trim()}
                       >
-                        Update Email
+                        Update email
                       </Button>
                     </div>
                   </div>
@@ -1215,7 +1215,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                           !accountConfirmPassword.trim()
                         }
                       >
-                        Update Password
+                        Update password
                       </Button>
                     </div>
                   </div>
@@ -1533,7 +1533,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </section>
 
                 <div className="mt-8">
-                  <Button loading={saving} onClick={() => void saveSettings()}>Save Appearance</Button>
+                  <Button loading={saving} onClick={() => void saveSettings()}>Save appearance</Button>
                 </div>
               </div>
             )}
@@ -1541,7 +1541,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
             {activeSection === 'voice' && (
               <div>
                 <SettingsHeader
-                  title="Voice & Video"
+                  title="Voice & video"
                   description="Choose your devices and how your mic behaves in calls."
                 />
                 <section>
@@ -1638,7 +1638,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                       <div className="text-label text-text-primary">How your mic activates</div>
                       <p className="mt-0.5 text-meta text-text-secondary">
                         {voiceInputMode === 'push_to_talk'
-                          ? 'Set your Push to Talk key under Keybinds. You start muted — hold the key to speak.'
+                          ? 'Set your Push to talk key under Keybinds. You start muted — hold the key to speak.'
                           : 'Your mic opens automatically when you speak.'}
                       </p>
                     </div>
@@ -1646,8 +1646,8 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                       value={voiceInputMode}
                       onChange={(mode) => setNotifications((prev) => ({ ...prev, voiceInputMode: mode }))}
                       options={[
-                        { value: 'voice_activity', label: 'Voice Activity' },
-                        { value: 'push_to_talk', label: 'Push to Talk' },
+                        { value: 'voice_activity', label: 'Voice activity' },
+                        { value: 'push_to_talk', label: 'Push to talk' },
                       ]}
                     />
                   </div>
@@ -1708,7 +1708,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                       });
                     }}
                   >
-                    Save Voice Settings
+                    Save voice settings
                   </Button>
                 </div>
               </div>
@@ -1771,7 +1771,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </section>
 
                 <div className="mt-8">
-                  <Button loading={saving} onClick={() => void saveSettings()}>Save Notifications</Button>
+                  <Button loading={saving} onClick={() => void saveSettings()}>Save notifications</Button>
                 </div>
               </div>
             )}
@@ -1779,7 +1779,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
             {activeSection === 'activity' && (
               <div>
                 <SettingsHeader
-                  title="Activity Privacy"
+                  title="Activity privacy"
                   description="Control what Paracord shares about the apps and games you use."
                 />
                 <section>
@@ -1835,7 +1835,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </section>
 
                 <div className="mt-8">
-                  <Button loading={saving} onClick={() => void saveActivitySettings()}>Save Activity Privacy</Button>
+                  <Button loading={saving} onClick={() => void saveActivitySettings()}>Save activity privacy</Button>
                 </div>
               </div>
             )}
@@ -1888,7 +1888,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </section>
 
                 <div className="mt-8">
-                  <Button loading={saving} onClick={() => void saveSettings()}>Save Keybinds</Button>
+                  <Button loading={saving} onClick={() => void saveSettings()}>Save keybinds</Button>
                 </div>
               </div>
             )}
@@ -1896,7 +1896,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
             {activeSection === 'identity' && (
               <div>
                 <SettingsHeader
-                  title="Identity Portability"
+                  title="Identity portability"
                   description="Verify your key, or move your identity between Paracord servers."
                 />
 
@@ -1953,7 +1953,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                   <div className="mt-5">
                     <Button loading={exporting} onClick={() => void handleExportIdentity()}>
                       {!exporting && <Download size={16} className="mr-1.5" />}
-                      Export Identity
+                      Export identity
                     </Button>
                   </div>
                 </section>
@@ -2005,7 +2005,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                   )}
                   <div className="mt-5">
                     <Button variant="secondary" loading={importing} disabled={!importPreview} onClick={() => void handleImportIdentity()}>
-                      Import Identity
+                      Import identity
                     </Button>
                   </div>
                 </section>

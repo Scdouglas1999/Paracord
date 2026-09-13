@@ -175,7 +175,7 @@ export function BotAppCard({
           )}
           <Button variant="ghost" size="sm" onClick={onRegenerateToken}>
             <Key size={14} />
-            Regen Token
+            Regen token
           </Button>
           <Button
             variant="ghost"

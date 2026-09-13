@@ -81,7 +81,7 @@ export function AppShell() {
     if (isMobile) setSidebarCollapsed(true);
   }, [isMobile, location.pathname, setSidebarCollapsed]);
 
-  // Open User Settings from deep links like /app?settings=identity (import flow).
+  // Open User settings from deep links like /app?settings=identity (import flow).
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const section = params.get('settings');

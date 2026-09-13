@@ -298,7 +298,7 @@ async function openDeleteConfirm(messageId: string) {
   const row = document.getElementById(`msg-${messageId}`);
   expect(row).not.toBeNull();
   fireEvent.contextMenu(row!);
-  fireEvent.click(await screen.findByRole('menuitem', { name: 'Delete Message' }));
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'Delete message' }));
   return screen.findByRole('alertdialog');
 }
 

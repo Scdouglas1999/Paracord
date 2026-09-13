@@ -160,7 +160,7 @@ describe('RegisterPage', () => {
 
     await user.type(screen.getByLabelText(/Username/), 'ada');
     await user.type(screen.getByLabelText(/^Password/), password);
-    await user.type(screen.getByLabelText(/Confirm Password/), password);
+    await user.type(screen.getByLabelText(/Confirm password/), password);
     await user.click(screen.getByLabelText(/I have read and agree/));
     await user.click(screen.getByRole('button', { name: 'Continue' }));
 
@@ -175,13 +175,13 @@ describe('RegisterPage', () => {
 
     await user.type(screen.getByLabelText(/Username/), 'ada');
     await user.type(screen.getByLabelText(/^Password/), VALID_PASSWORD);
-    await user.type(screen.getByLabelText(/Confirm Password/), 'DifferentPass1!');
+    await user.type(screen.getByLabelText(/Confirm password/), 'DifferentPass1!');
     await user.click(screen.getByLabelText(/I have read and agree/));
     await user.click(screen.getByRole('button', { name: 'Continue' }));
 
     expect(await screen.findByText('Passwords do not match.')).toBeInTheDocument();
-    expect(screen.getByLabelText(/Confirm Password/)).toHaveAccessibleDescription('These passwords don’t match yet.');
-    expect(screen.getByLabelText(/Confirm Password/)).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByLabelText(/Confirm password/)).toHaveAccessibleDescription('These passwords don’t match yet.');
+    expect(screen.getByLabelText(/Confirm password/)).toHaveAttribute('aria-invalid', 'true');
     expect(mockAuthState.register).not.toHaveBeenCalled();
   });
 
@@ -192,7 +192,7 @@ describe('RegisterPage', () => {
 
     await user.type(screen.getByLabelText(/Username/), 'ada');
     await user.type(screen.getByLabelText(/^Password/), password);
-    await user.type(screen.getByLabelText(/Confirm Password/), password);
+    await user.type(screen.getByLabelText(/Confirm password/), password);
     await user.click(screen.getByLabelText(/I have read and agree/));
     await user.click(screen.getByRole('button', { name: 'Continue' }));
 
@@ -208,10 +208,10 @@ describe('RegisterPage', () => {
     renderRegisterPage();
 
     await user.type(screen.getByLabelText(/Email/), 'ada@example.test');
-    await user.type(screen.getByLabelText(/Display Name/), '  Ada Lovelace  ');
+    await user.type(screen.getByLabelText(/Display name/), '  Ada Lovelace  ');
     await user.type(screen.getByLabelText(/Username/), '  ada  ');
     await user.type(screen.getByLabelText(/^Password/), VALID_PASSWORD);
-    await user.type(screen.getByLabelText(/Confirm Password/), VALID_PASSWORD);
+    await user.type(screen.getByLabelText(/Confirm password/), VALID_PASSWORD);
     await user.click(screen.getByLabelText(/I have read and agree/));
     await user.click(screen.getByRole('button', { name: 'Continue' }));
 
@@ -238,7 +238,7 @@ describe('RegisterPage', () => {
 
     await user.type(screen.getByLabelText(/Username/), 'ada');
     await user.type(screen.getByLabelText(/^Password/), VALID_PASSWORD);
-    await user.type(screen.getByLabelText(/Confirm Password/), VALID_PASSWORD);
+    await user.type(screen.getByLabelText(/Confirm password/), VALID_PASSWORD);
     await user.click(screen.getByLabelText(/I have read and agree/));
     await user.click(screen.getByRole('button', { name: 'Continue' }));
 

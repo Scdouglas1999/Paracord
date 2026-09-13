@@ -74,7 +74,7 @@ describe('AdminPage', () => {
     expect(screen.getByRole('heading', { name: 'Access denied' })).toBeInTheDocument();
     expect(screen.queryByText('Overview panel body')).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'Go Back' }));
+    await user.click(screen.getByRole('button', { name: 'Go back' }));
 
     expect(screen.getByText('Home route')).toBeInTheDocument();
   });

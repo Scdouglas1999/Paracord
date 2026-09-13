@@ -438,7 +438,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
     { path: '/app/dms', text: /Pick up a conversation/i },
     { path: '/app/discovery', text: /Discover spaces/i },
     { path: '/app/templates', text: /Template Gallery/i },
-    { path: '/app/developers', text: /Developer Portal/i },
+    { path: '/app/developers', text: /Developer portal/i },
   ];
   for (const lazyRoute of lazyRoutes) {
     await page.goto(lazyRoute.path);
@@ -491,7 +491,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   const conversationHeader = page.locator('.chat-header');
   for (const width of [320, 390, 767, 768, 1280]) {
     await page.setViewportSize({ width, height: 800 });
-    await expect(conversationHeader.getByRole('button', { name: 'Search Messages' })).toBeVisible();
+    await expect(conversationHeader.getByRole('button', { name: 'Search messages' })).toBeVisible();
     // lantern-stage-spec §6.5: no docked member list anywhere — the people who
     // are here now are the header's lit strip, and its sheet is the only full
     // list. §7.4 puts search, pins and threads in the header; below the small
@@ -514,7 +514,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
     await actionMenu.getByRole('menuitem', { name: 'Pinned messages' }).click();
     const pinsPanel = page.getByRole('complementary', { name: 'Pinned messages' });
     await expect(pinsPanel).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Close Pinned messages panel' })).toBeInViewport();
+    await expect(page.getByRole('button', { name: 'Close pinned messages panel' })).toBeInViewport();
     if (width >= 768) {
       const activePanel = conversationHeader.getByRole('button', { name: 'Close Pinned messages', exact: true });
       await expect(activePanel).toBeInViewport();
@@ -522,7 +522,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
       if (width === 1280) await page.screenshot({ path: testInfo.outputPath('header-active-panel-desktop.png'), fullPage: true });
       await activePanel.click();
     } else {
-      await page.getByRole('button', { name: 'Close Pinned messages panel' }).click();
+      await page.getByRole('button', { name: 'Close pinned messages panel' }).click();
     }
     await expect(pinsPanel).toBeHidden();
     await expect(moreActions).toBeFocused();
@@ -556,10 +556,10 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   for (const dm of dmFixtures) {
     await page.goto(`/app/dms/${dm.id}`);
     const dmHeader = page.locator('.chat-header');
-    await expect(dmHeader.getByRole('button', { name: 'Back to Messages' })).toBeVisible();
+    await expect(dmHeader.getByRole('button', { name: 'Back to messages' })).toBeVisible();
     for (const width of [320, 390, 768, 1280]) {
       await page.setViewportSize({ width, height: 800 });
-      await expect(dmHeader.getByRole('button', { name: 'Search Messages' })).toBeInViewport();
+      await expect(dmHeader.getByRole('button', { name: 'Search messages' })).toBeInViewport();
       await expect(dmHeader.getByRole('button', { name: 'Start direct message voice call' })).toBeInViewport();
       // A group DM is a room too (§7.6): its people live in the header's strip
       // and its sheet, never in a docked list.

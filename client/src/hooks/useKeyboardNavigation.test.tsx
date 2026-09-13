@@ -11,7 +11,7 @@ import { useChannelStore } from '../stores/channelStore';
  * useKeyboardNavigation owns two flagship new-IA behaviors (layout-spec §5):
  *   (a) roving-tabindex movement across the flat sidebar row list
  *       (ArrowUp/Down/Home/End over [data-nav-index] inside [data-roving-container]),
- *   (b) the Escape precedence Command Palette → ContextPanel → narrow sidebar overlay.
+ *   (b) the Escape precedence Command palette → ContextPanel → narrow sidebar overlay.
  * These tests exercise the actual key handling so a regression (off-by-one,
  * container-selector drift, precedence reorder) fails loudly instead of shipping green.
  */
@@ -133,7 +133,7 @@ describe('useKeyboardNavigation — Mod+F search', () => {
 });
 
 describe('useKeyboardNavigation — Escape precedence (§5)', () => {
-  it('closes the Command Palette first, leaving the ContextPanel open', () => {
+  it('closes the Command palette first, leaving the ContextPanel open', () => {
     useUIStore.setState({ commandPaletteOpen: true, contextPanelMode: 'pins' });
     renderHarness();
 
