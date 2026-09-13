@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { type Mock, describe, expect, it, vi } from 'vitest';
 import type { Guild, Member, Role } from '../../types';
-import { OverviewSection, RolesSection } from './GuildSettingsSections';
+import { InvitesSection, OverviewSection, RolesSection } from './GuildSettingsSections';
 
 const guild: Guild = {
   id: 'guild-1',
@@ -264,5 +264,41 @@ describe('RolesSection', () => {
     ]) {
       expect(screen.getByText(label)).toBeTruthy();
     }
+  });
+});
+
+// ── Invites ──────────────────────────────────────────────────────────────────
+//
+// Anyone who can create an invite can open this section, but *listing* a
+// space's invites needs Manage Space. That request comes back 403, the settings
+// loader swallows it, and the section used to render "No invite links yet" —
+// which is false for every ordinary member of every space that has invites.
+
+describe('InvitesSection', () => {
+  it('says the list is out of reach rather than claiming it is empty', () => {
+    render(
+      <InvitesSection
+        invites={[]}
+        canListInvites={false}
+        onCreateInvite={vi.fn()}
+        onRevokeInvite={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('Existing links are not yours to see')).toBeTruthy();
+    expect(screen.queryByText('No invite links yet')).toBeNull();
+    // Making one is still on offer — that is why they can reach this screen.
+    expect(screen.getByRole('button', { name: /Make a link/ })).toBeTruthy();
+  });
+
+  it('keeps the genuine empty state for someone who can see the list', () => {
+    render(
+      <InvitesSection
+        invites={[]}
+        canListInvites
+        onCreateInvite={vi.fn()}
+        onRevokeInvite={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('No invite links yet')).toBeTruthy();
   });
 });

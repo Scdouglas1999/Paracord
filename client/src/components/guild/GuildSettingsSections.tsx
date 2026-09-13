@@ -845,16 +845,27 @@ export function MembersSection({
 
 interface InvitesSectionProps {
   invites: Invite[];
+  /** Whether this member may read the space's invite list at all. */
+  canListInvites: boolean;
   onCreateInvite: () => void;
   onRevokeInvite: (code: string) => void;
 }
 
-export function InvitesSection({ invites, onCreateInvite, onRevokeInvite }: InvitesSectionProps) {
+export function InvitesSection({
+  invites,
+  canListInvites,
+  onCreateInvite,
+  onRevokeInvite,
+}: InvitesSectionProps) {
   return (
     <SettingsPanel>
       <SectionHeader
         title="Invites"
-        description="Share these links to bring people in. Revoke any that leak or outlive their purpose."
+        description={
+          canListInvites
+            ? 'Share these links to bring people in. Revoke any that leak or outlive their purpose.'
+            : 'Make a link to bring people in. The full list belongs to the people who manage this space.'
+        }
         action={
           <Button onClick={onCreateInvite}>
             <Plus size={15} aria-hidden />
@@ -863,7 +874,24 @@ export function InvitesSection({ invites, onCreateInvite, onRevokeInvite }: Invi
         }
       />
       <section className="border-t border-border-subtle pt-6">
-        {invites.length === 0 ? (
+        {/* Anyone who can create an invite reaches this section, but listing a
+            space's invites needs Manage Space — that request comes back 403 and
+            leaves `invites` empty. Saying "no invite links yet" to someone who
+            simply cannot see them is a lie; say what is actually true. */}
+        {!canListInvites ? (
+          <EmptyState
+            className="!py-8"
+            icon={<LinkIcon size={20} />}
+            title="Existing links are not yours to see"
+            description="You can make a link and hand it out. Seeing every link this space has — and revoking them — needs Manage Space."
+            action={
+              <Button variant="ghost" onClick={onCreateInvite}>
+                <Plus size={15} aria-hidden />
+                Make a link
+              </Button>
+            }
+          />
+        ) : invites.length === 0 ? (
           <EmptyState
             className="!py-8"
             icon={<LinkIcon size={20} />}

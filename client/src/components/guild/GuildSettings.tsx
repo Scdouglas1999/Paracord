@@ -1259,6 +1259,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
         {activeSection === 'invites' && (
           <InvitesSection
             invites={invites}
+            canListInvites={canManageRoleSettings}
             onCreateInvite={() => void createInvite()}
             onRevokeInvite={(code) => void revokeInvite(code)}
           />
