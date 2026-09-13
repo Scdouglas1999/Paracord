@@ -87,6 +87,80 @@ async function probeServerViaTauri(serverUrl: string): Promise<{ name: string; c
   };
 }
 
+/**
+ * The target server is up and answering, but its CORS allowlist does not
+ * include this page's origin.
+ *
+ * Carried as its own error type rather than a string so the wording lives in
+ * exactly one place (`corsBlockedMessage`) and can be asserted on directly.
+ */
+export class CorsBlockedError extends Error {
+  readonly host: string;
+  readonly origin: string;
+
+  constructor(host: string, origin: string) {
+    super(corsBlockedMessage(host, origin));
+    this.name = 'CorsBlockedError';
+    this.host = host;
+    this.origin = origin;
+  }
+}
+
+/**
+ * What to tell someone whose browser was refused by the *other* server.
+ *
+ * Nothing they can do on this page fixes it — the allowlist belongs to the
+ * server they are connecting to — so the message names the host, the exact
+ * setting its operator needs, and the fact that the desktop app is unaffected.
+ * Credentialed CORS cannot reflect an arbitrary origin (that would let any
+ * website drive a signed-in user's Paracord server), so an allowlist is the
+ * only safe answer and the operator has to say the word.
+ */
+export function corsBlockedMessage(host: string, origin: string): string {
+  return (
+    `${host} doesn't allow browser connections from this origin. ` +
+    `Its operator can allow it with PARACORD_CORS_ALLOWED_ORIGINS=${origin}; ` +
+    `the desktop app is not affected.`
+  );
+}
+
+/**
+ * Decide whether a failed `fetch` was a CORS refusal rather than the server
+ * being unreachable.
+ *
+ * The browser reports both as the same opaque `TypeError: Failed to fetch` on
+ * purpose — leaking the difference would let any page probe private networks.
+ * The one legitimate way to tell them apart is to repeat the request in
+ * `no-cors` mode: the response is opaque and unreadable, but the promise only
+ * *resolves* if the request actually reached a server and got an answer back.
+ * A resolve therefore means the host is up and it was the allowlist that
+ * refused us; a reject means DNS, TLS, the firewall, or the server being down.
+ */
+export async function probeRespondsWithoutCors(serverUrl: string): Promise<boolean> {
+  try {
+    await fetch(`${serverUrl}/health`, {
+      method: 'GET',
+      mode: 'no-cors',
+      signal: AbortSignal.timeout(10_000),
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function hostOf(serverUrl: string): string {
+  try {
+    return new URL(serverUrl).host;
+  } catch {
+    return serverUrl;
+  }
+}
+
+function currentOrigin(): string {
+  return typeof window !== 'undefined' && window.location ? window.location.origin : '';
+}
+
 /** Probe /health via browser fetch (works in web builds). */
 async function probeServerViaFetch(serverUrl: string): Promise<{ name: string; canonicalServerUrl: string }> {
   let resp: Response;
@@ -100,6 +174,10 @@ async function probeServerViaFetch(serverUrl: string): Promise<{ name: string; c
       throw new Error('Connection timed out while probing server health endpoint.');
     }
     if (err instanceof TypeError) {
+      // Reachable but refused => the peer's CORS allowlist, not the network.
+      if (await probeRespondsWithoutCors(serverUrl)) {
+        throw new CorsBlockedError(hostOf(serverUrl), currentOrigin());
+      }
       throw new Error('Network request failed. Check DNS, protocol, CORS, and TLS certificate settings.');
     }
     throw err;
@@ -130,7 +208,12 @@ async function probeServer(serverUrl: string): Promise<{ name: string; canonical
   return probeServerViaFetch(serverUrl);
 }
 
-function toFriendlyConnectionError(err: unknown): string {
+export function toFriendlyConnectionError(err: unknown): string {
+  if (err instanceof CorsBlockedError) {
+    // Already the specific, actionable sentence — never fold it into the
+    // generic "network request failed" branch below.
+    return err.message;
+  }
   if (!(err instanceof Error)) {
     return 'Could not connect. Check the URL and ensure the server is running.';
   }
@@ -159,6 +242,46 @@ function toFriendlyConnectionError(err: unknown): string {
     return 'Server authentication failed. Ensure this server supports challenge-response auth and your account exists.';
   }
   return msg;
+}
+
+/**
+ * Whether an error is the browser's deliberately-opaque "something went wrong
+ * on the wire" — the shape a CORS refusal takes once it reaches JavaScript.
+ *
+ * The per-server axios client surfaces a refused preflight as `ERR_NETWORK`,
+ * exactly as it surfaces an unreachable host, so the code alone cannot tell
+ * them apart; that is what `probeRespondsWithoutCors` is for. In Tauri there
+ * is no CORS at all, so the question is never worth asking.
+ */
+function looksLikeOpaqueNetworkFailure(err: unknown): boolean {
+  if (isTauri()) return false;
+  if ((err as { code?: unknown } | null)?.code === 'ERR_NETWORK') return true;
+  if (!(err instanceof Error)) return false;
+  const lower = err.message.toLowerCase();
+  return (
+    lower.includes('network error') ||
+    lower.includes('network request failed') ||
+    lower.includes('failed to fetch')
+  );
+}
+
+/**
+ * `toFriendlyConnectionError` plus the one question a synchronous formatter
+ * cannot ask: when an opaque network failure came from a server whose URL we
+ * know, is that server actually up and merely refusing this origin?
+ *
+ * Without this, only the `/health` probe explains a CORS refusal and every
+ * later step of the connect flow (challenge-response auth, reconnecting a saved
+ * server) falls back to the generic "network request failed", which sends the
+ * operator looking at DNS and TLS for a problem that is a one-line setting on
+ * the other end.
+ */
+export async function explainConnectionFailure(err: unknown, serverUrl?: string): Promise<string> {
+  if (err instanceof CorsBlockedError) return err.message;
+  if (serverUrl && looksLikeOpaqueNetworkFailure(err) && (await probeRespondsWithoutCors(serverUrl))) {
+    return corsBlockedMessage(hostOf(serverUrl), currentOrigin());
+  }
+  return toFriendlyConnectionError(err);
 }
 
 export function ServerConnectPage() {
@@ -199,8 +322,13 @@ export function ServerConnectPage() {
       return;
     }
 
+    // Remembered across the try/catch so a failure late in the flow can still
+    // ask whether the target server is up and merely refusing this origin.
+    let probedServerUrl: string | undefined;
+
     try {
       const { serverUrl, inviteCode } = parseInput(input);
+      probedServerUrl = serverUrl;
       const parsedUrl = new URL(serverUrl);
       if (parsedUrl.protocol !== 'https:' && !(parsedUrl.protocol === 'http:' && isLocalhostHost(parsedUrl.hostname))) {
         throw new Error(
@@ -250,7 +378,7 @@ export function ServerConnectPage() {
         navigate('/app');
       }
     } catch (err) {
-      setError(toFriendlyConnectionError(err));
+      setError(await explainConnectionFailure(err, probedServerUrl));
     } finally {
       setLoading(false);
       setStatus('');
@@ -274,7 +402,7 @@ export function ServerConnectPage() {
       await gateway.connectServer(serverId);
       navigate('/app');
     } catch (err) {
-      setError(toFriendlyConnectionError(err));
+      setError(await explainConnectionFailure(err, server.url));
     } finally {
       setReconnectingId(null);
     }

@@ -77,6 +77,42 @@ This page documents support boundaries for the v2.0.0 release. Items here are no
 - Federation is disabled by default for new installs.
 - Treat federation as an explicit trust relationship. Enable it only after configuring trusted peers, signing keys, DNS/URL policy, and operational key rotation.
 - Federation media and feature parity are still evolving; validate every advertised cross-server flow in staging before enabling public federation.
+- A federation request is **addressed to the peer's `server_name`**, not to the hostname in
+  its `federation_endpoint`, and the receiver refuses anything addressed to a name it does
+  not answer to. Register a peer under the `server_name` that peer publishes at
+  `/.well-known/paracord/server`; a peer registered under a made-up name will be refused
+  with `403` and a `destination binding mismatch` warning in the receiver's log naming both
+  values. A receiver also accepts the host of its own `PARACORD_PUBLIC_URL` as an alias for
+  itself, which is what lets a pre-3.0.0 sender keep delivering during a rolling upgrade.
+
+## Multi-Server From A Browser
+
+- Adding a **second** server from a browser-served Paracord requires that server's
+  operator to allow this page's origin. The browser sends the connect probe and every
+  later API call cross-origin with credentials, and a credentialed cross-origin request
+  is only answered for an origin on the target server's allowlist. Paracord ships that
+  allowlist closed (the Tauri origins and the Vite dev servers, plus
+  `PARACORD_PUBLIC_URL`), because the alternative — reflecting whatever `Origin` arrives
+  and answering with `Access-Control-Allow-Credentials: true` — would let *any* website
+  a signed-in user visits drive their Paracord server with their cookies.
+- The fix is one setting on the **server being added**, not on the one serving the page:
+
+  ```bash
+  # On the server being added. Comma-separated; scheme + host + port, no trailing slash.
+  PARACORD_CORS_ALLOWED_ORIGINS=https://chat.example.com,http://127.0.0.1:18240
+  ```
+
+  `PARACORD_PUBLIC_URL` is allowed automatically, so a server that already sets it accepts
+  its own origin without further configuration.
+- **The desktop app is not affected.** Tauri issues requests from a fixed
+  `tauri://localhost` origin that is always on the allowlist, so multi-server works between
+  any two reachable servers with no configuration at all. This limitation is specific to the
+  browser-served build.
+- When a browser connect is refused this way, the connect wizard now says so by name —
+  which host refused, the setting its operator needs, and that the desktop app is unaffected
+  — instead of reporting a generic network failure. It distinguishes the two by repeating the
+  probe in `no-cors` mode: a response that arrives at all proves the host is up and it was
+  the allowlist that refused.
 
 ## Scheduled Messages
 

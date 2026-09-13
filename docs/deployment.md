@@ -112,6 +112,26 @@ proxy should set it explicitly — verification and password-reset links are bui
 only from `PARACORD_PUBLIC_URL` (or headers from a trusted proxy), never from a
 client-supplied `Host` header.
 
+### Letting other Paracord servers' browser users connect to yours
+
+Paracord's multi-server sidebar lets someone signed in on one server add a second
+one. From the **desktop app** that always works: Tauri requests come from a fixed
+origin that is always allowed. From a **browser**, the connect probe and every later
+API call are cross-origin requests carrying credentials, and your server only answers
+those for an origin on its allowlist. `PARACORD_PUBLIC_URL` is on it automatically;
+add any other origin explicitly:
+
+```bash
+# Comma-separated. Scheme + host + port, no trailing slash.
+PARACORD_CORS_ALLOWED_ORIGINS=https://friends.example.org,http://127.0.0.1:18240
+```
+
+The allowlist is closed by default on purpose. Reflecting whatever `Origin` arrives
+and answering `Access-Control-Allow-Credentials: true` would let any website a
+signed-in user visits drive their Paracord server with their session, so a
+credentialed cross-origin request needs the operator to say the word. A browser user
+refused this way is told which host refused them and which setting fixes it.
+
 ## 4. PostgreSQL (optional)
 
 SQLite is the zero-config default and is fine for small communities. For sustained

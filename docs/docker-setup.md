@@ -75,6 +75,7 @@ All configuration can be overridden via environment variables in `docker-compose
 | `PARACORD_BIND_ADDRESS` | `0.0.0.0:8090` | Server listen address |
 | `PARACORD_SERVER_NAME` | `localhost` | Server hostname |
 | `PARACORD_PUBLIC_URL` | (auto-detected) | Public URL for CORS and invite links |
+| `PARACORD_CORS_ALLOWED_ORIGINS` | (empty) | Extra browser origins allowed to make credentialed cross-origin calls — needed only so users of *another* browser-served Paracord can add this server (see [known limitations](known-limitations.md#multi-server-from-a-browser)) |
 | `PARACORD_DATABASE_URL` | `sqlite:///data/paracord.db?mode=rwc` | SQLite database path |
 | `PARACORD_DATABASE_MAX_CONNECTIONS` | `20` | Max database connections |
 | `PARACORD_JWT_SECRET` | auto-generated | Not set in Docker. The server generates and persists a random secret to `/data/paracord.toml` on first run and reuses it thereafter |
