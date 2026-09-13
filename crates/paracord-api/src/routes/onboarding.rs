@@ -206,6 +206,26 @@ pub async fn update_guild_onboarding(
             MAX_ROLE_PROMPT_LEN
         )));
     }
+    // The two short labels are headings, not prose: a title and a one-line
+    // prompt, both of which the welcome gate renders for every arriving member
+    // and both of which a third-party client is free to interpolate. They take
+    // the same contract as every other label on the instance.
+    //
+    // `welcome_body` and `rules_text` are deliberately left out. They are
+    // long-form prose (2 KiB and 8 KiB), where `<` and `>` are ordinary
+    // characters — "no posting if you have < 10 messages" is a rule someone
+    // will write — and that is the same reason the validator's own contract
+    // exempts message content. Those two are protected by escaping at render.
+    for (field, value) in [
+        ("welcome_title", welcome_title.as_deref()),
+        ("role_prompt", role_prompt.as_deref()),
+    ] {
+        if value.is_some_and(paracord_util::validation::contains_dangerous_markup) {
+            return Err(ApiError::BadRequest(format!(
+                "{field} contains unsafe markup"
+            )));
+        }
+    }
     let progressive = body.progressive_channel_min_messages.unwrap_or(0);
     if !(0..=1_000_000).contains(&progressive) {
         return Err(ApiError::BadRequest(
@@ -255,11 +275,23 @@ pub async fn update_guild_onboarding(
             // could publish a privileged or ADMINISTRATOR role and self-select
             // it via the onboarding self-service path.
             ensure_role_option_assignable(guild_owner_id, auth.user_id, actor_perms, &role)?;
+            let label = trim_opt(option.label.as_deref());
+            let description = trim_opt(option.description.as_deref());
+            for (field, value) in [
+                ("label", label.as_deref()),
+                ("description", description.as_deref()),
+            ] {
+                if value.is_some_and(paracord_util::validation::contains_dangerous_markup) {
+                    return Err(ApiError::BadRequest(format!(
+                        "role option {field} contains unsafe markup"
+                    )));
+                }
+            }
             rows.push((
                 paracord_util::snowflake::generate(1),
                 role_id,
-                trim_opt(option.label.as_deref()),
-                trim_opt(option.description.as_deref()),
+                label,
+                description,
                 option.position.unwrap_or(idx as i32),
             ));
         }

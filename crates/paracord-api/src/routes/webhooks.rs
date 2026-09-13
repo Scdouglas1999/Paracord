@@ -299,6 +299,14 @@ pub async fn create_webhook(
             "Webhook name must be between 1 and 80 characters".into(),
         ));
     }
+    // A webhook name is the *author name* every message it posts is attributed
+    // to — the single most display-shaped value in this file — so it belongs to
+    // the same contract as a bot's name, which `bots.rs` already enforces.
+    if paracord_util::validation::contains_dangerous_markup(name) {
+        return Err(ApiError::BadRequest(
+            "Webhook name contains unsafe markup".into(),
+        ));
+    }
 
     // Determine target channel: either from body or first text channel in guild
     let channel_id = if let Some(ref raw) = body.channel_id {
@@ -467,6 +475,11 @@ pub async fn update_webhook(
         if trimmed.is_empty() || trimmed.len() > 80 {
             return Err(ApiError::BadRequest(
                 "Webhook name must be between 1 and 80 characters".into(),
+            ));
+        }
+        if paracord_util::validation::contains_dangerous_markup(trimmed) {
+            return Err(ApiError::BadRequest(
+                "Webhook name contains unsafe markup".into(),
             ));
         }
     }

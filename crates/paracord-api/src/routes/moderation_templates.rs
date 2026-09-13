@@ -94,6 +94,12 @@ pub async fn create_template(
             "name must be between 1 and 100 characters".into(),
         ));
     }
+    // The template name lands in the moderator's picker, in the audit log and
+    // in the mod-log post this template emits, so it is held to the same
+    // contract as the reason text beside it.
+    if paracord_util::validation::contains_dangerous_markup(name) {
+        return Err(ApiError::BadRequest("name contains unsafe markup".into()));
+    }
     if !matches!(
         body.action_type,
         ACTION_WARN | ACTION_TIMED_MUTE | ACTION_KICK | ACTION_BAN

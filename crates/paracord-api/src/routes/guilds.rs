@@ -235,6 +235,17 @@ pub async fn create_guild(
             "Guild name must be between 2 and 100 characters".into(),
         ));
     }
+    // A space name is one of the fields `contains_dangerous_markup` names in its
+    // own contract, and the sibling route that also creates a space —
+    // `POST /templates/{id}/apply` — has always checked it. This one had not, so
+    // the *only* way to land a `<script>` space name on an instance was the
+    // front door. The name reaches every consumer that never escapes: bots, the
+    // audit log's change payload, moderation dashboards, invite previews.
+    if contains_dangerous_markup(&body.name) {
+        return Err(ApiError::BadRequest(
+            "Guild name contains unsafe markup".into(),
+        ));
+    }
 
     ensure_guild_creation_allowed(&state, auth.user_id).await?;
 
@@ -323,6 +334,9 @@ pub async fn update_guild(
     if let Some(name) = body.name.as_deref() {
         if name.len() > MAX_GUILD_NAME_LEN {
             return Err(ApiError::BadRequest("name is too long".into()));
+        }
+        if contains_dangerous_markup(name) {
+            return Err(ApiError::BadRequest("name contains unsafe markup".into()));
         }
     }
     // Measured on the raw value, which is what reaches the column below;

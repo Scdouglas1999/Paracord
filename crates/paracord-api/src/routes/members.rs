@@ -107,6 +107,13 @@ pub async fn update_member(
         if nick.chars().count() > MAX_NICK_LEN {
             return Err(ApiError::BadRequest("nick is too long".into()));
         }
+        // A nickname is the guild-scoped twin of `display_name`, which
+        // `PATCH /users/@me` has always run through this validator. It is the
+        // label every message, member list and audit-log change payload in the
+        // space carries, so it gets the same contract.
+        if paracord_util::validation::contains_dangerous_markup(nick) {
+            return Err(ApiError::BadRequest("nick contains unsafe markup".into()));
+        }
     }
     let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
         .await

@@ -164,6 +164,15 @@ fn validate_name(name: &str) -> Result<String, ApiError> {
             "Rule name must be 1-100 characters".into(),
         ));
     }
+    // The rule name is echoed in every hit row (`rule_name`), in the moderator
+    // alert posted to the alert channel, and in the audit log — the three
+    // places a moderation dashboard reads from. It belongs to the same contract
+    // as every other name field on the instance.
+    if paracord_util::validation::contains_dangerous_markup(trimmed) {
+        return Err(ApiError::BadRequest(
+            "Rule name contains unsafe markup".into(),
+        ));
+    }
     Ok(trimmed.to_string())
 }
 

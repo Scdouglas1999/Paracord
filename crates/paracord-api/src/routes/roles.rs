@@ -20,6 +20,15 @@ fn validate_role_name(name: &str) -> Result<(), ApiError> {
     if name.len() > MAX_ROLE_NAME_LEN {
         return Err(ApiError::BadRequest("Role name is too long".into()));
     }
+    // A role name is a pure display label — it is rendered next to every member
+    // who carries it, listed in the permission matrix, and copied verbatim into
+    // the audit log's change payload. Nothing about it legitimately contains
+    // markup, so it belongs to the same contract as every other name field.
+    if paracord_util::validation::contains_dangerous_markup(name) {
+        return Err(ApiError::BadRequest(
+            "Role name contains unsafe markup".into(),
+        ));
+    }
     Ok(())
 }
 

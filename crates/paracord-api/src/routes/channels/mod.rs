@@ -912,6 +912,13 @@ pub async fn create_channel(
     if body.name.chars().count() > MAX_CHANNEL_NAME_LEN {
         return Err(ApiError::BadRequest("name is too long".into()));
     }
+    // The topic beside it has always been held to this contract, and so has a
+    // forum thread's name; a room name is the same kind of value and travels
+    // further — every sidebar, mention, invite preview and audit-log change
+    // payload carries it.
+    if contains_dangerous_markup(&body.name) {
+        return Err(ApiError::BadRequest("name contains unsafe markup".into()));
+    }
     let channel_id = paracord_util::snowflake::generate(1);
     let required_role_ids = match body.required_role_ids.as_deref() {
         Some(raw_role_ids) => {
@@ -976,6 +983,9 @@ pub async fn update_channel(
     if let Some(name) = body.name.as_deref() {
         if name.chars().count() > MAX_CHANNEL_NAME_LEN {
             return Err(ApiError::BadRequest("name is too long".into()));
+        }
+        if contains_dangerous_markup(name) {
+            return Err(ApiError::BadRequest("name contains unsafe markup".into()));
         }
     }
     // Measured on the raw value, which is what reaches the column; checking
