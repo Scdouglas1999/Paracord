@@ -7,6 +7,7 @@ pub mod file_transfer;
 pub mod protocol;
 pub mod stream;
 pub mod webtransport;
+pub mod wire_id;
 
 use std::sync::OnceLock;
 

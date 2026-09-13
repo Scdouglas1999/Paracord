@@ -661,8 +661,13 @@ pub async fn join_voice(
 
         let issued_at = chrono::Utc::now().timestamp();
         let media_claims = json!({
-            // paracord-transport::connection::MediaClaims expects a numeric sub.
-            "sub": auth.user_id,
+            // A snowflake is past 2^53, so it crosses the wire as a string:
+            // `JSON.parse` on a bare number silently rounds it, and the browser
+            // engine compares this `sub` against the participant ids the media
+            // control plane sends. A rounded one made the client treat its own
+            // seat in the room as somebody else's. `MediaClaims` and the
+            // WebTransport auth path both read either shape.
+            "sub": auth.user_id.to_string(),
             // Keep canonical claim names used by the transport layer.
             "sid": &session_id,
             "auth_sid": auth.session_id.as_deref(),

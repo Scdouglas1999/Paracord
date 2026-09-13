@@ -190,6 +190,18 @@ interface VideoSubscription {
   stop?: () => void;
 }
 
+/**
+ * One participant, exactly as the media control plane writes it
+ * (`paracord_transport::control::SessionParticipant`, camelCase, with the
+ * snowflake quoted). Reading it as snake_case left every id empty, so no remote
+ * participant was ever materialized and no remote audio was ever decoded.
+ */
+interface SessionParticipantWire {
+  userId?: string | number;
+  sessionId?: string;
+  videoCapabilities?: SessionParticipantCapabilities['videoCapabilities'];
+}
+
 interface SessionParticipantCapabilities {
   userId: string;
   sessionId: string;
@@ -201,6 +213,30 @@ interface SessionParticipantCapabilities {
     encodeHardware: boolean;
     decodeHardware: boolean;
   }>;
+}
+
+/**
+ * Read one participant off the media control plane.
+ *
+ * The server writes `paracord_transport::control::SessionParticipant` in
+ * camelCase with the snowflake quoted. Reading it as snake_case yielded an
+ * empty id for every participant, so no remote participant state was ever
+ * created and no remote audio was ever decoded — a call that connected and
+ * stayed silent. Returns `null` for a participant with no usable id.
+ */
+export function readSessionParticipantWire(
+  raw: unknown,
+): SessionParticipantCapabilities | null {
+  const participant = (raw ?? undefined) as SessionParticipantWire | undefined;
+  const userId = String(participant?.userId ?? '');
+  if (!userId) return null;
+  return {
+    userId,
+    sessionId: String(participant?.sessionId ?? ''),
+    videoCapabilities: Array.isArray(participant?.videoCapabilities)
+      ? participant.videoCapabilities
+      : [],
+  };
 }
 
 let browserStreamCapabilitiesPromise: Promise<MediaStreamCapabilities> | null = null;
@@ -2043,23 +2079,13 @@ export class BrowserMediaEngine implements MediaEngine {
         const desiredCapabilities = new Map<string, SessionParticipantCapabilities>();
         const recipientUserIds: string[] = [];
         for (const rawParticipant of participants) {
-          const userId = String((rawParticipant as { user_id?: string | number }).user_id ?? '');
-          if (!userId || userId === String(this.localUserId ?? '')) {
+          const participant = readSessionParticipantWire(rawParticipant);
+          if (!participant || participant.userId === String(this.localUserId ?? '')) {
             continue;
           }
-          const sessionId = String((rawParticipant as { session_id?: string }).session_id ?? '');
-          const videoCapabilities = Array.isArray(
-            (rawParticipant as { video_capabilities?: unknown[] }).video_capabilities,
-          )
-            ? ((rawParticipant as { video_capabilities?: SessionParticipantCapabilities['videoCapabilities'] })
-                .video_capabilities ?? [])
-            : [];
+          const userId = participant.userId;
           desired.add(userId);
-          desiredCapabilities.set(userId, {
-            userId,
-            sessionId,
-            videoCapabilities,
-          });
+          desiredCapabilities.set(userId, participant);
           if (!this.sessionParticipantIds.has(userId)) {
             this.ensureRemoteParticipantState(userId);
             this.participantJoinCb?.(userId);
@@ -2090,26 +2116,15 @@ export class BrowserMediaEngine implements MediaEngine {
         break;
       }
       case 'session_participant_join': {
-        const participant =
-          (msg.participant as {
-            user_id?: string | number;
-            session_id?: string;
-            video_capabilities?: SessionParticipantCapabilities['videoCapabilities'];
-          } | undefined) ?? undefined;
-        const userId = String(participant?.user_id ?? '');
-        if (!userId || userId === String(this.localUserId ?? '')) {
+        const participant = readSessionParticipantWire(msg.participant);
+        if (!participant || participant.userId === String(this.localUserId ?? '')) {
           break;
         }
-        const receipt = String(participant?.session_id ?? '');
+        const userId = participant.userId;
+        const receipt = participant.sessionId;
         if (this.sessionParticipantCapabilities.get(userId)?.sessionId === receipt && this.sessionParticipantIds.has(userId)) break;
         this.sessionParticipantIds.add(userId);
-        this.sessionParticipantCapabilities.set(userId, {
-          userId,
-          sessionId: String(participant?.session_id ?? ''),
-          videoCapabilities: Array.isArray(participant?.video_capabilities)
-            ? participant!.video_capabilities!
-            : [],
-        });
+        this.sessionParticipantCapabilities.set(userId, participant);
         void this.reconcileActivePublishCodecs().catch(() => {});
         this.ensureRemoteParticipantState(userId);
         this.participantJoinCb?.(userId);
@@ -2983,11 +2998,15 @@ export class BrowserMediaEngine implements MediaEngine {
     rawKey: Uint8Array,
     epoch: number,
     recipientUserIds: string[],
-  ): Promise<Array<[number, number[]]>> {
+  ): Promise<Array<[string, number[]]>> {
     const wrapped = await wrapSenderKeyForRecipients(scope, rawKey, epoch, recipientUserIds, this.account);
     this.assertOpen();
+    // The recipient is a snowflake, so it stays a string all the way to the
+    // wire. `Number(...)` here rounded every id past 2^53 to a neighbouring
+    // value, and the server then delivered each wrapped key to an account that
+    // does not exist — nobody could decrypt anybody.
     return wrapped.map(
-      (entry) => [Number(entry.recipientUserId), Array.from(entry.wrapped)] as [number, number[]],
+      (entry) => [String(entry.recipientUserId), Array.from(entry.wrapped)] as [string, number[]],
     );
   }
 

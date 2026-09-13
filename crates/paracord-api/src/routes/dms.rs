@@ -501,7 +501,9 @@ pub async fn join_dm_voice(
 
         let issued_at = chrono::Utc::now().timestamp();
         let media_claims = json!({
-            "sub": auth.user_id,
+            // A string, for the reason `voice::join_voice` gives: a snowflake
+            // does not survive `JSON.parse` as a bare number.
+            "sub": auth.user_id.to_string(),
             "sid": &session_id,
             "auth_sid": auth.session_id.as_deref(),
             "iat": issued_at,

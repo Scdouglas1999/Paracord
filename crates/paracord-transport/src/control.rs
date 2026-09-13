@@ -41,6 +41,7 @@ impl From<TrackKind> for TrackType {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionParticipant {
+    #[serde(with = "crate::wire_id")]
     pub user_id: i64,
     pub session_id: String,
     #[serde(default)]
@@ -55,10 +56,18 @@ pub enum ControlMessage {
     Auth { token: String },
 
     /// Subscribe to a user's media track.
-    Subscribe { user_id: i64, track_type: TrackKind },
+    Subscribe {
+        #[serde(with = "crate::wire_id")]
+        user_id: i64,
+        track_type: TrackKind,
+    },
 
     /// Unsubscribe from a user's media track.
-    Unsubscribe { user_id: i64, track_type: TrackKind },
+    Unsubscribe {
+        #[serde(with = "crate::wire_id")]
+        user_id: i64,
+        track_type: TrackKind,
+    },
 
     /// Client joins a specific stream-capable media session.
     SessionJoin {
@@ -81,6 +90,7 @@ pub enum ControlMessage {
 
     /// One participant left the active media session.
     SessionParticipantLeave {
+        #[serde(with = "crate::wire_id")]
         user_id: i64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         session_id: Option<String>,
@@ -127,11 +137,13 @@ pub enum ControlMessage {
     /// `encrypted_keys` maps (recipient_user_id, ciphertext).
     KeyAnnounce {
         epoch: u8,
+        #[serde(with = "crate::wire_id::pairs")]
         encrypted_keys: Vec<(i64, Vec<u8>)>,
     },
 
     /// Deliver an encryption key to a subscriber.
     KeyDeliver {
+        #[serde(with = "crate::wire_id")]
         sender_user_id: i64,
         epoch: u8,
         ciphertext: Vec<u8>,
@@ -143,6 +155,7 @@ pub enum ControlMessage {
         track_id: TrackId,
         codec: Option<VideoCodec>,
         epoch: u8,
+        #[serde(with = "crate::wire_id::pairs")]
         encrypted_keys: Vec<(i64, Vec<u8>)>,
     },
 
@@ -150,6 +163,7 @@ pub enum ControlMessage {
     StreamKeyDeliver {
         stream_id: StreamId,
         track_id: TrackId,
+        #[serde(with = "crate::wire_id")]
         sender_user_id: i64,
         epoch: u8,
         ciphertext: Vec<u8>,
@@ -160,6 +174,7 @@ pub enum ControlMessage {
     RequestStreamKey {
         stream_id: StreamId,
         track_id: TrackId,
+        #[serde(with = "crate::wire_id")]
         recipient_user_id: i64,
     },
 
@@ -617,6 +632,97 @@ impl Default for StreamFrameCodec {
 mod tests {
     use super::*;
     use crate::stream::VideoCodecCapability;
+
+    /// A snowflake past 2^53 does not survive `JSON.parse` as a bare number,
+    /// and the browser engine matches these ids against its own. Every id on
+    /// the control plane therefore travels quoted, and reads back from either
+    /// shape so a peer on the older wire still parses.
+    #[test]
+    fn every_control_plane_snowflake_travels_as_a_string() {
+        const BIG: i64 = 357_608_638_640_033_792;
+
+        let state = ControlMessage::SessionState {
+            participants: vec![SessionParticipant {
+                user_id: BIG,
+                session_id: "receipt".into(),
+                video_capabilities: Vec::new(),
+            }],
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(
+            json.contains("\"userId\":\"357608638640033792\""),
+            "participant id must be a quoted snowflake: {json}"
+        );
+        assert_eq!(
+            serde_json::from_str::<ControlMessage>(&json).unwrap(),
+            state
+        );
+
+        let announce = ControlMessage::KeyAnnounce {
+            epoch: 3,
+            encrypted_keys: vec![(BIG, vec![7, 8, 9])],
+        };
+        let json = serde_json::to_string(&announce).unwrap();
+        assert!(
+            json.contains("\"357608638640033792\""),
+            "key recipient must be a quoted snowflake: {json}"
+        );
+        assert_eq!(
+            serde_json::from_str::<ControlMessage>(&json).unwrap(),
+            announce
+        );
+
+        let leave = ControlMessage::SessionParticipantLeave {
+            user_id: BIG,
+            session_id: None,
+        };
+        let json = serde_json::to_string(&leave).unwrap();
+        assert!(json.contains("\"357608638640033792\""), "{json}");
+        assert_eq!(
+            serde_json::from_str::<ControlMessage>(&json).unwrap(),
+            leave
+        );
+
+        let deliver = ControlMessage::KeyDeliver {
+            sender_user_id: BIG,
+            epoch: 1,
+            ciphertext: vec![1],
+        };
+        let json = serde_json::to_string(&deliver).unwrap();
+        assert!(json.contains("\"357608638640033792\""), "{json}");
+        assert_eq!(
+            serde_json::from_str::<ControlMessage>(&json).unwrap(),
+            deliver
+        );
+    }
+
+    /// A peer still speaking the old wire (bare numbers) keeps parsing.
+    #[test]
+    fn a_numeric_snowflake_from_an_older_peer_still_parses() {
+        let legacy = r#"{"type":"session_state","participants":[{"userId":357608638640033792,"sessionId":"r","videoCapabilities":[]}]}"#;
+        let decoded: ControlMessage = serde_json::from_str(legacy).unwrap();
+        assert_eq!(
+            decoded,
+            ControlMessage::SessionState {
+                participants: vec![SessionParticipant {
+                    user_id: 357_608_638_640_033_792,
+                    session_id: "r".into(),
+                    video_capabilities: Vec::new(),
+                }],
+            }
+        );
+
+        let legacy =
+            r#"{"type":"key_announce","epoch":2,"encrypted_keys":[[357608638640033792,[1,2]]]}"#;
+        let decoded: ControlMessage = serde_json::from_str(legacy).unwrap();
+        assert_eq!(
+            decoded,
+            ControlMessage::KeyAnnounce {
+                epoch: 2,
+                encrypted_keys: vec![(357_608_638_640_033_792, vec![1, 2])],
+            }
+        );
+    }
 
     #[test]
     fn auth_round_trip() {

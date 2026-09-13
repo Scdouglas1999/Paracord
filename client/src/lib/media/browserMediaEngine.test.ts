@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildStreamFrameMessage,
   parseStreamFrameMessage,
+  readSessionParticipantWire,
   shouldSendVideoFrameOnStream,
   STREAM_FRAGMENT_THRESHOLD,
 } from './browserMediaEngine';
@@ -101,5 +102,45 @@ describe('setSourceVolume gain clamping', () => {
     expect(clamp(0.5)).toBe(0.5);
     expect(clamp(2)).toBe(2);
     expect(clamp(3)).toBe(2);
+  });
+});
+
+describe('readSessionParticipantWire (media control plane)', () => {
+  it('reads the camelCase shape the server actually writes', () => {
+    // `paracord_transport::control::SessionParticipant` is
+    // `#[serde(rename_all = "camelCase")]`. Reading snake_case produced an
+    // empty id for every participant, so no remote participant was ever
+    // created and the call stayed silent.
+    expect(
+      readSessionParticipantWire({
+        userId: '357608638640033792',
+        sessionId: 'receipt-1',
+        videoCapabilities: [
+          { codec: 'vp9', encode: true, decode: true, encodeHardware: false, decodeHardware: false },
+        ],
+      }),
+    ).toEqual({
+      userId: '357608638640033792',
+      sessionId: 'receipt-1',
+      videoCapabilities: [
+        { codec: 'vp9', encode: true, decode: true, encodeHardware: false, decodeHardware: false },
+      ],
+    });
+  });
+
+  it('keeps a quoted snowflake exact', () => {
+    // 357608638640033792 read as a JSON number comes back 357608638640033800.
+    const participant = readSessionParticipantWire({
+      userId: '357608638640033792',
+      sessionId: 'r',
+    });
+    expect(participant?.userId).toBe('357608638640033792');
+    expect(participant?.videoCapabilities).toEqual([]);
+  });
+
+  it('ignores a participant with no id rather than materialising an empty one', () => {
+    expect(readSessionParticipantWire({ sessionId: 'r' })).toBeNull();
+    expect(readSessionParticipantWire(undefined)).toBeNull();
+    expect(readSessionParticipantWire({ user_id: '1' })).toBeNull();
   });
 });

@@ -117,6 +117,7 @@ pub struct PublishedLayer {
 pub struct PublishedTrack {
     pub stream_id: StreamId,
     pub track_id: TrackId,
+    #[serde(with = "crate::wire_id")]
     pub publisher_user_id: i64,
     pub kind: TrackKind,
     #[serde(skip_serializing_if = "Option::is_none")]

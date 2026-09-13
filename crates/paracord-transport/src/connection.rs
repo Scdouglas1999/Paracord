@@ -27,6 +27,9 @@ pub enum ConnectionMode {
 /// JWT claims for media transport authentication.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MediaClaims {
+    /// The account. Written as a string (see [`crate::wire_id`]) and read from
+    /// either shape, so a token minted by an older server still validates.
+    #[serde(with = "crate::wire_id")]
     pub sub: i64,
     pub exp: usize,
     pub iat: usize,
