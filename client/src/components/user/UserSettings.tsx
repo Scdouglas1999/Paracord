@@ -29,7 +29,7 @@ import {
   isAdvancedMediaDevice,
   systemDefaultOptionLabel,
 } from '../../lib/media/deviceLabels';
-import { APP_NAME } from '../../lib/constants';
+import { APP_NAME, APP_VERSION } from '../../lib/constants';
 import { hasAccount as hasLocalCryptoAccount } from '../../lib/account';
 import { isAdmin } from '../../types';
 import { adminApi } from '../../api/admin';
@@ -2071,7 +2071,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 <section>
                   <div className="flex items-baseline justify-between gap-4 border-b border-border-subtle pb-4">
                     <div className="font-display text-title text-text-primary">{APP_NAME}</div>
-                    <div className="font-code text-meta text-text-muted">Version 0.4.0</div>
+                    <div className="font-code text-meta text-text-muted">Version {APP_VERSION}</div>
                   </div>
                   <p className="mt-5 max-w-xl text-body text-text-secondary">
                     A decentralized, self-hostable Discord alternative built with Rust, Tauri, and React — with its own

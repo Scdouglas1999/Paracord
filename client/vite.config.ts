@@ -1,7 +1,16 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { VitePWA } from "vite-plugin-pwa";
+
+// The one version the app ships with. About used to carry a literal that had
+// drifted four major versions behind the build, so the screen that exists to
+// answer "what am I running?" answered wrong.
+const appVersion: string = JSON.parse(
+  readFileSync(fileURLToPath(new URL("./package.json", import.meta.url)), "utf8"),
+).version;
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
@@ -51,6 +60,9 @@ export default defineConfig(({ mode }) => {
     // code-split (manualChunks + vite-plugin-pwa). Emit ES modules to match.
     worker: {
       format: "es",
+    },
+    define: {
+      __APP_VERSION__: JSON.stringify(appVersion),
     },
     server: {
       port: 1420,

@@ -75,6 +75,31 @@ describe('serverListStore', () => {
     });
   });
 
+  // Every API response marks its server reachable. When that wrote a new
+  // `servers` array regardless, it woke every subscriber of this store dozens of
+  // times per screen — and on the desktop one of those subscribers makes the
+  // shell issue a real `/health` request per server before the app may talk.
+  it('does not notify subscribers when reachability is already what it says', () => {
+    const id = useServerListStore.getState().addServer('https://a.example.com', 'A');
+    useServerListStore.getState().setApiReachable(id, true);
+    const before = useServerListStore.getState().servers;
+
+    const seen = vi.fn();
+    const stop = useServerListStore.subscribe(seen);
+    useServerListStore.getState().setApiReachable(id, true);
+    stop();
+
+    expect(seen).not.toHaveBeenCalled();
+    expect(useServerListStore.getState().servers).toBe(before);
+  });
+
+  it('still records a reachability change', () => {
+    const id = useServerListStore.getState().addServer('https://a.example.com', 'A');
+    useServerListStore.getState().setApiReachable(id, true);
+    useServerListStore.getState().setApiReachable(id, false);
+    expect(useServerListStore.getState().servers[0].apiReachable).toBe(false);
+  });
+
   it('requires a fresh authenticated profile when reconnect supplies a different credential', () => {
     const store = useServerListStore.getState();
     const id = store.addServer('https://example.test', 'A', 'old-token');

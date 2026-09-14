@@ -217,12 +217,20 @@ export const useServerListStore = create<ServerListState>()(
           ),
         })),
 
+      // Called on the response to every API request, so it has to be free when
+      // nothing changed: a fresh `servers` array here wakes every subscriber of
+      // this store — including the desktop shell's trusted-host sync — dozens of
+      // times per screen for a value that stayed the same.
       setApiReachable: (id, apiReachable) =>
-        set((state) => ({
-          servers: state.servers.map((s) =>
-            s.id === id ? { ...s, apiReachable } : s
-          ),
-        })),
+        set((state) => {
+          const current = state.servers.find((s) => s.id === id);
+          if (!current || current.apiReachable === apiReachable) return state;
+          return {
+            servers: state.servers.map((s) =>
+              s.id === id ? { ...s, apiReachable } : s
+            ),
+          };
+        }),
 
       markHydrated: () => set({ hydrated: true }),
 

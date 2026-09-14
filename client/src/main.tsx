@@ -29,10 +29,23 @@ if (isTauri() && 'serviceWorker' in navigator) {
     });
 }
 
-// Desktop-only: ask Rust to verify and sync trusted server hosts on startup and whenever the list changes
+// Desktop-only: ask Rust to verify and sync trusted server hosts on startup and
+// whenever the list of URLs changes.
+//
+// "Whenever the list changes" has to mean the URLs, not the store. Every
+// serverListStore write — and `setApiReachable` runs one on the response to
+// EVERY API call — used to re-enter this, and each entry makes the shell issue
+// a real `/health` request per server before it will talk. One click on a room
+// became a dozen extra round-trips to the server, all of them ahead of the data
+// the screen was waiting for. Compare the URLs and do nothing when they are the
+// same list.
 if (isTauri()) {
+  let syncedUrls = '';
   const syncHosts = () => {
     const urls = useServerListStore.getState().servers.map((s) => s.url);
+    const key = JSON.stringify(urls);
+    if (key === syncedUrls) return;
+    syncedUrls = key;
     void syncTrustedHosts(urls);
   };
   syncHosts();

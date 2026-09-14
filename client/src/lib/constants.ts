@@ -1,4 +1,7 @@
 export const APP_NAME = 'Paracord';
+/** The build's own version (vite `define`), so About can never drift. */
+export const APP_VERSION =
+  typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '0.0.0-dev';
 export const API_VERSION = 'v1';
 export const MAX_MESSAGE_LENGTH = 2000;
 export const MAX_GUILD_NAME_LENGTH = 100;
