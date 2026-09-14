@@ -1,5 +1,12 @@
 import { resolve } from 'node:path';
-import { expect, test, type APIRequestContext, type Browser, type Page } from '@playwright/test';
+import {
+  expect,
+  test,
+  type APIRequestContext,
+  type Browser,
+  type Locator,
+  type Page,
+} from '@playwright/test';
 
 // The end-to-end proof that a *browser* can hold a call on the native media
 // transport. Nothing here is mocked or stubbed: Chromium loads the embedded UI
@@ -38,11 +45,17 @@ function shotPath(name: string): string {
 }
 
 const MEDIA_LAUNCH_ARGS = [
-  // A deterministic 440 Hz capture device, auto-granted, so the microphone step
-  // does not depend on the runner having hardware.
+  // A deterministic 440 Hz tone and a moving colour pattern, auto-granted, so
+  // neither the microphone nor the camera step depends on the runner having
+  // hardware.
   '--use-fake-device-for-media-stream',
   '--use-fake-ui-for-media-stream',
   '--autoplay-policy=no-user-gesture-required',
+  // `getDisplayMedia` has no picker to click in a headless browser: these take
+  // the asking tab, which is the closest thing to a real share available here
+  // and gives a genuinely changing picture (the Paracord UI itself).
+  '--auto-accept-this-tab-capture',
+  '--auto-select-desktop-capture-source=Entire screen',
 ];
 
 type PlaywrightFixture = {
@@ -155,6 +168,156 @@ async function waitForAudiblePlayback(
 }
 
 /**
+ * The same standard, one layer up: count the `VideoDecoder`s this page builds
+ * and the frames they actually emit.
+ *
+ * This is the assertion the first two QA passes did not make, and the one that
+ * caught the blocker. A publisher's camera and screen share were counted at the
+ * relay in their thousands of datagrams, the sidebar said "X is on camera", and
+ * the receiving browser built 346 `VideoDecoder`s that between them decoded
+ * **zero** frames — because a VP9 decoder cannot emit anything until it has a
+ * keyframe, and keyframes ride reliable unidirectional streams that the server
+ * was never accepting.
+ */
+const VIDEO_PROBE = () => {
+  const probe = {
+    decoders: 0,
+    decodedFrames: 0,
+    keyChunks: 0,
+    deltaChunks: 0,
+    errors: 0,
+  };
+  (window as unknown as { __paracordVideoProbe: typeof probe }).__paracordVideoProbe = probe;
+
+  const NativeVideoDecoder = (window as unknown as { VideoDecoder?: typeof VideoDecoder })
+    .VideoDecoder;
+  if (!NativeVideoDecoder) return;
+  const nativeDecode = NativeVideoDecoder.prototype.decode;
+  NativeVideoDecoder.prototype.decode = function patchedDecode(
+    this: VideoDecoder,
+    chunk: EncodedVideoChunk,
+  ) {
+    if (chunk.type === 'key') probe.keyChunks += 1;
+    else probe.deltaChunks += 1;
+    return nativeDecode.call(this, chunk);
+  };
+  (window as unknown as { VideoDecoder: unknown }).VideoDecoder = class extends (
+    NativeVideoDecoder
+  ) {
+    constructor(init: VideoDecoderInit) {
+      super({
+        ...init,
+        output: (frame: VideoFrame) => {
+          probe.decodedFrames += 1;
+          init.output(frame);
+        },
+        error: (error: DOMException) => {
+          probe.errors += 1;
+          init.error(error);
+        },
+      });
+      probe.decoders += 1;
+    }
+  };
+};
+
+interface VideoProbe {
+  decoders: number;
+  decodedFrames: number;
+  keyChunks: number;
+  deltaChunks: number;
+  errors: number;
+}
+
+async function readVideoProbe(page: Page): Promise<VideoProbe> {
+  return page.evaluate(
+    () =>
+      (window as unknown as { __paracordVideoProbe?: VideoProbe }).__paracordVideoProbe ?? {
+        decoders: 0,
+        decodedFrames: 0,
+        keyChunks: 0,
+        deltaChunks: 0,
+        errors: 0,
+      },
+  );
+}
+
+/** Poll until every page has decoded `minimumFrames` of somebody else's video. */
+async function waitForDecodedVideo(
+  pages: Array<{ label: string; page: Page }>,
+  minimumFrames: number,
+  timeoutMs = 90_000,
+): Promise<Map<string, VideoProbe>> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const latest = new Map(
+      await Promise.all(
+        pages.map(async ({ label, page }) => [label, await readVideoProbe(page)] as const),
+      ),
+    );
+    if (Array.from(latest.values()).every((probe) => probe.decodedFrames >= minimumFrames)) {
+      return latest;
+    }
+    if (Date.now() > deadline) {
+      const detail = Array.from(latest.entries())
+        .map(
+          ([label, probe]) =>
+            `${label}: decoders=${probe.decoders} frames=${probe.decodedFrames} ` +
+            `keyChunks=${probe.keyChunks} deltaChunks=${probe.deltaChunks} errors=${probe.errors}`,
+        )
+        .join('; ');
+      throw new Error(`remote video was never decoded (${detail})`);
+    }
+    await pages[0].page.waitForTimeout(1_000);
+  }
+}
+
+/**
+ * How much of a tile is actually lit, and how many colours are in it.
+ *
+ * A tile painting somebody's camera is a picture; a tile that is not is the
+ * well colour with an avatar disc on it. Screenshotting the tile and measuring
+ * what the compositor produced is the only readback that works here: the
+ * renderer's WebGL context is created with `preserveDrawingBuffer: false`, so
+ * reading the canvas from inside the page gives a cleared buffer.
+ *
+ * The screenshot comes back as PNG bytes, and the browser under test is the
+ * nearest PNG decoder — it hands them straight back as pixels.
+ */
+async function tileBrightness(
+  page: Page,
+  locator: Locator,
+): Promise<{ litFraction: number; distinctColours: number }> {
+  const png = (await locator.screenshot()).toString('base64');
+  return page.evaluate(async (base64: string) => {
+    // Straight to a Blob: the app serves itself under a strict CSP, so a
+    // `fetch('data:…')` for the screenshot is refused before it is a picture.
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+    const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('no 2d context to measure the tile with');
+    context.drawImage(bitmap, 0, 0);
+    const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
+    const pixels = canvas.width * canvas.height;
+    const colours = new Set<number>();
+    let lit = 0;
+    for (let index = 0; index < pixels; index += 1) {
+      const offset = index * 4;
+      const [r, g, b] = [data[offset], data[offset + 1], data[offset + 2]];
+      // Rec. 601 luma, near enough for "is there a picture here".
+      if (0.299 * r + 0.587 * g + 0.114 * b > 24) lit += 1;
+      colours.add(((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3));
+    }
+    return { litFraction: pixels === 0 ? 0 : lit / pixels, distinctColours: colours.size };
+  }, png);
+}
+
+/**
  * Playwright refuses per-test `launchOptions`, and these cases need the fake
  * capture device, so each launches its own browser (same shape as
  * real-server.voice-check.spec.ts). `body` receives a factory so a case can
@@ -171,6 +334,7 @@ async function withChromium(
       const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
       await context.grantPermissions(['microphone', 'camera'], { origin: BASE });
       await context.addInitScript(AUDIO_PROBE);
+      await context.addInitScript(VIDEO_PROBE);
       context.setDefaultTimeout(30_000);
       const page = await context.newPage();
       pages.push(page);
@@ -193,6 +357,10 @@ async function withChromium(
 
 interface Account {
   email: string;
+  /** The display name on this account's tile. */
+  username: string;
+  /** The snowflake the Stage marks this person's tile with. */
+  userId: string;
   password: string;
   token: string;
   csrf: string;
@@ -226,7 +394,14 @@ async function register(api: APIRequestContext): Promise<Account> {
   const cookies = (await api.storageState()).cookies;
   const csrf = cookies.find((cookie) => cookie.name === 'paracord_csrf')?.value;
   expect(csrf, 'register should set a readable paracord_csrf cookie').toBeTruthy();
-  return { email, password, token: body.token as string, csrf: csrf! };
+  return {
+    email,
+    username,
+    userId: String(body.user.id),
+    password,
+    token: body.token as string,
+    csrf: csrf!,
+  };
 }
 
 /** Create the space and its voice room over REST — the UI paths for both are
@@ -324,8 +499,15 @@ interface RelayParticipant {
   session_id: string;
   transport: string;
   datagrams_received: number;
+  datagrams_sent: number;
   audio_datagrams_received: number;
+  video_datagrams_received: number;
+  /** Whole keyframe frames the relay accepted on this connection's uni streams. */
+  stream_frames_received: number;
+  /** …and forwarded to it on fresh uni streams. */
+  stream_frames_sent: number;
   bytes_received: number;
+  bytes_sent: number;
 }
 
 interface RelayRoom {
@@ -670,5 +852,228 @@ test('a participant who closes their tab stops being in the room for everyone el
     await signIn(bystander, bystanderAccount);
     await bystander.goto(`${BASE}/app/guilds/${guildId}/channels/${channelId}`);
     await expect(bystander.getByText('In this room — 1')).toBeVisible({ timeout: 30_000 });
+  });
+});
+
+/**
+ * Set a room up with two signed-in members already in the call, and hand back
+ * the pair. Every video case needs exactly this preamble.
+ */
+async function twoInOneRoom(
+  newParticipant: () => Promise<Page>,
+): Promise<{
+  host: Page;
+  guest: Page;
+  hostAccount: Account;
+  guestAccount: Account;
+  guildId: string;
+  channelId: string;
+}> {
+  const host = await newParticipant();
+  const guest = await newParticipant();
+
+  const hostAccount = await register(host.request);
+  const { guildId, channelId } = await createVoiceRoom(host.request, hostAccount);
+  const guestAccount = await register(guest.request);
+
+  const invite = await host.request.post(`${BASE}/api/v1/channels/${channelId}/invites`, {
+    headers: {
+      Authorization: `Bearer ${hostAccount.token}`,
+      'x-paracord-csrf': hostAccount.csrf,
+    },
+    data: {},
+  });
+  expect(invite.status(), `invite creation: ${await invite.text()}`).toBe(201);
+  const inviteCode = (await invite.json()).code as string;
+  const accepted = await guest.request.post(`${BASE}/api/v1/invites/${inviteCode}`, {
+    headers: {
+      Authorization: `Bearer ${guestAccount.token}`,
+      'x-paracord-csrf': guestAccount.csrf,
+    },
+    data: {},
+  });
+  expect(accepted.ok(), `invite accept: ${await accepted.text()}`).toBeTruthy();
+
+  for (const [page, account] of [
+    [host, hostAccount],
+    [guest, guestAccount],
+  ] as const) {
+    await signIn(page, account);
+    await page.goto(`${BASE}/app/guilds/${guildId}/channels/${channelId}`);
+    await joinVoice(page);
+    await expect(page.getByTestId('call-dock')).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByText(/Voice connection failed:/)).toHaveCount(0);
+  }
+
+  await waitForRelay(
+    host,
+    channelId,
+    'two connected participants',
+    (room) => room.connected_participants === 2,
+  );
+
+  return { host, guest, hostAccount, guestAccount, guildId, channelId };
+}
+
+test('two browsers in one room see each other — one on camera, one sharing a screen', async ({
+  playwright,
+}) => {
+  await withChromium(playwright, async (newParticipant) => {
+    const { host, guest, hostAccount, guestAccount, channelId } =
+      await twoInOneRoom(newParticipant);
+
+    const pageErrors: string[] = [];
+    for (const page of [host, guest]) {
+      page.on('pageerror', (error) => pageErrors.push(error.message));
+    }
+
+    // The host goes on camera; the guest shares a screen. One publisher each
+    // way, and the guest's own share preview is off by default — so every video
+    // frame the *guest* decodes came from the host's camera and nothing else.
+    await dismissFirstRunOverlays(host);
+    await dismissFirstRunOverlays(guest);
+    await host.getByRole('button', { name: 'Turn on camera', exact: true }).click();
+    await expect(host.getByRole('button', { name: 'Turn off camera', exact: true })).toBeVisible({
+      timeout: 30_000,
+    });
+    await guest.getByRole('button', { name: 'Share screen', exact: true }).click();
+    // The share is offered in two places at once — the call dock's Stop and the
+    // Stage control bar's — so take the first.
+    await expect(
+      guest.getByRole('button', { name: 'Stop streaming', exact: true }).first(),
+    ).toBeVisible({ timeout: 30_000 });
+
+    // 1. The keyframe path itself. A VP9 decoder emits nothing until it has a
+    //    keyframe, and keyframes ride reliable unidirectional streams rather
+    //    than datagrams. This counter pinned at 0 while thousands of video
+    //    datagrams arrived was the blocker: the server's WebTransport accept
+    //    loop validated each stream's header inline, so the first HTTP/3 stream
+    //    Chromium opened beside the session and left silent parked it, and
+    //    every keyframe stream behind it queued unaccepted.
+    const streaming = await waitForRelay(
+      host,
+      channelId,
+      'whole keyframe frames arriving on unidirectional streams',
+      (room) =>
+        room.participants.length === 2 &&
+        room.participants.every(
+          (entry) =>
+            (entry.stream_frames_received ?? 0) >= 1 &&
+            (entry.stream_frames_sent ?? 0) >= 1 &&
+            (entry.video_datagrams_received ?? 0) > 0,
+        ),
+      90_000,
+    );
+    for (const entry of streaming.participants) {
+      expect(
+        entry.stream_frames_received,
+        'the relay must accept the browser’s keyframe streams',
+      ).toBeGreaterThanOrEqual(1);
+      expect(
+        entry.stream_frames_sent,
+        'and forward the other publisher’s keyframes to it',
+      ).toBeGreaterThanOrEqual(1);
+      expect(
+        entry.video_datagrams_received,
+        'the delta frames ride datagrams beside them, as they always did',
+      ).toBeGreaterThan(0);
+    }
+
+    // 2. The guest decoded the host's camera. Thirty frames is a second of
+    //    continuous picture at the capture rate, not one lucky keyframe — and
+    //    the guest publishes no camera and previews no share, so there is
+    //    nothing else these frames could be.
+    const decoded = await waitForDecodedVideo([{ label: 'guest', page: guest }], 30);
+    for (const [label, probe] of decoded) {
+      expect(probe.decoders, `${label} built a video decoder`).toBeGreaterThanOrEqual(1);
+      expect(probe.decodedFrames, `${label} decoded the host’s camera`).toBeGreaterThanOrEqual(30);
+    }
+
+    // 3. And it reached the screen. The guest's tile for the host stops
+    //    reporting a camera that is off — that flag is set by the first frame
+    //    the renderer actually paints for *that participant* — and the tile is
+    //    a picture rather than the well colour with initials on it.
+    const hostTileOnGuest = guest.locator(`[data-motion-speaking="${hostAccount.userId}"]`).first();
+    await expect(hostTileOnGuest).toBeVisible({ timeout: 30_000 });
+    await expect(
+      hostTileOnGuest.getByText(/camera is off/),
+      'the tile must stop reporting a camera that is off once frames arrive',
+    ).toHaveCount(0, { timeout: 60_000 });
+    const cameraTile = await tileBrightness(guest, hostTileOnGuest);
+    expect(
+      cameraTile.litFraction,
+      `the host's camera tile is still dark (${JSON.stringify(cameraTile)})`,
+    ).toBeGreaterThan(0.2);
+    expect(cameraTile.distinctColours).toBeGreaterThan(8);
+
+    // 4. The other direction: the host opens the guest's share and decodes it.
+    //
+    //    The host's camera goes off first, and that is what makes this
+    //    countable: with nothing of its own to publish, every video frame the
+    //    host decodes from here on is the guest's screen. The viewer's own
+    //    empty state is the second half of the proof — it says "X is not
+    //    sharing" until a frame is *painted for that person's screen track*,
+    //    which is exactly what it said for every share before this round.
+    await host.getByRole('button', { name: 'Turn off camera', exact: true }).click();
+    await expect(host.getByRole('button', { name: 'Turn on camera', exact: true })).toBeVisible({
+      timeout: 30_000,
+    });
+    await host.waitForTimeout(2_000);
+    const beforeWatching = (await readVideoProbe(host)).decodedFrames;
+
+    const watch = host.getByRole('button', { name: 'Watch', exact: true }).first();
+    if (await watch.isVisible().catch(() => false)) await watch.click();
+    await expect(
+      host.getByText(/is not sharing/),
+      'the share viewer must stop claiming nobody is sharing',
+    ).toHaveCount(0, { timeout: 60_000 });
+
+    const watching = await waitForDecodedVideo(
+      [{ label: 'host', page: host }],
+      beforeWatching + 30,
+    );
+    expect(
+      watching.get('host')!.decodedFrames - beforeWatching,
+      'the host must decode the guest’s screen, with no camera of its own running',
+    ).toBeGreaterThanOrEqual(30);
+
+    const shareCanvas = host.locator('[data-stream-canvas]').first();
+    await expect(shareCanvas).toBeVisible({ timeout: 30_000 });
+    const shareTile = await tileBrightness(host, shareCanvas);
+    // A headless tab capture of the app's own dark UI is very nearly black, so
+    // brightness proves nothing here; what proves there is a picture is that it
+    // is a *picture*. A canvas nobody painted is one colour.
+    expect(
+      shareTile.distinctColours,
+      `the guest's share canvas is blank (${JSON.stringify(shareTile)})`,
+    ).toBeGreaterThan(32);
+
+    await guest.screenshot({ path: shotPath('browser-video-camera-seen.png') });
+    await host.screenshot({ path: shotPath('browser-video-share-seen.png') });
+
+    // The numbers, so a passing run says what it proved rather than only that
+    // it passed.
+    const finalRoom = await readRelayRoom(host, channelId);
+    console.log(
+      '[video proof] relay ' +
+        finalRoom.participants
+          .map(
+            (entry) =>
+              `${entry.user_id}: streams in ${entry.stream_frames_received} / out ` +
+              `${entry.stream_frames_sent}, video datagrams ${entry.video_datagrams_received}`,
+          )
+          .join(' | ') +
+        ` — guest decoded ${(await readVideoProbe(guest)).decodedFrames} camera frames, ` +
+        `host decoded ${(await readVideoProbe(host)).decodedFrames - beforeWatching} share frames ` +
+        `with its own camera off; camera tile ${JSON.stringify(cameraTile)}, ` +
+        `share canvas ${JSON.stringify(shareTile)}`,
+    );
+
+    // 5. Publishing video must not throw on the page. Every keyframe opens a
+    //    fresh WebTransport unidirectional stream, and the browser refuses once
+    //    the connection's credit runs out; those rejections used to escape the
+    //    encoder callback as uncaught errors — 299 of 552 stream opens in one
+    //    measured screen-share run.
+    expect(pageErrors, 'publishing video must not raise an uncaught page error').toEqual([]);
   });
 });
