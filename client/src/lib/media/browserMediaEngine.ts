@@ -88,6 +88,16 @@ const SPEAKING_SILENCE_MS = 400;
 const VIDEO_MAX_DATAGRAM_SIZE = 1200;
 const VIDEO_GCM_TAG_SIZE = 16;
 
+/** A canvas's size in device pixels — what the relay is asked to size a layer
+ * for. Spelled once: it used to be written out at seven call sites. */
+function canvasViewport(canvas: HTMLCanvasElement): { width: number; height: number } {
+  const ratio = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+  return {
+    width: Math.max(1, Math.round((canvas.clientWidth || canvas.width || 1) * ratio)),
+    height: Math.max(1, Math.round((canvas.clientHeight || canvas.height || 1) * ratio)),
+  };
+}
+
 const VP9_CODEC = 'vp09.00.10.08';
 const H264_CODEC = 'avc1.640028';
 const AV1_CODEC = 'av01.0.10M.08';
@@ -231,16 +241,33 @@ interface ParticipantState {
   gainNode: GainNode | null;
 }
 
+/**
+ * One surface watching a subscribed track: its canvas, the renderer painting
+ * into it, and the caller's "a frame landed" signal.
+ *
+ * A single track can have several at once — the Stage tile, the share viewer
+ * and the sidebar's 2 fps room thumbnail all want the same person's camera or
+ * screen — and they all read from ONE decoder.
+ */
+interface VideoSink {
+  canvas: HTMLCanvasElement;
+  renderer: CanvasRenderer;
+  onFrame?: () => void;
+}
+
 /** State for a remote participant's video stream. */
 interface VideoSubscription {
   userId: string;
   ssrc: number;
   codec: string;
   decoder: MediaVideoDecoder;
-  renderer: CanvasRenderer;
+  /** Every surface this track is painted onto, in subscribe order. */
+  sinks: VideoSink[];
   streamId?: string;
   trackId?: string;
   activeLayer?: number;
+  /** Tear the whole subscription down — every sink, the decoder, the
+   * registration. Releasing one sink is the function `subscribeVideo` returns. */
   stop?: () => void;
 }
 
@@ -1189,18 +1216,7 @@ export class BrowserMediaEngine implements MediaEngine {
         trackId: sub.trackId!,
         requestedLayer: sub.activeLayer ?? null,
         activeLayer: sub.activeLayer ?? null,
-        viewport: sub.renderer.canvasElement
-          ? {
-              width: Math.max(
-                1,
-                Math.round((sub.renderer.canvasElement.clientWidth || sub.renderer.canvasElement.width || 1) * (window.devicePixelRatio || 1)),
-              ),
-              height: Math.max(
-                1,
-                Math.round((sub.renderer.canvasElement.clientHeight || sub.renderer.canvasElement.height || 1) * (window.devicePixelRatio || 1)),
-              ),
-            }
-          : null,
+        viewport: this.subscriptionViewport(sub) ?? null,
       }));
 
     return {
@@ -1273,8 +1289,19 @@ export class BrowserMediaEngine implements MediaEngine {
 
   /**
    * Subscribe to a remote participant's video and render it onto a canvas.
-   * Creates a decoder and renderer for the given user. If a subscription
-   * already exists for this user, the old one is torn down first.
+   *
+   * **One decoder per track, however many surfaces are watching it.** The Stage
+   * tile, the share viewer and the sidebar's 2 fps room thumbnail all ask for
+   * the same person's camera or screen; each brings its own canvas and renderer
+   * and joins the subscription that is already running. This used to tear the
+   * existing one down and build another, which had two costs: the newest caller
+   * silently took the picture away from every earlier one (a thumbnail mounting
+   * blanked the share viewer), and any re-render upstream rebuilt a
+   * `VideoDecoder` and a WebGL context from scratch — 812 of each in 90 seconds
+   * of a two-party call, measured.
+   *
+   * The returned function releases THIS caller's surface. The decoder and the
+   * relay subscription go when the last one does.
    */
   subscribeVideo(
     userId: string,
@@ -1285,80 +1312,92 @@ export class BrowserMediaEngine implements MediaEngine {
     if (this.disposed) return () => {};
     const preferredTrackId = options?.preferredTrackId;
     const subscriptionKey = this.videoSubscriptionKey(userId, preferredTrackId);
-    // Tear down any existing subscription for this key
-    const existing = this.videoSubscriptions.get(subscriptionKey);
-    if (existing) {
-      existing.stop?.();
-    }
 
-    // Resolve the SSRC for this user
-    const publishedTrack = this.findPreferredPublishedVideoTrack(userId, preferredTrackId);
-    const viewport = {
-      width: Math.max(1, Math.round((canvas.clientWidth || canvas.width || 1) * (window.devicePixelRatio || 1))),
-      height: Math.max(1, Math.round((canvas.clientHeight || canvas.height || 1) * (window.devicePixelRatio || 1))),
-    };
-    const selectedLayer = publishedTrack
-      ? selectPublishedLayer(publishedTrack, viewport.width, viewport.height)
-      : null;
-    // Prefer the published track's layer SSRC over any placeholder audio SSRC
-    // that may already be mapped for this user.
-    let ssrc = selectedLayer?.ssrc ?? publishedTrack?.layers[0]?.ssrc ?? 0;
-    if (ssrc === 0) {
-      for (const [s, uid] of this.ssrcToUserId) {
-        if (uid === userId) {
-          ssrc = s;
-          break;
+    const renderer = new CanvasRenderer(canvas);
+    const sink: VideoSink = { canvas, renderer, onFrame };
+
+    const joined = this.videoSubscriptions.get(subscriptionKey);
+    let subscription: VideoSubscription;
+    if (joined) {
+      joined.sinks.push(sink);
+      subscription = joined;
+    } else {
+      // Resolve the SSRC for this user
+      const publishedTrack = this.findPreferredPublishedVideoTrack(userId, preferredTrackId);
+      const viewport = canvasViewport(canvas);
+      const selectedLayer = publishedTrack
+        ? selectPublishedLayer(publishedTrack, viewport.width, viewport.height)
+        : null;
+      // Prefer the published track's layer SSRC over any placeholder audio SSRC
+      // that may already be mapped for this user.
+      let ssrc = selectedLayer?.ssrc ?? publishedTrack?.layers[0]?.ssrc ?? 0;
+      if (ssrc === 0) {
+        for (const [candidate, uid] of this.ssrcToUserId) {
+          if (uid === userId) {
+            ssrc = candidate;
+            break;
+          }
         }
+      }
+
+      const codec = this.decoderCodecForTrack(publishedTrack);
+      const decoder = new MediaVideoDecoder({ codec });
+      const created: VideoSubscription = {
+        userId,
+        ssrc,
+        codec,
+        decoder,
+        sinks: [sink],
+        streamId: publishedTrack?.streamId,
+        trackId: publishedTrack?.trackId,
+        activeLayer: selectedLayer?.layerId,
+      };
+      decoder.onDecoded((frame) => {
+        if (this.disposed || this.videoSubscriptions.get(subscriptionKey) !== created) {
+          frame.close();
+          return;
+        }
+        this.renderToSinks(created, frame);
+      });
+      created.stop = () => this.teardownVideoSubscription(subscriptionKey, created);
+      this.videoSubscriptions.set(subscriptionKey, created);
+      subscription = created;
+
+      if (publishedTrack) {
+        void this.registerTrackSubscription({
+          streamId: publishedTrack.streamId,
+          trackId: publishedTrack.trackId,
+          requestedLayer: selectedLayer?.layerId,
+          viewport,
+        }).catch(() => {});
+      }
+
+      // Request a keyframe from this participant so we can start decoding immediately.
+      if (this.transport && ssrc !== 0 && publishedTrack) {
+        void this.transport.sendStreamControl({
+          type: 'request_keyframe',
+          stream_id: publishedTrack.streamId,
+          track_id: publishedTrack.trackId,
+          layer_id: selectedLayer?.layerId ?? null,
+        }).catch(() => {});
       }
     }
 
-    const decoder = new MediaVideoDecoder({
-      codec: this.decoderCodecForTrack(publishedTrack),
-    });
-    const renderer = new CanvasRenderer(canvas);
-
-    // Wire decoder output to the renderer
-    decoder.onDecoded((frame) => {
-      if (this.disposed || this.videoSubscriptions.get(subscriptionKey) !== subscription) { frame.close(); return; }
-      renderer.renderFrame(frame);
-      onFrame?.();
-    });
-
-    const subscription: VideoSubscription = {
-      userId,
-      ssrc,
-      codec: this.decoderCodecForTrack(publishedTrack),
-      decoder,
-      renderer,
-      streamId: publishedTrack?.streamId,
-      trackId: publishedTrack?.trackId,
-      activeLayer: selectedLayer?.layerId,
-    };
-
-    this.videoSubscriptions.set(subscriptionKey, subscription);
-
-    if (publishedTrack) {
-      void this.registerTrackSubscription({
-        streamId: publishedTrack.streamId,
-        trackId: publishedTrack.trackId,
-        requestedLayer: selectedLayer?.layerId,
-        viewport,
-      }).catch(() => {});
-    }
+    const active = subscription;
 
     const updateViewportSubscription = () => {
       const current = this.videoSubscriptions.get(subscriptionKey);
-      if (!current?.streamId || !current.trackId) {
+      if (current !== active || !current.streamId || !current.trackId) {
         return;
       }
       const track = this.publishedTracks.get(this.trackKey(current.streamId, current.trackId));
       if (!track) {
         return;
       }
-      const nextViewport = {
-        width: Math.max(1, Math.round((canvas.clientWidth || canvas.width || 1) * (window.devicePixelRatio || 1))),
-        height: Math.max(1, Math.round((canvas.clientHeight || canvas.height || 1) * (window.devicePixelRatio || 1))),
-      };
+      const nextViewport = this.subscriptionViewport(current);
+      if (!nextViewport) {
+        return;
+      }
       const nextLayer = selectPublishedLayer(track, nextViewport.width, nextViewport.height);
       const nextLayerId = nextLayer?.layerId;
       if (current.activeLayer === nextLayerId && current.ssrc === (nextLayer?.ssrc ?? current.ssrc)) {
@@ -1382,6 +1421,13 @@ export class BrowserMediaEngine implements MediaEngine {
       }
     };
 
+    // A surface joining an existing subscription may be the biggest one
+    // watching, so the layer is re-chosen for the whole set, not for whoever
+    // happened to subscribe first.
+    if (joined) {
+      updateViewportSubscription();
+    }
+
     let resizeObserver: ResizeObserver | null = null;
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
     if (typeof ResizeObserver !== 'undefined') {
@@ -1396,7 +1442,8 @@ export class BrowserMediaEngine implements MediaEngine {
 
     // Mirror Tauri attachStreamVisibilityControls: pause canvas paint when the
     // tab is hidden or the tile is fully off-screen. Decode still runs (no
-    // browser-side decode-pause API); this only skips rAF paint work.
+    // browser-side decode-pause API); this only skips rAF paint work, and it is
+    // per-surface — a hidden thumbnail must not stop the Stage tile painting.
     let intersectionVisible = true;
     let renderingEnabled = true;
     const applyVisibility = () => {
@@ -1425,20 +1472,8 @@ export class BrowserMediaEngine implements MediaEngine {
       document.addEventListener('visibilitychange', onDocVisibility);
     }
 
-    // Request a keyframe from this participant so we can start decoding immediately.
-    if (this.transport && ssrc !== 0) {
-      if (publishedTrack) {
-        void this.transport.sendStreamControl({
-          type: 'request_keyframe',
-          stream_id: publishedTrack.streamId,
-          track_id: publishedTrack.trackId,
-          layer_id: selectedLayer?.layerId ?? null,
-        }).catch(() => {});
-      }
-    }
-
     let stopped = false;
-    const stop = () => {
+    const release = () => {
       if (stopped) return;
       stopped = true;
       if (resizeTimer) {
@@ -1449,18 +1484,24 @@ export class BrowserMediaEngine implements MediaEngine {
       if (typeof document !== 'undefined') {
         document.removeEventListener('visibilitychange', onDocVisibility);
       }
-      renderer.setRenderingEnabled(true);
       const current = this.videoSubscriptions.get(subscriptionKey);
-      if (current !== subscription) return;
-      if (current.streamId && current.trackId) {
-        void this.unregisterTrackSubscription(current.streamId, current.trackId).catch(() => {});
+      if (current !== active) {
+        renderer.destroy();
+        return;
       }
-      current.decoder.close();
-      current.renderer.destroy();
-      this.videoSubscriptions.delete(subscriptionKey);
+      const index = current.sinks.indexOf(sink);
+      if (index >= 0) {
+        current.sinks.splice(index, 1);
+      }
+      renderer.destroy();
+      if (current.sinks.length === 0) {
+        this.teardownVideoSubscription(subscriptionKey, current);
+        return;
+      }
+      // The largest remaining surface decides the layer now.
+      updateViewportSubscription();
     };
-    subscription.stop = stop;
-    return stop;
+    return release;
   }
 
   subscribeLocalPublishedScreen(canvas: HTMLCanvasElement, onFrame?: () => void): () => void {
@@ -2192,7 +2233,7 @@ export class BrowserMediaEngine implements MediaEngine {
       subscription.decoder.close();
       const decoder = new MediaVideoDecoder({ codec: decoderCodec });
       decoder.onDecoded((frame) => {
-        subscription.renderer.renderFrame(frame);
+        this.renderToSinks(subscription, frame);
       });
       subscription.decoder = decoder;
       subscription.codec = decoderCodec;
@@ -2318,26 +2359,7 @@ export class BrowserMediaEngine implements MediaEngine {
             this.ssrcToUserId.set(layer.ssrc, publisherUserId);
           }
           const existingSub = this.videoSubscriptionFor(publisherUserId, track.trackId);
-          const viewport = existingSub
-            ? {
-                width: Math.max(
-                  1,
-                  Math.round(
-                    (existingSub.renderer.canvasElement?.clientWidth ||
-                      existingSub.renderer.canvasElement?.width ||
-                      1) * (window.devicePixelRatio || 1),
-                  ),
-                ),
-                height: Math.max(
-                  1,
-                  Math.round(
-                    (existingSub.renderer.canvasElement?.clientHeight ||
-                      existingSub.renderer.canvasElement?.height ||
-                      1) * (window.devicePixelRatio || 1),
-                  ),
-                ),
-              }
-            : null;
+          const viewport = existingSub ? this.subscriptionViewport(existingSub) ?? null : null;
           const primaryLayer =
             (viewport
               ? selectPublishedLayer(track, viewport.width, viewport.height)
@@ -2363,7 +2385,7 @@ export class BrowserMediaEngine implements MediaEngine {
                 existingSub.decoder.close();
                 const decoder = new MediaVideoDecoder({ codec: decoderCodec });
                 decoder.onDecoded((frame) => {
-                  existingSub.renderer.renderFrame(frame);
+                  this.renderToSinks(existingSub, frame);
                 });
                 existingSub.decoder = decoder;
                 existingSub.codec = decoderCodec;
@@ -2414,26 +2436,7 @@ export class BrowserMediaEngine implements MediaEngine {
             this.ssrcToUserId.set(layer.ssrc, publisherUserId);
           }
           const existingSub = this.videoSubscriptionFor(publisherUserId, updatedTrack.trackId);
-          const viewport = existingSub
-            ? {
-                width: Math.max(
-                  1,
-                  Math.round(
-                    (existingSub.renderer.canvasElement?.clientWidth ||
-                      existingSub.renderer.canvasElement?.width ||
-                      1) * (window.devicePixelRatio || 1),
-                  ),
-                ),
-                height: Math.max(
-                  1,
-                  Math.round(
-                    (existingSub.renderer.canvasElement?.clientHeight ||
-                      existingSub.renderer.canvasElement?.height ||
-                      1) * (window.devicePixelRatio || 1),
-                  ),
-                ),
-              }
-            : null;
+          const viewport = existingSub ? this.subscriptionViewport(existingSub) ?? null : null;
           const primaryLayer =
             (viewport
               ? selectPublishedLayer(updatedTrack, viewport.width, viewport.height)
@@ -2736,11 +2739,11 @@ export class BrowserMediaEngine implements MediaEngine {
     this.removePublishedTracksForUser(userId);
     this.keyring.removePeer(userId);
 
-    // Both of them if they were on camera *and* sharing a screen.
+    // Both of them if they were on camera *and* sharing a screen, and every
+    // surface each one was painting: a WebGL renderer that is only `clear()`ed
+    // keeps its programs, its textures, its I420 worker and its animation frame.
     for (const [key, sub] of this.videoSubscriptionsForUser(userId)) {
-      sub.decoder.close();
-      sub.renderer.clear();
-      this.videoSubscriptions.delete(key);
+      this.teardownVideoSubscription(key, sub);
     }
 
     this.emitSpeakingChange();
@@ -2809,6 +2812,78 @@ export class BrowserMediaEngine implements MediaEngine {
       this.videoSubscriptions.get(this.videoSubscriptionKey(userId, trackId)) ??
       this.videoSubscriptions.get(userId)
     );
+  }
+
+  /**
+   * Paint one decoded frame onto every surface subscribed to this track.
+   *
+   * A renderer takes ownership of what it is handed and closes it, so every
+   * sink but the last gets a `clone()` — a second reference to the same GPU
+   * buffer, not a copy of the pixels.
+   */
+  private renderToSinks(subscription: VideoSubscription, frame: VideoFrame): void {
+    const sinks = subscription.sinks;
+    if (sinks.length === 0) {
+      frame.close();
+      return;
+    }
+    for (let index = 0; index < sinks.length - 1; index += 1) {
+      const sink = sinks[index];
+      try {
+        sink.renderer.renderFrame(frame.clone());
+      } catch {
+        // A renderer torn down between the fan-out and here; the survivors still get the frame.
+      }
+      sink.onFrame?.();
+    }
+    const last = sinks[sinks.length - 1];
+    last.renderer.renderFrame(frame);
+    last.onFrame?.();
+  }
+
+  /**
+   * The viewport the relay should size this track for: the LARGEST surface
+   * watching it. A 64 px sidebar thumbnail must never talk the Stage's tile
+   * down to a thumbnail layer.
+   */
+  private subscriptionViewport(
+    subscription: VideoSubscription,
+  ): { width: number; height: number } | undefined {
+    let best: { width: number; height: number } | undefined;
+    for (const sink of subscription.sinks) {
+      const canvas = sink.renderer.canvasElement;
+      if (!canvas) continue;
+      const viewport = canvasViewport(canvas);
+      if (!best || viewport.width * viewport.height > best.width * best.height) {
+        best = viewport;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Retire a whole subscription: the relay registration, the decoder, and every
+   * surface's renderer.
+   *
+   * The renderers are **destroyed**, not cleared. `clear()` paints the canvas
+   * black and leaves the WebGL programs, the four textures, the I420 worker and
+   * the rAF loop alive — so every participant who left took a leaked GL context
+   * and a spinning animation frame with them.
+   */
+  private teardownVideoSubscription(key: string, subscription: VideoSubscription): void {
+    if (this.videoSubscriptions.get(key) === subscription) {
+      this.videoSubscriptions.delete(key);
+    }
+    if (subscription.streamId && subscription.trackId) {
+      void this.unregisterTrackSubscription(subscription.streamId, subscription.trackId).catch(
+        () => {},
+      );
+    }
+    subscription.decoder.close();
+    for (const sink of subscription.sinks) {
+      sink.renderer.destroy();
+    }
+    subscription.sinks = [];
   }
 
   /** Every subscription belonging to `userId`, whichever track it is for. */
@@ -3030,19 +3105,7 @@ export class BrowserMediaEngine implements MediaEngine {
     this.assertOpen();
     for (const [, sub] of this.videoSubscriptions) {
       if (!sub.streamId || !sub.trackId) continue;
-      const canvas = sub.renderer.canvasElement;
-      const viewport = canvas
-        ? {
-            width: Math.max(
-              1,
-              Math.round((canvas.clientWidth || canvas.width || 1) * (window.devicePixelRatio || 1)),
-            ),
-            height: Math.max(
-              1,
-              Math.round((canvas.clientHeight || canvas.height || 1) * (window.devicePixelRatio || 1)),
-            ),
-          }
-        : undefined;
+      const viewport = this.subscriptionViewport(sub);
       await this.registerTrackSubscription({
         streamId: sub.streamId,
         trackId: sub.trackId,
@@ -3078,13 +3141,7 @@ export class BrowserMediaEngine implements MediaEngine {
       }
       if (sub.activeLayer === targetLayer) continue;
       sub.activeLayer = targetLayer;
-      const canvas = sub.renderer.canvasElement;
-      const viewport = canvas
-        ? {
-            width: Math.max(1, Math.round((canvas.clientWidth || canvas.width || 1) * (window.devicePixelRatio || 1))),
-            height: Math.max(1, Math.round((canvas.clientHeight || canvas.height || 1) * (window.devicePixelRatio || 1))),
-          }
-        : undefined;
+      const viewport = this.subscriptionViewport(sub);
       await this.registerTrackSubscription({
         streamId: sub.streamId,
         trackId: sub.trackId,

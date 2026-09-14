@@ -1051,6 +1051,33 @@ test('two browsers in one room see each other — one on camera, one sharing a s
 
     await host.screenshot({ path: shotPath('browser-video-share-seen.png') });
 
+    // 5. A settled call builds NOTHING more. One decoder per subscribed track
+    //    is the contract; a re-render upstream must not cost another. This used
+    //    to be the opposite of true: the sidebar's room thumbnail keyed its
+    //    engine subscription on the `RoomLight` object, which is rebuilt every
+    //    time any light input moves, so it released and re-opened the
+    //    subscription about nine times a second — 812 `VideoDecoder`s and 812
+    //    WebGL contexts per browser in ninety seconds, measured, while the tile
+    //    and the share viewer it collided with lost their picture each time.
+    const settled = await Promise.all(
+      [
+        { label: 'host', page: host },
+        { label: 'guest', page: guest },
+      ].map(async ({ label, page }) => ({ label, page, probe: await readVideoProbe(page) })),
+    );
+    await host.waitForTimeout(15_000);
+    for (const { label, page, probe } of settled) {
+      const now = await readVideoProbe(page);
+      expect(
+        now.decoders - probe.decoders,
+        `${label} built ${now.decoders - probe.decoders} more decoders in fifteen settled seconds`,
+      ).toBe(0);
+      expect(
+        now.decodedFrames,
+        `${label} stopped decoding while the call was still running`,
+      ).toBeGreaterThan(probe.decodedFrames);
+    }
+
     // The numbers, so a passing run says what it proved rather than only that
     // it passed.
     const finalRoom = await readRelayRoom(host, channelId);
@@ -1069,7 +1096,7 @@ test('two browsers in one room see each other — one on camera, one sharing a s
         `share canvas ${JSON.stringify(shareTile)}`,
     );
 
-    // 5. Publishing video must not throw on the page. Every keyframe opens a
+    // 6. Publishing video must not throw on the page. Every keyframe opens a
     //    fresh WebTransport unidirectional stream, and the browser refuses once
     //    the connection's credit runs out; those rejections used to escape the
     //    encoder callback as uncaught errors — 299 of 552 stream opens in one
