@@ -93,6 +93,51 @@ static CHALLENGE_STORE: OnceLock<Cache<String, i64>> = OnceLock::new();
 static SUPERSEDED_REFRESH_HASHES: OnceLock<Cache<String, String>> = OnceLock::new();
 static AUTH_GUARD_OP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// How long the refresh endpoint keeps answering for the token it has *just*
+/// replaced, instead of reading a second presentation of it as theft.
+///
+/// Rotation plus reuse detection has one sharp edge: the loser of a race
+/// presents a credential the winner has already spent, which is byte-for-byte
+/// what a thief does, so the account's every session is revoked. Two QA domains
+/// watched that happen to a legitimate user mid-call — the client dropped to
+/// "Unknown user" with no buildings and no message.
+///
+/// The client is the main culprit and is fixed there (one refresh in flight per
+/// credential, ever — see `client/src/lib/authRefreshCoordinator.ts`), but some
+/// races no client can avoid: a refresh whose *response* is lost in transit
+/// leaves the server rotated and the client still holding the old token, and
+/// two browser tabs share one cookie and cannot see each other's flights.
+///
+/// Inside this window the old token is answered with the very tokens it was
+/// already exchanged for — the same access token, the same rotated refresh
+/// token — so a racing caller ends up in exactly the state the winner is in.
+/// This is deliberately narrow and does not weaken theft detection in any way
+/// that matters: a thief who replays the stolen token here receives what the
+/// victim already holds and no new generation, and one second later the same
+/// replay revokes the account as before. Detection depth
+/// (`previous_refresh_token_hash`, one generation) is unchanged.
+const REFRESH_REUSE_GRACE_SECONDS: i64 = 10;
+
+/// What a rotation handed out, so the token it replaced can be answered with
+/// the same thing for [`REFRESH_REUSE_GRACE_SECONDS`].
+///
+/// Process-local and short-lived. It holds a raw refresh token, which is no
+/// wider an exposure than the request that minted it — the same value is in
+/// this process's memory for the life of that request either way — and it is
+/// keyed by the SHA-256 of the *presented* token, never by a credential.
+/// A cross-node race misses this cache and falls through to the
+/// non-revoking 401 below, which is the part that must never depend on
+/// process memory.
+#[derive(Clone)]
+struct ReplayedRotation {
+    access_token: String,
+    refresh_token: String,
+    csrf_token: String,
+    session_id: String,
+}
+
+static REFRESH_REPLAY: OnceLock<Cache<String, ReplayedRotation>> = OnceLock::new();
+
 fn challenge_store() -> &'static Cache<String, i64> {
     CHALLENGE_STORE.get_or_init(|| {
         Cache::builder()
@@ -116,6 +161,15 @@ fn superseded_refresh_hashes() -> &'static Cache<String, String> {
 
 fn track_superseded_refresh_hash(old_hash: &str, session_id: &str) {
     superseded_refresh_hashes().insert(old_hash.to_string(), session_id.to_string());
+}
+
+fn refresh_replay() -> &'static Cache<String, ReplayedRotation> {
+    REFRESH_REPLAY.get_or_init(|| {
+        Cache::builder()
+            .max_capacity(100_000)
+            .time_to_live(StdDuration::from_secs(REFRESH_REUSE_GRACE_SECONDS as u64))
+            .build()
+    })
 }
 
 fn validate_public_key_hex(public_key: &str) -> Result<(), ApiError> {
@@ -1467,6 +1521,34 @@ async fn rotate_auth_session(
     {
         Some(session) => session,
         None => {
+            // A token this process replaced moments ago is answered with what
+            // it was replaced by, so the loser of a race ends up exactly where
+            // the winner is. See REFRESH_REUSE_GRACE_SECONDS.
+            if let Some(replayed) = refresh_replay().get(&refresh_hash) {
+                tracing::debug!(
+                    target: "paracord::auth",
+                    session_id = %replayed.session_id,
+                    "auth.refresh.replay"
+                );
+                let secure = should_use_secure_cookie(state);
+                let ttl_days = refresh_session_ttl_days();
+                return Ok((
+                    replayed.access_token.clone(),
+                    build_access_cookie(
+                        &replayed.access_token,
+                        state.config.jwt_expiry_seconds,
+                        secure,
+                    ),
+                    build_refresh_cookie(&replayed.refresh_token, ttl_days, secure),
+                    build_csrf_cookie(
+                        &replayed.csrf_token,
+                        state.config.jwt_expiry_seconds,
+                        secure,
+                    ),
+                    replayed.session_id.clone(),
+                    replayed.refresh_token.clone(),
+                ));
+            }
             if let Some(session) = paracord_db::sessions::get_session_by_superseded_refresh_hash(
                 &state.db,
                 &refresh_hash,
@@ -1475,8 +1557,28 @@ async fn rotate_auth_session(
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
             {
-                handle_refresh_token_reuse(state, &session.id, headers, peer_ip).await?;
+                // `last_seen_at` is written only when a session is created and
+                // when it rotates, so for the superseded token it is the exact
+                // moment it was spent. Another node (or this one before a
+                // restart) rotated it a heartbeat ago: that is a race, not
+                // theft, and it must not cost the user every session they have.
+                // The caller still gets a 401 and retries with the token it now
+                // holds.
+                if now.signed_duration_since(session.last_seen_at)
+                    < Duration::seconds(REFRESH_REUSE_GRACE_SECONDS)
+                {
+                    tracing::info!(
+                        target: "paracord::auth",
+                        session_id = %session.id,
+                        user_id = session.user_id,
+                        "auth.refresh.race"
+                    );
+                } else {
+                    handle_refresh_token_reuse(state, &session.id, headers, peer_ip).await?;
+                }
             } else if let Some(session_id) = superseded_refresh_hashes().get(&refresh_hash) {
+                // This process rotated it and the replay window above has
+                // already expired, so more than the grace has passed: reuse.
                 handle_refresh_token_reuse(state, &session_id, headers, peer_ip).await?;
             }
             return Err(ApiError::Unauthorized);
@@ -1521,6 +1623,19 @@ async fn rotate_auth_session(
     let refresh_cookie = build_refresh_cookie(&new_refresh, ttl_days, secure);
     let csrf_token = random_token_hex(24);
     let csrf_cookie = build_csrf_cookie(&csrf_token, state.config.jwt_expiry_seconds, secure);
+    // Remember what this rotation handed out, so a caller that was already in
+    // flight with the token we just spent is answered with the same thing
+    // instead of being read as a thief. Expires on its own after
+    // REFRESH_REUSE_GRACE_SECONDS.
+    refresh_replay().insert(
+        refresh_hash,
+        ReplayedRotation {
+            access_token: access_token.clone(),
+            refresh_token: new_refresh.clone(),
+            csrf_token: csrf_token.clone(),
+            session_id: session.id.clone(),
+        },
+    );
     Ok((
         access_token,
         access_cookie,

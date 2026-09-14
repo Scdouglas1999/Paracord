@@ -12,6 +12,8 @@ import {
   setAccessToken,
   setRefreshToken,
 } from '../lib/authToken';
+import { resetRefreshCoordination } from '../lib/authRefreshCoordinator';
+import { clearSessionEndedNotice } from '../lib/sessionEnded';
 import { clearDownloadTicketCache, startDownloadTicketLifecycle } from '../lib/downloadTicket';
 import { clearPermissionDataCache } from '../lib/permissionDataCache';
 import { invalidateGuildPermissionCache } from '../hooks/usePermissions';
@@ -54,6 +56,9 @@ interface AuthState {
 function clearAuthState(set: (partial: Partial<AuthState>) => void): Promise<void> {
   setAccessToken(null);
   setRefreshToken(null);
+  // Forget the ended session's in-flight and recently-settled refreshes, so
+  // the next sign-in is never answered out of the previous one's window.
+  resetRefreshCoordination();
   clearSessionHint();
   clearLegacyPersistedAuth();
   clearDownloadTicketCache();
@@ -105,8 +110,10 @@ export const useAuthStore = create<AuthState>()((set) => ({
         identifier: trimmedIdentifier,
         password,
       });
+      resetRefreshCoordination();
       setAccessToken(data.token);
       setRefreshToken(data.refresh_token ?? null);
+      clearSessionEndedNotice();
       set({ token: data.token, user: data.user, isLoading: false });
       startDownloadTicketLifecycle();
     } catch (err: unknown) {
@@ -124,8 +131,10 @@ export const useAuthStore = create<AuthState>()((set) => ({
         password,
         display_name: displayName || undefined,
       });
+      resetRefreshCoordination();
       setAccessToken(data.token);
       setRefreshToken(data.refresh_token ?? null);
+      clearSessionEndedNotice();
       set({ token: data.token, user: data.user, isLoading: false });
       startDownloadTicketLifecycle();
     } catch (err: unknown) {

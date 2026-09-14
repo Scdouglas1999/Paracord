@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Info } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { useAuthStore } from '../stores/authStore';
 import {
@@ -9,6 +10,7 @@ import {
 import { authApi } from '../api/auth';
 import { instanceApi } from '../api/instance';
 import { setAccessToken, setRefreshToken } from '../lib/authToken';
+import { takeSessionEndedNotice } from '../lib/sessionEnded';
 import { MIN_PASSWORD_LENGTH } from '../lib/constants';
 import { ErrorBanner } from '../components/ui/Feedback';
 import { Button } from '../components/ui/Button';
@@ -50,6 +52,10 @@ export function LoginPage() {
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  // Why the user is here without asking to be. Read once, at mount, so the
+  // sentence survives the redirect that brought them and is not repeated on
+  // every later visit to this screen.
+  const [sessionNotice] = useState<string | null>(() => takeSessionEndedNotice());
   const [successMsg, setSuccessMsg] = useState('');
   const [loading, setLoading] = useState(false);
   const [allowUsernameLogin, setAllowUsernameLogin] = useState(true);
@@ -518,6 +524,16 @@ export function LoginPage() {
               title="Welcome back"
               subtitle="Sign in to pick up where you left off across your buildings."
             />
+
+            {sessionNotice && !error && (
+              <div
+                role="status"
+                className="pc-well flex items-start gap-2.5 px-4 py-3 text-label text-text-secondary"
+              >
+                <Info size={16} className="mt-px shrink-0 text-text-tertiary" />
+                <span className="leading-relaxed">{sessionNotice}</span>
+              </div>
+            )}
 
             {error && <ErrorBanner multiline message={error} />}
 

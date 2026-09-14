@@ -8,6 +8,7 @@ use axum::{
     http::{header, HeaderMap, Request, StatusCode},
     Router,
 };
+use chrono::Utc;
 use common::{build_test_app, TestApp, TestAppOptions};
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -350,6 +351,239 @@ async fn refresh_token_body_copy_is_withheld_from_same_site_clients() -> anyhow:
     assert!(
         body.get("refresh_token").and_then(Value::as_str).is_some(),
         "native clients have no cookie jar for this origin: {body}"
+    );
+
+    Ok(())
+}
+
+fn sha256_hex(value: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(value.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+async fn session_is_live(db: &paracord_db::DbPool, session_id: &str) -> anyhow::Result<bool> {
+    Ok(paracord_db::sessions::get_session_by_id(db, session_id)
+        .await?
+        .map(|row| row.revoked_at.is_none())
+        .unwrap_or(false))
+}
+
+/// Plant a session that some *other* process rotated `rotated_ago` ago, so the
+/// grace decision is made from durable state alone — this is the cross-node
+/// (or post-restart) shape of the race, which the in-process replay cache
+/// cannot see.
+async fn plant_rotated_session(
+    db: &paracord_db::DbPool,
+    user_id: i64,
+    spent_token: &str,
+    live_token: &str,
+    rotated_ago: chrono::Duration,
+) -> anyhow::Result<String> {
+    let session_id = uuid::Uuid::new_v4().to_string();
+    paracord_db::sessions::create_session(
+        db,
+        &session_id,
+        user_id,
+        &sha256_hex(live_token),
+        &uuid::Uuid::new_v4().to_string(),
+        None,
+        None,
+        None,
+        None,
+        chrono::Utc::now() + chrono::Duration::days(30),
+    )
+    .await?;
+    // House convention for temporal columns through the `Any` pool: TEXT in
+    // the same shape `paracord_db` writes.
+    let rotated_at = (chrono::Utc::now() - rotated_ago)
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string();
+    sqlx::query(
+        "UPDATE auth_sessions SET previous_refresh_token_hash = $2, last_seen_at = $3 WHERE id = $1",
+    )
+    .bind(&session_id)
+    .bind(sha256_hex(spent_token))
+    .bind(rotated_at)
+    .execute(db)
+    .await?;
+    Ok(session_id)
+}
+
+/// The race that emptied the desktop app mid-call.
+///
+/// Refresh tokens rotate and reuse is treated as theft, so the loser of a
+/// concurrent refresh presented a credential the winner had already spent and
+/// the server revoked *every* session the account had. The client is fixed
+/// (one refresh in flight per credential — `authRefreshCoordinator`), but a
+/// refresh whose response is lost in transit, or two browser tabs sharing one
+/// cookie, can still race. Inside the grace window the spent token is answered
+/// with exactly what it was already exchanged for, and nothing is revoked.
+#[tokio::test]
+async fn a_racing_refresh_is_answered_not_treated_as_theft() -> anyhow::Result<()> {
+    let harness = Harness::new(true).await?;
+    let password = "R4ceCondition!Pass";
+    let user =
+        create_password_user(&harness.db, "raceuser", "race-user@example.com", password).await?;
+
+    let (status, _, body) = harness
+        .send(post_json(
+            "/api/v1/auth/login",
+            json!({ "email": "race-user@example.com", "password": password }),
+            &[],
+        )?)
+        .await?;
+    assert_eq!(status, StatusCode::OK, "login failed: {body}");
+    let first_refresh = body["refresh_token"]
+        .as_str()
+        .expect("native login returns the refresh token in the body")
+        .to_string();
+
+    // The winner of the race rotates the token.
+    let (status, _, winner) = harness
+        .send(post_json(
+            "/api/v1/auth/refresh",
+            json!({ "refresh_token": first_refresh }),
+            &[],
+        )?)
+        .await?;
+    assert_eq!(status, StatusCode::OK, "first refresh failed: {winner}");
+    let rotated_refresh = winner["refresh_token"].as_str().unwrap().to_string();
+    let rotated_access = winner["token"].as_str().unwrap().to_string();
+
+    // The loser was already in flight with the now-spent token.
+    let (status, _, loser) = harness
+        .send(post_json(
+            "/api/v1/auth/refresh",
+            json!({ "refresh_token": first_refresh }),
+            &[],
+        )?)
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a refresh racing its own rotation must be answered, not read as theft: {loser}"
+    );
+    assert_eq!(
+        loser["refresh_token"].as_str(),
+        Some(rotated_refresh.as_str()),
+        "the racing caller must land on the same rotated token as the winner, not a new generation"
+    );
+    assert_eq!(
+        loser["token"].as_str(),
+        Some(rotated_access.as_str()),
+        "the racing caller must land on the same access token as the winner"
+    );
+
+    // Nothing was revoked, and the session still rotates normally.
+    let sessions =
+        paracord_db::sessions::list_user_sessions(&harness.db, user.id, Utc::now()).await?;
+    assert_eq!(
+        sessions.len(),
+        1,
+        "the race must not revoke the account's sessions: {sessions:?}"
+    );
+    let (status, _, after) = harness
+        .send(post_json(
+            "/api/v1/auth/refresh",
+            json!({ "refresh_token": rotated_refresh }),
+            &[],
+        )?)
+        .await?;
+    assert_eq!(status, StatusCode::OK, "session no longer usable: {after}");
+
+    Ok(())
+}
+
+/// The same allowance across a restart or another node, where only the durable
+/// `previous_refresh_token_hash` and its rotation timestamp are available: a
+/// token spent a heartbeat ago is refused without revoking anything.
+#[tokio::test]
+async fn a_just_superseded_token_is_refused_without_revoking() -> anyhow::Result<()> {
+    let harness = Harness::new(true).await?;
+    let user = create_password_user(
+        &harness.db,
+        "graceuser",
+        "grace-user@example.com",
+        "Gr4cePeriod!Pass",
+    )
+    .await?;
+    let session_id = plant_rotated_session(
+        &harness.db,
+        user.id,
+        "spent-refresh-token-just-now",
+        "live-refresh-token-just-now",
+        chrono::Duration::seconds(1),
+    )
+    .await?;
+
+    let (status, _, body) = harness
+        .send(post_json(
+            "/api/v1/auth/refresh",
+            json!({ "refresh_token": "spent-refresh-token-just-now" }),
+            &[],
+        )?)
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "a spent token still buys nothing: {body}"
+    );
+    assert!(
+        session_is_live(&harness.db, &session_id).await?,
+        "a token spent one second ago is a race, not theft: the session must survive"
+    );
+
+    Ok(())
+}
+
+/// The grace is narrow on purpose. Past it, reuse is still theft and still
+/// costs the account every session it has — the detection this protects.
+#[tokio::test]
+async fn reuse_after_the_grace_window_still_revokes_every_session() -> anyhow::Result<()> {
+    let harness = Harness::new(true).await?;
+    let user = create_password_user(
+        &harness.db,
+        "theftuser",
+        "theft-user@example.com",
+        "Th3ftDetect!Pass",
+    )
+    .await?;
+    let stale_session = plant_rotated_session(
+        &harness.db,
+        user.id,
+        "stolen-refresh-token-long-ago",
+        "live-refresh-token-long-ago",
+        chrono::Duration::minutes(5),
+    )
+    .await?;
+    // A second, unrelated session for the same account: reuse detection is
+    // account-wide, and this one must go too.
+    let bystander = plant_rotated_session(
+        &harness.db,
+        user.id,
+        "other-spent-token",
+        "other-live-token",
+        chrono::Duration::minutes(5),
+    )
+    .await?;
+
+    let (status, _, body) = harness
+        .send(post_json(
+            "/api/v1/auth/refresh",
+            json!({ "refresh_token": "stolen-refresh-token-long-ago" }),
+            &[],
+        )?)
+        .await?;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "reuse must fail: {body}");
+    assert!(
+        !session_is_live(&harness.db, &stale_session).await?,
+        "reuse outside the grace window must still revoke the session"
+    );
+    assert!(
+        !session_is_live(&harness.db, &bystander).await?,
+        "reuse detection is account-wide and must still revoke every session"
     );
 
     Ok(())

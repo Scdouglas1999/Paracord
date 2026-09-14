@@ -4,6 +4,7 @@ import { LOCAL_SERVER_ID } from '../lib/serverScope';
 // authStore owns the home session. Selecting a remote server must never change
 // where login, profile editing, passwords or account recovery are sent.
 const getApi = () => getServerApi(LOCAL_SERVER_ID);
+import { refreshSharedSession } from './client';
 import { responseContract } from './responseContracts';
 import {
   isCurrentUser,
@@ -34,11 +35,16 @@ export const authApi = {
   options: async () => getApi().get<AuthOptions>('/auth/options'),
   login: async (data: LoginRequest) => getApi().post<LoginResponse>('/auth/login', data),
   register: async (data: RegisterRequest) => getApi().post<LoginResponse>('/auth/register', data),
-  refresh: async (refreshToken?: string) =>
-    getApi().post<{ token: string; refresh_token?: string }>(
-      '/auth/refresh',
-      refreshToken ? { refresh_token: refreshToken } : undefined,
-    ),
+  /**
+   * Refresh the home session.
+   *
+   * Delegates to the shared single-flight rather than posting `/auth/refresh`
+   * itself. A fourth independent lane onto a rotating, reuse-detected
+   * credential is how this app used to revoke its own sessions mid-use: the
+   * loser of the race presents a spent token, the server reads that as theft,
+   * and every session the account has is revoked. There is exactly one lane.
+   */
+  refresh: async () => ({ data: { token: await refreshSharedSession() } }),
   logout: async () => getApi().post('/auth/logout'),
   listSessions: async () => getApi().get<AuthSession[]>('/auth/sessions'),
   revokeSession: async (sessionId: string) => getApi().delete(`/auth/sessions/${sessionId}`),

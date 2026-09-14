@@ -1,6 +1,11 @@
 import { AxiosHeaders, type AxiosAdapter, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApiClient, redactApiLogUrl } from './client';
+import { resetRefreshCoordination } from '../lib/authRefreshCoordinator';
+
+// The refresh coordinator is module-level on purpose (one flight per
+// credential, across every axios instance), so each test starts from clean.
+afterEach(() => resetRefreshCoordination());
 
 const NEW_ACCESS_TOKEN = 'access-token-v2';
 
@@ -115,8 +120,13 @@ describe('createApiClient token refresh', () => {
 
     // Exactly one refresh despite two concurrent 401s.
     expect(getRefreshCalls()).toBe(1);
-    expect(onTokenRefreshed).toHaveBeenCalledTimes(1);
+    // Persistence runs per caller, not per HTTP refresh: whoever joins the
+    // flight must still store the rotated credential, or it is left holding
+    // the token the server has already spent.
     expect(onTokenRefreshed).toHaveBeenCalledWith(NEW_ACCESS_TOKEN, 'refresh-token-v2');
+    for (const call of onTokenRefreshed.mock.calls) {
+      expect(call).toEqual([NEW_ACCESS_TOKEN, 'refresh-token-v2']);
+    }
 
     // Both original requests retried and succeeded with the new token.
     expect(resA.status).toBe(200);
@@ -145,6 +155,96 @@ describe('createApiClient token refresh', () => {
 
     expect(res.status).toBe(200);
     expect(getRefreshBodies()).toEqual([{ refresh_token: 'server-refresh-token' }]);
+  });
+
+  it('shares one refresh between separate clients on the same credential', async () => {
+    // The defect this exists for: the home session is spoken for by several
+    // axios instances at once — the legacy singleton, the `__local__`
+    // connection, and the saved-server entry that is the same account under
+    // another name. Each used to guard only itself, so one navigation past the
+    // access-token expiry fired three or four concurrent refreshes; the first
+    // rotated the token, the rest presented the spent one, and the server
+    // (correctly) read that as theft and revoked every session the account had.
+    const { adapter, getRefreshCalls } = makeRefreshAdapter();
+    const scope = 'auth:home';
+    let sharedToken: string | null = 'stale-access-token';
+    const storeA = vi.fn((token: string) => {
+      sharedToken = token;
+    });
+    const storeB = vi.fn((token: string) => {
+      sharedToken = token;
+    });
+
+    const makeClient = (onRefreshed: (token: string, refreshToken?: string) => void) => {
+      const client = createApiClient(
+        'http://server.example/api/v1',
+        () => sharedToken,
+        onRefreshed,
+        undefined,
+        undefined,
+        () => 'refresh-token-v1',
+        scope,
+      );
+      client.defaults.adapter = adapter;
+      return client;
+    };
+    const clientA = makeClient(storeA);
+    const clientB = makeClient(storeB);
+
+    const [resA, resB] = await Promise.all([
+      clientA.get('/channels/1/messages'),
+      clientB.get('/users/@me'),
+    ]);
+
+    expect(getRefreshCalls()).toBe(1);
+    expect(resA.status).toBe(200);
+    expect(resB.status).toBe(200);
+    // Both stores end up holding the rotated credential, including the one
+    // that only awaited the other's flight.
+    expect(storeA).toHaveBeenCalledWith(NEW_ACCESS_TOKEN, 'refresh-token-v2');
+    expect(storeB).toHaveBeenCalledWith(NEW_ACCESS_TOKEN, 'refresh-token-v2');
+  });
+
+  it('does not throw the session away when the server is merely unreachable', async () => {
+    // A four-second restart is not a revocation. Signing the user out on any
+    // failed refresh is how a blip became "constant reconnecting" and an app
+    // that emptied itself.
+    const onAuthFailed = vi.fn();
+    const adapter: AxiosAdapter = async (config: InternalAxiosRequestConfig) => {
+      if (config.url === '/auth/refresh') throw Object.assign(new Error('Network Error'), {
+        config,
+        isAxiosError: true,
+        code: 'ECONNREFUSED',
+      });
+      const error = new Error('Request failed with status code 401') as Error & {
+        config: InternalAxiosRequestConfig;
+        response: AxiosResponse;
+        isAxiosError: boolean;
+      };
+      error.config = config;
+      error.response = {
+        data: { code: 'unauthorized', message: 'expired' },
+        status: 401,
+        statusText: '',
+        headers: AxiosHeaders.from({ 'content-type': 'application/json' }),
+        config,
+      };
+      error.isAxiosError = true;
+      throw error;
+    };
+
+    const client = createApiClient(
+      'http://server.example/api/v1',
+      () => 'stale-access-token',
+      undefined,
+      onAuthFailed,
+      undefined,
+      () => 'refresh-token-v1',
+    );
+    client.defaults.adapter = adapter;
+
+    await expect(client.get('/users/@me')).rejects.toBeTruthy();
+    expect(onAuthFailed).not.toHaveBeenCalled();
   });
 
   it('omits the refresh body when no per-server refresh token is available', async () => {

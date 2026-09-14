@@ -13,6 +13,12 @@ import { useAuthStore } from '../stores/authStore';
 import { useServerListStore } from '../stores/serverListStore';
 import type { ApiRequestContext } from './requestContext';
 import { DATABASE_HISTORY_HEADER } from '../lib/databaseHistory';
+import {
+  coordinateRefresh,
+  HOME_REFRESH_SCOPE,
+  type SessionRefreshResult,
+} from '../lib/authRefreshCoordinator';
+import { noteSessionEnded, SESSION_REVOKED_MESSAGE } from '../lib/sessionEnded';
 
 const API_SLOW_REQUEST_MS = 800;
 const API_TIMING_VERBOSE =
@@ -27,6 +33,7 @@ const API_LOG_INTERACTION_TOKEN_PATH_RE =
   /(\/interactions\/[^/?#\s]+\/)([^/?#\s]+)(?=(?:\/(?:callback|messages|followup)|[/?#\s]|$))/gi;
 
 let apiRequestSequence = 0;
+let clientInstanceSequence = 0;
 
 type TimedRequestConfig = {
   _paracordContext?: ApiRequestContext;
@@ -181,46 +188,80 @@ const clearPersistedAuth = () => {
   clearLegacyPersistedAuth();
 };
 
-// Single-flight refresh guard for the legacy client. When multiple requests
-// 401 at once (e.g. a burst on app load), the first one performs the refresh
-// and every concurrent 401 awaits the same promise. Without this, the 2nd+
-// refresh would present an already-rotated refresh token, fail, and log the
-// user out mid-session.
-let legacyRefreshPromise: Promise<string> | null = null;
+/**
+ * True when the server has definitively said the session no longer exists.
+ *
+ * Only this answer may end a session. A timeout, a dropped connection, a 500 or
+ * a 503 mean "ask again later" — tearing the session down on those is how a
+ * four-second server restart used to sign the user out of an app that was
+ * otherwise fine.
+ */
+function isSessionGoneError(err: unknown): boolean {
+  const status = apiErrorStatus(err);
+  return status === 401 || status === 403;
+}
 
 /**
- * Shared single-flight session refresh for the active server.
+ * End the home session and say why.
  *
- * Every caller that refreshes the *same* credential must go through here.
- * The server rotates the refresh token on each use, so two concurrent
- * refreshes present the same (now-stale) token and the loser 401s — which
- * previously logged the user out at random on page load, because session
- * bootstrap refreshed on its own path while the request interceptor
- * refreshed on this one.
+ * Clearing `authStore` alone is not enough: the saved-server entry that carries
+ * the *same* credential keeps its copy, `ProtectedRoute` still sees a hydrated
+ * server session, and the user is left inside a shell with no name, no
+ * buildings and a permanent "Connection lost" bar. Every copy of the dead
+ * credential goes, and the sign-in screen is handed a sentence to show.
+ */
+function endHomeSession(reason: string): void {
+  const deadAccess = getAccessToken();
+  const deadRefresh = getRefreshToken();
+  clearPersistedAuth();
+  useAuthStore.setState({ token: null, user: null });
+
+  const store = useServerListStore.getState();
+  for (const server of store.servers) {
+    const carriesDeadCredential =
+      (!!deadAccess && server.token === deadAccess) ||
+      (!!deadRefresh && server.refreshToken === deadRefresh);
+    if (!carriesDeadCredential) continue;
+    store.updateToken(server.id, '');
+    store.updateRefreshToken(server.id, null);
+  }
+
+  noteSessionEnded(reason);
+}
+
+/**
+ * Shared single-flight session refresh for the home session.
+ *
+ * Every caller that refreshes the *same* credential must go through the
+ * refresh coordinator with the same scope key — see
+ * `lib/authRefreshCoordinator`. The server rotates the refresh token on each
+ * use and treats a second presentation of a spent token as theft, so two
+ * concurrent refreshes do not merely make the loser 401: they revoke every
+ * session the account has.
  */
 export function refreshSharedSession(): Promise<string> {
   return refreshLegacyToken();
 }
 
 async function refreshLegacyToken(context?: ApiRequestContext): Promise<string> {
-  if (!legacyRefreshPromise) {
-    legacyRefreshPromise = (async () => {
-      const refreshToken = getRefreshToken();
-      const refresh = await apiClient.post<{ token: string; refresh_token?: string }>(
-        '/auth/refresh',
-        refreshToken ? { refresh_token: refreshToken } : undefined,
-        context ? { _paracordContext: context, signal: context.signal } : undefined,
-      );
-      context?.assertCurrent();
-      const nextToken = refresh.data.token;
-      setAccessToken(nextToken);
-      if (refresh.data.refresh_token) setRefreshToken(refresh.data.refresh_token);
-      return nextToken;
-    })().finally(() => {
-      legacyRefreshPromise = null;
-    });
-  }
-  return legacyRefreshPromise;
+  const result = await coordinateRefresh(HOME_REFRESH_SCOPE, async () => {
+    // Read the stored refresh token *inside* the flight: a value captured
+    // before someone else's rotation is precisely the spent credential that
+    // trips the server's reuse detection.
+    const refreshToken = getRefreshToken();
+    const refresh = await apiClient.post<{ token: string; refresh_token?: string }>(
+      '/auth/refresh',
+      refreshToken ? { refresh_token: refreshToken } : undefined,
+      context ? { _paracordContext: context, signal: context.signal } : undefined,
+    );
+    return { token: refresh.data.token, refreshToken: refresh.data.refresh_token ?? null };
+  });
+  context?.assertCurrent();
+  // Applied by every caller, including one that only joined someone else's
+  // flight, so nobody is left holding the pre-rotation credential.
+  setAccessToken(result.token);
+  if (result.refreshToken) setRefreshToken(result.refreshToken);
+  return result.token;
 }
 
 function markRequestApiReachable(baseURL: string | undefined, reachable: boolean): void {
@@ -318,20 +359,20 @@ apiClient.interceptors.response.use(
         original.headers = original.headers ?? {};
         original.headers.Authorization = `Bearer ${nextToken}`;
         return apiClient.request(original);
-      } catch {
+      } catch (refreshErr) {
         original?._paracordContext?.assertCurrent();
-        clearPersistedAuth();
-        // Clear auth state so ProtectedRoute redirects to /login via React
-        // Router.  A hard `window.location.href` navigation would kill all
-        // active WebSocket connections (voice, gateway) mid-call.
-        useAuthStore.setState({ token: null, user: null });
+        // Only a definitive "this session is gone" ends the session. A refresh
+        // that failed because the server was restarting must leave the
+        // credential alone — ProtectedRoute redirects to /login via React
+        // Router, and a hard navigation would kill voice and gateway sockets
+        // mid-call over what was a four-second blip.
+        if (isSessionGoneError(refreshErr)) endHomeSession(SESSION_REVOKED_MESSAGE);
         return Promise.reject(err);
       }
     }
 
     if (err.response?.status === 401 && original?.url !== '/auth/refresh') {
-      clearPersistedAuth();
-      useAuthStore.setState({ token: null, user: null });
+      endHomeSession(SESSION_REVOKED_MESSAGE);
     }
     return Promise.reject(err);
   }
@@ -350,6 +391,14 @@ export function createApiClient(
   onAuthFailed?: () => void,
   onApiReachabilityChanged?: (reachable: boolean) => void,
   getRefreshToken?: () => string | null,
+  /**
+   * Which *credential* this client refreshes, so every instance that draws on
+   * the same stored refresh token shares one flight. Omit it only for a client
+   * whose session is genuinely its own — the default is a key unique to this
+   * instance, which is a single-flight guard for this instance alone and, as
+   * this app learned the hard way, no guard at all for a shared credential.
+   */
+  refreshScope?: string | (() => string),
 ): AxiosInstance {
   const client = axios.create({
     baseURL: baseUrl,
@@ -359,33 +408,34 @@ export function createApiClient(
     adapter: getTauriAdapter(),
   });
 
-  // Single-flight refresh guard scoped to this client instance. Concurrent
-  // 401s share one in-flight refresh so rotating refresh tokens are not
-  // presented twice (which would fail and tear down the connection).
-  let refreshPromise: Promise<string> | null = null;
-  const refreshAccessToken = (context?: ApiRequestContext): Promise<string> => {
-    if (!refreshPromise) {
-      refreshPromise = (async () => {
+  const ownScope = `auth:client:${baseUrl}:${(clientInstanceSequence += 1)}`;
+  const resolveRefreshScope = (): string =>
+    typeof refreshScope === 'function' ? refreshScope() : (refreshScope ?? ownScope);
+
+  const refreshAccessToken = async (context?: ApiRequestContext): Promise<string> => {
+    const result: SessionRefreshResult = await coordinateRefresh(
+      resolveRefreshScope(),
+      async () => {
         // Pass the stored per-server refresh token in the body: for remote
         // servers the HttpOnly `paracord_refresh` cookie is unavailable
-        // cross-origin, so cookie-only refresh always 401s.
+        // cross-origin, so cookie-only refresh always 401s. Read it inside the
+        // flight — a token captured before another caller's rotation is the
+        // spent credential that trips reuse detection.
         const refreshToken = getRefreshToken?.() ?? null;
         const refresh = await client.post<{ token: string; refresh_token?: string }>(
           '/auth/refresh',
           refreshToken ? { refresh_token: refreshToken } : undefined,
           context ? { _paracordContext: context, signal: context.signal } : undefined,
         );
-        context?.assertCurrent();
-        const nextToken = refresh.data.token;
-        // Persist the rotated refresh token so the next refresh presents a
-        // valid credential (the server rotates on every refresh).
-        onTokenRefreshed?.(nextToken, refresh.data.refresh_token);
-        return nextToken;
-      })().finally(() => {
-        refreshPromise = null;
-      });
-    }
-    return refreshPromise;
+        return { token: refresh.data.token, refreshToken: refresh.data.refresh_token ?? null };
+      },
+    );
+    context?.assertCurrent();
+    // Persist the rotated refresh token so the next refresh presents a valid
+    // credential (the server rotates on every refresh). Run for joiners too,
+    // so a client that only awaited someone else's flight still stores it.
+    onTokenRefreshed?.(result.token, result.refreshToken ?? undefined);
+    return result.token;
   };
 
   // Auth interceptor
@@ -474,9 +524,12 @@ export function createApiClient(
           original.headers = original.headers ?? {};
           original.headers.Authorization = `Bearer ${nextToken}`;
           return client.request(original);
-        } catch {
+        } catch (refreshErr) {
           original?._paracordContext?.assertCurrent();
-          onAuthFailed?.();
+          // A refresh that failed because the server was unreachable or
+          // restarting is not a reason to throw the credential away; only the
+          // server saying the session is gone is.
+          if (isSessionGoneError(refreshErr)) onAuthFailed?.();
           return Promise.reject(err);
         }
       }

@@ -21,6 +21,8 @@ import { dispatchGatewayEvent } from '../gateway/dispatch';
 import { logVoiceDiagnostic } from './desktopDiagnostics';
 import { LOCAL_SERVER_ID, sameServerUrl } from './serverScope';
 import { configuredHomeServerUrl, findHomeServerEntry, getServerAccountScope, resolveHomeServerUrl } from './serverIdentity';
+import { coordinateRefresh, HOME_REFRESH_SCOPE, serverRefreshScope } from './authRefreshCoordinator';
+import { noteSessionEnded, SESSION_REVOKED_MESSAGE } from './sessionEnded';
 import { acceptDatabaseHistoryEpoch, getDatabaseHistoryEpoch, registerHistoryReconciler } from './databaseHistory';
 import { toast } from '../stores/toastStore';
 import { notifyServerDisconnected } from './serverDisconnect';
@@ -703,6 +705,27 @@ class ConnectionManager {
     }
   }
 
+  /**
+   * Which refresh flight a server entry belongs to.
+   *
+   * Keyed on the *credential*, not on the store entry. The same signed-in
+   * account can appear under two scopes at once — the legacy `__local__` entry
+   * and an added server entry are the same session under two names — and two
+   * scopes refreshing independently race each other into the server's
+   * reuse detection, which revokes every session the account has. Whatever it
+   * is called, an entry holding the home session's token shares the home
+   * flight; only a genuinely separate session gets its own.
+   */
+  private refreshScopeForServer(serverId: string, isHomeEntry: boolean): string {
+    if (isHomeEntry) return HOME_REFRESH_SCOPE;
+    const current = useServerListStore.getState().getServer(serverId);
+    const homeRefresh = getRefreshToken();
+    if (homeRefresh && current?.refreshToken === homeRefresh) return HOME_REFRESH_SCOPE;
+    const homeAccess = useAuthStore.getState().token;
+    if (homeAccess && current?.token === homeAccess) return HOME_REFRESH_SCOPE;
+    return serverRefreshScope(serverId);
+  }
+
   private promoteLocalAuthSession(token: string, refreshToken?: string | null): void {
     setAccessToken(token);
     useAuthStore.setState({ token });
@@ -711,31 +734,51 @@ class ConnectionManager {
     }
   }
 
+  /**
+   * Refresh a saved server's session through the shared single-flight.
+   *
+   * This used to POST `/auth/refresh` on its own, with its own captured token,
+   * while the axios interceptors for the same credential were refreshing on
+   * theirs. The server rotates on every refresh and treats a second
+   * presentation of a spent token as theft, so the loser of that race did not
+   * merely fail — it revoked every session the account had, and the desktop
+   * dropped to "Unknown user" with no buildings and no explanation.
+   *
+   * `readRefreshToken` is read *inside* the flight, never captured by the
+   * caller, so a rotation that lands first is picked up rather than raced.
+   */
   private async refreshServerSession(
     serverId: string,
     client: AxiosInstance,
-    refreshToken: string | null,
+    readRefreshToken: () => string | null,
     promoteToLocalAuth: boolean,
   ): Promise<string | null> {
-    if (!refreshToken) return null;
+    if (!readRefreshToken()) return null;
 
+    const scopeKey = this.refreshScopeForServer(serverId, promoteToLocalAuth);
     try {
-      const { data } = await client.post<{ token?: string; refresh_token?: string }>(
-        '/auth/refresh',
-        { refresh_token: refreshToken },
-        { timeout: 10_000 },
-      );
-      const nextToken = data.token;
-      if (!nextToken) return null;
-      useServerListStore.getState().updateToken(serverId, nextToken);
-      if (data.refresh_token) {
-        useServerListStore.getState().updateRefreshToken(serverId, data.refresh_token);
+      const result = await coordinateRefresh(scopeKey, async () => {
+        const refreshToken = readRefreshToken();
+        if (!refreshToken) throw new Error('No refresh token for this server');
+        const { data } = await client.post<{ token?: string; refresh_token?: string }>(
+          '/auth/refresh',
+          { refresh_token: refreshToken },
+          { timeout: 10_000 },
+        );
+        if (!data.token) throw new Error('Refresh response carried no token');
+        return { token: data.token, refreshToken: data.refresh_token ?? null };
+      });
+      // Applied here, not inside the flight, so this server's stored copy is
+      // updated even when another caller performed the refresh.
+      useServerListStore.getState().updateToken(serverId, result.token);
+      if (result.refreshToken) {
+        useServerListStore.getState().updateRefreshToken(serverId, result.refreshToken);
       }
       if (promoteToLocalAuth) {
-        this.promoteLocalAuthSession(nextToken, data.refresh_token);
+        this.promoteLocalAuthSession(result.token, result.refreshToken);
       }
       logVoiceDiagnostic('[gateway] refreshed saved server session', { server: serverId });
-      return nextToken;
+      return result.token;
     } catch (err) {
       logVoiceDiagnostic('[gateway] saved server refresh failed', {
         server: serverId,
@@ -766,6 +809,9 @@ class ConnectionManager {
       undefined,
       (reachable) => useServerListStore.getState().setApiReachable(serverId, reachable),
       () => verifiedRefreshToken,
+      // This probe carries the *home* session's tokens, so it must share the
+      // home refresh flight and not open one of its own.
+      HOME_REFRESH_SCOPE,
     );
 
     try {
@@ -833,10 +879,14 @@ class ConnectionManager {
       () => {
         setAccessToken(null);
         useAuthStore.setState({ token: null, user: null });
+        // Say why. Without this the shell simply empties itself: no name, no
+        // buildings, a permanent "Connection lost" bar and no sign-in screen.
+        noteSessionEnded(SESSION_REVOKED_MESSAGE);
         this.disconnectServer(LOCAL_SERVER_ID);
       },
       undefined,
       () => getRefreshToken(),
+      HOME_REFRESH_SCOPE,
     );
 
     const conn: ServerConnection = {
@@ -936,6 +986,13 @@ class ConnectionManager {
         useServerListStore.getState().updateToken(serverId, '');
         useServerListStore.getState().updateRefreshToken(serverId, null);
         useServerListStore.getState().setApiReachable(serverId, false);
+        if (isLocalServerEntry) {
+          // This entry carried the home session, so the app is about to land
+          // on the sign-in screen. Give it a sentence to show.
+          setAccessToken(null);
+          useAuthStore.setState({ token: null, user: null });
+          noteSessionEnded(SESSION_REVOKED_MESSAGE);
+        }
         this.disconnectServer(serverId);
       },
       (reachable) => useServerListStore.getState().setApiReachable(serverId, reachable),
@@ -946,6 +1003,15 @@ class ConnectionManager {
         }
         return current?.refreshToken || null;
       },
+      // Resolved per refresh, not captured, and keyed on the *credential*
+      // rather than on this store entry. The same signed-in account can appear
+      // under two scopes at once — the legacy `__local__` entry and the added
+      // server entry are the same session under two names — and if those two
+      // refresh independently they race each other into the server's reuse
+      // detection. Whatever it is called, an entry holding the home session's
+      // token shares the home flight; only a genuinely separate session
+      // (its own refresh token, its own server-side row) gets its own.
+      () => this.refreshScopeForServer(serverId, isLocalServerEntry),
     );
 
     // If we don't have a valid token, do challenge-response auth.
@@ -970,7 +1036,7 @@ class ConnectionManager {
       const refreshedToken = await this.refreshServerSession(
         serverId,
         client,
-        useServerListStore.getState().getServer(serverId)?.refreshToken ?? null,
+        () => useServerListStore.getState().getServer(serverId)?.refreshToken ?? null,
         // Promote to the global/home session only for the configured local server.
         // A different loopback server (e.g. a second self-hosted instance on another
         // port) is a distinct session and must not overwrite the home auth token.
