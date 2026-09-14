@@ -17,6 +17,13 @@ import { useInteractionStore } from '../stores/interactionStore';
 import { getAccountMessagingRuntime } from '../lib/messages/accountMessagingRuntime';
 import { GatewayEvents } from './events';
 import { sendNotification, isEnabled as notificationsEnabled } from '../lib/features/notifications';
+import {
+  effectiveNotificationLevel,
+  messageAddressesReader,
+  shouldNotifyForMessage,
+} from '../lib/features/messageNotifications';
+import { useNotificationPreferenceStore } from '../stores/notificationPreferenceStore';
+import { accountScopeKey } from '../lib/serverScope';
 import type { Channel, Guild, Member, Message, Poll, Presence, User, VoiceState } from '../types';
 import type { Component } from '../types/components';
 import { InteractionCallbackType } from '../types/interactions';
@@ -257,9 +264,29 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
         const authorId = data.author?.id ?? data.user_id;
         const focusedChannelId = channels.selectedChannelId;
         const isDocumentFocused = typeof document !== 'undefined' && document.hasFocus();
+        // A building you muted, and a room you told to say nothing, must be
+        // quiet on the desktop too — this used to consult nothing but the
+        // global switch, so the sidebar went silent and the notifications
+        // kept coming.
+        const preferenceKey = memberScope ? accountScopeKey(memberScope) : null;
+        const preferences = useNotificationPreferenceStore.getState();
+        const roomSetting = preferenceKey
+          ? preferences.channelsByAccount[preferenceKey]?.[data.channel_id]
+          : undefined;
+        const guildId = channels.channelsById[data.channel_id]?.guild_id;
+        const buildingSetting = preferenceKey && guildId
+          ? preferences.byAccount[preferenceKey]?.[guildId]
+          : undefined;
+        const level = effectiveNotificationLevel(roomSetting, buildingSetting);
+        const addressesReader = messageAddressesReader(
+          data,
+          currentUserId,
+          Boolean(roomSetting?.suppress_everyone ?? buildingSetting?.suppress_everyone),
+        );
         if (
           authorId !== currentUserId &&
-          !(isDocumentFocused && focusedChannelId === data.channel_id)
+          !(isDocumentFocused && focusedChannelId === data.channel_id) &&
+          shouldNotifyForMessage(level, addressesReader)
         ) {
           const channelName = channels.channelsById[data.channel_id]?.name;
           const authorName = data.author?.username ?? 'Someone';
