@@ -34,6 +34,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::Bytes;
 use h3::ext::Protocol;
@@ -342,15 +343,294 @@ async fn strip_stream_header(
     Ok(())
 }
 
+// ── Accepting streams without head-of-line blocking ─────────────────────
+
+/// How long one accepted stream has to say what it is.
+///
+/// A stream announces itself in its first varint — a WebTransport stream in its
+/// first two — and every peer writes those bytes as it creates the stream. A
+/// stream that has said nothing by the time this elapses is not going to be
+/// routed as media, so it stops occupying a classification slot. It is not
+/// *reset*: see [`ignore_foreign_stream`].
+const STREAM_HEADER_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// How many accepted streams may be waiting to be classified at once.
+///
+/// Classification runs off the accept loop, which is the whole point of this
+/// path — but it must not be unbounded, or a peer that opens streams and says
+/// nothing would spend the server's memory for it. Past this, a newly accepted
+/// stream is reset rather than classified.
+const MAX_PENDING_STREAM_HEADERS: usize = 128;
+
+/// How many foreign streams one session will sit and drain (see
+/// [`ignore_foreign_stream`]). An HTTP/3 connection has a handful: the control
+/// stream, the two QPACK streams, and possibly a GREASE stream.
+const MAX_IGNORED_STREAMS: usize = 16;
+
+/// How many classified streams may queue for the caller before the classifier
+/// waits — which is back-pressure on one stream, never on the accept loop.
+const ACCEPT_QUEUE_CAPACITY: usize = 256;
+
+/// `0x1f * N + 0x21`: the reserved stream types a peer opens purely to check
+/// that the other side really does ignore what it does not know
+/// (RFC 9114 §6.2.3).
+fn is_grease_stream_type(stream_type: u64) -> bool {
+    stream_type >= 0x21 && (stream_type - 0x21).is_multiple_of(0x1f)
+}
+
+/// Name a stream type for a log line (RFC 9114 §6.2, RFC 9204 §4.2,
+/// RFC 9220 §4). Naming it is all this module does with it.
+fn describe_stream_type(stream_type: u64) -> String {
+    match stream_type {
+        0x00 => "the HTTP/3 control stream".to_string(),
+        0x01 => "an HTTP/3 push stream".to_string(),
+        0x02 => "the QPACK encoder stream".to_string(),
+        0x03 => "the QPACK decoder stream".to_string(),
+        WEBTRANSPORT_BIDI_STREAM_TYPE => "a WebTransport bidirectional stream".to_string(),
+        WEBTRANSPORT_UNI_STREAM_TYPE => "a WebTransport unidirectional stream".to_string(),
+        other if is_grease_stream_type(other) => format!("a GREASE stream ({other:#x})"),
+        other => format!("a stream of unknown type {other:#x}"),
+    }
+}
+
+/// Consume a stream that is not this session's, without disturbing the HTTP/3
+/// connection underneath it.
+///
+/// RFC 9114 §6.2.3 says a recipient that does not recognise a unidirectional
+/// stream's type ignores it; §6.2.1 says closing a *critical* stream — the
+/// control stream or either QPACK stream — is `H3_CLOSED_CRITICAL_STREAM`, a
+/// connection error. Together those rule out the obvious implementation,
+/// dropping the handle: quinn sends STOP_SENDING for a `RecvStream` dropped
+/// before EOF, and a browser answers STOP_SENDING on its control stream by
+/// closing the whole HTTP/3 connection — taking the call with it. So read the
+/// stream and throw the bytes away instead, until the peer finishes it or the
+/// connection ends.
+fn ignore_foreign_stream(
+    mut recv: quinn::RecvStream,
+    session_id: u64,
+    direction: &'static str,
+    what: String,
+    ignored: Arc<tokio::sync::Semaphore>,
+) {
+    let Ok(permit) = ignored.try_acquire_owned() else {
+        // A peer that opens this many streams we cannot read is not an HTTP/3
+        // connection doing its housekeeping. Reset this one.
+        tracing::debug!(
+            session_id,
+            direction,
+            stream = %what,
+            "resetting a foreign stream: this session is already draining its limit"
+        );
+        return;
+    };
+    tracing::debug!(
+        session_id,
+        direction,
+        stream = %what,
+        "ignoring a stream that does not belong to this WebTransport session"
+    );
+    tokio::spawn(async move {
+        let _permit = permit;
+        // Whatever has arrived, discarded. Nothing is buffered and nothing is
+        // parsed; `Ok(None)` is the peer's FIN.
+        while let Ok(Some(_chunk)) = recv.read_chunk(4096, false).await {}
+    });
+}
+
+/// Read one accepted stream's header **off the accept loop's critical path**,
+/// and hand the stream on if it is this session's.
+///
+/// This spawn is the fix for the defect this path had: reading the header
+/// inline meant the *first* stream to go quiet — an HTTP/3 control or QPACK
+/// stream that Chromium opens beside the session and does not write to
+/// immediately — parked the accept loop forever, and every keyframe stream the
+/// browser opened behind it queued in quinn and was never accepted. Video
+/// therefore never arrived at all while audio, which rides datagrams, was fine.
+///
+/// `surface` turns the readable half into whatever the caller receives: the
+/// receive stream alone for a unidirectional stream, the pair for a
+/// bidirectional one.
+///
+/// Streams are surfaced in header-completion order rather than accept order.
+/// Nothing downstream depends on accept order — the relay spawns a task per
+/// stream the moment it has one — and each stream is a whole self-describing
+/// frame.
+fn classify_in_background<T, F>(
+    mut recv: quinn::RecvStream,
+    expected_type: u64,
+    session_id: u64,
+    surface: F,
+    tx: tokio::sync::mpsc::Sender<T>,
+    pending: &Arc<tokio::sync::Semaphore>,
+    ignored: &Arc<tokio::sync::Semaphore>,
+) where
+    T: Send + 'static,
+    F: FnOnce(quinn::RecvStream) -> T + Send + 'static,
+{
+    let direction = if expected_type == WEBTRANSPORT_UNI_STREAM_TYPE {
+        "unidirectional"
+    } else {
+        "bidirectional"
+    };
+    let Ok(permit) = Arc::clone(pending).try_acquire_owned() else {
+        tracing::warn!(
+            session_id,
+            direction,
+            limit = MAX_PENDING_STREAM_HEADERS,
+            "resetting a stream: too many accepted streams have not declared themselves"
+        );
+        return;
+    };
+    let ignored = Arc::clone(ignored);
+    tokio::spawn(async move {
+        let header = tokio::time::timeout(
+            STREAM_HEADER_TIMEOUT,
+            strip_stream_header(&mut recv, expected_type, session_id),
+        )
+        .await;
+        let unclaimed = match header {
+            Ok(Ok(())) => {
+                // Ours. The permit is held until the caller has it, so the
+                // queue's bound is the real ceiling on streams in flight.
+                let _ = tx.send(surface(recv)).await;
+                drop(permit);
+                return;
+            }
+            Ok(Err(FramingError::UnexpectedStreamType { actual, .. })) => {
+                describe_stream_type(actual)
+            }
+            Ok(Err(FramingError::SessionMismatch { actual, .. })) => {
+                format!("a WebTransport stream of session {actual}")
+            }
+            Ok(Err(err)) => format!("an unreadable stream ({err})"),
+            Err(_elapsed) => "a stream that never declared a type".to_string(),
+        };
+        drop(permit);
+        ignore_foreign_stream(recv, session_id, direction, unclaimed, ignored);
+    });
+}
+
+/// The classified-stream queues of one session.
+#[derive(Debug)]
+struct SessionStreamQueues {
+    uni: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<quinn::RecvStream>>,
+    bi: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<(quinn::SendStream, quinn::RecvStream)>>,
+}
+
+/// The accept loops of one session, started on first use and shared by every
+/// clone of its [`WebTransportStreams`].
+#[derive(Debug)]
+struct StreamDemux {
+    conn: quinn::Connection,
+    session_id: u64,
+    queues: tokio::sync::OnceCell<SessionStreamQueues>,
+}
+
+impl StreamDemux {
+    /// The queues, starting the accept loops if this is the first caller.
+    ///
+    /// Lazy so that constructing a [`WebTransportStreams`] outside a Tokio
+    /// runtime is still just arithmetic; by the time anybody accepts a stream
+    /// there is a runtime by definition.
+    async fn queues(&self) -> &SessionStreamQueues {
+        self.queues.get_or_init(|| async { self.start() }).await
+    }
+
+    /// Spawn one accept loop per direction. Each loop does nothing but accept
+    /// and hand off — every byte of every header is read elsewhere.
+    fn start(&self) -> SessionStreamQueues {
+        let (uni_tx, uni_rx) = tokio::sync::mpsc::channel(ACCEPT_QUEUE_CAPACITY);
+        let (bi_tx, bi_rx) = tokio::sync::mpsc::channel(ACCEPT_QUEUE_CAPACITY);
+        let pending = Arc::new(tokio::sync::Semaphore::new(MAX_PENDING_STREAM_HEADERS));
+        let ignored = Arc::new(tokio::sync::Semaphore::new(MAX_IGNORED_STREAMS));
+        let session_id = self.session_id;
+
+        let conn = self.conn.clone();
+        let (loop_pending, loop_ignored) = (Arc::clone(&pending), Arc::clone(&ignored));
+        tokio::spawn(async move {
+            loop {
+                let recv = tokio::select! {
+                    accepted = conn.accept_uni() => match accepted {
+                        Ok(recv) => recv,
+                        Err(err) => {
+                            tracing::debug!(
+                                session_id,
+                                error = %err,
+                                "WebTransport unidirectional accept loop stopping"
+                            );
+                            break;
+                        }
+                    },
+                    // Nobody is left to take them: stop, and let the
+                    // connection handle this loop holds go with it.
+                    () = uni_tx.closed() => break,
+                };
+                classify_in_background(
+                    recv,
+                    WEBTRANSPORT_UNI_STREAM_TYPE,
+                    session_id,
+                    |recv| recv,
+                    uni_tx.clone(),
+                    &loop_pending,
+                    &loop_ignored,
+                );
+            }
+        });
+
+        let conn = self.conn.clone();
+        tokio::spawn(async move {
+            loop {
+                let (send, recv) = tokio::select! {
+                    accepted = conn.accept_bi() => match accepted {
+                        Ok(pair) => pair,
+                        Err(err) => {
+                            tracing::debug!(
+                                session_id,
+                                error = %err,
+                                "WebTransport bidirectional accept loop stopping"
+                            );
+                            break;
+                        }
+                    },
+                    () = bi_tx.closed() => break,
+                };
+                classify_in_background(
+                    recv,
+                    WEBTRANSPORT_BIDI_STREAM_TYPE,
+                    session_id,
+                    move |recv| (send, recv),
+                    bi_tx.clone(),
+                    &pending,
+                    &ignored,
+                );
+            }
+        });
+
+        SessionStreamQueues {
+            uni: tokio::sync::Mutex::new(uni_rx),
+            bi: tokio::sync::Mutex::new(bi_rx),
+        }
+    }
+
+    /// Why there will be no more streams. The accept loops only ever stop on a
+    /// connection error, so by the time a queue runs dry the connection has a
+    /// close reason to give.
+    fn terminal_error(&self) -> quinn::ConnectionError {
+        self.conn
+            .close_reason()
+            .unwrap_or(quinn::ConnectionError::LocallyClosed)
+    }
+}
+
 /// Opens and accepts WebTransport streams on one session, applying the HTTP/3
 /// framing described in this module's header.
 ///
-/// Cheap to clone (a `quinn::Connection` handle plus the session id), so every
-/// task that needs to move a stream can hold one.
+/// Cheap to clone — a handle on the session's shared accept loops — so every
+/// task that needs to move a stream can hold one. Clones share one queue per
+/// direction: a stream is delivered to exactly one caller.
 #[derive(Clone, Debug)]
 pub struct WebTransportStreams {
-    conn: quinn::Connection,
-    session_id: u64,
+    demux: Arc<StreamDemux>,
 }
 
 impl WebTransportStreams {
@@ -359,22 +639,28 @@ impl WebTransportStreams {
     /// `session_id` is the stream id of the extended-CONNECT request the session
     /// was established on.
     pub fn new(conn: quinn::Connection, session_id: u64) -> Self {
-        Self { conn, session_id }
+        Self {
+            demux: Arc::new(StreamDemux {
+                conn,
+                session_id,
+                queues: tokio::sync::OnceCell::new(),
+            }),
+        }
     }
 
     /// The WebTransport session id these streams are tagged with.
     pub fn session_id(&self) -> u64 {
-        self.session_id
+        self.demux.session_id
     }
 
     /// The RFC 9297 quarter stream id that prefixes this session's datagrams.
     pub fn datagram_quarter_stream_id(&self) -> u64 {
-        datagram_quarter_stream_id(self.session_id)
+        datagram_quarter_stream_id(self.demux.session_id)
     }
 
     /// The underlying QUIC connection (statistics, close reason, teardown).
     pub fn connection(&self) -> &quinn::Connection {
-        &self.conn
+        &self.demux.conn
     }
 
     /// Open a bidirectional stream to the peer, headed for this session.
@@ -382,10 +668,10 @@ impl WebTransportStreams {
     /// The header is written before the caller gets the stream, so the first
     /// bytes the caller writes are the first bytes of the *payload*.
     pub async fn open_bi(&self) -> Result<(quinn::SendStream, quinn::RecvStream), FramingError> {
-        let (mut send, recv) = self.conn.open_bi().await?;
+        let (mut send, recv) = self.demux.conn.open_bi().await?;
         send.write_all(&stream_header(
             WEBTRANSPORT_BIDI_STREAM_TYPE,
-            self.session_id,
+            self.demux.session_id,
         ))
         .await?;
         Ok((send, recv))
@@ -393,32 +679,13 @@ impl WebTransportStreams {
 
     /// Open a unidirectional stream to the peer, headed for this session.
     pub async fn open_uni(&self) -> Result<quinn::SendStream, FramingError> {
-        let mut send = self.conn.open_uni().await?;
+        let mut send = self.demux.conn.open_uni().await?;
         send.write_all(&stream_header(
             WEBTRANSPORT_UNI_STREAM_TYPE,
-            self.session_id,
+            self.demux.session_id,
         ))
         .await?;
         Ok(send)
-    }
-
-    /// Accept exactly one bidirectional stream and validate its header.
-    ///
-    /// Reports precisely why a stream was not this session's. Callers that just
-    /// want the next stream of this session should use [`Self::accept_bi`].
-    pub async fn try_accept_bi(
-        &self,
-    ) -> Result<(quinn::SendStream, quinn::RecvStream), FramingError> {
-        let (send, mut recv) = self.conn.accept_bi().await?;
-        strip_stream_header(&mut recv, WEBTRANSPORT_BIDI_STREAM_TYPE, self.session_id).await?;
-        Ok((send, recv))
-    }
-
-    /// Accept exactly one unidirectional stream and validate its header.
-    pub async fn try_accept_uni(&self) -> Result<quinn::RecvStream, FramingError> {
-        let mut recv = self.conn.accept_uni().await?;
-        strip_stream_header(&mut recv, WEBTRANSPORT_UNI_STREAM_TYPE, self.session_id).await?;
-        Ok(recv)
     }
 
     /// Accept the next bidirectional stream **belonging to this session**,
@@ -426,42 +693,33 @@ impl WebTransportStreams {
     ///
     /// A WebTransport session shares its QUIC connection with the HTTP/3 layer
     /// underneath it, so the connection's accept queue is not this session's
-    /// alone. Anything that is not one of this session's streams is discarded
-    /// and the wait continues; only a connection-level failure ends it. Were a
-    /// stray stream returned as an error instead, the relay's accept loops —
-    /// which stop on error — would tear down a healthy call because a browser
-    /// opened an HTTP/3 control or QPACK stream a moment late.
+    /// alone: the browser's control stream, its two QPACK streams, a GREASE
+    /// stream and any other session's WebTransport streams arrive in the same
+    /// queue. Those are consumed and ignored, never surfaced and never reset —
+    /// and, crucially, never waited for. Only the connection ending ends this.
+    ///
+    /// Cancel-safe: the classification of every accepted stream lives in its own
+    /// task, so dropping this future (the relay selects on it) loses nothing.
     pub async fn accept_bi(
         &self,
     ) -> Result<(quinn::SendStream, quinn::RecvStream), quinn::ConnectionError> {
-        loop {
-            match self.try_accept_bi().await {
-                Ok(pair) => return Ok(pair),
-                Err(FramingError::Connection(err)) => return Err(err),
-                Err(err) => self.discard_foreign_stream(err, "bidirectional"),
-            }
-        }
+        let queues = self.demux.queues().await;
+        let mut queue = queues.bi.lock().await;
+        queue
+            .recv()
+            .await
+            .ok_or_else(|| self.demux.terminal_error())
     }
 
     /// Accept the next unidirectional stream belonging to this session, header
-    /// stripped. Same skipping rule as [`Self::accept_bi`].
+    /// stripped. Same rules as [`Self::accept_bi`].
     pub async fn accept_uni(&self) -> Result<quinn::RecvStream, quinn::ConnectionError> {
-        loop {
-            match self.try_accept_uni().await {
-                Ok(recv) => return Ok(recv),
-                Err(FramingError::Connection(err)) => return Err(err),
-                Err(err) => self.discard_foreign_stream(err, "unidirectional"),
-            }
-        }
-    }
-
-    fn discard_foreign_stream(&self, err: FramingError, direction: &str) {
-        tracing::debug!(
-            session_id = self.session_id,
-            direction,
-            error = %err,
-            "ignoring a stream that does not belong to this WebTransport session"
-        );
+        let queues = self.demux.queues().await;
+        let mut queue = queues.uni.lock().await;
+        queue
+            .recv()
+            .await
+            .ok_or_else(|| self.demux.terminal_error())
     }
 }
 
@@ -880,44 +1138,150 @@ mod tests {
         assert_eq!(recv.read_to_end(8192).await.unwrap(), payload);
     }
 
-    /// A stream tagged with someone else's session is refused, not handed to
-    /// the media reader with a corrupt first byte.
+    /// A stream tagged with someone else's session is never handed to the media
+    /// reader — the reader would see a corrupt first byte — and it does not stop
+    /// this session's own stream from arriving behind it.
     #[tokio::test]
-    async fn a_stream_naming_another_session_is_rejected() {
+    async fn a_stream_naming_another_session_is_never_surfaced() {
         let (server_conn, client_conn) = quinn_pair().await;
         let server = WebTransportStreams::new(server_conn, 0);
-        let impostor = WebTransportStreams::new(client_conn, 4);
+        let impostor = WebTransportStreams::new(client_conn.clone(), 4);
 
         let mut send = impostor.open_uni().await.unwrap();
-        send.write_all(b"payload").await.unwrap();
+        send.write_all(b"not ours").await.unwrap();
         send.finish().unwrap();
 
-        match server.try_accept_uni().await {
-            Err(FramingError::SessionMismatch { expected, actual }) => {
-                assert_eq!((expected, actual), (0, 4));
-            }
-            other => panic!("expected a session mismatch, got {other:?}"),
+        let mut ours = WebTransportStreams::new(client_conn, 0)
+            .open_uni()
+            .await
+            .unwrap();
+        ours.write_all(b"ours").await.unwrap();
+        ours.finish().unwrap();
+
+        let mut recv = tokio::time::timeout(Duration::from_secs(5), server.accept_uni())
+            .await
+            .expect("this session's stream arrives")
+            .expect("no connection error");
+        assert_eq!(
+            recv.read_to_end(4096).await.unwrap(),
+            b"ours",
+            "the other session's stream must not be surfaced as this one's"
+        );
+    }
+
+    /// A uni stream that is not a WebTransport stream at all — the HTTP/3
+    /// control stream, say — is read and thrown away, **not** reset.
+    ///
+    /// Dropping the handle is the obvious way to ignore it and the wrong one:
+    /// quinn sends STOP_SENDING for a `RecvStream` dropped before EOF, and
+    /// RFC 9114 §6.2.1 makes closing a critical stream a connection error, so a
+    /// browser answers by closing the whole HTTP/3 connection — and the call
+    /// with it. The proof is that the peer can still write to it afterwards.
+    #[tokio::test]
+    async fn an_http3_critical_stream_is_drained_rather_than_reset() {
+        let (server_conn, client_conn) = quinn_pair().await;
+        let server = WebTransportStreams::new(server_conn, 0);
+
+        // 0x00 is the HTTP/3 CONTROL stream type, and it stays open for the
+        // life of the connection.
+        let mut control = client_conn.open_uni().await.unwrap();
+        control.write_all(&[0x00]).await.unwrap();
+
+        // This session's own stream, opened behind it, still arrives.
+        let mut ours = WebTransportStreams::new(client_conn, 0)
+            .open_uni()
+            .await
+            .unwrap();
+        ours.write_all(b"keyframe").await.unwrap();
+        ours.finish().unwrap();
+        let mut recv = tokio::time::timeout(Duration::from_secs(5), server.accept_uni())
+            .await
+            .expect("the session's own stream arrives")
+            .expect("no connection error");
+        assert_eq!(recv.read_to_end(4096).await.unwrap(), b"keyframe");
+
+        // And the control stream is still writable: nothing stopped it.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        control
+            .write_all(&[0x04, 0x00])
+            .await
+            .expect("an ignored HTTP/3 control stream must not be reset");
+    }
+
+    /// The defect this accept path was rebuilt for: a stream that is accepted
+    /// and then says nothing must not hold up the streams behind it.
+    ///
+    /// Chromium opens its HTTP/3 control and QPACK streams beside the
+    /// WebTransport session, and one of them can sit silent. Reading each
+    /// header inline and in order parked the accept loop on that stream
+    /// forever, so every keyframe uni stream the browser opened afterwards
+    /// queued in quinn and was never accepted — 87 opened, 0 received, no
+    /// remote video anywhere while audio (which rides datagrams) was fine.
+    #[tokio::test]
+    async fn a_silent_stream_does_not_block_the_keyframes_behind_it() {
+        let (server_conn, client_conn) = quinn_pair().await;
+        let server = WebTransportStreams::new(server_conn, 0);
+        let browser = WebTransportStreams::new(client_conn.clone(), 0);
+
+        // A stream that is opened and never written to. `open_uni` alone does
+        // not put the stream on the wire, so write one byte that is not a
+        // complete header and then stop, which is exactly the shape that parked
+        // the old loop inside its first `read_varint`.
+        let mut silent = client_conn.open_uni().await.unwrap();
+        silent.write_all(&[0x40]).await.unwrap();
+
+        // Ten keyframes behind it.
+        for i in 0..10u8 {
+            let mut send = browser.open_uni().await.unwrap();
+            send.write_all(&[i; 64]).await.unwrap();
+            send.finish().unwrap();
+        }
+
+        for i in 0..10u8 {
+            let mut recv = tokio::time::timeout(Duration::from_secs(5), server.accept_uni())
+                .await
+                .unwrap_or_else(|_| panic!("keyframe {i} must not queue behind a silent stream"))
+                .expect("no connection error");
+            assert_eq!(recv.read_to_end(4096).await.unwrap().len(), 64);
         }
     }
 
-    /// A uni stream that is not a WebTransport stream at all (an HTTP/3 control
-    /// stream, say) is refused by type rather than misread as media.
+    /// The same, bidirectionally: the control plane's streams must not queue
+    /// behind an HTTP/3 request stream that has sent no frame yet.
     #[tokio::test]
-    async fn a_stream_of_the_wrong_type_is_rejected() {
+    async fn a_silent_stream_does_not_block_the_control_streams_behind_it() {
         let (server_conn, client_conn) = quinn_pair().await;
         let server = WebTransportStreams::new(server_conn, 0);
+        let browser = WebTransportStreams::new(client_conn.clone(), 0);
 
-        // 0x00 is the HTTP/3 CONTROL stream type.
-        let mut send = client_conn.open_uni().await.unwrap();
-        send.write_all(&[0x00, 0x04]).await.unwrap();
+        let (mut silent, _silent_recv) = client_conn.open_bi().await.unwrap();
+        silent.write_all(&[0x40]).await.unwrap();
+
+        let (mut send, _recv) = browser.open_bi().await.unwrap();
+        send.write_all(b"\x00\x00\x00\x02hi").await.unwrap();
         send.finish().unwrap();
 
-        match server.try_accept_uni().await {
-            Err(FramingError::UnexpectedStreamType { expected, actual }) => {
-                assert_eq!((expected, actual), (WEBTRANSPORT_UNI_STREAM_TYPE, 0));
-            }
-            other => panic!("expected a stream-type mismatch, got {other:?}"),
+        let (_send, mut recv) = tokio::time::timeout(Duration::from_secs(5), server.accept_bi())
+            .await
+            .expect("the control stream must not queue behind a silent stream")
+            .expect("no connection error");
+        assert_eq!(recv.read_to_end(4096).await.unwrap(), b"\x00\x00\x00\x02hi");
+    }
+
+    /// GREASE stream types (RFC 9114 §6.2.3) are recognised as something to
+    /// ignore rather than mistaken for a WebTransport stream.
+    #[test]
+    fn grease_stream_types_are_recognised() {
+        for reserved in [0x21u64, 0x21 + 0x1f, 0x21 + 0x1f * 2, 0x21 + 0x1f * 1000] {
+            assert!(is_grease_stream_type(reserved), "{reserved:#x}");
+            assert!(describe_stream_type(reserved).contains("GREASE"));
         }
+        for known in [0x00u64, 0x01, 0x02, 0x03, WEBTRANSPORT_UNI_STREAM_TYPE] {
+            assert!(!is_grease_stream_type(known), "{known:#x}");
+        }
+        assert_eq!(describe_stream_type(0x00), "the HTTP/3 control stream");
+        assert_eq!(describe_stream_type(0x02), "the QPACK encoder stream");
+        assert_eq!(describe_stream_type(0x03), "the QPACK decoder stream");
     }
 
     /// The HTTP/3 connection under a WebTransport session carries streams that
