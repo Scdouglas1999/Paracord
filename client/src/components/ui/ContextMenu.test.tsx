@@ -185,6 +185,39 @@ describe('ContextMenu', () => {
     expect(screen.getByTestId('icon')).toBeInTheDocument();
   });
 
+  it('keeps one label column when only some rows carry an icon', () => {
+    // "Follow the building" is the fourth choice of a four-way radio group and
+    // the only one without an icon; it used to start 26px left of the three
+    // above it, which reads as a row that has slipped out of its own menu.
+    const items: ContextMenuItem[] = [
+      { label: 'Every message', icon: <span data-testid="bell">B</span>, action: vi.fn(), selected: false },
+      { label: 'Follow the building', action: vi.fn(), selected: true },
+    ];
+    render(
+      <ContextMenu
+        items={items}
+        position={{ x: 100, y: 100 }}
+        onClose={onClose}
+      />
+    );
+    const rows = screen.getAllByRole('menuitemradio');
+    const columns = rows.map((row) => row.querySelectorAll('span.h-4.w-4').length);
+    expect(columns).toEqual([1, 1]);
+  });
+
+  it('leaves a menu with no icons at all flush', () => {
+    render(
+      <ContextMenu
+        items={[{ label: 'Copy', action: vi.fn() }, { label: 'Paste', action: vi.fn() }]}
+        position={{ x: 100, y: 100 }}
+        onClose={onClose}
+      />
+    );
+    for (const row of screen.getAllByRole('menuitem')) {
+      expect(row.querySelectorAll('span.h-4.w-4')).toHaveLength(0);
+    }
+  });
+
   it('renders shortcut text when provided', () => {
     const items: ContextMenuItem[] = [
       { label: 'Save', action: vi.fn(), shortcut: 'Ctrl+S' },

@@ -42,6 +42,8 @@ export function ContextMenu({ items, position, open = true, onClose, label = 'Co
   const menuRef = useRef<HTMLDivElement>(null);
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const { mounted, exiting, scenery } = usePresence(open);
+  /** True when at least one row draws an icon, so every row reserves its column. */
+  const anyIcon = items.some((item) => !item.divider && item.icon);
   // The caller drops `position` when it closes the menu, and the menu is still
   // on screen for the beat its leave takes — so the last one it was opened at
   // is kept, and the exit plays where the menu actually is. Adjusted during
@@ -187,6 +189,13 @@ export function ContextMenu({ items, position, open = true, onClose, label = 'Co
       aria-activedescendant={focusedIndex >= 0 ? `context-menu-item-${focusedIndex}` : undefined}
       {...scenery}
     >
+      {/*
+        One menu, one label column. A row without an icon used to close the gap
+        its neighbours reserve, so "Follow the building" — the fourth choice of
+        a four-way radio group — started 26px left of the three above it. When
+        any row in a menu carries an icon, every row reserves the column; a
+        menu with no icons at all still sits flush.
+      */}
       {items.map((item, i) => {
         if (item.divider) {
           return <div key={i} className="mx-1 my-1 h-px bg-border-subtle" />;
@@ -218,7 +227,7 @@ export function ContextMenu({ items, position, open = true, onClose, label = 'Co
             onMouseLeave={() => setFocusedIndex(-1)}
           >
             <span className="flex min-w-0 items-center gap-2.5">
-              {item.icon && (
+              {(item.icon || anyIcon) && (
                 <span className="flex h-4 w-4 shrink-0 items-center justify-center">
                   {item.icon}
                 </span>
