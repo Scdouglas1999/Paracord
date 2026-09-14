@@ -117,10 +117,28 @@ describe('InvitePage', () => {
     renderInvitePage();
 
     expect(await screen.findByText('Launch Guild')).toBeInTheDocument();
+    await user.click(screen.getByRole('checkbox'));
     await user.click(screen.getByRole('button', { name: 'Accept invite' }));
 
     expect(await screen.findByText('Login page')).toBeInTheDocument();
     expect(mockInviteApi.accept).not.toHaveBeenCalled();
+  });
+
+  it('will not accept until the rules are acknowledged', async () => {
+    const user = userEvent.setup();
+
+    renderInvitePage();
+
+    // The box arrives empty, and Accept waits for it. It used to arrive ticked,
+    // which made the acknowledgement a decoration: the one reader it exists for
+    // — someone joining a building whose verification gate the server enforces
+    // — agreed to rules they had not been shown.
+    expect(await screen.findByText('Launch Guild')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox')).not.toBeChecked();
+    expect(screen.getByRole('button', { name: 'Accept invite' })).toBeDisabled();
+
+    await user.click(screen.getByRole('checkbox'));
+    expect(screen.getByRole('button', { name: 'Accept invite' })).toBeEnabled();
   });
 
   it('accepts an invite with verification payload and selects the first text channel', async () => {
@@ -133,6 +151,7 @@ describe('InvitePage', () => {
       screen.getByPlaceholderText(/Verification answers/),
       'I accept the rules\nI am over 13',
     );
+    await user.click(screen.getByRole('checkbox'));
     await user.click(screen.getByRole('button', { name: 'Accept invite' }));
 
     await waitFor(() =>

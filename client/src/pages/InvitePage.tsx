@@ -24,7 +24,11 @@ export function InvitePage() {
   const [loadingPreview, setLoadingPreview] = useState(true);
   const [invitePreview, setInvitePreview] = useState<InvitePreview | null>(null);
   const [error, setError] = useState('');
-  const [verificationAck, setVerificationAck] = useState(true);
+  // An acknowledgement that arrives already ticked is not an acknowledgement:
+  // the server refuses the join without it on a gated building, so the one
+  // reader it exists for was agreeing to rules they had not been shown. It
+  // starts empty and gates Accept, the way the Terms box on /register does.
+  const [verificationAck, setVerificationAck] = useState(false);
   const [verificationAnswers, setVerificationAnswers] = useState('');
 
   useEffect(() => {
@@ -157,7 +161,7 @@ export function InvitePage() {
             onClick={handleAccept}
             size="lg"
             loading={loading}
-            disabled={loading || loadingPreview || !invitePreview}
+            disabled={loading || loadingPreview || !invitePreview || !verificationAck}
             aria-label={loading ? 'Joining server' : 'Accept invite'}
             className="w-full"
           >
