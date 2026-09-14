@@ -1,8 +1,8 @@
 import { create } from 'zustand';
 import type { ReadState } from '../types';
-import { accountScopeKey, type AccountScope, LOCAL_SERVER_ID } from '../lib/serverScope';
+import { accountScopeKey, type AccountScope } from '../lib/serverScope';
 import { captureScopedOperation, type OperationContext } from '../lib/operationContext';
-import { getServerAccountScope } from '../lib/serverIdentity';
+import { accountScopeServerIds, getServerAccountScope } from '../lib/serverIdentity';
 import { useServerListStore } from './serverListStore';
 import { extractApiError } from '../api/client';
 import { createChannelApi } from '../api/channels';
@@ -95,7 +95,7 @@ export const useReadStateStore = create<ReadStateStore>()((set, get) => ({
     return request.promise;
   },
   refreshAll: async () => {
-    const ids = [LOCAL_SERVER_ID, ...useServerListStore.getState().servers.filter(server => server.connected).map(server => server.id)];
+    const ids = accountScopeServerIds(useServerListStore.getState().servers.filter(server => server.connected).map(server => server.id));
     const scopes = ids.map(getServerAccountScope).filter((scope): scope is AccountScope => !!scope);
     // Each failure remains visible in its account's error state; another host's
     // successful request must not wait for or overwrite that failed account.

@@ -1,3 +1,4 @@
+import { findHomeServerEntry } from './serverIdentity';
 import { LOCAL_SERVER_ID } from './serverScope';
 import { useEffect, type ReactNode } from 'react';
 import { useGateway } from '../hooks/useGateway';
@@ -47,6 +48,15 @@ function AppInitializer({ children }: { children: ReactNode }) {
   const token = useAuthStore((s) => s.token);
   const homeUserId = useAuthStore(s => s.user?.id);
   const activeServerId = useServerListStore((s) => s.activeServerId);
+  const servers = useServerListStore((s) => s.servers);
+  // The one scope that names this account on the home server. On the desktop
+  // the server the user added IS the home server, so the entry's id is that
+  // scope; `__local__` is only the answer while no entry covers it.
+  const homeEntry = findHomeServerEntry(servers, token);
+  const homeScopeServerId = homeEntry?.id ?? LOCAL_SERVER_ID;
+  const homeScopeUserId = homeEntry
+    ? (homeEntry.token && homeEntry.user?.id === homeEntry.userId ? homeEntry.user?.id : undefined)
+    : homeUserId;
   const initializeSession = useAuthStore((s) => s.initializeSession);
   const hydrateServerTokens = useServerListStore((s) => s.hydrateTokens);
   const fetchUser = useAuthStore((s) => s.fetchUser);
@@ -83,9 +93,14 @@ function AppInitializer({ children }: { children: ReactNode }) {
     }
   }, [token, fetchUser, fetchSettings, fetchGuilds]);
 
+  // One server is one account. Fetching the home session's buildings under
+  // `__local__` while the gateway filed the same buildings under the added
+  // entry's scope is what listed every building twice on a fresh desktop
+  // install — and counted every person in them twice. Ask once, under the id
+  // that actually names this account.
   useEffect(() => {
-    if (token && homeUserId) void fetchGuilds({ serverId: LOCAL_SERVER_ID, userId: homeUserId });
-  }, [token, homeUserId, fetchGuilds]);
+    if (token && homeScopeUserId) void fetchGuilds({ serverId: homeScopeServerId, userId: homeScopeUserId });
+  }, [token, homeScopeServerId, homeScopeUserId, fetchGuilds]);
 
   useEffect(() => {
     if (!voiceConnected || !settings) return;

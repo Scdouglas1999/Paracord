@@ -19,8 +19,8 @@ import type { Activity, GatewayPayload } from '../types';
 import { GatewayEvents } from '../gateway/events';
 import { dispatchGatewayEvent } from '../gateway/dispatch';
 import { logVoiceDiagnostic } from './desktopDiagnostics';
-import { LOCAL_SERVER_ID } from './serverScope';
-import { getServerAccountScope } from './serverIdentity';
+import { LOCAL_SERVER_ID, sameServerUrl } from './serverScope';
+import { configuredHomeServerUrl, findHomeServerEntry, getServerAccountScope, resolveHomeServerUrl } from './serverIdentity';
 import { acceptDatabaseHistoryEpoch, getDatabaseHistoryEpoch, registerHistoryReconciler } from './databaseHistory';
 import { toast } from '../stores/toastStore';
 import { notifyServerDisconnected } from './serverDisconnect';
@@ -549,14 +549,10 @@ class ConnectionManager {
     }
 
     if (localToken) {
-      const localUrl = this.resolveLocalServerUrl().replace(/\/+$/, '');
-      const localAlreadyCovered = servers.some((s) => {
-        const latest = useServerListStore.getState().getServer(s.id);
-        return (
-          this.sameServerUrl(s.url, localUrl) ||
-          (!!localToken && latest?.token === localToken)
-        );
-      });
+      const localAlreadyCovered = !!findHomeServerEntry(
+        servers.map((s) => useServerListStore.getState().getServer(s.id) ?? s),
+        localToken,
+      );
       if (!localAlreadyCovered) {
         const local = this.connections.get(LOCAL_SERVER_ID);
         if (!local || !this.isConnectionHealthy(local)) return false;
@@ -681,46 +677,11 @@ class ConnectionManager {
    * and a guess must never be presented to the user as a server to trust.
    */
   private configuredLocalServerUrl(): string | null {
-    const stored = getStoredServerUrl();
-    if (stored) return stored;
-    const currentOrigin = getCurrentOriginServerUrl();
-    if (currentOrigin) return currentOrigin;
-    if (typeof window !== 'undefined' && /^https?:$/.test(window.location.protocol) && window.location.host) {
-      return `${window.location.protocol}//${window.location.host}`;
-    }
-    return null;
+    return configuredHomeServerUrl();
   }
 
   private resolveLocalServerUrl(): string {
-    const stored = getStoredServerUrl();
-    if (stored) return stored;
-
-    const currentOrigin = getCurrentOriginServerUrl();
-    if (currentOrigin) return currentOrigin;
-
-    if (typeof window !== 'undefined' && /^https?:$/.test(window.location.protocol) && window.location.host) {
-      return `${window.location.protocol}//${window.location.host}`;
-    }
-
-    return 'http://localhost:8080';
-  }
-
-  private canonicalServerUrl(url: string): string {
-    try {
-      const parsed = new URL(url);
-      const hostname = parsed.hostname.toLowerCase() === 'localhost'
-        ? '127.0.0.1'
-        : parsed.hostname.toLowerCase();
-      const port = parsed.port ? `:${parsed.port}` : '';
-      const pathname = parsed.pathname.replace(/\/+$/, '');
-      return `${parsed.protocol}//${hostname}${port}${pathname}`;
-    } catch {
-      return url.trim().replace(/\/+$/, '').toLowerCase();
-    }
-  }
-
-  private sameServerUrl(left: string, right: string): boolean {
-    return this.canonicalServerUrl(left) === this.canonicalServerUrl(right);
+    return resolveHomeServerUrl();
   }
 
   private isConfiguredLocalServerUrl(url: string): boolean {
@@ -729,7 +690,7 @@ class ConnectionManager {
       getCurrentOriginServerUrl(),
       this.resolveLocalServerUrl(),
     ].filter((candidate): candidate is string => !!candidate);
-    return candidates.some((candidate) => this.sameServerUrl(url, candidate));
+    return candidates.some((candidate) => sameServerUrl(url, candidate));
   }
 
   private isLoopbackServerUrl(url: string): boolean {
@@ -1944,18 +1905,16 @@ class ConnectionManager {
     // they never added and that is not running — a modal "Trust new Paracord
     // server?" prompt at every cold boot, and sixty seconds of a client that
     // cannot connect while it waits for an answer nobody knows to give.
+    // One entry per server: the shell issues a real `/health` GET for every URL
+    // in this list before it will talk to it, and the stored home URL is usually
+    // the very server already in the list under a different spelling.
     const allServerUrls = servers.map((s) => s.url);
     const localServerUrl = this.configuredLocalServerUrl();
-    if (localServerUrl && !allServerUrls.includes(localServerUrl)) {
+    if (localServerUrl && !allServerUrls.some((url) => sameServerUrl(url, localServerUrl))) {
       allServerUrls.push(localServerUrl);
     }
     await this.syncTrustedHosts(allServerUrls);
     const keepIds = new Set<string>();
-
-    // Determine the local server URL so we can detect when a server entry
-    // in the list points to the same host, avoiding duplicate SSE connections
-    // that fight each other for the same session.
-    const localUrl = this.resolveLocalServerUrl().replace(/\/+$/, '');
 
     if (servers.length > 0) {
       const results = await Promise.allSettled(servers.map((s) => this.connectServer(s.id)));
@@ -1972,13 +1931,10 @@ class ConnectionManager {
     // list, that entry already establishes the SSE connection — opening a
     // second one causes an infinite reconnect loop.
     const refreshedLocalToken = useAuthStore.getState().token;
-    const localAlreadyCovered = servers.some((s) => {
-      const latest = useServerListStore.getState().getServer(s.id);
-      return (
-        this.sameServerUrl(s.url, localUrl) ||
-        (!!refreshedLocalToken && latest?.token === refreshedLocalToken)
-      );
-    });
+    const localAlreadyCovered = !!findHomeServerEntry(
+      servers.map((s) => useServerListStore.getState().getServer(s.id) ?? s),
+      refreshedLocalToken,
+    );
     if (localToken && !localAlreadyCovered) {
       keepIds.add(LOCAL_SERVER_ID);
       await this.connectLocal();

@@ -19,7 +19,7 @@ import { DmE2eeError } from '../dmCipher';
 import { registerIdentityTrustVault, releaseIdentityTrustVault } from '../crypto/identityTrust';
 import { getDatabaseHistoryEpoch, subscribeDatabaseHistory } from '../databaseHistory';
 import { DatabaseHistoryExpiredError } from '../operationContext';
-import { getServerAccountScope, getServerUser } from '../serverIdentity';
+import { accountScopeServerIds, getServerAccountScope, getServerUser } from '../serverIdentity';
 import { accountScopeKey, LOCAL_SERVER_ID, type AccountScope } from '../serverScope';
 import { createAccountDeliveredMutations } from './accountDeliveredMutations';
 import { DeliveredMutations, DELETED_MESSAGES_NAMESPACE, type DeliveredMessageTarget, type DeliveredMutation } from './deliveredMutations';
@@ -989,7 +989,7 @@ let stopLifecycle: (() => void) | null = null;
 export function startAccountMessagingLifecycle() {
   if (stopLifecycle) return stopLifecycle;
   const start = () => {
-    for (const id of [LOCAL_SERVER_ID, ...useServerListStore.getState().servers.map(server => server.id)]) {
+    for (const id of accountScopeServerIds(useServerListStore.getState().servers.map(server => server.id))) {
       const scope = getServerAccountScope(id); if (scope) getAccountMessagingRuntime(scope);
     }
     reconcileAccountMessaging();

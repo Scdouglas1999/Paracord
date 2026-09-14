@@ -5,9 +5,9 @@ import { createChannelApi } from '../api/channels';
 import { createDmApi } from '../api/dms';
 import { extractApiError, isMissingOrForbidden } from '../api/client';
 import { captureScopedOperation, type OperationContext } from '../lib/operationContext';
-import { accountScopeKey, entityScopeKey, entityKeyBelongsToScope, LOCAL_SERVER_ID, type AccountScope } from '../lib/serverScope';
+import { accountScopeKey, entityScopeKey, entityKeyBelongsToScope, type AccountScope } from '../lib/serverScope';
 import { scopeChannel, type ScopedChannel, type ChannelReference } from '../lib/channelScope';
-import { getServerAccountScope } from '../lib/serverIdentity';
+import { accountScopeServerIds, getServerAccountScope } from '../lib/serverIdentity';
 import { fetchVisibleGuildChannels } from '../lib/guildChannels';
 import { useServerListStore } from './serverListStore';
 import { toast } from './toastStore';
@@ -195,7 +195,7 @@ export const useChannelStore = create<ChannelState>()((set, get) => ({
   fetchChannels: fetchCollection,
   fetchDmChannels: scope => fetchCollection('', scope),
   loadAllDmChannels: async () => {
-    const serverIds = [LOCAL_SERVER_ID, ...useServerListStore.getState().servers.filter(server => server.connected).map(server => server.id)];
+    const serverIds = accountScopeServerIds(useServerListStore.getState().servers.filter(server => server.connected).map(server => server.id));
     const scopes = serverIds.map(getServerAccountScope).filter((scope): scope is AccountScope => !!scope);
     await Promise.all(scopes.map(scope => get().fetchDmChannels(scope)));
   },
