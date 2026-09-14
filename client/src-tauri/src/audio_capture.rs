@@ -10,6 +10,46 @@ use paracord_codec::audio::resample::{StereoResampler, STEREO_FRAME_SAMPLES};
 /// There is no JS round-trip anymore.
 type ScreenAudioSink = mpsc::Sender<Vec<f32>>;
 
+/// One-shot report of whether the capture device actually opened.
+///
+/// The capture loop runs on its own thread, so before this existed
+/// `start_system_audio_capture_into` returned `Ok` the moment the thread was
+/// spawned — a sound server that refused the capture source failed a beat later,
+/// on that thread, into `eprintln!`. The UI had already been told audio was
+/// live, and the stream went out silent with nothing in the log a person would
+/// look at. Every capture backend now says "open" or "here is why not", and the
+/// caller waits for one of the two.
+struct StartupSignal {
+    tx: Mutex<Option<std::sync::mpsc::Sender<Result<(), String>>>>,
+}
+
+impl StartupSignal {
+    fn new(tx: std::sync::mpsc::Sender<Result<(), String>>) -> Self {
+        Self {
+            tx: Mutex::new(Some(tx)),
+        }
+    }
+
+    /// The device is open and delivering; the caller may report success.
+    fn ready(&self) {
+        self.report(Ok(()));
+    }
+
+    /// Capture could not start. Ignored if the device already reported ready —
+    /// a mid-session failure is not a startup failure.
+    fn failed(&self, reason: String) {
+        self.report(Err(reason));
+    }
+
+    fn report(&self, outcome: Result<(), String>) {
+        if let Ok(mut guard) = self.tx.lock() {
+            if let Some(tx) = guard.take() {
+                let _ = tx.send(outcome);
+            }
+        }
+    }
+}
+
 /// Accumulates arbitrary-size interleaved-stereo device-rate chunks and emits
 /// complete 48kHz 20ms stereo frames (1920 interleaved samples) into the sink,
 /// resampling with rubato when the source rate is not 48kHz (contract C4/AU3).
@@ -71,8 +111,15 @@ static SYSTEM_AUDIO_CAPTURE_ENABLED: AtomicBool = AtomicBool::new(false);
 // to SYSTEM_AUDIO_CAPTURE_ENABLED before any capture begins, and is reset each
 // time the session is torn down so consent must be re-confirmed per session.
 static NATIVE_CONSENT_GRANTED: AtomicBool = AtomicBool::new(false);
+/// Backstop for a sound server that neither opens the capture source nor
+/// refuses it. A missing server or a refused source answers immediately.
+const SYSTEM_AUDIO_START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-#[tauri::command]
+/// NOT a Tauri command. It used to carry `#[tauri::command]` and was never
+/// registered in `generate_handler!`, so the only caller that ever invoked it
+/// from the renderer got "command not found". System audio is driven entirely
+/// from `voice_set_screen_audio_enabled` (contract C4: no JS round-trip), and
+/// this is its Rust-side switch.
 pub fn set_system_audio_capture_enabled(enabled: bool) {
     SYSTEM_AUDIO_CAPTURE_ENABLED.store(enabled, Ordering::SeqCst);
     // Session teardown (JS calls this with `false` when stopping capture):
@@ -97,6 +144,17 @@ fn require_native_consent() -> Result<(), String> {
     } else {
         Err("System audio capture was denied at the native confirmation prompt".into())
     }
+}
+
+/// Obtain the native system-audio consent up front, before the caller takes any
+/// lock the rest of the app needs.
+///
+/// The prompt is a separate process the user has to read and answer, and it used
+/// to be raised from inside the media transition lock — which is held by mute,
+/// deafen, screen share, and every other media command. The app was unusable
+/// until the dialog was answered. Blocking: call it from `spawn_blocking`.
+pub fn ensure_system_audio_consent() -> Result<(), String> {
+    require_native_consent()
 }
 
 /// Show a native OS confirmation asking the user to allow system-audio capture.
@@ -260,11 +318,55 @@ pub fn start_system_audio_capture_into(
     #[cfg(not(target_os = "linux"))]
     let router_thread: Option<thread::JoinHandle<()>> = None;
 
+    let (startup_tx, startup_rx) = std::sync::mpsc::channel::<Result<(), String>>();
+    let startup = Arc::new(StartupSignal::new(startup_tx));
+    let thread_startup = startup.clone();
+
     let thread = thread::spawn(move || {
-        if let Err(e) = capture_loop(&sink, &stop, source_override.as_deref()) {
+        if let Err(e) = capture_loop(&sink, &stop, source_override.as_deref(), &thread_startup) {
+            // If the device never opened, this is the reason the caller is
+            // waiting for; if it had opened, the report is dropped and this is
+            // just a mid-session end.
+            thread_startup.failed(e.to_string());
             eprintln!("[audio_capture] Capture loop error: {e}");
         }
     });
+
+    // Wait for the device itself, not merely for the thread to exist. Returning
+    // Ok here without this is what published a screen share with a silent audio
+    // track and nothing in the UI to explain it.
+    let started = startup_rx.recv_timeout(SYSTEM_AUDIO_START_TIMEOUT);
+    match started {
+        Ok(Ok(())) => {}
+        Ok(Err(reason)) => {
+            stop_flag.store(true, Ordering::SeqCst);
+            let _ = thread.join();
+            if let Some(router_thread) = router_thread {
+                let _ = router_thread.join();
+            }
+            return Err(reason);
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            stop_flag.store(true, Ordering::SeqCst);
+            let _ = thread.join();
+            if let Some(router_thread) = router_thread {
+                let _ = router_thread.join();
+            }
+            return Err("System audio capture stopped before it reported a result.".into());
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            stop_flag.store(true, Ordering::SeqCst);
+            let _ = thread.join();
+            if let Some(router_thread) = router_thread {
+                let _ = router_thread.join();
+            }
+            return Err(format!(
+                "Your computer's sound server did not start recording within {}s, so this \
+                 stream would have gone out silent.",
+                SYSTEM_AUDIO_START_TIMEOUT.as_secs()
+            ));
+        }
+    }
 
     *guard = Some(CaptureHandle {
         stop_flag,
@@ -275,7 +377,9 @@ pub fn start_system_audio_capture_into(
     Ok(())
 }
 
-#[tauri::command]
+/// NOT a Tauri command — see [`set_system_audio_capture_enabled`]. Called from
+/// the screen-capture teardown on a blocking thread, because it joins the
+/// capture and router threads.
 pub fn stop_system_audio_capture() -> Result<(), String> {
     let mut guard = CAPTURE.lock().map_err(|e| e.to_string())?;
     if let Some(mut handle) = guard.take() {
@@ -289,11 +393,10 @@ pub fn stop_system_audio_capture() -> Result<(), String> {
             let _ = thread.join();
         }
     }
-    // Note: do NOT clear SYSTEM_AUDIO_CAPTURE_ENABLED here.
-    // The JS side calls stop then start in sequence to recover from stale
-    // sessions; clearing the flag here would cause the subsequent start to
-    // fail with "System audio capture disabled".  The flag is managed
-    // exclusively by set_system_audio_capture_enabled().
+    // Note: do NOT clear SYSTEM_AUDIO_CAPTURE_ENABLED here. The enable path
+    // stops a stale capture before starting a fresh one; clearing the flag here
+    // would make that start fail with "System audio capture disabled". The flag
+    // is managed exclusively by set_system_audio_capture_enabled().
     Ok(())
 }
 
@@ -431,6 +534,7 @@ fn capture_loop(
     sink: &ScreenAudioSink,
     stop_flag: &Arc<AtomicBool>,
     _source_override: Option<&str>,
+    startup: &StartupSignal,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Initialize COM on this thread — required for all WASAPI / IAudioClient calls.
     unsafe {
@@ -449,7 +553,7 @@ fn capture_loop(
     let my_pid = std::process::id();
 
     let result = match win_process_loopback::activate_process_loopback_exclude(my_pid) {
-        Ok(client) => capture_loop_with_client(sink, stop_flag, &client),
+        Ok(client) => capture_loop_with_client(sink, stop_flag, &client, startup),
         Err(e) => Err(format!(
             "System audio capture requires the Windows Process Loopback Exclusion \
              API (Windows 10 2004+), which is unavailable: {e}. Refusing to fall \
@@ -473,6 +577,7 @@ fn capture_loop_with_client(
     sink: &ScreenAudioSink,
     stop_flag: &Arc<AtomicBool>,
     client: &windows::Win32::Media::Audio::IAudioClient,
+    startup: &StartupSignal,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let is_process_loopback = true;
     use windows::Win32::Foundation::*;
@@ -558,6 +663,9 @@ fn capture_loop_with_client(
             return Err(e.into());
         }
 
+        // The endpoint is streaming: the caller may report stream audio live.
+        startup.ready();
+
         // Resample+chunk the device-rate stereo into 48kHz 20ms frames (C4/AU3).
         let mut emitter = match StereoFrameEmitter::new(sample_rate) {
             Ok(e) => e,
@@ -640,6 +748,7 @@ fn capture_loop(
     sink: &ScreenAudioSink,
     stop_flag: &Arc<AtomicBool>,
     source_override: Option<&str>,
+    startup: &StartupSignal,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use libpulse_binding::def::BufferAttr;
     use libpulse_binding::sample::{Format, Spec};
@@ -687,7 +796,15 @@ fn capture_loop(
         None,               // default channel map
         Some(&buffer_attr), // 20ms fragment for deterministic latency (AU11b)
     )
-    .map_err(|e| format!("Failed to connect to PulseAudio ({source}): {e}"))?;
+    .map_err(|e| {
+        format!(
+            "Your computer's sound server would not hand Paracord a recording of \
+             this machine's audio (capture source \"{source}\"): {e}"
+        )
+    })?;
+    // The device is open: everything below this line is a running capture, and
+    // the caller may tell the UI that stream audio is live.
+    startup.ready();
 
     // Read buffer: 20ms of stereo f32 audio at 48kHz = 960 frames * 2 ch * 4 bytes = 7680 bytes
     let frames_per_chunk: usize = 960;
@@ -733,6 +850,7 @@ fn capture_loop(
     _sink: &ScreenAudioSink,
     _stop_flag: &Arc<AtomicBool>,
     _source_override: Option<&str>,
+    _startup: &StartupSignal,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Err(
         "Native loopback system-audio capture is not used on macOS; integrated \
@@ -749,6 +867,7 @@ fn capture_loop(
     _sink: &ScreenAudioSink,
     _stop_flag: &Arc<AtomicBool>,
     _source_override: Option<&str>,
+    _startup: &StartupSignal,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Err("System audio capture is not supported on this platform.".into())
 }
@@ -893,5 +1012,40 @@ mod tests {
         set_system_audio_capture_enabled(false);
         assert!(!NATIVE_CONSENT_GRANTED.load(Ordering::SeqCst));
         assert!(!SYSTEM_AUDIO_CAPTURE_ENABLED.load(Ordering::SeqCst));
+    }
+
+    /// A capture loop that dies before the device opens must hand the caller the
+    /// reason. This is the seam that let a screen share publish a silent audio
+    /// track: the start returned Ok the moment the thread existed, and the real
+    /// failure arrived afterwards, on that thread, with nobody listening.
+    #[test]
+    fn a_capture_that_never_opens_reports_why_to_the_caller() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let signal = StartupSignal::new(tx);
+        signal.failed("the sound server refused the capture source".to_string());
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(1)),
+            Ok(Err(
+                "the sound server refused the capture source".to_string()
+            ))
+        );
+    }
+
+    /// Once the device is open, capture is live; a later error is the end of a
+    /// working session, not a failure to start, and must not be reported as one.
+    #[test]
+    fn a_failure_after_the_device_opened_is_not_a_startup_failure() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let signal = StartupSignal::new(tx);
+        signal.ready();
+        signal.failed("device disappeared mid-session".to_string());
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(1)),
+            Ok(Ok(()))
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "exactly one startup outcome is ever reported"
+        );
     }
 }

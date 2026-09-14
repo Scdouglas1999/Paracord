@@ -153,6 +153,13 @@ export interface MediaEngine {
   getScreenShareSourceThumbnail(sourceId: string): Promise<ScreenShareThumbnail | null>;
   /** Whether stream-audio capture is currently active for screen sharing. */
   isScreenShareAudioActive(): boolean;
+  /**
+   * Why stream audio is NOT being captured, in words a person can act on, or
+   * `null` when it is captured (or was never asked for). A stream that goes out
+   * silent must be able to say why; "System audio capture failed" told the user
+   * nothing he could do anything about.
+   */
+  getScreenShareAudioError(): string | null;
   /** Register a callback fired when the user stops screen sharing via the
    *  browser's native "Stop sharing" UI (track ended externally). */
   onScreenShareEnded(cb: () => void): void;

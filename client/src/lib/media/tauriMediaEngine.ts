@@ -510,6 +510,12 @@ export class TauriMediaEngine implements MediaEngine {
   // Screen share state for the native desktop capture path
   private screenShareEndedCb: (() => void) | null = null;
   private screenAudioActive = false;
+  /** Why stream audio is absent, in plain words; null when it is present. */
+  private screenAudioError: string | null = null;
+  /** True while `enableVideo(true)` is awaiting the native camera open. */
+  private cameraEnableInFlight = false;
+  /** The failure `enableVideo` already reported, and when, for de-duplication. */
+  private cameraEnableFailure: { message: string; at: number } | null = null;
   private screenEventUnlisten: UnlistenFn | null = null;
   private transportLostUnlisten: UnlistenFn | null = null;
   private transportLostCb: ((reason: string) => void) | null = null;
@@ -691,6 +697,11 @@ export class TauriMediaEngine implements MediaEngine {
     if (enabled) {
       await this.ensureNativeCameraEventListener();
       if (actionRevision !== this.cameraRevision) throw new DOMException("Camera action canceled", "AbortError");
+      // A failed open now rejects this invoke AND emits a camera error event.
+      // Both used to reach the toaster, so one missing camera produced two
+      // identical toasts. The rejection is the one the caller is waiting on, so
+      // the event is muted for the duration of the attempt.
+      this.cameraEnableInFlight = true;
       try {
         await this.invokeOwned('voice_enable_video', {
           enabled: true, actionRevision,
@@ -698,10 +709,12 @@ export class TauriMediaEngine implements MediaEngine {
           quality: null,
         });
       } catch (err) {
-        logVoiceDiagnostic('[media] native camera enable failed', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-        throw err instanceof Error ? err : new Error(String(err));
+        const message = err instanceof Error ? err.message : String(err);
+        logVoiceDiagnostic('[media] native camera enable failed', { error: message });
+        this.cameraEnableFailure = { message, at: Date.now() };
+        throw err instanceof Error ? err : new Error(message);
+      } finally {
+        this.cameraEnableInFlight = false;
       }
     } else {
       await this.invokeOwned('voice_enable_video', { enabled: false, actionRevision, deviceId: null, quality: null });
@@ -731,10 +744,26 @@ export class TauriMediaEngine implements MediaEngine {
       if (payload.kind === 'error') {
         const message = payload.message ?? 'unknown camera error';
         logVoiceDiagnostic('[media] native camera error', { message });
+        // The event and the invoke's rejection carry the same sentence, and the
+        // two arrive in either order; the caller reports the rejection, so the
+        // matching event is dropped rather than toasted a second time.
+        if (this.isDuplicateOfReportedCameraEnableFailure(message)) return;
         this.cameraFailureCb?.(new Error(message));
       }
     });
     this.unlisteners.push(this.cameraEventUnlisten);
+  }
+
+  /**
+   * True when this camera error is the one `enableVideo` is already reporting.
+   * The event may land just before or just after the invoke rejects, so an
+   * in-flight attempt suppresses unconditionally and a just-failed one
+   * suppresses only the identical message.
+   */
+  private isDuplicateOfReportedCameraEnableFailure(message: string): boolean {
+    if (this.cameraEnableInFlight) return true;
+    const reported = this.cameraEnableFailure;
+    return !!reported && reported.message === message && Date.now() - reported.at < 3000;
   }
 
   async startScreenShare(config: ScreenShareConfig): Promise<void> {
@@ -748,7 +777,7 @@ export class TauriMediaEngine implements MediaEngine {
     }
 
     this.screenAudioActive = false;
-    this.screenAudioActive = false;
+    this.screenAudioError = null;
     await this.ensureNativeScreenShareEventListener();
     const resolvedCodec = config.preferredCodec ?? (await this.choosePreferredScreenCodec());
     if (!resolvedCodec) {
@@ -779,9 +808,11 @@ export class TauriMediaEngine implements MediaEngine {
       const audioReady = await this.enableNativeScreenAudio(actionRevision);
       if (!audioReady) {
         // Fail loudly to the diagnostics log; the voice store surfaces the
-        // video-only state to the UI via isScreenShareAudioActive() (W9/C4).
+        // video-only state AND the reason to the UI via
+        // isScreenShareAudioActive() / getScreenShareAudioError() (W9/C4).
         logVoiceDiagnostic(
           '[media] native system audio capture unavailable; streaming video-only',
+          { reason: this.screenAudioError ?? 'unknown' },
         );
       }
       assertAction();
@@ -789,6 +820,7 @@ export class TauriMediaEngine implements MediaEngine {
     } else {
       await this.invokeCleanup('voice_set_screen_audio_enabled', { enabled: false, actionRevision }).catch(() => { });
       this.screenAudioActive = false;
+      this.screenAudioError = null;
     }
   }
 
@@ -817,6 +849,10 @@ export class TauriMediaEngine implements MediaEngine {
 
   isScreenShareAudioActive(): boolean {
     return this.screenAudioActive;
+  }
+
+  getScreenShareAudioError(): string | null {
+    return this.screenAudioError;
   }
 
   onScreenShareEnded(cb: () => void): void {
@@ -859,13 +895,19 @@ export class TauriMediaEngine implements MediaEngine {
     try {
       // Consent gate + enable the screen-audio track. Native capture starts with
       // screen_share_start's captureAudio flag; nothing streams over IPC here.
+      // This resolves only once the capture device is actually open, so a `true`
+      // here means audio really is being captured.
       await this.invokeOwned('voice_set_screen_audio_enabled', { enabled: true, actionRevision });
       this.screenAudioActive = true;
+      this.screenAudioError = null;
       return true;
     } catch (err) {
-      logVoiceDiagnostic('[media] native system audio enable failed', {
-        error: err instanceof Error ? err.message : String(err),
-      });
+      const reason = err instanceof Error ? err.message : String(err);
+      logVoiceDiagnostic('[media] native system audio enable failed', { error: reason });
+      // Keep the backend's sentence: it names the sound server, the missing
+      // capture source or the denied consent, which a generic "capture failed"
+      // never did.
+      this.screenAudioError = reason;
       if (actionRevision === this.screenRevision) this.disableNativeScreenAudio();
       return false;
     }
@@ -874,6 +916,8 @@ export class TauriMediaEngine implements MediaEngine {
   private disableNativeScreenAudio(): void {
     this.screenAudioActive = false;
     if (!invoke) return;
+    // NOTE: screenAudioError is deliberately left alone here — this runs as the
+    // cleanup half of a failed enable, and the reason is what the UI shows.
     this.invokeCleanup('voice_set_screen_audio_enabled', { enabled: false, actionRevision: this.screenRevision }).catch(() => {});
   }
 

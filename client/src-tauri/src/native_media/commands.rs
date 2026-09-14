@@ -498,6 +498,15 @@ pub async fn voice_enable_video(
     state: State<'_, MediaState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
+    // The consent prompt is a modal the user has to read. Raise it BEFORE the
+    // media transition lock, which every other media command (mute, deafen,
+    // screen share, volume) waits on — holding that lock across a dialog is how
+    // "turn on my camera" came to freeze the whole app. `start_capture` calls
+    // this again and finds the consent already fresh.
+    if enabled {
+        super::camera_capture::ensure_camera_consent(&app).await?;
+    }
+
     let app = super::CallEventSink::new(app, owner_id.clone());
 
     let action = state.calls.action(&owner_id, "camera", action_revision)?;
@@ -525,7 +534,10 @@ pub async fn camera_list_devices(
     app: tauri::AppHandle,
 ) -> Result<Vec<super::camera_capture::CameraDevice>, String> {
     super::camera_capture::ensure_camera_consent(&app).await?;
-    super::camera_capture::list_devices()
+    // nokhwa's query opens every capture node; never on the async executor.
+    tokio::task::spawn_blocking(super::camera_capture::list_devices)
+        .await
+        .map_err(|err| format!("camera enumeration failed: {err}"))?
 }
 
 #[tauri::command]
@@ -548,7 +560,10 @@ pub async fn screen_share_list_sources(
     app: tauri::AppHandle,
 ) -> Result<Vec<super::screen_capture::ScreenShareSource>, String> {
     super::screen_capture::ensure_screen_capture_consent(&app).await?;
-    Ok(super::screen_capture::list_sources())
+    // Enumerating windows talks to the display server; keep it off the executor.
+    tokio::task::spawn_blocking(super::screen_capture::list_sources)
+        .await
+        .map_err(|err| format!("screen source enumeration failed: {err}"))
 }
 
 #[tauri::command]
@@ -557,7 +572,10 @@ pub async fn screen_share_source_thumbnail(
     app: tauri::AppHandle,
 ) -> Result<Option<super::screen_capture::ScreenShareThumbnail>, String> {
     super::screen_capture::ensure_screen_capture_consent(&app).await?;
-    super::screen_capture::capture_source_thumbnail(&source_id)
+    // A thumbnail is a real frame grab; keep it off the executor.
+    tokio::task::spawn_blocking(move || super::screen_capture::capture_source_thumbnail(&source_id))
+        .await
+        .map_err(|err| format!("screen thumbnail capture failed: {err}"))?
 }
 
 #[tauri::command]
@@ -568,6 +586,10 @@ pub async fn screen_share_start(
     state: State<'_, MediaState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
+    // Same reason as the camera: the consent modal must not be raised while the
+    // media transition lock is held.
+    super::screen_capture::ensure_screen_capture_consent(&app).await?;
+
     let app = super::CallEventSink::new(app, owner_id.clone());
 
     let action = state.calls.action(&owner_id, "screen", action_revision)?;
@@ -613,6 +635,22 @@ pub async fn voice_set_screen_audio_enabled(
     state: State<'_, MediaState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
+    // The system-audio consent prompt is a separate dialog process the user has
+    // to answer. Raise it before the media transition lock, not under it — every
+    // other media command queues behind that lock.
+    #[cfg(not(target_os = "macos"))]
+    if enabled {
+        crate::audio_capture::set_system_audio_capture_enabled(true);
+        let consent =
+            tokio::task::spawn_blocking(crate::audio_capture::ensure_system_audio_consent)
+                .await
+                .map_err(|err| format!("system audio consent failed: {err}"))?;
+        if let Err(err) = consent {
+            crate::audio_capture::set_system_audio_capture_enabled(false);
+            return Err(err);
+        }
+    }
+
     let app = super::CallEventSink::new(app, owner_id.clone());
 
     let action = state

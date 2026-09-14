@@ -2192,9 +2192,16 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
         });
         action.assertCurrent();
         const nativeStreamAudioActive = mediaEngine.isScreenShareAudioActive();
+        // Say what actually went wrong. The engine carries the backend's
+        // sentence — no sound server, no capture source, consent refused — and
+        // "capture failed, try again" was advice that could not help with any of
+        // them.
+        const nativeStreamAudioReason = mediaEngine.getScreenShareAudioError();
         const nativeStreamAudioWarning = nativeStreamAudioActive
           ? null
-          : 'Stream started without PC audio. Native system audio capture failed. Try stopping the stream and starting it again.';
+          : nativeStreamAudioReason
+            ? `Streaming without PC audio. ${nativeStreamAudioReason}`
+            : 'Streaming without PC audio: this computer did not provide a recording of its own sound.';
 
         // Screen selected and tuned — now register with server
         await api.startStream(channelId, { quality_preset: qualityPreset });

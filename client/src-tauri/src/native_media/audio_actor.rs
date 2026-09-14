@@ -89,6 +89,54 @@ pub struct AudioActor {
     agc_enabled: Arc<AtomicBool>,
 }
 
+/// Which end of the audio path failed, for the message the person reads.
+#[derive(Clone, Copy)]
+pub(crate) enum AudioDeviceRole {
+    Microphone,
+    Speakers,
+}
+
+/// Turn a cpal device failure into a sentence a person can act on.
+///
+/// Same rule as the camera: the device answers immediately and precisely, and
+/// what reaches the screen must say what is wrong with *their* computer, not
+/// quote the audio backend at them. The raw text goes to the log instead.
+pub(crate) fn describe_audio_device_error(role: AudioDeviceRole, raw: &str) -> String {
+    eprintln!("[audio] device open failed: {raw}");
+    let lower = raw.to_ascii_lowercase();
+    let (thing, absent, busy) = match role {
+        AudioDeviceRole::Microphone => (
+            "microphone",
+            "No microphone is connected to this computer.",
+            "Your microphone is already in use by another application.",
+        ),
+        AudioDeviceRole::Speakers => (
+            "speakers",
+            "No speakers or headphones are connected to this computer.",
+            "Your speakers are already in use by another application.",
+        ),
+    };
+    if lower.contains("no input device")
+        || lower.contains("no output device")
+        || lower.contains("no default")
+        || lower.contains("devicenotavailable")
+        || lower.contains("not available")
+        || lower.contains("no such")
+    {
+        absent.to_string()
+    } else if lower.contains("busy") || lower.contains("in use") {
+        busy.to_string()
+    } else if lower.contains("permission")
+        || lower.contains("denied")
+        || lower.contains("not permitted")
+        || lower.contains("backenderrors")
+    {
+        format!("This computer is not allowing Paracord to use your {thing}.")
+    } else {
+        format!("Your {thing} could not be opened.")
+    }
+}
+
 impl AudioActor {
     /// Spawn the dedicated audio thread.
     ///
@@ -279,7 +327,10 @@ fn run_audio_thread(
                         let _ = reply.send(Ok(pcm_rx));
                     }
                     Err(err) => {
-                        let _ = reply.send(Err(format!("audio capture: {err}")));
+                        let _ = reply.send(Err(describe_audio_device_error(
+                            AudioDeviceRole::Microphone,
+                            &err.to_string(),
+                        )));
                     }
                 }
             }
@@ -304,7 +355,10 @@ fn run_audio_thread(
                         let _ = reply.send(Ok(()));
                     }
                     Err(err) => {
-                        let _ = reply.send(Err(format!("audio playback: {err}")));
+                        let _ = reply.send(Err(describe_audio_device_error(
+                            AudioDeviceRole::Speakers,
+                            &err.to_string(),
+                        )));
                     }
                 }
             }
@@ -359,8 +413,10 @@ fn run_audio_thread(
                         match AudioPlayback::start(Some(reference.clone())) {
                             Ok(pb) => pb,
                             Err(err) => {
-                                let _ = reply
-                                    .send(Err(format!("output device (default fallback): {err}")));
+                                let _ = reply.send(Err(describe_audio_device_error(
+                                    AudioDeviceRole::Speakers,
+                                    &format!("default output fallback: {err}"),
+                                )));
                                 continue;
                             }
                         }
@@ -399,4 +455,40 @@ fn run_audio_thread(
     // Drop both streams here, on the thread that created them.
     drop(capture);
     drop(playback);
+}
+
+#[cfg(test)]
+mod device_error_tests {
+    use super::{describe_audio_device_error, AudioDeviceRole};
+
+    /// A machine with no microphone answers instantly and precisely. What the
+    /// person reads must say that, not quote cpal at them.
+    #[test]
+    fn a_missing_microphone_is_named_as_missing() {
+        let message =
+            describe_audio_device_error(AudioDeviceRole::Microphone, "no input device available");
+        assert_eq!(message, "No microphone is connected to this computer.");
+    }
+
+    #[test]
+    fn a_microphone_held_elsewhere_says_so() {
+        let message =
+            describe_audio_device_error(AudioDeviceRole::Microphone, "Device or resource busy");
+        assert_eq!(
+            message,
+            "Your microphone is already in use by another application."
+        );
+    }
+
+    #[test]
+    fn a_refused_output_reads_as_a_permission_problem() {
+        let message = describe_audio_device_error(
+            AudioDeviceRole::Speakers,
+            "Permission denied (os error 13)",
+        );
+        assert_eq!(
+            message,
+            "This computer is not allowing Paracord to use your speakers."
+        );
+    }
 }

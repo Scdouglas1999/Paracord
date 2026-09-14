@@ -14,6 +14,11 @@ use paracord_transport::control::ControlMessage;
 
 const EVENT_EVENT: &str = "native_camera_event";
 const CAMERA_CONSENT_TTL: Duration = Duration::from_secs(120);
+/// Backstop for a camera that neither opens nor errors (a wedged driver). A
+/// device that is missing, busy or refused reports that immediately and never
+/// reaches this timeout — the wait exists only so a hung driver cannot hold the
+/// enable path open forever.
+const CAMERA_START_TIMEOUT: Duration = Duration::from_secs(5);
 static CAMERA_CONSENT_AT: LazyLock<Mutex<Option<Instant>>> = LazyLock::new(|| Mutex::new(None));
 
 fn camera_consent_is_fresh() -> bool {
@@ -173,6 +178,39 @@ struct LatestCameraFrame {
     notify: std::sync::Condvar,
 }
 
+/// Turn a backend open failure into a sentence the person at the keyboard can
+/// act on.
+///
+/// The V4L2/AVFoundation/MSMF text is precise but unreadable ("Could not open
+/// device 0: V4L2 Error: No such file or directory (os error 2)"), and it was
+/// the only thing that ever reached the toast. `device_count` is how many
+/// cameras enumeration could see at the moment of the failure, so "there is no
+/// camera" is stated only when that is actually true. The raw text goes to the
+/// log; only this sentence goes on screen.
+pub(crate) fn describe_camera_open_error(raw: &str, device_count: usize) -> String {
+    eprintln!("[camera] open failed ({device_count} device(s) enumerated): {raw}");
+    let lower = raw.to_ascii_lowercase();
+    if device_count == 0 {
+        "No camera is connected to this computer.".to_string()
+    } else if lower.contains("no such file")
+        || lower.contains("not found")
+        || lower.contains("nosuchdevice")
+        || lower.contains("enotfound")
+    {
+        "That camera is no longer connected.".to_string()
+    } else if lower.contains("busy") || lower.contains("in use") {
+        "The camera is already in use by another application.".to_string()
+    } else if lower.contains("permission")
+        || lower.contains("denied")
+        || lower.contains("not permitted")
+        || lower.contains("unauthorized")
+    {
+        "This computer is not allowing Paracord to use the camera.".to_string()
+    } else {
+        "The camera could not be opened.".to_string()
+    }
+}
+
 /// Enumerate available capture cameras (contract CAM1: `camera_list_devices`).
 pub fn list_devices() -> Result<Vec<CameraDevice>, String> {
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
@@ -223,6 +261,15 @@ pub async fn start_capture(
     let worker_stop = stop_flag.clone();
     let worker_app = app.clone();
     let (startup_tx, startup_rx) = mpsc::channel::<Result<(), String>>();
+    // A second handle on the startup channel so a capture loop that dies before
+    // it ever signals still tells the awaiting caller *why*. Without this the
+    // sender was dropped on the error path, `recv_timeout` returned
+    // `Disconnected`, and the caller reported a fabricated
+    // "Timed out while starting native camera capture." over a failure that was
+    // already known precisely (2026-09-14: a machine with no /dev/video* got
+    // "camera open failed: … No such file or directory" in the log and a
+    // "timed out" toast on screen).
+    let startup_failure_tx = startup_tx.clone();
 
     let worker = thread::spawn(move || {
         let run_result = run_capture_loop(
@@ -235,6 +282,9 @@ pub async fn start_capture(
         );
 
         if let Err(err) = run_result {
+            // Ignored once startup already succeeded (the receiver is gone by
+            // then); this only carries a *startup* failure back to the caller.
+            let _ = startup_failure_tx.send(Err(err.clone()));
             let _ = worker_app.emit(
                 EVENT_EVENT,
                 CameraEvent {
@@ -253,11 +303,19 @@ pub async fn start_capture(
         );
     });
 
-    match startup_rx.recv_timeout(Duration::from_secs(5)) {
+    // `recv_timeout` parks the calling thread. On the async executor that is a
+    // stalled tokio worker for as long as the device takes to open, which is
+    // how "enable camera" came to freeze the app; wait on a blocking thread.
+    let startup =
+        tokio::task::spawn_blocking(move || startup_rx.recv_timeout(CAMERA_START_TIMEOUT))
+            .await
+            .map_err(|err| format!("camera startup wait failed: {err}"))?;
+
+    match startup {
         Ok(Ok(())) => {
             if let Err(error) = state.calls.check_action(app.owner_id(), &stop_flag) {
                 stop_flag.store(true, Ordering::SeqCst);
-                let _ = worker.join();
+                join_worker(worker).await;
                 return Err(error);
             }
             let mut guard = state.camera_capture.lock().map_err(|e| e.to_string())?;
@@ -266,17 +324,32 @@ pub async fn start_capture(
         }
         Ok(Err(err)) => {
             stop_flag.store(true, Ordering::SeqCst);
-            let _ = worker.join();
+            join_worker(worker).await;
             teardown_camera_publish(state).await;
             Err(err)
         }
-        Err(_) => {
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
             stop_flag.store(true, Ordering::SeqCst);
-            let _ = worker.join();
+            join_worker(worker).await;
             teardown_camera_publish(state).await;
-            Err("Timed out while starting native camera capture.".into())
+            Err("Native camera capture stopped before it reported a result.".into())
+        }
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            stop_flag.store(true, Ordering::SeqCst);
+            join_worker(worker).await;
+            teardown_camera_publish(state).await;
+            Err(format!(
+                "The camera did not respond within {}s. It may be in use by another \
+                 application — close anything else using it and try again.",
+                CAMERA_START_TIMEOUT.as_secs()
+            ))
         }
     }
+}
+
+/// Join a capture worker without parking an async executor thread.
+async fn join_worker(worker: JoinHandle<()>) {
+    let _ = tokio::task::spawn_blocking(move || worker.join()).await;
 }
 
 pub async fn stop_capture(state: &MediaState) -> Result<(), String> {
@@ -284,10 +357,16 @@ pub async fn stop_capture(state: &MediaState) -> Result<(), String> {
 }
 
 async fn stop_capture_internal(state: &MediaState, revoke_consent: bool) -> Result<(), String> {
-    if let Ok(mut guard) = state.camera_capture.lock() {
-        if let Some(mut active) = guard.take() {
-            active.stop();
-        }
+    // Taking the handle is cheap; `stop()` joins the capture thread, so run it
+    // on a blocking thread rather than parking an async executor worker until
+    // the driver lets go of the device.
+    let active = state
+        .camera_capture
+        .lock()
+        .ok()
+        .and_then(|mut guard| guard.take());
+    if let Some(mut active) = active {
+        let _ = tokio::task::spawn_blocking(move || active.stop()).await;
     }
     teardown_camera_publish(state).await;
     if revoke_consent {
@@ -353,11 +432,14 @@ fn run_capture_loop(
             request.frame_rate.max(1),
         )));
 
-    let mut camera =
-        Camera::new(index, requested).map_err(|e| format!("camera open failed: {e}"))?;
-    camera
-        .open_stream()
-        .map_err(|e| format!("camera stream open failed: {e}"))?;
+    let mut camera = Camera::new(index, requested).map_err(|e| {
+        let devices = list_devices().map(|d| d.len()).unwrap_or(0);
+        describe_camera_open_error(&format!("camera open failed: {e}"), devices)
+    })?;
+    camera.open_stream().map_err(|e| {
+        let devices = list_devices().map(|d| d.len()).unwrap_or(0);
+        describe_camera_open_error(&format!("camera stream open failed: {e}"), devices)
+    })?;
 
     let negotiated = camera.camera_format();
     let capture_fps = negotiated.frame_rate().max(1);
@@ -611,4 +693,58 @@ fn run_capture_loop(
     _startup_tx: mpsc::Sender<Result<(), String>>,
 ) -> Result<(), String> {
     Err("native camera capture is not supported on this platform".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::describe_camera_open_error;
+
+    /// The user clicked "turn on camera" on a machine with no `/dev/video*`.
+    /// The backend knew that instantly and said so in V4L2's words; the app
+    /// answered "Timed out while starting native camera capture." Neither the
+    /// delay nor the cause was real. A missing camera must read as a missing
+    /// camera.
+    #[test]
+    fn a_machine_with_no_camera_is_told_it_has_no_camera() {
+        let message = describe_camera_open_error(
+            "camera open failed: Could not open device 0: V4L2 Error: No such file or directory (os error 2)",
+            0,
+        );
+        assert!(
+            message.starts_with("No camera is connected to this computer."),
+            "expected the absence to be named first, got: {message}"
+        );
+        assert!(
+            !message.to_ascii_lowercase().contains("timed out"),
+            "a device that answered immediately must never be reported as a timeout: {message}"
+        );
+        assert_eq!(
+            message, "No camera is connected to this computer.",
+            "the backend's V4L2 string belongs in the log, not on screen"
+        );
+    }
+
+    #[test]
+    fn a_camera_held_by_another_application_says_so() {
+        let message = describe_camera_open_error(
+            "camera open failed: Device or resource busy (os error 16)",
+            1,
+        );
+        assert!(message.starts_with("The camera is already in use by another application."));
+    }
+
+    #[test]
+    fn a_refused_camera_reads_as_a_permission_problem() {
+        let message =
+            describe_camera_open_error("camera open failed: Permission denied (os error 13)", 1);
+        assert!(message.starts_with("This computer is not allowing Paracord to use the camera."));
+    }
+
+    /// A camera that is present but unhappy for some other reason still gets a
+    /// plain sentence rather than the backend's raw string alone.
+    #[test]
+    fn an_unrecognized_failure_still_leads_with_plain_language() {
+        let message = describe_camera_open_error("camera open failed: gremlins", 2);
+        assert_eq!(message, "The camera could not be opened.");
+    }
 }

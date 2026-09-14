@@ -464,6 +464,8 @@ export class BrowserMediaEngine implements MediaEngine {
   private screenAudioEncoder: OpusMediaEncoder | null = null;
   private screenAudioSequence = 0;
   private screenAudioActive = false;
+  /** Why stream audio is absent, in plain words; null when it is present. */
+  private screenAudioError: string | null = null;
 
   // Remote screen-share audio playback (separate from voice)
   private screenAudioSubscriptions = new Map<
@@ -753,6 +755,7 @@ export class BrowserMediaEngine implements MediaEngine {
     // Stop any existing screen share first
     this.cleanupScreenShare();
     this.screenAudioActive = false;
+    this.screenAudioError = null;
 
     const resolvedCodec = config.preferredCodec ?? (await this.choosePreferredPublishCodec());
     this.assertOpen();
@@ -796,6 +799,10 @@ export class BrowserMediaEngine implements MediaEngine {
     if (generation !== this.screenGeneration) throw new DOMException("Capture action canceled", "AbortError");
       if (generation !== this.screenGeneration) throw new DOMException('Screen sharing was canceled.', 'AbortError');
       this.screenAudioActive = true;
+    } else if (config.audio) {
+      this.screenAudioError =
+        'The screen you picked was shared without its sound. Reshare and tick "Share tab audio" ' +
+        '(or pick a tab or whole screen, which can carry audio) to include it.';
     }
 
     // Listen for the user stopping the share via the browser's built-in UI
@@ -901,6 +908,10 @@ export class BrowserMediaEngine implements MediaEngine {
 
   isScreenShareAudioActive(): boolean {
     return this.screenAudioActive;
+  }
+
+  getScreenShareAudioError(): string | null {
+    return this.screenAudioError;
   }
 
   onScreenShareEnded(cb: () => void): void {

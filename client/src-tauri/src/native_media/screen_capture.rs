@@ -41,6 +41,9 @@ const PICKER_THUMBNAIL_MAX_HEIGHT: u32 = 180;
 const THUMBNAIL_JPEG_QUALITY: u8 = 74;
 #[cfg(not(target_os = "linux"))]
 const SCREEN_CAPTURE_CONSENT_TTL: Duration = Duration::from_secs(120);
+/// Backstop for a capture backend that neither starts nor errors. A refused or
+/// unavailable display answers immediately and never reaches this.
+const SCREEN_START_TIMEOUT: Duration = Duration::from_secs(3);
 #[cfg(not(target_os = "linux"))]
 static SCREEN_CAPTURE_CONSENT_AT: LazyLock<Mutex<Option<Instant>>> =
     LazyLock::new(|| Mutex::new(None));
@@ -369,6 +372,10 @@ pub async fn start_capture(
     let content_hint = request.content_hint.clone();
     let preferred_codec = request.preferred_codec.clone();
     let (startup_tx, startup_rx) = mpsc::channel::<Result<(), String>>();
+    // Same contract as the camera path: a capture loop that dies before it
+    // signals must hand the caller the real reason, not leave it to time out and
+    // invent one.
+    let startup_failure_tx = startup_tx.clone();
 
     let worker = thread::spawn(move || {
         let run_result = run_capture_loop(
@@ -390,6 +397,8 @@ pub async fn start_capture(
         );
 
         if let Err(err) = run_result {
+            // Ignored once startup already succeeded (the receiver is gone).
+            let _ = startup_failure_tx.send(Err(err.clone()));
             let _ = worker_app.emit(
                 EVENT_EVENT,
                 ScreenShareEvent {
@@ -408,11 +417,18 @@ pub async fn start_capture(
         );
     });
 
-    match startup_rx.recv_timeout(Duration::from_secs(3)) {
+    // Waiting on an OS thread, not on the async executor: a display server that
+    // takes its time answering must never stall every other media command.
+    let startup =
+        tokio::task::spawn_blocking(move || startup_rx.recv_timeout(SCREEN_START_TIMEOUT))
+            .await
+            .map_err(|err| format!("screen capture startup wait failed: {err}"))?;
+
+    match startup {
         Ok(Ok(())) => {
             if let Err(error) = state.calls.check_action(app.owner_id(), &stop_flag) {
                 stop_flag.store(true, Ordering::SeqCst);
-                let _ = worker.join();
+                join_worker(worker).await;
                 return Err(error);
             }
             let track_already_published = {
@@ -424,7 +440,7 @@ pub async fn start_capture(
             if !track_already_published {
                 if let Err(err) = announce_screen_track(state, &app).await {
                     stop_flag.store(true, Ordering::SeqCst);
-                    let _ = worker.join();
+                    join_worker(worker).await;
                     let mut guard = state.session.lock().await;
                     if let Some(session) = guard.as_mut() {
                         video_pipeline::stop_screen_share(session);
@@ -440,26 +456,41 @@ pub async fn start_capture(
         }
         Ok(Err(err)) => {
             stop_flag.store(true, Ordering::SeqCst);
-            let _ = worker.join();
-            let mut guard = state.session.lock().await;
-            if let Some(session) = guard.as_mut() {
-                video_pipeline::stop_screen_share(session);
-                session.screen_audio_enabled.store(false, Ordering::SeqCst);
-                session.published_screen_track = None;
-            }
+            join_worker(worker).await;
+            abandon_screen_publish(state).await;
             Err(err)
         }
-        Err(_) => {
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
             stop_flag.store(true, Ordering::SeqCst);
-            let _ = worker.join();
-            let mut guard = state.session.lock().await;
-            if let Some(session) = guard.as_mut() {
-                video_pipeline::stop_screen_share(session);
-                session.screen_audio_enabled.store(false, Ordering::SeqCst);
-                session.published_screen_track = None;
-            }
-            Err("Timed out while starting native screen capture.".into())
+            join_worker(worker).await;
+            abandon_screen_publish(state).await;
+            Err("Native screen capture stopped before it reported a result.".into())
         }
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            stop_flag.store(true, Ordering::SeqCst);
+            join_worker(worker).await;
+            abandon_screen_publish(state).await;
+            Err(format!(
+                "The screen did not start capturing within {}s. Close the screen picker and try \
+                 sharing again.",
+                SCREEN_START_TIMEOUT.as_secs()
+            ))
+        }
+    }
+}
+
+/// Join a capture worker without parking an async executor thread.
+async fn join_worker(worker: thread::JoinHandle<()>) {
+    let _ = tokio::task::spawn_blocking(move || worker.join()).await;
+}
+
+/// Roll the session back after a screen capture that never started.
+async fn abandon_screen_publish(state: &MediaState) {
+    let mut guard = state.session.lock().await;
+    if let Some(session) = guard.as_mut() {
+        video_pipeline::stop_screen_share(session);
+        session.screen_audio_enabled.store(false, Ordering::SeqCst);
+        session.published_screen_track = None;
     }
 }
 
@@ -468,13 +499,23 @@ pub async fn stop_capture(state: &MediaState) -> Result<(), String> {
 }
 
 async fn stop_capture_internal(state: &MediaState, revoke_consent: bool) -> Result<(), String> {
-    crate::audio_capture::stop_system_audio_capture()?;
-    crate::audio_capture::set_system_audio_capture_enabled(false);
-    if let Ok(mut guard) = state.screen_capture.lock() {
-        if let Some(mut active) = guard.take() {
+    // Both of these join capture threads; neither belongs on an async executor
+    // worker, where a slow teardown would stall every other media command.
+    let active = state
+        .screen_capture
+        .lock()
+        .ok()
+        .and_then(|mut guard| guard.take());
+    tokio::task::spawn_blocking(move || {
+        crate::audio_capture::stop_system_audio_capture()?;
+        crate::audio_capture::set_system_audio_capture_enabled(false);
+        if let Some(mut active) = active {
             active.stop();
         }
-    }
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|err| format!("screen capture teardown failed: {err}"))??;
 
     let mut guard = state.session.lock().await;
     if let Some(session) = guard.as_mut() {
