@@ -376,10 +376,22 @@ describe('text rooms', () => {
     const list = screen.getByRole('region', { name: 'Text rooms' });
     expect(within(list).getByText('1 mention')).toBeInTheDocument();
 
-    fireEvent.click(within(list).getByRole('button', { name: /build-log/ }));
+    // The row and its "…" both name the room; the row is the one that opens it.
+    const [row] = within(list).getAllByRole('button', { name: /build-log/ });
+    fireEvent.click(row);
     expect(screen.getByTestId('pathname')).toHaveTextContent(
       `/app/guilds/${GUILD}/channels/t1`,
     );
+  });
+
+  it('offers the room menu on a text row, which a phone has no other door to', () => {
+    renderLobby();
+    const list = screen.getByRole('region', { name: 'Text rooms' });
+    fireEvent.click(within(list).getByRole('button', { name: 'Room options for build-log' }));
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /Mark room as read/ })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /Copy link to room/ })).toBeInTheDocument();
+    expect(screen.getAllByRole('menuitemradio')).toHaveLength(4);
   });
 
   it('lights a text room amber when somebody is typing in it', async () => {
