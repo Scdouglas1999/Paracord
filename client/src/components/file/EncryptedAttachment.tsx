@@ -49,7 +49,7 @@ function UnencryptedAttachmentNotice({ attachment }: { attachment: Attachment })
       <span className="max-w-[20rem] truncate font-medium text-text-body">{attachment.filename}</span>
       <span className="text-meta text-text-faint">
         No key for this file arrived in the encrypted message. If it was sent without
-        end-to-end encryption, the server can read it.
+        end-to-end encryption, the instance can read it.
       </span>
     </div>
   );

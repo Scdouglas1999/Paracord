@@ -77,7 +77,7 @@ export function GuildEconomyPanel({ guildId }: GuildEconomyPanelProps) {
         <div>
           <div className="flex items-center gap-2 text-text-primary">
             <TrendingUp size={16} className="text-accent-primary" aria-hidden />
-            <span className="pc-display text-name">Guild leaderboard</span>
+            <span className="pc-display text-name">Server leaderboard</span>
           </div>
           <div className="mt-1 text-meta leading-relaxed text-text-muted">
             Activity XP, streaks, and levels update live.

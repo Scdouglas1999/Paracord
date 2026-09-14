@@ -21,14 +21,14 @@ const SHORTCUT_GROUPS: Array<{ title: string; shortcuts: Shortcut[] }> = [
     shortcuts: [
       { label: 'Command palette', keys: ['Mod', 'K'] },
       { label: 'Search in channel', keys: ['Mod', 'F'] },
-      { label: 'Switch guild', keys: ['Ctrl', 'Alt', '↑/↓'] },
+      { label: 'Switch server', keys: ['Ctrl', 'Alt', '↑/↓'] },
     ],
   },
   {
     title: 'Settings',
     shortcuts: [
       { label: 'User settings', keys: ['Ctrl', ','] },
-      { label: 'Guild settings', keys: ['Ctrl', 'Shift', ','] },
+      { label: 'Server settings', keys: ['Ctrl', 'Shift', ','] },
     ],
   },
   {

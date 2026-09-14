@@ -34,7 +34,7 @@ const TONE: Record<
 };
 
 const MESSAGES: Record<string, { tone: BannerTone; text: string }> = {
-  reconnecting: { tone: 'warning', text: 'Reconnecting to the server…' },
+  reconnecting: { tone: 'warning', text: 'Reconnecting to the instance…' },
   disconnected: { tone: 'danger', text: 'Connection lost — retrying automatically' },
 };
 

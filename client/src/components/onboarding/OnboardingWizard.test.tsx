@@ -20,7 +20,7 @@ describe('the connect introduction', () => {
     expect(screen.queryByText(/next screen/i)).not.toBeInTheDocument();
 
     // The button names where it goes instead.
-    const go = screen.getByRole('button', { name: 'Enter a server address' });
+    const go = screen.getByRole('button', { name: 'Enter an instance address' });
     await user.click(go);
     expect(onComplete).toHaveBeenCalledTimes(1);
   });

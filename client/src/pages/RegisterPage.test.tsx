@@ -92,7 +92,7 @@ function renderRegisterPage() {
         <Route path="/login" element={<div>Login page</div>} />
         <Route path="/terms" element={<div>Terms</div>} />
         <Route path="/privacy" element={<div>Privacy</div>} />
-        <Route path="/setup-server" element={<div>Set up your Paracord server</div>} />
+        <Route path="/setup-server" element={<div>Set up your Paracord instance</div>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -147,7 +147,7 @@ describe('RegisterPage', () => {
 
     renderRegisterPage();
 
-    expect(await screen.findByText('Set up your Paracord server')).toBeInTheDocument();
+    expect(await screen.findByText('Set up your Paracord instance')).toBeInTheDocument();
   });
 
   it('stays on registration when the setup check fails, rather than guessing', async () => {

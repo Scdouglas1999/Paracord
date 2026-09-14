@@ -381,7 +381,7 @@ export function AppShell() {
               ref={guildSettingsDialogRef}
               role="dialog"
               aria-modal="true"
-              aria-label="Building settings"
+              aria-label="Server settings"
               tabIndex={-1}
               className={cn(
                 'relative flex h-full max-h-[calc(100dvh-1.5rem)] w-full max-w-6xl flex-col overflow-hidden sm:max-h-[min(900px,85vh)]',

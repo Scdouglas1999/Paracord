@@ -48,7 +48,7 @@ export function SettingsPanel() {
   return (
     <div>
       <SettingsSectionHeader
-        title="Server settings"
+        title="Instance settings"
         description="Configure how this deployment behaves for everyone on it."
       />
 
@@ -56,7 +56,7 @@ export function SettingsPanel() {
         <section className="flex flex-col gap-5">
           <TextField
             id="setting-server-name"
-            label="Server name"
+            label="Instance name"
             type="text"
             value={settings.server_name || ''}
             onChange={(e) => update('server_name', e.target.value)}
@@ -67,7 +67,7 @@ export function SettingsPanel() {
               htmlFor="setting-server-description"
               className="text-label font-medium text-text-secondary"
             >
-              Server description
+              Instance description
             </label>
             <Textarea
               id="setting-server-description"
@@ -80,7 +80,7 @@ export function SettingsPanel() {
 
           <ToggleRow
             label="Open registration"
-            description="Allow anyone to create a new account on this server."
+            description="Allow anyone to create a new account on this instance."
             checked={settings.registration_enabled === 'true'}
             onChange={(next) => update('registration_enabled', next ? 'true' : 'false')}
           />
@@ -88,14 +88,14 @@ export function SettingsPanel() {
           <div className="grid gap-5 sm:grid-cols-2">
             <TextField
               id="setting-max-guilds"
-              label="Max guilds per user"
+              label="Max servers per user"
               type="number"
               value={settings.max_guilds_per_user || '100'}
               onChange={(e) => update('max_guilds_per_user', e.target.value)}
             />
             <TextField
               id="setting-max-members"
-              label="Max members per guild"
+              label="Max members per server"
               type="number"
               value={settings.max_members_per_guild || '1000'}
               onChange={(e) => update('max_members_per_guild', e.target.value)}
@@ -105,11 +105,11 @@ export function SettingsPanel() {
 
         <section className="flex flex-col gap-5">
           <Divider />
-          <h3 className="pc-display text-heading text-text-primary">Guild storage limits</h3>
+          <h3 className="pc-display text-heading text-text-primary">Server storage limits</h3>
           <TextField
             id="setting-storage-quota"
-            label="Max guild storage quota (MB)"
-            hint="Upper limit for per-guild storage quotas. Guild owners cannot set a quota higher than this."
+            label="Max server storage quota (MB)"
+            hint="Upper limit for per-server storage quotas. Server owners cannot set a quota higher than this."
             type="number"
             value={settings.max_guild_storage_quota || ''}
             onChange={(e) => update('max_guild_storage_quota', e.target.value)}
@@ -123,7 +123,7 @@ export function SettingsPanel() {
 
           <ToggleRow
             label="Cache federated files"
-            description="Store files fetched from federated servers locally to serve them faster."
+            description="Store files fetched from federated instances locally to serve them faster."
             checked={settings.federation_file_cache_enabled === 'true'}
             onChange={(next) =>
               update('federation_file_cache_enabled', next ? 'true' : 'false')

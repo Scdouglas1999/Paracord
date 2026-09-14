@@ -36,7 +36,7 @@ describe('who just walked in (§5.1)', () => {
     expect(noCrossings(delta)).toBe(true);
   });
 
-  it('does not turn the first load of a building into a burst of arrivals', () => {
+  it('does not turn the first load of a server into a burst of arrivals', () => {
     // No previous snapshot at all…
     expect(noCrossings(diffOccupancy(null, rooms({ '2001': ['mara', 'priya'] })))).toBe(true);
     // …and an explicit baseline, for a scope that just changed underneath us.

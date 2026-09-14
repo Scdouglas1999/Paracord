@@ -276,7 +276,7 @@ function PopoverHarness({ onClose }: { onClose?: () => void }) {
           onClose?.();
         }}
         role="menu"
-        label="Room actions"
+        label="Channel actions"
       >
         <MenuLabel>Room</MenuLabel>
         <MenuItem onClick={() => {}}>Invite</MenuItem>
@@ -297,7 +297,7 @@ describe('Popover', () => {
   it('opens onto the floating surface with an accessible name', async () => {
     render(<PopoverHarness />);
     await userEvent.click(screen.getByRole('button', { name: 'Open' }));
-    const menu = screen.getByRole('menu', { name: 'Room actions' });
+    const menu = screen.getByRole('menu', { name: 'Channel actions' });
     expect(menu).toHaveClass('pc-floating');
     expect(within(menu).getByRole('menuitem', { name: 'Invite' })).toBeInTheDocument();
   });
@@ -386,25 +386,25 @@ const TAB_ITEMS = [
 
 describe('Tabs', () => {
   it('renders a named tablist with one selected tab', () => {
-    render(<Tabs items={TAB_ITEMS} value="roles" onChange={() => {}} label="Building settings" />);
-    const list = screen.getByRole('tablist', { name: 'Building settings' });
+    render(<Tabs items={TAB_ITEMS} value="roles" onChange={() => {}} label="Server settings" />);
+    const list = screen.getByRole('tablist', { name: 'Server settings' });
     expect(within(list).getByRole('tab', { name: /Roles/ })).toHaveAttribute('aria-selected', 'true');
     expect(within(list).getByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'false');
   });
 
   it('selection is a raised surface, never an accent bar', () => {
-    render(<Tabs items={TAB_ITEMS} value="general" onChange={() => {}} label="Building settings" />);
+    render(<Tabs items={TAB_ITEMS} value="general" onChange={() => {}} label="Server settings" />);
     // The raised surface is ONE element the engine slides between the tabs
     // (§5.1 "the indicator slides, never jumps"), so it is the indicator that
     // carries the raised recipe — and no tab carries a fill of its own.
-    const list = screen.getByRole('tablist', { name: 'Building settings' });
+    const list = screen.getByRole('tablist', { name: 'Server settings' });
     const indicator = list.querySelector('[aria-hidden="true"]');
     expect(indicator).toHaveClass('bg-bg-raised');
     expect(screen.getByRole('tab', { name: 'General' })).not.toHaveClass('bg-accent-primary');
   });
 
   it('the sliding indicator is marked on the selected tab only', () => {
-    render(<Tabs items={TAB_ITEMS} value="roles" onChange={() => {}} label="Building settings" />);
+    render(<Tabs items={TAB_ITEMS} value="roles" onChange={() => {}} label="Server settings" />);
     expect(screen.getByRole('tab', { name: /Roles/ })).toHaveAttribute('data-indicator-target');
     expect(screen.getByRole('tab', { name: 'General' })).not.toHaveAttribute(
       'data-indicator-target',
@@ -413,7 +413,7 @@ describe('Tabs', () => {
 
   it('moves between tabs with the arrow keys (WAI-ARIA tabs pattern)', async () => {
     const onChange = vi.fn();
-    render(<Tabs items={TAB_ITEMS} value="general" onChange={onChange} label="Building settings" />);
+    render(<Tabs items={TAB_ITEMS} value="general" onChange={onChange} label="Server settings" />);
     screen.getByRole('tab', { name: 'General' }).focus();
     await userEvent.keyboard('{ArrowRight}');
     expect(onChange).toHaveBeenCalledWith('roles');
@@ -422,7 +422,7 @@ describe('Tabs', () => {
   });
 
   it('only the selected tab is in the tab order', () => {
-    render(<Tabs items={TAB_ITEMS} value="audit" onChange={() => {}} label="Building settings" />);
+    render(<Tabs items={TAB_ITEMS} value="audit" onChange={() => {}} label="Server settings" />);
     expect(screen.getByRole('tab', { name: 'Audit log' })).toHaveAttribute('tabindex', '0');
     expect(screen.getByRole('tab', { name: 'General' })).toHaveAttribute('tabindex', '-1');
   });
@@ -561,12 +561,12 @@ describe('no primitive hard-codes a colour', () => {
         <Switch checked onChange={() => {}} label="Compact messages" />
         <Switch checked={false} onChange={() => {}} label="Quiet hours" />
         <ToggleRow label="Play a sound" checked onChange={() => {}} />
-        <Tabs items={TAB_ITEMS} value="roles" onChange={() => {}} label="Building settings" />
+        <Tabs items={TAB_ITEMS} value="roles" onChange={() => {}} label="Server settings" />
         <Tabs
           items={TAB_ITEMS}
           value="roles"
           onChange={() => {}}
-          label="Building settings, as pages"
+          label="Server settings, as pages"
           variant="underline"
         />
       </Plate>,

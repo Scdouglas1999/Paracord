@@ -71,7 +71,7 @@ describe('canAccessGuildSettingsSync', () => {
     roleCache.get.mockReturnValue(null);
   });
 
-  it('allows the building owner', () => {
+  it('allows the server owner', () => {
     guildState.guilds = [{ id: 'guild-1', owner_id: 'user-1' }];
     expect(canAccessGuildSettingsSync('guild-1')).toBe(true);
   });

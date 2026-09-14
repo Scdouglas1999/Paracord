@@ -48,7 +48,7 @@ export function BotMetricsPanel({ metrics, onRefresh }: BotMetricsPanelProps) {
             </div>
             <div className="flex items-center gap-2">
               <Server size={15} className="text-accent-success" aria-hidden />
-              <Stat label="Active guilds" value={String(metrics.active_guild_count)} />
+              <Stat label="Active servers" value={String(metrics.active_guild_count)} />
             </div>
             <div className="min-w-0">
               <div className="text-section text-text-faint">Rating</div>

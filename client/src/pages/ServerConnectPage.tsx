@@ -72,7 +72,7 @@ async function probeServerViaTauri(serverUrl: string): Promise<{ name: string; c
   const { invoke } = await import('@tauri-apps/api/core');
   const data = await invoke<{ service?: string; name?: string }>('probe_server', { serverUrl });
   if (data.service !== 'paracord') {
-    throw new Error('Not a Paracord server');
+    throw new Error('Not a Paracord instance');
   }
   const canonicalServerUrl = canonicalServerBaseFromResolvedUrl(serverUrl);
   let fallbackName = canonicalServerUrl;
@@ -197,7 +197,7 @@ async function probeServerViaFetch(serverUrl: string): Promise<{ name: string; c
     });
   } catch (err) {
     if (err instanceof DOMException && err.name === 'TimeoutError') {
-      throw new Error('Connection timed out while probing server health endpoint.');
+      throw new Error('Connection timed out while probing the instance health endpoint.');
     }
     if (err instanceof TypeError) {
       // Reachable but refused => the peer's CORS allowlist, not the network.
@@ -208,10 +208,10 @@ async function probeServerViaFetch(serverUrl: string): Promise<{ name: string; c
     }
     throw err;
   }
-  if (!resp.ok) throw new Error('Server returned an error');
+  if (!resp.ok) throw new Error('The instance returned an error');
   const data = await resp.json();
   if (data.service !== 'paracord') {
-    throw new Error('Not a Paracord server');
+    throw new Error('Not a Paracord instance');
   }
   const canonicalServerUrl = canonicalServerBaseFromResolvedUrl(resp.url || serverUrl);
   let fallbackName = canonicalServerUrl;
@@ -226,7 +226,7 @@ async function probeServerViaFetch(serverUrl: string): Promise<{ name: string; c
   };
 }
 
-/** Probe /health and verify this is a Paracord server. Uses Rust-side HTTP in Tauri, fetch in browser. */
+/** Probe /health and verify this is a Paracord instance. Uses Rust-side HTTP in Tauri, fetch in browser. */
 async function probeServer(serverUrl: string): Promise<{ name: string; canonicalServerUrl: string }> {
   if (isTauri()) {
     return probeServerViaTauri(serverUrl);
@@ -241,7 +241,7 @@ export function toFriendlyConnectionError(err: unknown): string {
     return err.message;
   }
   if (!(err instanceof Error)) {
-    return 'Could not connect. Check the URL and ensure the server is running.';
+    return 'Could not connect. Check the address and make sure the instance is running.';
   }
 
   const msg = err.message.trim();
@@ -249,23 +249,23 @@ export function toFriendlyConnectionError(err: unknown): string {
   if (!msg) {
     return 'Could not connect. Check the URL and ensure the server is running.';
   }
-  if (lower.includes('not a paracord server')) {
-    return 'Connected endpoint is reachable, but it does not identify as a Paracord server.';
+  if (lower.includes('not a paracord instance')) {
+    return 'That address is reachable, but it does not identify as a Paracord instance.';
   }
   if (lower.includes('timed out')) {
-    return 'Connection timed out. The server may be offline, blocked by firewall, or too slow to respond.';
+    return 'Connection timed out. The instance may be down, blocked by a firewall, or too slow to respond.';
   }
   if (lower.includes('network request failed') || lower.includes('failed to fetch')) {
     return 'Network request failed. Verify DNS, protocol (http/https), CORS configuration, and TLS certificate trust.';
   }
   if (lower.includes('certificate') || lower.includes('tls') || lower.includes('ssl')) {
-    return 'TLS handshake failed. Verify server certificate chain and hostname.';
+    return 'TLS handshake failed. Check the instance certificate chain and hostname.';
   }
   if (lower.includes('account not unlocked')) {
-    return 'Unlock your local account before connecting to this server.';
+    return 'Unlock your local account before connecting to this instance.';
   }
   if (lower.includes('authentication failed') || lower.includes('challenge-response')) {
-    return 'Server authentication failed. Ensure this server supports challenge-response auth and your account exists.';
+    return 'Instance authentication failed. Check that this instance supports challenge-response auth and that your account exists.';
   }
   return msg;
 }
@@ -348,7 +348,7 @@ export function ServerConnectPage() {
 
     const input = url.trim();
     if (!input) {
-      setError('Please enter a server URL or invite link.');
+      setError('Please enter an instance address or invite link.');
       setLoading(false);
       return;
     }
@@ -363,7 +363,7 @@ export function ServerConnectPage() {
       const parsedUrl = new URL(serverUrl);
       if (parsedUrl.protocol !== 'https:' && !(parsedUrl.protocol === 'http:' && isLocalhostHost(parsedUrl.hostname))) {
         throw new Error(
-          'Remote Paracord servers must use HTTPS. Plain HTTP is allowed only for localhost development servers.',
+          'Remote Paracord instances must use HTTPS. Plain HTTP is allowed only for localhost development instances.',
         );
       }
 
@@ -371,7 +371,7 @@ export function ServerConnectPage() {
       const existingUrls = useServerListStore.getState().servers.map((s) => s.url);
       await syncTrustedHosts([...existingUrls, serverUrl]);
 
-      setStatus('Probing server...');
+      setStatus('Probing instance…');
       const probe = await probeServer(serverUrl);
       const canonicalServerUrl = probe.canonicalServerUrl;
       const serverName = probe.name;
@@ -399,7 +399,7 @@ export function ServerConnectPage() {
         }
         useServerListStore.getState().removeServer(serverId);
         throw new Error(
-          msg || 'Server authentication failed.',
+          msg || 'Instance authentication failed.',
         );
       }
 
@@ -445,8 +445,8 @@ export function ServerConnectPage() {
         <AuthCard>
           <form onSubmit={handleSubmit} className={AUTH_FORM}>
             <AuthHeading
-              title="Connect to a server"
-              subtitle="Paste a server address, invite, or portable link. Paracord probes it before you sign in."
+              title="Connect to an instance"
+              subtitle="Paste an instance address, invite, or portable link. Paracord probes it before you sign in."
             />
 
             {error && <ErrorBanner multiline message={error} />}
@@ -455,7 +455,7 @@ export function ServerConnectPage() {
                 wide window they sit beside the box they describe rather than
                 below it. */}
             <AuthScroll paired>
-            <Field label="Server URL or Invite link" required>
+            <Field label="Instance address or invite link" required>
               <Input
                 type="text"
                 value={url}
@@ -491,7 +491,7 @@ export function ServerConnectPage() {
 
             <div className="flex flex-col gap-2.5">
               <Button type="submit" size="lg" loading={loading} disabled={loading} className="w-full">
-                Add server
+                Add instance
               </Button>
               <Button
                 type="button"
@@ -501,19 +501,19 @@ export function ServerConnectPage() {
                 className="w-full"
               >
                 <Sparkles size={15} aria-hidden />
-                Try a public demo server
+                Try a public demo instance
               </Button>
             </div>
           </form>
         </AuthCard>
 
-        {/* Recent servers — selectable rows on their own plate, divided by a
+        {/* Recent instances — selectable rows on their own plate, divided by a
             hairline rather than tiled as identical cards (spec §6.8). */}
         {servers.length > 0 && (
           <AuthCard>
             <div className="flex min-h-0 flex-col p-4 sm:p-5">
               <div className="flex items-center justify-between px-2 pb-1">
-                <h2 className="pc-display text-heading text-text-primary">Your servers</h2>
+                <h2 className="pc-display text-heading text-text-primary">Your instances</h2>
                 <span className="pc-mono text-meta text-text-faint">{servers.length}</span>
               </div>
               <ul className="mt-1 flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">

@@ -51,7 +51,7 @@ export function GroupDmMembersPanel({ channelId, onClose }: GroupDmMembersPanelP
   const handleAddMember = async (userId: string) => {
     setMemberActionError(null);
     try {
-      if (!scope) throw new Error('Sign in to this server before continuing.');
+      if (!scope) throw new Error('Sign in to this instance before continuing.');
       await useChannelStore.getState().changeDmRecipient(channelId, userId, true, scope);
       setAddingMember(false);
     } catch (err) {
@@ -62,7 +62,7 @@ export function GroupDmMembersPanel({ channelId, onClose }: GroupDmMembersPanelP
   const handleRemoveMember = async (userId: string) => {
     setMemberActionError(null);
     try {
-      if (!scope) throw new Error('Sign in to this server before continuing.');
+      if (!scope) throw new Error('Sign in to this instance before continuing.');
       await useChannelStore.getState().changeDmRecipient(channelId, userId, false, scope);
     } catch (err) {
       setMemberActionError(extractApiError(err) || 'Failed to remove member from this group DM.');
@@ -80,7 +80,7 @@ export function GroupDmMembersPanel({ channelId, onClose }: GroupDmMembersPanelP
     if (!ok) return;
     setMemberActionError(null);
     try {
-      if (!scope) throw new Error('Sign in to this server before continuing.');
+      if (!scope) throw new Error('Sign in to this instance before continuing.');
       await useChannelStore.getState().changeDmRecipient(channelId, currentUser.id, false, scope);
       onClose();
       toast.success('Left the group DM.');

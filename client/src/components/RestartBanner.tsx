@@ -31,7 +31,7 @@ export function RestartBanner() {
     >
       <RefreshCw size={15} className="animate-spin" style={{ color: 'var(--accent-info)' }} />
       <span className="text-label" style={{ color: 'var(--accent-info)' }}>
-        Server is restarting — you'll reconnect automatically
+        The instance is restarting — you'll reconnect automatically
       </span>
     </div>
   );

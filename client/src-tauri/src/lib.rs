@@ -627,14 +627,14 @@ async fn request_native_server_trust_confirmation(app: &tauri::AppHandle, origin
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.dialog()
         .message(format!(
-            "Paracord wants to trust {origin} for server API requests and TLS certificate overrides.\n\n\
-             Trust this exact origin only if you intended to add this server.\n\n\
+            "Paracord wants to trust {origin} for instance API requests and TLS certificate overrides.\n\n\
+             Trust this exact origin only if you intended to add this instance.\n\n\
              A new certificate fingerprint will be pinned on first use."
         ))
-        .title("Trust new Paracord server?")
+        .title("Trust new Paracord instance?")
         .kind(MessageDialogKind::Warning)
         .buttons(MessageDialogButtons::OkCancelCustom(
-            "Trust server".to_string(),
+            "Trust instance".to_string(),
             "Cancel".to_string(),
         ))
         .show(move |approved| {

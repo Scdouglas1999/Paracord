@@ -40,7 +40,7 @@ const preview: InvitePreview = {
   code: 'abc123',
   guild: {
     id: '123456789012345678',
-    name: 'Building',
+    name: 'Server',
     icon_hash: null,
     member_count: 3,
   },
@@ -49,7 +49,7 @@ const preview: InvitePreview = {
 const accepted: InviteAcceptResponse = {
   guild: {
     id: '123456789012345678',
-    name: 'Building',
+    name: 'Server',
     description: null,
     icon_hash: null,
     owner_id: '323456789012345678',

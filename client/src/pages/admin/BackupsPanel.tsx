@@ -193,7 +193,7 @@ export function BackupsPanel() {
         <EmptyState
           icon={<Archive size={20} />}
           title="No backups yet"
-          description="You haven't captured a snapshot of this server. Create one now so you can roll back if something goes wrong."
+          description="You haven't captured a snapshot of this instance. Create one now so you can roll back if something goes wrong."
           action={
             <Button
               variant="ghost"

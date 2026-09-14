@@ -296,8 +296,8 @@ function transportOutcomeToStep(
         // for 13 days and rotated, which is inside the window browsers accept.
         summary: `The QUIC handshake with ${endpoint} did not complete, so no voice traffic can flow.`,
         remedy: config.certificatePinSha256
-          ? `The route is the likely cause: ${portText} must be published on the same host that serves chat and reach the Paracord server itself rather than another service, and nothing between this device and the server may drop UDP. If the server is on this machine or your own network, re-run this check first — the server rotates its media certificate, and a fingerprint read before a rotation is refused until it is read again.`
-          : `Ask the operator to confirm ${portText} is published on the same host that serves chat and reaches the Paracord server itself rather than another service, and that the server's media listener started without errors. If it is, something between this device and the server is dropping UDP.`,
+          ? `The route is the likely cause: ${portText} must be published on the same host that serves chat and reach the Paracord instance itself rather than another service, and nothing between this device and the instance may drop UDP. If the instance is on this machine or your own network, re-run this check first — the instance rotates its media certificate, and a fingerprint read before a rotation is refused until it is read again.`
+          : `Ask the operator to confirm ${portText} is published on the same host that serves chat and reaches the Paracord instance itself rather than another service, and that the instance's media listener started without errors. If it is, something between this device and the instance is dropping UDP.`,
         detail,
       };
     case 'closed-early':

@@ -22,7 +22,7 @@ describe('effectiveNotificationLevel', () => {
     expect(effectiveNotificationLevel(undefined, setting({ level: 0, muted_now: true }))).toBe(2);
   });
 
-  it('follows the building when the room holds no opinion', () => {
+  it('follows the server when the room holds no opinion', () => {
     expect(effectiveNotificationLevel(undefined, setting({ level: 1 }))).toBe(1);
     expect(effectiveNotificationLevel(undefined, undefined)).toBe(0);
   });

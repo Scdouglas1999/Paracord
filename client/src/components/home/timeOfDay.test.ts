@@ -48,26 +48,26 @@ describe("Home's one sentence", () => {
     expect(homeDateLine(at(20))).toBe('Saturday 12 September');
   });
 
-  it('counts people and buildings, and agrees with itself at one', () => {
+  it('counts people and servers, and agrees with itself at one', () => {
     expect(lightsOnAcrossBuildingsCaption(30, 2)).toBe(
-      '30 people have their lights on across your 2 buildings',
+      '30 people have their lights on across your 2 servers',
     );
     expect(lightsOnAcrossBuildingsCaption(1, 1)).toBe(
-      '1 person has their lights on across your building',
+      '1 person has their lights on across your server',
     );
   });
 
   it('says nobody rather than dressing a zero up as activity', () => {
     expect(lightsOnAcrossBuildingsCaption(0, 2)).toBe(
-      'nobody has their lights on across your 2 buildings',
+      'nobody has their lights on across your 2 servers',
     );
-    expect(lightsOnAcrossBuildingsCaption(0, 0)).toBe('you have not joined a building yet');
+    expect(lightsOnAcrossBuildingsCaption(0, 0)).toBe('you have not joined a server yet');
     expect(lightsOnAcrossBuildingsCaption(0, 0)).not.toMatch(/No data|quiet/i);
   });
 
   it('joins the two halves with the separator the render uses', () => {
     expect(homeSentence(at(20), 30, 2)).toBe(
-      'Saturday 12 September · 30 people have their lights on across your 2 buildings',
+      'Saturday 12 September · 30 people have their lights on across your 2 servers',
     );
   });
 });

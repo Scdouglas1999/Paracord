@@ -43,7 +43,7 @@ export function passwordRulesMismatch(requirements: PasswordRequirements | null)
     !requirements.requires_digit ||
     !requirements.requires_symbol
   ) {
-    return `This server enforces different password rules than this page describes: ${requirements.min_length}–${requirements.max_length} ${requirements.length_unit === 'utf8_bytes' ? 'bytes' : 'characters'}, uppercase ${requirements.requires_uppercase ? 'required' : 'not required'}, lowercase ${requirements.requires_lowercase ? 'required' : 'not required'}, digit ${requirements.requires_digit ? 'required' : 'not required'}, symbol ${requirements.requires_symbol ? 'required' : 'not required'}. Follow the server's rules.`;
+    return `This instance enforces different password rules than this page describes: ${requirements.min_length}–${requirements.max_length} ${requirements.length_unit === 'utf8_bytes' ? 'bytes' : 'characters'}, uppercase ${requirements.requires_uppercase ? 'required' : 'not required'}, lowercase ${requirements.requires_lowercase ? 'required' : 'not required'}, digit ${requirements.requires_digit ? 'required' : 'not required'}, symbol ${requirements.requires_symbol ? 'required' : 'not required'}. Follow the instance's rules.`;
   }
   return null;
 }
@@ -64,7 +64,7 @@ function claimFailureMessage(err: unknown): string {
   const status = (err as { response?: { status?: number } })?.response?.status;
   const message = extractApiError(err);
   if (status === 401 || message === 'unauthorized') {
-    return 'That claim token is not the one this server printed. Copy it again from the server’s terminal or from first-owner-claim.txt — it is case-sensitive, and whitespace counts.';
+    return 'That claim token is not the one this instance printed. Copy it again from the instance’s terminal or from first-owner-claim.txt — it is case-sensitive, and whitespace counts.';
   }
   return message || 'Setup failed. Check the claim token and try again.';
 }
@@ -133,7 +133,7 @@ export function claimStepError(
       if (!draft.token.trim()) {
         return {
           field: 'token',
-          message: 'Paste the claim token from your server’s terminal to continue.',
+          message: 'Paste the claim token from your instance’s terminal to continue.',
         };
       }
       return null;
@@ -142,7 +142,7 @@ export function claimStepError(
         return { field: 'username', message: 'Choose a username for the owner account.' };
       }
       if (options.requireEmail && !trimmedEmail) {
-        return { field: 'email', message: 'This server requires an email address.' };
+        return { field: 'email', message: 'This instance requires an email address.' };
       }
       if (trimmedEmail && !EMAIL_SHAPE.test(trimmedEmail)) {
         return { field: 'email', message: 'That doesn’t look like an email address.' };
@@ -160,13 +160,13 @@ export function claimStepError(
       if (!draft.instanceName.trim()) {
         return {
           field: 'instanceName',
-          message: 'Give this server a name so people know where they are.',
+          message: 'Give this instance a name so people know where they are.',
         };
       }
       if (draft.spaceName.trim().length < 2) {
         return {
           field: 'spaceName',
-          message: 'Name the first building — at least 2 characters.',
+          message: 'Name the first server — at least 2 characters.',
         };
       }
       return null;
@@ -275,7 +275,7 @@ export function InstanceSetupPage() {
         if (cancelled) return;
         setStatusError(
           extractApiError(err) ||
-            'Could not reach this server to check whether it has been set up. Check that it is running and reload.',
+            'Could not reach this instance to check whether it has been set up. Check that it is running and reload.',
         );
         setChecking(false);
       });
@@ -389,7 +389,7 @@ export function InstanceSetupPage() {
         <AuthCard className="max-w-md">
           <div className={AUTH_FORM}>
             <AppMark size={40} />
-            <p className="mt-6 text-body text-text-secondary">Checking this server…</p>
+            <p className="mt-6 text-body text-text-secondary">Checking this instance…</p>
           </div>
         </AuthCard>
       </AuthCanvas>
@@ -405,7 +405,7 @@ export function InstanceSetupPage() {
           <header className="flex items-center gap-3">
             <AppMark size={34} />
             <h1 className="pc-display text-title text-text-primary">
-              Set up your Paracord server
+              Set up your Paracord instance
             </h1>
           </header>
 
@@ -427,8 +427,8 @@ export function InstanceSetupPage() {
             <AuthStep
               key="token"
               progress={progress}
-              title="Prove you run this server"
-              description="You’re setting up the server itself, not joining one. Your server printed a one-time claim token when it started; it is also saved as first-owner-claim.txt next to the server’s config file, readable only by the account that runs it. Nobody can create an account here until this token is used."
+              title="Prove you run this instance"
+              description="You’re setting up the instance itself, not joining one. Your instance printed a one-time claim token when it started; it is also saved as first-owner-claim.txt next to the instance’s config file, readable only by the account that runs it. Nobody can create an account here until this token is used."
             >
               <AuthScroll>
                 <Field
@@ -462,14 +462,14 @@ export function InstanceSetupPage() {
               dense
               progress={progress}
               title="Create the owner account"
-              description="This account administers the server: settings, moderation, backups. It is a normal account too — you can chat with it. Everyone who arrives later signs up normally and joins as a member."
+              description="This account administers the instance: settings, moderation, backups. It is a normal account too — you can chat with it. Everyone who arrives later signs up normally and joins as a member."
             >
               <AuthScroll paired>
                 <Field
                   label="Username"
                   required
                   error={errorFor('username')}
-                  hint="Your unique @handle on this server."
+                  hint="Your unique @handle on this instance."
                   descriptionId={usernameErrorId}
                 >
                   <Input
@@ -523,7 +523,7 @@ export function InstanceSetupPage() {
               dense
               progress={progress}
               title="Protect the owner account"
-              description="This password is the only thing between a stranger and the server’s administration. Nothing else on this server can reset it for you."
+              description="This password is the only thing between a stranger and the instance’s administration. Nothing else on this instance can reset it for you."
             >
               <AuthScroll paired>
                 <Field
@@ -602,11 +602,11 @@ export function InstanceSetupPage() {
               dense
               progress={progress}
               title="Name the place"
-              description="The server name is shown to everyone who signs in here. A building is where conversations live; the first one is created with a #general channel and a voice room, and you can add more later."
+              description="The instance name is shown to everyone who signs in here. A server is where conversations live; the first one is created with a #general channel and a voice channel, and you can add more later."
             >
               <AuthScroll paired>
                 <Field
-                  label="Server name"
+                  label="Instance name"
                   required
                   error={errorFor('instanceName')}
                   hint="For example: Riverside Studio."
@@ -626,7 +626,7 @@ export function InstanceSetupPage() {
                 </Field>
 
                 <Field
-                  label="First building name"
+                  label="First server name"
                   required
                   error={errorFor('spaceName')}
                   hint="For example: The Lounge."
@@ -662,7 +662,7 @@ export function InstanceSetupPage() {
               disabled={loading}
               className="flex-1"
             >
-              {isLastStep ? 'Claim this server' : 'Continue'}
+              {isLastStep ? 'Claim this instance' : 'Continue'}
             </Button>
           </div>
 

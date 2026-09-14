@@ -13,17 +13,17 @@ Eight commits, `a99e519..HEAD`, the last of them this file.
 |---|---|
 | `a99e519` | every `flipList` animation carries the `data-motion-recipe` id the gate reads |
 | `5022354` | **3** a reaction pops like something somebody put there |
-| `d8b9c5e` | **4** the room's window breathes while somebody writes |
+| `d8b9c5e` | **4** the channel's window breathes while somebody writes |
 | `bc0e822` | **5** contextual plates slide in from their edge |
-| `0bc4fc0` | **6** the phone's pull reveals the room's lamp |
+| `0bc4fc0` | **6** the phone's pull reveals the channel's lamp |
 | `8785752` | the gate watches the WP9d moments play |
 | `3156974` | the popup's exit keeps its subject without a render-phase ref |
 | this file | the checkpoint |
 
 WP9a–c built the engine and hung motion on every surface that was still silent.
 WP9d's row is the moments where the *light* answers: a reaction is a little
-thing somebody placed, typing is the room's window breathing, a contextual
-plate is a door opening against its own edge, and on the phone the room's lamp
+thing somebody placed, typing is the channel's window breathing, a contextual
+plate is a door opening against its own edge, and on the phone the channel's lamp
 is something you can reach for.
 
 ## 0. The gate can name what it watches — `flipList.ts`
@@ -51,16 +51,16 @@ stamped. Removing a reaction fades and shrinks the chip out over
 empty row is the row's first commit and mounts silently by design; the count
 still re-rolls through `RollingNumber`.
 
-## 4. The room's window breathes while somebody writes — `TopBar.tsx`, `primitives.css`, `tokens.css`
+## 4. The channel's window breathes while somebody writes — `TopBar.tsx`, `primitives.css`, `tokens.css`
 
 `typingByChannel` already knew who was writing; the header just never looked.
-While someone *else* types in the current text room, the amber window gets
+While someone *else* types in the current text channel, the amber window gets
 `is-writing` and breathes at half amplitude — a new token,
 `--glow-window-amber-breathe`, defined for all three themes beside the full
 `--glow-window-amber`. It runs on `--duration-breathe` (1600ms), the window
 stays lit for the whole typing stretch, refreshes don't restart the cycle
 because the class never leaves, and the typing store's own expiry ends it.
-A voice room's window stays white and never takes the class. Under reduced
+A voice channel's window stays white and never takes the class. Under reduced
 motion the rule that lights the window still applies and the animation is the
 one thing removed: lit, still, correct.
 
@@ -92,7 +92,7 @@ The phone context overlay, search plate, pinned-messages plate and the rest of
 the `usePresence` family keep their existing enter/exit — this item changed
 the *direction* contract, not the plumbing.
 
-## 6. The phone's pull reveals the room's lamp — `MessageList.tsx`
+## 6. The phone's pull reveals the channel's lamp — `MessageList.tsx`
 
 Only on `(hover: none), (pointer: coarse)`. A `touchstart` at scroll top arms
 a passive gesture: the pull moves a small lamp (`data-motion-lamp`,
@@ -149,7 +149,7 @@ that silently didn't play passes a frame budget:
   pop is checked to start at scale 0.6, theirs at 0.8, the glyph at ±8°.
 - **The typing pulse is proven running, then proven stopped** — an
   infinite-iteration animation on the window while typing, gone after the
-  typing state lapses, and never present on a voice room.
+  typing state lapses, and never present on a voice channel.
 - **The plate's leave is sampled, not pictured** — same trick as WP9c's
   dialog: computed opacity across the exit (floor 0.04) and `aria-hidden` on
   every frame it was still leaving.

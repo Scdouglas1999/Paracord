@@ -15,7 +15,7 @@ interface IntentInfo {
 }
 
 const INTENTS: IntentInfo[] = [
-  { bit: 0, name: 'GUILDS', description: 'Guild create/update/delete, channels, threads', privileged: false },
+  { bit: 0, name: 'GUILDS', description: 'Server create/update/delete, channels, threads', privileged: false },
   { bit: 1, name: 'GUILD_MEMBERS', description: 'Member add/update/remove events', privileged: true },
   { bit: 2, name: 'GUILD_MODERATION', description: 'Ban add/remove events', privileged: false },
   { bit: 3, name: 'GUILD_EMOJIS_AND_STICKERS', description: 'Emoji and sticker updates', privileged: false },
@@ -24,9 +24,9 @@ const INTENTS: IntentInfo[] = [
   { bit: 6, name: 'GUILD_INVITES', description: 'Invite create/delete events', privileged: false },
   { bit: 7, name: 'GUILD_VOICE_STATES', description: 'Voice state updates', privileged: false },
   { bit: 8, name: 'GUILD_PRESENCES', description: 'Presence updates for members', privileged: true },
-  { bit: 9, name: 'GUILD_MESSAGES', description: 'Message create/update/delete in guilds', privileged: false },
-  { bit: 10, name: 'GUILD_MESSAGE_REACTIONS', description: 'Reaction add/remove in guilds', privileged: false },
-  { bit: 11, name: 'GUILD_MESSAGE_TYPING', description: 'Typing start events in guilds', privileged: false },
+  { bit: 9, name: 'GUILD_MESSAGES', description: 'Message create/update/delete in servers', privileged: false },
+  { bit: 10, name: 'GUILD_MESSAGE_REACTIONS', description: 'Reaction add/remove in servers', privileged: false },
+  { bit: 11, name: 'GUILD_MESSAGE_TYPING', description: 'Typing start events in servers', privileged: false },
   { bit: 12, name: 'DIRECT_MESSAGES', description: 'DM message events', privileged: false },
   { bit: 13, name: 'DIRECT_MESSAGE_REACTIONS', description: 'DM reaction events', privileged: false },
   { bit: 14, name: 'DIRECT_MESSAGE_TYPING', description: 'DM typing events', privileged: false },

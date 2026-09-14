@@ -39,7 +39,7 @@ interface BotAdvancedTabsProps {
 
 // Sentence case, ids unchanged (§6.8).
 const TABS: ReadonlyArray<TabItem<AdvancedTab>> = [
-  { value: 'guilds', label: 'Guilds', icon: <Server size={14} /> },
+  { value: 'guilds', label: 'Servers', icon: <Server size={14} /> },
   { value: 'commands', label: 'Commands', icon: <Terminal size={14} /> },
   { value: 'intents', label: 'Intents', icon: <Zap size={14} /> },
   { value: 'permissions', label: 'Permissions', icon: <Shield size={14} /> },
@@ -82,7 +82,7 @@ export function BotAdvancedTabs({
           <>
             {installs && installs.length > 0 ? (
               <>
-                <p className="text-section text-text-faint">Installed guilds</p>
+                <p className="text-section text-text-faint">Installed servers</p>
                 <ul className="mt-1 flex flex-col">
                   {installs.map((install) => (
                     <li

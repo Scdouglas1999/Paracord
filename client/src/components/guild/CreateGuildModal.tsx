@@ -57,7 +57,7 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
   const user = useCurrentUser();
   const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>('create');
-  const [serverName, setServerName] = useState(`${user?.username || 'My'}'s building`);
+  const [serverName, setServerName] = useState(`${user?.username || 'My'}'s server`);
   const [inviteCode, setInviteCode] = useState('');
   const [iconPreview, setIconPreview] = useState<string | null>(null);
   const [iconDataUrl, setIconDataUrl] = useState<string | null>(null);
@@ -129,7 +129,7 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
       const guild = await useGuildStore.getState().createGuild(serverName.trim(), guildScope, iconDataUrl || undefined);
       await navigateToGuild(guild);
     } catch (err: unknown) {
-      setError(extractApiError(err) || 'Failed to create building');
+      setError(extractApiError(err) || 'Failed to create server');
     } finally {
       setLoading(false);
     }
@@ -144,7 +144,7 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
       const guild = await useGuildStore.getState().acceptInvite(code, guildScope);
       await navigateToGuild(guild);
     } catch (err: unknown) {
-      setError(extractApiError(err) || 'Failed to join building');
+      setError(extractApiError(err) || 'Failed to join server');
     } finally {
       setLoading(false);
     }
@@ -158,7 +158,7 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
       const guild = await useGuildStore.getState().applyTemplate(selectedTemplate.id, templateGuildName.trim(), guildScope);
       await navigateToGuild(guild);
     } catch (err: unknown) {
-      setError(extractApiError(err) || 'Failed to create building from template');
+      setError(extractApiError(err) || 'Failed to create server from template');
     } finally {
       setLoading(false);
     }
@@ -172,17 +172,17 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
     }
   };
 
-  const tabTitle = tab === 'create' ? 'Create a building' : tab === 'join' ? 'Join a building' : 'Start from a template';
+  const tabTitle = tab === 'create' ? 'Create a server' : tab === 'join' ? 'Join a server' : 'Start from a template';
   const tabSubtitle =
     tab === 'create'
-      ? 'Your building is where you and your people hang out — give it a name and make it yours.'
+      ? 'Your server is where you and your people hang out — give it a name and make it yours.'
       : tab === 'join'
         ? 'Have an invite? Drop it in below to land in an existing community.'
         : 'Skip the setup — pick a ready-made structure and rename it in one step.';
 
   const footerAction =
     tab === 'create' ? handleCreate : tab === 'join' ? handleJoin : handleApplyTemplate;
-  const footerLabel = tab === 'create' ? 'Create' : tab === 'join' ? 'Join building' : 'Create from Template';
+  const footerLabel = tab === 'create' ? 'Create' : tab === 'join' ? 'Join server' : 'Create from Template';
 
   return (
     <Modal
@@ -202,7 +202,7 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
               surface, never the emerald (that is reserved for the one action). */}
           <Tabs
             className="mt-4"
-            label="How to add a building"
+            label="How to add a server"
             items={TABS}
             value={tab}
             onChange={(next) => { setTab(next); setError(''); }}
@@ -233,9 +233,9 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
                     iconDragActive && 'shadow-[var(--shadow-well),0_0_0_1px_var(--accent-primary)]',
                   )}
                 >
-                  <input type="file" accept="image/*" className="sr-only" onChange={handleIconChange} aria-label="Building icon" />
+                  <input type="file" accept="image/*" className="sr-only" onChange={handleIconChange} aria-label="Server icon" />
                   {iconPreview ? (
-                    <img src={iconPreview} alt="Building icon preview" className="h-full w-full object-cover" />
+                    <img src={iconPreview} alt="Server icon preview" className="h-full w-full object-cover" />
                   ) : (
                     <>
                       <Upload size={20} className="text-text-muted transition-colors group-hover:text-text-primary" />
@@ -248,12 +248,12 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
               </div>
 
               <label className="block">
-                <FieldLabel>Building name</FieldLabel>
+                <FieldLabel>Server name</FieldLabel>
                 <Input
                   type="text"
                   value={serverName}
                   onChange={(e) => setServerName(e.target.value)}
-                  aria-label="Building name"
+                  aria-label="Server name"
                 />
               </label>
             </div>
@@ -284,8 +284,8 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
               ) : templates.length === 0 ? (
                 <EmptyState
                   icon={<LayoutTemplate size={20} />}
-                  title="Save a building as a template first"
-                  description="A template copies an existing building's channels and roles. Open that building's settings, save its structure, and it shows up here for every new building you start."
+                  title="Save a server as a template first"
+                  description="A template copies an existing server's channels and roles. Open that server's settings, save its structure, and it shows up here for every new server you start."
                   action={
                     <Button variant="ghost" onClick={() => { setTab('create'); setError(''); }}>
                       Build one from scratch
@@ -305,7 +305,7 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
                       aria-label={`Use template ${t.name}`}
                       onClick={() => {
                         setSelectedTemplate(t);
-                        setTemplateGuildName(`${user?.username || 'My'}'s building`);
+                        setTemplateGuildName(`${user?.username || 'My'}'s server`);
                         setError('');
                       }}
                     >
@@ -377,10 +377,10 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
                   </div>
 
                   <label className="block">
-                    <FieldLabel>Building name</FieldLabel>
+                    <FieldLabel>Server name</FieldLabel>
                     <Input
                       type="text"
-                      aria-label="Template building name"
+                      aria-label="Template server name"
                       value={templateGuildName}
                       onChange={(e) => setTemplateGuildName(e.target.value)}
                     />

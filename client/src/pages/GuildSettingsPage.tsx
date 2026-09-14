@@ -63,7 +63,7 @@ export function GuildSettingsPage() {
   if (awaitingFirstAnswer) {
     return (
       <div className="pc-plate flex h-full min-h-0 items-center px-6 sm:px-10">
-        <LoadingSpinner size="sm" label="Checking your permissions in this building" />
+        <LoadingSpinner size="sm" label="Checking your permissions in this server" />
       </div>
     );
   }
@@ -74,8 +74,8 @@ export function GuildSettingsPage() {
         <EmptyState
           className="w-full max-w-prose"
           icon={<ShieldAlert size={20} strokeWidth={2} />}
-          title="Building settings are locked"
-          description="You need a moderation or management permission — Manage Building, Manage Channels, Ban Members or View Audit log — to open settings here. Ask an admin to grant one, or head back to the conversation."
+          title="Server settings are locked"
+          description="You need a moderation or management permission — Manage Server, Manage Channels, Ban Members or View Audit log — to open settings here. Ask an admin to grant one, or head back to the conversation."
           action={<Button onClick={closeSettings}>Back to the server</Button>}
         />
       </div>

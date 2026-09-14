@@ -56,14 +56,14 @@ describe('StreamViewer', () => {
     render(<StreamViewer streamerId="u2" streamerName="Alice" />);
     expect(screen.getByText('Alice is not sharing')).toBeInTheDocument();
     expect(
-      screen.getByText('No screen track is reaching this room right now.'),
+      screen.getByText('No screen track is reaching this call right now.'),
     ).toBeInTheDocument();
   });
 
   it('says the share is opening while the first frames are on their way', () => {
     render(<StreamViewer streamerId="u2" streamerName="Alice" expectingStream />);
     expect(screen.getByText('Opening your share')).toBeInTheDocument();
-    expect(screen.getByText('The first frames are on their way to the room.')).toBeInTheDocument();
+    expect(screen.getByText('The first frames are on their way to the call.')).toBeInTheDocument();
   });
 
   it('reveals the issue message when the warning affordance is toggled', () => {

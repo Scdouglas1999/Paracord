@@ -15,7 +15,7 @@ describe('BannerStack', () => {
     // it is not, because the shell's padding falls back to 0px without it.
     const { unmount } = render(
       <BannerStack>
-        <div>Reconnecting to the server…</div>
+        <div>Reconnecting to the instance…</div>
       </BannerStack>,
     );
     expect(document.documentElement.style.getPropertyValue(BANNER_INSET_PROPERTY)).toBe('0px');

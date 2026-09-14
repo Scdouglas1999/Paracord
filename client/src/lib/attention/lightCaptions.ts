@@ -46,13 +46,21 @@ export function lastLitCaption(lastLitMs: number | null, nowMs: number): string 
 }
 
 /**
- * A building's caption: "2 rooms lit · 3 reading" (§7.1). A building with no
- * lit voice room but somebody reading reads just "1 reading"; a fully dark
- * building reads "Dark · nobody in".
+ * A server's caption: "2 calls live · 3 reading" (§7.1). A server with no lit
+ * voice channel but somebody reading reads just "1 reading"; a fully dark
+ * server reads "Dark · nobody in".
+ *
+ * A lit voice channel is "a call", not "a voice channel lit": this caption
+ * shares one 276px sidebar row with the window map, and the map takes the
+ * first 118px of it whenever a server has eight or more channels. "2 voice
+ * channels lit · 3 reading" overruns that row and the plate cuts it mid-word —
+ * the count and the noun survive, "reading" does not. "Call" is the product's
+ * own word for a lit voice channel everywhere else ("Join the call", the LIVE
+ * dot), and it fits.
  */
 export function buildingCaption(roomsLit: number, readingCount: number): string {
   const parts: string[] = [];
-  if (roomsLit > 0) parts.push(roomsLit === 1 ? '1 room lit' : `${roomsLit} rooms lit`);
+  if (roomsLit > 0) parts.push(roomsLit === 1 ? '1 call live' : `${roomsLit} calls live`);
   if (readingCount > 0) parts.push(readingCaption(readingCount));
   return parts.length ? parts.join(' · ') : darkRoomCaption('row');
 }

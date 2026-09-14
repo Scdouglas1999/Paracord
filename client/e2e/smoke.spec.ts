@@ -450,10 +450,10 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   await page.setViewportSize({ width: 1280, height: 900 });
 
   const lazyRoutes = [
-    { path: '/app', text: /Your buildings/i },
+    { path: '/app', text: /Your servers/i },
     { path: '/app/friends', text: /Friends/i },
     { path: '/app/dms', text: /Pick up a conversation/i },
-    { path: '/app/discovery', text: /Discover buildings/i },
+    { path: '/app/discovery', text: /Discover servers/i },
     { path: '/app/templates', text: /Template Gallery/i },
     { path: '/app/developers', text: /Developer portal/i },
   ];
@@ -497,7 +497,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
 
 
-  await expect(page.getByRole('button', { name: /Switch room, current:/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Switch channel, current:/ })).toBeVisible();
 
   const closeWelcome = page.getByRole('button', { name: /Close welcome screen/i });
   if (await closeWelcome.isVisible().catch(() => false)) {
@@ -524,7 +524,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
     await page.keyboard.press('ArrowDown');
     const actionMenu = page.getByRole('menu', { name: 'Channel actions' });
     await expect(actionMenu).toBeFocused();
-    await expect(actionMenu.getByRole('menuitem', { name: 'Building leaderboard' })).toBeVisible();
+    await expect(actionMenu.getByRole('menuitem', { name: 'Server leaderboard' })).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(moreActions).toBeFocused();
     await moreActions.click();
@@ -677,7 +677,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   await composer.press('Tab');
   await expect(composer).not.toBeFocused();
   await page.keyboard.press('Control+K');
-  const commandPaletteInput = page.getByPlaceholder(/Jump to a channel, building, or setting/i);
+  const commandPaletteInput = page.getByPlaceholder(/Jump to a channel, server, or setting/i);
   await expect(commandPaletteInput).toBeVisible();
   await expect(commandPaletteInput).toBeFocused();
   await page.keyboard.press('Escape');
@@ -697,14 +697,14 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}$`));
   await expect(page.getByRole('heading', { name: /QA Guild/i })).toBeVisible();
   // `exact` because "Text rooms" is the landmark right below it.
-  await expect(page.getByRole('region', { name: 'Rooms', exact: true })).toBeVisible();
-  const textChannelsRegion = page.getByRole('region', { name: 'Text rooms' });
+  await expect(page.getByRole('region', { name: 'Voice channels', exact: true })).toBeVisible();
+  const textChannelsRegion = page.getByRole('region', { name: 'Text channels' });
   await expect(textChannelsRegion).toBeVisible();
 
   // Building settings now open from the guild-home header (MANAGE_GUILD-gated),
   // not the deleted channel-column dropdown.
-  await page.getByRole('button', { name: 'Building settings' }).click();
-  const serverSettingsDialog = page.getByRole('dialog', { name: 'Building settings' });
+  await page.getByRole('button', { name: 'Server settings' }).click();
+  const serverSettingsDialog = page.getByRole('dialog', { name: 'Server settings' });
   await expect(serverSettingsDialog).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(serverSettingsDialog).toBeHidden();
@@ -723,7 +723,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   // (lantern-stage-spec §7.1). The expanded column is one roving listbox whose
   // grouped options are the buildings and their rooms; a building's window-map
   // plate is its front door and opens the Lobby.
-  const buildingsColumn = page.getByRole('listbox', { name: 'Buildings and rooms' });
+  const buildingsColumn = page.getByRole('listbox', { name: 'Servers and channels' });
   const building = buildingsColumn.getByRole('group', { name: literal(GUILD_NAME) });
   // The lobby option is labelled "<building> lobby — <caption>", so the name to
   // match is the building's full name, not a prefix of it.
@@ -739,7 +739,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   showHomeFixtures = true;
   await page.goto('/app');
   const home = page.getByRole('main');
-  await expect(home.getByText('Your buildings')).toBeVisible();
+  await expect(home.getByText('Your servers')).toBeVisible();
   const attention = home.getByRole('region', { name: 'Needs you' });
   // The attention preview's author is the reader, so the row keeps the count.
   await expect(attention.getByText('3 mentions for you', { exact: true })).toBeVisible();

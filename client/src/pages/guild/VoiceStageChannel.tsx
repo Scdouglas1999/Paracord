@@ -673,7 +673,7 @@ export function VoiceStageChannel({
       leading={
         isPhoneLayout ? (
           <IconButton
-            label="Back to the building"
+            label="Back to the server"
             size="md"
             tone="ghost"
             onClick={(event) => {
@@ -763,7 +763,7 @@ export function VoiceStageChannel({
           )}
           <IconButton
             ref={moreAnchor}
-            label="More room actions"
+            label="More channel actions"
             size="md"
             tone="ghost"
             aria-haspopup="menu"
@@ -778,7 +778,7 @@ export function VoiceStageChannel({
             onClose={() => setMoreMenuOpen(false)}
             side="bottom"
             align="end"
-            label="Room actions"
+            label="Channel actions"
             className="w-64 p-2"
           >
             <div className="flex flex-col items-stretch gap-2">

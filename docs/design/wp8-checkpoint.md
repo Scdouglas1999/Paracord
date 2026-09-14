@@ -20,8 +20,8 @@ out of the orchestrator's review of the landed frames. §2 onwards is the detail
 
 | # | From | Item | Disposition |
 |---|---|---|---|
-| A1 | WP5 §6 | `e2e/smoke.spec.ts:698` matches the buildings listbox option with `/QA Guild lobby/i`, which cannot match the long fixture name | **Done** — the fixture name is a shared constant and the locators match the whole accessible name through an escaping helper (`71dfdf1`) |
-| A2 | WP5 §6 | `e2e/production-messaging.spec.ts` + `e2e/real-server.smoke.spec.ts` still select the old `Message #channel` placeholder | **Done** — "Say something in \<room\>" (`71dfdf1`); the two `getByRole('textbox', { name: /Message/ })` locators in the same suites found in the gate are now `/Say something/` (`6b8c205`) |
+| A1 | WP5 §6 | `e2e/smoke.spec.ts:698` matches the servers listbox option with `/QA Guild lobby/i`, which cannot match the long fixture name | **Done** — the fixture name is a shared constant and the locators match the whole accessible name through an escaping helper (`71dfdf1`) |
+| A2 | WP5 §6 | `e2e/production-messaging.spec.ts` + `e2e/real-server.smoke.spec.ts` still select the old `Message #channel` placeholder | **Done** — "Say something in \<channel\>" (`71dfdf1`); the two `getByRole('textbox', { name: /Message/ })` locators in the same suites found in the gate are now `/Say something/` (`6b8c205`) |
 | A3 | WP5 §5.1, §6 | `ContextPanel`'s `members` mode and the mobile swipe that opens it | **Done** — mode, swipe and `MemberList.tsx` deleted; group-DM recipients re-homed as the `recipients` mode (`326d192`) |
 | A4 | WP5 §6 | `.chat-header-action` / `.chat-header-active` dead in `components.css` | **Done** — deleted with 83 other dead class rules (`e7564d0`) |
 | A5 | WP7 §8 | `.settings-nav-item` dead | **Done** (`e7564d0`) |
@@ -34,20 +34,20 @@ out of the orchestrator's review of the landed frames. §2 onwards is the detail
 | A12 | WP3 §6 | the two static-a11y findings (`HomeAddBuilding`, `TimelineParts`) | **Not present** — `npm run test:a11y:static` passes on the whole tree; WP5/WP6 fixed them in flight |
 | A13 | WP7 §8 | dead `panelClassName` overrides from `CommandPalette` / `DiscoveryPage` | **Done** (`e7564d0`) |
 | A14 | WP2 §8 | stale prose naming deleted components | **Done** — `PinnedRail`, `SpacesList`, `GuildHomeHeader`, `LiveRoomsGrid`, `serverResolve`, `ConversationRow`, `MiniVoiceBar` (`74775f2`) |
-| A15 | WP2 §8 | `CallDock`'s collapsed variant paints `bg-accent-tint` + `ring-bg-secondary` | **Done** — being in a room is white light, not the action colour: a raised pill with a lit dot (`3a982f5`) |
+| A15 | WP2 §8 | `CallDock`'s collapsed variant paints `bg-accent-tint` + `ring-bg-secondary` | **Done** — being in a channel is white light, not the action colour: a raised pill with a lit dot (`3a982f5`) |
 | A16 | WP0 §8 | `data-testid="presence-dot"` in `ConversationRow` | **Moot** — `ConversationRow` is deleted (`e7564d0`); no `presence-dot` remains anywhere |
 | A17 | WP0 §8 | ~40 avatar fallbacks painting `bg-accent-primary` | **Already done** by WP2–WP7 — every avatar fallback now takes `getIdentityColor`; the remaining `bg-accent-primary` fills are buttons, progress bars and toggles, which is what the action colour is for |
 | A18 | WP0 §8, WP7 §8 | badge-sized `uppercase` labels | **Done** — the last two were the event card's weekday and the code block's language tag (`74775f2`). No `uppercase` class or `text-transform` survives in the product |
 | A19 | WP7 §8 | generic empty states in `FriendsPage` / `DiscoveryPage` | **Done for Friends** — the fallback state named its real tab (Requests) and gained its action (`74775f2`). `DiscoveryPage`'s was already specific and already carried a Clear-filters action |
 | A20 | WP7 §8 | `CreateBotForm`'s `sr-only`-labelled `Input`s | **Done** — two `TextField`s with visible labels (`74775f2`) |
 | A21 | WP0 §8 | point `docs/design-spec.md` at the Lantern Stage spec | **Done** — two paragraphs, file kept because other docs link to it (`00105cd`) |
-| A22 | WP8 brief | `docs/layout-spec.md` §7 "Rooms recipes" names the replaced components | **Done** — rewritten as the IA-level map (`00105cd`) |
+| A22 | WP8 brief | `docs/layout-spec.md` §7 "Channels recipes" names the replaced components | **Done** — rewritten as the IA-level map (`00105cd`) |
 
 ### B. The brief's own scope
 
 | # | Item | Disposition |
 |---|---|---|
-| B1 | Hub welcome copy / banner / featured rooms, with tests | **Done** — each fact goes where it is already true of the Lobby (`64581ef`); §3 |
+| B1 | Hub welcome copy / banner / featured channels, with tests | **Done** — each fact goes where it is already true of the Lobby (`64581ef`); §3 |
 | B2 | Migrate every deprecated token alias, then delete it | **Done** — §4 carries the table (`3a982f5`) |
 | B3 | `--color-status-*`, glass/noise/ambient, Fraunces/Inter | **Confirmed gone** — one prose mention of `--color-status-*` survives, in `lib/presence.ts`, explaining what replaced it |
 | B4 | Hard-coded hex outside `tokens.css`, and a lint so it cannot regress | **Done** — `scripts/literal-colour-audit.mjs`, `npm run test:tokens`, wired into `npm test` (`3a982f5`); §5 |
@@ -62,9 +62,9 @@ out of the orchestrator's review of the landed frames. §2 onwards is the detail
 | # | Item | Disposition |
 |---|---|---|
 | C1 | `RoomThumbnail`'s lamp is a grey haze over the top-left third of every live thumbnail | **Done** — the thumbnail has its own recipe now, `--thumb-glow` over `--thumb-frame-lit`, matching the reference exactly (`1536f3a`); §2 |
-| C2 | The Stage frame has no Buildings column | **Harness, not product** — `VoiceStageChannel` has always rendered inside the AppShell; the frames came from `/design-stage`, a bare preview page. It now also mounts at `/app/design-stage` and the desktop frames use it (`1536f3a`, `0cbc578`) |
-| C3 | The text-room header shows only the room name | **Fixture, not product** — `TopBar` renders "\<building\> · \<topic\>" and `TextRoom.test.tsx` pins it; the WP5 fixture had neither a guild in the store nor a topic on the channel. Both are staged now (`22359ad`) |
-| C4 | The WP5 fixture was empty and dark | **Done** — a building of 24 with three people in the room next door, three typing, and a timeline written by people who are in it (`22359ad`) |
+| C2 | The Stage frame has no Servers column | **Harness, not product** — `VoiceStageChannel` has always rendered inside the AppShell; the frames came from `/design-stage`, a bare preview page. It now also mounts at `/app/design-stage` and the desktop frames use it (`1536f3a`, `0cbc578`) |
+| C3 | The text-channel header shows only the channel name | **Fixture, not product** — `TopBar` renders "\<server\> · \<topic\>" and `TextRoom.test.tsx` pins it; the WP5 fixture had neither a guild in the store nor a topic on the channel. Both are staged now (`22359ad`) |
+| C4 | The WP5 fixture was empty and dark | **Done** — a server of 24 with three people in the channel next door, three typing, and a timeline written by people who are in it (`22359ad`) |
 
 ---
 
@@ -89,30 +89,30 @@ token:
 | `--thumb-frame-lit` | `#101a16` | `#e4e8e1` | `#080d0b` | `#0b1210` |
 | `--thumb-glow` | `rgba(243,234,216,.16)` | `rgba(133,94,48,.14)` | inherits Night | `rgba(243,234,216,.24)` |
 
-drawn by `.pc-thumb-glow` (inset-0, no border-radius). A dark room keeps the
+drawn by `.pc-thumb-glow` (inset-0, no border-radius). A dark channel keeps the
 plain matte well and has neither. The contrast audit gained two checks on the
 new frame, since the LIVE label and the occupants' names are read against it.
 
 ---
 
-## 3. What the building's operator wrote (B1)
+## 3. What the server's operator wrote (B1)
 
 `SpaceBriefing` went with the Emerald Commons, and it was the only member-facing
-render of a building's hub settings — so welcome copy, a banner and featured
-rooms were still configurable in space settings and displayed nowhere. §7.3 has
+render of a server's hub settings — so welcome copy, a banner and featured
+channels were still configurable in space settings and displayed nowhere. §7.3 has
 no slot shaped like a briefing block, so each fact goes where it is already true
 of the Lobby:
 
 - **The welcome line IS the header's sentence** when the operator wrote one. A
-  building gets one line, and the person who runs it outranks the generated one.
+  server gets one line, and the person who runs it outranks the generated one.
   The generated summary moves into the accessibility tree, so §9's text
   equivalent for the light does not go with it. Collapsed to a single line — a
-  pasted paragraph must not push the rooms off screen.
+  pasted paragraph must not push the channels off screen.
 - **The banner IS a 64px band** across the top of the plate. Not a hero, no
   gradient, nothing written over it (§6.1, §6.2).
-- **Featured rooms ARE first**, in both lists, in the operator's own order. Not a
+- **Featured channels ARE first**, in both lists, in the operator's own order. Not a
   separate section and not a badge: a small pin and an sr-only "Featured by this
-  building", spending no light token (§6.3) — being chosen by an operator is not
+  server", spending no light token (§6.3) — being chosen by an operator is not
   somebody being present.
 
 `client/src/components/rooms/lobby/hubWelcome.ts` holds the reading and the
@@ -121,7 +121,7 @@ line replacing the generated one and the generated one surviving for a screen
 reader; a whitespace-only welcome leaving the generated line alone; the greeting
 winning over the blurb and being collapsed to one line; a `javascript:` URL in
 `banner_hash` painting nothing; non-string pinned ids being dropped; featured
-ordering (none, some, and an id for a room that is not here); and a featured row
+ordering (none, some, and an id for a channel that is not here); and a featured row
 saying so without spending a light token.
 
 ---
@@ -183,7 +183,7 @@ painting a v1 shadow with hard-coded rgba in it:
 - `useTheme` wrote `--accent-secondary` on every theme change, and exported a
   `THEME_SURFACES` table of 16 literal colours that nothing read.
 - the sidebar `CallDock`'s collapsed variant painted `bg-accent-tint` — the
-  action colour — for a room you are **in**. Being in a room is white light.
+  action colour — for a channel you are **in**. Being in a channel is white light.
 - markdown's `@mention` was still the v1 Discord blurple, its spoiler and link
   rules carried literal fallbacks, and `==highlight==` was a raw rgba.
 - the contrast audit's last two checks were on `--bg-primary` / `--bg-secondary`;
@@ -262,26 +262,26 @@ The eight images were captured against Emerald Commons in July. They were
 recaptured with the same tooling against the same kind of real instance: a
 throwaway server, a fixture community seeded over the public REST API
 (`scripts/seed-demo-community.py`), and nine people holding real sessions — four
-in browsers, five inside voice rooms over the client's own realtime handshake.
+in browsers, five inside voice channels over the client's own realtime handshake.
 Nothing is drawn or retouched.
 
 Three things the new UI required of `scripts/capture-readme-screenshots.mjs`:
 
-1. `rooms.jpg` → `lobby.jpg`: a building's lobby, not a channel list. Its log
-   line reads the Lobby's own words ("2 rooms lit, 10 with their lights on") and
+1. `rooms.jpg` → `lobby.jpg`: a server's lobby, not a channel list. Its log
+   line reads the Lobby's own words ("2 channels lit, 10 with their lights on") and
    says so out loud when nothing is lit.
 2. `members.jpg` → `people.jpg`: there is no docked member list (§6.5); the
    header's here-now strip opens the one full list the product has. The locator
    is scoped to `.chat-header` — the account plate in the column also says
    "Lights on".
-3. The lobby is opened **before** the rooms are left to run. A room's duration
+3. The lobby is opened **before** the channels are left to run. A channel's duration
    counts from the moment that page first saw it lit (`lib/attention/litHistory.ts`
    — the gateway sends membership, not call start times, and the client refuses
    to invent one), so a reload before the shot restarts every clock and the cards
    read "0:03". They now read real elapsed time.
 
-The fixture building is `Lantern Works`; the README's prose is in the product's
-vocabulary — buildings, rooms, lights, and the people reading rather than a
+The fixture server is `Lantern Works`; the README's prose is in the product's
+vocabulary — servers, channels, lights, and the people reading rather than a
 roster of everyone who ever joined.
 
 ---
@@ -319,14 +319,14 @@ what the product now says (`6b8c205`), and none was weakened without saying why:
 - the composer is located by `/Say something/`, the prefix every §7.4 placeholder
   shares, not by the deleted "Message #channel"
 - Home's right column is "Needs you" and "Pick up where you left off"; there is
-  no per-room "Continue in \<room\>" region
+  no per-channel "Continue in \<channel\>" region
 - the Needs-you section is no longer removed when empty — it says "Nothing is
   waiting on you right now", because an absent section cannot tell you it
   checked — so the emptiness assertions count rows, not sections
 - a Needs-you row names **who** mentioned you rather than how many times
   (`needsYouReason`), so the two count assertions became row-shape assertions and
   the preview assertions carry the content check they always did
-- a row's single action is labelled for the room it opens ("Open decisions")
+- a row's single action is labelled for the channel it opens ("Open decisions")
 - the edit-history dialog lists "Version N · \<time\>" after WP7's restyle
 
 **`playwright.dm-attachments.config.ts` could not run at all.** It set its ports
@@ -367,10 +367,10 @@ copies of Home and three desktop-only token sheets), all inspected.
 |---|---|
 | Tokens & primitives | `tokens`, `tokens-themes`\*, `tokens-primitives`\* |
 | Light vocabulary | `light-avatars`, `light-windows`, `light-thumbnails`, `light-herenow`, `light-people-sheet` |
-| Buildings column | `column-lobby`, `column-room`, `column-call`, `column-empty`, and in situ `app-lobby`, `app-room` |
+| Servers column | `column-lobby`, `column-room`, `column-call`, `column-empty`, and in situ `app-lobby`, `app-room` |
 | Home | `home`, `home-lit-evening`, `home-quiet-morning` (+ full-page phone copies) |
 | Lobby | `lobby`, `lobby-lit`, `lobby-dark` |
-| Text room | `text-room`, `text-room-people`, `text-room-pins`, `channel` |
+| Text channel | `text-room`, `text-room-people`, `text-room-pins`, `channel` |
 | DMs | `dm`, `dm-index`, `dm-needs-setup` |
 | Stage | `stage-share`, `stage-speakers`, `stage-joining`, `stage-reconnecting`, `stage-lobby` |
 | Settings | `settings`, nine `settings-user-*` sections, `settings-space`, `settings-admin`, `settings-developer` |
@@ -412,27 +412,27 @@ lying.
   message-store tests, which is why `tsc` is happy about them. Encryption and
   media paths are not a design sweep's to delete.
 - **`pinnedStore` is read by `useUnifiedConversations` and drawn by nobody.**
-  No surface in this design offers a pin affordance — §7.1 orders buildings by
+  No surface in this design offers a pin affordance — §7.1 orders servers by
   brightness and recency instead. Either a surface gains one or the store goes;
   the note in the file now says so.
 - **~60 unused type re-exports** in the `ui/`, `light/`, `lobby/` and `stage/`
   barrels, plus a handful of functions exported only for their own tests. They
   cost nothing at runtime and deleting them would churn four public-looking
   barrels for no gain; worth a pass if the barrels ever become an API.
-- **A room's duration restarts on reload.** `litHistory` counts from when *this
-  page* first saw a room lit, so a room you have been in for an hour reads
+- **A channel's duration restarts on reload.** `litHistory` counts from when *this
+  page* first saw a channel lit, so a channel you have been in for an hour reads
   "0:03" after a refresh. That is honest by construction (WP1 chose a lower
   bound over a guess) but it is still wrong-looking; the real fix is a server
   `lit_since`, which is a protocol change.
 - **A mention count is invisible when the author is known.** `needsYouReason`
   says "\<author\> mentioned you", so two mentions from the same person in the
-  same room read the same as one. WP6's choice, surfaced by the real-server
+  same channel read the same as one. WP6's choice, surfaced by the real-server
   suite; worth revisiting with the row's design rather than patched here.
 - **`--thumb-frame-lit` for Daylight is a judgement call.** The Night value comes
   straight from the reference renders; the other three themes are derived, and
   only the Night one has been compared against an artboard.
 - **The here-now strip is hidden below the `md` breakpoint.** On a phone the
-  room header has no room for "5 reading · 19 lights on", so the light's words
+  channel header has no channel for "5 reading · 19 lights on", so the light's words
   on that surface come from the composer's invitation instead ("Say something to
   the 3 people reading"), which is in the DOM and visible. §9 holds, but the
   count is one fold further from the eye than it is on a desktop.

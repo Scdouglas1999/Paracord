@@ -113,10 +113,10 @@ describe('the connect wizard explains a CORS refusal', () => {
     globalThis.fetch = vi.fn().mockResolvedValue(OPAQUE_RESPONSE);
 
     const message = await explainConnectionFailure(
-      new Error('Not a Paracord server'),
+      new Error('Not a Paracord instance'),
       'http://127.0.0.1:18244',
     );
-    expect(message).toContain('does not identify as a Paracord server');
+    expect(message).toContain('does not identify as a Paracord instance');
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 });

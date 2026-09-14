@@ -58,7 +58,7 @@ const STATUS_LABEL: Record<DiagnosticStatus, string> = {
 const OVERALL_COPY: Record<DiagnosticReport['overall'], { title: string; body: string }> = {
   pass: {
     title: 'Everything needed for a call is working',
-    body: 'Your devices, this browser and the route to the server all passed.',
+    body: 'Your devices, this browser and the route to the instance all passed.',
   },
   warn: {
     title: 'Calls should work, with limits',

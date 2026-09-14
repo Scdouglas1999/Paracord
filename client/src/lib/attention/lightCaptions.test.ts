@@ -56,9 +56,9 @@ describe('light captions', () => {
     expect(lastLitCaption(null, 1_000)).toBe('never lit');
   });
 
-  it('builds the building caption from what is actually lit', () => {
-    expect(buildingCaption(2, 3)).toBe('2 rooms lit · 3 reading');
-    expect(buildingCaption(1, 0)).toBe('1 room lit');
+  it('builds the server caption from what is actually lit', () => {
+    expect(buildingCaption(2, 3)).toBe('2 calls live · 3 reading');
+    expect(buildingCaption(1, 0)).toBe('1 call live');
     expect(buildingCaption(0, 1)).toBe('1 reading');
     expect(buildingCaption(0, 0)).toBe('Dark · nobody in');
   });

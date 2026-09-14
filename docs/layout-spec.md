@@ -1,4 +1,4 @@
-# Paracord Layout Spec — "Rooms + Unified Stream" (v1.0 overhaul)
+# Paracord Layout Spec — "Channels + Unified Stream" (v1.0 overhaul)
 
 > **Status: SHIPPED (v1.0).** All four migration waves in §8 have landed on
 > `overhaul/v1.0-shippable`. The Discord skeleton (`Sidebar` / `ChannelSidebar` /
@@ -11,7 +11,7 @@
 >
 > **This file is the IA law.** The whole client-layout overhaul is graded against it.
 > It resolves the three verified research slices (ia-routing, attention/ranking data,
-> rooms/presence surfaces) into one implementable plan. Where a slice and this file
+> channels/presence surfaces) into one implementable plan. Where a slice and this file
 > disagree, this file wins. Where this file and a component disagree, the component is
 > wrong. Visual law is `docs/lantern-stage-spec.md` ("Lantern Stage"), which supersedes
 > the Emerald Commons system this document was written against and amends §7 below:
@@ -46,7 +46,7 @@
 
 > **Amended by the v2 overhaul.** The two-zone shell below is still the live
 > frame, but the components hanging off it were replaced between WP1 and WP7 of
-> `docs/lantern-stage-spec.md`: the sidebar body is now the Buildings column,
+> `docs/lantern-stage-spec.md`: the sidebar body is now the Servers column,
 > `RoomsView` is the Lobby, the docked `MemberList` is deleted, and
 > `MiniVoiceBar` is the on-air dock. **§7 of this file is the current map.** The
 > tree in this section is kept as the as-built record of the v1.0 overhaul that
@@ -85,7 +85,7 @@ client/src/pages/AppShell.tsx                         ← replaces AppLayout.tsx
 └─ settings overlays: <SettingsPage/> (userSettingsOpen), <GuildSettingsPage/> (guildSettingsId)
 ```
 
-### Guild Home = Rooms view (replaces GuildHub)
+### Guild Home = Channels view (replaces GuildHub)
 
 ```
 client/src/pages/GuildHomePage.tsx                    ← renamed from GuildHub.tsx; route element for guilds/:guildId
@@ -107,7 +107,7 @@ They render a reworked **`TopBar`** (`components/layout/TopBar.tsx`): breadcrumb
 `GuildName /` (→ guild Home) + `#channel` + topic (DMs: avatar + name), and a context
 toggle cluster that drives `contextPanelMode`. The right panel is `ContextPanel`, not a
 docked `MemberList`. The channel label opens `ChannelSwitcher`: a searchable, grouped
-local-room popover with a direct Rooms-home entry. It restores fast channel movement
+local-channel popover with a direct Channels-home entry. It restores fast channel movement
 without restoring the retired always-visible channel column.
 
 ### App Home (no guild selected) — HomePage
@@ -115,7 +115,7 @@ without restoring the retired always-visible channel column.
 `client/src/pages/HomePage.tsx` — **Pulse Lobby + Catch-up** complementary canvas (does
 **not** duplicate sidebar NeedsYou / RecentList / SpacesList):
 1. Fraunces greeting + meaningful status + New message (+ optional brand mark)
-2. **Happening now** — live DM/group calls **and** occupied guild voice/stage rooms
+2. **Happening now** — live DM/group calls **and** occupied guild voice/stage channels
    (`RoomCard`); section omitted when empty
 3. **Around now** — horizontal friend avatar strip (guild `AroundNowStrip` pattern); click → DM
 4. **Pick up** — short richer continue rows from `useUnifiedConversations().recent` (capped)
@@ -170,7 +170,7 @@ client/src/stores/pinnedStore.ts                  (zustand+persist — pinned co
 | `pages/FriendsPage`, `DiscoveryPage`, `TemplateGalleryPage`, `DeveloperPage`, `AdminPage`, `BotAuthorizePage`, `InvitePage` | **UNCHANGED** | full-page routes; reachable via `SpacesList`/Home quick-actions/⌘K |
 | Onboarding / welcome (`ServerConnectPage` `/connect`) | **UNCHANGED** | outside shell |
 | Legal (`Terms`,`Privacy`), auth (`Login`,`Register`,`AccountSetup`,`Unlock`,`Recover`) | **UNCHANGED** | outside shell |
-| Stage channels (`VoiceStageChannel`, `VoiceLobby`, `VoiceControlBar`) | **SURVIVE** | reached via `RoomCard` stage state → channel route (the real room view) |
+| Stage channels (`VoiceStageChannel`, `VoiceLobby`, `VoiceControlBar`) | **SURVIVE** | reached via `RoomCard` stage state → channel route (the real channel view) |
 | Streams / watch (`StreamViewer`, `VoiceParticipants`) | **SURVIVE** | `RoomCard` stream state → `setWatchedStreamer(id)` + navigate to channel |
 | Scheduled messages, file uploads (`MessageInput`, `FilePreview`) | **UNCHANGED** | live in the ChatView composer |
 | Developer surfaces (`DeveloperPage`) | **UNCHANGED** | route `/app/developers` + ⌘K |
@@ -291,10 +291,10 @@ Routes are **preserved and only re-skinned** — no new paths (⌘K + sidebar co
 
 | Path | Element (module) | Meaning after overhaul |
 |---|---|---|
-| `/app` (index) | `HomePage` | App Home — live rooms, around strip, pick-up, servers rail |
-| `/app/guilds/:guildId` | `GuildHomePage` *(was GuildHub)* | **Guild Home = Rooms view** |
+| `/app` (index) | `HomePage` | App Home — live channels, around strip, pick-up, servers rail |
+| `/app/guilds/:guildId` | `GuildHomePage` *(was GuildHub)* | **Guild Home = Channels view** |
 | `/app/guilds/:guildId/settings` | `GuildSettingsPage` | guild settings (also reachable as overlay via `guildSettingsId`) |
-| `/app/guilds/:guildId/channels/:channelId` | `GuildPage` | **ChatView** (text) / room view (voice/stage) |
+| `/app/guilds/:guildId/channels/:channelId` | `GuildPage` | **ChatView** (text) / channel view (voice/stage) |
 | `/app/dms`, `/app/dms/:channelId` | `DMPage` | **ChatView** for DMs |
 | `/app/friends` | `FriendsPage` | unchanged |
 | `/app/discovery` | `DiscoveryPage` | unchanged |
@@ -339,10 +339,10 @@ Breakpoint via `useMobile()` (≤768px); gestures via `useSwipeGesture`. On moun
 
 - **Unified sidebar → left overlay.** Swipe-right from the left edge opens; backdrop tap or `Esc` closes. Desktop-collapsed (64px rail) is *not* used on mobile — it is full overlay or hidden.
 - **ContextPanel → right overlay.** Default closed. *(Amended in WP8: the swipe-left gesture that opened it in `members` mode is gone with the mode — lantern-stage-spec §6.5. The panel is opened from the header.)*
-- **The Lobby stacks to one column:** header → around now → rooms → coming up → text rooms.
-- **The room header is compact;** the breadcrumb collapses to the room chip; ContextPanel default closed.
+- **The Lobby stacks to one column:** header → around now → channels → coming up → text channels.
+- **The channel header is compact;** the breadcrumb collapses to the channel chip; ContextPanel default closed.
 - **`MobileBottomNav` retained** (Home / DMs / Space / Friends / Settings). Space always
-  opens the selected guild's Rooms home (or the first joined space as a fallback), never a
+  opens the selected guild's Channels home (or the first joined server as a fallback), never a
   stale last channel and never a no-op when joined spaces exist.
 - **The on-air dock** stays in `AppShell` main on mobile (the sidebar CallDock is unreachable while the overlay sidebar is closed, so the bottom dock remains the persistent call surface).
 
@@ -352,7 +352,7 @@ collapse; expanded width = `sidebarWidth` (user-resizable within `--sidebar-min`
 
 ---
 
-## 7. Rooms recipes (Lantern Stage)
+## 7. Channels recipes (Lantern Stage)
 
 > **Rewritten in WP8.** Every component this section used to name was deleted in
 > the v2 overhaul. The recipes themselves now live in
@@ -365,7 +365,7 @@ collapse; expanded width = `sidebarWidth` (user-resizable within `--sidebar-min`
 > tokens never spent on emphasis, no docked member list, no status-colour dots,
 > no uppercase section labels, no identical-card tiling.
 
-### 7.1 The Lobby — a building seen from the street (`components/rooms/lobby/`)
+### 7.1 The Lobby — a server seen from the street (`components/rooms/lobby/`)
 
 `Lobby.tsx` composes the whole surface (lantern-stage-spec §7.3) and replaces
 `RoomsView` + `GuildHomeHeader` + `LiveRoomsGrid` + `AroundNowStrip` +
@@ -373,10 +373,10 @@ collapse; expanded width = `sidebarWidth` (user-resizable within `--sidebar-min`
 
 | Component | Was | Role |
 |---|---|---|
-| `LobbyHeader` | `GuildHomeHeader` | Building mark, name, one line of facts. The operator's welcome line replaces the generated sentence when they wrote one; the generated one stays in the accessibility tree. |
+| `LobbyHeader` | `GuildHomeHeader` | Server mark, name, one line of facts. The operator's welcome line replaces the generated sentence when they wrote one; the generated one stays in the accessibility tree. |
 | `AroundNowWell` | `AroundNowStrip` | Lit avatar stack + one sentence naming who is where. Reads `useAroundNow`; never a presence dot. |
 | `RoomCard` / `AddRoomTile` | `rooms/RoomCard` | The lit card (live thumbnail, duration, occupants, speaking line, white-light Join) and the matte card ("Dark · nobody's in", last lit, Open). |
-| `TextRoomRow` | `TextChannelList` | A text room is a row, never a card: grid `22px 1fr auto`, window dot, name + last author/time, preview, reader stack, mention chip. A featured room sorts first and carries a pin. |
+| `TextRoomRow` | `TextChannelList` | A text channel is a row, never a card: grid `22px 1fr auto`, window dot, name + last author/time, preview, reader stack, mention chip. A featured channel sorts first and carries a pin. |
 | `EventCard` | — | The next scheduled event, omitted entirely when there is none. |
 | `MediaStrip` | — | What has been passed around lately, omitted entirely when nothing has. |
 | `hubWelcome.ts` | `SpaceBriefing` | Reads `guild.hub_settings` into the three things the Lobby can show: the welcome line, a thin banner band, and the featured-first ordering. |
@@ -384,7 +384,7 @@ collapse; expanded width = `sidebarWidth` (user-resizable within `--sidebar-min`
 
 ### 7.2 The light primitives (`components/light/`)
 
-Shared by the Lobby, Home, the Buildings column, the Stage and the text room.
+Shared by the Lobby, Home, the Servers column, the Stage and the text channel.
 Nothing outside this folder derives a light: a surface that needs to know who is
 talking or reading calls a hook in `lib/attention` / `hooks/useLights.ts`.
 
@@ -392,33 +392,33 @@ talking or reading calls a hook in `lib/attention` / `hooks/useLights.ts`.
 `HereNowStrip` (the people sheet is the only full list of people in the product)
 · `LiveDot` · `OnAirPill` · `LightCaption`.
 
-### 7.3 The Buildings column (`components/layout/sidebar/`)
+### 7.3 The Servers column (`components/layout/sidebar/`)
 
 `BuildingsColumn` is one roving listbox (lantern-stage-spec §7.1);
-`BuildingSection` is a building's group inside it, `RoomRow` a room, `AccountPlate`
+`BuildingSection` is a server's group inside it, `RoomRow` a channel, `AccountPlate`
 the pinned footer, `SidebarSearch` the ⌘K well, `CollapsedRail` the collapsed
 state, `CallDock` the on-air slot. `ConversationRow` and the Needs-you section
 are gone — needs-you lives on Home.
 
 ### 7.4 The Stage (`components/voice/stage/`)
 
-`StageLayout` composes `StageHeader` (name, building · duration, here-now strip,
+`StageLayout` composes `StageHeader` (name, server · duration, here-now strip,
 actions), `SpeakerGrid` + `StageTile`, `StageControlBar`, `StageStatus` and
 `RoomChatRibbon` (lantern-stage-spec §7.2). `/design-stage` renders it from
 fixture models at full size, and `/app/design-stage` renders it inside the real
-shell, with the Buildings column beside it.
+shell, with the Servers column beside it.
 
 ### 7.5 Home (`components/home/`)
 
 `HomeBuildingCard`, `HomeNeedsYou`, `HomeComingUp`, `HomeAddBuilding`,
-`HomePickUp` (lantern-stage-spec §7.5). Brightest building first.
+`HomePickUp` (lantern-stage-spec §7.5). Brightest server first.
 
-### 7.6 The text room and DMs (`components/message/`, `components/layout/TopBar.tsx`)
+### 7.6 The text channel and DMs (`components/message/`, `components/layout/TopBar.tsx`)
 
-`TopBar` is the room header: window dot, `ChannelSwitcher`, the building as
+`TopBar` is the channel header: window dot, `ChannelSwitcher`, the server as
 breadcrumb with the topic, the here-now strip, and `ConversationHeaderActions`
 (search, pins, threads, one labelled overflow). `messageLight.ts` drives the
-inline room events ("Shop floor lit up · …"); `TimelineParts` draws the timeline.
+inline channel events ("Shop floor lit up · …"); `TimelineParts` draws the timeline.
 A DM is the same plate (lantern-stage-spec §7.6); the header strip carries the
 peer's light and the encryption state as a plain label.
 
@@ -432,21 +432,21 @@ WP8 removed its last door, the mobile left-edge swipe.
 
 ### 7.8 `ChannelSwitcher` (`components/layout/ChannelSwitcher.tsx`)
 
-The active room name in the header is a compact trigger, not another permanent
+The active channel name in the header is a compact trigger, not another permanent
 rail. The floating surface provides a filter, grouped destinations (the virtual
-groups are "Text rooms" and "Voice rooms"), the current-room state, and a
+groups are "Text channels" and "Voice channels"), the current-channel state, and a
 first-class Lobby entry. Arrow keys traverse destinations; `Escape` closes and
 restores focus. On narrow layouts it uses the same trigger and a viewport-bounded
 menu rather than a hover-only control.
 
 On narrow screens the header keeps only the local high-frequency actions visible.
 Summary, pins, threads, follows, economy, settings, Inbox and help move into one
-labelled overflow menu; they remain keyboard-accessible without crowding the room
+labelled overflow menu; they remain keyboard-accessible without crowding the channel
 name.
 
 ---
 
-## 8. Migration plan (lanes: data → shell → rooms/chat/pages → cleanup)
+## 8. Migration plan (lanes: data → shell → channels/chat/pages → cleanup)
 
 Each wave lands green (TS strict + `clippy -D warnings` + all tests). Compatibility seams keep
 old pages working while the new shell renders new components.
@@ -465,8 +465,8 @@ old pages working while the new shell renders new components.
 7. `uiStore`: add `contextPanelMode` (single source of truth) + `sidebarWidth`; repurpose `sidebarCollapsed`. **Seam:** keep `setMemberPanelOpen`/`setSearchPanelOpen`/`setEconomyPanelOpen`/`memberPanelOpen`(read) as thin adapters that route to/read from `contextPanelMode`, so un-migrated `TopBar`/`TextChannelView` keep compiling and passing. `Ctrl+B` → `toggleSidebarCollapsed`.
 8. Point `App.tsx` `/app` element at `AppShell`. **The shell renders the new sidebar while the still-original `HomePage`/`GuildHub`/`GuildPage` bodies render unchanged in the `<Outlet/>`** — app stays fully usable between waves.
 
-### Wave 3 — Rooms / Chat / Pages (page bodies)
-9. `components/rooms/*` + rename `GuildHub.tsx` → `GuildHomePage.tsx` (`RoomsView`); update `App.tsx` import + rename `GuildHub.test.tsx` → `GuildHomePage.test.tsx` asserting the room-card IA (speaking ring, quiet vs live, stream watch, around-now, text grouping, admin entry).
+### Wave 3 — Channels / Chat / Pages (page bodies)
+9. `components/rooms/*` + rename `GuildHub.tsx` → `GuildHomePage.tsx` (`RoomsView`); update `App.tsx` import + rename `GuildHub.test.tsx` → `GuildHomePage.test.tsx` asserting the channel-card IA (speaking ring, quiet vs live, stream watch, around-now, text grouping, admin entry).
 10. Rework `HomePage` (Pulse Lobby + Catch-up) — reuse `RoomCard` / Around strip patterns; update `HomePage.test.tsx` to the new IA.
 11. Rework `GuildPage`/`DMPage` ChatView: reworked `TopBar` (breadcrumb chip + context toggles → `contextPanelMode`); migrate its Search/Pins/Members/Economy/Threads toggles off the legacy setters onto `setContextPanelMode`. Update `TopBar.*.test.tsx`.
 12. Extract `DmPickerModal` from `DMList`; wire it to `SidebarSearch`/Home "new DM".
@@ -511,4 +511,4 @@ old pages working while the new shell renders new components.
    be built defensively; a proper fix (tag guilds with the originating serverId at ingest) is
    a small additive client change, flagged for its own PR — not required for v1 ranking.
 
-No server changes are required for the v1 layout, rooms, or ranking.
+No server changes are required for the v1 layout, channels, or ranking.

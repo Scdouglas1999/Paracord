@@ -60,7 +60,7 @@ export function OverviewPanel() {
       setHealth(data);
       if (announce) toast.success('Health refreshed');
     } catch (err) {
-      toast.error(`Failed to load server health: ${extractApiError(err)}`);
+      toast.error(`Failed to load instance health: ${extractApiError(err)}`);
     } finally {
       setRefreshing(false);
     }
@@ -73,7 +73,7 @@ export function OverviewPanel() {
   return (
     <div>
       <SettingsSectionHeader
-        title="Server health"
+        title="Instance health"
         description="What this deployment looks like right now, and anything worth acting on."
         action={
           <Button variant="ghost" onClick={() => void load(true)} disabled={refreshing}>
@@ -216,7 +216,7 @@ function HealthBody({ health }: { health: HealthReport }) {
       <Well className="grid grid-cols-2 gap-x-6 gap-y-5 px-5 py-5 sm:grid-cols-4">
         <Stat label="Messages sent" value={counts.messages} />
         <Stat label="Registered users" value={counts.users} />
-        <Stat label="Buildings" value={counts.guilds} />
+        <Stat label="Servers" value={counts.guilds} />
         <Stat label="Lights on now" value={counts.online_users} />
       </Well>
 

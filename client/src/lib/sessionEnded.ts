@@ -56,4 +56,4 @@ export function clearSessionEndedNotice(): void {
 
 /** The message shown when the server says the session no longer exists. */
 export const SESSION_REVOKED_MESSAGE =
-  'Your session ended on the server, so Paracord signed you out. Sign in again to pick up where you left off.';
+  'Your session ended on the instance, so Paracord signed you out. Sign in again to pick up where you left off.';

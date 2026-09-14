@@ -114,7 +114,7 @@ export const TextRoomRow = React.forwardRef<HTMLButtonElement, TextRoomRowProps>
             {featured && (
               <>
                 <Pin size={12} aria-hidden className="shrink-0 text-text-faint" />
-                <span className="sr-only">Featured by this building</span>
+                <span className="sr-only">Featured by this server</span>
               </>
             )}
             {byline && <span className="min-w-0 truncate text-meta text-text-faint">{byline}</span>}
@@ -165,7 +165,7 @@ export const TextRoomRow = React.forwardRef<HTMLButtonElement, TextRoomRowProps>
       <div className="flex min-w-0 items-center gap-0.5">
         <span className="min-w-0 flex-1">{row}</span>
         <IconButton
-          label={`Room options for ${room.name}`}
+          label={`Channel options for ${room.name}`}
           size="sm"
           className="pc-touch shrink-0"
           onClick={(event) => {

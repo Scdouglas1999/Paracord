@@ -1,4 +1,4 @@
-# WP9b — Lights on · Walk into a room · Someone arrives
+# WP9b — Lights on · Walk into a channel · Someone arrives
 
 Contract: [`docs/lantern-stage-spec.md`](../lantern-stage-spec.md) §5, and §10
 row **WP9b**. Branch `design/lantern-stage`. Builds on
@@ -36,16 +36,16 @@ once in the app shell, rendering nothing, one subscription and two effects.
 
 ### Why a director and not per-component motion
 
-"Say something" belongs to the composer and "walk into a room" belongs to the
+"Say something" belongs to the composer and "walk into a channel" belongs to the
 door you clicked — both have an owner, and WP9a's rule that the gesture starts
 on the frame of the input holds them together. **Lights on** and **someone
 arrives** have no owner: they are things the world did, and the surfaces they
 touch are in four different subtrees (the sidebar's window map, the Lobby's
-cards, a room header's strip, a timeline's event line).
+cards, a channel header's strip, a timeline's event line).
 
-A building waking up is also *one sequence with one clock*: a plate's lamp has
+A server waking up is also *one sequence with one clock*: a plate's lamp has
 to know when its own first window lit, and a person's rim has to know when
-their room did. Spread across `WindowMap`, `BuildingPlate` and `LitAvatar` that
+their channel did. Spread across `WindowMap`, `BuildingPlate` and `LitAvatar` that
 is three components sharing a timeline through props and re-deriving it on
 every render — and WP9a's first lesson was that a React re-render in the middle
 of a moment wipes it. Web Animations are not React's to wipe.
@@ -63,7 +63,7 @@ moment the face of somebody leaving still exists to be copied.
 Plates settle from 14px below, 120ms apart, as the street renders → each lit
 window blooms `--stagger-light` after its neighbour, behind its own plate → a
 lamp fades in once the first window in its plate is lit → a person's rim
-catches 120ms after the room they are in.
+catches 120ms after the channel they are in.
 
 Three triggers, and nothing else (`lightsOnTracker`):
 
@@ -78,17 +78,17 @@ Two subtleties the tests exist to pin:
 
 - A reconnect and a return are **promises that a fresh picture is coming**, not
   the picture. The gateway reconnects a beat before it re-delivers presence, and
-  firing on the promise would light the building up over the stale data still on
+  firing on the promise would light the server up over the stale data still on
   screen. The transition is armed and fires on the next observation that has
   presence in hand.
-- A building that empties is not a building that was never lit: presence going
+- A server that empties is not a server that was never lit: presence going
   away does not un-happen the first one.
 
 **The gather.** The edge arms the moment; the director waits 250ms before
 sweeping. READY sets the local account's own light before it has said a word
-about anybody else, and the building's channels, members and voice states
+about anybody else, and the server's channels, members and voice states
 follow over the next couple of hundred milliseconds. Sweeping on the first of
-those wakes a building that has not finished arriving — the plates settle over
+those wakes a server that has not finished arriving — the plates settle over
 a street with no windows lit in it, and every window that lights a beat later
 looks like somebody walking in. Nothing moves during the gather, so it is not
 part of §5.3's 1.6s.
@@ -98,26 +98,26 @@ thing to move is a rim, at (street settle) + (its window's delay) + 120ms +
 220ms. A 120-window street is compressed to fit rather than capped, because an
 arrival that never plays is worse than one that plays fast.
 
-## 3. Moment 2 — walk into a room / back to the pill
+## 3. Moment 2 — walk into a channel / back to the pill
 
 `MotionWalkIn.html`. `transitionWith` finally has call sites — five of them,
-all the same journey: the Lobby card, the sidebar room row, the inline "lit up"
+all the same journey: the Lobby card, the sidebar channel row, the inline "lit up"
 event in a timeline, the on-air pill (unfolding back into the Stage) and the
-single-room lobby's Join. A room travels under one name on every surface that
+single-channel lobby's Join. A channel travels under one name on every surface that
 draws it, `room-<channelId>`, so every door in and every door out is the same
 move played in a different direction.
 
 **One behaviour change, and it is the point of the package: Join in the Lobby
-now takes you into the room.** It used to join the call and leave you standing
-in the street, which is the one thing "walk into a room" cannot mean.
+now takes you into the channel.** It used to join the call and leave you standing
+in the street, which is the one thing "walk into a channel" cannot mean.
 
 Three things `transitionWith` had to grow, each because the product has more
 than one of everything:
 
-- **`origin`** — a room's name is on three surfaces at once, and only the click
+- **`origin`** — a channel's name is on three surfaces at once, and only the click
   knows which one you meant. Without it the first element in the document wins
   and the card you clicked appears to fly out of the sidebar.
-- **`destinationRoot`** — the same problem at the other end. A room lands in
+- **`destinationRoot`** — the same problem at the other end. A channel lands in
   `main`.
 - **`kind`** — stamped on `<html>` as `data-motion-transition` for the length
   of the journey. It is how the two engines dress the same choreography: the
@@ -130,7 +130,7 @@ update callback with nothing awaited in front of it.
 
 ### What the destination costs
 
-Every room, thread and settings surface is behind a lazy route chunk, so the
+Every channel, thread and settings surface is behind a lazy route chunk, so the
 destination is not in the document on the frame the route changed. Three things
 follow, all found by recording the moment (§6):
 
@@ -140,7 +140,7 @@ follow, all found by recording the moment (§6):
   bounded at 700ms — inside a View Transition the browser is still holding the
   old frame while it waits, which is the whole point;
 - the Web Animations path holds a copy of the thing you clicked on screen until
-  the room is there to take over from it (`holdOrigin`), because the fallback
+  the channel is there to take over from it (`holdOrigin`), because the fallback
   has no snapshot of its own.
 
 ## 4. Moment 3 — someone arrives / leaves
@@ -148,11 +148,11 @@ follow, all found by recording the moment (§6):
 `MotionArrives.html`. Their window blooms → their rim catches 120ms later,
 wherever a `LitAvatar` is drawn for them → they spring into the here-now strip
 or avatar stack → every count that changed re-rolls (`RollingNumber`, already
-on them from WP9a) → the inline room event fades in last.
+on them from WP9a) → the inline channel event fades in last.
 
 Leaving is the mirror: the rim dims over 400ms, the face slides out 120ms
-behind it, and the window cools **only if the room actually went dark** — a
-room with three people still in it is still lit, and dimming it would say
+behind it, and the window cools **only if the channel actually went dark** — a
+channel with three people still in it is still lit, and dimming it would say
 something untrue (§0).
 
 **The study animates a slot's width; this does not.** §5.3 puts no layout
@@ -177,7 +177,7 @@ compresses that stagger the same way the lights-on one is compressed.
 **Your own join never plays.** `diffOccupancy` drops `selfUserId`: your arrival
 is Moment 2, and it has already animated.
 
-### Text rooms are deliberately out of scope
+### Text channels are deliberately out of scope
 
 Occupancy is read from voice membership, which is exact — the gateway sends
 every `VOICE_STATE_UPDATE`. WP1's "reading" is derived from typing and recent
@@ -207,7 +207,7 @@ glow off the element itself (`scaleShadow`), so it can never invent a glow
 | `data-motion-plate` / `-lamp` | a `BuildingPlate` and its one radial |
 | `data-motion-person="<userId>"` | a `LitAvatar` root — the thing that moves |
 | `data-motion-rim` | the element inside it that carries the glow |
-| `data-motion-room="<channelId>"` | a face whose room the surface knows |
+| `data-motion-room="<channelId>"` | a face whose channel the surface knows |
 | `data-motion-strip` | an `AvatarStack` — where a face springs into |
 | `data-motion-event="<channelId>"` | the inline "lit up" row in a timeline |
 | `data-motion-recede` | a region that steps back while you walk through it |
@@ -220,7 +220,7 @@ four below was invisible in code review and none of them could have failed a
 budget — dropping an element is free.
 
 1. **The card flew into the sidebar.** The "after" pass took the first element
-   in the document carrying the room's name, and the sidebar comes first. →
+   in the document carrying the channel's name, and the sidebar comes first. →
    `destinationRoot`.
 2. **And then it travelled nowhere.** The surface you leave is still in the
    document for a tick after the route changes, so the destination pass found
@@ -241,15 +241,15 @@ is the compositor's bill rather than the main thread's.
 
 ### The strips
 
-- `lights-on-0000ms.png` … `-0900ms.png` — the building waking after a gateway
+- `lights-on-0000ms.png` … `-0900ms.png` — the server waking after a gateway
   reconnect. `_sidebar-lights.png` crops the same frames to the sidebar's
-  building plate, which is where it is legible: 0ms the plate is still on its
+  server plate, which is where it is legible: 0ms the plate is still on its
   way in, 60ms it has landed and the first window is on, 120ms the window is
   blooming past its resting glow and a second has joined it, 240ms both are at
   rest and the caption has caught up.
-- `walk-in-0000ms.png` … `-0600ms.png` — the Lobby card becoming the room. 0ms
+- `walk-in-0000ms.png` … `-0600ms.png` — the Lobby card becoming the channel. 0ms
   the Lobby is whole, 60–120ms it steps back 4% and fades with the card you
-  clicked still crisp on top of it, 180ms the room arrives underneath, 240ms
+  clicked still crisp on top of it, 180ms the channel arrives underneath, 240ms
   onward its chrome rises.
 - `arrives-0000ms.png` … `-0640ms.png` — Tomas walking into Shop floor while
   you stand in the Lobby: the window blooms, the counts re-roll from 3 to 4,
@@ -278,8 +278,8 @@ server would be measuring a fiction.
 `e2e/realtime-stub.mjs` grew a back door for it:
 
 - `POST /__standing` sets the world every stream opens into. It is merged into
-  READY, which is exactly where the real server puts it — the buildings you are
-  in, their rooms, who is in those rooms and whose lights are on.
+  READY, which is exactly where the real server puts it — the servers you are
+  in, their channels, who is in those channels and whose lights are on.
 - `POST /__emit` writes a frame (or a batch, in order) to every open stream.
 - `POST /__drop` cuts every stream, so the client reconnects. That is §5.1's
   second lights-on trigger and the only one a test can drive deterministically:
@@ -315,7 +315,7 @@ Building the gate found four real bugs, all fixed in `8470b13`:
 1. **`transition.ready` rejects in ordinary use** and nothing caught it. The
    browser skips a transition whenever a second starts on top of it or the
    document is torn down, and the rejection escaped as an unhandled promise —
-   which the app turned into an error toast on top of the room you had just
+   which the app turned into an error toast on top of the channel you had just
    walked into. A skipped transition means the update happened and the travel
    did not, which is the right degradation, so the chrome rises without it.
 2. **The chrome rose over an empty document** (see §3).
@@ -346,7 +346,7 @@ Three, all recorded here because §5 is the contract.
 
 1. **§5.3 "a frame over 32 ms fails the motion gate."** The walk-in's Web
    Animations path is allowed **exactly one** dropped frame, by name: the frame
-   on which the room's own surface mounts. Measured again with the engine's
+   on which the channel's own surface mounts. Measured again with the engine's
    ghosts removed entirely, the same frame is still 33ms in the same place, so
    it belongs to the route's render and not to the engine — and it does not
    appear on every run (the table above is a run where it did not). A second
@@ -357,20 +357,20 @@ Three, all recorded here because §5 is the contract.
    insertion displaced. §5.3's budget forbids a layout property in a keyframe,
    and §5.1's own "lists that change order animate layout (FLIP) on the same
    curve" is the sanctioned way to carry the rest.
-3. **Moment 3 covers voice rooms only.** Voice membership is exact; WP1's
+3. **Moment 3 covers voice channels only.** Voice membership is exact; WP1's
    "reading" is derived from typing and recent authorship, and a light that
    flickers on every keystroke is not somebody walking in.
 
 ## 10. Known, not fixed here
 
 - **The lights-on sweep is thin on a surface with no window map.** The Lobby
-  has room cards rather than windows, so on that route the moment is the
-  sidebar's building plate settling, its windows blooming and the Around-now
+  has channel cards rather than windows, so on that route the moment is the
+  sidebar's server plate settling, its windows blooming and the Around-now
   rims catching. That is correct — §3 puts the window map in the sidebar and on
   Home — but Home is where the moment is most worth looking at, and no frame
   strip of it was taken.
 - **A second server connecting mid-session** re-baselines the arrival director,
-  so nobody in its rooms "arrives". A person who then walks in does. This is the
+  so nobody in its channels "arrives". A person who then walks in does. This is the
   right trade, but it means a background server's first arrivals are silent.
 - **`framer-motion`** still drives `Modal`, `Tooltip`, toasts,
   `SlashCommandPopup` and the on-air dock's own enter/exit. WP9c should retire

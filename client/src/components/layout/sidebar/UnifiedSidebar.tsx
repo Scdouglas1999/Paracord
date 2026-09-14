@@ -224,8 +224,8 @@ export function UnifiedSidebar() {
     async (building: BuildingLight) => {
       const ok = await confirm({
         title: `Leave ${building.name}?`,
-        description: 'You will need an invite to come back to this building.',
-        confirmLabel: 'Leave building',
+        description: 'You will need an invite to come back to this server.',
+        confirmLabel: 'Leave server',
         variant: 'danger',
       });
       if (!ok) return;
@@ -244,7 +244,7 @@ export function UnifiedSidebar() {
           navigate('/app');
         }
       } catch (error) {
-        toast.error(`Failed to leave building: ${extractApiError(error)}`);
+        toast.error(`Failed to leave server: ${extractApiError(error)}`);
       }
     },
     [navigate],
@@ -263,7 +263,7 @@ export function UnifiedSidebar() {
       const isOwner = Boolean(building.scope.userId && guild?.owner_id === building.scope.userId);
       const items: ContextMenuItem[] = [
         {
-          label: muted ? 'Unmute building' : 'Mute building',
+          label: muted ? 'Unmute server' : 'Mute server',
           icon: muted ? <Bell size={16} /> : <BellOff size={16} />,
           disabled: saving[building.key] ?? false,
           action: () => {
@@ -282,7 +282,7 @@ export function UnifiedSidebar() {
       ];
       if (canAccessGuildSettingsSync(building.guildId, building.scope)) {
         items.push({
-          label: 'Building settings',
+          label: 'Server settings',
           icon: <Settings size={16} />,
           action: () => {
             activateGuild(reference);
@@ -292,7 +292,7 @@ export function UnifiedSidebar() {
       }
       if (!isOwner) {
         items.push({
-          label: 'Leave building',
+          label: 'Leave server',
           icon: <LogOut size={16} />,
           danger: true,
           action: () => void leaveBuilding(building),

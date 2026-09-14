@@ -106,7 +106,7 @@ export function FederationPanel() {
       if (isFederationDisabled(err)) {
         setFederationEnabled(false);
       } else {
-        toast.error(`Failed to load federated servers: ${extractApiError(err)}`);
+        toast.error(`Failed to load federated instances: ${extractApiError(err)}`);
       }
       setServers([]);
       setSelectedServer(null);
@@ -173,7 +173,7 @@ export function FederationPanel() {
     const trimmedDomain = domain.trim();
     const trimmedEndpoint = endpoint.trim();
     if (!trimmedName || !trimmedDomain || !trimmedEndpoint) {
-      toast.error('Server name, domain, and endpoint are required.');
+      toast.error('Instance name, domain, and endpoint are required.');
       return;
     }
     setCreating(true);
@@ -187,7 +187,7 @@ export function FederationPanel() {
         trusted,
         discover,
       });
-      toast.success('Federated server added.');
+      toast.success('Federated instance added.');
       setServerName('');
       setDomain('');
       setEndpoint('');
@@ -195,7 +195,7 @@ export function FederationPanel() {
       setKeyId('');
       await fetchServers();
     } catch (err) {
-      toast.error(`Failed to add server: ${extractApiError(err)}`);
+      toast.error(`Failed to add instance: ${extractApiError(err)}`);
     } finally {
       setCreating(false);
     }
@@ -207,7 +207,7 @@ export function FederationPanel() {
       const { data } = await adminApi.getFederatedServer(name);
       setSelectedServer(data);
     } catch (err) {
-      toast.error(`Failed to inspect server: ${extractApiError(err)}`);
+      toast.error(`Failed to inspect instance: ${extractApiError(err)}`);
     } finally {
       setInspectingName(null);
     }
@@ -215,8 +215,8 @@ export function FederationPanel() {
 
   const handleDelete = async (name: string) => {
     const ok = await confirm({
-      title: 'Remove federated server?',
-      description: `Remove peer "${name}" from this server's federation directory?`,
+      title: 'Remove federated instance?',
+      description: `Remove peer "${name}" from this instance's federation directory?`,
       confirmLabel: 'Remove',
       variant: 'danger',
     });
@@ -224,11 +224,11 @@ export function FederationPanel() {
     setDeletingName(name);
     try {
       await adminApi.deleteFederatedServer(name);
-      toast.success('Federated server removed.');
+      toast.success('Federated instance removed.');
       if (selectedServer?.server_name === name) setSelectedServer(null);
       await fetchServers();
     } catch (err) {
-      toast.error(`Failed to delete server: ${extractApiError(err)}`);
+      toast.error(`Failed to delete instance: ${extractApiError(err)}`);
     } finally {
       setDeletingName(null);
     }
@@ -238,13 +238,13 @@ export function FederationPanel() {
     const name = applyServer.trim().toLowerCase();
     setApplyError(null);
     if (!name) {
-      setApplyError('Server name is required.');
-      toast.error('Server name is required.');
+      setApplyError('Instance name is required.');
+      toast.error('Instance name is required.');
       return;
     }
     if (!/^[a-z0-9][a-z0-9._-]*$/i.test(name)) {
-      setApplyError('Server name should look like a peer id (letters, digits, ., _, -).');
-      toast.error('Invalid server name.');
+      setApplyError('Instance name should look like a peer id (letters, digits, ., _, -).');
+      toast.error('Invalid instance name.');
       return;
     }
     let quarantineMinutes: number | undefined;
@@ -290,7 +290,7 @@ export function FederationPanel() {
       .map((line) => line.trim())
       .filter(Boolean);
     if (lines.length === 0) {
-      setImportError('Paste one server name per line (optional: name action reason).');
+      setImportError('Paste one instance name per line (optional: name action reason).');
       toast.error('Nothing to import.');
       return;
     }
@@ -435,12 +435,12 @@ export function FederationPanel() {
         <section>
           <SettingsSectionHeader
             title="Federation"
-            description="Manage trusted peer servers and inspect discovered federation metadata."
+            description="Manage trusted peer instances and inspect discovered federation metadata."
           />
           <EmptyState
             icon={<Globe2 size={18} />}
             title="Federation is turned off on this deployment"
-            description="Nothing is exchanged with other servers, and no peers can be added. Set enabled = true under [federation] in this server's configuration file, give it a domain and a signing key, then restart to peer with other servers."
+            description="Nothing is exchanged with other instances, and no peers can be added. Set enabled = true under [federation] in this instance's configuration file, give it a domain and a signing key, then restart to peer with other instances."
           />
         </section>
       </div>
@@ -452,7 +452,7 @@ export function FederationPanel() {
       <section>
         <SettingsSectionHeader
           title="Federation"
-          description="Manage trusted peer servers and inspect discovered federation metadata."
+          description="Manage trusted peer instances and inspect discovered federation metadata."
           action={
             <Button
               variant="ghost"
@@ -470,9 +470,9 @@ export function FederationPanel() {
           }
         />
 
-        <h3 className="pc-display text-heading text-text-primary">Add a federated server</h3>
+        <h3 className="pc-display text-heading text-text-primary">Add a federated instance</h3>
         <div className="mt-3 grid gap-4 md:grid-cols-2">
-          <TextField id="fed-name" label="Server name" type="text" value={serverName} onChange={(e) => setServerName(e.target.value)} placeholder="example-server" />
+          <TextField id="fed-name" label="Instance name" type="text" value={serverName} onChange={(e) => setServerName(e.target.value)} placeholder="example-server" />
           <TextField id="fed-domain" label="Domain" type="text" value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="example.com" />
           <TextField id="fed-endpoint" label="Federation endpoint" type="url" value={endpoint} onChange={(e) => setEndpoint(e.target.value)} placeholder="https://example.com/_paracord/federation/v1" className="md:col-span-2" />
           <TextField id="fed-pubkey" label="Public key (hex)" type="text" value={publicKeyHex} onChange={(e) => setPublicKeyHex(e.target.value)} placeholder="Optional" />
@@ -483,7 +483,7 @@ export function FederationPanel() {
           <Divider />
           <ToggleRow
             label="Trusted peer"
-            description="Accept this server's signed envelopes without a manual review."
+            description="Accept this instance's signed envelopes without a manual review."
             checked={trusted}
             onChange={setTrusted}
           />
@@ -503,16 +503,16 @@ export function FederationPanel() {
       </section>
 
       <section>
-        <h3 className="pc-display text-heading text-text-primary">Known servers</h3>
+        <h3 className="pc-display text-heading text-text-primary">Known instances</h3>
         {loading ? (
           <Well className="mt-3 px-6 py-10">
-            <LoadingSpinner size="sm" label="Loading federated servers…" />
+            <LoadingSpinner size="sm" label="Loading federated instances…" />
           </Well>
         ) : servers.length === 0 ? (
           <EmptyState
             icon={<Globe2 size={20} />}
             title="No peers configured yet"
-            description="This server isn't federated with anyone. Add a trusted peer above to start exchanging messages and identities across servers."
+            description="This instance isn't federated with anyone. Add a trusted peer above to start exchanging messages and identities across instances."
           />
         ) : (
           <ul className="mt-2 flex flex-col">
@@ -598,7 +598,7 @@ export function FederationPanel() {
       <section>
         <SettingsSectionHeader
           title="Federation moderation"
-          description="Block, quarantine, or allow peer servers, and subscribe to remote moderation lists."
+          description="Block, quarantine, or allow peer instances, and subscribe to remote moderation lists."
           action={
             <Button
               variant="ghost"
@@ -618,7 +618,7 @@ export function FederationPanel() {
 
         <h3 className="pc-display text-heading text-text-primary">Apply an action</h3>
         <div className="mt-3 grid gap-4 md:grid-cols-2">
-          <TextField id="mod-server" label="Server name" type="text" value={applyServer} onChange={(e) => setApplyServer(e.target.value)} placeholder="peer.example" />
+          <TextField id="mod-server" label="Instance name" type="text" value={applyServer} onChange={(e) => setApplyServer(e.target.value)} placeholder="peer.example" />
           <div className="flex flex-col gap-1.5">
             <label htmlFor="mod-action" className="text-label font-medium text-text-secondary">
               Action
@@ -654,9 +654,9 @@ export function FederationPanel() {
       <section>
         <h3 className="pc-display text-heading text-text-primary">Paste or import a list</h3>
         <p className="mt-1 max-w-prose text-body text-text-secondary">
-          One entry per line: <span className="pc-mono text-meta">server</span>,{' '}
-          <span className="pc-mono text-meta">server block</span>, or{' '}
-          <span className="pc-mono text-meta">server quarantine 60 reason</span>. Bare names use the
+          One entry per line: <span className="pc-mono text-meta">instance</span>,{' '}
+          <span className="pc-mono text-meta">instance block</span>, or{' '}
+          <span className="pc-mono text-meta">instance quarantine 60 reason</span>. Bare names use the
           action selected above.
         </p>
         <label htmlFor="mod-import" className="sr-only">
@@ -750,7 +750,7 @@ export function FederationPanel() {
         <h3 className="pc-display text-heading text-text-primary">Moderation list subscriptions</h3>
         <div className="mt-3 grid gap-4 md:grid-cols-2">
           <TextField id="sub-url" label="Source URL" type="url" value={subUrl} onChange={(e) => setSubUrl(e.target.value)} placeholder="https://example.com/moderation.json" className="md:col-span-2" />
-          <TextField id="sub-server" label="Source server (optional)" type="text" value={subServer} onChange={(e) => setSubServer(e.target.value)} placeholder="list-publisher" />
+          <TextField id="sub-server" label="Source instance (optional)" type="text" value={subServer} onChange={(e) => setSubServer(e.target.value)} placeholder="list-publisher" />
         </div>
         {subError && <ErrorBanner className="mt-3" message={subError} multiline />}
         <div className="mt-4 flex justify-end">
@@ -771,7 +771,7 @@ export function FederationPanel() {
             <EmptyState
               icon={<Globe2 size={20} />}
               title="Not subscribed to any lists"
-              description="Point this server at a published moderation list and its blocks and quarantines will sync automatically."
+              description="Point this instance at a published moderation list and its blocks and quarantines will sync automatically."
             />
           ) : (
             <ul className="flex flex-col">

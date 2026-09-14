@@ -171,7 +171,7 @@ function RoomMenuButton({
   if (!onMenu) return null;
   return (
     <IconButton
-      label={`Room options for ${room.name}`}
+      label={`Channel options for ${room.name}`}
       size="sm"
       className="pc-touch shrink-0"
       onClick={(event) => {

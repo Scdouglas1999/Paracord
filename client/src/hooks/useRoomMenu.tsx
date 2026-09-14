@@ -46,17 +46,17 @@ export function useRoomMenu(): (room: RoomLight) => ContextMenuItem[] {
       return [
         notify('Every message', <Bell size={16} />, 0),
         notify('Only when you’re mentioned', <AtSign size={16} />, 1),
-        notify('Nothing from this room', <BellOff size={16} />, 2),
+        notify('Nothing from this channel', <BellOff size={16} />, 2),
         {
-          label: 'Follow the building',
-          description: 'Use whatever this building is set to.',
+          label: 'Follow the server',
+          description: 'Use whatever this server is set to.',
           selected: level === null,
           disabled: busy,
           action: () => roomNotifications.setLevel(reference, null),
         },
         { divider: true, label: '', action: () => {} },
         {
-          label: 'Mark room as read',
+          label: 'Mark channel as read',
           icon: <CheckCheck size={16} />,
           action: () => {
             void markRoomRead(reference).catch((error) =>
@@ -65,7 +65,7 @@ export function useRoomMenu(): (room: RoomLight) => ContextMenuItem[] {
           },
         },
         {
-          label: 'Copy link to room',
+          label: 'Copy link to channel',
           icon: <Link2 size={16} />,
           action: () => {
             const path = `/app/guilds/${room.guildId}/channels/${room.channelId}`;

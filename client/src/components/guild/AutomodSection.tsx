@@ -61,11 +61,11 @@ const PRESETS: Array<{
 }> = [
   {
     key: 'invites',
-    name: 'Block building invites',
-    blurb: 'Stops drive-by advertising of other buildings.',
+    name: 'Block server invites',
+    blurb: 'Stops drive-by advertising of other servers.',
     trigger_type: TriggerType.Link,
     trigger_metadata: { kind: 'link', block_all: false, block_invites: true, allowed_domains: [] },
-    actions: [{ kind: 'block_message', reason: 'Building invites are not allowed here.' }],
+    actions: [{ kind: 'block_message', reason: 'Server invites are not allowed here.' }],
   },
   {
     key: 'mentions',
@@ -176,7 +176,7 @@ export function AutomodSection({ guildId, channels, roles }: AutomodSectionProps
     <div className="flex flex-col gap-8">
       <SectionHeader
         title="AutoMod"
-        description="Rules that check every message before it posts. Members who can manage this building are never filtered."
+        description="Rules that check every message before it posts. Members who can manage this server are never filtered."
         action={
           <Button onClick={() => setCreating(true)} disabled={creating}>
             <Plus size={15} /> New rule
@@ -700,7 +700,7 @@ function TriggerFields({
           <Well bare className="divide-y divide-border-subtle px-4">
             <ToggleRow
               label="Block invite links"
-              description="Invites to other buildings on any Paracord server."
+              description="Invites to other servers on any Paracord instance."
               checked={meta.block_invites ?? false}
               onChange={(v) => onChange({ ...meta, block_invites: v })}
             />

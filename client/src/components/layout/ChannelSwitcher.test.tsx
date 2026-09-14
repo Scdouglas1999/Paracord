@@ -44,31 +44,31 @@ function renderSwitcher() {
 }
 
 describe('ChannelSwitcher', () => {
-  it('opens a grouped room menu with Rooms home and the active channel', async () => {
+  it('opens a grouped room menu with Channels home and the active channel', async () => {
     const user = userEvent.setup();
     renderSwitcher();
 
-    const trigger = screen.getByRole('button', { name: 'Switch room, current: general' });
+    const trigger = screen.getByRole('button', { name: 'Switch channel, current: general' });
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
     await user.click(trigger);
 
-    const dialog = screen.getByRole('dialog', { name: 'Switch room in Emerald HQ' });
+    const dialog = screen.getByRole('dialog', { name: 'Switch channel in Emerald HQ' });
     expect(trigger).toHaveAttribute('aria-expanded', 'true');
-    expect(within(dialog).getByRole('button', { name: 'Rooms home' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Channels home' })).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: 'general' })).toHaveAttribute(
       'aria-current',
       'page',
     );
-    expect(within(dialog).getByText('Text rooms')).toBeInTheDocument();
-    expect(within(dialog).getByText('Voice rooms')).toBeInTheDocument();
+    expect(within(dialog).getByText('Text channels')).toBeInTheDocument();
+    expect(within(dialog).getByText('Voice channels')).toBeInTheDocument();
   });
 
-  it('filters by room name and navigates without returning to the building map', async () => {
+  it('filters by room name and navigates without returning to the server map', async () => {
     const user = userEvent.setup();
     renderSwitcher();
 
-    await user.click(screen.getByRole('button', { name: 'Switch room, current: general' }));
-    await user.type(screen.getByPlaceholderText('Find a room'), 'project');
+    await user.click(screen.getByRole('button', { name: 'Switch channel, current: general' }));
+    await user.type(screen.getByPlaceholderText('Find a channel'), 'project');
 
     expect(screen.getByRole('button', { name: 'project-ideas' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Lounge' })).not.toBeInTheDocument();
@@ -77,34 +77,34 @@ describe('ChannelSwitcher', () => {
     expect(screen.getByTestId('pathname')).toHaveTextContent(
       '/app/guilds/g1/channels/ideas',
     );
-    expect(screen.queryByRole('dialog', { name: 'Switch room in Emerald HQ' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Switch channel in Emerald HQ' })).not.toBeInTheDocument();
   });
 
   it('supports ArrowDown from search and closes with Escape', () => {
     renderSwitcher();
-    fireEvent.click(screen.getByRole('button', { name: 'Switch room, current: general' }));
-    const search = screen.getByPlaceholderText('Find a room');
+    fireEvent.click(screen.getByRole('button', { name: 'Switch channel, current: general' }));
+    const search = screen.getByPlaceholderText('Find a channel');
 
     fireEvent.keyDown(search, { key: 'ArrowDown' });
-    expect(screen.getByRole('button', { name: 'Rooms home' })).toHaveFocus();
+    expect(screen.getByRole('button', { name: 'Channels home' })).toHaveFocus();
     fireEvent.keyDown(document, { key: 'Escape' });
-    expect(screen.queryByRole('dialog', { name: 'Switch room in Emerald HQ' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Switch channel in Emerald HQ' })).not.toBeInTheDocument();
   });
 
   it('marks the room menu as a modal dialog so shell Escape defers to it', async () => {
     const user = userEvent.setup();
     renderSwitcher();
-    await user.click(screen.getByRole('button', { name: 'Switch room, current: general' }));
+    await user.click(screen.getByRole('button', { name: 'Switch channel, current: general' }));
 
-    const dialog = screen.getByRole('dialog', { name: 'Switch room in Emerald HQ' });
+    const dialog = screen.getByRole('dialog', { name: 'Switch channel in Emerald HQ' });
     expect(dialog).toHaveAttribute('aria-modal', 'true');
   });
 
   it('closes with Escape even when focus has left the popover', async () => {
     const user = userEvent.setup();
     renderSwitcher();
-    await user.click(screen.getByRole('button', { name: 'Switch room, current: general' }));
-    expect(screen.getByRole('dialog', { name: 'Switch room in Emerald HQ' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Switch channel, current: general' }));
+    expect(screen.getByRole('dialog', { name: 'Switch channel in Emerald HQ' })).toBeInTheDocument();
 
     // Simulate focus escaping the popover (e.g. Tab into the members panel).
     const outside = document.createElement('button');
@@ -115,7 +115,7 @@ describe('ChannelSwitcher', () => {
     expect(outside).toHaveFocus();
 
     fireEvent.keyDown(document, { key: 'Escape' });
-    expect(screen.queryByRole('dialog', { name: 'Switch room in Emerald HQ' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Switch channel in Emerald HQ' })).not.toBeInTheDocument();
     outside.remove();
   });
 
@@ -126,7 +126,7 @@ describe('ChannelSwitcher', () => {
   // panel narrows the header, since the icon and chevron cannot shrink.
   it('keeps the room name inside its own box when the header is squeezed', () => {
     renderSwitcher();
-    const trigger = screen.getByRole('button', { name: 'Switch room, current: general' });
+    const trigger = screen.getByRole('button', { name: 'Switch channel, current: general' });
 
     expect(trigger.className).toContain('w-full');
     expect(trigger.className).toContain('min-w-0');

@@ -64,7 +64,7 @@ function input(over: Partial<GuildLightInput> = {}): GuildLightInput {
 }
 
 describe('guildLight — the store seam', () => {
-  it('skips categories and keeps the building\'s own room order', () => {
+  it('skips categories and keeps the server\'s own room order', () => {
     const building = guildLight(input());
     expect(building.windows.map((window) => window.name)).toEqual([
       'Shop floor',
@@ -74,9 +74,9 @@ describe('guildLight — the store seam', () => {
     ]);
   });
 
-  it('does not draw a thread as a room of the building', () => {
+  it('does not draw a thread as a room of the server', () => {
     // A thread took a room's slot in the Buildings column and could push its
-    // own parent behind "1 more room" — and appeared in the Lobby's text-room
+    // own parent behind "1 more channel" — and appeared in the Lobby's text-room
     // rows as a sibling of the room it lives inside (§7.1, §7.3).
     const withThread = input({
       channels: [
@@ -109,10 +109,10 @@ describe('guildLight — the store seam', () => {
     expect(room.talkingCount).toBe(1);
     expect(room.screenSharer?.person.name).toBe('priya');
     expect(building.roomsLit).toBe(1);
-    expect(building.caption).toBe('1 room lit');
+    expect(building.caption).toBe('1 call live');
   });
 
-  it('refuses a voice state belonging to another building', () => {
+  it('refuses a voice state belonging to another server', () => {
     const building = guildLight(
       input({
         channelParticipants: new Map([['v1', [voiceState({ user_id: '1', guild_id: 'other' })]]]),

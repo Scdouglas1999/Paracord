@@ -759,7 +759,7 @@ class ConnectionManager {
     try {
       const result = await coordinateRefresh(scopeKey, async () => {
         const refreshToken = readRefreshToken();
-        if (!refreshToken) throw new Error('No refresh token for this server');
+        if (!refreshToken) throw new Error('No refresh token for this instance');
         const { data } = await client.post<{ token?: string; refresh_token?: string }>(
           '/auth/refresh',
           { refresh_token: refreshToken },
@@ -1668,7 +1668,7 @@ class ConnectionManager {
         try {
           if (getDatabaseHistoryEpoch(scope)) {
             this.disconnectServer(conn.serverId);
-            toast.error('This server did not confirm its database history. Reconnect after updating the server.');
+            toast.error('This instance did not confirm its database history. Reconnect after updating the instance.');
             return false;
           }
         } catch (error) { this.rejectHistory(conn, error); return false; }
@@ -1700,7 +1700,7 @@ class ConnectionManager {
 
   private rejectHistory(conn: ServerConnection, error: unknown): void {
     this.disconnectServer(conn.serverId);
-    toast.error(`Cannot reconcile this server's history. ${error instanceof Error ? error.message : 'Reconnect to try again.'}`);
+    toast.error(`Cannot reconcile this instance's history. ${error instanceof Error ? error.message : 'Reconnect to try again.'}`);
   }
 
   /** Drop the old transport and its queued commands before a fresh handshake. */

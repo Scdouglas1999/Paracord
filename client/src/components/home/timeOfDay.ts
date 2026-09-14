@@ -55,8 +55,8 @@ export function homeDateLine(now: Date): string {
 export function lightsOnAcrossBuildingsCaption(lightsOn: number, buildings: number): string {
   const people = Math.max(0, Math.trunc(lightsOn));
   const houses = Math.max(0, Math.trunc(buildings));
-  if (houses === 0) return 'you have not joined a building yet';
-  const where = houses === 1 ? 'your building' : `your ${houses} buildings`;
+  if (houses === 0) return 'you have not joined a server yet';
+  const where = houses === 1 ? 'your server' : `your ${houses} servers`;
   if (people === 0) return `nobody has their lights on across ${where}`;
   const who = people === 1 ? '1 person has' : `${people} people have`;
   return `${who} their lights on across ${where}`;

@@ -28,7 +28,7 @@ describe('the header line', () => {
         roomsLitCaption(2),
         nextEventCaption('thermal test', '1 pm'),
       ]),
-    ).toBe('24 of 61 have their lights on · 2 rooms lit · thermal test at 1 pm');
+    ).toBe('24 of 61 have their lights on · 2 calls live · thermal test at 1 pm');
   });
 
   it('drops a clause rather than printing an empty one', () => {
@@ -49,7 +49,7 @@ describe('the header line', () => {
   });
 
   it('counts rooms in the singular and stays silent when none are lit', () => {
-    expect(roomsLitCaption(1)).toBe('1 room lit');
+    expect(roomsLitCaption(1)).toBe('1 call live');
     expect(roomsLitCaption(0)).toBe('');
   });
 
@@ -70,7 +70,7 @@ describe('the room cards', () => {
   });
 
   it('offers a way to open one more, never a void', () => {
-    expect(OPEN_A_NEW_ROOM).toBe('Open a new room');
+    expect(OPEN_A_NEW_ROOM).toBe('Add a voice channel');
   });
 });
 
@@ -84,7 +84,7 @@ describe('coming up', () => {
 });
 
 describe('the media strip', () => {
-  it('names the building it is recently inside', () => {
+  it('names the server it is recently inside', () => {
     expect(recentlyInCaption('Kestrel Robotics')).toBe('Recently in Kestrel Robotics');
   });
 

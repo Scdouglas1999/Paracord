@@ -145,7 +145,7 @@ no product copy, no literal colour (a test asserts the last one).
 | `Tooltip` | existing component, restyled onto the floating recipe |
 
 `light` is the only variant that spends a light token, and it asserts that
-somebody is in the room. It is never emphasis.
+somebody is in the channel. It is never emphasis.
 
 ---
 

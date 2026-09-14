@@ -1,4 +1,4 @@
-# WP2 — The Buildings column
+# WP2 — The Servers column
 
 Contract: [`docs/lantern-stage-spec.md`](../lantern-stage-spec.md) §7.1, §3, §6,
 §8, §9; IA from [`docs/layout-spec.md`](../layout-spec.md) §5 (keyboard) and §6
@@ -6,9 +6,9 @@ Contract: [`docs/lantern-stage-spec.md`](../lantern-stage-spec.md) §7.1, §3, �
 Branch: `design/lantern-stage`.
 
 Everything here is checkable in one place: run the client and open
-**`/design-tokens` → "Buildings column"** (dev builds only). The column is
-rendered there in the four states worth reviewing — a Lobby open, a text room
-open, you in a call, and an account with no buildings — from real
+**`/design-tokens` → "Servers column"** (dev builds only). The column is
+rendered there in the four states worth reviewing — a Lobby open, a text channel
+open, you in a call, and an account with no servers — from real
 `lib/attention` models, not hand-written props. If a row looks wrong on that
 page, the light is wrong, not the row.
 
@@ -21,9 +21,9 @@ page, the light is wrong, not the row.
 | `sidebar/AnchorNav.tsx` (Home / Friends / Messages) | the two `NavRow`s at the top of `BuildingsColumn` (§7.1 draws Home and Messages; see §4 below for where Friends went) |
 | `sidebar/NeedsYou.tsx` | nothing in the column — **Needs-you lives on Home now** (§7.1). The column keeps the **count**, as the white-light chip on the Home row |
 | `sidebar/PinnedRail.tsx` | nothing. `pinnedStore` survives (`useUnifiedConversations` still reads it), but no UI has ever written a pin — `pin()` is called only from tests — so the rail rendered a store nobody could fill |
-| `sidebar/RecentList.tsx` | the per-building room rows. A room you were in is a room in its building, not a separate "recent" list |
-| `sidebar/SpacesList.tsx` | `BuildingSection` — the section label, the window-map plate and the rooms. Its **context menu** (mute / mark read / settings / leave) moved to `UnifiedSidebar`, which is still the only writer of the account-owned muted set `useMutedGuilds` reads |
-| `sidebar/VoiceChannelOccupants.tsx` | `RoomThumbnail`'s occupant stack on a lit room row |
+| `sidebar/RecentList.tsx` | the per-server channel rows. A channel you were in is a channel in its server, not a separate "recent" list |
+| `sidebar/SpacesList.tsx` | `BuildingSection` — the section label, the window-map plate and the channels. Its **context menu** (mute / mark read / settings / leave) moved to `UnifiedSidebar`, which is still the only writer of the account-owned muted set `useMutedGuilds` reads |
+| `sidebar/VoiceChannelOccupants.tsx` | `RoomThumbnail`'s occupant stack on a lit channel row |
 | `layout/UserPanel.tsx` (+ test) | `sidebar/AccountPlate.tsx` — see §5 |
 | `sidebar/SidebarSearch.tsx` (input recipe) | rewritten onto the well recipe, 38px, with a `Kbd` shortcut hint |
 
@@ -36,8 +36,8 @@ is running, directly above the account plate).
 
 | File | Role |
 |---|---|
-| `sidebar/BuildingsColumn.tsx` | The column, **presentational**. Takes `BuildingLight[]` and callbacks; owns only view state (which buildings are unfolded) and the flat roving-tabindex numbering. |
-| `sidebar/BuildingSection.tsx` | One building: `SectionLabel` + the `BuildingPlate` (the Lobby link) + its room rows + the expander. |
+| `sidebar/BuildingsColumn.tsx` | The column, **presentational**. Takes `BuildingLight[]` and callbacks; owns only view state (which servers are unfolded) and the flat roving-tabindex numbering. |
+| `sidebar/BuildingSection.tsx` | One server: `SectionLabel` + the `BuildingPlate` (the Lobby link) + its channel rows + the expander. |
 | `sidebar/RoomRow.tsx` | The three row shapes, plus `LiveRoomRow`, the one row that touches WP1's read-only frame tap. |
 | `sidebar/AccountPlate.tsx` | "sam.douglas · Lights on" + the account menu. |
 | `sidebar/CollapsedRail.tsx` | The 64px rail (layout-spec §6), extracted from the old `UnifiedSidebar`. |
@@ -67,8 +67,8 @@ is running, directly above the account plate).
   CallDock (only in a call) · AccountPlate
 ```
 
-Ordering is `useBuildingLights()` — brightest building first, and inside a
-building the rooms in WP1's window order (lit voice, dark voice, then text by
+Ordering is `useBuildingLights()` — brightest server first, and inside a
+server the channels are in WP1's window order (lit voice, dark voice, then text by
 readers). **Nothing in WP2 re-derives a light.** The only thing the container
 merges on top is unread / mention state, and it can do that without a second
 resolution pass because a `ConversationEntry.key` and a `RoomLight.key` are both
@@ -83,22 +83,22 @@ in the map, the account plate at 32px avatar + name + caption.
 
 ## 3. Decisions
 
-### The active row is raised, and the active building is outlined
+### The active row is raised, and the active server is outlined
 
 §7.1 says "active row = raised", and `NavRow active` already is
 (`--bg-raised` + the warm top highlight). The **plate** could not take the same
 treatment: `pc-plate` sets its own background and shadow from an unlayered
 stylesheet, so a Tailwind utility cannot override either. The reference render
-rings the open building's plate in warm light — but a light token asserts that
+rings the open server's plate in warm light — but a light token asserts that
 somebody is in there (§6.3), and "you have this Lobby open" is not presence. The
-open building gets a 1px `--border-strong` **outline** offset 2px instead, plus
+open server gets a 1px `--border-strong` **outline** offset 2px instead, plus
 `aria-current="page"`. Outline is free: WP0's focus ring is a box-shadow.
 
-### The building plate keeps its caption when its Lobby is open
+### The server plate keeps its caption when its Lobby is open
 
 `Lobby.html` swaps the caption to the word "open" while the plate is
 highlighted. The outline and `aria-current` already say that, and
-"2 rooms lit · 3 reading" is the more useful half — so the caption stays.
+"2 channels lit · 3 reading" is the more useful half — so the caption stays.
 
 ### Friends left the column
 
@@ -108,21 +108,21 @@ Messages. Friends is not orphaned: Home renders the pending-request rows and the
 ⌘K reaches `/app/friends`. The old friend-request badge lived on the Friends
 row; the requests themselves are on Home, where the list is.
 
-### Long lists: eight rooms, then a row; eight buildings, then an accordion
+### Long lists: eight channels, then a row; eight servers, then an accordion
 
-- **Rooms.** A building draws at most **8** room rows and folds the rest into
-  "N more rooms". Rooms arrive lit-first from `buildingLight`, so nothing lit is
+- **Channels.** A server draws at most **8** channel rows and folds the rest into
+  "N more channels". Channels arrive lit-first from `buildingLight`, so nothing lit is
   ever behind the fold.
-- **Buildings.** Past **8** buildings the column becomes an accordion: a
-  building that is dark *and* not the one you are in draws its label and its
-  window map — which still shows every room's light and its overflow count — and
-  its rooms wait behind one click. Twenty dark buildings cost forty rows instead
+- **Servers.** Past **8** servers the column becomes an accordion: a
+  server that is dark *and* not the one you are in draws its label and its
+  window map — which still shows every channel's light and its overflow count — and
+  its channels wait behind one click. Twenty dark servers cost forty rows instead
   of two hundred.
 
 Virtualising was the alternative and was rejected: the column is one roving
 listbox with a flat `data-nav-index` order (layout-spec §5), and a virtualised
 list makes both the arrow-key order and the screen reader's row count lie about
-what exists. A window map already summarises a folded building, which a
+what exists. A window map already summarises a folded server, which a
 scrolled-past row does not.
 
 Both bounds are one piece of state (`openBuildings`), and both expanders are
@@ -131,9 +131,9 @@ rows in the same roving order.
 ### Unread lifts the ink; mentions get a chip
 
 The window dot is already the row's light. A second dot beside it would say two
-different things in the same place, so an unread room lifts its name to
+different things in the same place, so an unread channel lifts its name to
 `--text-primary` and a mention shows an accent `Chip`. A mention chip outranks
-the room's own caption in the trailing slot.
+the channel's own caption in the trailing slot.
 
 ### "Dark · nobody in" is in the DOM, always
 
@@ -153,13 +153,13 @@ returns it on close, which reopens the palette). The column's search wears the
 ## 4. Keyboard and narrow behaviour (layout-spec §5, §6)
 
 - One `[data-roving-container]`, one Tab stop. Every row carries
-  `data-nav-index` in DOM order — Home, Messages, then per building the plate,
-  its rooms and its expander, then "Add a building" — and the shared handler in
+  `data-nav-index` in DOM order — Home, Messages, then per server the plate,
+  its channels and its expander, then "Add a server" — and the shared handler in
   `useKeyboardNavigation` moves with ↑/↓/Home/End. The Tab stop prefers the open
-  Lobby, then the open room, then the active anchor, then Home.
+  Lobby, then the open channel, then the active anchor, then Home.
 - ⌘K opens the palette from the search well (`aria-keyshortcuts`), Escape
   precedence is unchanged, Ctrl+B still collapses.
-- Collapsed (64px): the buildings survive as their marks, each carrying the
+- Collapsed (64px): the servers survive as their marks, each carrying the
   brightest window it has lit, with the caption in the button's accessible name.
   Its own roving container, one Tab stop.
 - Narrow: unchanged from §6 — the column is a full overlay on a phone, never the
@@ -244,8 +244,8 @@ before the sidebar assertion. 82 of the smoke's 84 checks pass.
 `output/design-reference/{Main,Lobby,Channel,Home}.png`, left column:
 
 - **Rim strength.** The plate's lit ring is WP1's `--ring-lit-plate`; a dark
-  building drops to the quiet tile highlight, exactly as `Main.html` draws the
-  second building.
+  server drops to the quiet tile highlight, exactly as `Main.html` draws the
+  second server.
 - **Thumbnail height.** 64px, the reference's `.thumb` height for a sidebar row,
   with the LIVE dot at 8px from the top-left and the occupant stack at 8px from
   the bottom-right.
@@ -275,6 +275,6 @@ before the sidebar assertion. 82 of the smoke's 84 checks pass.
 - **Pinning.** `pinnedStore` is now read by `useUnifiedConversations` and drawn
   by nobody. Either a surface gains a pin affordance or the store goes; deleting
   it was out of WP2's scope because the hook's contract is shared.
-- **Live sidebar thumbnails** are live only for the room you are actually in —
-  that is WP1's honest table, not a gap. Every other lit room is a still plus
+- **Live sidebar thumbnails** are live only for the channel you are actually in —
+  that is WP1's honest table, not a gap. Every other lit channel is a still plus
   the LIVE dot, and the reason is named in the model.

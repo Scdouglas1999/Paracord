@@ -43,7 +43,7 @@ export function resolveCapturedApiRoot(baseURL: string, path: string): string {
 /** Capture before any await. Selection changes never retarget this operation. */
 export function captureOperationContext(serverId = useServerListStore.getState().activeServerId ?? LOCAL_SERVER_ID) {
   const user = getServerUser(serverId);
-  if (!user) throw new Error('Sign in to this server before continuing.');
+  if (!user) throw new Error('Sign in to this instance before continuing.');
   const client = getServerApi(serverId);
   const resolveScopeBase = () => {
     if (serverId === LOCAL_SERVER_ID) return resolveApiBaseUrl();

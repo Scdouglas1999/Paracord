@@ -148,7 +148,7 @@ describe('the text room header (§7.4)', () => {
     expect(screen.getByText(/19 lights on/)).toBeVisible();
   });
 
-  it('names the building and the topic beside the room, and the building is the way back', () => {
+  it('names the server and the topic beside the room, and the server is the way back', () => {
     renderTextRoomHeader();
     expect(screen.getByRole('button', { name: 'Go to Kestrel Robotics home' })).toBeInTheDocument();
     expect(screen.getByText(/· Hardware bring-up/)).toBeInTheDocument();

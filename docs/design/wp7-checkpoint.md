@@ -4,7 +4,7 @@ Contract: [`docs/lantern-stage-spec.md`](../lantern-stage-spec.md) (§1–§4, �
 and the §10 work-package table. Depends on
 [WP0](./wp0-checkpoint.md). Branch: `design/lantern-stage`.
 
-This package restyles every surface a person reaches *around* the rooms —
+This package restyles every surface a person reaches *around* the channels —
 settings, dialogs, the first screens of the app — onto the plate/well/raised
 system. **No behaviour, route, store, API call or test intent changed.**
 
@@ -44,7 +44,7 @@ Three rules carry almost all of the work:
 
 - `Switch`'s off state is a **well**, not a grey pill: recessed like every other
   input. On is the **emerald**, never a light token — a light would assert that
-  somebody is in a room (§0, §6.3). A test asserts exactly this.
+  somebody is in a channel (§0, §6.3). A test asserts exactly this.
 - `Tabs` selects with a **raised** surface inside a well, the same way a
   selected row is raised anywhere else. Never an accent bar, never a tint.
   Arrow keys / Home / End move between tabs and only the selected tab is in the
@@ -225,7 +225,7 @@ duplicate radius/shadow (the plate inside carries both now).
 
 The primitives section gained live examples of everything new: `Switch` in all
 three states, a `ToggleRow` pair inside a plate, both `Tabs` variants, the bare
-`Select`/`Textarea`, a real `Modal` (the delete-a-room confirm, with the danger
+`Select`/`Textarea`, a real `Modal` (the delete-a-channel confirm, with the danger
 button and a field), `ErrorBanner` in both single-line and multiline form, an
 `EmptyState` inside a plate, and a working `SettingsShell` miniature.
 
@@ -340,7 +340,7 @@ Run from `client/`.
 > `getByPlaceholder(/Message #qa-general-channel/)` at `e2e/smoke.spec.ts:398`,
 > `:414` and `:561`. WP5 replaced that placeholder with the spec's §7.4 copy
 > ("Say something to the 5 people reading", falling back to "Say something in
-> <room>"), which is correct and is not WP7's to revert — the three assertions
+> <channel>"), which is correct and is not WP7's to revert — the three assertions
 > belong with that change. Left for WP5 rather than patched here, so the copy
 > and its test move together.
 

@@ -72,8 +72,13 @@ export const WindowMap = React.forwardRef<HTMLDivElement, WindowMapProps>(functi
           />
         ))}
       </div>
+      {/* The caption may shrink; the map may not. A window map is a fixed grid
+          — half a window is not a window — so when the row runs out the words
+          are the half that can give way. Without `min-w-0` the caption keeps
+          its full width, overflows, and the plate's `overflow-hidden` cuts it
+          mid-word with no ellipsis to say that it did. */}
       {caption && (
-        <span className="relative ml-auto shrink-0 truncate text-meta text-text-faint">
+        <span className="relative ml-auto min-w-0 truncate text-meta text-text-faint">
           {caption}
         </span>
       )}
@@ -82,8 +87,8 @@ export const WindowMap = React.forwardRef<HTMLDivElement, WindowMapProps>(functi
           ? // With no windows the caption is the only honest thing to say —
             // "No rooms yet" is a claim, and a building whose rooms have not
             // been fetched has not earned it.
-            (caption ?? 'No rooms yet')
-          : `${lit.length} of ${windows.length + overflowCount} rooms lit${
+            (caption ?? 'No channels yet')
+          : `${lit.length} of ${windows.length + overflowCount} channels lit${
               overflowCount > 0 ? `, ${overflowCount} more not shown` : ''
             }${caption ? `. ${caption}` : ''}`}
       </span>

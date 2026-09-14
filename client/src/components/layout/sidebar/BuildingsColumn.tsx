@@ -145,7 +145,7 @@ export function BuildingsColumn({
   footer,
 }: BuildingsColumnProps) {
   const [openBuildings, setOpenBuildings] = useState<ReadonlySet<string>>(() => new Set<string>());
-  // Every reorder the light merge produces — a building rising as its rooms
+  // Every reorder the light merge produces — a server rising as its rooms
   // light, a conversation leaving Needs-you — plays back through the engine.
   const listRef = useFlipList<HTMLDivElement>();
 
@@ -220,7 +220,7 @@ export function BuildingsColumn({
         ref={listRef}
         data-roving-container=""
         role="listbox"
-        aria-label="Buildings and rooms"
+        aria-label="Servers and channels"
         aria-orientation="vertical"
         className="-mx-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-1 pb-2 scrollbar-thin"
       >
@@ -307,11 +307,11 @@ export function BuildingsColumn({
         {buildings.length === 0 ? (
           <Well className="mt-4 flex flex-col items-start gap-2.5">
             <p className="text-label text-text-secondary">
-              Add a building — join with an invite, or start your own.
+              Add a server — join with an invite, or start your own.
             </p>
             <Button variant="primary" size="sm" onClick={onAddBuilding}>
               <Plus size={14} aria-hidden />
-              Add a building
+              Add a server
             </Button>
           </Well>
         ) : (
@@ -325,7 +325,7 @@ export function BuildingsColumn({
             onClick={onAddBuilding}
             className="mt-2"
           >
-            Add a building
+            Add a server
           </NavRow>
         )}
       </div>

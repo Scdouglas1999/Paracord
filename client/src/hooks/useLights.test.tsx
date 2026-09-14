@@ -153,7 +153,7 @@ describe('useBuildingLight', () => {
     rerender();
     expect(result.current?.roomsLit).toBe(1);
     expect(result.current?.windows[0].state).toBe('on');
-    expect(result.current?.caption).toBe('1 room lit');
+    expect(result.current?.caption).toBe('1 call live');
 
     act(() => {
       useVoiceStore.setState({ channelParticipants: new Map() });
@@ -228,8 +228,8 @@ describe('useRoomLight and useHereNow', () => {
   });
 });
 
-describe('useBuildingLights across servers', () => {
-  it('orders buildings brightest first', () => {
+describe('useServerLights across servers', () => {
+  it('orders servers brightest first', () => {
     act(() => {
       useGuildStore.getState().setGuilds(
         [
@@ -249,7 +249,7 @@ describe('useBuildingLights across servers', () => {
     ]);
   });
 
-  it('sums lights on across every building', () => {
+  it('sums lights on across every server', () => {
     const { result } = renderHook(() => {
       const buildings = useBuildingLights();
       return useLightsOnAcrossBuildings(buildings);
@@ -286,12 +286,12 @@ describe('useBuildingLights across servers', () => {
       );
     });
     const { result } = renderHook(() =>
-      useAroundNow(useBuildingLights(), 3, 'Every building is dark'),
+      useAroundNow(useBuildingLights(), 3, 'Every server is dark'),
     );
-    expect(result.current).toBe('Every building is dark');
+    expect(result.current).toBe('Every server is dark');
   });
 
-  it('says it has not looked rather than claiming a building is empty', () => {
+  it('says it has not looked rather than claiming a server is empty', () => {
     // Harbour Lights is a building you are not standing in: nobody has fetched
     // its rooms or its members. "0 in · Dark · nobody in" would be two claims
     // and both would be false.
@@ -307,12 +307,12 @@ describe('useBuildingLights across servers', () => {
     const { result } = renderHook(() => useBuildingLights());
     const harbour = result.current.find((building) => building.name === 'Harbour Lights');
     expect(harbour?.rosterKnown).toBe(false);
-    expect(harbour?.caption).toBe('Open to see rooms');
+    expect(harbour?.caption).toBe('Open to see channels');
     const kestrel = result.current.find((building) => building.name === 'Kestrel Robotics');
     expect(kestrel?.rosterKnown).toBe(true);
   });
 
-  it('counts a person in two buildings on one server once', () => {
+  it('counts a person in two servers on one server once', () => {
     act(() => {
       useGuildStore.getState().setGuilds(
         [
@@ -344,7 +344,7 @@ describe('useOnAir', () => {
     expect(result.current).toBeNull();
   });
 
-  it('names the room, the building and the mic state', () => {
+  it('names the room, the server and the mic state', () => {
     act(() => {
       useVoiceStore.setState({
         connected: true,

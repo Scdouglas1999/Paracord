@@ -153,7 +153,7 @@ describe('TemplateGalleryPage', () => {
     renderPage();
 
     await screen.findByRole('button', { name: 'View template Ops Template' });
-    expect(screen.getByLabelText('Source guild')).toHaveValue('guild-1');
+    expect(screen.getByLabelText('Source server')).toHaveValue('guild-1');
     expect(screen.queryByText('Other Guild')).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Create template' }));

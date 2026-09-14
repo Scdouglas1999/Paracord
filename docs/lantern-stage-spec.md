@@ -12,17 +12,27 @@
 
 ## 0. The idea, in one paragraph
 
-Paracord is **a building at night, and light means people.** Every space you
-belong to is a building; every room in it is a window. A window is lit when
-someone is in the room — **white light** for a voice/video room with people
-talking, **amber light** for a text room with people reading — and dark when it
-is empty. People who have the app open have their **lights on**: their avatar
-carries a rim of warm light; away or offline avatars are matte. The centre of
-the app is **the room**: when you are in one you are on the **Stage** (screen
-share, cameras, speakers), and text chat is a ribbon beside it; when you are not,
-you are in the **Lobby**, looking at the building from the street. There is no
-docked member list anywhere — the people who are here *now* are a lit strip in
-the header. Everything that is not light is dark, matte and quiet.
+Paracord is **lit windows at night, and light means people.** Every server you
+belong to is a facade of windows; every channel in it is one window. A window is
+lit when someone is in the channel — **white light** for a voice channel with
+people talking, **amber light** for a text channel with people reading — and
+dark when it is empty. People who have the app open have their **lights on**:
+their avatar carries a rim of warm light; away or offline avatars are matte. The
+centre of the app is **the channel**: when you are in a call you are on the
+**Stage** (screen share, cameras, speakers), and text chat is a ribbon beside it;
+when you are not, you are in the **Lobby**, looking at the server from the
+street. There is no docked member list anywhere — the people who are here *now*
+are a lit strip in the header. Everything that is not light is dark, matte and
+quiet.
+
+**Vocabulary (§6.9 enforces it).** The community that holds channels is a
+**server**. The thing inside it is a **channel** — a **text channel** or a
+**voice channel**; you *join voice* or *join the call*, you never "enter a
+room". The host somebody runs, connects to and claims is an **instance**:
+"Connect to an instance", "Instance address", "Trust new Paracord instance?".
+`guild`, `guild_id` and the routes keep their wire names. The words
+"building", "room" and "space" are retired from every user-facing surface, and
+`client/src/lib/vocabulary.test.ts` fails the build if one comes back.
 
 Two consequences that keep this from becoming decoration:
 
@@ -60,8 +70,8 @@ shadow** (`0 1px 2px rgba(0,0,0,.6) inset`) on wells. Never a border-only depth.
 
 | Token | Value | Meaning | Where |
 |---|---|---|---|
-| `--light-white` | `#F3EAD8` | **Talking / live.** People in a voice or video room. | Lit window, live room thumbnail, speaking tile ring, lit avatar rim, "LIVE" dot, the primary Join button in a lit context. |
-| `--light-amber` | `#E2C98F` | **Reading.** People present in a text room. | Amber window, text-room dot, "reading" counts. |
+| `--light-white` | `#F3EAD8` | **Talking / live.** People in a voice channel. | Lit window, live channel thumbnail, speaking tile ring, lit avatar rim, "LIVE" dot, the primary Join button in a lit context. |
+| `--light-amber` | `#E2C98F` | **Reading.** People present in a text channel. | Amber window, text-channel dot, "reading" counts. |
 | `--accent-primary` | `#2BD39A` | **Action you can take.** | Primary buttons outside a lit context, links, @mentions, focus ring, live data lines. |
 
 Light effects are fixed recipes, not free values:
@@ -69,13 +79,33 @@ Light effects are fixed recipes, not free values:
 - Lit window: `background: var(--light-white); box-shadow: 0 0 6px rgba(243,234,216,.55)`; amber uses `rgba(226,201,143,.5)`.
 - Lit avatar (`.lit`): `box-shadow: 0 0 0 1.5px rgba(243,234,216,.55), 0 0 12px rgba(243,234,216,.22)`.
 - Speaking tile: `0 0 0 1.5px rgba(243,234,216,.7), 0 0 18px rgba(243,234,216,.25)`.
-- Lit plate (a card whose room is live): `0 0 0 1px rgba(243,234,216,.16), 0 0 34px rgba(243,234,216,.10)` on top of the plate shadow.
-- The one permitted radial: a **lamp** inside a lit building/room card —
+- Lit plate (a card whose channel is live): `0 0 0 1px rgba(243,234,216,.16), 0 0 34px rgba(243,234,216,.10)` on top of the plate shadow.
+- The one permitted radial: a **lamp** inside a lit server/channel card —
   `radial-gradient(closest-side, rgba(243,234,216,.16), transparent)` sized to the
-  card's top-left, one per lit card, never on a surface without a lit room.
+  card's top-left, one per lit card, never on a surface without a lit channel.
 - Away/offline (`.dim`): `filter: saturate(.35) brightness(.72)`; no rim.
 
 Text/icon on white light: `--text-on-light = #0A0C10`. On emerald: `--text-on-accent = #06241A`.
+
+### 1.2a Identity — whose it is, never what state it is in
+
+Eight fixed hues (`--color-avatar-1…8`) say **who somebody is** and **which
+server this is**. Identity never carries state, never glows, and never moves:
+not with the theme, and not with the base hue. A person's colour is who they
+are, not where the app is and not what ground the reader picked.
+
+| Where | Which token |
+|---|---|
+| Avatar fallback, server mark on a section label, Home card, Lobby header | `--color-avatar-N` (the fill) |
+| An author's name in the timeline, unless a role has coloured it | `--identity-ink-N` |
+
+The split exists because a fill and a piece of text are not the same problem:
+apricot inside a 28px circle is fine on paper, and apricot written as a name on
+paper measures about 2:1. On a dark ground the ink **is** the fill; Daylight
+carries its own deepened set (same hue, L 48%, the most chroma that stays in
+sRGB), which clears 4.9:1 on the darkest paper ground at every base hue.
+A role colour outranks identity — a role is something the server said about
+somebody, and it should win.
 
 ### 1.3 Semantic (unchanged in meaning; re-tuned to the warm neutral)
 
@@ -106,8 +136,9 @@ rim. The old status-colour dots (`--color-status-*`) are removed from the UI.
 
 ### 1.6 Borders
 
-Hairlines only where a plate needs an internal divider:
-`--border-subtle rgba(243,234,216,.06)`, `--border-strong rgba(243,234,216,.14)`.
+Hairlines only where a plate needs an internal divider, and they take the base
+hue with everything else: `--border-subtle oklch(94% .022 H / .07)`,
+`--border-strong oklch(94% .022 H / .14)`.
 
 ### 1.7 Themes & accent presets
 
@@ -134,7 +165,7 @@ They never touch the light tokens.
 Three faces; character comes from the pairing, not decoration.
 
 - **Display / names — `--font-display: 'Gabarito'`** (self-host via
-  `@fontsource/gabarito`, weights 500/600/700). Room and building names,
+  `@fontsource/gabarito`, weights 500/600/700). Channel and server names,
   page titles, author names, section leads, tile name tags.
 - **UI / body — `--font-primary: 'Onest'`** (`@fontsource/onest`, 400/500/600).
   Everything else.
@@ -146,8 +177,8 @@ Remove Fraunces and Inter from the bundle and the tokens.
 | Step | Size / weight / tracking / leading | Face | Use |
 |---|---|---|---|
 | Display | 28 / 700 / −0.015em / 1.05 | Gabarito | Lobby and Home titles. |
-| Title | 22 / 700 / −0.01em / 1.1 | Gabarito | Stage room name, text-room header. |
-| Heading | 18 / 700 / −0.005em / 1.2 | Gabarito | Building names, room card titles. |
+| Title | 22 / 700 / −0.01em / 1.1 | Gabarito | Stage channel name, text-channel header. |
+| Heading | 18 / 700 / −0.005em / 1.2 | Gabarito | Server names, channel card titles. |
 | Name | 15.5 / 600 / 0 / 1.2 | Gabarito | Author names, list item titles. |
 | Body | 15 / 400 / 0 / 1.55 | Onest | Messages, prose. (Ribbon: 14 / 1.45.) |
 | Label | 14 / 500 / 0 / 1.4 | Onest | Nav rows, buttons, inputs. |
@@ -166,10 +197,10 @@ Tabular numerals (`tnum`) everywhere a number can change.
   avatars full. Phone: plates 16, controls 16.
 - Control heights: nav row 34, list row 36, button 32 (28 compact, 44 phone),
   composer 50 (42 in the ribbon, 46 phone), Stage control 46 (50 phone).
-- Sidebar ("Buildings column") 276px; chat ribbon 336px; phone breakpoints per
+- Sidebar ("Servers column") 276px; chat ribbon 336px; phone breakpoints per
   `docs/layout-spec.md` §6 (unchanged).
 - Window map: windows 10×13 (12×16 on Home), 5–6px gaps, 8 per row max; a
-  building draws one window per room, rooms ordered voice first, then text by
+  server draws one window per channel, channels ordered voice first, then text by
   activity; **no more than two rows** — overflow collapses into the count.
 
 ---
@@ -189,8 +220,8 @@ was breaking silently until the `.pc-*` recipes moved into `@layer components`
 
 | Object | Radius (§3) | Depth |
 |---|---|---|
-| Plate on the street — the Lobby, a text room, the Stage, a dialog | `--radius-plate` (14) | `--shadow-plate` (warm 1px top highlight **+** the deep drop) |
-| Card inside a plate — a building card, a room card, a DM or Friends row, a settings section, the add tile | `--radius-card` (12) | `--shadow-tile` (the warm 1px top highlight alone) |
+| Plate on the street — the Lobby, a text channel, the Stage, a dialog | `--radius-plate` (14) | `--shadow-plate` (warm 1px top highlight **+** the deep drop) |
+| Card inside a plate — a server card, a channel card, a DM or Friends row, a settings section, the add tile | `--radius-card` (12) | `--shadow-tile` (the warm 1px top highlight alone) |
 | Well inside a plate — search, form fields, Around now, the here-now strip | `--radius-well` (10) | `--shadow-well` (inset) |
 
 The deep drop is what says *this surface floats over the street*. A card that
@@ -207,7 +238,7 @@ light source, so it may add `--ring-lit-plate` over the depth it already has
 
 ---
 
-## 5. Motion — the building is alive
+## 5. Motion — the street is alive
 
 **The law: only light and the things people do animate.** Nothing decorative
 moves. The base never animates. Every motion below has a physical model, and a
@@ -228,25 +259,25 @@ reviewer rejects motion that has none.
   (`lib/attention/lightsOn.ts`), and each waits for presence to actually be in
   hand. The 30 ms stagger compresses so a large map still lands inside §5.3's
   1.6 s rather than being capped. See `docs/design/wp9b-checkpoint.md`.)*
-- **The thing you click becomes the thing you look at.** Navigation into a room,
+- **The thing you click becomes the thing you look at.** Navigation into a channel,
   a thread, a settings section or a dialog moves one shared element from where
   it was to where it will be (View Transitions API where the webview has it,
   Web Animations transform fallback elsewhere — the same choreography on
   both). 360–420 ms on the *spring-settle* curve; supporting chrome rises 80 ms
-  later, staggered. Leaving reverses it (into the on-air pill for a room).
-  *(WP9b: a room travels under one name, `room-<channelId>`, on every surface
+  later, staggered. Leaving reverses it (into the on-air pill for a call).
+  *(WP9b: a channel travels under one name, `room-<channelId>`, on every surface
   that draws it, so the Lobby card, the sidebar row, the inline "lit up" event,
   the Stage's dominant region and the on-air pill are all the same journey. The
   caller says which element the gesture started on and where it is going,
   because more than one surface carries the name at once. Every destination is
   behind a lazy route chunk, so the journey waits for the place it is going to
   — which is what the browser is holding the old frame for — and the Web
-  Animations fallback holds a copy of what you clicked until the room arrives.
-  Joining from the Lobby now takes you INTO the room; it used to join the call
+  Animations fallback holds a copy of what you clicked until the channel arrives.
+  Joining from the Lobby now takes you INTO the channel; it used to join the call
   and leave you in the street.)*
-- **Arrivals travel one path.** Someone entering a room: their window blooms →
+- **Arrivals travel one path.** Someone entering a channel: their window blooms →
   their rim catches 120 ms later → they spring into the here-now strip →
-  counts re-roll like a flip counter → the inline room event fades in last.
+  counts re-roll like a flip counter → the inline channel event fades in last.
   Leaving is the mirror. Nothing else on screen moves.
   *(WP9b: the newcomer springs in on transform and opacity, and everything the
   insertion displaced is carried by a FLIP on transform alone — §5.3 puts no
@@ -255,10 +286,10 @@ reviewer rejects motion that has none.
   told us has already taken the real one out of the tree. A burst inside 300 ms
   is ONE staggered sequence, not five. Your own arrival never plays: that is
   the moment below. Occupancy is read from voice membership, which is exact;
-  "reading" in a text room is derived and deliberately out of scope.)*
+  "reading" in a text channel is derived and deliberately out of scope.)*
 - **A message has mass.** Sent text lifts out of the composer along the path it
   lands in the timeline (220 ms, ease-out); the composer relaxes 0.8% and
-  springs back; the send control flashes white light for one beat; the room's
+  springs back; the send control flashes white light for one beat; the channel's
   amber window flickers. Receipts fade in only after the server answers.
   *(WP9a: "after the server answers" is structural here, not a check — this
   runtime has no optimistic row at all, and publishes a message only once the
@@ -283,14 +314,14 @@ reviewer rejects motion that has none.
 - **The lights change.** Changing the theme crosses the whole shell over
   `--duration-dim` — View Transitions where the webview has them, a dip through
   the street's own colour everywhere else — and the light elements re-bloom once
-  the new ground has settled. The gateway being away is drawn on the building
+  the new ground has settled. The gateway being away is drawn on the server
   rather than beside it: it dims 30% and holds there until it is back, and
   **never a spinner on the street**. Coming back replays "lights on" for the
   plates that actually went dark, and they do not travel — a plate rises when it
   ENTERS the street.
   *(WP9d: `lib/motion/lights.ts`, with the edge in `lib/attention/outage.ts`.
   The outage waits out a 600 ms grace, because a gateway blips several times an
-  hour and a building that dims for 80 ms is a flashing blocker. The theme is
+  hour and a server that dims for 80 ms is a flashing blocker. The theme is
   applied INSIDE the crossfade by `useTheme`'s own effect, so the engine is told
   how to recognise that it landed rather than guessing at frames; and nothing
   else may be a transition for the length of the one that matters — a theme swap
@@ -329,7 +360,7 @@ to those curves. Durations: `--duration-fast` 120, `--duration-normal` 160,
   the View Transitions path, which the harness's software renderer halves the
   frame rate for. See `docs/design/wp9a-checkpoint.md` §4.)*
   *(WP9b adds one more named allowance, also printed on every run: the walk-in's
-  Web Animations path may drop the frame on which the room's own surface mounts,
+  Web Animations path may drop the frame on which the channel's own surface mounts,
   at one. Measured again with the engine's ghosts removed entirely, the same
   frame is still 33 ms in the same place. See `wp9b-checkpoint.md` §9.)*
   *(WP9d adds the third and last: the theme crossfade may drop the frame the
@@ -350,8 +381,8 @@ to those curves. Durations: `--duration-fast` 120, `--duration-normal` 160,
 - Never animate on first paint what the user did not cause or presence did not
   cause; loading skeletons crossfade to content, they do not pulse forever.
   *(WP9b: the edges that decide this are pure and testable —
-  `lib/attention/lightsOn.ts` for the building waking, `arrivals.ts` for a
-  person crossing a room's threshold. A gateway snapshot that REPLACES a
+  `lib/attention/lightsOn.ts` for the server waking, `arrivals.ts` for a
+  person crossing a channel's threshold. A gateway snapshot that REPLACES a
   guild's membership is the picture arriving, not people walking in, and
   re-baselines the arrival director rather than animating.)*
 
@@ -368,8 +399,8 @@ on `/design-tokens` › Motion with a Replay button and the tokens it spends.
 4. **No fake video.** Camera tiles without frames show the initials avatar on a dark tile, never a silhouette illustration.
 5. **No docked member list.** Presence is the "here now" strip and lit avatars in context.
 6. **No status-colour dots.** Presence is light (§1.5).
-7. **No LIVE badge louder than the room.** The LIVE dot is 6px and the label is 10.5–11px; the thumbnail carries the weight.
-8. **No emoji as UI chrome; no uppercase section labels; no over-rounding** (radii in §3); **no identical-card tiling** (the Lobby mixes a lit card, a dark card and an add tile; text rooms are rows, not cards).
+7. **No LIVE badge louder than the channel.** The LIVE dot is 6px and the label is 10.5–11px; the thumbnail carries the weight.
+8. **No emoji as UI chrome; no uppercase section labels; no over-rounding** (radii in §3); **no identical-card tiling** (the Lobby mixes a lit card, a dark card and an add tile; text channels are rows, not cards).
 9. **Copy is specific and in the metaphor**: "5 reading", "3 talking", "lights on", "Dark · nobody's in", "Say something to the 5 people here". Never "No data", "It's quiet here", "Online".
 10. Everything from `docs/design-spec.md` §6 that is not superseded above still applies (buttons solid/tactile, empty states left-aligned with an action, density matched to surface, intentional rhythm).
 
@@ -377,51 +408,53 @@ on `/design-tokens` › Motion with a Replay button and the tokens it spends.
 
 ## 7. Surfaces and their laws
 
-### 7.1 Buildings column (replaces the unified sidebar's body)
+### 7.1 Servers column (replaces the unified sidebar's body)
 
 Top to bottom: search well (⌘K) · Home / Messages rows with counts · **per
-building**: a section label ("Kestrel Robotics · 24 in"), the **window map
-plate** (one window per room; lamp radial only if a room is lit; caption
-"2 rooms lit · 3 reading"), then rooms as rows — a **lit voice room renders as a
-live thumbnail row** (thumbnail 64px tall, LIVE dot, occupant stack, name +
-"you're here"/"N talking"), dark voice rooms as plain rows ("Dark · nobody in"),
-text rooms as rows with an amber/dark window dot and "N reading" · repeat for
-each building · account plate pinned to the bottom ("Lights on"). Needs-you no
-longer lives in the sidebar (it lives on Home and as the Home count); the
-cross-server merge from `layout-spec` §3 still drives ordering (brightest
-building first, then most recent).
+server**: a section label ("Kestrel Robotics · 24 in"), the **window map
+plate** (one window per channel; lamp radial only if a channel is lit; caption
+"2 calls live · 3 reading"), then channels as rows — a **lit voice
+channel renders as a live thumbnail row** (thumbnail 64px tall, LIVE dot,
+occupant stack, name + "you're here"/"N talking"), dark voice channels as plain
+rows ("Dark · nobody in"), text channels as rows with an amber/dark window dot
+and "N reading" · repeat for each server · account plate pinned to the bottom
+("Lights on"). Needs-you no longer lives in the sidebar (it lives on Home and as
+the Home count); the cross-server merge from `layout-spec` §3 still drives
+ordering (brightest server first, then most recent). The landmark is
+`Servers and channels`.
 
-### 7.2 Stage (in a room) — reference artboard 1 / phone artboard 5
+### 7.2 Stage (in a call) — reference artboard 1 / phone artboard 5
 
-Plate with: header (room name, building · duration, **here-now strip**, Invite /
+Plate with: header (channel name, server · duration, **here-now strip**, Invite /
 Layout / more) · **share or focused speaker as the dominant tile** (16:9,
 `meet` fit, name tag bottom-left, transport readout top-right in mono) ·
 speaker strip beneath (equal columns, speaking ring, mute glyph on tag) ·
 control bar centred (mic **on = white light**, headphones, camera, share, leave
 in danger). When nobody shares, the grid is speakers only (VideoGrid rules).
-The chat ribbon (336px) shows the room's text channel with lit avatars, a
-"from the room" highlight on messages written by someone currently in the room,
-and a composer "Say something to the room". Phone: share on top, 2×2 speakers,
+The chat ribbon (336px) shows the voice channel's text chat with lit avatars, a
+"from the call" highlight on messages written by someone currently in the call,
+and a composer "Say something to the call". Phone: share on top, 2×2 speakers,
 controls, then a chat sheet (drag handle) — no fake status bar.
 
-### 7.3 Lobby (a building, not in a call) — artboard 2
+### 7.3 Lobby (a server, not in a call) — artboard 2
 
-Header (building mark, name, "24 of 61 have their lights on · 2 rooms lit ·
-next event") · **Around now** well (lit avatar stack + one sentence naming who
-is where) · **rooms grid**: lit rooms as lit cards with the live thumbnail,
-duration, occupants, "Mara speaking", **Join in white light**; dark rooms as
-matte cards ("Dark · nobody's in", "last lit 2 h ago", Open); an add tile ·
-**Coming up** event card + **Recently in the shop** media strip · **text rooms
-as rows** (window dot, name, last author · time, preview, reader stack,
-mention chip). Replaces `RoomsView`/`GuildHomeHeader`/`LiveRoomsGrid`/
+Header (server mark, name, "24 of 61 have their lights on · 2 calls live ·
+next event") · **Around now** well (lit avatar stack + one sentence naming
+who is where) · **voice channels grid** (landmark `Voice channels`): lit channels
+as lit cards with the live thumbnail, duration, occupants, "Mara speaking",
+**Join in white light**; dark channels as matte cards ("Dark · nobody's in",
+"last lit 2 h ago", Open); an add tile ("Add a voice channel") ·
+**Coming up** event card + **Recently in the shop** media strip · **text channels
+as rows** (landmark `Text channels`: window dot, name, last author · time,
+preview, reader stack, mention chip). Replaces `RoomsView`/`GuildHomeHeader`/`LiveRoomsGrid`/
 `TextChannelList` presentation; keeps their data.
 
-### 7.4 Text room — artboard 3
+### 7.4 Text channel — artboard 3
 
-Full-width plate: header (amber dot, name, building · topic, **here-now strip
+Full-width plate: header (amber dot, name, server · topic, **here-now strip
 "5 reading · 19 lights on"**, search / pins / threads / more) · timeline with
 36px lit avatars, author name in Gabarito, "in Shop floor · 9:12 AM" meta when
-the author is in a room · room events inline ("Shop floor lit up · Mara, Priya
+the author is in a voice channel · channel events inline ("Shop floor lit up · Mara, Priya
 and Ren are in there now · Join") · composer "Say something to the 5 people
 reading". Pending/failed delivery rows keep their current region above the
 composer, restyled as raised rows.
@@ -429,22 +462,22 @@ composer, restyled as raised rows.
 ### 7.5 Home — artboard 4
 
 Title "Tonight" (time-of-day word: Morning / Afternoon / Tonight) + one
-sentence · Around now well · **Your buildings** (brightest first; a lit building
+sentence · Around now well · **Your servers** (brightest first; a lit server
 renders with its live thumbnail beside the window map, then its lit text
-rooms) · Coming up · Add a building · right column **Needs you** (lit avatar,
+channels) · Coming up · Add a server · right column **Needs you** (lit avatar,
 one-line reason, one action) and **Pick up where you left off**.
 
 ### 7.6 Messages / DMs
 
-A DM is a text room between two people: same text-room plate, the header's
+A DM is a text channel between two people: same text-channel plate, the header's
 here-now strip shows the peer's light ("Ren · lights on · reading this") and the
-encryption state as a plain label. Group DMs render as rooms too. First-DM
+encryption state as a plain label. Group DMs render as channels too. First-DM
 setup states keep their current copy, restyled.
 
 ### 7.7 Chrome you carry with you
 
-- **On-air pill** (replaces `MiniVoiceBar`): when you are in a room and looking
-  at something else, a small raised pill in the header — white dot, room name,
+- **On-air pill** (replaces `MiniVoiceBar`): when you are in a call and looking
+  at something else, a small raised pill in the header — white dot, channel name,
   duration, mic state — tap to return to the Stage.
 - **Voice connection check** (item 13) opens as a plate over the Stage; its
   steps use the same light/amber/danger vocabulary.
@@ -461,7 +494,7 @@ setup states keep their current copy, restyled.
 - **HereNowStrip** — well; avatar stack (max 5) + "N here · M lights on"; click opens the people sheet (the only place a full list lives).
 - **StageTile** — 12px radius well; name tag; `speaking` ring; camera-off = initials; share = `meet`-fit content + readout.
 - **ControlBar** — 46px controls, 13px radius; mic-on is white light; leave is danger; phone 50px.
-- **RoomChatRibbon** — plate, 336px; compact messages (28px avatars); "from the room" raised message; composer 42px.
+- **RoomChatRibbon** — plate, 336px; compact messages (28px avatars); "from the call" raised message; composer 42px.
 - **TextRoomRow** — grid `22px 1fr auto`; window dot, name + last author/time, preview, reader stack, mention chip; `active` raised.
 - **NeedsYouRow** — grid `32px 1fr auto`; lit avatar, reason, single action.
 - **EventCard** — well; day tile (mono weekday + Gabarito date), title, meta, one action.
@@ -494,15 +527,15 @@ visual **and** automated — no package is done without inspected screenshots.
 | WP | Scope (owner) | Files | Depends on |
 |---|---|---|---|
 | **WP0 Tokens & type** | New token set (§1–§4), fonts (`@fontsource/gabarito`, `@fontsource/onest`), theme remaps (§1.7), delete glass/noise/ambient tokens, `useTheme` presets, `text-*` utilities; a `/design-tokens` dev page rendering every recipe. | `client/src/styles/tokens.css`, `globals.css`, `hooks/useTheme.ts`, `package.json` | — |
-| **WP1 Light primitives** | `WindowMap`, `BuildingPlate`, `LitAvatar`, `HereNowStrip`, `RoomThumbnail`, `OnAirPill`, motion (§5), presence-as-light selectors (who is talking/reading where, per building, across servers — extend `lib/attention` and the voice/read-state stores; the room-thumbnail frame source from the native stream pipeline at ≤2fps). | `components/light/*`, `lib/attention/*`, `stores/voice*`, `lib/media/*` (read-only frame tap) | WP0 |
-| **WP2 Buildings column** | Replace the sidebar body with §7.1; remove Needs-you from the sidebar; keep collapse/keyboard behaviour from `layout-spec` §5. | `components/layout/sidebar/*`, `Sidebar*.tsx` | WP1 |
+| **WP1 Light primitives** | `WindowMap`, `BuildingPlate`, `LitAvatar`, `HereNowStrip`, `RoomThumbnail`, `OnAirPill`, motion (§5), presence-as-light selectors (who is talking/reading where, per server, across instances — extend `lib/attention` and the voice/read-state stores; the channel-thumbnail frame source from the native stream pipeline at ≤2fps). | `components/light/*`, `lib/attention/*`, `stores/voice*`, `lib/media/*` (read-only frame tap) | WP0 |
+| **WP2 Servers column** | Replace the sidebar body with §7.1; remove Needs-you from the sidebar; keep collapse/keyboard behaviour from `layout-spec` §5. | `components/layout/sidebar/*`, `Sidebar*.tsx` | WP1 |
 | **WP3 Stage** | §7.2 desktop + phone: restructure `VideoGrid`/`StreamViewer`/`FocusedWebcamView`/`VoiceControlBar` into the Stage plate; chat ribbon; here-now strip; `MiniVoiceBar → OnAirPill`. Keep every media-engine contract untouched (see `native-streaming-pipeline` memory). | `components/voice/*`, `pages/GuildPage` (voice route), `components/message/*` (ribbon variant) | WP1 |
 | **WP4 Lobby** | §7.3 on top of `RoomsView`/`RoomCard`/`AroundNowStrip`/`TextChannelList`; event card from scheduled events; media strip from recent attachments. | `components/rooms/*`, `pages/GuildHomePage` | WP1 |
-| **WP5 Text room & DMs** | §7.4 + §7.6: header strip, timeline restyle, room events inline, composer copy; keep the durable-delivery/recovery regions. | `components/message/*`, `components/layout/TopBar*`, `pages/DMPage` | WP1 |
+| **WP5 Text channel & DMs** | §7.4 + §7.6: header strip, timeline restyle, channel events inline, composer copy; keep the durable-delivery/recovery regions. | `components/message/*`, `components/layout/TopBar*`, `pages/DMPage` | WP1 |
 | **WP6 Home** | §7.5 on `HomePage`/`HomeNeedsYou`. | `pages/HomePage.tsx`, `components/home/*` | WP1, WP4 |
 | **WP7 Settings, modals, onboarding, setup** | Restyle to the plate/well system; `/setup-server`, register/login, voice connection check, admin. No new features. | `components/settings/*`, `pages/*` | WP0 |
 | **WP9a Motion engine** | Spring/choreography layer over the motion tokens (`lib/motion/`: springs, stagger, shared-element with View Transitions + WAAPI fallback, flip counter, bloom/flicker recipes, central reduced-motion), motion tokens in `tokens.css`, frame-timing gate, `/design-tokens` Motion section. | `lib/motion/**`, `styles/tokens.css`, `styles/primitives.css`, `e2e/motion-gate.spec.ts` | WP8 |
-| **WP9b Signature moments** | Lights on, walk into a room / back to the pill, someone arrives/leaves, say something — wired through the real stores and engines (§5.1). `docs/design/wp9b-checkpoint.md`. | surfaces from WP2–WP6 | WP9a |
+| **WP9b Signature moments** | Lights on, walk into a channel / back to the pill, someone arrives/leaves, say something — wired through the real stores and engines (§5.1). `docs/design/wp9b-checkpoint.md`. | surfaces from WP2–WP6 | WP9a |
 | **WP9c Systematic micro-motion** | Hover/press, plates settle, menus/dialogs/toasts enter-exit, tab/toggle indicators, list FLIP, phone sheet physics, number re-roll everywhere. | `ui/**`, `light/**`, dialogs, sidebar, Stage sheet | WP9a |
 | **WP9d Further moments** | Audio-reactive speaking ring, theme change as the lights changing, reaction pop, typing pulse, contextual plates sliding in, phone pull-to-refresh lamp. | per item | WP9a |
 | **WP8 Sweep & delete** | Remove Emerald Commons leftovers: old tokens, `--color-status-*` dots, glass panels, Fraunces/Inter, any remaining member-list dock; update `docs/design-spec.md` → pointer to this file and `docs/layout-spec.md` §7 recipes; README screenshots. | repo-wide | all |

@@ -133,14 +133,14 @@ test('real identity setup survives rejected credentials and reload, then adopts 
   await page.goto(`/setup?migrate=1&server=__local__&user=${account.id}`);
   await page.getByLabel('New encryption password', { exact: false }).fill('Separate encryption password');
   await page.getByLabel('Confirm password', { exact: false }).fill('Separate encryption password');
-  await page.getByLabel('Current server password', { exact: false }).fill('Wrong-Server-Password-123!');
+  await page.getByLabel('Current sign-in password', { exact: false }).fill('Wrong-Server-Password-123!');
   await page.getByRole('button', { name: 'Secure account' }).click();
-  await expect(page.getByText('Server authentication was rejected.', { exact: false })).toBeVisible();
+  await expect(page.getByText('The instance rejected that sign-in.', { exact: false })).toBeVisible();
   const original = await page.evaluate(() => localStorage.getItem('paracord:encrypted-identity:v1'));
   expect(original).toBeTruthy();
   await page.reload();
   await page.getByLabel('Encryption password', { exact: false }).fill('Separate encryption password');
-  await page.getByLabel('Current server password', { exact: false }).fill(password);
+  await page.getByLabel('Current sign-in password', { exact: false }).fill(password);
   const profiles: Array<{ status: number; authorization?: string }> = [];
   page.on('response', response => {
     if (response.url().endsWith('/api/v1/users/@me')) profiles.push({ status: response.status(), authorization: response.request().headers().authorization });

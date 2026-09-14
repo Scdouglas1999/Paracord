@@ -61,7 +61,7 @@ export function useRoomNotifications(): RoomNotifications {
         .setChannelLevel({ id: channel.id, scope: channel.scope }, level)
         .catch((error) =>
           toast.error(
-            `Could not change notifications for ${channel.name ?? 'that room'}: ${extractApiError(error)}`,
+            `Could not change notifications for ${channel.name ?? 'that channel'}: ${extractApiError(error)}`,
           ),
         );
     },

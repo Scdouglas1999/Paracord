@@ -91,7 +91,7 @@ describe('window map', () => {
   });
 });
 
-describe('building light', () => {
+describe('server light', () => {
   const rooms = [
     voice('v1', 'Shop floor', [MARA, PRIYA, REN], 1),
     voice('v2', 'Lounge', []),
@@ -114,11 +114,11 @@ describe('building light', () => {
     expect(building.readingCount).toBe(2);
     expect(building.lightsOn).toBe(5);
     expect(building.memberCount).toBe(61);
-    expect(building.caption).toBe('1 room lit · 2 reading');
+    expect(building.caption).toBe('1 call live · 2 reading');
     expect(building.key).toBe(JSON.stringify(['a', 'viewer', 'g1']));
   });
 
-  it('picks the loudest lit voice room for the building thumbnail', () => {
+  it('picks the loudest lit voice room for the server thumbnail', () => {
     const building = buildingLight({
       scope: SCOPE,
       guildId: 'g1',
@@ -151,7 +151,7 @@ describe('brightest first', () => {
     expect(reading).toBeGreaterThan(quiet);
   });
 
-  it('orders buildings and breaks ties deterministically', () => {
+  it('orders servers and breaks ties deterministically', () => {
     const make = (name: string, rooms: RoomLight[], members: typeof MARA[]) =>
       buildingLight({ scope: SCOPE, guildId: name, name, rooms, members });
     const ordered = orderBuildingsByBrightness([
@@ -216,8 +216,8 @@ describe('around now', () => {
     expect(aroundNowSentence({ rooms: [], people: [] })).toBe(
       "Nobody's lights are on right now",
     );
-    expect(aroundNowSentence({ rooms: [], people: [], empty: 'Every building is dark' })).toBe(
-      'Every building is dark',
+    expect(aroundNowSentence({ rooms: [], people: [], empty: 'Every server is dark' })).toBe(
+      'Every server is dark',
     );
   });
 });

@@ -120,7 +120,7 @@ export function CollapsedRail({
       <div
         data-roving-container=""
         role="listbox"
-        aria-label="Buildings"
+        aria-label="Servers"
         aria-orientation="vertical"
         className="flex min-h-0 flex-1 flex-col items-center gap-2 overflow-y-auto scrollbar-none"
       >
@@ -136,7 +136,7 @@ export function CollapsedRail({
         ))}
       </div>
 
-      <IconButton label="Add a building" size="md" onClick={onAddBuilding}>
+      <IconButton label="Add a server" size="md" onClick={onAddBuilding}>
         <Plus size={16} aria-hidden />
       </IconButton>
 

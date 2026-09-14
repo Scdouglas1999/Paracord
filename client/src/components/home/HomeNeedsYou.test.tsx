@@ -133,7 +133,7 @@ describe('Home attention', () => {
     ).toEqual(['pinned', 'dm', 'thread', 'plain', 'voice']);
   });
 
-  it('shows the reason and the building, and opens the conversation the row owns', async () => {
+  it('shows the reason and the server, and opens the conversation the row owns', async () => {
     const user = userEvent.setup();
     const onOpen = vi.fn();
     const first = entry('chat', { mentionCount: 2 });
@@ -305,7 +305,7 @@ describe('friend requests and the quiet column', () => {
   it('never claims nothing needs you while the answer is still unknown', () => {
     const onRefresh = vi.fn();
     const { rerender } = render(<HomeNeedsYou {...shell({ status: 'loading' })} />);
-    expect(screen.getByText(/Still checking your buildings/)).toBeInTheDocument();
+    expect(screen.getByText(/Still checking your servers/)).toBeInTheDocument();
     expect(screen.queryByText(/Nothing is waiting on you/)).not.toBeInTheDocument();
 
     rerender(<HomeNeedsYou {...shell({ status: 'error', onRefresh })} />);

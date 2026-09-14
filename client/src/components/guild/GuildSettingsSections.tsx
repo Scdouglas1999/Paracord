@@ -158,12 +158,12 @@ export function OverviewSection({
     <SettingsPanel>
       <SectionHeader
         title="Overview"
-        description="Your building's identity — the name, icon, and blurb members see everywhere."
+        description="Your server's identity — the name, icon, and blurb members see everywhere."
         action={
           <div className="flex items-center gap-2">
             {guild && authUserId && guild.owner_id !== authUserId && (
               <Button variant="ghost" onClick={onLeave}>
-                Leave building
+                Leave server
               </Button>
             )}
             <Button onClick={onSave}>Save changes</Button>
@@ -183,7 +183,7 @@ export function OverviewSection({
               crop of a square logo previewed a building nothing renders. */}
           <div className="pc-well flex h-24 w-24 flex-col items-center justify-center overflow-hidden rounded-[var(--radius-card)] transition-colors group-hover:bg-bg-mod-subtle">
             {iconDataUrl ? (
-              <img src={iconDataUrl} alt="Building icon" className="h-full w-full object-cover" />
+              <img src={iconDataUrl} alt="Server icon" className="h-full w-full object-cover" />
             ) : (
               <>
                 <Upload size={20} className="text-text-muted" aria-hidden />
@@ -194,7 +194,7 @@ export function OverviewSection({
         </label>
         <div className="flex flex-1 flex-col gap-5">
           <label className="block">
-            <FieldLabel>Building name</FieldLabel>
+            <FieldLabel>Server name</FieldLabel>
             <Input value={name} onChange={(e) => onNameChange(e.target.value)} />
           </label>
           <label className="block">
@@ -204,7 +204,7 @@ export function OverviewSection({
               onChange={(e) => onDescriptionChange(e.target.value)}
               rows={3}
               className="resize-none"
-              placeholder="Describe what this building is about."
+              placeholder="Describe what this server is about."
             />
           </label>
         </div>
@@ -247,7 +247,7 @@ export function OverviewSection({
         <section className="border-t border-border-subtle pt-6">
           <GroupLabel>Transfer ownership</GroupLabel>
           <p className="mt-2 max-w-prose text-body leading-relaxed text-text-secondary">
-            Hand this building to another member. You'll immediately lose owner privileges — this can't be undone.
+            Hand this server to another member. You'll immediately lose owner privileges — this can't be undone.
           </p>
           <div className="mt-4 flex flex-wrap items-center gap-3">
             <Select
@@ -287,13 +287,13 @@ export function OverviewSection({
           <GroupLabel className="text-accent-danger">Danger zone</GroupLabel>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
-              <div className="text-label text-text-primary">Delete this building</div>
+              <div className="text-label text-text-primary">Delete this server</div>
               <div className="mt-0.5 max-w-prose text-meta leading-relaxed text-text-secondary">
                 Every channel, message, and upload is permanently erased. This cannot be undone.
               </div>
             </div>
             <Button variant="danger" onClick={onShowDeleteDialog}>
-              Delete building
+              Delete server
             </Button>
           </div>
           {showDeleteGuildDialog && guild && (
@@ -315,7 +315,7 @@ export function OverviewSection({
                   disabled={deletingGuild || deleteGuildConfirmName !== guild.name}
                   loading={deletingGuild}
                 >
-                  Delete server
+                  Delete permanently
                 </Button>
                 <Button variant="ghost" onClick={onHideDeleteDialog}>
                   Cancel
@@ -704,7 +704,7 @@ export function MembersSection({
     <SettingsPanel>
       <SectionHeader
         title="Members"
-        description={`${members.length} ${members.length === 1 ? 'person is' : 'people are'} in this building. Manage their roles, or remove them.`}
+        description={`${members.length} ${members.length === 1 ? 'person is' : 'people are'} in this server. Manage their roles, or remove them.`}
       />
       <Input
         type="text"
@@ -721,7 +721,7 @@ export function MembersSection({
             title={memberSearch.trim() ? 'No member matches that search' : 'Nobody has joined yet'}
             description={
               memberSearch.trim()
-                ? `Nobody in this building matches "${memberSearch.trim()}". Try part of a username instead.`
+                ? `Nobody in this server matches "${memberSearch.trim()}". Try part of a username instead.`
                 : 'Hand out an invite from the Invites section and the people who accept show up here.'
             }
             action={
@@ -904,7 +904,7 @@ export function InvitesSection({
         description={
           canListInvites
             ? 'Share these links to bring people in. Revoke any that leak or outlive their purpose.'
-            : 'Make a link to bring people in. The full list belongs to the people who manage this building.'
+            : 'Make a link to bring people in. The full list belongs to the people who manage this server.'
         }
         action={
           <Button onClick={onCreateInvite}>
@@ -923,7 +923,7 @@ export function InvitesSection({
             className="!py-8"
             icon={<LinkIcon size={20} />}
             title="Existing links are not yours to see"
-            description="You can make a link and hand it out. Seeing every link this building has — and revoking them — needs Manage Building."
+            description="You can make a link and hand it out. Seeing every link this server has — and revoking them — needs Manage Server."
             action={
               <Button variant="ghost" onClick={onCreateInvite}>
                 <Plus size={15} aria-hidden />
@@ -1034,7 +1034,7 @@ export function EmojisSection({
       />
 
       {!canManage && (
-        <GateNotice>You can view building emojis, but the Manage Emojis permission is needed to add, rename, or delete.</GateNotice>
+        <GateNotice>You can view server emojis, but the Manage Emojis permission is needed to add, rename, or delete.</GateNotice>
       )}
 
       {canManage && (
@@ -1476,7 +1476,7 @@ export function BotsSection({
     <SettingsPanel>
       <SectionHeader
         title="Bots"
-        description="Automations installed in this building — your own apps, third-party apps, and Paracord's built-ins."
+        description="Automations installed in this server — your own apps, third-party apps, and Paracord's built-ins."
       />
 
       {!canManage && <GateNotice>You need the Manage Server permission to add or remove bots.</GateNotice>}
@@ -1805,7 +1805,7 @@ interface AuditLogSectionProps {
 /// is built from this same map, those entries could not be filtered for either.
 /// Adding a constant on the server means adding it here.
 export const ACTION_LABELS: Record<number, string> = {
-  1: 'Guild Updated',
+  1: 'Server Updated',
   10: 'Channel Created',
   11: 'Channel Updated',
   12: 'Channel Deleted',
@@ -1850,7 +1850,7 @@ export function AuditLogSection({
 }: AuditLogSectionProps) {
   return (
     <SettingsPanel>
-      <SectionHeader title="Audit log" description="A running record of administrative actions in this building." />
+      <SectionHeader title="Audit log" description="A running record of administrative actions in this server." />
       {(onActionFilterChange || onUserFilterChange) && (
         <div className="flex flex-wrap gap-3 border-t border-border-subtle pt-4">
           {onActionFilterChange && (

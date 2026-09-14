@@ -19,17 +19,17 @@ strips that are opt-in behind `PARACORD_E2E_MOTION_FRAMES=1`).
 | Moment | Where it lives | Gate case |
 |---|---|---|
 | The motion engine: recipes, the one reduced-motion switch, `run()`'s `data-motion-recipe:<name>` ids | `client/src/lib/motion/` (`animate.ts`, `arrive.ts`, `flip.ts`, `index.ts`), tokens in `styles/tokens.css` §5.2 | every case (the ids are what the gate reads) |
-| **Say something** — the words lift out of the composer, the composer relaxes, the send control catches a beat of light, the room's window flickers, the row lands 26px from below | `message/MessageInput.tsx`, `message/MessageList.tsx`, `layout/TopBar.tsx`; the recipes (`liftOut`, `relax`, `flash`, `flicker`, `arriveIn`) in `lib/motion/animate.ts`, handed over on `lib/motion/bus.ts` | `say something holds 60fps and stays inside the duration budget` · `a pointer send plays the same moment` |
+| **Say something** — the words lift out of the composer, the composer relaxes, the send control catches a beat of light, the channel's window flickers, the row lands 26px from below | `message/MessageInput.tsx`, `message/MessageList.tsx`, `layout/TopBar.tsx`; the recipes (`liftOut`, `relax`, `flash`, `flicker`, `arriveIn`) in `lib/motion/animate.ts`, handed over on `lib/motion/bus.ts` | `say something holds 60fps and stays inside the duration budget` · `a pointer send plays the same moment` |
 | The receipt fading in behind the row | `MessageList.tsx` | (inside the send cases) |
 | Numbers re-roll | `RollingNumber` in `lib/motion/flipCounter.tsx`; `TopBar`, `HereNowStrip` | `every engine recipe on /design-tokens holds the budget` (`#motion-roll`) |
 | Frame strips | — | `capture the send moment as a frame strip` → `output/design-reference/motion/frames-wp9a` |
 
-## WP9b — the building's three moments
+## WP9b — the server's three moments
 
 | Moment | Where it lives | Gate case |
 |---|---|---|
-| **Lights on** — the building wakes after a reconnect: plates settle, windows and rims bloom, staggered | `components/motion/MotionDirector.tsx`, the edge in `lib/attention/lightsOn.ts`, the sweep in `lib/motion/lightsOn.ts` | `lights on: the building wakes, and the whole sequence lands inside 1.6s` · `lights on does not fire again for a route change or a re-render` |
-| **Walk into a room** — the room card becomes the Stage's dominant tile; chrome recedes | `rooms/lobby/RoomCard.tsx`, `voice/stage/StageLayout.tsx`, `lib/motion/walk.ts` (`walkIntoRoom` / `recedeAround`) over `lib/motion/sharedElement.ts` | `walk into a room: the Web Animations path` · `walk into a room: the View Transitions path is the same choreography` |
+| **Lights on** — the server wakes after a reconnect: plates settle, windows and rims bloom, staggered | `components/motion/MotionDirector.tsx`, the edge in `lib/attention/lightsOn.ts`, the sweep in `lib/motion/lightsOn.ts` | `lights on: the building wakes, and the whole sequence lands inside 1.6s` · `lights on does not fire again for a route change or a re-render` |
+| **Walk into a channel** — the channel card becomes the Stage's dominant tile; chrome recedes | `rooms/lobby/RoomCard.tsx`, `voice/stage/StageLayout.tsx`, `lib/motion/walk.ts` (`walkIntoRoom` / `recedeAround`) over `lib/motion/sharedElement.ts` | `walk into a room: the Web Animations path` · `walk into a room: the View Transitions path is the same choreography` |
 | **Someone arrives / leaves** — the window lights, the rim takes them, the strip and the counts move | `lib/attention/arrivals.ts`, `lib/motion/arrive.ts`, `light/LitAvatar.tsx`, `light/AvatarStack.tsx`, `light/HereNowStrip.tsx`, `light/WindowMap.tsx` | `someone arrives: window, rim, the strip, and the counts` · `five people in one beat are one choreography, not five` · `leaving is the mirror` |
 | Frame strips | — | `capture the three moments as frame strips` → `frames-wp9b` |
 
@@ -59,9 +59,9 @@ are what most of them ride on. **`framer-motion` left production code here.**
 | Moment | Where it lives | Gate case |
 |---|---|---|
 | **A reaction pops** — yours from 0.6 with the emoji over-rotating 8°, theirs from 0.8; removing shrinks it back out | `MessageList.tsx` (`ReactionRow`), `lib/motion/flipList.ts` (`enter: 'pop'`, `data-flip-own`, `data-flip-glyph`) | `a reaction pops — yours bigger, theirs smaller, the leave shrinks` (asserts the declared keyframes, not just the ids) |
-| **The room's window breathes while somebody writes** — half the speaking ring's amplitude | `layout/TopBar.tsx`, `.pc-window.is-writing` in `primitives.css`, `--glow-window-amber-breathe` in `tokens.css` (all three themes) | `the typing pulse breathes while somebody writes, and ends when they stop` (scoped to the room, proven running then proven stopped) |
+| **The channel's window breathes while somebody writes** — half the speaking ring's amplitude | `layout/TopBar.tsx`, `.pc-window.is-writing` in `primitives.css`, `--glow-window-amber-breathe` in `tokens.css` (all three themes) | `the typing pulse breathes while somebody writes, and ends when they stop` (scoped to the channel, proven running then proven stopped) |
 | **Contextual plates slide in from their edge** | `pc-drawer-in/out-left/right` in `primitives.css`; `pages/AppShell.tsx`, `layout/ContextPanel.tsx`, `user/UserProfile.tsx`, `MessageList.tsx`, `pages/FriendsPage.tsx` | `a contextual plate slides in from its edge` (enter, exit, and the exit's own opacity samples) |
-| **The phone's pull reveals the room's lamp** | `MessageList.tsx` (`data-motion-lamp`, coarse-pointer only) | `a pull far enough lights the lamp, flickers, and refetches` · `a pull that lets go early just dims the lamp back out` |
+| **The phone's pull reveals the channel's lamp** | `MessageList.tsx` (`data-motion-lamp`, coarse-pointer only) | `a pull far enough lights the lamp, flickers, and refetches` · `a pull that lets go early just dims the lamp back out` |
 | Frame strips | — | `capture the WP9d-light moments as frame strips` · `pulling the timeline down, frame by frame` → `frames-wp9d` |
 
 ## WP9d-hard — the ring, the lights, the power
@@ -70,7 +70,7 @@ are what most of them ride on. **`framer-motion` left production code here.**
 |---|---|---|
 | **The speaking ring takes the voice** — +15% of the resting glow at full voice, 60ms attack / 240ms release, never below rest | `lib/motion/voiceLevel.ts` (one rAF loop for every tile), the ring parts in `tokens.css`, `.pc-speaking` composed in `primitives.css`; marks `data-motion-person` and `data-motion-speaking`; sources wired in `stores/voiceStore.ts` | `the speaking-ring level driver holds 60fps and grows nothing` (frames, composed `box-shadow` alphas at rest vs full voice, and heap growth over 300 frames) |
 | **The theme change is the lights changing** — the shell crosses over `--duration-dim`, then the light elements re-bloom | `lib/motion/lights.ts` (`changeLights`), the `lights-change` stamp in `primitives.css`, `ThemeSelector` | `theme change: the whole shell crosses over, and the lights re-bloom` · `theme change: the View Transitions path is the same moment` |
-| **The power goes** — the gateway is away, so the whole building dims 30% and holds; the relight replays WP9b's sweep over the plates that went dark | `lib/attention/outage.ts` (600ms grace), `lib/motion/lights.ts` (`dimBuilding` / `relightBuilding`, the `#pc-motion-lights` scrim), played by `components/motion/MotionDirector.tsx` | `the gateway goes away: the building dims, and relights when it is back` |
+| **The power goes** — the gateway is away, so the whole server dims 30% and holds; the relight replays WP9b's sweep over the plates that went dark | `lib/attention/outage.ts` (600ms grace), `lib/motion/lights.ts` (`dimBuilding` / `relightBuilding`, the `#pc-motion-lights` scrim), played by `components/motion/MotionDirector.tsx` | `the gateway goes away: the building dims, and relights when it is back` |
 | **No spinner on the street** — the banner says the words with a static glyph | `components/ConnectionStatusBar.tsx` (on `usePresence` + `pc-banner-in/out`) | the outage case asserts `.animate-spin` has count 0 |
 | Frame strips | — | `capture the WP9d-hard moments as frame strips` (plus a `_voice-level-*` calibration strip that holds the breathe still) → `frames-wp9d` |
 

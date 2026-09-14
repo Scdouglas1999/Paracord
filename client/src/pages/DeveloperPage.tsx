@@ -202,7 +202,7 @@ export function DeveloperPage() {
         const { data } = await botApi.listInstalls(appId);
         setExpandedInstalls((prev) => ({ ...prev, [appId]: data }));
       } catch (err) {
-        setError(`Failed to load guild installs: ${extractApiError(err)}`);
+        setError(`Failed to load server installs: ${extractApiError(err)}`);
       }
     }
   };

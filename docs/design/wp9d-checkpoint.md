@@ -53,10 +53,10 @@ the engine that runs on *every frame* for as long as somebody is talking, so its
 shape is entirely about cost. Four rules, each load-bearing:
 
 1. **One loop for every tile.** Not one per `StageTile`, not one per `LitAvatar`.
-   A ten-person room is one `requestAnimationFrame` callback, and it exits the
+   A ten-person channel is one `requestAnimationFrame` callback, and it exits the
    moment the last voice has released to silence.
 2. **No React state, ever.** A level is fifty updates a second; a store write
-   would re-render the room fifty times a second to move a glow. The property is
+   would re-render the channel fifty times a second to move a glow. The property is
    written straight onto DOM the engine found — which is also why a re-render
    cannot wipe it (WP9a's first lesson): it is re-applied on the next report
    regardless.
@@ -67,7 +67,7 @@ shape is entirely about cost. Four rules, each load-bearing:
    measures this (§5 below): **0.0 KiB across 300 frames**.
 4. **A level is never invented.** Where an engine reports speaking but no level,
    the ring simply breathes — which is exactly what §5.1's "where the engine
-   exposes level" leaves room for.
+   exposes level" leaves channel for.
 
 The envelope is a **linear slew**, not an exponential one, so "60 ms attack"
 means exactly that and a unit test can hold it: silence to full voice takes 60 ms
@@ -126,7 +126,7 @@ light rather than being repainted along with everything else.
 Two engines, one shape:
 
 - **View Transitions**, where the webview has them: the browser holds a snapshot
-  of the old building and crosses it with the new one, at `--duration-dim` on
+  of the old server and crosses it with the new one, at `--duration-dim` on
   `--ease-out` (`primitives.css`, under the `lights-change` stamp).
 - **The crossfade**, everywhere else: there is no snapshot to cross with, so the
   lights go **down to the street's own colour and back up in the new one** — a
@@ -148,15 +148,15 @@ acting, and deliberately does not animate (§5.3).
 ### 3. The power goes (§5.1, and "never a spinner on the street")
 
 The gateway being away is the one piece of state that is about the *whole*
-building rather than anything in it, so it is drawn on the whole building: it
+server rather than anything in it, so it is drawn on the whole server: it
 dims 30 % and holds there until the gateway is back.
 
 - **The edge** is `client/src/lib/attention/outage.ts` — pure and injectable,
   the same shape as WP9b's `lightsOn.ts`, with no store, React, DOM or ambient
-  clock. It refuses to dim a building that has not been up yet (that is the app
+  clock. It refuses to dim a server that has not been up yet (that is the app
   starting, not the power going), and it enforces a **600 ms grace**: a gateway
   blips several times an hour — a token refresh, a laptop lid, a Wi-Fi handover
-  — and a building that dims and undims for 80 ms is precisely the flashing
+  — and a server that dims and undims for 80 ms is precisely the flashing
   blocker WP9a spent a commit removing.
 - **The dim** is a scrim the engine owns: one fixed rectangle of the street's own
   colour, `pointer-events: none` so you can keep typing through an outage,
@@ -174,7 +174,7 @@ dims 30 % and holds there until the gateway is back.
   when it *enters* the street and these never left it. A reconnect too short to
   dim anything hands over nothing, and the sweep does what it has always done.
 
-And the banner's spinning loader is gone. A spinner says "wait"; a dark building
+And the banner's spinning loader is gone. A spinner says "wait"; a dark server
 says what is actually true, which is that nothing on screen is answerable for
 right now and you can keep reading it. `ConnectionStatusBar` still says the
 words — light is never the only cue (§9) — with a static glyph.
@@ -282,7 +282,7 @@ PARACORD_E2E_MOTION=1 PARACORD_E2E_MOTION_FRAMES=1 npx playwright test --grep "c
   in Daylight from 360 ms. Captured on the crossfade because the View Transitions
   path composites its snapshots off the main thread and a screencast of it on a
   software-rendered headless Chromium is a black rectangle (WP9a §4).
-- `outage-0000ms.png` … `-1400ms.png` — the building going dark over the Lobby:
+- `outage-0000ms.png` … `-1400ms.png` — the server going dark over the Lobby:
   mean luminance 23.15 → 19.62 across the 400 ms, then held.
 - `relight-0000ms.png` … `-2000ms.png` — the mirror.
 - `_voice-strip.png`, `_lights-change-strip.png`, `_outage-strip.png`,
@@ -293,7 +293,7 @@ The outage strips are zeroed on the frame the **engine** started moving, not on
 the request — WP9b's convention, and this moment needs it more than anything
 there did: the gateway has to be away for the whole 600 ms grace on top of
 however long the client takes to notice, so a strip labelled from the request
-would be most of a second of a building sitting still.
+would be most of a second of a server sitting still.
 
 ### 7. The gate, run
 
@@ -327,7 +327,7 @@ Three, all recorded here because §5 is the contract.
    connected that is every plate on screen; the mechanism is what matters, and it
    is asserted (the relight blooms windows and never settles a plate). A
    per-server connection status does not exist in `uiStore` — it aggregates — so
-   a second server's building going dark on its own is not something this can
+   a second instance's server going dark on its own is not something this can
    distinguish yet.
 
 ### 9. Known, not fixed here

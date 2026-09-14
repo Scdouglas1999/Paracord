@@ -137,7 +137,7 @@ describe('owned edit history', () => {
     const adapter = vi.fn(async (config: InternalAxiosRequestConfig) => response(config, []));
     clients.byId.get('a')!.defaults.adapter = adapter;
     const p = props(); const view = render(<MessageEditHistoryDialog {...p} scope={null} />);
-    expect(await screen.findByRole('alert')).toHaveTextContent('Sign in to this server');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Sign in to this instance');
     view.rerender(<MessageEditHistoryDialog {...p} scope={{ serverId: 'a', userId: 'other' }} />);
     expect(await screen.findByRole('alert')).toHaveTextContent('no longer signed in');
     expect(adapter).not.toHaveBeenCalled();

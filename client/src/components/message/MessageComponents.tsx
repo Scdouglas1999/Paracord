@@ -49,7 +49,7 @@ async function dispatchComponentInteraction(
 ): Promise<void> {
   const resolvedGuildId = resolveGuildIdForChannel(channelId, guildId);
   if (!resolvedGuildId) {
-    throw new Error('Could not resolve guild for this channel');
+    throw new Error('Could not resolve the server for this channel');
   }
   const { data: interaction } = await getApi().post<Interaction>('/interactions', {
     type: InteractionType.MessageComponent,

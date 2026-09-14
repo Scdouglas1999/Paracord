@@ -146,14 +146,14 @@ stops animating its own `height`, which §5.3 forbids outright.
 `BuildingsColumn.tsx` (the container), `BuildingSection.tsx` and `RoomRow.tsx`
 (the keys), `Toast.tsx` (the stack).
 
-The Buildings column is ranked by attention and re-sorts whenever a room lights
+The Servers column is ranked by attention and re-sorts whenever a channel lights
 or a mention lands; every one of those was a silent redraw. Interruptible (a
 second re-rank retargets from the velocity the row had), silent on first mount,
 instant under reduced motion.
 
 ### 6 · Number re-roll
 `RoomRow` (mention chip), `BuildingsColumn` (needs-you and unread chips),
-`BuildingSection` ("24 in", "N more rooms"), `AvatarStack` ("+M"),
+`BuildingSection` ("24 in", "N more channels"), `AvatarStack` ("+M"),
 `InboxOverlay` (tab counts, per-conversation mentions), `MessageList`
 (reaction tallies) — on top of WP9a's `TopBar` and `HereNowStrip`.
 
@@ -349,11 +349,11 @@ excludes them.
    measures; a wrapper between them changes the scroll geometry, which is a
    bigger change than a crossfade is worth. Its placeholders still take the
    `.pc-skeleton` pulse and its reduced-motion stop.
-3. **The Buildings column's FLIP is not measured against live data.** The gate
+3. **The Servers column's FLIP is not measured against live data.** The gate
    measures the same hook on `/design-tokens`, because the mocked fixture has no
    way to make the attention ranking re-sort on demand. What is gated is the
    hook; what is not is the particular sort that drives it.
-4. **`WindowMap`'s caption does not re-roll (item 6).** "2 rooms lit · 3
+4. **`WindowMap`'s caption does not re-roll (item 6).** "2 channels lit · 3
    reading" is a sentence assembled in `lib/attention`, not a count in a slot.
    Rolling the whole string vertically would be rolling words, which §5.1's line
    is not about.

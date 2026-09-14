@@ -212,7 +212,7 @@ describe('BotAuthorizePage install target', () => {
     vi.mocked(botApi.addBotToGuild).mockResolvedValue({ data: {} } as never);
   });
 
-  it('installs into the building the invite link names, not whichever came back first', async () => {
+  it('installs into the server the invite link names, not whichever came back first', async () => {
     // A bot-invite link carries the space it wants; the picker used to ignore it.
     vi.mocked(botStoreApi.listReviews).mockRejectedValue(new Error('not found'));
     const user = userEvent.setup();
@@ -227,7 +227,7 @@ describe('BotAuthorizePage install target', () => {
     });
   });
 
-  it('falls back to the first building when the link names one the user is not in', async () => {
+  it('falls back to the first server when the link names one the user is not in', async () => {
     vi.mocked(botStoreApi.listReviews).mockRejectedValue(new Error('not found'));
     renderPage('/oauth2/authorize?client_id=app-1&guild_id=g-nope&permissions=0');
     expect(await screen.findByText('Deploy Helper')).toBeInTheDocument();

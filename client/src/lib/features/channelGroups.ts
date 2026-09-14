@@ -57,7 +57,7 @@ function buildVirtualGroups(channels: Channel[]): ChannelGroup[] {
   if (textChannels.length > 0) {
     groups.push({
       id: VIRTUAL_TEXT_ID,
-      name: 'Text rooms',
+      name: 'Text channels',
       isReal: false,
       position: 0,
       channels: textChannels,
@@ -67,7 +67,7 @@ function buildVirtualGroups(channels: Channel[]): ChannelGroup[] {
   if (voiceChannels.length > 0) {
     groups.push({
       id: VIRTUAL_VOICE_ID,
-      name: 'Voice rooms',
+      name: 'Voice channels',
       isReal: false,
       position: 1,
       channels: voiceChannels,

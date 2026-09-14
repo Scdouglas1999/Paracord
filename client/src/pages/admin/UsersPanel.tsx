@@ -283,7 +283,7 @@ export function UsersPanel() {
                     <EmptyState
                       icon={<Shield size={20} />}
                       title="No users on this page yet"
-                      description="Accounts will appear here as people register on this server."
+                      description="Accounts will appear here as people register on this instance."
                     />
                   )}
                 </td>

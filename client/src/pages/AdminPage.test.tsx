@@ -20,7 +20,7 @@ vi.mock('../stores/authStore', () => {
 // isolation, without the panels' own data fetching.
 vi.mock('./admin/OverviewPanel', () => ({ OverviewPanel: () => <div>Overview panel body</div> }));
 vi.mock('./admin/UsersPanel', () => ({ UsersPanel: () => <div>Users panel body</div> }));
-vi.mock('./admin/GuildsPanel', () => ({ GuildsPanel: () => <div>Guilds panel body</div> }));
+vi.mock('./admin/GuildsPanel', () => ({ GuildsPanel: () => <div>Servers panel body</div> }));
 vi.mock('./admin/SettingsPanel', () => ({ SettingsPanel: () => <div>Settings panel body</div> }));
 vi.mock('./admin/FederationPanel', () => ({ FederationPanel: () => <div>Federation panel body</div> }));
 vi.mock('./admin/SecurityPanel', () => ({ SecurityPanel: () => <div>Security panel body</div> }));
@@ -84,7 +84,7 @@ describe('AdminPage', () => {
 
     renderAdminPage();
 
-    expect(screen.getByRole('navigation', { name: 'Server administration' })).toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: 'Instance administration' })).toBeInTheDocument();
     expect(screen.getByText('Admin')).toBeInTheDocument();
     expect(screen.getByText('Overview panel body')).toBeInTheDocument();
     expect(screen.queryByText('Users panel body')).not.toBeInTheDocument();

@@ -3274,8 +3274,8 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                   : emptyThread
                   ? 'Nobody has replied in this thread yet. Say the first thing.'
                   : activeChannel?.name
-                  ? `Nobody has posted in ${activeChannel.name} yet. Say something and the room lights up.`
-                  : 'Say something and the room lights up.'}
+                  ? `Nobody has posted in ${activeChannel.name} yet. Say something and the channel lights up.`
+                  : 'Say something and the channel lights up.'}
               </p>
             </div>
             {/* Never offer the one action this conversation is going to refuse. */}

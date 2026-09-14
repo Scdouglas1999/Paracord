@@ -273,8 +273,8 @@ test.describe('first-owner claim on a real unclaimed server', () => {
       await continueButton.click();
 
       await expect(page.getByText('Step 4 of 4')).toBeVisible();
-      await page.getByLabel(/Server name/).fill('Riverside Studio');
-      await page.getByLabel(/First building name/).fill('The Lounge');
+      await page.getByLabel(/Instance name/).fill('Riverside Studio');
+      await page.getByLabel(/First server name/).fill('The Lounge');
       await claimButton.click();
       await expect(page.getByText(/not the one this server printed/)).toBeVisible();
       await expect(claimButton).toBeEnabled();
@@ -292,8 +292,8 @@ test.describe('first-owner claim on a real unclaimed server', () => {
       await continueButton.click();
       await expect(page.getByLabel(/^Password/)).toHaveValue(OWNER_PASSWORD);
       await continueButton.click();
-      await expect(page.getByLabel(/Server name/)).toHaveValue('Riverside Studio');
-      await expect(page.getByLabel(/First building name/)).toHaveValue('The Lounge');
+      await expect(page.getByLabel(/Instance name/)).toHaveValue('Riverside Studio');
+      await expect(page.getByLabel(/First server name/)).toHaveValue('The Lounge');
 
       // 5. The real token claims the server and lands the owner in the space it
       //    just created.

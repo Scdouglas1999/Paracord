@@ -7,7 +7,7 @@ import { isReadyGuildCore } from './generated/validators';
 const readyGuild = {
   id: '123456789012345678',
   owner_id: '987654321098765432',
-  name: 'Building',
+  name: 'Server',
   icon_hash: 'a1b2c3d4',
   created_at: '2026-09-12T12:00:00+00:00',
   member_count: 2,

@@ -90,7 +90,7 @@ export const useNotificationPreferenceStore = create<PreferenceState>()(persist(
   },
   setMuted: async (guild, muted) => {
     const key = entityScopeKey(guild.scope, guild.id);
-    if (saves.has(key)) throw new Error('A notification change for this building is still being saved.');
+    if (saves.has(key)) throw new Error('A notification change for this server is still being saved.');
     const context = own(guild.scope);
     const pending = { context, promise: Promise.resolve() };
     saves.set(key, pending);
@@ -114,7 +114,7 @@ export const useNotificationPreferenceStore = create<PreferenceState>()(persist(
   },
   setChannelLevel: async (channel, level) => {
     const key = entityScopeKey(channel.scope, channel.id);
-    if (saves.has(key)) throw new Error('A notification change for this room is still being saved.');
+    if (saves.has(key)) throw new Error('A notification change for this channel is still being saved.');
     const context = own(channel.scope);
     const pending = { context, promise: Promise.resolve() };
     saves.set(key, pending);

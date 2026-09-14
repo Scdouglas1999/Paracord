@@ -74,7 +74,7 @@ export function textRoomCaption(room: RoomLight, mentionCount = 0): string {
 }
 
 /** The add-a-building row (§7.5). One sentence, both ways in. */
-export const ADD_BUILDING_LABEL = 'Add a building — join with an invite, or start your own';
+export const ADD_BUILDING_LABEL = 'Add a server — join with an invite, or start your own';
 
 /**
  * "Nothing is waiting on you right now" and the two states that are NOT that.
@@ -85,6 +85,6 @@ export const ADD_BUILDING_LABEL = 'Add a building — join with an invite, or st
  */
 export const NEEDS_YOU_QUIET = {
   ready: 'Nothing is waiting on you right now.',
-  loading: 'Still checking your buildings for anything waiting on you…',
+  loading: 'Still checking your servers for anything waiting on you…',
   error: 'Some activity could not be checked — refresh to see what needs you.',
 } as const;

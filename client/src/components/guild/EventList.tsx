@@ -150,7 +150,7 @@ function toReminderSelectValue(
 }
 
 const ENTITY_TABS = [
-  { value: '1', label: 'Voice room' },
+  { value: '1', label: 'Voice channel' },
   { value: '2', label: 'External' },
 ] as const;
 

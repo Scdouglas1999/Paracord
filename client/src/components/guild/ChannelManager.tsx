@@ -884,7 +884,7 @@ function CategoryGroupSection({
             <p className="px-6 py-1.5 text-meta leading-relaxed text-text-secondary">
               {group.isReal
                 ? `Nothing in ${group.name} yet — add the first channel with the plus above.`
-                : 'Every channel in this building already belongs to a category.'}
+                : 'Every channel in this server already belongs to a category.'}
             </p>
           )}
         </div>

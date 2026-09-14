@@ -189,7 +189,7 @@ export default function StagePreviewPage() {
       surface={phone ? 'sheet' : 'ribbon'}
       composer={
         <Well bare className="flex h-[var(--h-composer-ribbon)] items-center gap-2 pl-3 pr-1.5">
-          <span className="flex-1 truncate text-label text-text-faint">Say something to the room</span>
+          <span className="flex-1 truncate text-label text-text-faint">Say something to the call</span>
           <span className="inline-flex h-[30px] items-center rounded-[var(--radius-control)] bg-light-white px-3 text-label font-semibold text-text-on-light shadow-[var(--glow-control-on)]">
             Send
           </span>
@@ -242,7 +242,7 @@ export default function StagePreviewPage() {
                     <Button variant="ghost"><LayoutList size={16} className="mr-1.5" />Layout</Button>
                   </>
                 )}
-                <IconButton label="More room actions" size="md" tone="ghost">
+                <IconButton label="More channel actions" size="md" tone="ghost">
                   <MoreHorizontal size={18} />
                 </IconButton>
               </>

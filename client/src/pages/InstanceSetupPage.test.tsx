@@ -65,14 +65,14 @@ function renderPage() {
       <Routes>
         <Route path="/setup-server" element={<InstanceSetupPage />} />
         <Route path="/login" element={<div>Welcome back</div>} />
-        <Route path="/app/guilds/:guildId" element={<div>Building shell</div>} />
+        <Route path="/app/guilds/:guildId" element={<div>Server shell</div>} />
       </Routes>
     </MemoryRouter>,
   );
 }
 
 const continueButton = () => screen.getByRole('button', { name: 'Continue' });
-const claimButton = () => screen.getByRole('button', { name: 'Claim this server' });
+const claimButton = () => screen.getByRole('button', { name: 'Claim this instance' });
 
 type User = ReturnType<typeof userEvent.setup>;
 
@@ -100,8 +100,8 @@ async function walkToLastStep(user: User) {
   await passToken(user);
   await passOwner(user);
   await passPassword(user);
-  await user.type(await screen.findByLabelText(/Server name/), 'Riverside Studio');
-  await user.type(screen.getByLabelText(/First building name/), 'The Lounge');
+  await user.type(await screen.findByLabelText(/Instance name/), 'Riverside Studio');
+  await user.type(screen.getByLabelText(/First server name/), 'The Lounge');
 }
 
 describe('InstanceSetupPage', () => {
@@ -118,9 +118,9 @@ describe('InstanceSetupPage', () => {
   it('distinguishes running the server from joining a community', async () => {
     renderPage();
 
-    expect(await screen.findByText('Set up your Paracord server')).toBeInTheDocument();
+    expect(await screen.findByText('Set up your Paracord instance')).toBeInTheDocument();
     expect(
-      screen.getByText(/You’re setting up the server itself, not joining one/),
+      screen.getByText(/You’re setting up the instance itself, not joining one/),
     ).toBeInTheDocument();
     expect(screen.getByText(/Joining someone else’s community instead\?/)).toBeInTheDocument();
   });
@@ -128,7 +128,7 @@ describe('InstanceSetupPage', () => {
   it('explains where the claim token comes from before asking for it', async () => {
     renderPage();
 
-    expect(await screen.findByText(/Prove you run this server/)).toBeInTheDocument();
+    expect(await screen.findByText(/Prove you run this instance/)).toBeInTheDocument();
     expect(screen.getByText(/first-owner-claim\.txt/)).toBeInTheDocument();
     expect(
       screen.getByText(/Nobody can create an account here until this token is used/),
@@ -142,7 +142,7 @@ describe('InstanceSetupPage', () => {
     expect(await screen.findByText('Step 1 of 4')).toBeInTheDocument();
     // Only this step's field is on screen — the rest of the form is not below
     // a fold, it is not rendered yet.
-    expect(screen.queryByLabelText(/Server name/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Instance name/)).not.toBeInTheDocument();
     expect(screen.getByLabelText(/Claim token/)).toHaveFocus();
 
     await passToken(user);
@@ -181,7 +181,7 @@ describe('InstanceSetupPage', () => {
     await user.click(continueButton());
 
     expect(
-      await screen.findByText(/Paste the claim token from your server’s terminal/),
+      await screen.findByText(/Paste the claim token from your instance’s terminal/),
     ).toBeInTheDocument();
     expect(screen.getByLabelText(/Claim token/)).toHaveAttribute('aria-invalid', 'true');
     // Still on step 1.
@@ -318,7 +318,7 @@ describe('InstanceSetupPage', () => {
     });
     expect(mockSetAccessToken).toHaveBeenCalledWith('access-token');
     expect(mockSetRefreshToken).toHaveBeenCalledWith('refresh-token');
-    expect(await screen.findByText('Building shell')).toBeInTheDocument();
+    expect(await screen.findByText('Server shell')).toBeInTheDocument();
   });
 
   it('sends an optional display name and email through unchanged', async () => {
@@ -340,8 +340,8 @@ describe('InstanceSetupPage', () => {
     await user.type(screen.getByLabelText(/Email/), 'ada@example.test');
     await user.click(continueButton());
     await passPassword(user);
-    await user.type(await screen.findByLabelText(/Server name/), 'Riverside Studio');
-    await user.type(screen.getByLabelText(/First building name/), 'The Lounge');
+    await user.type(await screen.findByLabelText(/Instance name/), 'Riverside Studio');
+    await user.type(screen.getByLabelText(/First server name/), 'The Lounge');
     await user.click(claimButton());
 
     await waitFor(() =>
@@ -370,7 +370,7 @@ describe('InstanceSetupPage', () => {
       await walkToLastStep(user);
       await user.click(claimButton());
 
-      const banner = await screen.findByText(/not the one this server printed/);
+      const banner = await screen.findByText(/not the one this instance printed/);
       expect(scrollIntoView).toHaveBeenCalled();
       // The live region holding the banner takes focus, so the rejection is
       // announced as well as scrolled to.
@@ -396,7 +396,7 @@ describe('InstanceSetupPage', () => {
     await walkToLastStep(user);
     await user.click(claimButton());
 
-    expect(await screen.findByText(/not the one this server printed/)).toBeInTheDocument();
+    expect(await screen.findByText(/not the one this instance printed/)).toBeInTheDocument();
     expect(screen.queryByText('unauthorized')).not.toBeInTheDocument();
     expect(claimButton()).toBeEnabled();
   });
@@ -404,10 +404,10 @@ describe('InstanceSetupPage', () => {
   it('passes through the operator-authored message the server sends for other failures', async () => {
     const user = userEvent.setup();
     mockClaimInstance.mockRejectedValue(
-      Object.assign(new Error('conflict: This server has already been set up.'), {
+      Object.assign(new Error('conflict: This instance has already been set up.'), {
         response: {
           status: 409,
-          data: { message: 'conflict: This server has already been set up.' },
+          data: { message: 'conflict: This instance has already been set up.' },
         },
       }),
     );
@@ -416,7 +416,7 @@ describe('InstanceSetupPage', () => {
     await walkToLastStep(user);
     await user.click(claimButton());
 
-    expect(await screen.findByText(/This server has already been set up/)).toBeInTheDocument();
+    expect(await screen.findByText(/This instance has already been set up/)).toBeInTheDocument();
   });
 
   it('will not claim with a field cleared after its step was passed', async () => {
@@ -424,10 +424,10 @@ describe('InstanceSetupPage', () => {
     renderPage();
 
     await walkToLastStep(user);
-    await user.clear(screen.getByLabelText(/Server name/));
+    await user.clear(screen.getByLabelText(/Instance name/));
     await user.click(claimButton());
 
-    expect(await screen.findByText(/Give this server a name/)).toBeInTheDocument();
+    expect(await screen.findByText(/Give this instance a name/)).toBeInTheDocument();
     expect(screen.getByText('Step 4 of 4')).toBeInTheDocument();
     expect(mockClaimInstance).not.toHaveBeenCalled();
   });

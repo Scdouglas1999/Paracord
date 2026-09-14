@@ -105,7 +105,7 @@ describe('DiscoveryPage', () => {
 
     renderDiscoveryPage();
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Failed to load public buildings: network down');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Failed to load public servers: network down');
     await user.click(screen.getByRole('button', { name: 'Retry' }));
 
     expect(await screen.findByRole('heading', { name: 'Launch Guild' })).toBeInTheDocument();
@@ -131,7 +131,7 @@ describe('DiscoveryPage', () => {
 
     const dialog = screen.getByRole('dialog', { name: 'Launch Guild' });
     expect(dialog).toHaveTextContent('Public launch planning.');
-    expect(dialog).toHaveTextContent('Joining adds this building to your sidebar');
+    expect(dialog).toHaveTextContent('Joining adds this server to your sidebar');
     expect(apiClient.put).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole('button', { name: 'Join Launch Guild' }));
@@ -167,7 +167,7 @@ describe('DiscoveryPage', () => {
     await user.click(screen.getByRole('button', { name: 'Join Launch Guild' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      "We couldn't join this building: Membership service is temporarily unavailable.",
+      "We couldn't join this server: Membership service is temporarily unavailable.",
     );
     expect(screen.getByRole('dialog', { name: 'Launch Guild' })).toBeInTheDocument();
     expect(toast.success).not.toHaveBeenCalled();
@@ -196,7 +196,7 @@ describe('DiscoveryPage', () => {
     await user.click(await screen.findByRole('button', { name: 'Preview' }));
 
     expect(screen.getByRole('dialog', { name: 'Launch Guild' })).toHaveTextContent('From peer.example');
-    expect(screen.getByText(/Cross-server joining is not available/i)).toBeInTheDocument();
+    expect(screen.getByText(/Cross-instance joining is not available/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Join Launch Guild/i })).toBeNull();
   });
 });

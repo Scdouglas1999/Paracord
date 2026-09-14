@@ -158,7 +158,7 @@ export function CustomCSS({ initialCSS = '', onSave }: CustomCSSProps) {
       )}
 
       <p className="max-w-prose text-meta leading-relaxed text-text-faint">
-        Server administrators can also apply server-wide CSS that reaches every member of that server.
+        Instance administrators can also apply instance-wide CSS that reaches everyone signed in here.
       </p>
     </div>
   );

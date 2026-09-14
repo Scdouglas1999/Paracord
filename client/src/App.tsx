@@ -311,7 +311,7 @@ function DeviceKeySignIn() {
             This device could not sign in with its key
           </h1>
           <p className="text-label leading-relaxed text-text-secondary">
-            Your identity is unlocked, but the server has not accepted it. The server may be
+            Your identity is unlocked, but the instance has not accepted it. The instance may be
             unreachable, or this account may not have this device's key attached to it.
           </p>
         </div>
@@ -402,7 +402,7 @@ function GuardStalled({ to }: { to: CryptoAuthRedirect | '/app' }) {
   const destination =
     to === '/setup' ? 'the device setup screen'
     : to === '/unlock' ? 'the unlock screen'
-    : to === '/connect' ? 'the server screen'
+    : to === '/connect' ? 'the instance screen'
     : to === '/login' ? 'the sign-in screen'
     : 'the app';
   return (

@@ -83,19 +83,19 @@ function renderOverview(
   return handlers;
 }
 
-const deleteConfirmButton = () => screen.getByRole('button', { name: 'Delete server' });
+const deleteConfirmButton = () => screen.getByRole('button', { name: 'Delete permanently' });
 
 describe('OverviewSection danger zone', () => {
   it('hides the danger zone for non-owners', () => {
     renderOverview({ authUserId: 'user-2' });
-    expect(screen.queryByRole('button', { name: 'Delete building' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete permanently' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Transfer' })).not.toBeInTheDocument();
   });
 
   it('opens the delete confirmation dialog from the trigger', async () => {
     const user = userEvent.setup();
     const handlers = renderOverview();
-    await user.click(screen.getByRole('button', { name: 'Delete building' }));
+    await user.click(screen.getByRole('button', { name: 'Delete server' }));
     expect(handlers.onShowDeleteDialog).toHaveBeenCalledTimes(1);
     expect(handlers.onDeleteGuild).not.toHaveBeenCalled();
   });
@@ -223,7 +223,7 @@ function renderRoles(overrides: Partial<React.ComponentProps<typeof RolesSection
 }
 
 describe('RolesSection', () => {
-  it('lists the default role on a building that has no custom roles yet', () => {
+  it('lists the default role on a server that has no custom roles yet', () => {
     renderRoles();
     expect(screen.getByDisplayValue('Member')).toBeTruthy();
     expect(screen.getByText('Everyone')).toBeTruthy();

@@ -57,14 +57,14 @@ const STEPS = [
         <p className="text-body text-text-secondary">
           Unlike centralized platforms, Paracord gives you{' '}
           <strong className="font-semibold text-text-primary">full control</strong> over your
-          conversations. Your data lives on servers that you or your community operate.
+          conversations. Your data lives on instances that you or your community operate.
         </p>
         <FeatureList
           rows={[
             {
               icon: Server,
               title: 'Self-hosted',
-              body: 'Your server, your rules, your data',
+              body: 'Your instance, your rules, your data',
             },
             {
               icon: Shield,
@@ -73,8 +73,8 @@ const STEPS = [
             },
             {
               icon: Users,
-              title: 'Multi-server',
-              body: 'Connect to multiple communities seamlessly',
+              title: 'Multi-instance',
+              body: 'Connect to several instances at once, and your servers on each',
             },
           ]}
         />
@@ -82,19 +82,19 @@ const STEPS = [
     ),
   },
   {
-    title: 'Connect to a server',
-    subtitle: 'You need a server to get started',
+    title: 'Connect to an instance',
+    subtitle: 'You need an instance to get started',
     icon: Server,
     content: (
       <>
         <p className="text-body text-text-secondary">
-          To use Paracord, you connect to a server hosted by you or someone you trust.
+          To use Paracord, you connect to an instance hosted by you or someone you trust.
         </p>
         <div className="pc-well px-3.5 py-1">
           <div className="py-3">
-            <div className="text-label text-text-primary">Join an existing server</div>
+            <div className="text-label text-text-primary">Join an existing instance</div>
             <div className="mt-0.5 text-meta leading-relaxed text-text-faint">
-              Ask your admin for a server address or invite link. It looks like{' '}
+              Ask your admin for an instance address or invite link. It looks like{' '}
               <code className="rounded-[var(--radius-chip)] bg-bg-mod-strong px-1 py-0.5 pc-mono text-text-secondary">
                 192.168.1.5:8090
               </code>{' '}
@@ -106,9 +106,9 @@ const STEPS = [
           </div>
           <Divider />
           <div className="py-3">
-            <div className="text-label text-text-primary">Host your own server</div>
+            <div className="text-label text-text-primary">Host your own instance</div>
             <div className="mt-0.5 text-meta leading-relaxed text-text-faint">
-              Download the server binary and run it on your machine, VPS, or home server. It takes
+              Download the Paracord binary and run it on your machine, a VPS, or a box at home. It takes
               a few minutes.
             </div>
           </div>
@@ -198,7 +198,7 @@ export function OnboardingWizard({ onComplete, onTryDemo }: OnboardingWizardProp
               actions rather than inside the region that may scroll. */}
           {step === 1 && onTryDemo && (
             <Button type="button" variant="ghost" size="lg" onClick={onTryDemo} className="w-full">
-              Try a public demo server
+              Try a public demo instance
             </Button>
           )}
 
@@ -215,7 +215,7 @@ export function OnboardingWizard({ onComplete, onTryDemo }: OnboardingWizardProp
               className="flex-1"
               onClick={isLast ? handleComplete : () => setStep(step + 1)}
             >
-              {isLast ? 'Enter a server address' : 'Next'}
+              {isLast ? 'Enter an instance address' : 'Next'}
               {!isLast && <ArrowRight size={16} aria-hidden />}
             </Button>
           </div>

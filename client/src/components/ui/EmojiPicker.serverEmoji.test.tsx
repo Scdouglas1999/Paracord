@@ -56,11 +56,11 @@ describe('EmojiPicker server emojis', () => {
 
     render(<EmojiPicker guildId="g1" onSelect={onSelect} onClose={onClose} />);
 
-    fireEvent.click(screen.getByText('Building emojis'));
+    fireEvent.click(screen.getByText('Server emojis'));
     expect(await screen.findByRole('button', { name: /party_parrot/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /ship_it/ })).toBeInTheDocument();
 
-    fireEvent.change(screen.getByPlaceholderText('Search building emojis...'), {
+    fireEvent.change(screen.getByPlaceholderText('Search server emojis...'), {
       target: { value: 'party' },
     });
 
@@ -96,7 +96,7 @@ describe('EmojiPicker server emojis', () => {
 
     await waitFor(() => expect(listGuild).toHaveBeenCalledTimes(2));
 
-    fireEvent.click(screen.getByText('Building emojis'));
+    fireEvent.click(screen.getByText('Server emojis'));
 
     expect(await screen.findByRole('button', { name: /new_static/ })).toBeInTheDocument();
   });

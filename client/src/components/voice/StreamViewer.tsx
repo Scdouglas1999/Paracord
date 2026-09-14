@@ -1012,7 +1012,7 @@ export function StreamViewer({
                     Your share is live — the preview is off
                   </span>
                   <p className="text-label text-text-secondary">
-                    Everyone in the room still sees it. Turning the preview off saves your
+                    Everyone in the call still sees it. Turning the preview off saves your
                     machine a decode of your own frames.
                   </p>
                   <button
@@ -1030,7 +1030,7 @@ export function StreamViewer({
                     Opening your share
                   </span>
                   <p className="text-label text-text-secondary">
-                    The first frames are on their way to the room.
+                    The first frames are on their way to the call.
                   </p>
                 </>
               ) : (
@@ -1039,7 +1039,7 @@ export function StreamViewer({
                     {displayName === 'You' ? 'You are not sharing' : `${displayName} is not sharing`}
                   </span>
                   <p className="text-label text-text-secondary">
-                    No screen track is reaching this room right now.
+                    No screen track is reaching this call right now.
                   </p>
                 </>
               )}

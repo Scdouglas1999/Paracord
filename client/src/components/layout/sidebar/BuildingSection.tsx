@@ -181,13 +181,13 @@ export function BuildingSection({
           className="text-text-faint"
         >
           {expanded ? (
-            'Fewer rooms'
+            'Fewer channels'
           ) : (
             /* The number of rooms folded away changes as rooms light and go
                dark, so it re-rolls with the rest of them (§5.1). */
             <RollingNumber
               value={hiddenRoomCount}
-              format={(count) => (count === 1 ? '1 more room' : `${count} more rooms`)}
+              format={(count) => (count === 1 ? '1 more channel' : `${count} more channels`)}
               announce={false}
             />
           )}

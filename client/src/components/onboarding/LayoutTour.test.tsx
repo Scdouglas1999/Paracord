@@ -150,7 +150,7 @@ describe('LayoutTour', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByText(/jump into a room or pick a channel/i);
+    await screen.findByText(/join a call or pick a channel/i);
     expect(getVersionedStorageItem(GUILD_KEY)).toBeNull();
 
     await user.click(screen.getByRole('button', { name: 'Done' }));
@@ -218,7 +218,7 @@ describe('LayoutTour', () => {
     // The shell tour runs first; the Lobby's coach mark is not a second overlay
     // stacked on top of it.
     await screen.findByText(/Everything that needs you/i);
-    expect(screen.queryByText(/jump into a room or pick a channel/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/join a call or pick a channel/i)).not.toBeInTheDocument();
   });
 
   it('still runs the Lobby step where the shell tour has no anchor to run on', async () => {
@@ -231,7 +231,7 @@ describe('LayoutTour', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByText(/jump into a room or pick a channel/i, undefined, { timeout: 2000 });
+    await screen.findByText(/join a call or pick a channel/i, undefined, { timeout: 2000 });
   });
 
   it('places the first step beside the middle of a full-height anchor', async () => {

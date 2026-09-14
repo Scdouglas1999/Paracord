@@ -32,10 +32,10 @@ const NAV_GROUPS: SettingsNavGroup[] = [
     items: [{ id: 'overview', label: 'Overview', icon: <BarChart3 size={16} /> }],
   },
   {
-    label: 'People and buildings',
+    label: 'People and servers',
     items: [
       { id: 'users', label: 'Users', icon: <Users size={16} /> },
-      { id: 'guilds', label: 'Guilds', icon: <Server size={16} /> },
+      { id: 'guilds', label: 'Servers', icon: <Server size={16} /> },
       { id: 'federation', label: 'Federation', icon: <Globe2 size={16} /> },
     ],
   },
@@ -76,7 +76,7 @@ export function AdminPage() {
             role="alert"
             icon={<Shield size={20} />}
             title="Access denied"
-            description="The control plane is limited to server administrators. Ask an admin to grant you access, then come back."
+            description="The control plane is limited to instance administrators. Ask an admin to grant you access, then come back."
             action={<Button onClick={goHome}>Go back</Button>}
           />
         </Plate>
@@ -93,7 +93,7 @@ export function AdminPage() {
 
   return (
     <SettingsShell
-      label="Server administration"
+      label="Instance administration"
       title="Admin"
       groups={NAV_GROUPS}
       active={activeTab}

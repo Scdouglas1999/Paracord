@@ -346,7 +346,7 @@ function messageInputError(err: unknown, fallback: string): string {
 export function MessageInput(props: MessageInputProps) {
   const messageStore = useCurrentMessageStoreApi();
   const scope = messageStore.scope;
-  if (!scope) return <p className="px-4 py-3 text-meta text-text-muted">Sign in to this server to write a message.</p>;
+  if (!scope) return <p className="px-4 py-3 text-meta text-text-muted">Sign in to this instance to write a message.</p>;
   return <OwnedMessageInput key={memberScopeKey(scope, props.channelId)} {...props} scope={scope} messageStore={messageStore} />;
 }
 

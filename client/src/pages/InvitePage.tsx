@@ -96,7 +96,7 @@ export function InvitePage() {
               </div>
               <div className="min-w-0">
                 <h1 className="truncate pc-display text-title text-text-primary">
-                  {loadingPreview ? 'Loading invite…' : guild?.name ?? 'Join this building'}
+                  {loadingPreview ? 'Loading invite…' : guild?.name ?? 'Join this server'}
                 </h1>
                 <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-text-faint">
                   {memberCount !== null && (
@@ -147,11 +147,11 @@ export function InvitePage() {
                   onChange={(e) => setVerificationAck(e.target.checked)}
                   className="pc-checkbox mt-0.5"
                 />
-                I acknowledge this building’s rules and verification requirements.
+                I acknowledge this server’s rules and verification requirements.
               </label>
               <Textarea
                 className="min-h-[72px] resize-y"
-                placeholder="Verification answers (one per line, if this building requires them)"
+                placeholder="Verification answers (one per line, if this server requires them)"
                 value={verificationAnswers}
                 onChange={(e) => setVerificationAnswers(e.target.value)}
               />

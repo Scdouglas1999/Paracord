@@ -170,7 +170,7 @@ const ENTRY_SCREENS: EntryScreen[] = [
     name: 'setup-server',
     url: '/setup-server',
     action: /^Continue$/,
-    settled: /Set up your Paracord server/,
+    settled: /Set up your Paracord instance/,
   },
   // A browser that has never been here gets the first-run explainer, not the
   // address form; both are measured, this one here and the form below.
@@ -227,7 +227,7 @@ test.describe('first-run and account screens fit a native window', () => {
     await page.goto('/setup-server');
 
     const steps = [
-      { title: /Prove you run this server/, counter: 'Step 1 of 4' },
+      { title: /Prove you run this instance/, counter: 'Step 1 of 4' },
       { title: /Create the owner account/, counter: 'Step 2 of 4' },
       { title: /Protect the owner account/, counter: 'Step 3 of 4' },
       { title: /Name the place/, counter: 'Step 4 of 4' },
@@ -246,7 +246,7 @@ test.describe('first-run and account screens fit a native window', () => {
       await expect(page.locator('input:focus')).toHaveCount(1);
 
       const action = page
-        .getByRole('button', { name: index === steps.length - 1 ? /^Claim this server$/ : /^Continue$/ })
+        .getByRole('button', { name: index === steps.length - 1 ? /^Claim this instance$/ : /^Continue$/ })
         .first();
       await expect(action).toBeInViewport({ ratio: 1 });
       await expectNoPageScroll(page, `setup step ${index + 1} at 940x500`);
@@ -306,7 +306,7 @@ test.describe('first-run and account screens fit a native window', () => {
     for (const [label, viewport] of NATIVE_VIEWPORTS) {
       await page.setViewportSize(viewport);
       await page.goto('/connect');
-      const action = page.getByRole('button', { name: /^Add server$/ });
+      const action = page.getByRole('button', { name: /^Add instance$/ });
       await expect(action).toBeVisible();
       await expect(action).toBeInViewport({ ratio: 1 });
       await expectNoPageScroll(page, `connect at ${label}`);

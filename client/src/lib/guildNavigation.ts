@@ -10,7 +10,7 @@ import type { GuildReference, ScopedGuild } from './guildScope';
 export function activateGuild(guild: GuildReference): void {
   const current = getServerAccountScope(guild.scope.serverId);
   if (!current || accountScopeKey(current) !== accountScopeKey(guild.scope)) {
-    throw new Error('The account for this building is no longer signed in.');
+    throw new Error('The account for this instance is no longer signed in.');
   }
   useServerListStore.getState().setActive(guild.scope.serverId === LOCAL_SERVER_ID ? null : guild.scope.serverId);
   useGuildStore.getState().selectGuild(guild);

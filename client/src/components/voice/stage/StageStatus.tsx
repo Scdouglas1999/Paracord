@@ -37,7 +37,7 @@ export function stageStatusDetail(phase: StagePhase, roomName: string): string {
     case 'joining':
       return 'Opening the call — your microphone stays off until you are in.';
     case 'reconnecting':
-      return 'The call dropped. Nobody has left the room; this client is dialling back in.';
+      return 'The call dropped. Nobody has left the call; this client is dialling back in.';
     case 'closing':
       return 'Closing your microphone and camera.';
     case 'failed':

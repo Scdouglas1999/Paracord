@@ -55,7 +55,7 @@ export function registerStepError(
   const trimmedEmail = draft.email.trim();
   if (stepId === 'identity') {
     if (options.requireEmail && !trimmedEmail) {
-      return { field: 'email', message: 'This server requires an email address.' };
+      return { field: 'email', message: 'This instance requires an email address.' };
     }
     if (trimmedEmail && !EMAIL_SHAPE.test(trimmedEmail)) {
       return { field: 'email', message: 'That doesn’t look like an email address.' };
@@ -228,7 +228,7 @@ export function RegisterPage() {
               dense
               progress={progress}
               title="Who you are here"
-              description="Claim a username, and you’re in — you can add servers and a recovery identity next."
+              description="Claim a username, and you’re in — you can join servers and add a recovery identity next."
             >
               <AuthScroll paired>
                 <Field
@@ -266,7 +266,7 @@ export function RegisterPage() {
                   label="Username"
                   required
                   error={errorFor('username')}
-                  hint="Your unique @handle on this server."
+                  hint="Your unique @handle on this instance."
                   descriptionId={usernameErrorId}
                 >
                   <Input

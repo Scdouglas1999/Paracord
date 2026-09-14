@@ -1044,7 +1044,7 @@ describe('the speaking ring takes the voice', () => {
 describe('the outage edge', () => {
   const tracker = () => createOutageTracker(OUTAGE_GRACE_MS);
 
-  it('never dims a building that has not been up yet', () => {
+  it('never dims a server that has not been up yet', () => {
     const outage = tracker();
     expect(outage.observe({ connected: false, nowMs: 0 })).toBeNull();
     expect(outage.observe({ connected: false, nowMs: 5_000 })).toBeNull();
@@ -1152,7 +1152,7 @@ describe('the lights changing', () => {
     expect(waapi.played).toHaveLength(0);
   });
 
-  it('dims the whole building 30% and holds it there', () => {
+  it('dims the whole server 30% and holds it there', () => {
     plate(2);
     expect(buildingIsDim()).toBe(false);
     const result = dimBuilding();

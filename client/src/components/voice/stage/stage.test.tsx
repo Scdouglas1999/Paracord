@@ -104,7 +104,7 @@ describe('StageControlBar', () => {
 });
 
 describe('StageHeader', () => {
-  it('renders the room, its building and the duration in the mono face', () => {
+  it('renders the room, its server and the duration in the mono face', () => {
     const { container } = render(
       <StageHeader
         roomName="Shop floor"
@@ -194,10 +194,10 @@ describe('RoomChatRibbon', () => {
         <div>timeline</div>
       </RoomChatRibbon>,
     );
-    const ribbon = screen.getByRole('complementary', { name: 'build-log — room chat' });
+    const ribbon = screen.getByRole('complementary', { name: 'build-log — call chat' });
     expect(ribbon.className).toContain('w-[var(--w-chat-ribbon)]');
     expect(screen.getByText('build-log')).toBeInTheDocument();
-    expect(screen.getByText('room chat')).toBeInTheDocument();
+    expect(screen.getByText('call chat')).toBeInTheDocument();
     expect(screen.getByText('timeline')).toBeInTheDocument();
     expect(screen.getByText('composer')).toBeInTheDocument();
     // Somebody is reading it, so the window dot is amber.

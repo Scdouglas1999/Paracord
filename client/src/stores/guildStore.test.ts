@@ -48,7 +48,7 @@ describe('guild account ownership', () => {
     pending.finish([guild()]); await Promise.all([first, second]);
     expect(snapshot().loading[accountScopeKey(a)]).toBe(false);
   });
-  it('reports a fetch failure without replacing cached buildings', async () => {
+  it('reports a fetch failure without replacing cached servers', async () => {
     snapshot().addGuild(guild(), a);
     const error = vi.spyOn(toast, 'error').mockImplementation(() => 'toast');
     clients.get('a')!.defaults.adapter = async () => { throw new Error('offline'); };
@@ -56,7 +56,7 @@ describe('guild account ownership', () => {
     expect(error).toHaveBeenCalledWith(expect.stringContaining('offline'));
     expect(cached()?.name).toBe('A');
   });
-  it('rejects a malformed HTTP snapshot without replacing valid cached buildings', async () => {
+  it('rejects a malformed HTTP snapshot without replacing valid cached servers', async () => {
     snapshot().addGuild(guild('Cached'), a);
     const error = vi.spyOn(toast, 'error').mockImplementation(() => 'toast');
     clients.get('a')!.defaults.adapter = async config => reply(config, [

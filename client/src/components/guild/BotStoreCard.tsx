@@ -50,7 +50,7 @@ export function BotStoreCard({ bot, onAdd, adding, canManage }: BotStoreCardProp
 
         <p className="text-body leading-relaxed text-text-secondary">
           {bot.description ||
-            'This developer has not written a listing yet — open their page before you add it to a building.'}
+            'This developer has not written a listing yet — open their page before you add it to a server.'}
         </p>
 
         {(bot.category || bot.tags.length > 0) && (
@@ -69,7 +69,7 @@ export function BotStoreCard({ bot, onAdd, adding, canManage }: BotStoreCardProp
             <span className="inline-flex items-center gap-1.5">
               <Download size={12} aria-hidden />
               <span className="pc-mono">
-                {`${bot.install_count.toLocaleString()} ${bot.install_count === 1 ? 'building' : 'buildings'}`}
+                {`${bot.install_count.toLocaleString()} ${bot.install_count === 1 ? 'server' : 'servers'}`}
               </span>
             </span>
             {typeof bot.average_rating === 'number' && typeof bot.review_count === 'number' && (

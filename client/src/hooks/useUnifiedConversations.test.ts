@@ -258,7 +258,7 @@ describe('useUnifiedConversations — graceful degradation', () => {
     expect(requests[2].createdMs).toBeNull();
   });
 
-  it('maps joined guilds to buildings with resolved serverIds', () => {
+  it('maps joined guilds to servers with resolved serverIds', () => {
     useGuildStore.setState({
       guilds: [
         guild({ id: 'ga', server_url: URL_A, name: 'Alpha' }),

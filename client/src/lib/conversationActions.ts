@@ -31,14 +31,14 @@ export function readConversationCapabilities(value: unknown, channelId: string, 
   const caps = value as ConversationCapabilities | null;
   if (!caps || caps.version !== 1 || caps.channel_id !== channelId || caps.user_id !== userId
     || typeof caps.encrypted !== 'boolean' || typeof caps.own_identity_enrolled !== 'boolean' || typeof caps.peers_ready !== 'boolean') {
-    throw new Error('The server returned capabilities for an unsupported contract or a different conversation.');
+    throw new Error('The instance returned capabilities for an unsupported contract or a different conversation.');
   }
   for (const action of CONVERSATION_ACTIONS) {
     const decision = caps.actions?.[action];
     if (!decision || typeof decision.supported !== 'boolean' || typeof decision.allowed !== 'boolean'
       || (decision.reason !== null && typeof decision.reason !== 'string')
       || (decision.allowed && (!decision.supported || decision.reason !== null))
-      || (!decision.allowed && !decision.reason)) throw new Error('The server returned an invalid action decision.');
+      || (!decision.allowed && !decision.reason)) throw new Error('The instance returned an invalid action decision.');
   }
   return caps;
 }

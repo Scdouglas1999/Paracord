@@ -28,11 +28,11 @@ export function lightsOnOfCaption(lightsOn: number, memberCount: number): string
   return on === 1 ? '1 has their lights on' : `${on} have their lights on`;
 }
 
-/** "2 rooms lit" / "1 room lit". Empty when the building is dark. */
+/** "2 calls live" / "1 call live". Empty when the server is dark. */
 export function roomsLitCaption(roomsLit: number): string {
   const lit = Math.max(0, Math.trunc(roomsLit));
   if (lit === 0) return '';
-  return lit === 1 ? '1 room lit' : `${lit} rooms lit`;
+  return lit === 1 ? '1 call live' : `${lit} calls live`;
 }
 
 /** "thermal test at 1 pm" — the header's next-event clause (§7.3). */
@@ -62,10 +62,10 @@ export function speakingCaption(names: readonly string[]): string {
  * room. WP1's default ("Nobody's lights are on right now") is about rooms, and
  * next to a "+17 lights on" count it would contradict itself.
  */
-export const NOBODY_IN_A_ROOM = "Nobody's in a room right now";
+export const NOBODY_IN_A_ROOM = "Nobody's in a voice channel right now";
 
 /** The add tile (§7.3), shown only to somebody who can actually open one. */
-export const OPEN_A_NEW_ROOM = 'Open a new room';
+export const OPEN_A_NEW_ROOM = 'Add a voice channel';
 
 /** "Recently in Kestrel Robotics" — the media strip's label (§7.3). */
 export function recentlyInCaption(buildingName: string): string {

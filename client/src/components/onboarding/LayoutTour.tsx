@@ -45,7 +45,7 @@ const SHELL_STEPS: TourStepDef[] = [
   {
     id: 'sidebar',
     selector: 'aside[aria-label="Navigation"]',
-    body: 'Everything that needs you, in one place: mentions, DMs, and your buildings, ranked.',
+    body: 'Everything that needs you, in one place: mentions, DMs, and your servers, ranked.',
     side: 'right',
   },
   {
@@ -61,8 +61,8 @@ const GUILD_STEPS: TourStepDef[] = [
     id: 'rooms',
     // The Lobby's rooms grid (§7.3). The older "Live rooms" label is kept in
     // the selector so a tour started against a stale bundle still finds it.
-    selector: 'section[aria-label="Rooms"], section[aria-label="Live rooms"]',
-    body: "Buildings open on who's around — jump into a room or pick a channel below.",
+    selector: 'section[aria-label="Voice channels"], section[aria-label="Rooms"], section[aria-label="Live rooms"]',
+    body: "Servers open on who's around — join a call or pick a channel below.",
     side: 'top',
   },
 ];

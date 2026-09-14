@@ -106,7 +106,7 @@ export function StageSpeakers({
           'pc-floating flex list-none gap-1.5 rounded-[var(--radius-well)] p-1.5',
           className,
         )}
-        aria-label="People in this room"
+        aria-label="People in this call"
       >
         {occupants.map((occupant) => (
           <li
@@ -126,7 +126,7 @@ export function StageSpeakers({
       arrangement={arrangement}
       compact={compact}
       count={occupants.length}
-      aria-label="People in this room"
+      aria-label="People in this call"
       className={cn(arrangement === 'strip' && 'h-full', className)}
     >
       {occupants.map((occupant) => (

@@ -465,13 +465,13 @@ test('capture the design-review screens', async ({ page }) => {
     ] as const) {
       await page.setViewportSize(viewport);
       await page.goto('/design-tokens');
-      await expect(page.getByRole('heading', { name: 'Buildings column' })).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Servers column' })).toBeVisible();
 
       for (const [name, selector] of columns) {
         await page.locator(selector).scrollIntoViewIfNeeded();
         // The shell can briefly swap back to its boot splash while the account
         // bootstrap settles; re-assert the section before every frame.
-        await expect(page.getByRole('heading', { name: 'Buildings column' })).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'Servers column' })).toBeVisible();
         await shoot(`column-${name}-${label}`);
       }
 
@@ -488,7 +488,7 @@ test('capture the design-review screens', async ({ page }) => {
           // The same selectors the mocked smoke uses for the column, asserted
           // here too so a rename cannot pass unnoticed while the smoke is red
           // for an unrelated package.
-          const column = page.getByRole('listbox', { name: 'Buildings and rooms' });
+          const column = page.getByRole('listbox', { name: 'Servers and channels' });
           await expect(
             column.getByRole('group', { name: /Kestrel Robotics/i })
               .getByRole('option', { name: /Kestrel Robotics lobby/i }),
@@ -774,7 +774,7 @@ test('capture the design-review screens', async ({ page }) => {
         } else {
           await page.goto(`/app/guilds/${GUILD_ID}`);
         }
-        await expect(page.getByRole('region', { name: 'Rooms', exact: true })).toBeVisible();
+        await expect(page.getByRole('region', { name: 'Voice channels', exact: true })).toBeVisible();
         await shoot(`lobby-${name}-${label}`);
       }
     };
@@ -906,7 +906,7 @@ test('capture the design-review screens', async ({ page }) => {
     const kestrelChannels = [
       channel('2002', GUILD_ID, 'Shop floor', 2, 0),
       channel('2009', GUILD_ID, 'Paint booth', 2, 1),
-      channel('2010', GUILD_ID, 'Quiet room', 2, 2),
+      channel('2010', GUILD_ID, 'Quiet corner', 2, 2),
       channel('2001', GUILD_ID, 'build-log', 0, 3),
       channel('2005', GUILD_ID, 'general', 0, 4),
       channel('2006', GUILD_ID, 'parts-orders', 0, 5),
@@ -1182,7 +1182,7 @@ test('capture the design-review screens', async ({ page }) => {
         await page.goto('/app');
         const main = page.getByRole('main');
         await expect(main).toBeVisible();
-        await expect(main.getByText('Your buildings')).toBeVisible();
+        await expect(main.getByText('Your servers')).toBeVisible();
         // Wait for the light itself, not just the frame.
         if (scenario === 'lit') {
           await expect(main.getByText(/is sharing a screen/).first()).toBeVisible({ timeout: 30_000 });
@@ -1361,7 +1361,7 @@ test('capture the design-review screens', async ({ page }) => {
           // paints the shell before the guild list has arrived, which would
           // photograph an empty column and prove nothing.
           await page.goto(`/app/guilds/${GUILD_ID}`);
-          const column = page.getByRole('listbox', { name: 'Buildings and rooms' });
+          const column = page.getByRole('listbox', { name: 'Servers and channels' });
           const building = column.getByRole('group', { name: /Kestrel Robotics/i });
           // An EMPTY column is the same failure as a missing one, in a
           // different shape — wait for the building itself.

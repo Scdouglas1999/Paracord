@@ -76,7 +76,7 @@ describe('SearchOverlay', () => {
       rejectFallback(new Error('fallback down'));
     });
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Search is temporarily unavailable for this server.',
+      'Search is temporarily unavailable for this instance.',
     );
   });
 });

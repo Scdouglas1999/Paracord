@@ -226,7 +226,7 @@ export function VoiceLobby({
               onClick={(event) => walkIn(event.currentTarget.closest('[data-motion-shared]'))}
             >
               {!voiceJoinPending && <Headphones size={16} className="mr-1.5" />}
-              {voiceJoinPending ? `Joining ${channelName}` : isStage ? 'Join the stage' : 'Join the room'}
+              {voiceJoinPending ? `Joining ${channelName}` : isStage ? 'Join the stage' : 'Join voice'}
             </Button>
           )}
         </div>
@@ -235,7 +235,7 @@ export function VoiceLobby({
       {voiceJoinError && (
         <Well bare className="px-3.5 py-2.5">
           <p className="text-label text-accent-danger">
-            {isStage ? 'The stage' : 'The room'} would not open: {voiceJoinError}
+            {isStage ? 'The stage' : 'The call'} would not open: {voiceJoinError}
           </p>
           <p className="mt-1 text-meta text-text-secondary">
             Chat still works. Calls take a separate network path, so the connection check above
@@ -321,7 +321,7 @@ export function VoiceLobby({
             </>
           ) : (
             <>
-              {groupLabel(<Users size={12} />, `In this room — ${lobbyParticipants.length}`)}
+              {groupLabel(<Users size={12} />, `In this channel — ${lobbyParticipants.length}`)}
               <ul className="flex flex-col gap-0.5">{lobbyParticipants.map(renderParticipant)}</ul>
             </>
           )}

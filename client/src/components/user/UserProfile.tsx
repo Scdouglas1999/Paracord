@@ -364,7 +364,7 @@ function UserProfileCard({
   const handleMessage = async () => {
     try {
       setActionError(null);
-      if (!channelScope) throw new Error('Sign in to this server before messaging.');
+      if (!channelScope) throw new Error('Sign in to this instance before messaging.');
       const data = await useChannelStore.getState().createDm(user.id, channelScope);
       activateChannel(data);
       onClose();

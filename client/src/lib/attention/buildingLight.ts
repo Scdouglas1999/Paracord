@@ -101,7 +101,7 @@ export function brightnessOf(building: {
 }
 
 /** What a building says while nobody has looked inside it yet (§6.9). */
-export const UNKNOWN_ROSTER_CAPTION = 'Open to see rooms';
+export const UNKNOWN_ROSTER_CAPTION = 'Open to see channels';
 
 /** Build the light for one building. */
 export function buildingLight(input: BuildingLightInput): BuildingLight {

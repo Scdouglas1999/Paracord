@@ -9,7 +9,7 @@ const DEVICE_KEY_LIMITATION =
 const REENROLLMENT_LIMITATION =
   'Your recovery phrase restored the identity this account is enrolled under, and that identity is what everyone you talk to verifies. This device can publish fresh keys under it, and your contacts pick them up on their next message. Messages sent before now stay unreadable here: import the account’s encrypted backup from Settings › Identity portability if you need them. Any other device still signed in to this account stops receiving new conversations until it sets up again.';
 const LEGACY_LIMITATION =
-  'Older keys are retained because their server ownership cannot be verified. Starting new encryption does not recover historical messages. Restore the original account backup if you need those keys; continue only to start a new session for this account.';
+  'Older keys are retained because their instance ownership cannot be verified. Starting new encryption does not recover historical messages. Restore the original account backup if you need those keys; continue only to start a new session for this account.';
 
 describe('MessagingRecoveryNotice', () => {
   it('renders nothing when storage and encryption are healthy', () => {
@@ -23,9 +23,9 @@ describe('MessagingRecoveryNotice', () => {
   it('waits for the authenticated connection without offering an action', () => {
     const { runtime } = createMessagingPanelRuntime({ storage: 'awaiting-handshake' });
     render(<MessagingRecoveryNotice runtime={runtime} encryptedConversation={false} channelId="chan-1" />);
-    expect(screen.getByText('Waiting for this server’s authenticated connection')).toBeInTheDocument();
+    expect(screen.getByText('Waiting for this instance’s authenticated connection')).toBeInTheDocument();
     expect(
-      screen.getByText('Your first drafts stay on this device until the server confirms its history.'),
+      screen.getByText('Your first drafts stay on this device until the instance confirms its history.'),
     ).toBeInTheDocument();
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
@@ -37,7 +37,7 @@ describe('MessagingRecoveryNotice', () => {
       error: 'The server database history changed. Review saved messages before sending into this history.',
     });
     render(<MessagingRecoveryNotice runtime={runtime} encryptedConversation={false} channelId="chan-1" />);
-    expect(screen.getByText('Review messages from the previous server history')).toBeInTheDocument();
+    expect(screen.getByText('Review messages from the previous instance history')).toBeInTheDocument();
     expect(
       screen.getByText(
         'Preserve saved requests and open composer text as recovery drafts before starting fresh messages. Nothing from the previous history will send automatically.',

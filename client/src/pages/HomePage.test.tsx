@@ -136,7 +136,7 @@ vi.mock('../lib/operationContext', () => ({
   }),
 }));
 vi.mock('../components/guild/CreateGuildModal', () => ({
-  CreateGuildModal: () => <div>Add a building dialog</div>,
+  CreateGuildModal: () => <div>Add a server dialog</div>,
 }));
 vi.mock('../stores/channelStore', () => {
   const state = {
@@ -205,7 +205,7 @@ function tree() {
     <MemoryRouter initialEntries={['/app']}>
       <Routes>
         <Route path="/app" element={<HomePage />} />
-        <Route path="/app/guilds/:guildId" element={<div>Building route</div>} />
+        <Route path="/app/guilds/:guildId" element={<div>Server route</div>} />
         <Route path="/app/guilds/:guildId/channels/:channelId" element={<div>Room route</div>} />
       </Routes>
     </MemoryRouter>
@@ -234,14 +234,14 @@ beforeEach(() => {
 
 /* -------------------------------------------------------------------------- */
 
-describe('Home, the street outside your buildings', () => {
+describe('Home, the street outside your servers', () => {
   it('opens with the time-of-day word and one sentence of fact', () => {
     lights.buildings = [litBuilding(), quietBuilding()];
     lights.lightsOn = 30;
     renderHome();
     expect(screen.getByRole('heading', { name: 'Tonight' })).toBeInTheDocument();
     expect(
-      screen.getByText(/Saturday 12 September · 30 people have their lights on across your 2 buildings/),
+      screen.getByText(/Saturday 12 September · 30 people have their lights on across your 2 servers/),
     ).toBeInTheDocument();
   });
 
@@ -257,7 +257,7 @@ describe('Home, the street outside your buildings', () => {
     expect(within(well).getByText('+6 lights on')).toBeInTheDocument();
   });
 
-  it('draws each building in the order the light hook gave them', () => {
+  it('draws each server in the order the light hook gave them', () => {
     lights.buildings = [litBuilding(), quietBuilding()];
     renderHome();
     expect(screen.getByRole('article', { name: 'Kestrel Robotics' })).toBeInTheDocument();
@@ -265,7 +265,7 @@ describe('Home, the street outside your buildings', () => {
     expect(screen.getByText('brightest first')).toBeInTheDocument();
   });
 
-  it('joins a lit room in the room it is showing, not the building', async () => {
+  it('joins a lit room in the room it is showing, not the server', async () => {
     lights.buildings = [litBuilding()];
     renderHome();
     await userEvent.click(screen.getByRole('button', { name: 'Join' }));
@@ -274,24 +274,24 @@ describe('Home, the street outside your buildings', () => {
     expect(await screen.findByText('Room route')).toBeInTheDocument();
   });
 
-  it('opens a building from its name', async () => {
+  it('opens a server from its name', async () => {
     lights.buildings = [quietBuilding()];
     renderHome();
     await userEvent.click(screen.getByRole('button', { name: 'Saltmarsh Sailing' }));
     expect(stores.activateGuild).toHaveBeenCalledWith({ scope: SCOPE, id: 'guild-2' });
-    expect(await screen.findByText('Building route')).toBeInTheDocument();
+    expect(await screen.findByText('Server route')).toBeInTheDocument();
   });
 
   it('always offers a way in, and opens the join-or-create dialog', async () => {
     renderHome();
     const add = screen.getByRole('button', {
-      name: 'Add a building — join with an invite, or start your own',
+      name: 'Add a server — join with an invite, or start your own',
     });
     await userEvent.click(add);
-    expect(screen.getByText('Add a building dialog')).toBeInTheDocument();
+    expect(screen.getByText('Add a server dialog')).toBeInTheDocument();
   });
 
-  it('loads the rooms and people of every building it has not got, once', () => {
+  it('loads the rooms and people of every server it has not got, once', () => {
     stores.loaded = false;
     stores.guilds = [
       { id: 'guild-1', key: 'k1', scope: SCOPE },
@@ -327,7 +327,7 @@ describe('Coming up on Home', () => {
     rsvp: false,
   };
 
-  it('shows scheduled events from across the buildings', () => {
+  it('shows scheduled events from across the servers', () => {
     lights.buildings = [litBuilding()];
     comingUp.events = [event];
     renderHome();
@@ -371,7 +371,7 @@ describe('Needs you and Pick up', () => {
     expect(stores.acceptFriend).toHaveBeenCalledWith('9');
   });
 
-  it('never says nothing needs you while a building’s rooms failed to load', () => {
+  it('never says nothing needs you while a server’s rooms failed to load', () => {
     stores.guilds = [{ id: 'guild-1', key: 'k1', scope: SCOPE }];
     stores.channelErrors = { k1: 'offline' };
     renderHome();
@@ -397,7 +397,7 @@ describe('Needs you and Pick up', () => {
 
     // Pick-up is never glued to Needs-you on a phone: it sorts after the
     // buildings, so work leads, the street follows, and continuity is last.
-    const buildings = screen.getByText('Your buildings').closest('div')!.parentElement!;
+    const buildings = screen.getByText('Your servers').closest('div')!.parentElement!;
     expect(buildings.className).toContain('order-2');
     // The right-hand column only exists on a wide viewport.
     expect(needs().parentElement!.className).toContain('contents');

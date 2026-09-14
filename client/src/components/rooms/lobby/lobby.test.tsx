@@ -156,7 +156,7 @@ describe('AddRoomTile', () => {
   it('is one action and nothing else', () => {
     const onClick = vi.fn();
     render(<AddRoomTile onClick={onClick} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Open a new room' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add a voice channel' }));
     expect(onClick).toHaveBeenCalledTimes(1);
   });
 });
@@ -266,7 +266,7 @@ describe('the room menu on the Lobby', () => {
     expect(onMenu).toHaveBeenCalledTimes(1);
 
     // …and the affordance a first-time reader can actually see.
-    const control = screen.getByRole('button', { name: 'Room options for build-log' });
+    const control = screen.getByRole('button', { name: 'Channel options for build-log' });
     expect(control.className).toContain('pc-touch');
     fireEvent.click(control);
     expect(onMenu).toHaveBeenCalledTimes(2);
@@ -280,12 +280,12 @@ describe('the room menu on the Lobby', () => {
       <RoomCard room={litRoom()} onJoin={vi.fn()} onMenu={onMenu} nowMs={NOW} />,
     );
     fireEvent.contextMenu(container.querySelector('article')!);
-    fireEvent.click(screen.getByRole('button', { name: 'Room options for Shop floor' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Channel options for Shop floor' }));
     expect(onMenu).toHaveBeenCalledTimes(2);
 
     rerender(<RoomCard room={darkRoom()} onJoin={vi.fn()} onMenu={onMenu} nowMs={NOW} />);
     fireEvent.contextMenu(container.querySelector('article')!);
-    fireEvent.click(screen.getByRole('button', { name: 'Room options for Lounge' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Channel options for Lounge' }));
     expect(onMenu).toHaveBeenCalledTimes(4);
   });
 
@@ -354,7 +354,7 @@ describe('MediaStrip', () => {
     authorName: 'Mara',
   });
 
-  it('names the building, the sharer and the week count', () => {
+  it('names the server, the sharer and the week count', () => {
     render(
       <MediaStrip
         buildingName="Kestrel Robotics"
@@ -431,7 +431,7 @@ describe('LobbyHeader', () => {
     );
     expect(screen.getByRole('heading', { name: 'Kestrel Robotics' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Invite people' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Building settings' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Server settings' })).not.toBeInTheDocument();
 
     const onInvite = vi.fn();
     const onSettings = vi.fn();
@@ -445,7 +445,7 @@ describe('LobbyHeader', () => {
       />,
     );
     fireEvent.click(screen.getByRole('button', { name: 'Invite people' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Building settings' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Server settings' }));
     expect(onInvite).toHaveBeenCalledTimes(1);
     expect(onSettings).toHaveBeenCalledTimes(1);
   });
@@ -461,7 +461,7 @@ describe('the operator’s welcome line', () => {
       <LobbyHeader
         guildId="g1"
         name="Kestrel Robotics"
-        summary="24 of 61 have their lights on · 2 rooms lit"
+        summary="24 of 61 have their lights on · 2 channels lit"
         welcome="Bring a part, leave with a part."
       />,
     );
@@ -469,14 +469,14 @@ describe('the operator’s welcome line', () => {
     expect(written).toBeVisible();
     expect(written.className).not.toContain('sr-only');
     // §9: the light's words are not lost with it.
-    expect(screen.getByText('24 of 61 have their lights on · 2 rooms lit').className).toContain('sr-only');
+    expect(screen.getByText('24 of 61 have their lights on · 2 channels lit').className).toContain('sr-only');
   });
 
   it('leaves the generated sentence alone when the operator wrote nothing', () => {
     render(
-      <LobbyHeader guildId="g1" name="Kestrel Robotics" summary="2 rooms lit" welcome="   " />,
+      <LobbyHeader guildId="g1" name="Kestrel Robotics" summary="2 channels lit" welcome="   " />,
     );
-    const generated = screen.getByText('2 rooms lit');
+    const generated = screen.getByText('2 channels lit');
     expect(generated).toBeVisible();
     expect(generated.className).not.toContain('sr-only');
   });
@@ -529,14 +529,14 @@ describe('a featured text room', () => {
     const { container } = render(
       <TextRoomRow room={textRoom(false)} featured onOpen={() => {}} />,
     );
-    expect(screen.getByText('Featured by this building')).toBeInTheDocument();
+    expect(screen.getByText('Featured by this server')).toBeInTheDocument();
     expect(container.innerHTML).not.toContain('light-white');
     expect(container.innerHTML).not.toContain('light-amber');
   });
 
   it('says nothing when it is an ordinary room', () => {
     render(<TextRoomRow room={textRoom(false)} onOpen={() => {}} />);
-    expect(screen.queryByText('Featured by this building')).not.toBeInTheDocument();
+    expect(screen.queryByText('Featured by this server')).not.toBeInTheDocument();
   });
 });
 
@@ -673,7 +673,7 @@ describe('no Lobby component hard-codes a colour', () => {
         <LobbyHeader
           guildId="g1"
           name="Kestrel Robotics"
-          summary="24 of 61 have their lights on · 2 rooms lit"
+          summary="24 of 61 have their lights on · 2 channels lit"
           onInvite={() => {}}
           onSettings={() => {}}
         />

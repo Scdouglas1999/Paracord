@@ -92,7 +92,7 @@ describe('ContextMenu', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it('activates the highlighted item with Building', () => {
+  it('activates the highlighted item with Server', () => {
     render(
       <ContextMenu
         items={defaultItems}
@@ -191,7 +191,7 @@ describe('ContextMenu', () => {
     // above it, which reads as a row that has slipped out of its own menu.
     const items: ContextMenuItem[] = [
       { label: 'Every message', icon: <span data-testid="bell">B</span>, action: vi.fn(), selected: false },
-      { label: 'Follow the building', action: vi.fn(), selected: true },
+      { label: 'Follow the server', action: vi.fn(), selected: true },
     ];
     render(
       <ContextMenu

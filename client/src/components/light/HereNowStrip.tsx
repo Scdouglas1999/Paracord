@@ -120,7 +120,7 @@ export const HereNowStrip = React.forwardRef<HTMLDivElement, HereNowStripProps>(
             ))}
             {people.length === 0 && (
               <li className="px-2 py-1.5 text-meta text-text-faint">
-                Nobody is in here yet — say something and the room lights up.
+                Nobody is in here yet — say something and the channel lights up.
               </li>
             )}
           </ul>

@@ -6,7 +6,7 @@ type ChannelState = ReturnType<typeof useChannelStore.getState>;
 const views = new WeakMap<ChannelState, Map<string, ReturnType<typeof buildView>>>();
 const actions = new Map<string, ReturnType<typeof buildActions>>();
 function buildActions(scope: AccountScope | null) {
-  const requireScope = () => { if (!scope) throw new Error('Sign in to this server before continuing.'); return scope; };
+  const requireScope = () => { if (!scope) throw new Error('Sign in to this instance before continuing.'); return scope; };
   return {
     fetchChannels: (id: string) => useChannelStore.getState().fetchChannels(id, requireScope()),
     selectChannel: (id: string | null) => useChannelStore.getState().selectChannel(id ? { id, scope: requireScope() } : null),

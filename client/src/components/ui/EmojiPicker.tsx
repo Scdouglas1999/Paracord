@@ -545,7 +545,7 @@ export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPicke
                   : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
               )}
             >
-              {tab === 'unicode' ? 'Unicode' : 'Building emojis'}
+              {tab === 'unicode' ? 'Unicode' : 'Server emojis'}
             </button>
           ))}
         </div>
@@ -557,7 +557,7 @@ export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPicke
           <Search size={16} className="shrink-0 text-text-muted" />
           <input
             type="text"
-            placeholder={activeTab === 'server' ? 'Search building emojis...' : 'Search emoji...'}
+            placeholder={activeTab === 'server' ? 'Search server emojis...' : 'Search emoji...'}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="flex-1 bg-transparent text-body text-text-primary placeholder:text-text-muted outline-none"
@@ -574,7 +574,7 @@ export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPicke
       >
         {activeTab === 'server' ? (
           loadingServerEmojis ? (
-            <div className="grid grid-cols-6 gap-1.5 p-1" aria-busy="true" aria-label="Loading building emojis">
+            <div className="grid grid-cols-6 gap-1.5 p-1" aria-busy="true" aria-label="Loading server emojis">
               {Array.from({ length: 18 }).map((_, i) => (
                 <Skeleton key={i} height={52} borderRadius="var(--radius-chip)" />
               ))}

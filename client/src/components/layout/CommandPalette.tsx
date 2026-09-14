@@ -190,12 +190,12 @@ export function CommandPalette() {
       if (canAccessGuildSettingsSync(guild.id, guild.scope)) {
         items.push({
           id: `guild-settings-${guild.id}`,
-          label: 'Building settings',
+          label: 'Server settings',
           sublabel: guild.name,
           icon: <Settings size={16} />,
           action: () => { activateGuild(guild); useUIStore.getState().setGuildSettingsId(guild.id); },
           category: 'Navigation',
-          keywords: `${guild.name} building settings server settings admin manage`,
+          keywords: `${guild.name} server settings admin manage`,
         });
       }
 
@@ -212,8 +212,8 @@ export function CommandPalette() {
         action: async () => {
           navigate(await guildLandingPath(guild));
         },
-        category: 'Buildings',
-        keywords: `${guild.name} server building`,
+        category: 'Servers',
+        keywords: `${guild.name} server community`,
       });
     });
 
@@ -251,7 +251,7 @@ export function CommandPalette() {
   // Group filtered items by category
   const groupedItems = useMemo(() => {
     const groups: { category: string; items: PaletteItem[] }[] = [];
-    const categoryOrder = ['Actions', 'Navigation', 'Channels', 'Buildings', 'Direct messages'];
+    const categoryOrder = ['Actions', 'Navigation', 'Channels', 'Servers', 'Direct messages'];
     const categoryMap = new Map<string, PaletteItem[]>();
 
     filteredItems.forEach((item) => {
@@ -362,7 +362,7 @@ export function CommandPalette() {
           aria-activedescendant={activeItemId ? `command-item-${activeItemId}` : undefined}
           aria-label="Search command palette"
           className="pc-focusable flex-1 rounded-chip bg-transparent px-1 py-0.5 text-body text-text-primary outline-none placeholder:text-text-muted"
-          placeholder="Jump to a channel, building, or setting…"
+          placeholder="Jump to a channel, server, or setting…"
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
@@ -438,7 +438,7 @@ export function CommandPalette() {
               Nothing matches “{query.trim()}”
             </div>
             <p className="mt-1 text-meta text-text-secondary">
-              Try a command name, a channel, or a building you belong to.
+              Try a command name, a channel, or a server you belong to.
             </p>
           </div>
         )}

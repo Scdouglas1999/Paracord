@@ -1,23 +1,23 @@
 # Paracord 3.0.0
 
-This is a big release. The client has a new look, voice works from the browser, installing a server is one command, and a lot of things that were broken or half-finished in 2.0 have been fixed. We tested it by having people actually use it — join calls, send messages, run servers, try to break things — and fixed what they found.
+This is a big release. The client has a new look, voice works from the browser, installing an instance is one command, and a lot of things that were broken or half-finished in 2.0 have been fixed. We tested it by having people actually use it — join calls, send messages, run instances, try to break things — and fixed what they found.
 
 Compare: [v2.0.0...v3.0.0](https://github.com/Scdouglas1999/Paracord/compare/v2.0.0...v3.0.0)
 
 ## New interface
 
-The app has been redesigned from the ground up. The sidebar shows your servers and rooms with a small indicator of who's around and where; voice rooms show who's in them before you join; text rooms show who's reading. There are four themes (dark by default, plus light, black and high contrast), a motion setting (follow system, on, off), and everything works at phone width with proper touch targets.
+The app has been redesigned from the ground up. The sidebar shows your servers and channels with a small indicator of who's around and where; voice channels show who's in them before you join; text channels show who's reading. There are four themes (dark by default, plus light, black and high contrast), a motion setting (follow system, on, off), and everything works at phone width with proper touch targets.
 
-Animations are deliberate and short. Joining a room animates from the thing you clicked; sending a message lifts it out of the composer; when someone joins a call you see it happen. If you have reduced motion turned on in your OS, none of this plays.
+Animations are deliberate and short. Joining a channel animates from the thing you clicked; sending a message lifts it out of the composer; when someone joins a call you see it happen. If you have reduced motion turned on in your OS, none of this plays.
 
-The wording has been made consistent throughout: servers are "buildings", voice channels are "rooms", DMs are "Messages".
+The wording has been made consistent throughout, and it is Discord's: a community is a **server**, the things inside it are **channels** (text or voice), and the host you run or connect to is an **instance**. DMs are "Messages".
 
 ## Voice
 
 - Voice calls now work in the browser, not just the desktop app. Previously the call would connect and show everyone's tile, but no audio ever played. Three separate bugs in the media protocol have been fixed and there's a test that fails unless both sides actually decode and play audio.
 - Call encryption now uses a key created per call. The old design tried to use each account's identity key, which most accounts never had, so encryption never actually established. The relay still can't read your audio or video. Note that 3.0 clients can't exchange call keys with 2.0 clients, so upgrade clients together.
-- If you close the tab during a call, you leave the room within a second or two. Before, you'd be stuck in there until the server restarted.
-- If the server goes away mid-call, the app says it's reconnecting and then tells you the call ended, instead of showing a live timer forever.
+- If you close the tab during a call, you leave the call within a second or two. Before, you'd be stuck in there until the instance restarted.
+- If the instance goes away mid-call, the app says it's reconnecting and then tells you the call ended, instead of showing a live timer forever.
 - The speaking indicator and mic level meter work (they didn't on the native path, including for yourself).
 - Incoming DM calls now ring, and you can answer or decline.
 
@@ -27,9 +27,9 @@ The wording has been made consistent throughout: servers are "buildings", voice 
 - The message actions menu (reply, edit, pin, etc.) only worked on the last message in a channel. Fixed.
 - Busy channels open at the newest message, and you can scroll back all the way to the start.
 - Jumping to a message from search or pins works. Editing puts the cursor at the end. Webhook messages stay attributed to the webhook after a reload.
-- Rooms have a right-click menu: notification level (everything, mentions only, muted), mark as read, copy link.
-- If you lose permission to see a room while you have it open, it goes away immediately.
-- A room with unread mentions won't get hidden behind "N more rooms" anymore.
+- Channels have a right-click menu: notification level (everything, mentions only, muted), mark as read, copy link.
+- If you lose permission to see a channel while you have it open, it goes away immediately.
+- A channel with unread mentions won't get hidden behind "N more channels" anymore.
 
 ## Direct messages and encryption
 
@@ -40,28 +40,28 @@ The wording has been made consistent throughout: servers are "buildings", voice 
 - Group DMs still can't send messages (see limitations below), but the app now tells you before you create one instead of after.
 - Fixed an error on every first login that caused a reconnect.
 
-## Server administration
+## Instance administration
 
-- Names for servers, rooms, roles, nicknames, webhooks and AutoMod rules are validated the same way everywhere. Invisible or right-to-left-override names are rejected.
+- Names for servers, channels, roles, nicknames, webhooks and AutoMod rules are validated the same way everywhere. Invisible or right-to-left-override names are rejected.
 - You can edit the default role's permissions (previously it was hidden), and the permissions grid shows all 30 permissions instead of 16.
-- Rooms can be created inside categories. That was broken.
+- Channels can be created inside categories. That was broken.
 - Admin actions are reachable on phones.
 - Scheduled events with invalid dates are rejected instead of silently disappearing from the calendar.
 - Various inputs that accepted anything (reactions, channel types, role colours, scheduled send times, permission bits) are now checked.
 
-## Installing and running a server
+## Installing and running an instance
 
-- `scripts/install.sh` (Linux/macOS) and `scripts/install.ps1` (Windows) install or upgrade a server in one command, verify the download, keep your config and data, and print the share URL and claim token.
-- The server now handles SIGTERM, which is what systemd, Docker and most process managers send. Before, only Ctrl-C triggered a clean shutdown. Clients are told the server is restarting before it goes down.
+- `scripts/install.sh` (Linux/macOS) and `scripts/install.ps1` (Windows) install or upgrade an instance in one command, verify the download, keep your config and data, and print the share URL and claim token.
+- The server binary now handles SIGTERM, which is what systemd, Docker and most process managers send. Before, only Ctrl-C triggered a clean shutdown. Clients are told the instance is restarting before it goes down.
 - `scripts/backup-db.sh` always ran `pg_dump`, even on SQLite. Fixed.
-- Federation between servers works when the server's configured name differs from its hostname (which was the default setup). Refused requests are logged with a reason.
+- Federation between instances works when the instance's configured name differs from its hostname (which was the default setup). Refused requests are logged with a reason.
 - Rate limits can be tuned with `PARACORD_HTTP_RATE_LIMIT_*` environment variables. Defaults are unchanged.
-- Adding a second server from a browser needs that server's operator to allow your origin. The connect screen now tells you exactly what to set. The desktop app doesn't have this restriction.
+- Adding a second instance from a browser needs that instance's operator to allow your origin. The connect screen now tells you exactly what to set. The desktop app doesn't have this restriction.
 - Log levels are more sensible: a successful setup isn't a warning, and a feature that isn't configured isn't an error.
 
 ## Upgrading
 
-Server binaries and client installers are attached. The server upgrades in place from 2.0 on both SQLite and PostgreSQL. Upgrade clients together because of the call encryption change. Theme and motion settings are per device.
+Server binaries and client installers are attached. An instance upgrades in place from 2.0 on both SQLite and PostgreSQL. Upgrade clients together because of the call encryption change. Theme and motion settings are per device.
 
 ## Known limitations
 

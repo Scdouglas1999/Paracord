@@ -100,7 +100,7 @@ On Enter or a click, **on the same frame as the keystroke and before any await**
   along the path they land in the timeline;
 - the composer relaxes to 0.992 from its bottom edge and springs back;
 - the send control catches `--light-white` for one beat and returns;
-- the room's amber window flickers once.
+- the channel's amber window flickers once.
 
 `MessageList` takes the same gesture off the bus and lands the row that arrives
 from it, 26px from below on the spring-settle curve, so the words leaving and
@@ -127,7 +127,7 @@ gives the words back on its own after 4s.
 
 ### The receipt
 
-"Delivered" sits under your last message in the room. It **cannot** appear
+"Delivered" sits under your last message in the channel. It **cannot** appear
 before the server has answered, structurally rather than by a check: this
 runtime publishes a message only once the authoritative recovery feed has
 vouched for it — there is no optimistic row in this app at all — so the row and
@@ -137,7 +137,7 @@ depends on it.
 
 ### Numbers re-roll
 
-`<RollingNumber>` carries the here-now counts in the room header (`TopBar`, "5
+`<RollingNumber>` carries the here-now counts in the channel header (`TopBar`, "5
 reading · 19 lights on") and in `HereNowStrip`'s default caption ("4 here · 20
 lights on"). One live region per strip announces the count that changed; the
 other is readable but silent, so a change never announces twice.
@@ -269,9 +269,9 @@ PARACORD_E2E_MOTION=1 PARACORD_E2E_MOTION_FRAMES=1 npx playwright test --grep "f
   the row fades up through the same space; 160–280ms the row is on its mark;
   500ms "Delivered" answers.
 - `flicker-0000ms.png` … `flicker-0220ms.png` — the flicker recipe on
-  `/design-tokens`. The room's own window is captured dark in the fixture
+  `/design-tokens`. The channel's own window is captured dark in the fixture
   because nobody is reading it, so the flicker is shown where it can be seen;
-  it is the same `flicker()` the room header calls.
+  it is the same `flicker()` the channel header calls.
 - `_strip-a.png` / `_strip-b.png` / `_flicker-strip.png` — the same frames
   cropped to the composer band and to the window, stacked into one sheet each.
   Montages for reading the moment in one go, not captures.
@@ -316,13 +316,13 @@ against `lib/motion` and needs no new primitives.
   stagger, the lamp fades in after the first lit window, rims catch, captions
   last. `settleIn` + `stagger` + `bloom` exist; what is missing is the presence
   edge to hang them on.
-- *Walk into a room / back to the pill* (`MotionWalkIn.html`): `transitionWith`
+- *Walk into a channel / back to the pill* (`MotionWalkIn.html`): `transitionWith`
   is built and demonstrated but has **no call site in the product yet**. The
   Lobby card and the Stage need matching `data-motion-shared` names, and the
   Stage's header, tile strip and control bar need `data-motion-chrome`.
 - *Someone arrives / leaves* (`MotionArrives.html`): window blooms → rim catches
   120ms later → they spring into the here-now strip → counts re-roll → the
-  inline room event fades in last. `RollingNumber` is already on the counts;
+  inline channel event fades in last. `RollingNumber` is already on the counts;
   the arrival path needs the presence-delta selectors.
 
 **WP9c — systematic micro-motion.** `press` is on the send control only; it

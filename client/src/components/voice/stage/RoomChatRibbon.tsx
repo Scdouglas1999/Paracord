@@ -12,7 +12,7 @@ export interface RoomChatRibbonProps extends Omit<React.HTMLAttributes<HTMLEleme
   roomName: string;
   /** Somebody is reading it right now: the window dot goes amber. */
   lit?: boolean;
-  /** The words beside the name. "room chat" on the Stage. */
+  /** The words beside the name. "call chat" on the Stage. */
   caption?: string;
   /** Header affordances — close, threads, pins. */
   actions?: React.ReactNode;
@@ -45,7 +45,7 @@ export const RoomChatRibbon = React.forwardRef<HTMLElement, RoomChatRibbonProps>
     {
       roomName,
       lit = false,
-      caption = 'room chat',
+      caption = 'call chat',
       actions,
       children,
       composer,
@@ -83,7 +83,7 @@ export const RoomChatRibbon = React.forwardRef<HTMLElement, RoomChatRibbonProps>
           as="aside"
           bare
           ref={mergeRefs(ref, sheetRef)}
-          aria-label={`${roomName} — room chat`}
+          aria-label={`${roomName} — call chat`}
           className={cn(
             'flex min-h-0 flex-col overflow-hidden rounded-b-none',
             expanded ? 'flex-1' : 'shrink-0',
@@ -122,7 +122,7 @@ export const RoomChatRibbon = React.forwardRef<HTMLElement, RoomChatRibbonProps>
         as="aside"
         bare
         ref={ref}
-        aria-label={`${roomName} — room chat`}
+        aria-label={`${roomName} — call chat`}
         className={cn(
           'flex w-[var(--w-chat-ribbon)] shrink-0 flex-col overflow-hidden',
           className,

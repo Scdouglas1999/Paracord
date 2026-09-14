@@ -71,7 +71,7 @@ export function GifPicker({ onSelect, onClose }: GifPickerProps) {
         setError({
           kind: 'unconfigured',
           message:
-            'This server has no Tenor API key, so there are no GIFs to search. An admin can add one in server settings.',
+            'This instance has no Tenor API key, so there are no GIFs to search. An admin can add one in instance settings.',
         });
       } else {
         setError({ kind: 'failed', message: 'The GIF service did not answer.' });

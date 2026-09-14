@@ -63,7 +63,7 @@ function renderLoginPage() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/app" element={<div>App shell</div>} />
-        <Route path="/setup-server" element={<div>Set up your Paracord server</div>} />
+        <Route path="/setup-server" element={<div>Set up your Paracord instance</div>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -240,7 +240,7 @@ describe('LoginPage on a server that has no owner yet', () => {
 
     renderLoginPage();
 
-    expect(await screen.findByText('Set up your Paracord server')).toBeInTheDocument();
+    expect(await screen.findByText('Set up your Paracord instance')).toBeInTheDocument();
   });
 
   it('stays on sign-in when the setup check fails, rather than guessing', async () => {
@@ -249,6 +249,6 @@ describe('LoginPage on a server that has no owner yet', () => {
     renderLoginPage();
 
     await waitFor(() => expect(mockGetSetupStatus).toHaveBeenCalled());
-    expect(screen.queryByText('Set up your Paracord server')).not.toBeInTheDocument();
+    expect(screen.queryByText('Set up your Paracord instance')).not.toBeInTheDocument();
   });
 });

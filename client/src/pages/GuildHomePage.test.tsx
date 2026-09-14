@@ -213,26 +213,26 @@ afterEach(() => {
 // ---- the header ------------------------------------------------------------
 
 describe('the Lobby header', () => {
-  it('names the building and counts its lights in one line', async () => {
+  it('names the server and counts its lights in one line', async () => {
     light('v1', [voiceState({ user_id: '1' })]);
     renderLobby();
 
     expect(screen.getByRole('heading', { name: 'Kestrel Robotics' })).toBeInTheDocument();
     await waitFor(() =>
       expect(
-        screen.getByText('2 of 61 have their lights on · 1 room lit'),
+        screen.getByText('2 of 61 have their lights on · 1 call live'),
       ).toBeInTheDocument(),
     );
   });
 
-  it('hides building settings without the permission, and opens them with it', () => {
+  it('hides server settings without the permission, and opens them with it', () => {
     const { unmount } = renderLobby();
-    expect(screen.queryByRole('button', { name: 'Building settings' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Server settings' })).not.toBeInTheDocument();
     unmount();
 
     gates.isAdmin = true;
     renderLobby();
-    fireEvent.click(screen.getByRole('button', { name: 'Building settings' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Server settings' }));
     expect(useUIStore.getState().guildSettingsId).toBe(GUILD);
   });
 
@@ -269,7 +269,7 @@ describe('the rooms grid', () => {
     light('v1', [voiceState({ user_id: '1', username: 'mara' })]);
     renderLobby();
 
-    const rooms = screen.getByRole('region', { name: 'Rooms' });
+    const rooms = screen.getByRole('region', { name: 'Voice channels' });
     await waitFor(() => expect(within(rooms).getByText('LIVE')).toBeInTheDocument());
     expect(within(rooms).getByRole('button', { name: 'Join Shop floor' })).toBeInTheDocument();
     expect(within(rooms).getByText(/Dark · nobody's in/)).toBeInTheDocument();
@@ -279,7 +279,7 @@ describe('the rooms grid', () => {
   it('puts the lit room before the dark one', async () => {
     light('v2', [voiceState({ user_id: '1', username: 'mara' })]);
     renderLobby();
-    const rooms = screen.getByRole('region', { name: 'Rooms' });
+    const rooms = screen.getByRole('region', { name: 'Voice channels' });
     await waitFor(() => expect(within(rooms).getByText('LIVE')).toBeInTheDocument());
     const names = within(rooms)
       .getAllByRole('heading', { level: 3 })
@@ -295,13 +295,13 @@ describe('the rooms grid', () => {
 
   it('omits the add tile for somebody who cannot open a room', () => {
     renderLobby();
-    expect(screen.queryByRole('button', { name: 'Open a new room' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add a voice channel' })).not.toBeInTheDocument();
   });
 
   it('offers the add tile to somebody who can, and sends them where rooms are made', () => {
     gates.permissions = Permissions.MANAGE_CHANNELS;
     renderLobby();
-    fireEvent.click(screen.getByRole('button', { name: 'Open a new room' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add a voice channel' }));
     expect(useUIStore.getState().guildSettingsId).toBe(GUILD);
     expect(useUIStore.getState().guildSettingsInitialSection).toBe('channels');
   });
@@ -364,7 +364,7 @@ describe('the media strip', () => {
 describe('text rooms', () => {
   it('renders them as rows, never as cards, and keeps voice rooms out', () => {
     renderLobby();
-    const list = screen.getByRole('region', { name: 'Text rooms' });
+    const list = screen.getByRole('region', { name: 'Text channels' });
     expect(within(list).getByText('build-log')).toBeInTheDocument();
     expect(within(list).getByText('firmware')).toBeInTheDocument();
     expect(within(list).queryByText('Shop floor')).not.toBeInTheDocument();
@@ -373,7 +373,7 @@ describe('text rooms', () => {
   it('carries the mention chip and opens the room', () => {
     gates.mentions = new Map([['t1', 1]]);
     renderLobby();
-    const list = screen.getByRole('region', { name: 'Text rooms' });
+    const list = screen.getByRole('region', { name: 'Text channels' });
     expect(within(list).getByText('1 mention')).toBeInTheDocument();
 
     // The row and its "…" both name the room; the row is the one that opens it.
@@ -386,11 +386,11 @@ describe('text rooms', () => {
 
   it('offers the room menu on a text row, which a phone has no other door to', () => {
     renderLobby();
-    const list = screen.getByRole('region', { name: 'Text rooms' });
-    fireEvent.click(within(list).getByRole('button', { name: 'Room options for build-log' }));
+    const list = screen.getByRole('region', { name: 'Text channels' });
+    fireEvent.click(within(list).getByRole('button', { name: 'Channel options for build-log' }));
     expect(screen.getByRole('menu')).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: /Mark room as read/ })).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: /Copy link to room/ })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /Mark channel as read/ })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /Copy link to channel/ })).toBeInTheDocument();
     expect(screen.getAllByRole('menuitemradio')).toHaveLength(4);
   });
 
@@ -399,7 +399,7 @@ describe('text rooms', () => {
       useTypingStore.setState({ typingByChannel: { t1: ['1', '2'] } });
     });
     renderLobby();
-    const list = screen.getByRole('region', { name: 'Text rooms' });
+    const list = screen.getByRole('region', { name: 'Text channels' });
     await waitFor(() => expect(within(list).getByText('2 reading')).toBeInTheDocument());
   });
 });

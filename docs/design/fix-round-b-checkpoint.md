@@ -8,33 +8,33 @@ Triage: group **B** of the QA fleet's open items (B1–B8), from
 
 Screenshots: `output/fix-round-b/` — `before/` is the release candidate as the
 reviewers found it, `after/` is the rebuilt binary. Both were taken against a
-real `paracord-server` on port 18340, seeded with two buildings, four dark voice
-rooms, five text rooms and three accounts, at 1440×900 and 400×844, in Night and
+real `paracord-server` on port 18340, seeded with two servers, four dark voice
+channels, five text channels and three accounts, at 1440×900 and 400×844, in Night and
 Daylight.
 
 ---
 
-## B1 — a dark room is a dark window, not an empty screen
+## B1 — a dark channel is a dark window, not an empty screen
 
 ### What was wrong
 
 `output/fix-round-b/before/desk-lobby.png`,
 `output/fix-round-b/before/phone-lobby.png`.
 
-Every never-lit room reserved the lit card's full §8 `RoomThumbnail` — 168px of
+Every never-lit channel reserved the lit card's full §8 `RoomThumbnail` — 168px of
 window well — and filled it with nothing. The Lobby of a quiet community was
-three or four identical ~250px voids plus an equally tall "Open a new room"
+three or four identical ~250px voids plus an equally tall "Open a new channel"
 tile; on a 400×844 phone two cards and the header were the entire screen, and no
-text room was above the fold. It read as broken images, which is the one thing
+text channel was above the fold. It read as broken images, which is the one thing
 kill-list #4 asks a frameless tile never to do, and four of them side by side
 are exactly the "identical-card tiling" #8 forbids.
 
-§7.3 never asked for that well. It asks a dark room for four things: the name,
+§7.3 never asked for that well. It asks a dark channel for four things: the name,
 "Dark · nobody's in", "last lit 2 h ago", and Open.
 
 ### The sketch
 
-A lit card is 250px because it is carrying a picture of people. A dark room has
+A lit card is 250px because it is carrying a picture of people. A dark channel has
 no picture, so it is the height of its own words:
 
 ```
@@ -50,11 +50,11 @@ no picture, so it is the height of its own words:
 
 Four decisions, each of them a rule rather than a taste:
 
-1. **The mark is the room's façade, not an icon.** Four unlit panes built from
-   `pc-window` — the same object the sidebar's window map, the building plate
-   and the text-room rows use — inside a small recessed well. A dark room is
+1. **The mark is the channel's façade, not an icon.** Four unlit panes built from
+   `pc-window` — the same object the sidebar's window map, the server plate
+   and the text-channel rows use — inside a small recessed well. A dark channel is
    marked with the same thing everywhere it appears, and the mark can never
-   light: `DarkWindowMark` is only ever rendered for a room that is dark, so
+   light: `DarkWindowMark` is only ever rendered for a channel that is dark, so
    there is no state in which it glows without somebody behind it (§0, §6.1).
 2. **A matte plate, not a well.** `--bg-plate` with a hairline
    (`--border-subtle`), hovering to `--bg-raised`. A recessed well is what a
@@ -66,13 +66,13 @@ Four decisions, each of them a rule rather than a taste:
    friends see it instantly", four times down a column — is gone with the
    constant; an offer repeated on every card is decoration.
 4. **Two grids, not one.** The Lobby now draws lit cards in their own grid and
-   dark rooms in a denser one beneath. In a single grid CSS stretches every
+   dark channels in a denser one beneath. In a single grid CSS stretches every
    dark card in a row up to the lit card beside it — which would have re-created
-   the empty rectangle the moment one room lit up. `AddRoomTile` moved into the
+   the empty rectangle the moment one channel lit up. `AddRoomTile` moved into the
    dark grid and matches its height for the same reason.
 
 Both grids use the same column rhythm (`1 / sm:2 / xl:3`), so the surface reads
-as one building whether its rooms are lit or dark, and the Lobby still mixes
+as one server whether its channels are lit or dark, and the Lobby still mixes
 three kinds of object — a lit card, a dark card, an add tile (§6.8).
 
 ### The result
@@ -82,36 +82,36 @@ three kinds of object — a lit card, a dark card, an add tile (§6.8).
 `output/fix-round-b/after/phone-lobby.png`,
 `output/fix-round-b/after/phone-lobby-daylight.png`.
 
-A dark card is **68px** instead of ~250px. At 1440×900 four dark rooms and the
-add tile occupy two rows, and the whole building — header, Around now, every
-room, every text room with its last line — is on screen at once with room to
-spare. At 400×844 all four rooms, the add tile and the first three text rooms
+A dark card is **68px** instead of ~250px. At 1440×900 four dark channels and the
+add tile occupy two rows, and the whole server — header, Around now, every
+channel, every text channel with its last line — is on screen at once with channel to
+spare. At 400×844 all four channels, the add tile and the first three text channels
 are above the fold, where before the screen held two empty rectangles.
 
 ---
 
-## B2 — a text room row says who spoke last, and what they said
+## B2 — a text channel row says who spoke last, and what they said
 
-§7.3 asks each text room row for "window dot, name, **last author · time,
+§7.3 asks each text channel row for "window dot, name, **last author · time,
 preview**, reader stack, mention chip". The rows had the dot, the name and a
 stamp. The other half was missing because the Lobby could only read the
-timelines the message store happened to be holding — a building you had not
-read through was a column of bare names, and a room nobody had ever written in
+timelines the message store happened to be holding — a server you had not
+read through was a column of bare names, and a channel nobody had ever written in
 was a name and three blanks, which reads as a row that failed to load.
 
 `useRoomPreviews` opens a second, read-only door: one `limit=1` request per
-room, at most twelve rooms, once per room per session, two at a time, cached.
+channel, at most twelve channels, once per channel per session, two at a time, cached.
 It does **not** go through `messageStore.fetchMessages`, which aborts every
-other channel's in-flight fetch when it starts — five rooms at once would cancel
-four of them and race the open room's own history. It refuses ciphertext, and a
-room it could not read keeps the name and stamp it already had.
+other channel's in-flight fetch when it starts — five channels at once would cancel
+four of them and race the open channel's own history. It refuses ciphertext, and a
+channel it could not read keeps the name and stamp it already had.
 
-A room with nothing in it says `Nothing said here yet`.
+A channel with nothing in it says `Nothing said here yet`.
 
 Two parts of B2 were **not** defects:
 
 - The reader stack and "N reading" are implemented and presence-driven; the
-  reviewer's building simply had nobody reading.
+  reviewer's server simply had nobody reading.
 - The two-column flow is **row-major**, and the DOM order matches the visual
   reading order (left to right, then down). The reviewer read down the columns.
 
@@ -121,21 +121,21 @@ Two parts of B2 were **not** defects:
 
 The well drew no faces beside a bare "+1 lights on" chip at the far edge, ~800px
 from the sentence it belonged to. Two causes: the faces came from
-`useBuildingPeople`, which only knows who is *in a room*, while the count comes
+`useBuildingPeople`, which only knows who is *in a channel*, while the count comes
 from `building.lightsOn`, which knows everybody — so with somebody signed in but
-in no room the picture and the number disagreed about the same person; and the
+in no channel the picture and the number disagreed about the same person; and the
 sentence carried `flex-1`, which pushed the count to the opposite edge.
 
 The well now reads `building.people` and shows anybody who is lit **or** visibly
-in a room, people in rooms first — they are who the sentence names, and a stack
+in a channel, people in channels first — they are who the sentence names, and a stack
 that overflows the names it is printing is worse than no stack. The count sits
 with the sentence. `HERE_NOW_MAX_FACES` (5) replaces a local 6.
 
 The motion gate's "leaving is the mirror" case now asserts a departing face
-leaves the **room**, not the page: their lights are still on, and the well is
+leaves the **channel**, not the page: their lights are still on, and the well is
 about who is around.
 
-## B4 — the room fills the Stage on a phone
+## B4 — the channel fills the Stage on a phone
 
 One person, nobody sharing, 400×844: the tile stopped 198px down and ~390px of
 empty plate sat between it and the control bar. The phone layout hands the
@@ -154,13 +154,13 @@ seen break. `output/fix-round-b/after/phone-stage-joined.png`.
 `pc-touch` (primitives.css) keeps a control the size the design asked for and
 carries its *hit area* out to 44px with a pseudo-element — the technique the
 message-actions chip already uses — on coarse pointers only. It is on Button's
-`sm` and `md`, the Lobby's text-room rows and the Friends filter chips.
+`sm` and `md`, the Lobby's text-channel rows and the Friends filter chips.
 
 A stacked row cannot borrow the space around it, so `--h-nav-row` grows to 44px
 inside the phone token block, beside the controls and radii that already round
 up there.
 
-Measured at 400×844 with a coarse pointer: text-room rows 344×44 (ink 39), Open
+Measured at 400×844 with a coarse pointer: text-channel rows 344×44 (ink 39), Open
 50×44 (ink 28), Invite 44×44 (ink 38), Friends chips ×44 (ink 32), Settings rows
 352×44. `elementFromPoint` at the four edge midpoints of each 44px box resolves
 to its own control, including the IconButton 6px from Invite.

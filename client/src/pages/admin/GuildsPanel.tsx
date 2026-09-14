@@ -46,7 +46,7 @@ export function GuildsPanel() {
       .getGuilds()
       .then(({ data }) => setGuilds(data.guilds))
       .catch((err) => {
-        toast.error(`Failed to load guilds: ${extractApiError(err)}`);
+        toast.error(`Failed to load servers: ${extractApiError(err)}`);
       });
   };
 
@@ -82,7 +82,7 @@ export function GuildsPanel() {
       );
       closeEdit();
     } catch (err) {
-      toast.error(`Failed to save guild: ${extractApiError(err)}`);
+      toast.error(`Failed to save server: ${extractApiError(err)}`);
     } finally {
       setSaving(false);
     }
@@ -90,7 +90,7 @@ export function GuildsPanel() {
 
   const deleteGuild = async (guildId: string, name: string) => {
     if (!(await confirm({
-      title: 'Delete guild?',
+      title: 'Delete server?',
       description: `Delete "${name}"? This will delete all channels and messages. This cannot be undone.`,
       confirmLabel: 'Delete',
       variant: 'danger',
@@ -100,20 +100,20 @@ export function GuildsPanel() {
       if (editingGuild?.id === guildId) closeEdit();
       fetchGuilds();
     } catch (err) {
-      toast.error(`Failed to delete guild: ${extractApiError(err)}`);
+      toast.error(`Failed to delete server: ${extractApiError(err)}`);
     }
   };
 
   return (
     <div>
       <SettingsSectionHeader
-        title="Guilds"
+        title="Servers"
         description={
           <>
             <span className="pc-mono tabular-nums text-text-primary">
               {guilds.length.toLocaleString()}
             </span>{' '}
-            {guilds.length === 1 ? 'community' : 'communities'} hosted on this server.
+            {guilds.length === 1 ? 'community' : 'communities'} hosted on this instance.
           </>
         }
       />
@@ -121,15 +121,15 @@ export function GuildsPanel() {
       {guilds.length === 0 ? (
         <EmptyState
           icon={<Server size={20} />}
-          title="No guilds have been created yet"
-          description="Once members start their own communities, every guild on this server will be listed and manageable here."
+          title="No servers have been created yet"
+          description="Once members start their own communities, every server on this instance will be listed and manageable here."
         />
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full min-w-[560px] text-left">
             <thead>
               <tr>
-                <th scope="col" className="px-3 pb-2 text-section text-text-faint">Guild</th>
+                <th scope="col" className="px-3 pb-2 text-section text-text-faint">Server</th>
                 <th scope="col" className="px-3 pb-2 text-section text-text-faint">Description</th>
                 <th scope="col" className="px-3 pb-2 text-section text-text-faint">Created</th>
                 <th scope="col" className="px-3 pb-2 text-right text-section text-text-faint">
@@ -169,11 +169,11 @@ export function GuildsPanel() {
                   </td>
                   <td className="px-3 py-2.5">
                     <div className="flex items-center justify-end gap-1">
-                      <IconButton label={`Edit guild ${g.name}`} onClick={() => openEdit(g)}>
+                      <IconButton label={`Edit server ${g.name}`} onClick={() => openEdit(g)}>
                         <Pencil size={16} />
                       </IconButton>
                       <IconButton
-                        label={`Delete guild ${g.name}`}
+                        label={`Delete server ${g.name}`}
                         onClick={() => deleteGuild(g.id, g.name)}
                         className="hover:bg-danger-well hover:text-accent-danger"
                       >
@@ -196,7 +196,7 @@ export function GuildsPanel() {
         showCloseButton
       >
         <ModalHeader>
-          <ModalTitle id="admin-edit-guild-title">Edit guild</ModalTitle>
+          <ModalTitle id="admin-edit-guild-title">Edit server</ModalTitle>
         </ModalHeader>
         <ModalBody className="flex flex-col gap-5 pt-2">
           <TextField

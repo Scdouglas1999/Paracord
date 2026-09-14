@@ -184,11 +184,11 @@ beforeEach(() => {
 });
 
 describe('UnifiedSidebar', () => {
-  it('is a 276px buildings column on the street, fed by the light selector', () => {
+  it('is a 276px servers column on the street, fed by the light selector', () => {
     renderSidebar();
     const column = screen.getByRole('complementary', { name: 'Navigation' });
     expect(column).toHaveClass('md:w-[calc(var(--w-buildings-column)+var(--gutter)+var(--gutter))]');
-    expect(screen.getByRole('listbox', { name: 'Buildings and rooms' })).toBeInTheDocument();
+    expect(screen.getByRole('listbox', { name: 'Servers and channels' })).toBeInTheDocument();
     expect(screen.getByRole('group', { name: 'Kestrel Robotics' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: /Shop floor/ })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: /build-log/ })).toBeInTheDocument();
@@ -211,7 +211,7 @@ describe('UnifiedSidebar', () => {
     expect(screen.getByRole('button', { name: 'Open user settings' })).toBeInTheDocument();
   });
 
-  it('opens a building Lobby, and a room inside it', () => {
+  it('opens a server Lobby, and a room inside it', () => {
     renderSidebar();
     fireEvent.click(screen.getByRole('option', { name: /Kestrel Robotics lobby/ }));
     expect(screen.getByTestId('pathname')).toHaveTextContent('/app/guilds/g1');
@@ -220,13 +220,13 @@ describe('UnifiedSidebar', () => {
     expect(screen.getByTestId('pathname')).toHaveTextContent('/app/guilds/g1/channels/2001');
   });
 
-  it('keeps the building context menu the old Buildings list owned', () => {
+  it('keeps the server context menu the old Servers list owned', () => {
     renderSidebar();
     fireEvent.contextMenu(screen.getByRole('option', { name: /Kestrel Robotics lobby/ }));
     const menu = screen.getByRole('menu');
-    expect(within(menu).getByText('Mute building')).toBeInTheDocument();
+    expect(within(menu).getByText('Mute server')).toBeInTheDocument();
     expect(within(menu).getByText('Mark as read')).toBeInTheDocument();
-    expect(within(menu).getByText('Leave building')).toBeInTheDocument();
+    expect(within(menu).getByText('Leave server')).toBeInTheDocument();
   });
 
   it('gives a room its own menu — notifications, mark as read, copy link', () => {
@@ -236,12 +236,12 @@ describe('UnifiedSidebar', () => {
     // Three levels plus the fourth state: no opinion, follow the building.
     expect(within(menu).getByRole('menuitemradio', { name: /Every message/ })).toBeInTheDocument();
     expect(within(menu).getByRole('menuitemradio', { name: /Only when you.re mentioned/ })).toBeInTheDocument();
-    expect(within(menu).getByRole('menuitemradio', { name: /Nothing from this room/ })).toBeInTheDocument();
-    const follow = within(menu).getByRole('menuitemradio', { name: /Follow the building/ });
+    expect(within(menu).getByRole('menuitemradio', { name: /Nothing from this channel/ })).toBeInTheDocument();
+    const follow = within(menu).getByRole('menuitemradio', { name: /Follow the server/ });
     // With no override saved, the room follows its building — and says so.
     expect(follow).toHaveAttribute('aria-checked', 'true');
-    expect(within(menu).getByText('Mark room as read')).toBeInTheDocument();
-    expect(within(menu).getByText('Copy link to room')).toBeInTheDocument();
+    expect(within(menu).getByText('Mark channel as read')).toBeInTheDocument();
+    expect(within(menu).getByText('Copy link to channel')).toBeInTheDocument();
   });
 
   it('gives a thread\u2019s attention to the room it lives in, not a room of its own', () => {
@@ -268,13 +268,13 @@ describe('UnifiedSidebar', () => {
     expect(screen.getByTestId('pathname')).toHaveTextContent('/app/guilds/g1/channels/2003');
   });
 
-  it('offers the create/join flow from the persistent Add a building row', () => {
+  it('offers the create/join flow from the persistent Add a server row', () => {
     renderSidebar();
-    fireEvent.click(screen.getByRole('option', { name: 'Add a building' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Add a server' }));
     expect(screen.getByTestId('create-guild-modal')).toBeInTheDocument();
   });
 
-  it('keeps the buildings reachable when collapsed to the rail', () => {
+  it('keeps the servers reachable when collapsed to the rail', () => {
     useUIStore.setState({ sidebarCollapsed: true });
     renderSidebar();
     const rail = screen.getByRole('complementary', { name: 'Navigation' });

@@ -60,8 +60,8 @@ beforeEach(() => {
   request.mockResolvedValue({ data: [] });
 });
 
-describe('Coming up, across the buildings', () => {
-  it('asks each building once and merges the answers soonest first', async () => {
+describe('Coming up, across the servers', () => {
+  it('asks each server once and merges the answers soonest first', async () => {
     request.mockImplementation(({ url }: { url: string }) =>
       Promise.resolve({
         data: url.includes('g1')
@@ -100,7 +100,7 @@ describe('Coming up, across the buildings', () => {
     expect(result.current.events[0].roomName).toBe('Shop floor');
   });
 
-  it('keeps a building that cannot answer from blanking the others', async () => {
+  it('keeps a server that cannot answer from blanking the others', async () => {
     request.mockImplementation(({ url }: { url: string }) =>
       url.includes('g1') ? Promise.reject(new Error('offline')) : Promise.resolve({ data: [event()] }),
     );
@@ -111,7 +111,7 @@ describe('Coming up, across the buildings', () => {
     expect(result.current.events[0].buildingName).toBe('Saltmarsh');
   });
 
-  it('caps the list — the building keeps the full one', async () => {
+  it('caps the list — the server keeps the full one', async () => {
     request.mockResolvedValue({
       data: [1, 2, 3, 4, 5].map((n) =>
         event({ id: `e${n}`, scheduled_start: new Date(NOW + n * 3_600_000).toISOString() }),
@@ -122,7 +122,7 @@ describe('Coming up, across the buildings', () => {
     expect(result.current.events).toHaveLength(3);
   });
 
-  it('does not refetch when only the light on a building changed', async () => {
+  it('does not refetch when only the light on a server changed', async () => {
     request.mockResolvedValue({ data: [event()] });
     const { result, rerender } = renderHook(
       ({ clock }: { clock: number }) => useComingUp([building('g1', 'Kestrel')], clock),
@@ -134,7 +134,7 @@ describe('Coming up, across the buildings', () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
-  it('sends the RSVP the row asked for and tells the building about it', async () => {
+  it('sends the RSVP the row asked for and tells the server about it', async () => {
     request.mockResolvedValue({ data: [event()] });
     const { result } = renderHook(() => useComingUp([building('g1', 'Kestrel')], NOW));
     await waitFor(() => expect(result.current.events).toHaveLength(1));

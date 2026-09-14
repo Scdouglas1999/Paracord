@@ -20,9 +20,9 @@ export function useConversationActions(channelId?: string | null) {
     let live = true;
     let context: ReturnType<typeof captureScopedOperation>;
     try { context = captureScopedOperation(scope); }
-    catch { setSnapshot({ key, caps: null, error: 'Sign in to this server to check conversation actions.' }); return; }
+    catch { setSnapshot({ key, caps: null, error: 'Sign in to this instance to check conversation actions.' }); return; }
     setSnapshot({ key, caps: null, error: null });
-    const revoked = () => { if (live) setSnapshot({ key, caps: null, error: 'Sign in to this server to check conversation actions.' }); };
+    const revoked = () => { if (live) setSnapshot({ key, caps: null, error: 'Sign in to this instance to check conversation actions.' }); };
     context.signal.addEventListener('abort', revoked, { once: true });
     void context.request({ method: 'GET', url: `/channels/${encodeURIComponent(channelId)}/capabilities`, timeout: 15_000 })
       .then(response => {

@@ -373,7 +373,7 @@ function OwnedTopBar({
     prepareTopBarSurface();
     setInboxError(null);
     try {
-      if (!readScope) throw new Error('Sign in to this server before opening the inbox.');
+      if (!readScope) throw new Error('Sign in to this instance before opening the inbox.');
       await useReadStateStore.getState().refresh(readScope);
     } catch (err) {
       setInboxError(`Failed to load inbox: ${extractApiError(err)}`);
@@ -514,8 +514,8 @@ function OwnedTopBar({
     // the panel still opens (§6.5, §7.6). A 1:1 DM's "list" is the one person
     // already named in the header strip.
     ...(isGroupDm ? [{ label: 'People in this message', icon: <Users size={17} />, action: panelToggle('recipients') }] : []),
-    ...(!isDM ? [{ label: 'Building leaderboard', icon: <TrendingUp size={17} />, action: panelToggle('economy') }] : []),
-    ...(canOpenSpaceSettings && resolvedGuildId ? [{ label: 'Building settings', icon: <Settings size={17} />, action: openSpaceSettings }] : []),
+    ...(!isDM ? [{ label: 'Server leaderboard', icon: <TrendingUp size={17} />, action: panelToggle('economy') }] : []),
+    ...(canOpenSpaceSettings && resolvedGuildId ? [{ label: 'Server settings', icon: <Settings size={17} />, action: openSpaceSettings }] : []),
     { label: '', action: () => {}, divider: true },
     { label: 'Inbox', icon: <Inbox size={17} />, action: () => void openInbox(), description: attentionDescription(unreadItems.length, inboxMentions) },
     { label: 'Keyboard shortcuts', icon: <HelpCircle size={17} />, action: openHelp },
@@ -523,7 +523,7 @@ function OwnedTopBar({
   const contextualSurfaces: Partial<Record<Exclude<ContextPanelMode, null>, ActiveHeaderSurface>> = {
     pins: { label: 'Pinned messages', icon: Pin, onClose: panelToggle('pins') },
     threads: { label: 'Threads', icon: MessagesSquare, onClose: panelToggle('threads') },
-    economy: { label: 'Building leaderboard', icon: TrendingUp, onClose: panelToggle('economy') },
+    economy: { label: 'Server leaderboard', icon: TrendingUp, onClose: panelToggle('economy') },
     recipients: { label: 'People in this message', icon: Users, onClose: panelToggle('recipients') },
   };
   const activeSurface: ActiveHeaderSurface | undefined = showSummary
@@ -708,7 +708,7 @@ function OwnedTopBar({
             // reading · 19 lights on" — not the Stage's "N here".
             <HereNowStrip
               hereNow={hereNow}
-              context={`reading ${channelName ?? 'this room'}`}
+              context={`reading ${channelName ?? 'this channel'}`}
               className="hidden md:block"
               caption={
                 // §5.1 "numbers re-roll": these two change when somebody starts
@@ -862,7 +862,7 @@ function OwnedTopBar({
             <div className="min-w-0 pt-0.5">
               <h3 className="text-heading text-text-primary">Nothing to follow into yet</h3>
               <p className="mt-1 text-label text-text-secondary">
-                Create another text channel in this building to cross-post announcements from here.
+                Create another text channel in this server to cross-post announcements from here.
               </p>
             </div>
           </div>

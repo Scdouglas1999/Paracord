@@ -1,15 +1,15 @@
-# WP5 — The text room, and the DM that is one
+# WP5 — The text channel, and the DM that is one
 
 Contract: [`docs/lantern-stage-spec.md`](../lantern-stage-spec.md) §7.4, §7.6,
 §8 (HereNowStrip / TextRoomRow / Composer), §6, §9. Depends on
 [WP0](./wp0-checkpoint.md) and [WP1](./wp1-checkpoint.md). Branch:
 `design/lantern-stage`.
 
-A text room is now a **plate on the street**: the header, the timeline and the
+A text channel is now a **plate on the street**: the header, the timeline and the
 composer are one surface on the 12px gutter. The header says who is reading it,
 the timeline says who wrote each line and where they are, and the composer
 invites the people who will actually read it. A DM is the same plate between two
-people; a group DM is a room.
+people; a group DM is a channel.
 
 Nothing about delivery changed. The durable-delivery runtime, the recovery
 drafts, the encryption readiness gates and the encrypted-attachment seam are
@@ -22,11 +22,11 @@ tree is byte-identical.
 
 | File | Role |
 |---|---|
-| `client/src/components/message/messageLight.ts` | **The seam.** Everything a message surface needs from the light that WP1 does not already model: the author's light, a DM as a text room, and the one client-side timeline event. |
-| `client/src/components/message/TimelineParts.tsx` | The timeline's small shapes — day divider, author meta, reply chip, room-lit event row, thread row, attachment frame. Presentational, tokens only. |
-| `client/src/components/layout/TopBar.tsx` | The room header (§7.4) and the DM header (§7.6). |
+| `client/src/components/message/messageLight.ts` | **The seam.** Everything a message surface needs from the light that WP1 does not already model: the author's light, a DM as a text channel, and the one client-side timeline event. |
+| `client/src/components/message/TimelineParts.tsx` | The timeline's small shapes — day divider, author meta, reply chip, channel-lit event row, thread row, attachment frame. Presentational, tokens only. |
+| `client/src/components/layout/TopBar.tsx` | The channel header (§7.4) and the DM header (§7.6). |
 | `client/src/components/layout/ConversationHeaderActions.tsx` | Search / pins / threads / overflow, with counts. |
-| `client/src/components/message/MessageList.tsx` | The timeline: 36px lit avatars, Gabarito names, in-room meta, reply chips, reaction chips, thread rows, attachments, the inline room event. |
+| `client/src/components/message/MessageList.tsx` | The timeline: 36px lit avatars, Gabarito names, in-channel meta, reply chips, reaction chips, thread rows, attachments, the inline channel event. |
 | `client/src/components/message/MessageInput.tsx` | The composer (§8) and its copy. |
 | `client/src/components/message/Messaging{QueuePanel,RecoveryNotice}.tsx` | Delivery and recovery, as raised rows above the composer. |
 | `client/src/pages/GuildPage.tsx` (text branch) · `client/src/pages/DMPage.tsx` | The plate and its gutter. |
@@ -40,7 +40,7 @@ tree is byte-identical.
 
 WP1's handover has one rule above all others — **do not re-derive a light**.
 This module keeps it by never inventing a rule, only by feeding WP1's own pure
-functions the three things a message surface knows that a building does not.
+functions the three things a message surface knows that a server does not.
 
 ### An author is a person, as light
 
@@ -50,24 +50,24 @@ gateway sends every `VOICE_STATE_UPDATE`, so **"in Shop floor · 9:12 AM" is
 never a guess** — and presence goes through WP1's `personLight()`. The presence
 lookup is scoped by `serverId`, because a user id is a per-server snowflake.
 
-The row draws `LitAvatar size={36}` and `AuthorMeta`. §9 is kept two ways: a room
-is named in words beside the dot, and when there is no room the person's own
+The row draws `LitAvatar size={36}` and `AuthorMeta`. §9 is kept two ways: a channel
+is named in words beside the dot, and when there is no channel the person's own
 label ("Lights on", "Away") is rendered `sr-only`, so a rim is never the only cue.
 
-### A DM is a text room
+### A DM is a text channel
 
 A DM has no guild, so it never appears in a `BuildingLight`. `useDmLight()`
 therefore lights it with **`textRoomLight()` — the same function a guild text
-room uses** — fed the same three reading terms (typing, recently authored,
+channel uses** — fed the same three reading terms (typing, recently authored,
 self-viewing). "Reading" means exactly the same thing in a DM as it does in
 `#build-log`, term for term, because it is literally the same code path.
 
-That is what makes §7.6 true rather than approximated: a group DM is a room
+That is what makes §7.6 true rather than approximated: a group DM is a channel
 because it is built as one, and its here-now strip and people sheet are the same
-components the room header uses.
+components the channel header uses.
 
 `peerLightSentence(peer, reading)` is the 1:1 header's line. The third clause is
-only ever added when the room can actually tell the peer is here:
+only ever added when the channel can actually tell the peer is here:
 
 ```
 Ren · lights on · reading this     ← a fresh channel-bound signal
@@ -75,19 +75,19 @@ Ren · lights on                    ← the app is open somewhere; that is all w
 Ren · away / lights off
 ```
 
-### A room lighting up, in the timeline
+### A channel lighting up, in the timeline
 
-`useRoomLitEvents(guildId)` watches WP1's room lights for a voice room going
+`useRoomLitEvents(guildId)` watches WP1's channel lights for a voice channel going
 dark → lit **while you are reading this one**, and the timeline renders it
 inline ("Shop floor lit up · Mara, Priya and Ren are in there now · Join").
 
 Four rules make it an event rather than decoration:
 
-- a room that was **already lit when you arrived** is state, not news — the first
-  observation of a building is the baseline;
-- a room that **empties again** loses its event immediately, so the Join it
-  offers can never lead into a dark room;
-- a room **you are already in** is not an invitation;
+- a channel that was **already lit when you arrived** is state, not news — the first
+  observation of a server is the baseline;
+- a channel that **empties again** loses its event immediately, so the Join it
+  offers can never lead into a dark channel;
+- a channel **you are already in** is not an invitation;
 - at most two, aged out after ten minutes.
 
 It is a client-side observation, never a server message: it lives in the
@@ -97,28 +97,28 @@ virtualized row list as its own row type and never enters `messages`.
 
 ## 3. The surfaces
 
-### The text room header (§7.4)
+### The text channel header (§7.4)
 
 ```
 [ ▪ ]  build-log                    [ ●●●●● 5 reading · 19 lights on ]      ⌕  ⚲2  ⌸3  ⋯ More
        Kestrel Robotics · Hardware bring-up
 ```
 
-- The **window dot** is the room's own light: amber when people are reading,
-  white for a voice room with people in it, dark when nobody is there.
-- The name is Gabarito 20/700 and is the `ChannelSwitcher` trigger, so fast room
+- The **window dot** is the channel's own light: amber when people are reading,
+  white for a voice channel with people in it, dark when nobody is there.
+- The name is Gabarito 20/700 and is the `ChannelSwitcher` trigger, so fast channel
   movement survives (layout-spec §7.8).
-- The **building is the breadcrumb** — it is the link back to the Lobby, so the
-  header carries one name for the building instead of two.
+- The **server is the breadcrumb** — it is the link back to the Lobby, so the
+  header carries one name for the server instead of two.
 - The **here-now strip** is WP1's `HereNowStrip`. §7.2 words it "4 here"; §7.4
   words it "5 reading". One optional `caption` prop was added to
   `components/light/HereNowStrip.tsx` so the surface that knows the verb supplies
   it — additive, defaulted to the old sentence, and still the light's DOM text
   equivalent.
 - **There is no member list.** The strip's people sheet is the only full list of
-  people in the product (§6.5), in a guild room and in a group DM alike.
+  people in the product (§6.5), in a guild channel and in a group DM alike.
 - **Counts** ride on the control they belong to: threads from the channel list
-  (free), pins from one `GET /channels/:id/pins` per room, cached five minutes
+  (free), pins from one `GET /channels/:id/pins` per channel, cached five minutes
   and silently countless on failure — a number nobody can trust is worse than no
   number.
 
@@ -131,12 +131,12 @@ well with the file's own line beneath it.
 
 Two things the screenshots forced:
 
-1. **A room reads from the bottom.** The reference render pins the conversation
+1. **A channel reads from the bottom.** The reference render pins the conversation
    to the bottom of the plate; the virtualized feed filled from the top. The
    scroll container is now a flex column and the rows sit on `mt-auto`, so a
    short timeline drops to the composer and a long one scrolls exactly as before.
 2. **A timeline with no day on it is a list.** The first message now gets a day
-   divider too, so a room opens with "Today" the way the artboard does — and the
+   divider too, so a channel opens with "Today" the way the artboard does — and the
    per-message meta drops to the bare time, because the day is already stated.
 
 ### The composer (§8)
@@ -151,11 +151,11 @@ The copy is the point:
 |---|---|
 | people other than you are reading | `Say something to the 5 people reading` |
 | one other person | `Say something to the 1 person reading` |
-| a room nobody else is in | `Say something in build-log` |
+| a channel nobody else is in | `Say something in build-log` |
 | a one-to-one DM | `Say something to Mara Okafor` |
 
-`readingOthers` **excludes you**. You are always reading the room you have open,
-so counting yourself would mean the fallback never appeared and a room you are
+`readingOthers` **excludes you**. You are always reading the channel you have open,
+so counting yourself would mean the fallback never appeared and a channel you are
 alone in would invite you to talk to yourself.
 
 The capability model is untouched: the composer still explains *why* it is
@@ -173,7 +173,7 @@ does not exist, so failures rendered in inherited ink. They are
 
 ### Pins, threads, search, members
 
-They are contextual plates on the gutter beside the room, mounted only when
+They are contextual plates on the gutter beside the channel, mounted only when
 open. Nothing about their behaviour changed.
 
 ---
@@ -202,14 +202,14 @@ Run from `client/`.
 
 ### WP5's own tests
 
-- `components/message/messageLight.test.tsx` — the room-lit event, rule by rule
-  (already lit is not news, an emptied room drops its event, a room you are in is
-  not an invitation, a text room is not an event, the cap), plus the DM header's
+- `components/message/messageLight.test.tsx` — the channel-lit event, rule by rule
+  (already lit is not news, an emptied channel drops its event, a channel you are in is
+  not an invitation, a text channel is not an event, the cap), plus the DM header's
   sentence.
 - `components/message/TextRoom.test.tsx` — the header strip's "5 reading · 19
-  lights on", the building-as-breadcrumb, the absence of any member-list control,
-  the pins count, the in-room meta (and its refusal to claim a room for somebody
-  whose lights are off), the room-event row, the composer copy in all four
+  lights on", the server-as-breadcrumb, the absence of any member-list control,
+  the pins count, the in-channel meta (and its refusal to claim a channel for somebody
+  whose lights are off), the channel-event row, the composer copy in all four
   cases, and the timeline's small shapes.
 - The older message and header suites keep their subjects and stub the light
   seam through `src/test/messageLightMock.ts`. Those suites mock the stores down
@@ -235,7 +235,7 @@ an encrypted conversation this device has no identity for. All inspected against
 
 ## 5. Decisions a reviewer should see
 
-1. **The member list is gone from the header**, in a guild room and in a group
+1. **The member list is gone from the header**, in a guild channel and in a group
    DM (§6.5). `smoke.spec.ts`'s member-list assertions were rewritten to assert
    its absence and to open the people sheet instead. `ContextPanel`'s `members`
    mode still exists — it is reachable from the mobile swipe gesture in
@@ -250,16 +250,16 @@ an encrypted conversation this device has no identity for. All inspected against
    the same strip differently and only the calling surface knows the verb. It is
    additive and defaults to WP1's sentence.
 4. **`ChannelSwitcher` was restyled** (Gabarito 20px trigger, `pc-floating`
-   menu). It is the room name in the header and had no other owner; the hash
-   icon is gone for text rooms because the window dot beside it now says what
-   kind of room it is, and it is kept for voice/stage/forum/announcement, which
+   menu). It is the channel name in the header and had no other owner; the hash
+   icon is gone for text channels because the window dot beside it now says what
+   kind of channel it is, and it is kept for voice/stage/forum/announcement, which
    the dot cannot distinguish.
 5. **Pins/threads are primary controls above the small breakpoint and overflow
    items below it.** §7.4 puts them in the header; layout-spec §7.8 folds them
    into the labeled overflow menu on narrow screens. Both are true at once.
-6. **The pins count costs one request per room.** Threads are counted from the
+6. **The pins count costs one request per channel.** Threads are counted from the
    channel list for free; pins have no count endpoint. The five-minute cache
-   keeps a room switch from re-asking, and a failure leaves the control
+   keeps a channel switch from re-asking, and a failure leaves the control
    countless rather than wrong.
 
 ---

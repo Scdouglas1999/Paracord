@@ -123,15 +123,15 @@ test('the setup form retries rejected server credentials after reload using the 
   }
   await page.getByLabel('New encryption password', { exact: false }).fill('separate local password');
   await page.getByLabel('Confirm password', { exact: false }).fill('separate local password');
-  await page.getByLabel('Current server password', { exact: false }).fill('wrong server password');
+  await page.getByLabel('Current sign-in password', { exact: false }).fill('wrong server password');
   await page.getByLabel('Two-factor or backup code').fill('123456');
   await page.getByRole('button', { name: 'Secure account' }).click();
-  await expect(page.getByText('Server authentication was rejected.', { exact: false })).toBeVisible();
+  await expect(page.getByText('The instance rejected that sign-in.', { exact: false })).toBeVisible();
   const original = await page.evaluate(() => localStorage.getItem('paracord:encrypted-identity:v1'));
   expect(attempts[0]).toMatchObject({ password: 'wrong server password', mfa_code: '123456' });
   await form();
   await page.getByLabel('Encryption password', { exact: false }).fill('separate local password');
-  await page.getByLabel('Current server password', { exact: false }).fill('correct server password');
+  await page.getByLabel('Current sign-in password', { exact: false }).fill('correct server password');
   await page.getByRole('button', { name: 'Secure account' }).click();
   await expect(page.getByRole('heading', { name: 'Recovery phrase' })).toBeVisible();
   expect(attempts[1].public_key).toBe(attempts[0].public_key);

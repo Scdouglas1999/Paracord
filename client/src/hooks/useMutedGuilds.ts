@@ -44,7 +44,7 @@ export function useMutedGuilds() {
   const isMuted = useCallback((guild: GuildReference) => mutedGuildKeys.includes(entityScopeKey(guild.scope, guild.id)), [mutedGuildKeys]);
   const toggleMute = useCallback(async (guild: GuildReference) => {
     try { await useNotificationPreferenceStore.getState().setMuted(guild, !isMuted(guild)); }
-    catch (err) { toast.error(`Failed to update building notifications: ${extractApiError(err)}`); }
+    catch (err) { toast.error(`Failed to update server notifications: ${extractApiError(err)}`); }
   }, [isMuted]);
   return { mutedGuildKeys, isMuted, toggleMute, saving };
 }

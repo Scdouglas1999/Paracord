@@ -114,7 +114,7 @@ function OwnedTextChannelView({
                 #{parentChannel.name || 'unknown'}
               </button>
             ) : (
-              <span className="text-label text-text-secondary">a room you can no longer see</span>
+              <span className="text-label text-text-secondary">a channel you can no longer see</span>
             )}
             {starterName && (
               <span className="truncate text-meta text-text-muted">· started by {starterName}</span>

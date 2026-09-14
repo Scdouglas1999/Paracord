@@ -133,7 +133,7 @@ pub async fn claim_instance(
         // No guard failure recorded: this is a settled state, not a guess. An
         // attacker learns nothing they could not read from `GET /setup/status`.
         return Err(ApiError::Conflict(
-            "This server has already been set up.".into(),
+            "This instance has already been set up.".into(),
         ));
     }
 
@@ -142,7 +142,7 @@ pub async fn claim_instance(
     // token would be catastrophic, so say exactly what is wrong.
     let Some(stored_hash) = setup.claim_token_hash.as_deref() else {
         return Err(ApiError::ServiceUnavailable(
-            "This server has no setup claim token provisioned. Restart the server to mint one, or set [setup] claim_token in its configuration.".into(),
+            "This instance has no setup claim token provisioned. Restart it to mint one, or set [setup] claim_token in its configuration.".into(),
         ));
     };
 

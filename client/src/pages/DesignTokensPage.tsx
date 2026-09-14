@@ -382,7 +382,7 @@ function PrimitivesSection() {
         <IconButton label="Share your screen" size="stage" tone="raised">
           <MonitorUp size={20} />
         </IconButton>
-        <IconButton label="Leave the room" size="stage" tone="danger">
+        <IconButton label="Leave the call" size="stage" tone="danger">
           <PhoneOff size={20} />
         </IconButton>
         <IconButton label="People" active>
@@ -423,14 +423,14 @@ function PrimitivesSection() {
       <SectionLabel>Fields</SectionLabel>
       <div className="flex max-w-[28rem] flex-col gap-4">
         <SearchWell icon={<Search size={16} />} shortcut={<Kbd>⌘K</Kbd>} />
-        <TextField label="Room name" placeholder="Shop floor" hint="Short and specific." />
-        <TextField label="Room name" defaultValue="general" error="A room already has that name." />
+        <TextField label="Channel name" placeholder="Shop floor" hint="Short and specific." />
+        <TextField label="Channel name" defaultValue="general" error="A channel already has that name." />
         <TextField label="Disabled" placeholder="Not editable" disabled />
         <Select defaultValue="default" aria-label="Microphone">
           <option value="default">System default — Scarlett Solo</option>
           <option value="webcam">C920 webcam</option>
         </Select>
-        <Textarea rows={3} placeholder="What is this room for?" aria-label="Room topic" />
+        <Textarea rows={3} placeholder="What is this channel for?" aria-label="Channel topic" />
       </div>
 
       <SectionLabel meta="off is a well, on is the emerald">Switch and toggle row</SectionLabel>
@@ -449,8 +449,8 @@ function PrimitivesSection() {
           />
           <Divider />
           <ToggleRow
-            label="Show when you are in a room"
-            description="Other people see the room name on your profile."
+            label="Show when you are in a voice channel"
+            description="Other people see the channel name on your profile."
             checked={switchOn}
             onChange={setSwitchOn}
           />
@@ -459,12 +459,12 @@ function PrimitivesSection() {
 
       <SectionLabel meta="2 variants">Tabs</SectionLabel>
       <div className="flex max-w-[32rem] flex-col gap-4">
-        <Tabs items={DEMO_TABS} value={tab} onChange={setTab} label="Building settings" className="self-start" />
+        <Tabs items={DEMO_TABS} value={tab} onChange={setTab} label="Server settings" className="self-start" />
         <Tabs
           items={DEMO_TABS}
           value={pageTab}
           onChange={setPageTab}
-          label="Building settings, as pages"
+          label="Server settings, as pages"
           variant="underline"
         />
       </div>
@@ -484,7 +484,7 @@ function PrimitivesSection() {
         <Button
           variant="ghost"
           onClick={() => {
-            toast.info('Recovering this room’s history…');
+            toast.info('Recovering this channel’s history…');
             window.setTimeout(() => toast.warning('Two attachments are still uploading.'), 220);
             window.setTimeout(() => toast.error('The thermal rig stopped answering.'), 440);
           }}
@@ -507,14 +507,14 @@ function PrimitivesSection() {
           </ModalDescription>
         </ModalHeader>
         <ModalBody>
-          <TextField label="Type the room name to confirm" placeholder="build-log" />
+          <TextField label="Type the channel name to confirm" placeholder="build-log" />
         </ModalBody>
         <ModalFooter>
           <Button variant="ghost" onClick={() => setDialogOpen(false)}>
             Keep it
           </Button>
           <Button variant="danger" onClick={() => setDialogOpen(false)}>
-            Delete the room
+            Delete the channel
           </Button>
         </ModalFooter>
       </Modal>
@@ -528,7 +528,7 @@ function PrimitivesSection() {
           <EmptyState
             icon={<Inbox size={18} />}
             title="No invites are live right now"
-            description="An invite lets someone join this building without an admin adding them by hand."
+            description="An invite lets someone join this server without an admin adding them by hand."
             action={<Button>Create an invite</Button>}
           />
         </Plate>
@@ -580,16 +580,16 @@ function PrimitivesSection() {
         >
           Open menu
         </button>
-        <Popover anchor={menuAnchor} open={menuOpen} onClose={() => setMenuOpen(false)} role="menu" label="Room actions">
-          <MenuLabel>Room</MenuLabel>
+        <Popover anchor={menuAnchor} open={menuOpen} onClose={() => setMenuOpen(false)} role="menu" label="Channel actions">
+          <MenuLabel>Channel</MenuLabel>
           <MenuItem icon={<Users size={16} />} onClick={() => setMenuOpen(false)}>
             Invite people
           </MenuItem>
           <MenuItem icon={<Settings size={16} />} trailing="⌘," onClick={() => setMenuOpen(false)}>
-            Room settings
+            Channel settings
           </MenuItem>
           <MenuItem icon={<PhoneOff size={16} />} danger onClick={() => setMenuOpen(false)}>
-            Leave the room
+            Leave the channel
           </MenuItem>
         </Popover>
         <Tooltip content="Tooltips use the floating surface">
@@ -741,7 +741,7 @@ const DEMO_BUILDING = buildingLight({
   name: 'Kestrel Robotics',
   rooms: [
     DEMO_LIT_ROOM,
-    demoVoice({ channelId: 'v3', name: 'Quiet room', order: 1, occupants: [{ person: DEMO_AISHA }] }),
+    demoVoice({ channelId: 'v3', name: 'Quiet corner', order: 1, occupants: [{ person: DEMO_AISHA }] }),
     DEMO_DARK_ROOM,
     DEMO_READ_ROOM,
     DEMO_QUIET_ROOM,
@@ -791,7 +791,7 @@ function LightComponentsSection() {
     <Section
       id="light-components"
       title="Light components"
-      blurb="The WP1 vocabulary: a window map, a building plate, lit avatars, a here-now strip, a room thumbnail and the on-air pill. Every state below is real data from lib/attention/light.ts — the models decide what is lit, the components only draw it, and each one renders its words as well as its light."
+      blurb="The WP1 vocabulary: a window map, a server plate, lit avatars, a here-now strip, a channel thumbnail and the on-air pill. Every state below is real data from lib/attention/light.ts — the models decide what is lit, the components only draw it, and each one renders its words as well as its light."
     >
       <div id="light-avatars" className="flex flex-col gap-4">
       <SectionLabel meta="rim · breathe · dim · slash">Lit avatars</SectionLabel>
@@ -845,7 +845,7 @@ function LightComponentsSection() {
         </Well>
       </div>
 
-      <SectionLabel meta="lit · dark">Building plate</SectionLabel>
+      <SectionLabel meta="lit · dark">Server plate</SectionLabel>
       <div className="flex max-w-[var(--w-buildings-column)] flex-col gap-2">
         <SectionLabel meta={litMembersCaption(DEMO_BUILDING.lightsOn)}>
           {DEMO_BUILDING.name}
@@ -860,7 +860,7 @@ function LightComponentsSection() {
       </div>
 
       <div id="light-thumbnails" className="flex flex-col gap-4">
-      <SectionLabel meta="64 · 168 · 176">Room thumbnails</SectionLabel>
+      <SectionLabel meta="64 · 168 · 176">Channel thumbnails</SectionLabel>
       <div className="flex flex-wrap items-start gap-4">
         <div className="flex w-full max-w-[17rem] flex-col gap-1.5">
           <RoomThumbnail room={DEMO_LIT_ROOM} height={64} />
@@ -1058,8 +1058,8 @@ function BuildingsColumnSection() {
   return (
     <Section
       id="buildings-column"
-      title="Buildings column"
-      blurb="The sidebar, in the three states worth reviewing: a Lobby open, a text room open, and you in a call. Every building, room and caption below is a real model from lib/attention — the column only draws them."
+      title="Servers column"
+      blurb="The sidebar, in the three states worth reviewing: a Lobby open, a text channel open, and you in a call. Every server, channel and caption below is a real model from lib/attention — the column only draws them."
     >
       <div className="flex flex-wrap items-start gap-6">
         <ColumnFrame id="column-lobby" label="A Lobby is open">
@@ -1073,7 +1073,7 @@ function BuildingsColumnSection() {
           />
         </ColumnFrame>
 
-        <ColumnFrame id="column-room" label="A text room is open">
+        <ColumnFrame id="column-room" label="A text channel is open">
           <BuildingsColumn
             buildings={[DEMO_BUILDING, DEMO_DARK_BUILDING]}
             needsYouCount={3}
@@ -1096,7 +1096,7 @@ function BuildingsColumnSection() {
           />
         </ColumnFrame>
 
-        <ColumnFrame id="column-empty" label="No buildings yet">
+        <ColumnFrame id="column-empty" label="No servers yet">
           <BuildingsColumn
             buildings={[]}
             needsYouCount={0}
@@ -1293,7 +1293,7 @@ function MotionSection() {
           id="motion-dim"
           name="Dim"
           tokens="--duration-dim · --ease-in"
-          model="A light going out lingers a beat, then goes. Slower than the bloom on purpose: rooms empty more gently than they fill."
+          model="A light going out lingers a beat, then goes. Slower than the bloom on purpose: channels empty more gently than they fill."
           onPlay={() => dim(dimRef.current)}
         >
           <span ref={dimRef} className="pc-window is-talking h-[26px] w-[20px]" aria-hidden />
@@ -1350,7 +1350,7 @@ function MotionSection() {
           id="motion-stagger"
           name="Stagger"
           tokens="--stagger-light 30ms"
-          model="Neighbouring lights are 30ms apart, so a building lights up as a sequence rather than a switch."
+          model="Neighbouring lights are 30ms apart, so a server comes on as a sequence rather than a switch."
           onPlay={() => stagger(staggerRef.current?.querySelectorAll('span') ?? [])}
         >
           <div ref={staggerRef} className="flex gap-1.5" aria-hidden>
@@ -1423,7 +1423,7 @@ function MotionSection() {
           id="motion-writing"
           name="Writing pulse"
           tokens="--duration-breathe · --glow-window-amber-breathe"
-          model="While somebody writes in the room, its window breathes at half the speaking ring's amplitude — presence, not an alert. The pulse holds while typing refreshes and ends when typing stops; under reduced motion the window is simply lit."
+          model="While somebody writes in the channel, its window breathes at half the speaking ring's amplitude — presence, not an alert. The pulse holds while typing refreshes and ends when typing stops; under reduced motion the window is simply lit."
           onPlay={() => {
             if (writingTimer.current) clearTimeout(writingTimer.current);
             setWriting(true);
@@ -1478,11 +1478,11 @@ function MotionSection() {
           id="motion-outage"
           name="The power goes"
           tokens="--duration-dim · --ease-in / --ease-out"
-          model="A gateway that is away is drawn on the whole building: it dims 30% and holds there until it is back. Never a spinner on the street — a spinner says wait; a dark building says what is true."
+          model="A gateway that is away is drawn on the whole server: it dims 30% and holds there until it is back. Never a spinner — a spinner says wait; going dark says what is true."
           onPlay={cutPower}
         >
           <span className="text-meta text-text-faint">
-            {dark ? 'The building is dark. Replay brings it back.' : 'The lights are on.'}
+            {dark ? 'The lights are out. Replay brings them back.' : 'The lights are on.'}
           </span>
         </Recipe>
 
@@ -1559,10 +1559,10 @@ function MotionSection() {
           </p>
           <div className="flex flex-wrap gap-2">
             <Button variant="secondary" size="sm" onClick={() => walk()}>
-              {walkedIn ? 'Back to the Lobby' : 'Walk into the room'}
+              {walkedIn ? 'Back to the Lobby' : 'Walk into the channel'}
             </Button>
             <Button variant="ghost" size="sm" onClick={() => walk('flip')}>
-              {walkedIn ? 'Back to the Lobby (FLIP)' : 'Walk into the room (FLIP)'}
+              {walkedIn ? 'Back to the Lobby (FLIP)' : 'Walk into the channel (FLIP)'}
             </Button>
           </div>
         </div>
@@ -1579,7 +1579,7 @@ export default function DesignTokensPage() {
           <p className="text-section text-text-faint">Dev only · docs/lantern-stage-spec.md</p>
           <h1 className="pc-display text-display text-text-primary">Lantern Stage tokens</h1>
           <p className="max-w-[70ch] text-text-body">
-            A building at night, and light means people. Everything that is not light is dark, matte
+            Windows at night, and light means people. Everything that is not light is dark, matte
             and quiet. This page is the contract made visible: if a component disagrees with what is
             here, the component is wrong.
           </p>
@@ -1681,7 +1681,7 @@ export default function DesignTokensPage() {
         <Section
           id="themes"
           title="Themes"
-          blurb="Themes remap the tokens, never the recipes. The light tokens are remapped in every theme, never removed: in Daylight they become ink so a lit room still reads as presence on paper."
+          blurb="Themes remap the tokens, never the recipes. The light tokens are remapped in every theme, never removed: in Daylight they become ink so a lit channel still reads as presence on paper."
         >
           <div className="flex flex-wrap gap-4">
             <ThemePreview theme="dark" label="Night — the default" />

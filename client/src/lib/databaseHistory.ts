@@ -59,7 +59,7 @@ export function requestHistoryReconciliation(scope: AccountScope): void {
  * the replacement history. Healthy resumes of the same history do nothing.
  */
 export function acceptDatabaseHistoryEpoch(scope: AccountScope, epoch: unknown): boolean {
-  if (!isDatabaseHistoryEpoch(epoch)) throw new Error('The server supplied an invalid database history identity.');
+  if (!isDatabaseHistoryEpoch(epoch)) throw new Error('The instance supplied an invalid database history identity.');
   const key = accountScopeKey(scope);
   // A valid handshake can repair malformed saved metadata, but ordinary
   // operations cannot silently ignore it or send into an unknown history.

@@ -476,7 +476,7 @@ async function joinVoice(page: Page): Promise<void> {
   // The welcome screen and layout tour are dialogs that mark the rest of the
   // app aria-hidden, and they can mount a beat after the room renders — so
   // clear them, then look for the button, and repeat until the click lands.
-  const joinButton = page.getByRole('button', { name: 'Join the room', exact: true });
+  const joinButton = page.getByRole('button', { name: 'Join voice', exact: true });
   let clicked = false;
   for (let attempt = 0; attempt < 8 && !clicked; attempt++) {
     await dismissFirstRunOverlays(page);
@@ -851,7 +851,7 @@ test('a participant who closes their tab stops being in the room for everyone el
     expect(joined.ok(), `bystander invite accept: ${await joined.text()}`).toBeTruthy();
     await signIn(bystander, bystanderAccount);
     await bystander.goto(`${BASE}/app/guilds/${guildId}/channels/${channelId}`);
-    await expect(bystander.getByText('In this room — 1')).toBeVisible({ timeout: 30_000 });
+    await expect(bystander.getByText('In this channel — 1')).toBeVisible({ timeout: 30_000 });
   });
 });
 

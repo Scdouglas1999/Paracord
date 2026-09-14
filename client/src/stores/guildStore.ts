@@ -53,7 +53,7 @@ function record(scope: AccountScope, id: string, mutation: GuildMutation) {
   if (!request) return;
   if (!request.mutations.has(id) && request.mutations.size >= MAX_PENDING_GUILDS) {
     request.context.dispose();
-    toast.error('Building activity exceeded this snapshot. Reload your buildings to refresh.');
+    toast.error('Server activity exceeded this snapshot. Reload your servers to refresh.');
     return;
   }
   const previous = request.mutations.get(id);
@@ -101,7 +101,7 @@ export const useGuildStore = create<GuildState>()((set, get) => ({
         }
         get().setGuilds([...guilds.values()], scope);
       } catch (err) {
-        if (!context.signal.aborted) toast.error(`Failed to load buildings: ${extractApiError(err)}`);
+        if (!context.signal.aborted) toast.error(`Failed to load servers: ${extractApiError(err)}`);
       } finally { context.dispose(); }
     })();
     return request.promise;

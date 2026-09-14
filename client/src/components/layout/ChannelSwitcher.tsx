@@ -130,7 +130,7 @@ export function ChannelSwitcher({
       <button
         ref={triggerRef}
         type="button"
-        aria-label={`Switch room, current: ${channelName}`}
+        aria-label={`Switch channel, current: ${channelName}`}
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
@@ -173,7 +173,7 @@ export function ChannelSwitcher({
           role="dialog"
           aria-modal="true"
           tabIndex={-1}
-          aria-label={`Switch room in ${guildName || 'this building'}`}
+          aria-label={`Switch channel in ${guildName || 'this server'}`}
           className="pc-floating absolute left-0 top-[calc(100%+0.5rem)] z-50 w-[min(20rem,calc(100vw-4rem))] overflow-hidden"
           onKeyDown={(event) => {
             if (event.key === 'ArrowDown') {
@@ -194,12 +194,12 @@ export function ChannelSwitcher({
           <div className="border-b border-border-subtle p-2">
             <label className="flex h-9 items-center gap-2 rounded-chip border border-border-subtle bg-bg-well px-2.5 focus-within:border-accent-primary focus-within:shadow-[var(--focus-ring-input)]">
               <Search size={15} className="shrink-0 text-text-muted" aria-hidden />
-              <span className="sr-only">Find a room</span>
+              <span className="sr-only">Find a channel</span>
               <input
                 ref={searchRef}
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Find a room"
+                placeholder="Find a channel"
                 className="min-w-0 flex-1 bg-transparent text-label text-text-primary outline-none placeholder:text-text-muted"
               />
             </label>
@@ -219,12 +219,12 @@ export function ChannelSwitcher({
               className="pc-focusable flex h-9 w-full items-center gap-2 rounded-chip px-2 text-left text-label font-medium text-text-secondary outline-none transition-colors hover:bg-bg-mod-subtle hover:text-text-primary focus:bg-accent-tint focus:text-text-primary"
             >
               <LayoutGrid size={17} className="shrink-0 text-channel-icon" aria-hidden />
-              <span className="flex-1 truncate">Rooms home</span>
+              <span className="flex-1 truncate">Channels home</span>
             </button>
 
             {groups.length === 0 ? (
               <p className="px-2 py-5 text-center text-label text-text-muted">
-                No matching rooms.
+                No matching channels.
               </p>
             ) : (
               groups.map((group) => (

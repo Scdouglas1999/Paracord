@@ -101,12 +101,12 @@ export function SearchOverlay({
           if (cancelled) return;
           setSearchResults(fallbackResults);
           setSearchError(
-            fallbackResults.length === 0 ? 'Search is temporarily unavailable for this server.' : null
+            fallbackResults.length === 0 ? 'Search is temporarily unavailable for this instance.' : null
           );
         } catch {
           if (cancelled) return;
           setSearchResults([]);
-          setSearchError('Search is temporarily unavailable for this server.');
+          setSearchError('Search is temporarily unavailable for this instance.');
         }
       } finally {
         if (!cancelled) setSearching(false);

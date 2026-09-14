@@ -342,7 +342,7 @@ function AttentionRow({
   const action = actionFor(entry);
 
   const previewLine = voiceOnly
-    ? 'Open this room to join what is happening'
+    ? 'Open this channel to join what is happening'
     : historyUnavailable
       ? 'Reconnect this account to restore previews'
       : failed

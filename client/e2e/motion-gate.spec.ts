@@ -500,7 +500,7 @@ test.describe('the motion gate (§5.3)', () => {
     // the CI box. What MUST hold is that it runs, that it is the same
     // choreography, and that it stays inside the duration budget.
     const vtSample = await measureMoment(page, async () => {
-      await shared.getByRole('button', { name: /^(?:Walk into the room|Back to the Lobby)$/ }).click();
+      await shared.getByRole('button', { name: /^(?:Walk into the channel|Back to the Lobby)$/ }).click();
     }, 1000);
     expectBudget('motion-shared (view transitions)', vtSample, { frames: false });
     await expect(shared.getByText('Last run: view-transition.')).toBeVisible();
@@ -723,7 +723,7 @@ test.describe('the motion gate (§5.3)', () => {
     // it. The stage header does not even carry the room's window, so the
     // assertion is that nothing on the page takes the pulse.
     await page.goto(`/app/guilds/${MOTION_GUILD_ID}/channels/${MOTION_VOICE_CHANNEL_ID}`);
-    await expect(page.getByRole('button', { name: 'Join the room' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Join voice' })).toBeVisible();
     await typingStart(MOTION_VOICE_CHANNEL_ID, '44');
     await page.waitForTimeout(300);
     await expect(page.locator('.is-writing')).toHaveCount(0);
@@ -1056,7 +1056,7 @@ test.describe('the motion gate (§5.3)', () => {
     // latency, not the engine's; measuring it would be measuring Vite.
     await openLitLobby(page);
     await page.goto(`/app/guilds/${MOTION_GUILD_ID}/channels/${MOTION_VOICE_CHANNEL_ID}`);
-    await expect(page.getByRole('button', { name: 'Join the room' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Join voice' })).toBeVisible();
     await page.getByRole('option', { name: /lobby/ }).click();
     await expect(page.getByRole('region', { name: 'Lobby' })).toBeVisible();
     await page.waitForTimeout(1200);
@@ -1597,7 +1597,7 @@ test.describe('the motion gate (§5.3)', () => {
     }, 600);
 
     // 6 — the tab indicator sliding (item 2).
-    const tabs = page.getByRole('tablist', { name: 'Building settings', exact: true }).first();
+    const tabs = page.getByRole('tablist', { name: 'Server settings', exact: true }).first();
     if (await tabs.count()) {
       await tabs.scrollIntoViewIfNeeded();
       await page.waitForTimeout(400);

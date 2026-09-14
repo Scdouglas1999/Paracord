@@ -22,8 +22,8 @@ const THEME_OPTIONS: Array<{
   hint: string;
   icon: React.ReactNode;
 }> = [
-  { id: 'dark', label: 'Night', hint: 'The default — a building after dark', icon: <Moon size={16} /> },
-  { id: 'light', label: 'Daylight', hint: 'Warm paper; lit rooms read as ink', icon: <Sun size={16} /> },
+  { id: 'dark', label: 'Night', hint: 'The default — lit windows after dark', icon: <Moon size={16} /> },
+  { id: 'light', label: 'Daylight', hint: 'Warm paper; lit channels read as ink', icon: <Sun size={16} /> },
   { id: 'amoled', label: 'AMOLED', hint: 'A true-black street for OLED panels', icon: <Monitor size={16} /> },
   { id: 'high-contrast', label: 'High contrast', hint: 'Thicker rims, two text steps', icon: <Eye size={16} /> },
 ];
@@ -35,7 +35,7 @@ const THEME_OPTIONS: Array<{
  */
 const MOTION_OPTIONS: Array<{ id: MotionPreference; label: string; hint: string }> = [
   { id: 'system', label: 'Match my system', hint: 'Follow this device\u2019s reduced-motion setting' },
-  { id: 'full', label: 'Full motion', hint: 'Lights bloom, messages lift, rooms move' },
+  { id: 'full', label: 'Full motion', hint: 'Lights bloom, messages lift, channels move' },
   { id: 'reduced', label: 'Reduced motion', hint: 'Everything lands instantly; lights still change' },
 ];
 
@@ -204,7 +204,7 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
         </p>
         <p className="mt-1 max-w-prose text-meta leading-relaxed text-text-faint">
           The accent drives primary buttons, active navigation, mentions and focus rings. The
-          light that shows who is in a room never changes colour.
+          light that shows who is in a channel never changes colour.
         </p>
       </section>
 

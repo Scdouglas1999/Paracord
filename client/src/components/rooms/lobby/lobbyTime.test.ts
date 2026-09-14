@@ -25,7 +25,7 @@ describe('the clock', () => {
     expect(shortClock(new Date('2026-09-13T13:30:00'))).toMatch(/:30/);
   });
 
-  it('lower-cases the meridiem, because the building is quiet', () => {
+  it('lower-cases the meridiem, because the server is quiet', () => {
     const twelve = clockTime(new Date('2026-09-13T13:00:00'));
     expect(twelve).not.toMatch(/PM|AM/);
     expect(twelve).toMatch(/:00/);

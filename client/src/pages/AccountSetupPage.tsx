@@ -40,8 +40,8 @@ export function AccountSetupPage() {
           <AuthCard className="max-w-md">
             <div className={`${AUTH_FORM} items-start`}>
               <AuthHeading
-                title={user ? 'Account changed' : 'Waiting for your server account'}
-                subtitle="Sign in to the intended server account before setting up encryption."
+                title={user ? 'Account changed' : 'Waiting for your instance account'}
+                subtitle="Sign in to the intended instance account before setting up encryption."
               />
               <p className="text-label text-text-secondary">
                 Setup continues when that account is available.
@@ -70,7 +70,7 @@ function OwnedAccountSetupPage() {
     return expectedUser && expectedUser !== account?.userId ? null : account;
   });
   const targetUser = scope ? getServerUser(scope.serverId) : null;
-  const serverName = useServerListStore(s => scope?.serverId === LOCAL_SERVER_ID ? 'current server' : s.servers.find(server => server.id === scope?.serverId)?.name ?? 'unavailable server');
+  const serverName = useServerListStore(s => scope?.serverId === LOCAL_SERVER_ID ? 'current instance' : s.servers.find(server => server.id === scope?.serverId)?.name ?? 'unavailable instance');
   const returnTo = searchParams.get('returnTo');
   const destination = returnTo?.startsWith('/app/') && !returnTo.includes('\\') ? returnTo : '/app';
   const existingIdentity = useAccountStore(s => s.publicKey);
@@ -140,7 +140,7 @@ function OwnedAccountSetupPage() {
     }
 
     if (isMigration && !scope) {
-      setError('Sign in to the intended server account before setting up encryption.');
+      setError('Sign in to the intended instance account before setting up encryption.');
       return;
     }
     setLoading(true);
@@ -149,7 +149,7 @@ function OwnedAccountSetupPage() {
       if (isMigration && scope) context = captureScopedOperation(scope);
       const account = useAccountStore.getState();
       if (context?.user.public_key && !account.hasAccount()) {
-        throw new Error('This server account already has an identity. Restore its recovery phrase instead of creating a replacement.');
+        throw new Error('This instance account already has an identity. Restore its recovery phrase instead of creating a replacement.');
       }
       if (account.hasAccount()) {
         // Reuse the saved identity after a failed attach or reload. Never replace
@@ -323,13 +323,13 @@ function OwnedAccountSetupPage() {
               title={isMigration ? 'Secure your account' : 'Set up a local identity'}
               subtitle={
                 isMigration
-                  ? 'Attach your device identity to this server account for encrypted messages and key-based sign-in.'
+                  ? 'Attach your device identity to this instance account for encrypted messages and key-based sign-in.'
                   : 'Create a device-held identity for passwordless, challenge-response sign-in. Optional — you can skip it.'
               }
             />
           </div>
 
-          {isMigration && scope && <p className="text-label text-text-secondary">Server account: {targetUser?.username} ({serverName})</p>}
+          {isMigration && scope && <p className="text-label text-text-secondary">Instance account: {targetUser?.username} ({serverName})</p>}
           {existingIdentity && (
             <p className="text-meta text-text-secondary">
               Using saved identity <span className="pc-mono">{existingIdentity.slice(0, 12)}…</span>
@@ -366,7 +366,7 @@ function OwnedAccountSetupPage() {
               required
               hint={
                 hasSavedIdentity ? 'Unlocks the identity already saved on this device.' : isMigration
-                  ? 'Encrypts your new account key on this device. It can differ from your server password.'
+                  ? 'Encrypts your new account key on this device. It can differ from your sign-in password.'
                   : 'Encrypts your account key on this device. At least 10 characters.'
               }
             >
@@ -393,10 +393,10 @@ function OwnedAccountSetupPage() {
             </Field>}
 
             {isMigration && <>
-              <Field label="Current server password" required hint="Authenticates this change on the server. It can differ from your encryption password.">
+              <Field label="Current sign-in password" required hint="Authenticates this change on the instance. It can differ from your encryption password.">
                 <Input type="password" value={serverPassword} onChange={e => setServerPassword(e.target.value)} required autoComplete="current-password" />
               </Field>
-              <Field label="Two-factor or backup code" hint="Required if two-factor authentication is enabled on this server account.">
+              <Field label="Two-factor or backup code" hint="Required if two-factor authentication is enabled on this instance account.">
                 <Input value={mfaCode} onChange={e => setMfaCode(e.target.value)} autoComplete="one-time-code" className="pc-mono" />
               </Field>
             </>}

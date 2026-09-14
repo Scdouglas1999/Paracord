@@ -65,7 +65,7 @@ describe('the lights-on tracker (§5.1, §5.3)', () => {
     expect(tracker.observe({ ...on, nowMs: 150 })).toBeNull();
   });
 
-  it('a building that empties is not a building that was never lit', () => {
+  it('a server that empties is not a server that was never lit', () => {
     const tracker = createLightsOnTracker();
     expect(tracker.observe({ ...on, nowMs: 0 })).toBe('first');
     expect(tracker.observe({ ...on, presenceResolved: false, nowMs: 100 })).toBeNull();

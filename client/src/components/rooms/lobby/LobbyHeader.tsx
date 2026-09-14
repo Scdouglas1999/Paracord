@@ -86,7 +86,7 @@ export const LobbyHeader = React.forwardRef<HTMLElement, LobbyHeaderProps>(funct
           </Button>
         )}
         {onSettings && (
-          <IconButton label="Building settings" onClick={onSettings}>
+          <IconButton label="Server settings" onClick={onSettings}>
             <Settings size={18} aria-hidden />
           </IconButton>
         )}

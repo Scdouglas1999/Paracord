@@ -52,7 +52,7 @@ async function setup(page: Page, id: string, returnTo: string) {
   await page.goto(`${origin}/setup?${new URLSearchParams({ migrate: '1', server: '__local__', user: id, returnTo })}`);
   await page.getByLabel('New encryption password', { exact: false }).fill(encryptionPassword);
   await page.getByLabel('Confirm password', { exact: false }).fill(encryptionPassword);
-  await page.getByLabel('Current server password', { exact: false }).fill(password);
+  await page.getByLabel('Current sign-in password', { exact: false }).fill(password);
   await page.getByRole('button', { name: 'Secure account' }).click();
   await expect(page.getByRole('heading', { name: 'Recovery phrase' }).or(page.getByRole('alert'))).toBeVisible();
   if (await page.getByRole('alert').isVisible()) throw new Error(await page.getByRole('alert').innerText());

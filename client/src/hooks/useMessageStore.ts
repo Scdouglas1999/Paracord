@@ -5,7 +5,7 @@ import { useAvailableAccountScopes } from './useAvailableAccountScopes';
 import { accountScopeKey } from '../lib/serverScope';
 import type { AccountScope } from '../lib/serverScope';
 
-const unavailable = (): never => { throw new Error('Sign in to this server before accessing messages.'); };
+const unavailable = (): never => { throw new Error('Sign in to this instance before accessing messages.'); };
 const emptyStore = Object.assign(create<MessageState>(() => ({
   messages: {}, hasMore: {}, loading: {}, messageErrors: {}, pins: {}, decryptingIds: new Set(), deletedMessageIds: new Set(), offlineQueue: [],
   fetchMessages: unavailable, sendMessage: unavailable, scheduleMessage: unavailable, editScheduledMessage: unavailable,

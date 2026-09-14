@@ -57,7 +57,7 @@ export function presenceLight(status: PresenceStatus | null | undefined): Presen
     case 'online':
       return { ...LIT, label: 'Lights on' };
     case 'streaming':
-      return { ...LIT, live: true, label: 'Live in a room' };
+      return { ...LIT, live: true, label: 'Live in a voice channel' };
     case 'idle':
       return { ...MATTE, label: 'Away' };
     case 'dnd':

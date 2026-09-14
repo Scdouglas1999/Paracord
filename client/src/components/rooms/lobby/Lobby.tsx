@@ -368,10 +368,10 @@ export function Lobby({ guildId }: LobbyProps) {
           lightsOn={building?.lightsOn ?? 0}
         />
 
-        <section aria-label="Rooms" className="flex flex-col gap-3">
+        <section aria-label="Voice channels" className="flex flex-col gap-3">
           {voiceRooms.length === 0 && !canOpenRoom ? (
             <p className="text-label text-text-muted">
-              This building has no rooms yet — its text rooms are below.
+              This server has no voice channels yet — its text channels are below.
             </p>
           ) : (
             <>
@@ -437,7 +437,7 @@ export function Lobby({ guildId }: LobbyProps) {
             the reference render puts nothing above them. The landmark is named
             for assistive tech instead. */}
         {textRooms.length > 0 && (
-          <section aria-label="Text rooms">
+          <section aria-label="Text channels">
             <div className="grid grid-cols-1 gap-x-5 gap-y-2.5 xl:grid-cols-2">
               {textRooms.map((room) => {
                 const loaded = messagesByChannel[room.channelId] ?? [];

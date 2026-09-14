@@ -118,8 +118,8 @@ describe('the words Home adds', () => {
     expect(roomActivityLine(voice({ occupants: [] }))).toBe("Dark · nobody's in");
   });
 
-  it('never contradicts itself about a building with people but no lit room', () => {
-    expect(buildingMetaCaption(litBuilding())).toMatch(/^3 in · 1 room lit/);
+  it('never contradicts itself about a server with people but no lit room', () => {
+    expect(buildingMetaCaption(litBuilding())).toMatch(/^3 in · 1 call live/);
     expect(buildingMetaCaption({ lightsOn: 6, roomsLit: 0, readingCount: 0, caption: 'x' })).toBe(
       '6 in · quiet',
     );
@@ -171,7 +171,7 @@ describe('what Home picks out of the light models', () => {
     expect(people).toHaveLength(1);
   });
 
-  it('treats only a lit voice room as a lit building', () => {
+  it('treats only a lit voice room as a lit server', () => {
     expect(isLitBuilding(litBuilding())).toBe(true);
     expect(isLitBuilding(quietBuilding())).toBe(false);
     expect(litTextRooms(litBuilding()).map((room) => room.name)).toEqual(['build-log']);
@@ -180,14 +180,14 @@ describe('what Home picks out of the light models', () => {
   });
 });
 
-describe('a lit building card', () => {
+describe('a lit server card', () => {
   it('shows the room, who is in it, what they are doing, and Join in white light', async () => {
     const on = handlers();
     render(<HomeBuildingCard building={litBuilding()} mentions={new Map()} {...on} />);
     const card = screen.getByRole('article', { name: 'Kestrel Robotics' });
     expect(within(card).getByText(/LIVE/)).toBeInTheDocument();
     expect(within(card).getByText('Mara is sharing a screen')).toBeInTheDocument();
-    expect(within(card).getByText(/^3 in · 1 room lit/)).toBeInTheDocument();
+    expect(within(card).getByText(/^3 in · 1 call live/)).toBeInTheDocument();
     const join = within(card).getByRole('button', { name: 'Join' });
     expect(join.className).toContain('bg-light-white');
     await userEvent.click(join);
@@ -218,12 +218,12 @@ describe('a lit building card', () => {
     );
     // Two rooms in the map, plus the 8px dot on the text-room line.
     expect(container.querySelectorAll('.pc-window.is-large')).toHaveLength(2);
-    expect(screen.getByText(/2 of 2 rooms lit/)).toBeInTheDocument();
+    expect(screen.getByText(/2 of 2 channels lit/)).toBeInTheDocument();
   });
 
 });
 
-describe('a quiet building row', () => {
+describe('a quiet server row', () => {
   it('is a compact row with its counts, its windows and its one active text room', () => {
     const handle = handlers();
     render(<HomeBuildingCard building={quietBuilding()} mentions={new Map()} {...handle} />);
@@ -234,7 +234,7 @@ describe('a quiet building row', () => {
     expect(within(row).queryByRole('button', { name: 'Join' })).not.toBeInTheDocument();
   });
 
-  it('opens the building from its name', async () => {
+  it('opens the server from its name', async () => {
     const handle = handlers();
     render(<HomeBuildingCard building={quietBuilding()} mentions={new Map()} {...handle} />);
     await userEvent.click(screen.getByRole('button', { name: 'Saltmarsh Sailing' }));
@@ -358,7 +358,7 @@ describe('Pick up where you left off', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('lights a row only when the building says that room is lit', () => {
+  it('lights a row only when the server says that channel is lit', () => {
     const row = entry();
     const { container, rerender } = render(
       <HomePickUp entries={[row]} litRooms={new Set()} onOpen={vi.fn()} />,
@@ -377,12 +377,12 @@ describe('Pick up where you left off', () => {
   });
 });
 
-describe('Add a building', () => {
+describe('Add a server', () => {
   it('is one row that says both ways in', async () => {
     const onClick = vi.fn();
     render(<HomeAddBuilding onClick={onClick} />);
     await userEvent.click(
-      screen.getByRole('button', { name: 'Add a building — join with an invite, or start your own' }),
+      screen.getByRole('button', { name: 'Add a server — join with an invite, or start your own' }),
     );
     expect(onClick).toHaveBeenCalled();
   });

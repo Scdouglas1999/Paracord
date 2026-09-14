@@ -35,7 +35,7 @@ it('keeps the created key after a failed attach and retries with the separate se
   setup(); const user = userEvent.setup();
   await user.type(screen.getByLabelText('New encryption password', { exact: false }), 'local encryption password');
   await user.type(screen.getByLabelText('Confirm password', { exact: false }), 'local encryption password');
-  await user.type(screen.getByLabelText('Current server password', { exact: false }), 'wrong server password');
+  await user.type(screen.getByLabelText('Current sign-in password', { exact: false }), 'wrong server password');
   await user.type(screen.getByLabelText('Two-factor or backup code'), '123456');
   await user.click(screen.getByRole('button', { name: 'Secure account' }));
   expect(await screen.findByText('Server password rejected')).toBeInTheDocument();
@@ -43,8 +43,8 @@ it('keeps the created key after a failed attach and retries with the separate se
   expect(create).toHaveBeenCalledWith('alice', 'local encryption password', undefined);
   expect(enrollment.attach.mock.calls[0][1]).toBe('wrong server password');
   expect(enrollment.attach.mock.calls[0][2]).toBe('123456');
-  await user.clear(screen.getByLabelText('Current server password', { exact: false }));
-  await user.type(screen.getByLabelText('Current server password', { exact: false }), 'correct server password');
+  await user.clear(screen.getByLabelText('Current sign-in password', { exact: false }));
+  await user.type(screen.getByLabelText('Current sign-in password', { exact: false }), 'correct server password');
   await user.click(screen.getByRole('button', { name: 'Secure account' }));
   expect(await screen.findByText('Recovery phrase', { exact: true })).toBeInTheDocument();
   expect(create).toHaveBeenCalledTimes(1);
@@ -59,7 +59,7 @@ it('unlocks a saved identity instead of replacing it after reopening setup', asy
   useAccountStore.setState({ publicKey: 'a'.repeat(64), isUnlocked: false });
   setup(); const user = userEvent.setup();
   await user.type(screen.getByLabelText('Encryption password', { exact: false }), 'existing encryption password');
-  await user.type(screen.getByLabelText('Current server password', { exact: false }), 'server password');
+  await user.type(screen.getByLabelText('Current sign-in password', { exact: false }), 'server password');
   await user.click(screen.getByRole('button', { name: 'Secure account' }));
   expect(await screen.findByText('Recovery phrase', { exact: true })).toBeInTheDocument();
   expect(unlock).toHaveBeenCalledWith('existing encryption password'); expect(create).not.toHaveBeenCalled();
@@ -76,7 +76,7 @@ it('waits for profile hydration before binding a reloaded setup page', async () 
   const server = useServerListStore.getState().servers[0];
   useServerListStore.setState({ servers: [{ ...server, user: undefined, userId: undefined }] });
   setup();
-  expect(screen.getByText('Waiting for your server account')).toBeInTheDocument();
+  expect(screen.getByText('Waiting for your instance account')).toBeInTheDocument();
   act(() => useServerListStore.setState({ servers: [server] }));
   expect(await screen.findByLabelText('Username', { exact: false })).toHaveValue('alice');
   expect(screen.getByRole('button', { name: 'Secure account' })).toBeInTheDocument();

@@ -63,7 +63,7 @@ export function RoomChat({
       onToggle={onToggleExpanded}
       actions={
         isPhone ? undefined : (
-          <IconButton label="Close the room chat" size="sm" tone="ghost" onClick={onClose}>
+          <IconButton label="Close the call chat" size="sm" tone="ghost" onClick={onClose}>
             <X size={16} />
           </IconButton>
         )
@@ -79,7 +79,7 @@ export function RoomChat({
         />
       }
     >
-      <ErrorBoundary variant="section" label="the room chat">
+      <ErrorBoundary variant="section" label="the call chat">
         <MessageList
           variant="ribbon"
           channelId={channelId}

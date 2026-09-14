@@ -32,7 +32,7 @@ describe('owned guild navigation', () => {
     expect(useServerListStore.getState().activeServerId).toBe('a');
     expect(useGuildStore.getState().selectedGuild).toEqual({ id: '1', scope: a });
   });
-  it('opens the building home when no channels are currently visible', async () => {
+  it('opens the server home when no channels are currently visible', async () => {
     clients.get('a')!.defaults.adapter = async config => reply(config, config.url?.endsWith('/visible') ? { channel_ids: [] } : [{ id: '2', type: 0, position: 0 }]);
     expect(await guildLandingPath(guild())).toBe('/app/guilds/1');
   });

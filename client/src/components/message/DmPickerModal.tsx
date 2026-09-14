@@ -75,7 +75,7 @@ export function DmPickerModal({ open, onClose, onCreated }: DmPickerModalProps) 
     setError(null);
     setSubmitting(true);
     try {
-      if (!scope) throw new Error('Sign in to this server before messaging.');
+      if (!scope) throw new Error('Sign in to this instance before messaging.');
       const data = await useChannelStore.getState().createDm(userId, scope);
       commitChannel(data);
     } catch (err) {
@@ -150,7 +150,7 @@ export function DmPickerModal({ open, onClose, onCreated }: DmPickerModalProps) 
             <p className="pc-display text-name text-text-primary">Group conversations aren’t ready yet</p>
             <p className="mt-1 break-words text-body text-text-body">{GROUP_DM_LIMITATION}</p>
             <p className="mt-2 break-words text-meta text-text-faint">
-              Start a direct message instead, or open a room in a building for more than two people.
+              Start a direct message instead, or open a channel in a server for more than two people.
             </p>
           </div>
         </div>

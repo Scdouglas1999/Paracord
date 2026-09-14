@@ -239,7 +239,7 @@ export function HomePage() {
               className="px-0 pb-0.5 pt-0"
               meta={buildings.length > 1 ? 'brightest first' : undefined}
             >
-              Your buildings
+              Your servers
             </SectionLabel>
             {buildings.map((building) => (
               <HomeBuildingCard

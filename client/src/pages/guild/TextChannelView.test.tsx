@@ -111,7 +111,7 @@ describe('a thread view', () => {
 
   it('says so plainly when the room the thread lives in is gone', () => {
     renderThread(THREAD, [THREAD]);
-    expect(screen.getByText('a room you can no longer see')).toBeInTheDocument();
+    expect(screen.getByText('a channel you can no longer see')).toBeInTheDocument();
   });
 
   it('leaves an ordinary room alone', () => {

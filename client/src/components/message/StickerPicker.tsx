@@ -43,7 +43,7 @@ export function StickerPicker({ guildId, onSelect, onClose }: StickerPickerProps
 
   const fetchStickers = useCallback(async () => {
     if (!guildId) {
-      setError('No guild selected.');
+      setError('No server selected.');
       return;
     }
     setLoading(true);

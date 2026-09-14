@@ -66,7 +66,7 @@ export function InteractionModal() {
         };
       });
       if (!activeModal.channelId || !activeModal.guildId || !activeModal.applicationId) {
-        toast.error('Modal is missing channel or guild context. Dismiss and try again.');
+        toast.error('Modal is missing channel or server context. Dismiss and try again.');
         return;
       }
       await getApi().post('/interactions', {

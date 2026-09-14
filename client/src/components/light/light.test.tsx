@@ -125,12 +125,12 @@ describe('WindowMap', () => {
       text({ typingUserIds: ['1'], order: 2 }),
     ];
     const { container } = render(
-      <WindowMap windows={building(rooms).windows} caption="1 room lit · 1 reading" />,
+      <WindowMap windows={building(rooms).windows} caption="1 call live · 1 reading" />,
     );
     expect(container.querySelectorAll('.pc-window')).toHaveLength(3);
     expect(container.querySelectorAll('.pc-window.is-talking')).toHaveLength(1);
     expect(container.querySelectorAll('.pc-window.is-reading')).toHaveLength(1);
-    expect(screen.getByText('1 room lit · 1 reading')).toBeTruthy();
+    expect(screen.getByText('1 call live · 1 reading')).toBeTruthy();
   });
 
   it('never draws more than eight per row', () => {
@@ -151,7 +151,7 @@ describe('WindowMap', () => {
     );
     const built = building(rooms);
     render(<WindowMap windows={built.windows} overflowCount={built.overflowCount} />);
-    expect(screen.getByText(/0 of 20 rooms lit, 4 more not shown/)).toBeTruthy();
+    expect(screen.getByText(/0 of 20 channels lit, 4 more not shown/)).toBeTruthy();
   });
 });
 
@@ -175,9 +175,9 @@ describe('BuildingPlate', () => {
     expect(container.querySelectorAll('.pc-lamp')).toHaveLength(1);
   });
 
-  it('shows the building caption', () => {
+  it('shows the server caption', () => {
     render(<BuildingPlate building={building([voice({ occupants: [{ person: MARA }] })])} />);
-    expect(screen.getAllByText('1 room lit').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('1 call live').length).toBeGreaterThan(0);
   });
 });
 
@@ -255,7 +255,7 @@ describe('HereNowStrip', () => {
       <HereNowStrip hereNow={{ people: [], here: 0, lightsOn: 0, caption: '0 here · 0 lights on' }} />,
     );
     fireEvent.click(screen.getByRole('button'));
-    expect(screen.getByText(/say something and the room lights up/)).toBeTruthy();
+    expect(screen.getByText(/say something and the channel lights up/)).toBeTruthy();
   });
 });
 

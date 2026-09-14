@@ -6,7 +6,7 @@ const SECTIONS: LegalSection[] = [
     id: 'overview',
     heading: 'Overview',
     body: [
-      'These terms govern your use of this Paracord deployment. Paracord is self-hosted software; this server is run by an independent operator who sets the rules that apply on top of these baseline terms.',
+      'These terms govern your use of this Paracord deployment. Paracord is self-hosted software; this instance is run by an independent operator who sets the rules that apply on top of these baseline terms.',
       'By creating an account or using the service, you agree to these terms and to any additional community rules the operator publishes.',
     ],
   },
@@ -31,14 +31,14 @@ const SECTIONS: LegalSection[] = [
     heading: 'Content and moderation',
     body: [
       'You retain ownership of the content you create. By posting, you grant this deployment the limited technical permissions needed to store and display your content to its intended audience.',
-      'Server operators and their moderators may remove content, suspend accounts, or restrict access to enforce local rules or applicable law. Where a conversation is end-to-end encrypted, moderation relies on reports and metadata rather than message contents.',
+      'Instance operators and their moderators may remove content, suspend accounts, or restrict access to enforce local rules or applicable law. Where a conversation is end-to-end encrypted, moderation relies on reports and metadata rather than message contents.',
     ],
   },
   {
     id: 'federation',
     heading: 'Federation',
     body: [
-      'When you interact across federated servers, your content is delivered to and governed by those peer servers as well. Each peer applies its own terms and moderation. Consider this before sharing sensitive content across a federation boundary.',
+      'When you interact across federated instances, your content is delivered to and governed by those peer instances as well. Each peer applies its own terms and moderation. Consider this before sharing sensitive content across a federation boundary.',
     ],
   },
   {
@@ -46,7 +46,7 @@ const SECTIONS: LegalSection[] = [
     heading: 'Availability and backups',
     body: [
       'Availability is provided on a best-effort basis. The service may be unavailable for maintenance, upgrades, or reasons outside the operator’s control, and no specific uptime is guaranteed.',
-      'Backups and data retention are managed by the server operator. Keep your own copies of anything you cannot afford to lose.',
+      'Backups and data retention are managed by the instance operator. Keep your own copies of anything you cannot afford to lose.',
     ],
   },
   {

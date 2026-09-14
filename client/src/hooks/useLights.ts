@@ -493,7 +493,7 @@ export function useOnAir(): OnAir | null {
     return {
       room,
       roomName: room?.name
-        ?? (isDirectMessage ? (dmName ?? 'this conversation') : (channel?.name ?? 'the room')),
+        ?? (isDirectMessage ? (dmName ?? 'this conversation') : (channel?.name ?? 'the channel')),
       isDirectMessage,
       others,
       buildingName: building?.name ?? null,

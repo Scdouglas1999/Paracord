@@ -29,7 +29,7 @@ function HistoryContents({ scope, channelId, messageId, onClose, onRetry }: Omit
     let context: OperationContext | undefined;
     const expired = () => { if (active) onClose(); };
     void (async () => {
-      if (!serverId || !userId) throw new Error('Sign in to this server to view message history.');
+      if (!serverId || !userId) throw new Error('Sign in to this instance to view message history.');
       const operation = captureScopedOperation({ serverId, userId });
       context = operation;
       operation.signal.addEventListener('abort', expired, { once: true });
@@ -41,7 +41,7 @@ function HistoryContents({ scope, channelId, messageId, onClose, onRetry }: Omit
         || typeof entry.content !== 'string' || typeof entry.edited_at !== 'string'
         || !Number.isFinite(Date.parse(entry.edited_at)))
         || new Set(entries.map(entry => entry.id)).size !== entries.length) {
-        throw new Error('The server returned invalid history for this message.');
+        throw new Error('The instance returned invalid history for this message.');
       }
       setState({ kind: 'ready', entries });
     })().catch(error => {

@@ -277,7 +277,7 @@ export default function MediaTest() {
               </span>
             </h2>
             {participants.length === 0 ? (
-              <p className="text-meta text-text-secondary">Waiting for peers to join the room.</p>
+              <p className="text-meta text-text-secondary">Waiting for peers to join the call.</p>
             ) : (
               <div className="flex flex-col gap-1.5">
                 {participants.map((p) => (

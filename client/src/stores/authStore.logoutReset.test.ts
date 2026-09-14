@@ -85,7 +85,7 @@ function seedSignedInSession() {
   useChannelStore.getState().selectChannel({ id: 'ch1', scope: { serverId: '__local__', userId: 'first-user' } });
 
   useGuildStore.setState({
-    guilds: [{ id: 'g1', name: "First user's building" } as never],
+    guilds: [{ id: 'g1', name: "First user's server" } as never],
     selectedGuild: { id: 'g1', scope: { serverId: '__local__', userId: 'user-1' } },
   });
 

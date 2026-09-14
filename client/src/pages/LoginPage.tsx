@@ -240,7 +240,7 @@ export function LoginPage() {
       // sentence still on screen.
       if (!response) {
         setError(
-          `Could not reach ${serverUrl ?? 'the server'}. It may be restarting, or this machine cannot see it. Your password was not the problem.`,
+          `Could not reach ${serverUrl ?? 'the instance'}. It may be restarting, or this machine cannot see it. Your password was not the problem.`,
         );
         return;
       }
@@ -292,7 +292,7 @@ export function LoginPage() {
     try {
       await authApi.forgotPassword(resetIdentifier);
       setSuccessMsg(
-        'If the account exists, a reset token has been generated. Check the server logs or contact your administrator to obtain the token, then enter it below.'
+        'If the account exists, a reset token has been generated. Check the instance logs or contact your administrator to obtain the token, then enter it below.'
       );
       setView('reset-password');
     } catch {
@@ -530,7 +530,7 @@ export function LoginPage() {
           <form onSubmit={handleVerifyEmail} className={AUTH_FORM}>
             <AuthHeading
               title="Verify email"
-              subtitle="Enter the verification token your server administrator issued for your account."
+              subtitle="Enter the verification token your instance administrator issued for your account."
             />
 
             {error && <ErrorBanner multiline message={error} />}
@@ -567,7 +567,7 @@ export function LoginPage() {
           <form onSubmit={handleSubmit} className={AUTH_FORM}>
             <AuthHeading
               title="Welcome back"
-              subtitle="Sign in to pick up where you left off across your buildings."
+              subtitle="Sign in to pick up where you left off across your servers."
             />
 
             {sessionNotice && !error && (
@@ -674,7 +674,7 @@ export function LoginPage() {
                   onClick={handleChangeServer}
                   className="font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
                 >
-                  Change server
+                  Change instance
                 </button>
               </div>
             )}

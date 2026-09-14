@@ -213,7 +213,7 @@ export function FriendsPage() {
         normalized.response?.data?.message ||
         normalized.response?.data?.error ||
         (normalized.response?.status === 422
-          ? 'Server rejected this format. Try using the user ID instead of username.'
+          ? 'The instance rejected this format. Try using the user ID instead of username.'
           : extractApiError(err));
       setAddFriendStatus({ type: 'error', message: errorMessage });
     } finally {
@@ -255,7 +255,7 @@ export function FriendsPage() {
     setRelationshipError(null);
     startAction(actionKey);
     try {
-      if (!channelScope) throw new Error('Sign in to this server before messaging.');
+      if (!channelScope) throw new Error('Sign in to this instance before messaging.');
       const data = await useChannelStore.getState().createDm(userId, channelScope);
       activateChannel(data);
       navigate(`/app/dms/${data.id}`);
@@ -307,7 +307,7 @@ export function FriendsPage() {
           </span>
           <div className="min-w-0 flex-1">
             <h1 className="font-display text-heading text-text-primary">Friends</h1>
-            <p className="text-meta text-text-muted">People you can DM, share buildings with, and see around.</p>
+            <p className="text-meta text-text-muted">People you can DM, share servers with, and see around.</p>
           </div>
           <Button
             onClick={() => (showAddFriend ? setShowAddFriend(false) : openAddFriend())}
@@ -653,7 +653,7 @@ function FriendsEmptyState({
         <EmptyState
           icon={<UserRoundPlus size={20} />}
           title="Your friends list is empty"
-          description="Add people by their username with the Add friend button up top to start DMs, share buildings, and see when they're around. All it takes is their handle."
+          description="Add people by their username with the Add friend button up top to start DMs, share servers, and see when they're around. All it takes is their handle."
           action={
             <Button size="sm" onClick={onAdd}>
               Add your first friend

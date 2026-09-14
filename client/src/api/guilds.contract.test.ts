@@ -27,12 +27,12 @@ describe('production guild HTTP contracts', () => {
   it('accepts actual detail for reads and mutations and retains transport metadata', async () => {
     const detail = guildDetailFixture();
     const { api, adapter } = clientWith(detail, 201);
-    const created = await api.create({ name: 'Test Building', icon: null });
+    const created = await api.create({ name: 'Test Server', icon: null });
     expect(created.data).toBe(detail);
     expect(created.status).toBe(201);
     expect(created.headers['x-request-id']).toBe('contract-test');
     expect(adapter.mock.calls[0][0]).toMatchObject({
-      method: 'post', url: '/guilds', data: JSON.stringify({ name: 'Test Building', icon: null }),
+      method: 'post', url: '/guilds', data: JSON.stringify({ name: 'Test Server', icon: null }),
     });
     expect((await api.get('1001')).data).toBe(detail);
     expect((await api.update('1001', { description: 'Updated' })).data).toBe(detail);
@@ -42,7 +42,7 @@ describe('production guild HTTP contracts', () => {
   it('rejects summary-shaped responses on all full-detail routes', async () => {
     const { api } = clientWith(guildSummaryFixture());
     for (const request of [
-      () => api.get('1001'), () => api.create({ name: 'Test Building' }),
+      () => api.get('1001'), () => api.create({ name: 'Test Server' }),
       () => api.update('1001', { name: 'Renamed' }), () => api.joinPublic('1001'),
     ]) {
       await expect(request()).rejects.toBeInstanceOf(ApiContractError);

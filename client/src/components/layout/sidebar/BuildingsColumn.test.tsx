@@ -17,7 +17,7 @@ import { BuildingsColumn, ROOM_ROWS_VISIBLE } from './BuildingsColumn';
  *
  * Every case here is a state the contract names — a lit voice room, a dark one,
  * a text room, the open room, the open Lobby, no buildings at all, a building
- * with more rooms than fit, and an account with more buildings than fit. The
+ * with more channels than fit, and an account with more buildings than fit. The
  * models come from `lib/attention/light`, never from hand-written props, so a
  * row can only look wrong here if the light itself is wrong.
  */
@@ -130,7 +130,7 @@ describe('BuildingsColumn', () => {
     expect(screen.queryByLabelText(/unread/)).not.toBeInTheDocument();
   });
 
-  it('draws a building as its label, its window map plate and its rooms', () => {
+  it('draws a server as its label, its window map plate and its rooms', () => {
     renderColumn();
     const section = screen.getByRole('group', { name: 'Kestrel Robotics' });
 
@@ -140,7 +140,7 @@ describe('BuildingsColumn', () => {
 
     // The plate is the Lobby link and says what the building is doing.
     const plate = within(section).getByRole('option', { name: /lobby/ });
-    expect(plate).toHaveAccessibleName(/1 room lit · 3 reading/);
+    expect(plate).toHaveAccessibleName(/1 call live · 3 reading/);
     fireEvent.click(plate);
     expect(handlers.onOpenLobby).toHaveBeenCalledWith(expect.objectContaining({ guildId: 'g1' }));
   });
@@ -209,7 +209,7 @@ describe('BuildingsColumn', () => {
 
   it('hangs the open thread off its room without spending a room slot', () => {
     // A thread is not a room (§7.1). It never competes for the fold, it never
-    // pushes its own parent behind "N more rooms", and the one you are in is an
+    // pushes its own parent behind "N more channels", and the one you are in is an
     // indented row under the room that owns it so the column can say where you
     // are.
     const onOpenThread = vi.fn();
@@ -235,16 +235,16 @@ describe('BuildingsColumn', () => {
     expect(onOpenThread).toHaveBeenCalledTimes(1);
   });
 
-  it('asks for the first building in the metaphor when there are none', () => {
+  it('asks for the first server in the metaphor when there are none', () => {
     renderColumn({ buildings: [] });
     expect(
-      screen.getByText('Add a building — join with an invite, or start your own.'),
+      screen.getByText('Add a server — join with an invite, or start your own.'),
     ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Add a building' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add a server' }));
     expect(handlers.onAddBuilding).toHaveBeenCalled();
   });
 
-  it('folds a building past eight rooms behind one row, and unfolds it on request', () => {
+  it('folds a server past eight rooms behind one row, and unfolds it on request', () => {
     const many = Array.from({ length: 14 }, (_room, index) =>
       text({ channelId: `t${index}`, name: `room-${index}`, order: index }),
     );
@@ -253,11 +253,11 @@ describe('BuildingsColumn', () => {
 
     // The plate, ROOM_ROWS_VISIBLE rooms and the expander.
     expect(within(section).getAllByRole('option')).toHaveLength(ROOM_ROWS_VISIBLE + 2);
-    const expander = within(section).getByRole('option', { name: '6 more rooms' });
+    const expander = within(section).getByRole('option', { name: '6 more channels' });
 
     fireEvent.click(expander);
     expect(within(section).getAllByRole('option')).toHaveLength(16);
-    fireEvent.click(within(section).getByRole('option', { name: 'Fewer rooms' }));
+    fireEvent.click(within(section).getByRole('option', { name: 'Fewer channels' }));
     expect(within(section).getAllByRole('option')).toHaveLength(ROOM_ROWS_VISIBLE + 2);
   });
 
@@ -265,7 +265,7 @@ describe('BuildingsColumn', () => {
     const many = Array.from({ length: 14 }, (_room, index) =>
       text({ channelId: `t${index}`, name: `room-${index}`, order: index }),
     );
-    // room-12 would sit behind "N more rooms" on light alone.
+    // room-12 would sit behind "N more channels" on light alone.
     const buried = many[12];
     renderColumn({
       buildings: [building(many)],
@@ -275,7 +275,7 @@ describe('BuildingsColumn', () => {
     expect(within(section).getAllByRole('option')).toHaveLength(ROOM_ROWS_VISIBLE + 2);
     expect(within(section).getByRole('option', { name: /room-12/ })).toBeInTheDocument();
     // The fold still accounts for every room it hid.
-    expect(within(section).getByRole('option', { name: '6 more rooms' })).toBeInTheDocument();
+    expect(within(section).getByRole('option', { name: '6 more channels' })).toBeInTheDocument();
   });
 
   it('leaves the light order alone when nothing behind the fold needs you', () => {
@@ -291,11 +291,11 @@ describe('BuildingsColumn', () => {
     expect(within(section).getByRole('option', { name: /room-7/ })).toBeInTheDocument();
   });
 
-  it('turns into an accordion past the building threshold, keeping lit and open buildings open', () => {
+  it('turns into an accordion past the server threshold, keeping lit and open servers open', () => {
     const dark = Array.from({ length: 10 }, (_building, index) =>
       building([text({ channelId: `d${index}`, name: `notes-${index}` })], {
         guildId: `g${index + 2}`,
-        name: `Building ${index}`,
+        name: `Server ${index}`,
         members: [],
       }),
     );
@@ -306,38 +306,38 @@ describe('BuildingsColumn', () => {
     expect(
       within(screen.getByRole('group', { name: 'Kestrel Robotics' })).getAllByRole('option'),
     ).toHaveLength(3);
-    const folded = screen.getByRole('group', { name: 'Building 0' });
+    const folded = screen.getByRole('group', { name: 'Server 0' });
     expect(within(folded).getAllByRole('option')).toHaveLength(2);
-    fireEvent.click(within(folded).getByRole('option', { name: '1 more room' }));
+    fireEvent.click(within(folded).getByRole('option', { name: '1 more channel' }));
     expect(within(folded).getAllByRole('option')).toHaveLength(3);
   });
 
-  it('keeps the open building unfolded even in the accordion', () => {
+  it('keeps the open server unfolded even in the accordion', () => {
     const dark = Array.from({ length: 10 }, (_building, index) =>
       building([text({ channelId: `d${index}`, name: `notes-${index}` })], {
         guildId: `g${index + 2}`,
-        name: `Building ${index}`,
+        name: `Server ${index}`,
         members: [],
       }),
     );
     renderColumn({ buildings: dark, activeBuildingKey: dark[3].key });
-    expect(within(screen.getByRole('group', { name: 'Building 3' })).getAllByRole('option')).toHaveLength(2);
-    expect(within(screen.getByRole('group', { name: 'Building 4' })).getAllByRole('option')).toHaveLength(2);
+    expect(within(screen.getByRole('group', { name: 'Server 3' })).getAllByRole('option')).toHaveLength(2);
+    expect(within(screen.getByRole('group', { name: 'Server 4' })).getAllByRole('option')).toHaveLength(2);
     // Building 3 spends its second row on the room; Building 4 on the expander.
     expect(
-      within(screen.getByRole('group', { name: 'Building 3' })).getByRole('option', { name: /notes-3/ }),
+      within(screen.getByRole('group', { name: 'Server 3' })).getByRole('option', { name: /notes-3/ }),
     ).toBeInTheDocument();
   });
 
   it('never wraps a long name — it truncates', () => {
     const long = building([
       text({ channelId: 't9', name: 'a-very-long-room-name-that-will-not-fit-in-276-pixels' }),
-    ], { name: 'A building with an unreasonably long name that must not wrap' });
+    ], { name: 'A server with an unreasonably long name that must not wrap' });
     renderColumn({ buildings: [long] });
     const row = screen.getByRole('option', { name: /a-very-long-room-name/ });
     expect(row.querySelector('.truncate')).not.toBeNull();
     expect(
-      screen.getByText('A building with an unreasonably long name that must not wrap'),
+      screen.getByText('A server with an unreasonably long name that must not wrap'),
     ).toHaveClass('truncate');
   });
 

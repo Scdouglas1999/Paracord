@@ -1,4 +1,4 @@
-# WP3 — The Stage: the room you are in
+# WP3 — The Stage: the channel you are in
 
 Contract: [`docs/lantern-stage-spec.md`](../lantern-stage-spec.md) §7.2, §7.7, §5,
 §6, §8, §9. Depends on [WP0](./wp0-checkpoint.md) and [WP1](./wp1-checkpoint.md).
@@ -18,18 +18,18 @@ wrong, because it *is* the Stage.
 |---|---|
 | `client/src/components/voice/stage/StageTile.tsx` | One tile: 12px-radius well, name tag bottom-left, transport readout top-right, speaking ring, camera-off initials. |
 | `client/src/components/voice/stage/SpeakerGrid.tsx` | The tile layout rules — equal columns in the strip, the old VideoGrid column rules in the speakers-only grid, two columns on a phone. |
-| `client/src/components/voice/stage/StageHeader.tsx` | Room name, "Kestrel · 34:12", the here-now slot, Invite / Layout / more. |
+| `client/src/components/voice/stage/StageHeader.tsx` | Channel name, "Kestrel · 34:12", the here-now slot, Invite / Layout / more. |
 | `client/src/components/voice/stage/StageControlBar.tsx` | The centred control row (46px desktop, 50px phone). |
 | `client/src/components/voice/stage/StageLayout.tsx` | The whole in-call surface: plate + ribbon on desktop, share → 2×2 → controls → sheet on a phone. |
 | `client/src/components/voice/stage/RoomChatRibbon.tsx` | The 336px plate, and its phone sheet with the handle. |
-| `client/src/components/voice/stage/StageStatus.tsx` | The words for a call that is not a room yet — `StageStatus` (fills the tile) and `StageNotice` (one line above it). |
+| `client/src/components/voice/stage/StageStatus.tsx` | The words for a call that is not a channel yet — `StageStatus` (fills the tile) and `StageNotice` (one line above it). |
 | `client/src/components/voice/stage/transportReadout.ts` | What the tile's top-right corner may honestly say. |
 | `client/src/components/voice/CameraSurface.tsx` | The camera attach/subscribe logic, moved verbatim out of the two places that had a copy each. |
-| `client/src/components/voice/StageSpeakers.tsx` | The container: one tile per person **in the room**, frames from `useWebcamTiles`. |
+| `client/src/components/voice/StageSpeakers.tsx` | The container: one tile per person **in the channel**, frames from `useWebcamTiles`. |
 | `client/src/components/voice/OnAirDock.tsx` | WP1's `OnAirPill`, wired to the route back to the Stage. |
 | `client/src/pages/guild/VoiceStageChannel.tsx` | The route: every store read, every media effect, composing `StageLayout`. |
-| `client/src/pages/guild/RoomChat.tsx` | The ribbon's contents — the text room's own list and composer, in their ribbon variant. |
-| `client/src/pages/guild/VoiceLobby.tsx` | The room you are not in yet, restyled to the plate/well system. |
+| `client/src/pages/guild/RoomChat.tsx` | The ribbon's contents — the text channel's own list and composer, in their ribbon variant. |
+| `client/src/pages/guild/VoiceLobby.tsx` | The channel you are not in yet, restyled to the plate/well system. |
 | `client/src/pages/StagePreviewPage.tsx` | `/design-stage`, behind `import.meta.env.DEV`. |
 
 Nothing in `components/voice/stage/` reads a store. The containers
@@ -41,15 +41,15 @@ Nothing in `components/voice/stage/` reads a store. The containers
 
 | Was | Now |
 |---|---|
-| `components/voice/VideoGrid.tsx` (+ test) — one tile per **camera**, four ad-hoc layouts, its own attach logic and its own chrome | **Deleted.** Split into `CameraSurface` (the attach logic), `StageTile` (the chrome), `SpeakerGrid` (the layout rules) and `StageSpeakers` (the container). The strip now shows one tile per **person in the room**, because a room with four people and one camera is four tiles, not one. |
-| `components/voice/MiniVoiceBar.tsx` (+ test) — a second control bar in the app chrome | **Deleted.** `components/voice/OnAirDock.tsx` renders WP1's `OnAirPill`: white dot, room name, mono duration, mic state, one action (§7.7). Call sites updated: `components/layout/sidebar/CallDock.tsx`, `pages/AppShell.tsx` (and the two tests that stubbed it). |
+| `components/voice/VideoGrid.tsx` (+ test) — one tile per **camera**, four ad-hoc layouts, its own attach logic and its own chrome | **Deleted.** Split into `CameraSurface` (the attach logic), `StageTile` (the chrome), `SpeakerGrid` (the layout rules) and `StageSpeakers` (the container). The strip now shows one tile per **person in the channel**, because a channel with four people and one camera is four tiles, not one. |
+| `components/voice/MiniVoiceBar.tsx` (+ test) — a second control bar in the app chrome | **Deleted.** `components/voice/OnAirDock.tsx` renders WP1's `OnAirPill`: white dot, channel name, mono duration, mic state, one action (§7.7). Call sites updated: `components/layout/sidebar/CallDock.tsx`, `pages/AppShell.tsx` (and the two tests that stubbed it). |
 | `pages/guild/VoiceChatSidebar.tsx` — a 460px slide-over with its own header | **Deleted.** `pages/guild/RoomChat.tsx` + `RoomChatRibbon`: the 336px plate beside the Stage, or the phone sheet. |
 | `components/voice/FocusedWebcamView.tsx` — duplicated VideoGrid's attach logic | Rewritten as `StageTile` + `CameraSurface`. Same props, same behaviour. |
 | `components/voice/VoiceControlBar.tsx` — an absolutely-positioned floating bar of 44px controls | Laid out in flow by the Stage, on `StageControlBar` + `IconButton size="stage"`: mic-on is **white light**, leave is danger. Every aria-label, tooltip, menu and the whole screen-share flow are unchanged. |
 | `components/voice/StreamViewer.tsx` — a red "LIVE" badge and a black gradient wash across the top of the frame | Chrome restyled onto the tile recipe: `LiveDot` + name tag bottom-left, transport readout top-right, hover controls on the tag fill in the same corner (so nothing shifts), poster states left-aligned in the metaphor. **The media path is untouched** — the underlay hole-punch, the WebGL canvas, the subscription bookkeeping and the native-surface boundary are all byte-identical. |
 | `components/voice/SplitPane.tsx`, `SplitPaneSourcePicker.tsx`, `InCallDeviceMenu.tsx` | Restyled to tokens (floating recipe, tag fill, stage control height). Behaviour untouched. |
-| `pages/guild/VoiceLobby.tsx` | Restyled to a plate; the Join button is **white light when somebody is in there** and emerald when the room is dark; the gradient avatar ring is gone (§6.2). |
-| `pages/GuildPage.tsx` | The app's `TopBar` is suppressed for voice/stage channels — the Stage plate carries its own header (§7.2), and two titles for one room is a defect. Every other channel type keeps it. |
+| `pages/guild/VoiceLobby.tsx` | Restyled to a plate; the Join button is **white light when somebody is in there** and emerald when the channel is dark; the gradient avatar ring is gone (§6.2). |
+| `pages/GuildPage.tsx` | The app's `TopBar` is suppressed for voice/stage channels — the Stage plate carries its own header (§7.2), and two titles for one channel is a defect. Every other channel type keeps it. |
 
 **Deleted files:** `VideoGrid.tsx`, `VideoGrid.test.tsx`, `MiniVoiceBar.tsx`,
 `MiniVoiceBar.test.tsx`, `VoiceChatSidebar.tsx`.
@@ -58,10 +58,10 @@ Nothing in `components/voice/stage/` reads a store. The containers
 
 ## 3. The Stage, region by region (§7.2)
 
-- **Header** — room name in Gabarito at the title step, `Kestrel · 34:12` in meta
+- **Header** — channel name in Gabarito at the title step, `Kestrel · 34:12` in meta
   with the duration in the mono face, WP1's `HereNowStrip` ("4 here · 20 lights
   on"), then Invite / Layout / more. The name, the duration and the strip all
-  come from the room's light (`useBuildingLight` → the room, `useHereNow`) —
+  come from the channel's light (`useBuildingLight` → the channel, `useHereNow`) —
   **nothing is re-derived** (WP1 §9, rule 1). On a phone the header stacks, folds
   "4 here" into the meta line, keeps three faces, and gains a back affordance.
 - **Dominant tile** — the watched screen share (`StreamViewer`), the split panes,
@@ -73,11 +73,11 @@ Nothing in `components/voice/stage/` reads a store. The containers
   tag says "· muted"; a speaking tile breathes and says "· speaking".
   Somebody sharing who is not already on the dominant tile carries a **Watch**
   action — this is where the old "Pick a stream to watch" list went.
-- **Control bar** — centred, in flow: mic (white light when the room can hear
+- **Control bar** — centred, in flow: mic (white light when the channel can hear
   you), the device menu behind its chevron, headphones, camera, the screen-share
   split control, the chat toggle, and leave in the danger well at 64px (72 on a
   phone).
-- **Chat ribbon** — the room's own text channel, 336px, open by default on
+- **Chat ribbon** — the channel's own text channel, 336px, open by default on
   desktop (§7.2 draws it as part of the Stage) and still toggleable from the
   control bar. On a phone it is the sheet under the controls, with a handle that
   collapses it.
@@ -88,7 +88,7 @@ Nothing in `components/voice/stage/` reads a store. The containers
 
 ### Copy
 
-Every not-yet-a-room state names the room and says one true thing —
+Every not-yet-a-channel state names the channel and says one true thing —
 "Joining Shop floor", "Reconnecting to Shop floor · 3 s", "Leaving Shop floor",
 "Couldn't reach Shop floor". A test asserts that none of the strings contains
 "warming up", "connecting…", "please wait", "loading" or "no data".
@@ -103,8 +103,8 @@ commented at the declaration with the spec section that asks for it.
 | Component | Prop | What it does |
 |---|---|---|
 | `components/message/MessageList.tsx` | `variant?: 'default' \| 'ribbon'` | 28px `LitAvatar`s, tighter rows, the 14/1.45 ribbon body step. Nothing about what is fetched, rendered or announced changes. |
-| | `inRoomUserIds?: ReadonlySet<string>` | Messages written by somebody **in the room right now** get the raised "from the room" background. The set comes from WP1's `useHereNow`; the list never works out who is present. |
-| `components/message/MessageInput.tsx` | `variant?: 'default' \| 'ribbon'` | 42px composer on the well recipe, "Say something to the room", and the send button in **white light** — everybody it reaches is in the room. |
+| | `inRoomUserIds?: ReadonlySet<string>` | Messages written by somebody **in the channel right now** get the raised "from the channel" background. The set comes from WP1's `useHereNow`; the list never works out who is present. |
+| `components/message/MessageInput.tsx` | `variant?: 'default' \| 'ribbon'` | 42px composer on the well recipe, "Say something to the channel", and the send button in **white light** — everybody it reaches is in the channel. |
 
 The ribbon reuses the real list and the real composer; nothing is forked.
 
@@ -211,10 +211,10 @@ at **1440×900 and 390×844**. All inspected against
    the top-right and folds "4 here" into the meta line; the compact header now
    takes an avatar stack and a `hereCaption`.
 
-Checked against the renders: the 22px Gabarito room name and the mono duration,
+Checked against the renders: the 22px Gabarito channel name and the mono duration,
 the here-now well, the 12px tile radius and the 12px gutters, the 128px strip,
 the 46px controls on the 13px radius with the mic in white light, the 64px danger
-leave, the 336px ribbon with 28px avatars and the raised "from the room" message,
+leave, the 336px ribbon with 28px avatars and the raised "from the channel" message,
 and the 42px composer with the white-light send.
 
 ---

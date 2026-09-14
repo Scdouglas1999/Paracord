@@ -29,7 +29,7 @@ export async function attachAccountIdentity(
       }
       return context.user;
     }
-    if (!password) throw new Error('Enter your current server password to attach this identity.');
+    if (!password) throw new Error('Enter your current sign-in password to attach this identity.');
     const response = await context.request<{ nonce: string; timestamp: number; server_origin: string }>({
       method: 'POST', url: '/auth/challenge', signal: lease.signal, timeout: 30_000,
     });
@@ -53,7 +53,7 @@ export async function attachAccountIdentity(
     });
     lease.assertCurrent(); context.assertCurrent();
     if (attached.status === 401) {
-      throw new Error('Server authentication was rejected. Check your current server password and two-factor code, or sign in again.');
+      throw new Error('The instance rejected that sign-in. Check your current password and two-factor code, or sign in again.');
     }
     const result = attached.data;
     if (attached.status !== 200 || !result || typeof result.token !== 'string' || !result.token
