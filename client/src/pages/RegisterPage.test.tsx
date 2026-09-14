@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { authApi } from '../api/auth';
-import { RegisterPage } from './RegisterPage';
+import { RegisterPage, registerStepError } from './RegisterPage';
 
 const mockAuthState = vi.hoisted(() => ({
   token: 'access-token' as string | null,
@@ -98,6 +98,30 @@ function renderRegisterPage() {
   );
 }
 
+
+const continueButton = () => screen.getByRole('button', { name: 'Continue' });
+const createButton = () => screen.getByRole('button', { name: 'Create account' });
+
+type User = ReturnType<typeof userEvent.setup>;
+
+/** Step 1 → step 2. */
+async function passIdentity(
+  user: User,
+  fields: { email?: string; displayName?: string; username?: string } = {},
+) {
+  if (fields.email) await user.type(screen.getByLabelText(/Email/), fields.email);
+  if (fields.displayName) await user.type(screen.getByLabelText(/Display name/), fields.displayName);
+  await user.type(screen.getByLabelText(/Username/), fields.username ?? 'ada');
+  await user.click(continueButton());
+}
+
+/** Fill step 2 without submitting it. */
+async function fillPassword(user: User, password: string, confirm = password, agree = true) {
+  await user.type(await screen.findByLabelText(/^Password/), password);
+  await user.type(screen.getByLabelText(/Confirm password/), confirm);
+  if (agree) await user.click(screen.getByLabelText(/I have read and agree/));
+}
+
 describe('RegisterPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -132,13 +156,16 @@ describe('RegisterPage', () => {
     renderRegisterPage();
 
     await waitFor(() => expect(mockGetSetupStatus).toHaveBeenCalled());
-    expect(screen.getByRole('button', { name: 'Continue' })).toBeInTheDocument();
+    expect(continueButton()).toBeInTheDocument();
   });
 
-  it('explains the password requirements before typing', () => {
+  it('explains the password requirements on the step that asks for one', async () => {
+    const user = userEvent.setup();
     renderRegisterPage();
 
-    const hint = screen.getByText(/10–128 bytes/);
+    await passIdentity(user);
+
+    const hint = await screen.findByText(/10–128 bytes/);
     expect(hint).toBeInTheDocument();
     expect(hint.textContent).toMatch(/uppercase letter \(A–Z\)/);
     expect(hint.textContent).toMatch(/lowercase letter \(a–z\)/);
@@ -158,11 +185,9 @@ describe('RegisterPage', () => {
 
     renderRegisterPage();
 
-    await user.type(screen.getByLabelText(/Username/), 'ada');
-    await user.type(screen.getByLabelText(/^Password/), password);
-    await user.type(screen.getByLabelText(/Confirm password/), password);
-    await user.click(screen.getByLabelText(/I have read and agree/));
-    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await passIdentity(user);
+    await fillPassword(user, password);
+    await user.click(createButton());
 
     expect(await screen.findByText(message)).toBeInTheDocument();
     expect(mockAuthState.register).not.toHaveBeenCalled();
@@ -173,14 +198,17 @@ describe('RegisterPage', () => {
 
     renderRegisterPage();
 
-    await user.type(screen.getByLabelText(/Username/), 'ada');
-    await user.type(screen.getByLabelText(/^Password/), VALID_PASSWORD);
-    await user.type(screen.getByLabelText(/Confirm password/), 'DifferentPass1!');
-    await user.click(screen.getByLabelText(/I have read and agree/));
-    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await passIdentity(user);
+    await fillPassword(user, VALID_PASSWORD, 'DifferentPass1!');
+    await user.click(createButton());
 
     expect(await screen.findByText('Passwords do not match.')).toBeInTheDocument();
-    expect(screen.getByLabelText(/Confirm password/)).toHaveAccessibleDescription('These passwords don’t match yet.');
+    // One message per field: the rejection replaces the gentler "not yet" the
+    // field carried while it was still being typed into, rather than stacking
+    // a second sentence that says the same thing.
+    expect(screen.getByLabelText(/Confirm password/)).toHaveAccessibleDescription(
+      'Passwords do not match.',
+    );
     expect(screen.getByLabelText(/Confirm password/)).toHaveAttribute('aria-invalid', 'true');
     expect(mockAuthState.register).not.toHaveBeenCalled();
   });
@@ -190,11 +218,9 @@ describe('RegisterPage', () => {
 
     renderRegisterPage();
 
-    await user.type(screen.getByLabelText(/Username/), 'ada');
-    await user.type(screen.getByLabelText(/^Password/), password);
-    await user.type(screen.getByLabelText(/Confirm password/), password);
-    await user.click(screen.getByLabelText(/I have read and agree/));
-    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await passIdentity(user);
+    await fillPassword(user, password);
+    await user.click(createButton());
 
     await waitFor(() => {
       expect(mockAuthState.register).toHaveBeenCalledWith('', 'ada', password, '');
@@ -207,13 +233,13 @@ describe('RegisterPage', () => {
 
     renderRegisterPage();
 
-    await user.type(screen.getByLabelText(/Email/), 'ada@example.test');
-    await user.type(screen.getByLabelText(/Display name/), '  Ada Lovelace  ');
-    await user.type(screen.getByLabelText(/Username/), '  ada  ');
-    await user.type(screen.getByLabelText(/^Password/), VALID_PASSWORD);
-    await user.type(screen.getByLabelText(/Confirm password/), VALID_PASSWORD);
-    await user.click(screen.getByLabelText(/I have read and agree/));
-    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await passIdentity(user, {
+      email: 'ada@example.test',
+      displayName: '  Ada Lovelace  ',
+      username: '  ada  ',
+    });
+    await fillPassword(user, VALID_PASSWORD);
+    await user.click(createButton());
 
     await waitFor(() => {
       expect(mockAuthState.register).toHaveBeenCalledWith(
@@ -236,14 +262,105 @@ describe('RegisterPage', () => {
 
     renderRegisterPage();
 
-    await user.type(screen.getByLabelText(/Username/), 'ada');
-    await user.type(screen.getByLabelText(/^Password/), VALID_PASSWORD);
-    await user.type(screen.getByLabelText(/Confirm password/), VALID_PASSWORD);
-    await user.click(screen.getByLabelText(/I have read and agree/));
-    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await passIdentity(user);
+    await fillPassword(user, VALID_PASSWORD);
+    await user.click(createButton());
 
     expect(await screen.findByText('App shell')).toBeInTheDocument();
     expect(legacyAttachment).not.toHaveBeenCalled();
     expect(mockServerListState.addServer).not.toHaveBeenCalled();
+  });
+  it('asks who you are first, then the password, and counts the steps', async () => {
+    const user = userEvent.setup();
+    renderRegisterPage();
+
+    expect(screen.getByText('Step 1 of 2')).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Confirm password/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/Email/)).toHaveFocus();
+
+    await passIdentity(user, { email: 'ada@example.test' });
+
+    expect(await screen.findByText('Step 2 of 2')).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Password/)).toHaveFocus();
+    expect(createButton()).toBeInTheDocument();
+  });
+
+  it('keeps what was typed when stepping back', async () => {
+    const user = userEvent.setup();
+    renderRegisterPage();
+
+    await passIdentity(user, { email: 'ada@example.test', displayName: 'Ada' });
+    await fillPassword(user, VALID_PASSWORD, VALID_PASSWORD, false);
+    await user.click(screen.getByRole('button', { name: 'Back' }));
+
+    expect(await screen.findByLabelText(/Email/)).toHaveValue('ada@example.test');
+    expect(screen.getByLabelText(/Display name/)).toHaveValue('Ada');
+
+    await user.click(continueButton());
+    expect(await screen.findByLabelText(/^Password/)).toHaveValue(VALID_PASSWORD);
+  });
+
+  it('refuses to leave the first step without a username, and says so on the field', async () => {
+    const user = userEvent.setup();
+    renderRegisterPage();
+
+    await user.click(continueButton());
+
+    expect(await screen.findByText('Username is required.')).toBeInTheDocument();
+    expect(screen.getByLabelText(/Username/)).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByText('Step 1 of 2')).toBeInTheDocument();
+  });
+
+  it('says a confirmation does not match yet while it is still being typed', async () => {
+    const user = userEvent.setup();
+    renderRegisterPage();
+
+    await passIdentity(user);
+    await fillPassword(user, VALID_PASSWORD, 'Different', false);
+
+    expect(screen.getByLabelText(/Confirm password/)).toHaveAccessibleDescription(
+      'These passwords don’t match yet.',
+    );
+  });
+
+  it('will not create the account until the terms are agreed to', async () => {
+    const user = userEvent.setup();
+    renderRegisterPage();
+
+    await passIdentity(user);
+    await fillPassword(user, VALID_PASSWORD, VALID_PASSWORD, false);
+    await user.click(createButton());
+
+    expect(await screen.findByText('You must agree to the terms of service')).toBeInTheDocument();
+    expect(mockAuthState.register).not.toHaveBeenCalled();
+  });
+});
+
+describe('registerStepError', () => {
+  const draft = {
+    email: '',
+    displayName: '',
+    username: 'ada',
+    password: VALID_PASSWORD,
+    confirmPassword: VALID_PASSWORD,
+    agreed: true,
+  };
+
+  it('passes a complete draft at both steps', () => {
+    expect(registerStepError('identity', draft, { requireEmail: false })).toBeNull();
+    expect(registerStepError('password', draft, { requireEmail: false })).toBeNull();
+  });
+
+  it('names the field a rejection belongs to', () => {
+    expect(registerStepError('identity', { ...draft, username: ' ' }, { requireEmail: false }))
+      .toMatchObject({ field: 'username' });
+    expect(registerStepError('identity', { ...draft, email: 'nope' }, { requireEmail: false }))
+      .toMatchObject({ field: 'email' });
+    expect(registerStepError('identity', draft, { requireEmail: true }))
+      .toMatchObject({ field: 'email' });
+    expect(registerStepError('password', { ...draft, confirmPassword: 'x' }, { requireEmail: false }))
+      .toMatchObject({ field: 'confirmPassword' });
+    expect(registerStepError('password', { ...draft, agreed: false }, { requireEmail: false }))
+      .toMatchObject({ field: 'agreed' });
   });
 });

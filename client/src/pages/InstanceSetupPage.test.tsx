@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { InstanceSetupPage, passwordRulesMismatch } from './InstanceSetupPage';
+import { InstanceSetupPage, claimStepError, passwordRulesMismatch } from './InstanceSetupPage';
 
 const mockGetSetupStatus = vi.hoisted(() => vi.fn());
 const mockGetPasswordRequirements = vi.hoisted(() => vi.fn());
@@ -71,12 +71,36 @@ function renderPage() {
   );
 }
 
-async function fillClaimForm(user: ReturnType<typeof userEvent.setup>) {
-  await user.type(screen.getByLabelText(/Claim token/), CLAIM_TOKEN);
-  await user.type(screen.getByLabelText(/Username/), 'ada');
-  await user.type(screen.getByLabelText(/^Password/), VALID_PASSWORD);
-  await user.type(screen.getByLabelText(/Confirm password/), VALID_PASSWORD);
-  await user.type(screen.getByLabelText(/Server name/), 'Riverside Studio');
+const continueButton = () => screen.getByRole('button', { name: 'Continue' });
+const claimButton = () => screen.getByRole('button', { name: 'Claim this server' });
+
+type User = ReturnType<typeof userEvent.setup>;
+
+/** Step 1 → step 2. */
+async function passToken(user: User, token = CLAIM_TOKEN) {
+  await user.type(await screen.findByLabelText(/Claim token/), token);
+  await user.click(continueButton());
+}
+
+/** Step 2 → step 3. */
+async function passOwner(user: User, username = 'ada') {
+  await user.type(await screen.findByLabelText(/Username/), username);
+  await user.click(continueButton());
+}
+
+/** Step 3 → step 4. */
+async function passPassword(user: User, password = VALID_PASSWORD) {
+  await user.type(await screen.findByLabelText(/^Password/), password);
+  await user.type(screen.getByLabelText(/Confirm password/), password);
+  await user.click(continueButton());
+}
+
+/** Everything up to, but not including, the claim itself. */
+async function walkToLastStep(user: User) {
+  await passToken(user);
+  await passOwner(user);
+  await passPassword(user);
+  await user.type(await screen.findByLabelText(/Server name/), 'Riverside Studio');
   await user.type(screen.getByLabelText(/First building name/), 'The Lounge');
 }
 
@@ -98,9 +122,6 @@ describe('InstanceSetupPage', () => {
     expect(
       screen.getByText(/You’re setting up the server itself, not joining one/),
     ).toBeInTheDocument();
-    expect(
-      screen.getByText(/Everyone who arrives later signs up normally and joins as a member/),
-    ).toBeInTheDocument();
     expect(screen.getByText(/Joining someone else’s community instead\?/)).toBeInTheDocument();
   });
 
@@ -114,8 +135,86 @@ describe('InstanceSetupPage', () => {
     ).toBeInTheDocument();
   });
 
-  it('shows the complete password requirements before typing', async () => {
+  it('asks for one thing at a time, counted, with the action always on the plate', async () => {
+    const user = userEvent.setup();
     renderPage();
+
+    expect(await screen.findByText('Step 1 of 4')).toBeInTheDocument();
+    // Only this step's field is on screen — the rest of the form is not below
+    // a fold, it is not rendered yet.
+    expect(screen.queryByLabelText(/Server name/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/Claim token/)).toHaveFocus();
+
+    await passToken(user);
+    expect(await screen.findByText('Step 2 of 4')).toBeInTheDocument();
+    expect(screen.getByLabelText(/Username/)).toHaveFocus();
+    expect(screen.queryByLabelText(/Claim token/)).not.toBeInTheDocument();
+
+    await passOwner(user);
+    expect(await screen.findByText('Step 3 of 4')).toBeInTheDocument();
+
+    await passPassword(user);
+    expect(await screen.findByText('Step 4 of 4')).toBeInTheDocument();
+    // The last step is the one that claims, and says so.
+    expect(claimButton()).toBeInTheDocument();
+  });
+
+  it('announces the step it moved to rather than changing silently', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await passToken(user);
+
+    const live = await screen.findByText('Step 2 of 4');
+    const region = live.closest('[aria-live]');
+    expect(region).toHaveAttribute('aria-live', 'polite');
+    expect(region).toHaveTextContent('Create the owner account');
+  });
+
+  it('refuses to leave a step whose field is wrong, and says so on the field', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByLabelText(/Claim token/);
+
+    // Whitespace only: the `required` attribute accepts it, the server does not.
+    await user.type(screen.getByLabelText(/Claim token/), '   ');
+    await user.click(continueButton());
+
+    expect(
+      await screen.findByText(/Paste the claim token from your server’s terminal/),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText(/Claim token/)).toHaveAttribute('aria-invalid', 'true');
+    // Still on step 1.
+    expect(screen.getByText('Step 1 of 4')).toBeInTheDocument();
+  });
+
+  it('withdraws a field rejection as soon as the field is edited', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByLabelText(/Claim token/);
+
+    await user.click(continueButton());
+    expect(await screen.findByText(/Paste the claim token/)).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/Claim token/), CLAIM_TOKEN);
+    await waitFor(() => expect(screen.queryByText(/Paste the claim token/)).not.toBeInTheDocument());
+  });
+
+  it('advances on Enter, exactly like the visible button', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.type(await screen.findByLabelText(/Claim token/), `${CLAIM_TOKEN}{Enter}`);
+
+    expect(await screen.findByText('Step 2 of 4')).toBeInTheDocument();
+  });
+
+  it('shows the complete password requirements on the step that asks for one', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await passToken(user);
+    await passOwner(user);
 
     const hint = await screen.findByText(/10–128 bytes/);
     expect(hint.textContent).toMatch(/uppercase letter \(A–Z\)/);
@@ -123,6 +222,35 @@ describe('InstanceSetupPage', () => {
     expect(hint.textContent).toMatch(/digit \(0–9\)/);
     expect(hint.textContent).toMatch(/ASCII symbol.*or space/);
     expect(screen.getByLabelText(/^Password/)).toHaveAccessibleDescription(hint.textContent!);
+  });
+
+  it('keeps every typed value when stepping back and forward again', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await passToken(user);
+    await user.type(await screen.findByLabelText(/Username/), 'ada');
+    await user.type(screen.getByLabelText(/Display name/), 'Ada Lovelace');
+    await user.click(continueButton());
+
+    await user.click(await screen.findByRole('button', { name: 'Back' }));
+    expect(await screen.findByLabelText(/Username/)).toHaveValue('ada');
+    expect(screen.getByLabelText(/Display name/)).toHaveValue('Ada Lovelace');
+
+    await user.click(await screen.findByRole('button', { name: 'Back' }));
+    expect(await screen.findByLabelText(/Claim token/)).toHaveValue(CLAIM_TOKEN);
+  });
+
+  it('does not validate on the way back — a half-typed value is still your work', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await passToken(user);
+    await user.type(await screen.findByLabelText(/Email/), 'not-an-email');
+    await user.click(await screen.findByRole('button', { name: 'Back' }));
+
+    expect(await screen.findByText('Step 1 of 4')).toBeInTheDocument();
+    expect(screen.queryByText(/doesn’t look like an email address/)).not.toBeInTheDocument();
   });
 
   it('redirects to sign-in when the server already has an owner', async () => {
@@ -147,72 +275,22 @@ describe('InstanceSetupPage', () => {
     ['a lowercase letter', 'AA1!BCDEFG', 'Password must include a lowercase letter (a–z).'],
     ['a digit', 'Aa!!bcdefg', 'Password must include a digit (0–9).'],
     ['a symbol or space', 'Aa1bcdefgh', 'Password must include a symbol or space.'],
-  ])('refuses to claim when the password lacks %s', async (_missing, password, message) => {
+  ])('will not pass the password step when it lacks %s', async (_missing, password, message) => {
     const user = userEvent.setup();
     renderPage();
-    await screen.findByLabelText(/Claim token/);
 
-    await user.type(screen.getByLabelText(/Claim token/), CLAIM_TOKEN);
-    await user.type(screen.getByLabelText(/Username/), 'ada');
-    await user.type(screen.getByLabelText(/^Password/), password);
+    await passToken(user);
+    await passOwner(user);
+    await user.type(await screen.findByLabelText(/^Password/), password);
     await user.type(screen.getByLabelText(/Confirm password/), password);
-    await user.type(screen.getByLabelText(/Server name/), 'Riverside Studio');
-    await user.type(screen.getByLabelText(/First building name/), 'The Lounge');
-    await user.click(screen.getByRole('button', { name: 'Claim this server' }));
+    await user.click(continueButton());
 
     expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.getByText('Step 3 of 4')).toBeInTheDocument();
     expect(mockClaimInstance).not.toHaveBeenCalled();
   });
 
-  it('refuses to claim on a whitespace-only token, which the required attribute accepts', async () => {
-    const user = userEvent.setup();
-    renderPage();
-    await screen.findByLabelText(/Claim token/);
-
-    await user.type(screen.getByLabelText(/Claim token/), '   ');
-    await user.type(screen.getByLabelText(/Username/), 'ada');
-    await user.type(screen.getByLabelText(/^Password/), VALID_PASSWORD);
-    await user.type(screen.getByLabelText(/Confirm password/), VALID_PASSWORD);
-    await user.type(screen.getByLabelText(/Server name/), 'Riverside Studio');
-    await user.type(screen.getByLabelText(/First building name/), 'The Lounge');
-    await user.click(screen.getByRole('button', { name: 'Claim this server' }));
-
-    expect(
-      await screen.findByText(/Paste the claim token from your server’s terminal/),
-    ).toBeInTheDocument();
-    expect(mockClaimInstance).not.toHaveBeenCalled();
-  });
-
-  it('brings a rejection into view rather than leaving it above the fold', async () => {
-    const user = userEvent.setup();
-    const scrollIntoView = vi.fn();
-    // jsdom has no scrollIntoView; the page must both call it when present and
-    // survive its absence (asserted by every other test here).
-    Element.prototype.scrollIntoView = scrollIntoView;
-    try {
-      renderPage();
-      await screen.findByLabelText(/Claim token/);
-
-      await user.type(screen.getByLabelText(/Claim token/), CLAIM_TOKEN);
-      await user.type(screen.getByLabelText(/Username/), 'ada');
-      await user.type(screen.getByLabelText(/^Password/), 'nouppercase1!');
-      await user.type(screen.getByLabelText(/Confirm password/), 'nouppercase1!');
-      await user.type(screen.getByLabelText(/Server name/), 'Riverside Studio');
-      await user.type(screen.getByLabelText(/First building name/), 'The Lounge');
-      await user.click(screen.getByRole('button', { name: 'Claim this server' }));
-
-      const banner = await screen.findByText(/Password must include/);
-      expect(scrollIntoView).toHaveBeenCalled();
-      // The live region holding the banner takes focus, so the rejection is
-      // announced as well as scrolled to.
-      expect(banner.closest('[aria-live="assertive"]')).toHaveFocus();
-    } finally {
-      // @ts-expect-error restoring the jsdom default (absent)
-      delete Element.prototype.scrollIntoView;
-    }
-  });
-
-  it('claims the server and lands the owner in the new building', async () => {
+  it('claims the server with exactly the payload the one-page form used to send', async () => {
     const user = userEvent.setup();
     mockClaimInstance.mockResolvedValue({
       data: {
@@ -225,9 +303,8 @@ describe('InstanceSetupPage', () => {
     });
 
     renderPage();
-    await screen.findByLabelText(/Claim token/);
-    await fillClaimForm(user);
-    await user.click(screen.getByRole('button', { name: 'Claim this server' }));
+    await walkToLastStep(user);
+    await user.click(claimButton());
 
     await waitFor(() => expect(mockClaimInstance).toHaveBeenCalledTimes(1));
     expect(mockClaimInstance).toHaveBeenCalledWith({
@@ -244,44 +321,160 @@ describe('InstanceSetupPage', () => {
     expect(await screen.findByText('Building shell')).toBeInTheDocument();
   });
 
+  it('sends an optional display name and email through unchanged', async () => {
+    const user = userEvent.setup();
+    mockClaimInstance.mockResolvedValue({
+      data: {
+        token: 'access-token',
+        refresh_token: null,
+        user: { id: '1', username: 'ada' },
+        instance_name: 'Riverside Studio',
+        space: { id: '99', name: 'The Lounge' },
+      },
+    });
+
+    renderPage();
+    await passToken(user);
+    await user.type(await screen.findByLabelText(/Username/), 'ada');
+    await user.type(screen.getByLabelText(/Display name/), 'Ada Lovelace');
+    await user.type(screen.getByLabelText(/Email/), 'ada@example.test');
+    await user.click(continueButton());
+    await passPassword(user);
+    await user.type(await screen.findByLabelText(/Server name/), 'Riverside Studio');
+    await user.type(screen.getByLabelText(/First building name/), 'The Lounge');
+    await user.click(claimButton());
+
+    await waitFor(() =>
+      expect(mockClaimInstance).toHaveBeenCalledWith(
+        expect.objectContaining({
+          email: 'ada@example.test',
+          display_name: 'Ada Lovelace',
+        }),
+      ),
+    );
+  });
+
+  it('brings a rejected claim into view rather than leaving it above the fold', async () => {
+    const user = userEvent.setup();
+    const scrollIntoView = vi.fn();
+    // jsdom has no scrollIntoView; the page must both call it when present and
+    // survive its absence (asserted by every other test here).
+    Element.prototype.scrollIntoView = scrollIntoView;
+    mockClaimInstance.mockRejectedValue(
+      Object.assign(new Error('unauthorized'), {
+        response: { status: 401, data: { message: 'unauthorized' } },
+      }),
+    );
+    try {
+      renderPage();
+      await walkToLastStep(user);
+      await user.click(claimButton());
+
+      const banner = await screen.findByText(/not the one this server printed/);
+      expect(scrollIntoView).toHaveBeenCalled();
+      // The live region holding the banner takes focus, so the rejection is
+      // announced as well as scrolled to.
+      expect(banner.closest('[aria-live="assertive"]')).toHaveFocus();
+    } finally {
+      // @ts-expect-error restoring the jsdom default (absent)
+      delete Element.prototype.scrollIntoView;
+    }
+  });
+
   it('says a rejected token is the wrong token, not "unauthorized", and keeps the form usable', async () => {
     const user = userEvent.setup();
     // What the server actually answers: a bare 401 whose body message is the
     // wire string "unauthorized". Putting that on screen told the operator
     // nothing about the one thing that went wrong.
-    const rejection = Object.assign(new Error('unauthorized'), {
-      response: { status: 401, data: { message: 'unauthorized' } },
-    });
-    mockClaimInstance.mockRejectedValue(rejection);
+    mockClaimInstance.mockRejectedValue(
+      Object.assign(new Error('unauthorized'), {
+        response: { status: 401, data: { message: 'unauthorized' } },
+      }),
+    );
 
     renderPage();
-    await screen.findByLabelText(/Claim token/);
-    await fillClaimForm(user);
-    await user.click(screen.getByRole('button', { name: 'Claim this server' }));
+    await walkToLastStep(user);
+    await user.click(claimButton());
 
-    expect(
-      await screen.findByText(/not the one this server printed/),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/not the one this server printed/)).toBeInTheDocument();
     expect(screen.queryByText('unauthorized')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Claim this server' })).toBeEnabled();
+    expect(claimButton()).toBeEnabled();
   });
 
   it('passes through the operator-authored message the server sends for other failures', async () => {
     const user = userEvent.setup();
     mockClaimInstance.mockRejectedValue(
       Object.assign(new Error('conflict: This server has already been set up.'), {
-        response: { status: 409, data: { message: 'conflict: This server has already been set up.' } },
+        response: {
+          status: 409,
+          data: { message: 'conflict: This server has already been set up.' },
+        },
       }),
     );
 
     renderPage();
-    await screen.findByLabelText(/Claim token/);
-    await fillClaimForm(user);
-    await user.click(screen.getByRole('button', { name: 'Claim this server' }));
+    await walkToLastStep(user);
+    await user.click(claimButton());
 
+    expect(await screen.findByText(/This server has already been set up/)).toBeInTheDocument();
+  });
+
+  it('will not claim with a field cleared after its step was passed', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await walkToLastStep(user);
+    await user.clear(screen.getByLabelText(/Server name/));
+    await user.click(claimButton());
+
+    expect(await screen.findByText(/Give this server a name/)).toBeInTheDocument();
+    expect(screen.getByText('Step 4 of 4')).toBeInTheDocument();
+    expect(mockClaimInstance).not.toHaveBeenCalled();
+  });
+});
+
+describe('claimStepError', () => {
+  const draft = {
+    token: CLAIM_TOKEN,
+    username: 'ada',
+    displayName: '',
+    email: '',
+    password: VALID_PASSWORD,
+    confirmPassword: VALID_PASSWORD,
+    instanceName: 'Riverside Studio',
+    spaceName: 'The Lounge',
+  };
+  const options = { requireEmail: false };
+
+  it('passes a complete draft at every step', () => {
+    for (const step of ['token', 'owner', 'password', 'place'] as const) {
+      expect(claimStepError(step, draft, options)).toBeNull();
+    }
+  });
+
+  it('names the field a rejection belongs to', () => {
+    expect(claimStepError('token', { ...draft, token: '  ' }, options)).toMatchObject({
+      field: 'token',
+    });
+    expect(claimStepError('owner', { ...draft, username: '' }, options)).toMatchObject({
+      field: 'username',
+    });
+    expect(claimStepError('owner', { ...draft, email: 'nope' }, options)).toMatchObject({
+      field: 'email',
+    });
     expect(
-      await screen.findByText(/This server has already been set up/),
-    ).toBeInTheDocument();
+      claimStepError('password', { ...draft, confirmPassword: 'other' }, options),
+    ).toMatchObject({ field: 'confirmPassword' });
+    expect(claimStepError('place', { ...draft, spaceName: 'a' }, options)).toMatchObject({
+      field: 'spaceName',
+    });
+  });
+
+  it('requires an email only when the server does', () => {
+    expect(claimStepError('owner', { ...draft, email: '' }, options)).toBeNull();
+    expect(
+      claimStepError('owner', { ...draft, email: '' }, { requireEmail: true }),
+    ).toMatchObject({ field: 'email' });
   });
 });
 

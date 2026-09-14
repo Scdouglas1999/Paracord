@@ -173,14 +173,17 @@ test('real identity setup survives rejected credentials and reload, then adopts 
   await logout();
   await page.getByRole('link', { name: 'Create one' }).click();
   await expect(page.getByRole('heading', { name: 'Create your account' })).toBeVisible();
+  // Registration is two steps — who you are, then the password and the terms.
   const secondEmail = `second-${unique}@example.test`;
   await page.getByLabel('Email', { exact: false }).fill(secondEmail);
   await page.getByLabel('Username', { exact: false }).fill(`second${unique}`);
+  await page.getByRole('button', { name: 'Continue', exact: true }).click();
+  await expect(page.getByText('Step 2 of 2')).toBeVisible();
   await page.getByLabel('Password', { exact: false }).first().fill(password);
   await page.getByLabel('Confirm password', { exact: false }).fill(password);
   await page.getByRole('checkbox').check();
   const registrationResponse = page.waitForResponse(response => response.url().endsWith('/auth/register'));
-  await page.getByRole('button', { name: 'Continue', exact: true }).click();
+  await page.getByRole('button', { name: 'Create account', exact: true }).click();
   const registration = await registrationResponse;
   expect(registration.status()).toBe(201);
   const second = await registration.json();

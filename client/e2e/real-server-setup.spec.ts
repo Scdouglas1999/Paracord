@@ -238,33 +238,70 @@ test.describe('first-owner claim on a real unclaimed server', () => {
       await expect(page.getByText('Set up your Paracord server')).toBeVisible();
       await expect(page).toHaveURL(/\/setup-server$/);
 
-      // 2. The page says who this is for, and where the token comes from.
+      // 2. Step one says who this is for, and where the token comes from.
+      await expect(page.getByText('Step 1 of 4')).toBeVisible();
       await expect(
         page.getByText(/You’re setting up the server itself, not joining one/),
       ).toBeVisible();
       await expect(page.getByText(/first-owner-claim\.txt/)).toBeVisible();
-      await expect(page.getByText(/10–128 bytes/)).toBeVisible();
+
+      // The claim is a wizard, so this walks it the way an operator does: one
+      // decision per step, Continue between them, and the claim only on the
+      // last. Nothing may be off the window at any point — the fit law is
+      // asserted for every route in e2e/auth-fit.spec.ts; here the concern is
+      // that the stepped flow still claims a real server.
+      const continueButton = page.getByRole('button', { name: 'Continue' });
+      const claimButton = page.getByRole('button', { name: 'Claim this server' });
+      const backButton = page.getByRole('button', { name: 'Back' });
 
       // 3. A wrong token is refused, and says so, without creating anything.
+      //    It is only the claim itself that can know that, so the wizard is
+      //    walked to the end before the server ever sees it.
       await page.getByLabel(/Claim token/).fill('X'.repeat(CLAIM_TOKEN.length));
+      await continueButton.click();
+
+      await expect(page.getByText('Step 2 of 4')).toBeVisible();
       await page.getByLabel(/Username/).fill(ownerName);
+      await page.getByLabel(/Email/).fill(`${ownerName}@example.test`);
+      await continueButton.click();
+
+      // The server's own password rules are stated on the step that asks for one.
+      await expect(page.getByText('Step 3 of 4')).toBeVisible();
+      await expect(page.getByText(/10–128 bytes/)).toBeVisible();
       await page.getByLabel(/^Password/).fill(OWNER_PASSWORD);
       await page.getByLabel(/Confirm password/).fill(OWNER_PASSWORD);
-      await page.getByLabel(/Email/).fill(`${ownerName}@example.test`);
+      await continueButton.click();
+
+      await expect(page.getByText('Step 4 of 4')).toBeVisible();
       await page.getByLabel(/Server name/).fill('Riverside Studio');
       await page.getByLabel(/First building name/).fill('The Lounge');
-      await page.getByRole('button', { name: 'Claim this server' }).click();
-      await expect(page.getByRole('button', { name: 'Claim this server' })).toBeEnabled();
+      await claimButton.click();
+      await expect(page.getByText(/not the one this server printed/)).toBeVisible();
+      await expect(claimButton).toBeEnabled();
       await expect(page).toHaveURL(/\/setup-server$/);
 
-      // 4. The real token claims the server and lands the owner in the space it
-      //    just created.
+      // 4. Correcting the token means stepping back to it — and every value
+      //    typed on the way is still there when the operator returns.
+      await backButton.click();
+      await backButton.click();
+      await backButton.click();
+      await expect(page.getByLabel(/Claim token/)).toHaveValue('X'.repeat(CLAIM_TOKEN.length));
       await page.getByLabel(/Claim token/).fill(CLAIM_TOKEN);
-      await page.getByRole('button', { name: 'Claim this server' }).click();
+      await continueButton.click();
+      await expect(page.getByLabel(/Username/)).toHaveValue(ownerName);
+      await continueButton.click();
+      await expect(page.getByLabel(/^Password/)).toHaveValue(OWNER_PASSWORD);
+      await continueButton.click();
+      await expect(page.getByLabel(/Server name/)).toHaveValue('Riverside Studio');
+      await expect(page.getByLabel(/First building name/)).toHaveValue('The Lounge');
+
+      // 5. The real token claims the server and lands the owner in the space it
+      //    just created.
+      await claimButton.click();
       await page.waitForURL(/\/app\/guilds\/\d+/, { timeout: 60_000 });
       await expect(page.getByText('The Lounge').first()).toBeVisible({ timeout: 30_000 });
 
-      // 5. The server now reports itself as claimed, by name.
+      // 6. The server now reports itself as claimed, by name.
       const statusResponse = await context.request.get(`${base}/api/v1/setup/status`);
       expect(statusResponse.status()).toBe(200);
       expect(await statusResponse.json()).toMatchObject({
@@ -272,7 +309,7 @@ test.describe('first-owner claim on a real unclaimed server', () => {
         instance_name: 'Riverside Studio',
       });
 
-      // 6. The owner is an administrator; the token is spent.
+      // 7. The owner is an administrator; the token is spent.
       const me = await context.request.get(`${base}/api/v1/users/@me`);
       expect(me.status()).toBe(200);
       const owner = await me.json();
@@ -301,7 +338,7 @@ test.describe('first-owner claim on a real unclaimed server', () => {
         await stranger.close();
       }
 
-      // 7. Somebody else arriving afterwards registers normally and is a
+      // 8. Somebody else arriving afterwards registers normally and is a
       //    member, not an operator. This is the distinction the setup page
       //    promises, checked against the server rather than the copy.
       const memberContext = await browser.newContext({ baseURL: base });

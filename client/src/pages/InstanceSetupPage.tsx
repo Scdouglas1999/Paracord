@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useAuthStore } from '../stores/authStore';
 import { instanceApi, type PasswordRequirements } from '../api/instance';
@@ -14,7 +14,17 @@ import {
 import { ErrorBanner } from '../components/ui/Feedback';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
-import { AuthCanvas, AuthCard, AuthHeading, AppMark, Field } from './authScaffold';
+import {
+  AUTH_FORM,
+  AuthCanvas,
+  AuthCard,
+  AuthScroll,
+  AuthStep,
+  AuthSteps,
+  AppMark,
+  Field,
+  useFocusRejectedField,
+} from './authScaffold';
 import type { User } from '../types';
 
 /**
@@ -60,37 +70,107 @@ function claimFailureMessage(err: unknown): string {
 }
 
 /**
- * Numbered section, so the four things being asked for read as steps.
+ * The fields this page collects, and the field a rejection belongs to.
  *
- * A well inside the page's one plate (spec §4): depth is the inset shadow, not
- * a border. The step number is quiet mono meta, not a filled circle — a badge
- * that loud would outrank the thing it counts.
+ * A message that names a field is rendered under that field with the danger
+ * edge on the control (`cf75db8`); the banner is kept for what has no field to
+ * belong to — the server refusing the whole claim.
  */
-function Step({
-  index,
-  title,
-  description,
-  children,
-}: {
-  index: number;
-  title: string;
-  description: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="pc-well flex flex-col gap-4 p-4 sm:p-5">
-      <div className="min-w-0">
-        <div className="flex items-baseline gap-2">
-          <span aria-hidden="true" className="pc-mono text-meta text-text-faint">
-            {index}
-          </span>
-          <h2 className="pc-display text-heading text-text-primary">{title}</h2>
-        </div>
-        <p className="mt-1.5 text-meta leading-relaxed text-text-secondary">{description}</p>
-      </div>
-      <div className="flex flex-col gap-5">{children}</div>
-    </section>
-  );
+export type ClaimField =
+  | 'token'
+  | 'username'
+  | 'email'
+  | 'password'
+  | 'confirmPassword'
+  | 'instanceName'
+  | 'spaceName';
+
+export interface ClaimDraft {
+  token: string;
+  username: string;
+  displayName: string;
+  email: string;
+  password: string;
+  confirmPassword: string;
+  instanceName: string;
+  spaceName: string;
+}
+
+/**
+ * The wizard, as data.
+ *
+ * Four things are being asked for and the window is 940×500 at its smallest,
+ * so they are four steps rather than four sections of one long page. The split
+ * follows the thing being decided, not an even division of fields: proving you
+ * run the machine, who the owner is, what protects that account, and what the
+ * place is called.
+ */
+export const CLAIM_STEPS = [
+  { id: 'token', fields: ['token'] },
+  { id: 'owner', fields: ['username', 'email'] },
+  { id: 'password', fields: ['password', 'confirmPassword'] },
+  { id: 'place', fields: ['instanceName', 'spaceName'] },
+] as const satisfies ReadonlyArray<{ id: string; fields: readonly ClaimField[] }>;
+
+export type ClaimStepId = (typeof CLAIM_STEPS)[number]['id'];
+
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * What is wrong with one step, or nothing. Exported because the step gate is
+ * the part of this page most worth testing directly: every rule below is one
+ * the server also enforces, and a drift between them is a rejected submit the
+ * operator cannot explain.
+ */
+export function claimStepError(
+  stepId: ClaimStepId,
+  draft: ClaimDraft,
+  options: { requireEmail: boolean },
+): { field: ClaimField; message: string } | null {
+  const trimmedEmail = draft.email.trim();
+  switch (stepId) {
+    case 'token':
+      if (!draft.token.trim()) {
+        return {
+          field: 'token',
+          message: 'Paste the claim token from your server’s terminal to continue.',
+        };
+      }
+      return null;
+    case 'owner':
+      if (!draft.username.trim()) {
+        return { field: 'username', message: 'Choose a username for the owner account.' };
+      }
+      if (options.requireEmail && !trimmedEmail) {
+        return { field: 'email', message: 'This server requires an email address.' };
+      }
+      if (trimmedEmail && !EMAIL_SHAPE.test(trimmedEmail)) {
+        return { field: 'email', message: 'That doesn’t look like an email address.' };
+      }
+      return null;
+    case 'password': {
+      const passwordError = registrationPasswordError(draft.password);
+      if (passwordError) return { field: 'password', message: passwordError };
+      if (draft.password !== draft.confirmPassword) {
+        return { field: 'confirmPassword', message: 'Passwords do not match.' };
+      }
+      return null;
+    }
+    case 'place':
+      if (!draft.instanceName.trim()) {
+        return {
+          field: 'instanceName',
+          message: 'Give this server a name so people know where they are.',
+        };
+      }
+      if (draft.spaceName.trim().length < 2) {
+        return {
+          field: 'spaceName',
+          message: 'Name the first building — at least 2 characters.',
+        };
+      }
+      return null;
+  }
 }
 
 /**
@@ -98,11 +178,22 @@ function Step({
  * the only page on it that can create one — and it needs the one-time token the
  * server printed in its own terminal, which is what proves the person filling
  * this in is the person running the machine.
+ *
+ * It is a wizard because the content is a wizard: four separate decisions, each
+ * of which fits the window on its own, with the one action always on screen.
+ * Stepping back never costs a typed value — the draft lives here, above the
+ * steps, and the payload the last step submits is the same one the single long
+ * form used to send.
  */
 export function InstanceSetupPage() {
   const tokenHintId = useId();
+  const usernameErrorId = useId();
+  const emailErrorId = useId();
   const passwordHintId = useId();
+  const passwordErrorId = useId();
   const confirmErrorId = useId();
+  const instanceErrorId = useId();
+  const spaceErrorId = useId();
   const navigate = useNavigate();
 
   const [checking, setChecking] = useState(true);
@@ -110,25 +201,44 @@ export function InstanceSetupPage() {
   const [requirements, setRequirements] = useState<PasswordRequirements | null>(null);
   const [requireEmail, setRequireEmail] = useState(false);
 
-  const [token, setToken] = useState('');
-  const [username, setUsername] = useState('');
-  const [displayName, setDisplayName] = useState('');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [instanceName, setInstanceName] = useState('');
-  const [spaceName, setSpaceName] = useState('');
+  const [draft, setDraft] = useState<ClaimDraft>({
+    token: '',
+    username: '',
+    displayName: '',
+    email: '',
+    password: '',
+    confirmPassword: '',
+    instanceName: '',
+    spaceName: '',
+  });
+  const [stepIndex, setStepIndex] = useState(0);
+  const [fieldError, setFieldError] = useState<{ field: ClaimField; message: string } | null>(null);
 
   const [error, setError] = useState('');
   // Bumped on every rejection so an identical repeat still re-announces.
   const [errorSeq, setErrorSeq] = useState(0);
   const [loading, setLoading] = useState(false);
   const errorRef = useRef<HTMLDivElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
+  useFocusRejectedField(formRef, fieldError);
 
-  // This form is taller than any viewport, and the submit button is at the
-  // bottom: a banner rendered at the top is a rejection the operator never
-  // sees, which reads as "the button does nothing". Bring it into view and
-  // move focus to it so it is announced as well as visible.
+  const step = CLAIM_STEPS[stepIndex];
+  const isLastStep = stepIndex === CLAIM_STEPS.length - 1;
+
+  /**
+   * Typing into a field withdraws the rejection against it. A message that
+   * survives the edit that answers it reads like the field is still wrong.
+   */
+  const edit = useCallback(
+    (field: keyof ClaimDraft, value: string) => {
+      setDraft((previous) => ({ ...previous, [field]: value }));
+      setFieldError((previous) => (previous?.field === field ? null : previous));
+    },
+    [],
+  );
+
+  // The banner carries what belongs to no field — the server refusing the
+  // claim. Focus moves to it so the rejection is announced, not only drawn.
   const rejectWith = useCallback((message: string) => {
     setError(message);
     setErrorSeq((seq) => seq + 1);
@@ -200,61 +310,35 @@ export function InstanceSetupPage() {
     };
   }, []);
 
-  const trimmedEmail = email.trim();
-  const emailError =
-    trimmedEmail.length > 0 && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)
-      ? 'That doesn’t look like an email address.'
-      : null;
-  const confirmError =
-    confirmPassword.length > 0 && password !== confirmPassword
-      ? 'These passwords don’t match yet.'
-      : null;
-  const rulesMismatch = passwordRulesMismatch(requirements);
+  const rulesMismatch = useMemo(() => passwordRulesMismatch(requirements), [requirements]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const trimmedToken = token.trim();
-    const trimmedUsername = username.trim();
-    const trimmedInstanceName = instanceName.trim();
-    const trimmedSpaceName = spaceName.trim();
+  const errorFor = (field: ClaimField) =>
+    fieldError?.field === field ? fieldError.message : null;
 
-    if (!trimmedToken) {
-      rejectWith('Paste the claim token from your server’s terminal to continue.');
-      return;
-    }
-    if (!trimmedUsername) {
-      rejectWith('Choose a username for the owner account.');
-      return;
-    }
-    const passwordError = registrationPasswordError(password);
-    if (passwordError) {
-      rejectWith(passwordError);
-      return;
-    }
-    if (password !== confirmPassword) {
-      rejectWith('Passwords do not match.');
-      return;
-    }
-    if (!trimmedInstanceName) {
-      rejectWith('Give this server a name so people know where they are.');
-      return;
-    }
-    if (trimmedSpaceName.length < 2) {
-      rejectWith('Name the first building — at least 2 characters.');
-      return;
+  const submitClaim = async () => {
+    // Every step, not only the last: a value can be cleared after the step that
+    // owns it was passed, and the server would answer that with a 4xx the
+    // operator has to translate back into a field.
+    for (const [index, candidate] of CLAIM_STEPS.entries()) {
+      const failure = claimStepError(candidate.id, draft, { requireEmail });
+      if (failure) {
+        setStepIndex(index);
+        setFieldError(failure);
+        return;
+      }
     }
 
     setError('');
     setLoading(true);
     try {
       const { data } = await instanceApi.claimInstance({
-        token: trimmedToken,
-        username: trimmedUsername,
-        email: trimmedEmail || undefined,
-        password,
-        instance_name: trimmedInstanceName,
-        initial_space_name: trimmedSpaceName,
-        display_name: displayName.trim() || undefined,
+        token: draft.token.trim(),
+        username: draft.username.trim(),
+        email: draft.email.trim() || undefined,
+        password: draft.password,
+        instance_name: draft.instanceName.trim(),
+        initial_space_name: draft.spaceName.trim(),
+        display_name: draft.displayName.trim() || undefined,
       });
       setAccessToken(data.token);
       setRefreshToken(data.refresh_token ?? null);
@@ -267,11 +351,43 @@ export function InstanceSetupPage() {
     }
   };
 
+  /**
+   * One submit handler for the whole wizard, so Enter in any field does what
+   * the visible button does — advance, or claim on the last step.
+   */
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (loading) return;
+
+    const failure = claimStepError(step.id, draft, { requireEmail });
+    if (failure) {
+      setFieldError(failure);
+      return;
+    }
+    setFieldError(null);
+
+    if (!isLastStep) {
+      setError('');
+      setStepIndex((index) => index + 1);
+      return;
+    }
+    await submitClaim();
+  };
+
+  const goBack = () => {
+    if (stepIndex === 0) return;
+    // Nothing is validated on the way back and nothing is cleared: a half-typed
+    // value is still the operator's work.
+    setFieldError(null);
+    setError('');
+    setStepIndex((index) => index - 1);
+  };
+
   if (checking) {
     return (
       <AuthCanvas>
         <AuthCard className="max-w-md">
-          <div className="p-7 sm:p-8">
+          <div className={AUTH_FORM}>
             <AppMark size={40} />
             <p className="mt-6 text-body text-text-secondary">Checking this server…</p>
           </div>
@@ -280,169 +396,282 @@ export function InstanceSetupPage() {
     );
   }
 
+  const progress = <AuthSteps step={stepIndex + 1} count={CLAIM_STEPS.length} />;
+
   return (
     <AuthCanvas>
-      <AuthCard className="max-w-xl">
-        <form onSubmit={handleSubmit} className="flex flex-col gap-6 p-7 sm:p-8">
-          <AuthHeading
-            title="Set up your Paracord server"
-            subtitle="You’re setting up the server itself, not joining one. This creates the owner account — the person who runs this machine — names the server and opens its first building. Everyone who arrives later signs up normally and joins as a member."
-          />
+      <AuthCard className="max-w-lg short-window:max-w-2xl">
+        <form ref={formRef} onSubmit={handleSubmit} noValidate className={AUTH_FORM}>
+          <header className="flex items-center gap-3">
+            <AppMark size={34} />
+            <h1 className="pc-display text-title text-text-primary">
+              Set up your Paracord server
+            </h1>
+          </header>
 
           {/* These messages are instructions, not labels: they must wrap rather
               than ellipsize, or the operator is told something went wrong and
               not what to do about it. */}
           {statusError && <ErrorBanner multiline message={statusError} />}
           {rulesMismatch && <ErrorBanner multiline message={rulesMismatch} />}
-          <div ref={errorRef} tabIndex={-1} aria-live="assertive" className="outline-none">
+          <div
+            ref={errorRef}
+            tabIndex={-1}
+            aria-live="assertive"
+            className="outline-none empty:hidden"
+          >
             {error && <ErrorBanner multiline message={error} />}
           </div>
 
-          <Step
-            index={1}
-            title="Prove you run this server"
-            description="Your server printed a one-time claim token when it started. It is also saved as first-owner-claim.txt next to the server's config file, readable only by the account that runs it. Nobody can create an account here until this token is used."
-          >
-            <Field
-              label="Claim token"
-              required
-              hint="Paste it exactly as printed — it is used once and then stops working."
-              descriptionId={tokenHintId}
+          {step.id === 'token' && (
+            <AuthStep
+              key="token"
+              progress={progress}
+              title="Prove you run this server"
+              description="You’re setting up the server itself, not joining one. Your server printed a one-time claim token when it started; it is also saved as first-owner-claim.txt next to the server’s config file, readable only by the account that runs it. Nobody can create an account here until this token is used."
             >
-              <Input
-                type="text"
-                value={token}
-                onChange={(e) => setToken(e.target.value)}
-                required
-                className="pc-mono"
-                placeholder="A1B2C3…"
-                autoComplete="off"
-                spellCheck={false}
-                aria-describedby={tokenHintId}
-              />
-            </Field>
-          </Step>
+              <AuthScroll>
+                <Field
+                  label="Claim token"
+                  required
+                  error={errorFor('token')}
+                  hint="Paste it exactly as printed — it is used once and then stops working."
+                  descriptionId={tokenHintId}
+                >
+                  <Input
+                    type="text"
+                    value={draft.token}
+                    onChange={(e) => edit('token', e.target.value)}
+                    required
+                    className="pc-mono"
+                    placeholder="A1B2C3…"
+                    autoComplete="off"
+                    spellCheck={false}
+                    error={Boolean(errorFor('token'))}
+                    aria-invalid={Boolean(errorFor('token')) || undefined}
+                    aria-describedby={tokenHintId}
+                  />
+                </Field>
+              </AuthScroll>
+            </AuthStep>
+          )}
 
-          <Step
-            index={2}
-            title="Create the owner account"
-            description="This account administers the server: settings, moderation, backups. It is a normal account too — you can chat with it."
-          >
-            <Field label="Username" required hint="Your unique @handle on this server.">
-              <Input
-                type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                required
-                placeholder="ada"
-                autoComplete="username"
-              />
-            </Field>
-
-            <Field label="Display name" hint="How people see you. You can change it anytime.">
-              <Input
-                type="text"
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                placeholder="Ada Lovelace"
-              />
-            </Field>
-
-            <Field
-              label="Email"
-              required={requireEmail}
-              error={emailError}
-              hint={requireEmail ? undefined : 'Optional — used only for password recovery.'}
+          {step.id === 'owner' && (
+            <AuthStep
+              key="owner"
+              dense
+              progress={progress}
+              title="Create the owner account"
+              description="This account administers the server: settings, moderation, backups. It is a normal account too — you can chat with it. Everyone who arrives later signs up normally and joins as a member."
             >
-              <Input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required={requireEmail}
-                placeholder={requireEmail ? 'you@example.com' : 'you@example.com (optional)'}
-                autoComplete="email"
-              />
-            </Field>
+              <AuthScroll paired>
+                <Field
+                  label="Username"
+                  required
+                  error={errorFor('username')}
+                  hint="Your unique @handle on this server."
+                  descriptionId={usernameErrorId}
+                >
+                  <Input
+                    type="text"
+                    value={draft.username}
+                    onChange={(e) => edit('username', e.target.value)}
+                    required
+                    placeholder="ada"
+                    autoComplete="username"
+                    error={Boolean(errorFor('username'))}
+                    aria-invalid={Boolean(errorFor('username')) || undefined}
+                    aria-describedby={usernameErrorId}
+                  />
+                </Field>
 
-            <Field
-              label="Password"
-              required
-              hint={PASSWORD_REQUIREMENTS_HINT}
-              descriptionId={passwordHintId}
+                <Field label="Display name" hint="How people see you. You can change it anytime.">
+                  <Input
+                    type="text"
+                    value={draft.displayName}
+                    onChange={(e) => edit('displayName', e.target.value)}
+                    placeholder="Ada Lovelace"
+                  />
+                </Field>
+
+                <Field
+                  label="Email"
+                  required={requireEmail}
+                  error={errorFor('email')}
+                  hint={requireEmail ? undefined : 'Optional — used only for password recovery.'}
+                  descriptionId={emailErrorId}
+                >
+                  <Input
+                    type="email"
+                    value={draft.email}
+                    onChange={(e) => edit('email', e.target.value)}
+                    required={requireEmail}
+                    placeholder={requireEmail ? 'you@example.com' : 'you@example.com (optional)'}
+                    autoComplete="email"
+                    error={Boolean(errorFor('email'))}
+                    aria-invalid={Boolean(errorFor('email')) || undefined}
+                    aria-describedby={errorFor('email') || !requireEmail ? emailErrorId : undefined}
+                  />
+                </Field>
+              </AuthScroll>
+            </AuthStep>
+          )}
+
+          {step.id === 'password' && (
+            <AuthStep
+              key="password"
+              dense
+              progress={progress}
+              title="Protect the owner account"
+              description="This password is the only thing between a stranger and the server’s administration. Nothing else on this server can reset it for you."
             >
-              <Input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                placeholder="Choose a strong password"
-                autoComplete="new-password"
-                aria-describedby={passwordHintId}
-              />
-            </Field>
+              <AuthScroll paired>
+                <Field
+                  label="Password"
+                  required
+                  error={errorFor('password')}
+                  descriptionId={passwordErrorId}
+                >
+                  <Input
+                    type="password"
+                    value={draft.password}
+                    onChange={(e) => edit('password', e.target.value)}
+                    required
+                    placeholder="Choose a strong password"
+                    autoComplete="new-password"
+                    error={Boolean(errorFor('password'))}
+                    aria-invalid={Boolean(errorFor('password')) || undefined}
+                    aria-describedby={
+                      errorFor('password') ? `${passwordErrorId} ${passwordHintId}` : passwordHintId
+                    }
+                  />
+                </Field>
 
-            <Field
-              label="Confirm password"
-              required
-              error={confirmError}
-              descriptionId={confirmErrorId}
+                <Field
+                  label="Confirm password"
+                  required
+                  error={
+                    errorFor('confirmPassword') ??
+                    (draft.confirmPassword.length > 0 && draft.password !== draft.confirmPassword
+                      ? 'These passwords don’t match yet.'
+                      : null)
+                  }
+                  descriptionId={confirmErrorId}
+                >
+                  <Input
+                    type="password"
+                    value={draft.confirmPassword}
+                    onChange={(e) => edit('confirmPassword', e.target.value)}
+                    required
+                    placeholder="Re-enter your password"
+                    autoComplete="new-password"
+                    error={
+                      Boolean(errorFor('confirmPassword')) ||
+                      (draft.confirmPassword.length > 0 &&
+                        draft.password !== draft.confirmPassword)
+                    }
+                    aria-describedby={
+                      errorFor('confirmPassword') || draft.confirmPassword.length > 0
+                        ? confirmErrorId
+                        : undefined
+                    }
+                    aria-invalid={
+                      Boolean(errorFor('confirmPassword')) ||
+                      (draft.confirmPassword.length > 0 &&
+                        draft.password !== draft.confirmPassword) ||
+                      undefined
+                    }
+                  />
+                </Field>
+
+                {/* One statement of the rules, at the full measure, under both
+                    boxes it governs. */}
+                <p
+                  id={passwordHintId}
+                  className="pc-auth-span text-meta leading-relaxed text-text-faint"
+                >
+                  {PASSWORD_REQUIREMENTS_HINT}
+                </p>
+              </AuthScroll>
+            </AuthStep>
+          )}
+
+          {step.id === 'place' && (
+            <AuthStep
+              key="place"
+              dense
+              progress={progress}
+              title="Name the place"
+              description="The server name is shown to everyone who signs in here. A building is where conversations live; the first one is created with a #general channel and a voice room, and you can add more later."
             >
-              <Input
-                type="password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                required
-                placeholder="Re-enter your password"
-                autoComplete="new-password"
-                aria-describedby={confirmError ? confirmErrorId : undefined}
-                aria-invalid={Boolean(confirmError) || undefined}
-              />
-            </Field>
-          </Step>
+              <AuthScroll paired>
+                <Field
+                  label="Server name"
+                  required
+                  error={errorFor('instanceName')}
+                  hint="For example: Riverside Studio."
+                  descriptionId={instanceErrorId}
+                >
+                  <Input
+                    type="text"
+                    value={draft.instanceName}
+                    onChange={(e) => edit('instanceName', e.target.value)}
+                    required
+                    maxLength={100}
+                    placeholder="Riverside Studio"
+                    error={Boolean(errorFor('instanceName'))}
+                    aria-invalid={Boolean(errorFor('instanceName')) || undefined}
+                    aria-describedby={instanceErrorId}
+                  />
+                </Field>
 
-          <Step
-            index={3}
-            title="Name this server"
-            description="Shown to everyone who signs in here, so it should say whose community this is."
-          >
-            <Field label="Server name" required hint="For example: Riverside Studio.">
-              <Input
-                type="text"
-                value={instanceName}
-                onChange={(e) => setInstanceName(e.target.value)}
-                required
-                maxLength={100}
-                placeholder="Riverside Studio"
-              />
-            </Field>
-          </Step>
+                <Field
+                  label="First building name"
+                  required
+                  error={errorFor('spaceName')}
+                  hint="For example: The Lounge."
+                  descriptionId={spaceErrorId}
+                >
+                  <Input
+                    type="text"
+                    value={draft.spaceName}
+                    onChange={(e) => edit('spaceName', e.target.value)}
+                    required
+                    minLength={2}
+                    maxLength={100}
+                    placeholder="The Lounge"
+                    error={Boolean(errorFor('spaceName'))}
+                    aria-invalid={Boolean(errorFor('spaceName')) || undefined}
+                    aria-describedby={spaceErrorId}
+                  />
+                </Field>
+              </AuthScroll>
+            </AuthStep>
+          )}
 
-          <Step
-            index={4}
-            title="Open the first building"
-            description="A building is where conversations live. This one is created with a #general channel and a voice room; you can add more later."
-          >
-            <Field label="First building name" required hint="For example: The Lounge.">
-              <Input
-                type="text"
-                value={spaceName}
-                onChange={(e) => setSpaceName(e.target.value)}
-                required
-                minLength={2}
-                maxLength={100}
-                placeholder="The Lounge"
-              />
-            </Field>
-          </Step>
+          <div className="flex items-center gap-3">
+            {stepIndex > 0 && (
+              <Button type="button" variant="ghost" size="lg" onClick={goBack} disabled={loading}>
+                Back
+              </Button>
+            )}
+            <Button
+              type="submit"
+              size="lg"
+              loading={loading}
+              disabled={loading}
+              className="flex-1"
+            >
+              {isLastStep ? 'Claim this server' : 'Continue'}
+            </Button>
+          </div>
 
-          <Button type="submit" size="lg" loading={loading} disabled={loading} className="w-full">
-            Claim this server
-          </Button>
-
-          <p className="text-meta leading-relaxed text-text-secondary">
-            Joining someone else’s community instead? You don’t need a claim token — ask them for an
-            invite link and sign up there as a member.
-          </p>
+          {stepIndex === 0 && (
+            <p className="text-meta leading-relaxed text-text-secondary">
+              Joining someone else’s community instead? You don’t need a claim token — ask them for
+              an invite link and sign up there as a member.
+            </p>
+          )}
         </form>
       </AuthCard>
     </AuthCanvas>

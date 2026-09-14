@@ -143,11 +143,15 @@ describe('Account recovery setup flows', () => {
 
     await user.type(screen.getByLabelText(/Recovery phrase/), 'too short');
     await user.type(screen.getByLabelText(/Username/), 'alice');
-    await user.type(screen.getByLabelText(/^New password/), 'StrongPass123!');
-    await user.type(screen.getByLabelText(/Confirm password/), 'StrongPass123!');
-    await user.click(screen.getByRole('button', { name: 'Recover account' }));
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Recovery phrase must be exactly 24 words.');
+    // The rejection belongs to the phrase field, and the step it belongs to
+    // does not advance past it.
+    expect(
+      await screen.findByText('Recovery phrase must be exactly 24 words.'),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText(/Recovery phrase/)).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByText('Step 1 of 2')).toBeInTheDocument();
     expect(useAccountStore((state) => state.recover)).not.toHaveBeenCalled();
   });
 
@@ -158,7 +162,9 @@ describe('Account recovery setup flows', () => {
 
     await user.type(screen.getByLabelText(/Recovery phrase/), recoveryPhrase);
     await user.type(screen.getByLabelText(/Username/), '  alice  ');
-    await user.type(screen.getByLabelText(/^New password/), 'StrongPass123!');
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+
+    await user.type(await screen.findByLabelText(/^New password/), 'StrongPass123!');
     await user.type(screen.getByLabelText(/Confirm password/), 'StrongPass123!');
     await user.click(screen.getByRole('button', { name: 'Recover account' }));
 
