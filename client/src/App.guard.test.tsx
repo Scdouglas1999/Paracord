@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { render, screen, act } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -48,10 +49,12 @@ vi.mock('./lib/config/apiBaseUrl', () => ({
 }));
 
 /** A handle that lets a test navigate the way a late async handler would. */
-let stray: ((to: string) => void) | null = null;
+const stray: { go: ((to: string) => void) | null } = { go: null };
 function StrayNavigator() {
   const navigate = useNavigate();
-  stray = (to: string) => navigate(to, { replace: true });
+  useEffect(() => {
+    stray.go = (to: string) => navigate(to, { replace: true });
+  }, [navigate]);
   return null;
 }
 
@@ -80,7 +83,7 @@ describe('ProtectedRoute guard', () => {
     // A server in the list makes serverStatus resolve to 'ready' synchronously.
     serverListState.servers = [{ id: 's1' }];
     serverListState.tokensHydrated = true;
-    stray = null;
+    stray.go = null;
   });
 
   it('sends a signed-in account with no device identity to /setup', () => {
@@ -99,7 +102,7 @@ describe('ProtectedRoute guard', () => {
     renderApp();
     expect(screen.getByText('Set up a local identity')).toBeInTheDocument();
 
-    act(() => stray?.('/app'));
+    act(() => stray.go?.('/app'));
 
     expect(screen.getByText('Set up a local identity')).toBeInTheDocument();
     expect(document.body.textContent?.trim()).not.toBe('');
