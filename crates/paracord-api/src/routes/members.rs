@@ -598,6 +598,10 @@ pub async fn join_public_guild(
                 Some(guild_id),
             );
         }
+
+        // Same as the invite path: the join is what lets the joiner and the
+        // people already inside see each other's light.
+        crate::routes::realtime::announce_guild_join(&state, guild_id, auth.user_id).await;
     }
 
     Ok(Json(crate::routes::guilds::guild_detail(

@@ -289,3 +289,157 @@ async fn ready_carries_guild_members_who_are_already_online() {
          as offline until they happen to change status; got {presences:?}",
     );
 }
+
+/// Attach the stream and read frames until `stop` says we have what we came for,
+/// holding the connection open in a task so the attachment outlives the call.
+fn reader(
+    app: Router,
+    ticket: String,
+    session_id: String,
+    stop: fn(&Value) -> bool,
+) -> tokio::task::JoinHandle<Vec<Value>> {
+    tokio::spawn(async move {
+        let uri = format!("/api/v2/rt/events?session_id={session_id}&cursor=0&ticket={ticket}");
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri(uri)
+            .body(Body::empty())
+            .expect("build sse request");
+        let response = app.oneshot(request).await.expect("sse response");
+        let mut stream = response.into_body().into_data_stream();
+        let mut buf = String::new();
+        let mut frames: Vec<Value> = Vec::new();
+        while frames.len() < 16 {
+            let chunk = match tokio::time::timeout(Duration::from_secs(3), stream.next()).await {
+                Ok(Some(Ok(bytes))) => bytes,
+                _ => break,
+            };
+            buf.push_str(&String::from_utf8_lossy(&chunk));
+            while let Some(idx) = buf.find('\n') {
+                let line = buf[..idx].trim().to_string();
+                buf.drain(..=idx);
+                if let Some(payload) = line.strip_prefix("data:") {
+                    if let Ok(value) = serde_json::from_str::<Value>(payload.trim()) {
+                        let done = stop(&value);
+                        frames.push(value);
+                        if done {
+                            return frames;
+                        }
+                    }
+                }
+            }
+        }
+        frames
+    })
+}
+
+/// Two people, two live sessions, one building — joined into while both are
+/// already signed in.
+///
+/// This is the shape the app is actually used in and the one nothing covered:
+/// connecting publishes presence to the people you *already* share a space
+/// with, and READY carries the presence of people in the buildings you were
+/// *already* in. Somebody who signs in and then walks through an invite falls
+/// between the two. Both of them stayed dark to each other for the whole
+/// session — the member list right, every light off, "1 in" on both screens.
+#[tokio::test]
+async fn joining_a_building_lights_the_joiner_and_the_people_already_there() {
+    let ctx = build_test_app(TestAppOptions::default())
+        .await
+        .expect("test app");
+
+    let resident_token =
+        create_authenticated_user_token(&ctx.db, &ctx.jwt_secret, "resident", "hunter2hunter2")
+            .await
+            .expect("resident token");
+    let (resident_session, resident_id) = create_session(&ctx.app, &resident_token).await;
+
+    let guild_id = paracord_util::snowflake::generate(1);
+    paracord_db::guilds::create_guild(&ctx.db, guild_id, "Join Test", resident_id, None)
+        .await
+        .expect("create guild");
+    paracord_db::members::add_member(&ctx.db, resident_id, guild_id)
+        .await
+        .expect("add resident");
+    ctx.state.member_index.add_member(guild_id, resident_id);
+
+    let channel_id = paracord_util::snowflake::generate(1);
+    paracord_db::channels::create_channel(
+        &ctx.db, channel_id, guild_id, "general", 0, 0, None, None,
+    )
+    .await
+    .expect("create channel");
+
+    // The joiner is signed in BEFORE they belong to anything — the whole point.
+    let joiner_token =
+        create_authenticated_user_token(&ctx.db, &ctx.jwt_secret, "joiner", "hunter2hunter2")
+            .await
+            .expect("joiner token");
+    let (joiner_session, joiner_id) = create_session(&ctx.app, &joiner_token).await;
+
+    // Both are sitting in the app with a live stream attached.
+    let resident_ticket = mint_stream_ticket(&ctx.app, &resident_token).await;
+    let resident_reader = reader(
+        ctx.app.clone(),
+        resident_ticket,
+        resident_session,
+        |frame| frame["t"] == "PRESENCE_UPDATE",
+    );
+    let joiner_ticket = mint_stream_ticket(&ctx.app, &joiner_token).await;
+    let joiner_reader = reader(ctx.app.clone(), joiner_ticket, joiner_session, |frame| {
+        frame["t"] == "PRESENCE_UPDATE"
+    });
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert!(
+        ctx.state.online_users.contains(&resident_id)
+            && ctx.state.online_users.contains(&joiner_id),
+        "both people must be online before the join",
+    );
+
+    // The resident mints an invite and the joiner walks through it.
+    let invite_request = common::build_json_request(
+        Method::POST,
+        &format!("/api/v1/channels/{channel_id}/invites"),
+        Some(serde_json::json!({})),
+        Some(&resident_token),
+    )
+    .expect("invite request");
+    let (status, invite) = common::dispatch_json(&ctx.app, invite_request)
+        .await
+        .expect("create invite");
+    assert!(
+        status.is_success(),
+        "create invite failed: {status} {invite}"
+    );
+    let code = invite["code"].as_str().expect("invite code").to_string();
+
+    let accept_request = common::build_json_request(
+        Method::POST,
+        &format!("/api/v1/invites/{code}"),
+        Some(serde_json::json!({})),
+        Some(&joiner_token),
+    )
+    .expect("accept request");
+    let (status, accepted) = common::dispatch_json(&ctx.app, accept_request)
+        .await
+        .expect("accept invite");
+    assert!(
+        status.is_success(),
+        "accept invite failed: {status} {accepted}"
+    );
+
+    let resident_frames = resident_reader.await.expect("resident reader");
+    assert!(
+        !presence_updates_for(&resident_frames, joiner_id).is_empty(),
+        "somebody already in the building must be told the joiner's lights are on; \
+         got {resident_frames:?}",
+    );
+
+    let joiner_frames = joiner_reader.await.expect("joiner reader");
+    assert!(
+        !presence_updates_for(&joiner_frames, resident_id).is_empty(),
+        "the joiner must be told about the people already in the building, else \
+         everyone there renders as offline until they happen to change status; \
+         got {joiner_frames:?}",
+    );
+}

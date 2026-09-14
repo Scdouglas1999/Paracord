@@ -572,6 +572,11 @@ pub async fn accept_invite(
             Some(guild.id),
         );
 
+        // Walking in is the moment these people can see each other. Without
+        // this the joiner and everybody already inside stay dark to one
+        // another for the whole session — see `announce_guild_join`.
+        crate::routes::realtime::announce_guild_join(&state, guild.id, auth.user_id).await;
+
         if paracord_federation::is_enabled() {
             let fed_state = state.clone();
             let joined_user_id = auth.user_id;

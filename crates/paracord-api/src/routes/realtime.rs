@@ -174,6 +174,94 @@ fn build_presence_payload(
     })
 }
 
+/// The presence value to publish for `user_id` right now: what they last chose
+/// for themselves, or a plain "online" when we have nothing on file.
+///
+/// A missing entry in `user_presences` means offline (see `AppState`), so this
+/// is only ever called for somebody already known to be online.
+fn presence_snapshot(state: &AppState, user_id: i64) -> Value {
+    state
+        .user_presences
+        .get(&user_id)
+        .map(|entry| entry.value().clone())
+        .unwrap_or_else(|| build_presence_payload(user_id, Some("online"), None, None))
+}
+
+/// How many already-present people a single join may light up for the joiner.
+///
+/// The snapshot is one event per person, so an unbounded loop would let one
+/// join into a very large building push thousands of frames into that one
+/// session's replay buffer at once and blow its retention window. Past the cap
+/// the joiner learns the rest the way every other client does — from the next
+/// READY — rather than at the cost of the events they are actually here for.
+const MAX_JOIN_PRESENCE_SNAPSHOT: usize = 500;
+
+/// A join is a presence event, in both directions.
+///
+/// Connecting is what publishes "this person is here" (`mark_stream_user_online`),
+/// and READY is the only other thing that carries a presence snapshot. Somebody
+/// who signs in and *then* joins a building gets neither: their connect fan-out
+/// ran while they shared a space with nobody, and the people already inside have
+/// long since had their READY. The result is two members of one building, both
+/// signed in, each rendered as the only person there — the member list correct,
+/// every light off.
+///
+/// So the join itself announces: the joiner to the people already there, and
+/// each of them back to the joiner. Both directions are user-targeted, so they
+/// reach a session whatever guild scope it has caught up to — the joiner's own
+/// session has not necessarily processed its `GUILD_MEMBER_ADD` yet.
+pub(crate) async fn announce_guild_join(state: &AppState, guild_id: i64, user_id: i64) {
+    // The in-memory index is the zero-query path and is updated before the
+    // join events are dispatched; fall back to the database when this process
+    // has never loaded the guild (a cold index entry is empty, not absent).
+    let mut members = state.member_index.members_of(guild_id);
+    if members.len() < 2 {
+        if let Ok(rows) = paracord_db::members::get_guild_member_user_ids(&state.db, guild_id).await
+        {
+            members = rows;
+        }
+    }
+
+    // ── The joiner → everyone already there ──
+    if state.online_users.contains(&user_id) {
+        let recipients: Vec<i64> = members
+            .iter()
+            .copied()
+            .filter(|id| *id != user_id)
+            .collect();
+        if !recipients.is_empty() {
+            state.event_bus.dispatch_to_users(
+                "PRESENCE_UPDATE",
+                presence_snapshot(state, user_id),
+                recipients,
+            );
+        }
+    }
+
+    // ── Everyone already there → the joiner ──
+    let mut sent = 0usize;
+    for member_id in members {
+        if member_id == user_id || !state.online_users.contains(&member_id) {
+            continue;
+        }
+        if sent >= MAX_JOIN_PRESENCE_SNAPSHOT {
+            tracing::warn!(
+                guild_id,
+                user_id,
+                cap = MAX_JOIN_PRESENCE_SNAPSHOT,
+                "realtime: join presence snapshot truncated"
+            );
+            break;
+        }
+        state.event_bus.dispatch_to_users(
+            "PRESENCE_UPDATE",
+            presence_snapshot(state, member_id),
+            vec![user_id],
+        );
+        sent += 1;
+    }
+}
+
 /// Everyone entitled to see `user_id`'s presence: themselves, anyone sharing a
 /// space with them, and their friends. Mirrors the gateway's recipient scoping —
 /// presence is never broadcast server-wide.
@@ -1253,13 +1341,7 @@ async fn build_ready_payload(
         let presences_json: Vec<Value> = member_ids
             .iter()
             .filter(|uid| state.online_users.contains(uid))
-            .map(|uid| {
-                state
-                    .user_presences
-                    .get(uid)
-                    .map(|entry| entry.value().clone())
-                    .unwrap_or_else(|| build_presence_payload(*uid, Some("online"), None, None))
-            })
+            .map(|uid| presence_snapshot(state, *uid))
             .collect();
 
         let mut guild_json = json!(paracord_contracts::guild::ReadyGuildCore {
