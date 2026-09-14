@@ -152,6 +152,11 @@ export default function CodeBlock({ code, language }: CodeBlockProps) {
           type="button"
           onClick={handleCopy}
           aria-label={copied ? 'Code copied to clipboard' : 'Copy code to clipboard'}
+          // pc-touch (§9, primitives.css): the chip keeps the 25px ink the code
+          // block's header rhythm asks for and carries its hit area out to 44px
+          // on a coarse pointer. On a phone this is the only way to copy a code
+          // block — there is no hover row and no context menu behind it.
+          className="pc-touch"
           style={{
             display: 'inline-flex',
             alignItems: 'center',
