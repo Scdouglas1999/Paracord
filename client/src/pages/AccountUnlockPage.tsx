@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { useAccountStore } from '../stores/accountStore';
-import { useServerListStore } from '../stores/serverListStore';
+import { normalizeServerUrl, useServerListStore } from '../stores/serverListStore';
 import { useAuthStore } from '../stores/authStore';
 import { hasAccount } from '../lib/account';
 import { getStoredServerUrl, getCurrentOriginServerUrl, setStoredServerUrl } from '../lib/config/apiBaseUrl';
@@ -48,8 +48,20 @@ export function AccountUnlockPage() {
       setFailedAttempts(0);
       setCooldownUntil(0);
 
-      const serverUrl = getStoredServerUrl() || getCurrentOriginServerUrl();
-      if (serverUrl) {
+      const originUrl = getCurrentOriginServerUrl();
+      const serverUrl = getStoredServerUrl() || originUrl;
+      // The embedded web UI *is* its server: `__local__` already owns this
+      // origin's session, its API client and its event stream. Registering the
+      // same origin a second time as a "remote" entry — and making that entry
+      // the active server — hands every request to a connection that can never
+      // get a stream of its own: the duplicate-SSE guard in connectionManager
+      // sees `__local__` already streaming to that URL, marks the newcomer
+      // connected and returns. READY then never reaches the account's message
+      // runtime for the new scope, so the conversation sat on "Waiting for this
+      // server's authenticated connection" until the page was loaded again.
+      const isOwnOrigin = !!originUrl && !!serverUrl
+        && normalizeServerUrl(serverUrl) === normalizeServerUrl(originUrl);
+      if (serverUrl && !isOwnOrigin) {
         setStoredServerUrl(serverUrl);
         const serverStore = useServerListStore.getState();
         const existingServer = serverStore.getServerByUrl(serverUrl);
@@ -66,8 +78,15 @@ export function AccountUnlockPage() {
           ? existingServer.id
           : serverStore.addServer(serverUrl, serverName, tokenForServer);
 
-        const server = useServerListStore.getState().getServer(serverId);
-        if (!server?.token) {
+        // What decides this is whether a LIVE connection exists, not whether the
+        // entry carries a token. `addServer` is handed the session token above,
+        // so a freshly created entry always has one — and the old `!server.token`
+        // test therefore skipped the connect on exactly the load that created
+        // the entry and made it active. `getApi()` then resolved the active
+        // server to a connection that was never opened and threw "This server is
+        // not connected", so the first unlock after enrolment left the composer
+        // unable to send or save a draft until the page was loaded again.
+        if (!gateway.getApiClient(serverId)) {
           try {
             await gateway.connectServer(serverId);
           } catch {
