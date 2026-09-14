@@ -97,10 +97,15 @@ export const TextRoomRow = React.forwardRef<HTMLButtonElement, TextRoomRowProps>
         />
 
         <span className="flex min-w-0 flex-col gap-0.5">
+          {/* The room's NAME is what this row is for, so it is the last thing
+              that gives way. Both halves could shrink and only the byline was
+              pinned, so a long "author · time" squeezed "design-notes" down to
+              "d" on a phone. The name keeps what it needs up to 70% of the row
+              and the byline truncates into whatever is left. */}
           <span className="flex items-baseline gap-2">
             <span
               className={cn(
-                'pc-display truncate text-name',
+                'pc-display max-w-[70%] shrink-0 truncate text-name',
                 room.lit || unread ? 'text-text-primary' : 'text-text-secondary',
               )}
             >
@@ -112,7 +117,7 @@ export const TextRoomRow = React.forwardRef<HTMLButtonElement, TextRoomRowProps>
                 <span className="sr-only">Featured by this building</span>
               </>
             )}
-            {byline && <span className="shrink-0 truncate text-meta text-text-faint">{byline}</span>}
+            {byline && <span className="min-w-0 truncate text-meta text-text-faint">{byline}</span>}
           </span>
           {preview && (
             <span

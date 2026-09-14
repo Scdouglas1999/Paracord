@@ -221,6 +221,27 @@ describe('TextRoomRow', () => {
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
+  it('gives the room name the space before the byline gets it', () => {
+    // Both halves could shrink and only the byline was pinned, so a long
+    // "author · time" beside a "…" squeezed "design-notes" down to "d" at
+    // 390px. The name is what the row is for.
+    render(
+      <TextRoomRow
+        room={textRoom(false)}
+        lastAuthor="kestrel1789356167489"
+        lastAt="11:22 pm"
+        onOpen={vi.fn()}
+        onMenu={vi.fn()}
+      />,
+    );
+    const name = screen.getByText('build-log');
+    expect(name.className).toContain('shrink-0');
+    expect(name.className).toContain('max-w-[70%]');
+    const byline = screen.getByText('kestrel1789356167489 · 11:22 pm');
+    expect(byline.className).not.toContain('shrink-0');
+    expect(byline.className).toContain('truncate');
+  });
+
   it('has no menu control when the surface offers no menu', () => {
     render(<TextRoomRow room={textRoom(true)} onOpen={vi.fn()} />);
     expect(screen.getAllByRole('button')).toHaveLength(1);
