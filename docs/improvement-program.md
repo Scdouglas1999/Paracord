@@ -1849,3 +1849,19 @@ width), 16 (released SQLite upgrade fixture, encrypted-media recovery evidence).
   messaging 6/6, DM-attachments 1/1, motion gate 22 cases, all Rust suites,
   fmt, clippy 1.91.
 - Next: live multi-agent QA across every domain, then tag `v3.0.0` (draft).
+
+
+## 2026-09-14 — 3.0.0 release candidate tagged (draft)
+
+- Live QA fleet (8 domains) + 5 fix rounds + re-verification + 3 sweeps + final
+  gate; reports under `output/qa-*/` (REPORT, REVERIFY, SWEEP) and
+  `output/fix-round-*/`.
+- Headline fixes: browser voice audible and video visible (three wire defects,
+  per-call media keys, WebTransport accept path, decoder churn); recovery phrase
+  worked for nobody; SIGTERM unhandled then unbounded; federation destination
+  binding; muted rooms still notifying; scrollback dead-ends; ghost voice
+  participants; plus ~150 further defects (see RELEASE_NOTES.md).
+- Deferred (post-3.0): retire LiveKit; bot-store publish path; instance-wide
+  AutoMod; credential-less cross-origin multi-server; desktop engine shared-key
+  video subscriptions; group DM encryption migration.
+- Final gate on the release commit: see RELEASE_NOTES.md "Verification".

@@ -75,7 +75,13 @@ Server binaries and client installers are attached. The server upgrades in place
 
 ## Verification
 
-_Filled in at tagging time._
+Run on the release commit before tagging:
+
+- Rust: `cargo fmt --check` and `cargo clippy --workspace --all-targets -D warnings` (Rust 1.91) clean; 1,553 tests across 92 suites on SQLite, and the 569-test API suite again on a real PostgreSQL 16, all passing.
+- Client: `tsc` clean; 2,560 unit tests in 268 files; the colour-token, contrast, static accessibility and vocabulary audits all pass.
+- End to end (Chromium against the real release binary): 87 mocked cases, 22 motion timing cases, 15 real-server cases (voice join with audible audio and visible video both ways, restore, first-owner claim), 6 messaging and 1 attachment-confidentiality cases.
+- Release smokes: all 22 `scripts/release_*_smoke.py` pass, plus the install smoke, restore on SQLite and PostgreSQL, upgrade-from-v2.0.0 on both, security DAST, and the three-node federation validation.
+- Eight QA passes drove the app live across voice, messaging, DMs and encryption, guild administration, install and operations, desktop and phone interfaces, and an adversarial pass; the three domains that came back red were fixed and re-verified end to end.
 
 ## Previous releases
 
