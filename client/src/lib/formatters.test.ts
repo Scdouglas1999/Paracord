@@ -1,9 +1,20 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { formatTimestamp, wallClock } from './formatters';
 
 describe('the product has one wall clock', () => {
+  // "Today" is relative to the clock, so pin the clock. Without this the
+  // suite passed only on the day it was written.
+  const today = new Date(2026, 8, 13, 12, 0, 0, 0);
   const at = (h: number, m: number) => new Date(2026, 8, 13, h, m, 0, 0);
+
+  beforeAll(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(today);
+  });
+  afterAll(() => {
+    vi.useRealTimers();
+  });
 
   it('writes the meridiem in lower case, everywhere', () => {
     // The timeline used to render "2:28 PM" while the Lobby rendered "2:28 pm".
