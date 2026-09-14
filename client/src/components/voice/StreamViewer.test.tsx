@@ -189,10 +189,14 @@ describe('StreamViewer', () => {
 
     const { unmount } = render(<StreamViewer streamerId="u2" streamerName="Alice" />);
 
+    // The track is named: without it the engine hands back whichever video
+    // track this person published first — their camera — and files the
+    // subscription under their bare user id, where no screen frame looks.
     expect(mediaEngine.subscribeVideo).toHaveBeenCalledWith(
       'u2',
       expect.any(HTMLCanvasElement),
       expect.any(Function),
+      { preferredTrackId: 'screen' },
     );
     expect(mediaEngine.subscribeScreenShareAudio).toHaveBeenCalledWith(
       'u2',

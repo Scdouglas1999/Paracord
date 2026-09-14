@@ -567,7 +567,14 @@ export function StreamViewer({
     if (watchingSelf) {
       unsubscribe = mediaEngine.subscribeLocalPublishedScreen(canvas, onFrame);
     } else {
-      unsubscribe = mediaEngine.subscribeVideo(streamerId, canvas, onFrame);
+      // Name the track. Without it the engine hands back whichever video track
+      // this person published first — their camera, if they have one on — and
+      // files the subscription under their bare user id, so a screen frame
+      // arriving for `<user>:screen` found nothing to render into and the
+      // viewer sat on "X is not sharing" while the share was running.
+      unsubscribe = mediaEngine.subscribeVideo(streamerId, canvas, onFrame, {
+        preferredTrackId: 'screen',
+      });
       setHasActiveTrack(false);
     }
 
@@ -977,6 +984,7 @@ export function StreamViewer({
             shows through whenever the surface reports occluded/hidden (§3.6). */}
         <canvas
           ref={canvasRef}
+          data-stream-canvas=""
           className="h-full w-full object-contain"
           style={{
             // Underlay route: the canvas box IS the hole — any paint here

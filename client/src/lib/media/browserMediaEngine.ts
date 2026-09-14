@@ -46,6 +46,7 @@ import {
   SIMULCAST_LAYERS,
   type EncodedVideoChunkWithMeta,
 } from './video/videoEncoder';
+import { VideoSendQueue } from './video/videoSendQueue';
 import { MediaVideoDecoder } from './video/videoDecoder';
 import { CanvasRenderer } from './video/canvasRenderer';
 import { isMediaCallKey, MediaKeyring } from './mediaKeyring';
@@ -396,6 +397,12 @@ async function detectBrowserStreamCapabilities(): Promise<MediaStreamCapabilitie
  * Browser media engine using WebTransport + WebCodecs.
  * Always connects via server relay (browsers can't do P2P QUIC).
  */
+/** One encoded frame waiting for the transport, with the sequence it was given. */
+interface QueuedVideoFrame {
+  data: EncodedVideoChunkWithMeta;
+  seq: number;
+}
+
 export class BrowserMediaEngine implements MediaEngine {
   private transport: WebTransportManager | null = null;
   private senderKeys = new SenderKeyManager();
@@ -497,6 +504,15 @@ export class BrowserMediaEngine implements MediaEngine {
   private removeAbortListener: (() => void) | null = null;
   private cameraGeneration = 0;
   private screenGeneration = 0;
+
+  /**
+   * The camera's and the screen share's outbound frames, one send in flight
+   * each. `VideoEncoder.onEncoded` is a synchronous callback and publishing is
+   * not; handing the promise straight back to it meant every frame raced every
+   * other frame onto the transport and every refused uni stream became an
+   * uncaught page error. See `VideoSendQueue`.
+   */
+  private videoSendQueues = new Map<'camera' | 'screen', VideoSendQueue<QueuedVideoFrame>>();
 
   private assertOpen(): void {
     if (this.disposed) throw new DOMException('The media session has ended.', 'AbortError');
@@ -635,6 +651,8 @@ export class BrowserMediaEngine implements MediaEngine {
     this.cleanupAudio();
     this.cleanupVideo();
     this.cleanupScreenShare();
+    for (const queue of this.videoSendQueues.values()) queue.stop();
+    this.videoSendQueues.clear();
     this.stopPlaybackLoop();
     this.stopSpeakingLoop();
     for (const participant of this.participants.values()) participant.decoder.close();
@@ -776,7 +794,7 @@ export class BrowserMediaEngine implements MediaEngine {
 
     this.screenEncoder.onEncoded((data) => {
       if (this.disposed || generation !== this.screenGeneration) return;
-      this.sendEncodedVideo(data, this.screenSequence, true);
+      this.publishEncodedVideo(data, this.screenSequence, true);
       // Advance by the number of sequence numbers this frame actually consumes.
       // Advancing by 1 made every multi-fragment frame overlap its successor and
       // reuse an AES-GCM (key, nonce) pair. See videoSequenceSpan.
@@ -1108,7 +1126,7 @@ export class BrowserMediaEngine implements MediaEngine {
         codec: preferredCodec,
       });
       this.videoEncoder.onEncoded((data) => {
-        this.sendEncodedVideo(data, this.videoSequence, false);
+        this.publishEncodedVideo(data, this.videoSequence, false);
         // See videoSequenceSpan: advancing by 1 reused (key, nonce) pairs.
         this.videoSequence =
           (this.videoSequence +
@@ -1138,7 +1156,7 @@ export class BrowserMediaEngine implements MediaEngine {
         codec: preferredCodec,
       });
       this.screenEncoder.onEncoded((data) => {
-        this.sendEncodedVideo(data, this.screenSequence, true);
+        this.publishEncodedVideo(data, this.screenSequence, true);
         // See videoSequenceSpan: advancing by 1 reused (key, nonce) pairs.
         this.screenSequence =
           (this.screenSequence +
@@ -1266,7 +1284,7 @@ export class BrowserMediaEngine implements MediaEngine {
   ): () => void {
     if (this.disposed) return () => {};
     const preferredTrackId = options?.preferredTrackId;
-    const subscriptionKey = preferredTrackId ? `${userId}:${preferredTrackId}` : userId;
+    const subscriptionKey = this.videoSubscriptionKey(userId, preferredTrackId);
     // Tear down any existing subscription for this key
     const existing = this.videoSubscriptions.get(subscriptionKey);
     if (existing) {
@@ -1596,7 +1614,7 @@ export class BrowserMediaEngine implements MediaEngine {
 
     this.videoEncoder.onEncoded((data) => {
       if (this.disposed || generation !== this.cameraGeneration) return;
-      this.sendEncodedVideo(data, this.videoSequence, false);
+      this.publishEncodedVideo(data, this.videoSequence, false);
       // See videoSequenceSpan: advancing by 1 reused (key, nonce) pairs.
       this.videoSequence =
         (this.videoSequence +
@@ -1800,6 +1818,43 @@ export class BrowserMediaEngine implements MediaEngine {
       video.pause();
       video.srcObject = null;
     };
+  }
+
+  /**
+   * Hand one encoded frame to its track's send queue.
+   *
+   * This is what the encoder callbacks call, and it returns nothing: there is
+   * no promise here for a caller to drop. `sendEncodedVideo` awaits an
+   * encryption and, for a keyframe, a fresh WebTransport unidirectional stream
+   * — which the browser refuses once the connection's uni-stream credit runs
+   * out. Called bare from the callback, that refusal became an unhandled
+   * rejection and an uncaught page error; the queue absorbs it, reports it
+   * once, and keeps publishing.
+   */
+  private publishEncodedVideo(
+    data: EncodedVideoChunkWithMeta,
+    seq: number,
+    isScreenShare: boolean,
+  ): void {
+    if (this.disposed) return;
+    const kind = isScreenShare ? 'screen' : 'camera';
+    let queue = this.videoSendQueues.get(kind);
+    if (!queue) {
+      queue = new VideoSendQueue<QueuedVideoFrame>(
+        (frame) => this.sendEncodedVideo(frame.data, frame.seq, isScreenShare),
+        {
+          onError: (error, stats) => {
+            console.warn(
+              `[BrowserMediaEngine] a ${kind} frame could not be published ` +
+                `(${stats.failed} failed, ${stats.dropped} dropped for back-pressure):`,
+              error,
+            );
+          },
+        },
+      );
+      this.videoSendQueues.set(kind, queue);
+    }
+    queue.enqueue({ data, seq }, data.isKeyframe);
   }
 
   /**
@@ -2129,7 +2184,7 @@ export class BrowserMediaEngine implements MediaEngine {
         : this.ssrcToUserId.get(header.ssrc);
     if (!userId) return;
 
-    const subscription = this.videoSubscriptions.get(userId);
+    const subscription = this.videoSubscriptionFor(userId, trackId);
     if (!subscription) return;
     subscription.ssrc = header.ssrc;
     const decoderCodec = this.decoderCodecForTrack(publishedTrack, codec);
@@ -2262,7 +2317,7 @@ export class BrowserMediaEngine implements MediaEngine {
           for (const layer of track.layers) {
             this.ssrcToUserId.set(layer.ssrc, publisherUserId);
           }
-          const existingSub = this.videoSubscriptions.get(publisherUserId);
+          const existingSub = this.videoSubscriptionFor(publisherUserId, track.trackId);
           const viewport = existingSub
             ? {
                 width: Math.max(
@@ -2358,7 +2413,7 @@ export class BrowserMediaEngine implements MediaEngine {
           for (const layer of layers) {
             this.ssrcToUserId.set(layer.ssrc, publisherUserId);
           }
-          const existingSub = this.videoSubscriptions.get(publisherUserId);
+          const existingSub = this.videoSubscriptionFor(publisherUserId, updatedTrack.trackId);
           const viewport = existingSub
             ? {
                 width: Math.max(
@@ -2681,11 +2736,11 @@ export class BrowserMediaEngine implements MediaEngine {
     this.removePublishedTracksForUser(userId);
     this.keyring.removePeer(userId);
 
-    const sub = this.videoSubscriptions.get(userId);
-    if (sub) {
+    // Both of them if they were on camera *and* sharing a screen.
+    for (const [key, sub] of this.videoSubscriptionsForUser(userId)) {
       sub.decoder.close();
       sub.renderer.clear();
-      this.videoSubscriptions.delete(userId);
+      this.videoSubscriptions.delete(key);
     }
 
     this.emitSpeakingChange();
@@ -2726,6 +2781,41 @@ export class BrowserMediaEngine implements MediaEngine {
 
   private trackKey(streamId: string, trackId: string): string {
     return `${streamId}:${trackId}`;
+  }
+
+  /**
+   * The key one video subscription is filed under.
+   *
+   * A person can publish two tracks at once — their camera and their screen —
+   * and each gets its own decoder, renderer and canvas, so the map is keyed by
+   * the pair. `subscribeVideo` has always keyed it this way; every *reader*
+   * looked the person up by id alone and missed. That is why a remote camera or
+   * share decoded nothing: the frames arrived, were decrypted and reassembled,
+   * failed this lookup, and were dropped without a word.
+   */
+  private videoSubscriptionKey(userId: string, trackId?: string | null): string {
+    return trackId ? `${userId}:${trackId}` : userId;
+  }
+
+  /**
+   * The subscription a frame belongs to: the one for this person's *track*, or
+   * a bare per-person subscription for a caller that did not name one.
+   */
+  private videoSubscriptionFor(
+    userId: string,
+    trackId?: string | null,
+  ): VideoSubscription | undefined {
+    return (
+      this.videoSubscriptions.get(this.videoSubscriptionKey(userId, trackId)) ??
+      this.videoSubscriptions.get(userId)
+    );
+  }
+
+  /** Every subscription belonging to `userId`, whichever track it is for. */
+  private videoSubscriptionsForUser(userId: string): Array<[string, VideoSubscription]> {
+    return Array.from(this.videoSubscriptions.entries()).filter(
+      ([, subscription]) => subscription.userId === userId,
+    );
   }
 
   private decoderCodecForTrack(track?: PublishedTrackDescriptor, fallbackCodec?: string): string {
