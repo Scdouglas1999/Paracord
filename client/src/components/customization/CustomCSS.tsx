@@ -1,11 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { RotateCcw, Save, ShieldAlert, Code2, AlertTriangle } from 'lucide-react';
 import { sanitizeCustomCss } from '../../lib/security';
+import { clearCustomCss, renderCustomCss } from '../../lib/customCss';
 import { toast } from '../../stores/toastStore';
 import { Button } from '../ui/Button';
-
-// Shared with useTheme(): the single <style> element that owns rendered custom CSS.
-const CUSTOM_CSS_STYLE_ID = 'paracord-custom-css';
 
 // Mirrors the at-rule stripping in sanitizeCustomCss(); used to detect (not perform) drops.
 const AT_RULE_RE = /@[^{;]+(?:;|\{[^}]*\})/g;
@@ -49,43 +47,45 @@ export function CustomCSS({ initialCSS = '', onSave }: CustomCSSProps) {
   const [css, setCss] = useState(initialCSS);
   const [saved, setSaved] = useState(false);
   const [sanitized, setSanitized] = useState(false);
+  // Whether the document is actually rendering the preview. False means the
+  // page's own security policy refused the stylesheet — the one case where
+  // this whole panel would otherwise be a convincing no-op.
+  const [applied, setApplied] = useState(true);
   const initialCssRef = useRef(initialCSS);
 
   useEffect(() => {
     initialCssRef.current = initialCSS;
   }, [initialCSS]);
 
-  // Live preview: drive the single theme-owned <style> element (shared with useTheme),
-  // never a competing private element.
+  // Live preview: drive the single theme-owned stylesheet (shared with
+  // useTheme), never a competing private element. `renderCustomCss` reports
+  // whether the document actually took it; a refusal is shown, not swallowed.
   useEffect(() => {
     const safeCss = sanitizeCustomCss(css);
     setSanitized(sanitizationDroppedContent(css, safeCss));
-
-    let styleEl = document.getElementById(CUSTOM_CSS_STYLE_ID) as HTMLStyleElement | null;
-    if (!styleEl) {
-      styleEl = document.createElement('style');
-      styleEl.id = CUSTOM_CSS_STYLE_ID;
-      document.head.appendChild(styleEl);
-    }
-    styleEl.textContent = safeCss;
+    setApplied(renderCustomCss(safeCss));
   }, [css]);
 
   // On unmount, discard unsaved preview and restore the committed value so custom CSS the
   // user actually saved (rendered via useTheme from the same source) survives.
   useEffect(() => {
     return () => {
-      const styleEl = document.getElementById(CUSTOM_CSS_STYLE_ID) as HTMLStyleElement | null;
-      if (!styleEl) return;
       const committed = sanitizeCustomCss(initialCssRef.current);
       if (committed) {
-        styleEl.textContent = committed;
+        renderCustomCss(committed);
       } else {
-        styleEl.remove();
+        clearCustomCss();
       }
     };
   }, []);
 
   const handleSave = () => {
+    if (!applied) {
+      // Saving would persist a stylesheet this app cannot render and tell the
+      // user it worked. Refuse, and say why.
+      toast.error('This build refused the stylesheet — nothing was applied, so nothing was saved.');
+      return;
+    }
     onSave?.(sanitizeCustomCss(css));
     setSaved(true);
     toast.success('Custom CSS saved');
@@ -147,6 +147,17 @@ export function CustomCSS({ initialCSS = '', onSave }: CustomCSSProps) {
         />
       </div>
 
+      {!applied && (
+        <div
+          className="flex items-start gap-2 rounded-[var(--radius-well)] bg-danger-well px-3.5 py-2.5 text-meta font-medium leading-relaxed text-accent-danger shadow-[var(--shadow-well)]"
+          role="alert"
+        >
+          <AlertTriangle size={15} className="mt-px shrink-0" aria-hidden />
+          This build refused the stylesheet, so nothing here reaches the interface. Custom CSS is
+          unavailable until that is fixed — please report it rather than working around it.
+        </div>
+      )}
+
       {sanitized && (
         <div
           className="flex items-start gap-2 rounded-[var(--radius-well)] bg-danger-well px-3.5 py-2.5 text-meta font-medium leading-relaxed text-accent-danger shadow-[var(--shadow-well)]"
@@ -158,7 +169,11 @@ export function CustomCSS({ initialCSS = '', onSave }: CustomCSSProps) {
       )}
 
       <p className="max-w-prose text-meta leading-relaxed text-text-faint">
-        Instance administrators can also apply instance-wide CSS that reaches everyone signed in here.
+        If a theme ever leaves you unable to read the interface, press{' '}
+        <kbd className="pc-mono">Ctrl</kbd>+<kbd className="pc-mono">Alt</kbd>+
+        <kbd className="pc-mono">Shift</kbd>+<kbd className="pc-mono">C</kbd> to remove your custom
+        CSS from anywhere in the app. Instance administrators can also apply instance-wide CSS that
+        reaches everyone signed in here.
       </p>
     </div>
   );

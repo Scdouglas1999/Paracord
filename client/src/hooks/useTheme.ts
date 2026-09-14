@@ -3,6 +3,9 @@ import { useUIStore } from '../stores/uiStore';
 import { useAuthStore } from '../stores/authStore';
 import { configureMotion } from '../lib/motion/reducedMotion';
 import { sanitizeCustomCss } from '../lib/security';
+import { clearCustomCss, renderCustomCss } from '../lib/customCss';
+import { toast } from '../stores/toastStore';
+import { logVoiceDiagnostic } from '../lib/desktopDiagnostics';
 
 type ThemeName = 'dark' | 'light' | 'amoled' | 'high-contrast';
 
@@ -115,6 +118,7 @@ export function useTheme() {
   const lowBandwidthMode = useUIStore((s) => s.lowBandwidthMode);
   const motion = useUIStore((s) => s.motion);
   const customCss = useUIStore((s) => s.customCss);
+  const setCustomCss = useUIStore((s) => s.setCustomCss);
   const settings = useAuthStore((s) => s.settings);
   const initializedFromServer = useRef(false);
 
@@ -199,21 +203,35 @@ export function useTheme() {
     );
   }, [lowBandwidthMode]);
 
+  // The committed custom CSS, rendered through the same single stylesheet the
+  // Settings preview drives. A refusal (the document's CSP declining an
+  // injected stylesheet) is reported rather than left as a silent no-op —
+  // Settings shows it to the user, this records it for a bug report.
   useEffect(() => {
-    const id = 'paracord-custom-css';
-    let styleEl = document.getElementById(id) as HTMLStyleElement | null;
     const css = sanitizeCustomCss(settings?.custom_css || customCss || '');
-    if (css) {
-      if (!styleEl) {
-        styleEl = document.createElement('style');
-        styleEl.id = id;
-        document.head.appendChild(styleEl);
-      }
-      styleEl.textContent = css;
-    } else if (styleEl) {
-      styleEl.remove();
+    if (!renderCustomCss(css)) {
+      logVoiceDiagnostic('[theme] custom css refused by the document', { length: css.length });
     }
   }, [customCss, settings?.custom_css]);
+
+  // The way back. Custom CSS runs against the whole interface, and while the
+  // sanitizer allows no layout or visibility properties, a transparent colour
+  // or a zeroed font size is enough that somebody cannot find Settings again to
+  // undo it. Ctrl+Alt+Shift+C removes it without needing to read the screen.
+  // (Instance-wide CSS is an administrator's, not something a person pasted
+  // here, and is left alone.)
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!event.ctrlKey || !event.altKey || !event.shiftKey) return;
+      if (event.code !== 'KeyC') return;
+      event.preventDefault();
+      setCustomCss('');
+      clearCustomCss();
+      toast.success('Custom CSS removed.');
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [setCustomCss]);
 
   return { theme: activeTheme };
 }

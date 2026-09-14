@@ -45,15 +45,36 @@ describe('CustomCSS', () => {
     expect(customStyleElements()).toHaveLength(1);
   });
 
-  it('removes the preview style element on unmount when nothing is committed', () => {
-    // Empty initialCSS === nothing persisted; the element exists only for live preview and
-    // must be torn down on unmount so no stray custom-css element leaks.
+  it('leaves no style element behind when nothing is committed', () => {
+    // Empty initialCSS === nothing persisted. Nothing to render means no element at
+    // all — an empty one is a stray, and on unmount none may leak either.
     const { unmount } = render(<CustomCSS initialCSS="" />);
+    expect(customStyleElements()).toHaveLength(0);
+
+    fireEvent.change(screen.getByRole('textbox'), {
+      target: { value: 'body { color: red; }' },
+    });
     expect(customStyleElements()).toHaveLength(1);
 
     unmount();
 
     expect(customStyleElements()).toHaveLength(0);
+  });
+
+  // The desktop shell serves a CSP with a style nonce, which turns off
+  // `'unsafe-inline'`: a <style> minted without that nonce is refused, and the
+  // panel used to save-and-toast over the top of a stylesheet the document had
+  // thrown away. The element now carries the document's own nonce.
+  it('mints the preview element with the page style nonce', () => {
+    const pageStyle = document.createElement('style');
+    pageStyle.nonce = 'page-nonce-xyz';
+    document.head.appendChild(pageStyle);
+    try {
+      render(<CustomCSS initialCSS="body { color: red; }" />);
+      expect(customStyleElements()[0].nonce).toBe('page-nonce-xyz');
+    } finally {
+      pageStyle.remove();
+    }
   });
 
   it('reverts unsaved preview edits to the committed value on unmount', () => {
