@@ -1005,6 +1005,7 @@ test('two browsers in one room see each other — one on camera, one sharing a s
       `the host's camera tile is still dark (${JSON.stringify(cameraTile)})`,
     ).toBeGreaterThan(0.2);
     expect(cameraTile.distinctColours).toBeGreaterThan(8);
+    await guest.screenshot({ path: shotPath('browser-video-camera-seen.png') });
 
     // 4. The other direction: the host opens the guest's share and decodes it.
     //
@@ -1048,7 +1049,6 @@ test('two browsers in one room see each other — one on camera, one sharing a s
       `the guest's share canvas is blank (${JSON.stringify(shareTile)})`,
     ).toBeGreaterThan(32);
 
-    await guest.screenshot({ path: shotPath('browser-video-camera-seen.png') });
     await host.screenshot({ path: shotPath('browser-video-share-seen.png') });
 
     // The numbers, so a passing run says what it proved rather than only that
