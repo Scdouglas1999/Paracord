@@ -512,8 +512,9 @@ describe('connectionManager SSE watchdog', () => {
       manager.startSseWatchdog(conn, es);
       expect(conn.sseWatchdogTimer).not.toBeNull();
 
-      // Three silent watchdog ticks (no intervening frame) -> stale.
-      vi.advanceTimersByTime(30_000 * 3);
+      // Silence past the tolerated gap -> stale. The server heartbeats an idle
+      // stream every 15s, so this is four missed heartbeats.
+      vi.advanceTimersByTime(75_000);
 
       expect(reconnectSpy).toHaveBeenCalledTimes(1);
       expect(close).toHaveBeenCalledTimes(1);
@@ -524,22 +525,28 @@ describe('connectionManager SSE watchdog', () => {
     });
   });
 
-  it('resets its miss counter whenever a frame keeps the stream alive', () => {
+  it('measures real silence, so a stream that keeps speaking is never replaced', () => {
+    // The watchdog used to count its own ticks rather than look at the clock,
+    // which made "is this stream alive?" a question about how many times a
+    // timer had fired instead of about the stream. A frame arriving between
+    // ticks is the only thing that means anything, and the gap since the last
+    // one is the whole answer.
     const es = { close: vi.fn() } as unknown as EventSource;
     const conn = makeConnection({ eventSource: es, connected: true });
 
     withConnection(conn, () => {
       manager.startSseWatchdog(conn, es);
-      // Two silent ticks accumulate misses...
-      vi.advanceTimersByTime(30_000 * 2);
-      expect(conn.missedAcks).toBe(2);
+
+      // A quiet stream that is nonetheless heartbeating, for half an hour.
+      for (let elapsed = 0; elapsed < 30 * 60_000; elapsed += 15_000) {
+        vi.advanceTimersByTime(15_000);
+        conn.lastFrameTs = Date.now();
+      }
       expect(reconnectSpy).not.toHaveBeenCalled();
 
-      // ...a live frame resets the counter, so the stream survives.
-      conn.lastFrameTs = Date.now();
-      conn.missedAcks = 0;
-      vi.advanceTimersByTime(30_000 * 2);
-      expect(reconnectSpy).not.toHaveBeenCalled();
+      // Then it genuinely stops.
+      vi.advanceTimersByTime(75_000);
+      expect(reconnectSpy).toHaveBeenCalledTimes(1);
 
       // The watchdog timer is not owned by withConnection's cleanup; clear it.
       if (conn.sseWatchdogTimer) clearInterval(conn.sseWatchdogTimer);

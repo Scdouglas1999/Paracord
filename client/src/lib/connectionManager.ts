@@ -13,6 +13,7 @@ import {
 import { getRefreshToken, setAccessToken, setRefreshToken } from './authToken';
 import { getCurrentOriginServerUrl, getStoredServerUrl } from './config/apiBaseUrl';
 import { isTauri } from './tauriEnv';
+import { syncTrustedHosts } from './trustedHosts';
 import { inflateSync } from 'fflate';
 import type { Activity, GatewayPayload } from '../types';
 import { GatewayEvents } from '../gateway/events';
@@ -199,6 +200,10 @@ type DispatchLane = {
 
 class ConnectionManager {
   private connections = new Map<string, ServerConnection>();
+  /** The in-flight `connectAll()`, if any. See `connectAll`. */
+  private connectAllInFlight: Promise<void> | null = null;
+  /** A `connectAll()` asked for while one was running; collapses to one re-run. */
+  private connectAllQueued = false;
   private connecting = new Map<string, Promise<void>>();
   private static readonly MAX_PENDING_MESSAGES = 200;
   private static readonly MAX_DISPATCH_EVENTS = 1000;
@@ -210,9 +215,22 @@ class ConnectionManager {
   /** Consecutive missed liveness checks (heartbeat acks / SSE frames) before a
    *  connection is considered stale and torn down. Shared by WS and SSE. */
   private static readonly MAX_MISSED_ACKS = 3;
-  /** SSE watchdog tick: mirrors the WS heartbeat cadence. Each tick with no
-   *  intervening frame counts as a miss, matching the WS missed-ack logic. */
-  private static readonly SSE_WATCHDOG_INTERVAL_MS = 30_000;
+  /** How often the SSE watchdog looks at the stream. It is a sampling rate, not
+   *  a budget: the decision below is made from the elapsed time since the last
+   *  frame, so a slow tick can never shorten the tolerated silence. */
+  private static readonly SSE_WATCHDOG_INTERVAL_MS = 15_000;
+  /** How long a v2 SSE stream may stay silent before it is declared dead.
+   *
+   *  The server heartbeats an idle stream every 15 s (`SSE_KEEPALIVE_INTERVAL`
+   *  in crates/paracord-api/src/routes/realtime.rs), so this tolerates four
+   *  missed heartbeats. It must stay a multiple of that interval: the previous
+   *  watchdog counted ticks instead of measuring silence and, because the
+   *  server's keepalive was an SSE comment that no client can observe, it tore
+   *  down every healthy idle stream on a fixed 90 s cycle. */
+  private static readonly SSE_SILENCE_LIMIT_MS = 60_000;
+  /** How long a stream must stay up before its reconnect backoff is forgiven.
+   *  Long enough that a connect/drop loop cannot keep resetting itself. */
+  private static readonly SSE_SETTLED_MS = 30_000;
   private readonly useRealtimeV2 =
     import.meta.env.VITE_RT_V2 !== '0' && import.meta.env.VITE_RT_V2 !== 'false';
   private offline = typeof navigator !== 'undefined' && navigator.onLine === false;
@@ -301,6 +319,31 @@ class ConnectionManager {
       && this.dispatchLanes.get(conn) === lane
       && getServerAccountScope(conn.serverId)?.userId === lane.accountId
       && (!conn.accountId || conn.accountId === lane.accountId);
+  }
+
+  /**
+   * A realtime setup step found that its lane no longer owns the connection.
+   *
+   * Two different things land here. If a *newer* transport has taken over, this
+   * one simply stops: the newer attempt owns `conn.connecting` and will report
+   * its own result. If no newer transport exists — the lane lost ownership
+   * because the account scope moved under it — then nothing else is coming, and
+   * returning quietly used to leave `conn.connecting` true forever: a realtime
+   * session created on the server whose stream was never opened, and a client
+   * that `isConnectionHealthy()` still called healthy. Say so, and retry.
+   */
+  private abandonTransport(conn: ServerConnection, lane: DispatchLane, stage: string): void {
+    const superseded = this.dispatchLanes.get(conn) !== lane;
+    logVoiceDiagnostic('[gateway] SSE setup abandoned', {
+      server: conn.serverId,
+      stage,
+      reason: superseded ? 'newer transport' : 'account scope changed',
+    });
+    if (superseded || !this.isCurrentConnection(conn) || !conn.allowReconnect) return;
+    conn.connecting = false;
+    conn.connected = false;
+    this.cleanupConnection(conn);
+    this.reconnectGateway(conn);
   }
 
   private invalidateDispatchLane(conn: ServerConnection): void {
@@ -422,6 +465,15 @@ class ConnectionManager {
     };
     if (replaced) console.info('[gateway] Reconnecting: this account session was replaced.', diagnostic);
     else console.error('[gateway] Cannot complete gateway delivery; reconnecting from the last completed checkpoint.', diagnostic);
+    // The desktop diagnostics file is the only record of a client that will not
+    // stay connected, and this is one of the two paths that drops the stream.
+    // Reported to the console alone, it left a log that showed a session being
+    // created every thirty seconds and nothing whatsoever about why.
+    logVoiceDiagnostic('[gateway] dispatch failed, reconnecting', {
+      server: conn.serverId,
+      ...diagnostic,
+      attempt: conn.reconnectAttempts,
+    });
     const ws = conn.ws; const es = conn.eventSource;
     conn.ws = null; conn.eventSource = null;
     conn.connected = false; conn.connecting = false;
@@ -619,6 +671,24 @@ class ConnectionManager {
         this.connecting.delete(LOCAL_SERVER_ID);
       }
     }
+  }
+
+  /**
+   * The local server URL only when one is genuinely configured.
+   *
+   * `resolveLocalServerUrl()` always answers — it falls back to a hardcoded
+   * default so a connect attempt has somewhere to go. That default is a guess,
+   * and a guess must never be presented to the user as a server to trust.
+   */
+  private configuredLocalServerUrl(): string | null {
+    const stored = getStoredServerUrl();
+    if (stored) return stored;
+    const currentOrigin = getCurrentOriginServerUrl();
+    if (currentOrigin) return currentOrigin;
+    if (typeof window !== 'undefined' && /^https?:$/.test(window.location.protocol) && window.location.host) {
+      return `${window.location.protocol}//${window.location.host}`;
+    }
+    return null;
   }
 
   private resolveLocalServerUrl(): string {
@@ -1161,7 +1231,7 @@ class ConnectionManager {
         }>(`${conn.serverUrl.replace(/\/+$/, '')}/api/v2/rt/session`, undefined, {
           timeout: 10_000,
         });
-        if (!this.ownsTransport(conn, lane)) return;
+        if (!this.ownsTransport(conn, lane)) return this.abandonTransport(conn, lane, 'session');
         logVoiceDiagnostic('[gateway] SSE session POST ok', { session_id: sessionResp.data?.session_id });
         // Bootstrap values select a stream; only its authenticated READY may
         // acknowledge them. A failed setup must retain the completed resume point.
@@ -1179,7 +1249,7 @@ class ConnectionManager {
           undefined,
           { timeout: 10_000 },
         );
-        if (!this.ownsTransport(conn, lane)) return;
+        if (!this.ownsTransport(conn, lane)) return this.abandonTransport(conn, lane, 'ticket');
         const ticket = ticketResp.data?.ticket;
         if (!ticket) throw new Error('stream ticket missing');
 
@@ -1201,7 +1271,7 @@ class ConnectionManager {
         // live stream that nothing would ever close.
         if (!this.ownsTransport(conn, lane)) {
           es.close();
-          return;
+          return this.abandonTransport(conn, lane, 'stream');
         }
         conn.eventSource = es;
 
@@ -1244,7 +1314,10 @@ class ConnectionManager {
         });
 
         es.onerror = (errEvt) => {
-          if (!this.ownsTransport(conn, lane) || conn.eventSource !== es) return;
+          if (!this.ownsTransport(conn, lane) || conn.eventSource !== es) {
+            logVoiceDiagnostic('[gateway] SSE error on a superseded stream', { server: conn.serverId });
+            return;
+          }
           logVoiceDiagnostic('[gateway] SSE error', {
             server: conn.serverId,
             readyState: es.readyState,
@@ -1468,15 +1541,27 @@ class ConnectionManager {
    */
   private startSseWatchdog(conn: ServerConnection, es: RealtimeEventSource): void {
     this.clearSseWatchdog(conn);
-    conn.lastFrameTs = Date.now();
+    const openedAt = Date.now();
+    conn.lastFrameTs = openedAt;
     conn.missedAcks = 0;
     conn.sseWatchdogTimer = setInterval(() => {
       if (!this.isCurrentConnection(conn) || conn.eventSource !== es) {
         this.clearSseWatchdog(conn);
         return;
       }
-      conn.missedAcks++;
-      if (conn.missedAcks < ConnectionManager.MAX_MISSED_ACKS) return;
+      const silentFor = Date.now() - conn.lastFrameTs;
+      if (silentFor < ConnectionManager.SSE_SILENCE_LIMIT_MS) {
+        // The stream is provably alive. A connection that has carried traffic
+        // this long is not the one the backoff was counting against, so stop
+        // charging it for earlier failures — otherwise an account quiet enough
+        // never to deliver a durable event stays at the 30 s backoff cap for
+        // the rest of the session.
+        if (Date.now() - openedAt >= ConnectionManager.SSE_SETTLED_MS
+          && !this.durableFailures.has(conn)) {
+          conn.reconnectAttempts = 0;
+        }
+        return;
+      }
 
       // Stream is stale. Reconnect it, but do not publish "time since last
       // frame" as latency; that can be tens of seconds and is not an RTT.
@@ -1770,19 +1855,58 @@ class ConnectionManager {
   }
 
   /** Ask the Tauri backend to verify and sync server URLs for TLS trust decisions. */
+  /**
+   * Have the desktop shell verify and record every server origin we are about
+   * to talk to, and wait for it.
+   *
+   * This used to gate on `'__TAURI__' in window`, which is only defined when
+   * the app is built with `withGlobalTauri` — it is not. So on the real desktop
+   * client the gate was always false, this awaited nothing, and `connectAll()`
+   * went straight on to connect. The only surviving trust sync was the
+   * fire-and-forget one in main.tsx, which races it: the first realtime connect
+   * after a cold boot lost that race and died with "Native fetch target is not
+   * in the trusted server list", leaving the connection to find its way back
+   * through reconnect backoff. Share the one implementation, which detects
+   * Tauri properly, and actually wait for it.
+   */
   private async syncTrustedHosts(serverUrls: string[]): Promise<void> {
-    try {
-      if (typeof window !== 'undefined' && '__TAURI__' in window) {
-        const { invoke } = await import('@tauri-apps/api/core');
-        await invoke('update_trusted_server_hosts', { serverUrls });
-      }
-    } catch {
-      // Not running in Tauri or command not available — ignore.
-    }
+    await syncTrustedHosts(serverUrls);
   }
 
   /** Connect to all saved servers */
+  /**
+   * Reconcile every connection with the current server list.
+   *
+   * Serialized. `useGateway` re-runs whenever a server's token changes, and a
+   * first login changes it twice within the same millisecond (the entry is
+   * created without a token, then the token lands). Two overlapping runs each
+   * found no connection for the server, each created one, and the second
+   * replaced the first in the map — two realtime sessions and two streams for
+   * one server, one of them orphaned with nothing left to close it. One run at
+   * a time, with at most one queued re-run, keeps the one-session invariant
+   * where it belongs: at the layer that owns the connection map.
+   */
   async connectAll(): Promise<void> {
+    if (this.connectAllInFlight) {
+      this.connectAllQueued = true;
+      await this.connectAllInFlight.catch(() => {});
+      return;
+    }
+    const run = this.connectAllOnce().finally(() => {
+      this.connectAllInFlight = null;
+    });
+    this.connectAllInFlight = run;
+    try {
+      await run;
+    } finally {
+      if (this.connectAllQueued) {
+        this.connectAllQueued = false;
+        await this.connectAll();
+      }
+    }
+  }
+
+  private async connectAllOnce(): Promise<void> {
     if (this.offline) {
       logVoiceDiagnostic('[gateway] connectAll: offline, skipping');
       this.syncUiConnectionStatus();
@@ -1800,11 +1924,18 @@ class ConnectionManager {
     const localToken = useAuthStore.getState().token;
     logVoiceDiagnostic('[gateway] connectAll', { serverCount: servers.length, useRealtimeV2: this.useRealtimeV2, hasAuthToken: !!localToken, serverIds: servers.map(s => s.id) });
 
-    // Ask the Tauri backend to verify and sync trusted server hosts so that TLS
-    // certificate errors for user-configured self-hosted servers are allowed through.
-    // Include the local server URL alongside remote servers.
+    // Ask the desktop shell to verify and record every origin we are about to
+    // talk to, so a self-hosted server's certificate is accepted.
+    //
+    // Only origins that actually exist. `resolveLocalServerUrl()` ends in a
+    // hardcoded `http://localhost:8080` when nothing is configured, which in
+    // the desktop client is always: it has no stored URL and its own origin is
+    // `tauri://`. Handing that to the shell asks the user to trust a server
+    // they never added and that is not running — a modal "Trust new Paracord
+    // server?" prompt at every cold boot, and sixty seconds of a client that
+    // cannot connect while it waits for an answer nobody knows to give.
     const allServerUrls = servers.map((s) => s.url);
-    const localServerUrl = this.resolveLocalServerUrl();
+    const localServerUrl = this.configuredLocalServerUrl();
     if (localServerUrl && !allServerUrls.includes(localServerUrl)) {
       allServerUrls.push(localServerUrl);
     }
