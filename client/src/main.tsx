@@ -126,39 +126,6 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   </React.StrictMode>
 );
 
-// QA-DIAG (temporary): mirror console.warn/error into the diagnostics log.
-if (isTauri()) {
-  for (const level of ['error', 'warn'] as const) {
-    const original = console[level].bind(console);
-    console[level] = (...args: unknown[]) => {
-      original(...args);
-      try {
-        void logVoiceDiagnostic(`[qa-diag] console.${level}`, {
-          msg: args.map((a) => (a instanceof Error ? `${a.message} :: ${a.stack}` : typeof a === 'string' ? a : JSON.stringify(a))).join(' ').slice(0, 600),
-        });
-      } catch { /* ignore */ }
-    };
-  }
-  window.addEventListener('error', (e) => {
-    void logVoiceDiagnostic('[qa-diag] window error', { message: e.message, file: e.filename, line: e.lineno, stack: (e.error as Error | undefined)?.stack?.slice(0, 400) ?? '' });
-  });
-}
-
-// QA-DIAG (temporary)
-if (isTauri()) {
-  setInterval(() => {
-    const root = document.getElementById('root');
-    const first = root?.firstElementChild as HTMLElement | null;
-    void logVoiceDiagnostic('[qa-diag] dom heartbeat', {
-      href: location.href,
-      rootChildren: root?.childElementCount ?? -1,
-      firstTag: first?.tagName ?? 'none',
-      firstClass: (first?.className ?? '').slice(0, 120),
-      txt: (root?.innerText ?? '').replace(/\s+/g, ' ').slice(0, 160),
-    });
-  }, 4000);
-}
-
 // Desktop-only: show window after React renders (prevents white flash)
 if (isTauri()) {
   import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {

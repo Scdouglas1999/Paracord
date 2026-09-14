@@ -172,6 +172,16 @@ export function AccountUnlockPage() {
             >
               Import account from file
             </button>
+            {/* This screen is now where a device with an identity starts, so it
+                must not be the only door: signing in as someone else, or as
+                this account by password, has to stay possible. */}
+            <button
+              type="button"
+              onClick={() => navigate('/login')}
+              className="pc-focusable rounded-[var(--radius-chip)] font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+            >
+              Sign in with a password instead
+            </button>
           </div>
         </form>
       </AuthCard>

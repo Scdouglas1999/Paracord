@@ -75,6 +75,13 @@ function OwnedAccountSetupPage() {
   const destination = returnTo?.startsWith('/app/') && !returnTo.includes('\\') ? returnTo : '/app';
   const existingIdentity = useAccountStore(s => s.publicKey);
   const hasSavedIdentity = useAccountStore(s => s.hasAccount());
+  // The signed-in account's own key, as the server knows it. On a second device
+  // this is the whole story: the account already has an identity, it lives on
+  // the first device, and the thing to do here is restore it — not mint a
+  // rival key this account's contacts have never seen.
+  const signedInUser = useAuthStore(s => s.user);
+  const accountAlreadyHasIdentity =
+    !isMigration && !hasSavedIdentity && Boolean(signedInUser?.public_key);
   const identityUnlocked = useAccountStore(s => s.isUnlocked);
   const [serverPassword, setServerPassword] = useState('');
   const [mfaCode, setMfaCode] = useState('');
@@ -172,6 +179,55 @@ function OwnedAccountSetupPage() {
   const handleContinue = () => {
     navigate(isMigration ? destination : '/connect');
   };
+
+  if (accountAlreadyHasIdentity) {
+    return (
+      <AuthCanvas>
+        <AuthCard className="max-w-md">
+          <div className={`${AUTH_FORM} items-start`}>
+            <AuthHeading
+              mark={false}
+              dense
+              title="This account already has an identity"
+              subtitle={`${signedInUser?.username ?? 'This account'} has a device identity on another device. Restore it here with your 24-word recovery phrase, so your key — and everything encrypted to it — stays the same.`}
+            />
+            <p className="pc-well px-4 py-3 text-meta text-text-secondary">
+              Its key ends in{' '}
+              <span className="pc-mono text-text-primary">
+                {(signedInUser?.public_key ?? '').slice(-8)}
+              </span>
+              . Creating a new identity here instead would replace it, and nobody who has already
+              verified you would recognise the new one.
+            </p>
+            <Button size="lg" className="w-full" onClick={() => navigate('/recover')}>
+              <KeyRound size={16} aria-hidden />
+              Recover from phrase
+            </Button>
+            {/* One way out per line: a wrapped separator reads as a typo. */}
+            <div className="flex flex-col items-start gap-1 text-meta text-text-secondary">
+              <p>
+                Lost the phrase?{' '}
+                <button
+                  type="button"
+                  onClick={() => navigate('/app?settings=identity')}
+                  className="pc-focusable rounded-[var(--radius-chip)] font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+                >
+                  Import the account from a file
+                </button>
+              </p>
+              <button
+                type="button"
+                onClick={() => navigate('/login')}
+                className="pc-focusable rounded-[var(--radius-chip)] font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+              >
+                Use a different account
+              </button>
+            </div>
+          </div>
+        </AuthCard>
+      </AuthCanvas>
+    );
+  }
 
   if (step === 'recovery') {
     const words = recoveryPhrase.split(' ');

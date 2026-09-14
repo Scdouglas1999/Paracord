@@ -1,5 +1,5 @@
 import { useState, useEffect, lazy, Suspense } from 'react';
-import { Routes, Route, Navigate } from 'react-router';
+import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router';
 import { AppMark } from './pages/authScaffold';
 import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
@@ -40,6 +40,8 @@ const StagePreviewPage = import.meta.env.DEV
   ? lazy(() => import('./pages/StagePreviewPage'))
   : null;
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { Button } from './components/ui/Button';
+import { gateway } from './gateway/manager';
 import { useAccountStore } from './stores/accountStore';
 import { useServerListStore } from './stores/serverListStore';
 import { useAuthStore } from './stores/authStore';
@@ -129,7 +131,7 @@ export function resolveCryptoAuthRedirect(params: {
  * Default mode is username/password auth. Device key unlock is only enforced
  * when the user has explicitly enabled crypto auth in server-side account settings.
  */
-function ProtectedRoute({ children }: { children: React.ReactNode }) {
+export function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isUnlocked = useAccountStore((s) => s.isUnlocked);
   const servers = useServerListStore((s) => s.servers);
   const tokensHydrated = useServerListStore((s) => s.tokensHydrated);
@@ -169,7 +171,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
       hasToken: Boolean(token || hasServerSession),
       serverReady: serverStatus === 'ready',
     });
-    return target ? <Navigate to={target} /> : <>{children}</>;
+    return target ? <GuardRedirect to={target} /> : <>{children}</>;
   }
 
   // Password mode: a valid local token or a hydrated per-server session can enter directly.
@@ -179,9 +181,20 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
   // Password mode without token.
   if (serverStatus === 'needed') {
-    return <Navigate to="/connect" />;
+    return <GuardRedirect to="/connect" />;
   }
-  return <Navigate to="/login" />;
+
+  // A device identity is a credential in its own right, and the only one this
+  // app can read before it has a session: `crypto_auth_enabled` lives in
+  // account settings, which need the very token we are missing. So an enrolled
+  // identity decides. Locked, the way back in is its unlock password — not the
+  // server password the feature exists to replace. Unlocked, the gateway is
+  // signing the server's challenge right now and a session is moments away.
+  if (hasAccount()) {
+    if (!isUnlocked) return <GuardRedirect to="/unlock" />;
+    return <DeviceKeySignIn />;
+  }
+  return <GuardRedirect to="/login" />;
 }
 
 export function AuthRoute({ children }: { children: React.ReactNode }) {
@@ -201,12 +214,12 @@ export function AuthRoute({ children }: { children: React.ReactNode }) {
   }
 
   if (serverStatus === 'needed') {
-    return <Navigate to="/connect" />;
+    return <GuardRedirect to="/connect" />;
   }
 
   // Already authenticated: don't show the login/register forms.
   if ((token || hasServerSession) && serverStatus === 'ready') {
-    return <Navigate to="/app" replace />;
+    return <GuardRedirect to="/app" />;
   }
 
   return <>{children}</>;
@@ -270,6 +283,161 @@ function lazyRoute(children: React.ReactNode) {
 /** Same per-route isolation for the eagerly-imported auth/legal surfaces. */
 function route(children: React.ReactNode) {
   return <ErrorBoundary>{children}</ErrorBoundary>;
+}
+
+/**
+ * This device holds an unlocked identity but the server has not issued a
+ * session yet — the gateway is in the middle of challenge-response. Wait for
+ * it, visibly; and if it never arrives, say so and offer the password instead
+ * of spinning forever.
+ */
+function DeviceKeySignIn() {
+  const [slow, setSlow] = useState(false);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSlow(true), 10_000);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  if (!slow) return <BrandedSplash label="Signing in with this device's key..." />;
+
+  return (
+    <div className="flex min-h-screen w-full flex-col items-center justify-center gap-5 bg-bg-base px-6">
+      <div className="flex w-full max-w-md flex-col items-start gap-4">
+        <AppMark size={40} />
+        <div className="flex flex-col gap-1.5">
+          <h1 className="font-display text-heading text-text-primary">
+            This device could not sign in with its key
+          </h1>
+          <p className="text-label leading-relaxed text-text-secondary">
+            Your identity is unlocked, but the server has not accepted it. The server may be
+            unreachable, or this account may not have this device's key attached to it.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            onClick={() => {
+              setSlow(false);
+              void gateway.syncServers().catch(() => undefined);
+            }}
+          >
+            Try again
+          </Button>
+          <Button variant="secondary" onClick={() => navigate('/login', { replace: true })}>
+            Use your password
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Guard redirects that bounce between two screens would spin forever. Count
+ * them across mounts so a ping-pong is recognised and stopped rather than run
+ * silently at full speed.
+ */
+let recentGuardRedirects: number[] = [];
+function noteGuardRedirect(): boolean {
+  const now = Date.now();
+  recentGuardRedirects = recentGuardRedirects.filter((at) => now - at < 4_000);
+  recentGuardRedirects.push(now);
+  return recentGuardRedirects.length <= 8;
+}
+
+/**
+ * A route guard's redirect — idempotent, and it always paints something.
+ *
+ * `<Navigate>` renders `null` and fires its navigation once, from an effect
+ * whose dependencies are its own props. That is a blank window waiting to
+ * happen: if anything else navigates while the redirect is in flight — the
+ * sign-in handler's own `navigate('/app')`, arriving after its `await` and
+ * after this guard had already sent the account to `/setup` — the router lands
+ * back on the guarded path, the guard renders the very same `<Navigate>`, and
+ * its effect never runs again because nothing about it changed. The redirect is
+ * lost, `null` is all that is left on screen, and there is no way out of the
+ * app from inside it.
+ *
+ * So: re-issue the redirect until the router actually arrives, show a real
+ * loading surface while it does, and if the destination never takes, say so and
+ * offer a way out instead of a black rectangle.
+ */
+function GuardRedirect({ to }: { to: CryptoAuthRedirect | '/app' }) {
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const [stalled, setStalled] = useState(false);
+
+  useEffect(() => {
+    if (!to || pathname === to) return;
+    let attempts = 0;
+    // Declared before `attempt` so the very first, synchronous call can clear it
+    // — the loop guard can trip on that call, and reading a `const` declared
+    // below would throw out of the effect instead.
+    let timer = 0;
+    const attempt = () => {
+      if (!noteGuardRedirect() || attempts >= 5) {
+        window.clearInterval(timer);
+        setStalled(true);
+        return;
+      }
+      attempts += 1;
+      navigate(to, { replace: true });
+    };
+    attempt();
+    timer = window.setInterval(attempt, 700);
+    return () => window.clearInterval(timer);
+  }, [to, pathname, navigate]);
+
+  if (stalled) return <GuardStalled to={to} />;
+  return <BrandedSplash label="Just a moment..." />;
+}
+
+/**
+ * Shown when a guard's redirect never lands. Whatever the state of the app, the
+ * person gets a screen that names the problem and two things they can press.
+ */
+function GuardStalled({ to }: { to: CryptoAuthRedirect | '/app' }) {
+  const navigate = useNavigate();
+  const destination =
+    to === '/setup' ? 'the device setup screen'
+    : to === '/unlock' ? 'the unlock screen'
+    : to === '/connect' ? 'the server screen'
+    : to === '/login' ? 'the sign-in screen'
+    : 'the app';
+  return (
+    <div className="flex min-h-screen w-full flex-col items-center justify-center gap-5 bg-bg-base px-6">
+      <div className="flex w-full max-w-md flex-col items-start gap-4">
+        <AppMark size={40} />
+        <div className="flex flex-col gap-1.5">
+          <h1 className="font-display text-heading text-text-primary">Paracord could not open {destination}</h1>
+          <p className="text-label leading-relaxed text-text-secondary">
+            Your sign-in worked, but this device could not move on to the next screen.
+            Try again, or sign out and start over.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            onClick={() => {
+              recentGuardRedirects = [];
+              if (to) navigate(to, { replace: true });
+            }}
+          >
+            Try again
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={() => {
+              recentGuardRedirects = [];
+              void useAuthStore.getState().logout().finally(() => navigate('/login', { replace: true }));
+            }}
+          >
+            Sign out
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function App() {

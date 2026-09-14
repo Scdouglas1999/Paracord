@@ -45,6 +45,28 @@ export function resolveLoginIdentifierMode(
   };
 }
 
+/**
+ * Where a completed sign-in should send the app, or `null` for "leave it alone".
+ *
+ * The session token is set several `await`s before this runs, and the route
+ * guards act on it the moment it lands: `AuthRoute` leaves the sign-in screen,
+ * and `ProtectedRoute` sends an account whose server has device crypto security
+ * on to `/setup` or `/unlock`. Navigating to `/app` unconditionally arrives
+ * *after* that and undoes it — the guard is then re-rendered on the path it
+ * already rejected, with nothing new to react to, and the window renders
+ * nothing at all. So only steer while this screen is still mounted — once a
+ * guard has replaced it, it has already decided. An invite the person asked for
+ * is the exception: that intent outranks the guard.
+ */
+export function destinationAfterLogin(
+  pendingInvite: string | null,
+  stillOnSignInScreen: boolean,
+): string | null {
+  if (pendingInvite) return `/invite/${pendingInvite}`;
+  if (!stillOnSignInScreen) return null;
+  return '/app';
+}
+
 type LoginView = 'login' | 'forgot-password' | 'reset-password' | 'verify-email' | 'mfa-challenge';
 
 export function LoginPage() {
@@ -77,6 +99,16 @@ export function LoginPage() {
   // Tracks the deferred view-switch timer so it can be cancelled on unmount,
   // preventing a setState on an unmounted component.
   const viewSwitchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Whether this screen is still the one on show. `completeLoginFlow` runs
+  // after awaits, by which time a route guard may already have replaced it.
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -159,7 +191,8 @@ export function LoginPage() {
     } catch {
       /* ignore */
     }
-    navigate(pendingInvite ? `/invite/${pendingInvite}` : '/app');
+    const destination = destinationAfterLogin(pendingInvite, mountedRef.current);
+    if (destination) navigate(destination, { replace: true });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -580,6 +613,21 @@ export function LoginPage() {
                 className="font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
               >
                 Verify email token
+              </button>
+            </div>
+
+            {/* The 24 words the app insists you write down are useless if the
+                only screens that accept them sit behind a password. A new
+                install reaches exactly this screen and nothing else. Its own
+                row: it is a different kind of way in from the two above, and a
+                wrapped middot reads as a typo. */}
+            <div className="text-meta text-text-muted">
+              <button
+                type="button"
+                onClick={() => navigate('/recover')}
+                className="font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+              >
+                Recover from phrase
               </button>
             </div>
 

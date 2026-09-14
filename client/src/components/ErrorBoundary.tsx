@@ -1,6 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { Bug, Home, RefreshCw, RotateCcw } from 'lucide-react';
 import { safeExternalUrl } from '../lib/security';
+import { logVoiceDiagnostic } from '../lib/desktopDiagnostics';
 import { Button } from './ui/Button';
 
 interface Props {
@@ -45,6 +46,15 @@ export class ErrorBoundary extends Component<Props, State> {
     if (import.meta.env.DEV) {
       console.error('ErrorBoundary caught:', error, errorInfo);
     }
+    // A release build used to swallow this entirely: the only trace of a render
+    // throw was whatever the user saw on screen. When the screen is blank there
+    // is then nothing at all to go on. Always write it to the diagnostics log.
+    void logVoiceDiagnostic('[app] render error caught by boundary', {
+      label: this.props.label ?? 'root',
+      message: error.message,
+      stack: (error.stack ?? '').split('\n').slice(0, 6).join(' | '),
+      componentStack: (errorInfo.componentStack ?? '').split('\n').slice(0, 8).join(' | '),
+    });
   }
 
   private resetBoundary = () => {

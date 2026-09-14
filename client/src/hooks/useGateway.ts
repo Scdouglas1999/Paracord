@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { useAccountStore } from '../stores/accountStore';
 import { useAuthStore } from '../stores/authStore';
 import { useServerListStore } from '../stores/serverListStore';
 import { gateway } from '../gateway/manager';
@@ -15,11 +16,19 @@ export function useGateway() {
       .join('|')
   );
   const storesHydrated = useServerListStore((s) => s.hydrated && s.tokensHydrated);
+  // A device identity is a credential: once it is unlocked the gateway can sign
+  // the server's challenge and get a session of its own. Without this in the
+  // dependencies, the connect that failed at boot with "No server token and
+  // local account is not unlocked" was never retried — unlocking or recovering
+  // an identity left the app signed in to nothing, with a permanent
+  // "Reconnecting to the server..." and a composer that refused to send.
+  const accountUnlocked = useAccountStore((s) => s.isUnlocked);
 
   useEffect(() => {
     logVoiceDiagnostic('[gateway] useGateway effect fired', {
       storesHydrated,
       hasToken: !!token,
+      accountUnlocked,
       serverSyncKey: diagnosticServerSyncKey.substring(0, 160),
       hydrated: useServerListStore.getState().hydrated,
       tokensHydrated: useServerListStore.getState().tokensHydrated,
@@ -42,7 +51,7 @@ export function useGateway() {
     void gateway.syncServers().catch((err) => {
       logVoiceDiagnostic('[gateway] useGateway: syncServers error', { error: String(err) });
     });
-  }, [token, storesHydrated, serverSyncKey, diagnosticServerSyncKey]);
+  }, [token, storesHydrated, serverSyncKey, diagnosticServerSyncKey, accountUnlocked]);
 
   useEffect(
     () => () => {
