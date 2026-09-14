@@ -458,6 +458,11 @@ export function useOnAir(): OnAir | null {
   return useMemo(() => {
     if (!connected || !channelId) return null;
     const room = building?.rooms.find((entry) => entry.channelId === channelId) ?? null;
+    const dmPersonName = (userId: string): string | null => {
+      const person = channel?.recipients?.find((candidate) => candidate.id === userId)
+        ?? (channel?.recipient?.id === userId ? channel.recipient : null);
+      return person ? displayName(person) : null;
+    };
     const others: OnAirPerson[] = room
       ? room.occupants
           .filter((occupant) => occupant.person.userId !== selfUserId)
@@ -470,7 +475,11 @@ export function useOnAir(): OnAir | null {
           .filter((state) => state.user_id !== selfUserId)
           .map((state) => ({
             userId: state.user_id,
-            name: displayName(state),
+            // A DM voice state carries no username (`routes/dms.rs` announces the
+            // call, not the person), so `displayName` fell through to "Unknown
+            // user" and the chip showed a "U" for the friend it had just named
+            // in the same sentence. The conversation already knows who they are.
+            name: dmPersonName(state.user_id) ?? displayName(state),
             speaking: speakingUsers.has(state.user_id),
           }));
     const dmName = channel?.name

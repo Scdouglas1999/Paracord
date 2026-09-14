@@ -362,4 +362,38 @@ describe('useOnAir', () => {
       sharing: false,
     });
   });
+
+  // A DM voice state carries no username — the server announces the call, not
+  // the person (`routes/dms.rs`) — so `displayName` fell through to "Unknown
+  // user" and the chip drew a "U" beside the friend's own name.
+  it('names a direct-message caller from the conversation, not "Unknown user"', () => {
+    act(() => {
+      useChannelStore.getState().setChannels(
+        'dm',
+        [chan({
+          id: 'd1', type: ChannelType.DM, guild_id: undefined,
+          recipients: [
+            { id: 'viewer', username: 'viewer' },
+            { id: 'ada', username: 'ada', display_name: 'Ada Lovelace' },
+          ],
+        } as never)],
+        SCOPE,
+      );
+      useVoiceStore.setState({
+        connected: true,
+        channelId: 'd1',
+        guildId: 'dm',
+        participants: new Map([
+          ['viewer', voiceState({ user_id: 'viewer', guild_id: undefined })],
+          ['ada', voiceState({ user_id: 'ada', guild_id: undefined })],
+        ]),
+        channelParticipants: new Map(),
+      });
+    });
+    const { result } = renderHook(() => useOnAir());
+    expect(result.current?.isDirectMessage).toBe(true);
+    expect(result.current?.others).toEqual([
+      { userId: 'ada', name: 'Ada Lovelace', speaking: false },
+    ]);
+  });
 });
