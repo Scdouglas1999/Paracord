@@ -139,11 +139,22 @@ static DIAGNOSTIC_LOG_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()
 /// turn window-title surveillance on. (CWE-359)
 static ACTIVITY_TITLE_SHARING_ENABLED: AtomicBool = AtomicBool::new(false);
 
+/// A Signal DM session is stored under both parties' identity keys:
+/// `paracord:signal:session:<64 hex>:<64 hex>` is 153 bytes. The previous 128
+/// byte ceiling therefore rejected every ratchet-session key the desktop shell
+/// was ever asked to hold — and `readStoredValueForMigration` passes that
+/// rejection straight through, so the pre-send legacy-session check in
+/// `assertLegacySignalReviewed` threw `secure store key is too long` and no
+/// encrypted direct message could be sent from the desktop at all. The limit is
+/// a denial-of-service bound on the keychain, not a format rule, so it only has
+/// to sit above the longest key the app legitimately writes.
+const MAX_SECURE_STORE_KEY_BYTES: usize = 256;
+
 fn validate_secure_store_key(key: &str) -> Result<(), String> {
     if !key.starts_with(SECURE_STORE_KEY_PREFIX) {
         return Err("secure store key must start with 'paracord:'".into());
     }
-    if key.len() > 128 {
+    if key.len() > MAX_SECURE_STORE_KEY_BYTES {
         return Err("secure store key is too long".into());
     }
     Ok(())
@@ -887,8 +898,8 @@ mod linux_tests {
 #[cfg(test)]
 mod activity_consent_tests {
     use super::{
-        apply_title_consent, sanitize_diagnostic_line, ForegroundApplication,
-        ACTIVITY_TITLE_SHARING_ENABLED, MAX_DIAGNOSTIC_LINE_BYTES,
+        apply_title_consent, sanitize_diagnostic_line, validate_secure_store_key,
+        ForegroundApplication, ACTIVITY_TITLE_SHARING_ENABLED, MAX_DIAGNOSTIC_LINE_BYTES,
     };
     use std::sync::atomic::Ordering;
 
@@ -924,6 +935,17 @@ mod activity_consent_tests {
 
         // Restore the default (redacted) posture for any other reader.
         ACTIVITY_TITLE_SHARING_ENABLED.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn a_signal_dm_session_key_fits_the_secure_store() {
+        // `paracord:signal:session:<my identity hex>:<peer identity hex>`, the
+        // key `sessionManager` writes every ratchet state under.
+        let key = format!("paracord:signal:session:{}:{}", "a".repeat(64), "b".repeat(64));
+        assert_eq!(key.len(), 153);
+        assert!(validate_secure_store_key(&key).is_ok());
+        assert!(validate_secure_store_key(&format!("paracord:{}", "x".repeat(512))).is_err());
+        assert!(validate_secure_store_key("signal:session:nope").is_err());
     }
 
     #[test]
