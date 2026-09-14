@@ -313,6 +313,26 @@ const MAX_STREAM_LIFETIME: Duration = Duration::from_secs(15 * 60);
 /// How often an attached stream re-validates that its login session is still
 /// active. Cheap (one indexed lookup) relative to the stream's lifetime.
 const STREAM_REVALIDATE_INTERVAL: Duration = Duration::from_secs(60);
+/// How long an idle stream may go without sending anything before the server
+/// emits a heartbeat. Reset by every real frame, so a busy stream never pays it.
+const SSE_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+/// The idle heartbeat frame.
+///
+/// This used to be an SSE *comment* (`: keep-alive`). A comment keeps the TCP
+/// connection and any intermediary warm, but the SSE specification requires
+/// every consumer to discard comment lines: a browser `EventSource` fires no
+/// `message`, no named listener, and does not change `readyState`, and the
+/// desktop client's native parser drops them for the same reason. An idle v2
+/// stream therefore looked, to every client, identical to a stream that had
+/// silently died — so each client's liveness watchdog tore down a perfectly
+/// healthy connection and rebuilt it, forever, on a fixed cycle.
+///
+/// The heartbeat is a real frame the client can see. It reuses op 11
+/// (HEARTBEAT_ACK), which the gateway protocol already defines and which every
+/// shipped client already handles as "the peer is alive, clear the missed-ack
+/// count". It carries no `id:`, so it takes no sequence number and never enters
+/// the replay window: resuming from a cursor is unaffected.
+const SSE_KEEPALIVE_FRAME: &str = r#"{"op":11,"d":null}"#;
 
 // ── Owner-bound realtime session ids ────────────────────────────────────────
 //
@@ -1714,8 +1734,8 @@ pub async fn stream_events(
 
     Ok(Sse::new(event_stream).keep_alive(
         KeepAlive::new()
-            .interval(Duration::from_secs(15))
-            .text("keep-alive"),
+            .interval(SSE_KEEPALIVE_INTERVAL)
+            .event(Event::default().event("gateway").data(SSE_KEEPALIVE_FRAME)),
     ))
 }
 
