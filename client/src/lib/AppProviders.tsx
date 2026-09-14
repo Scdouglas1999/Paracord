@@ -10,6 +10,7 @@ import { startAccountMessagingLifecycle, reconcileAccountMessaging } from './mes
 import { useVoiceStore } from '../stores/voiceStore';
 import { useUIStore } from '../stores/uiStore';
 import { useServerListStore } from '../stores/serverListStore';
+import { BannerStack } from '../components/BannerStack';
 import { RestartBanner } from '../components/RestartBanner';
 import { ConnectionStatusBar } from '../components/ConnectionStatusBar';
 import { IncomingCallBanner } from '../components/dm/IncomingCallBanner';
@@ -118,9 +119,13 @@ function AppInitializer({ children }: { children: ReactNode }) {
 
   return (
     <>
-      <ConnectionStatusBar />
-      <IncomingCallBanner />
-      <RestartBanner />
+      {/* One stacked column, and the shell reserves its height — a banner
+          must not land on top of the app's own top row. */}
+      <BannerStack>
+        <ConnectionStatusBar />
+        <IncomingCallBanner />
+        <RestartBanner />
+      </BannerStack>
       <UpdateNotification />
       <ToastContainer />
       <ImageLightbox />

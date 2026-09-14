@@ -205,9 +205,14 @@ export function AppShell() {
   // underlay (Linux), this wrapper's background goes transparent so the tile
   // is a real hole down to the video (see layout.css).
   return (
+      /* The banners stack at the very top of the viewport (`BannerStack`), and
+         `--pc-banner-inset` is the room they take. Box-sizing is border-box
+         everywhere, so the shell stays exactly one viewport tall and its own
+         content moves down instead of disappearing under a banner. */
       <div
         data-native-underlay-clear=""
         className="flex h-[100dvh] w-full flex-col overflow-hidden bg-bg-base text-text-primary"
+        style={{ paddingTop: 'var(--pc-banner-inset, 0px)' }}
       >
         {/* The two moments nobody clicks: "lights on" and "someone arrives"
             (§5.1). It renders nothing — it is one subscription and two effects,

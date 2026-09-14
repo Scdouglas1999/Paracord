@@ -20,6 +20,11 @@ import { cn } from '../../lib/utils';
  * way the moment the caller hangs up. Decline is a local dismissal — nothing is
  * sent, the caller is told nothing, and the next call from the same person rings
  * again.
+ *
+ * It does not position itself. `BannerStack` stacks it under the connection bar
+ * and reserves its height at the top of the app shell, because when it fixed
+ * itself to `top: 0` it covered the search field, the sidebar's collapse button
+ * and the entire conversation header for as long as the call rang.
  */
 export function IncomingCallBanner() {
   const { call, decline } = useIncomingDmCall();
@@ -39,7 +44,7 @@ export function IncomingCallBanner() {
       role="alert"
       aria-live="assertive"
       className={cn(
-        'fixed inset-x-0 top-0 z-[9999] flex flex-wrap items-center justify-center gap-x-3 gap-y-2 px-4 py-2',
+        'flex w-full flex-wrap items-center justify-center gap-x-3 gap-y-2 px-4 py-2',
         exiting ? 'pc-banner-out' : 'pc-banner-in',
       )}
       style={{
