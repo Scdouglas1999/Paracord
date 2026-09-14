@@ -598,6 +598,13 @@ impl Drop for NativeMediaSession {
 
 #[derive(Debug, Deserialize)]
 struct MediaTokenClaims {
+    /// The account. The server mints this as a JSON **string** (a snowflake is
+    /// past 2^53, so a bare number would round in a browser); older servers
+    /// still send a bare number. Read either shape, exactly like
+    /// `paracord_transport::connection::MediaClaims` does — a plain `i64` here
+    /// made every native join fail with "token claims parse failed: invalid
+    /// type: string".
+    #[serde(with = "paracord_transport::wire_id")]
     sub: i64,
     #[allow(dead_code)]
     exp: Option<usize>,
