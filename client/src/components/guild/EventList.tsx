@@ -188,6 +188,10 @@ function EventFormModal({ guildId, event, onClose, onSaved }: EventFormModalProp
       onClose={onClose}
       labelledBy="event-form-title"
       showCloseButton
+      // The events list lives inside Building settings, a windowed overlay at
+      // z-[150]. At the Modal default (z-[60]) this form opened *behind* that
+      // plate — the screen dimmed and no event could be created.
+      zIndexClassName="z-[160]"
       panelClassName="w-[min(92vw,32rem)]"
     >
       <div className="max-h-[min(86dvh,42rem)] overflow-auto">

@@ -22,6 +22,13 @@ export function ConfirmDialog() {
       onClose={() => close(false)}
       role="alertdialog"
       size="sm"
+      // A confirm is always raised *on top of* whatever asked for it, and the
+      // windowed User/Building settings overlays sit at z-[150]. At the Modal
+      // default (z-[60]) the prompt rendered *underneath* the settings plate:
+      // the screen dimmed, nothing appeared, and the destructive action (delete
+      // a channel, transfer ownership) could not be confirmed or dismissed
+      // without closing settings first. Toasts stay above at z-[9999].
+      zIndexClassName="z-[160]"
       labelledBy="confirm-dialog-title"
       describedBy={options?.description ? 'confirm-dialog-desc' : undefined}
     >

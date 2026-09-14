@@ -41,6 +41,29 @@ type ReportResolutionAction = 'approve' | 'reject' | 'dismiss' | 'warn' | 'mute'
 // spec §4) and every section renders inside it, so this is a bare rhythm
 // wrapper — never a second surface. Depth inside comes from wells and raised
 // rows; separation comes from hairline dividers, never from tiled cards.
+/**
+ * An invite's lifespan, in words.
+ *
+ * `max_age` is a duration in **seconds** straight off the wire. Printing it raw
+ * put "86400" under an "Expires" heading, which reads as neither a date nor a
+ * duration. Say when the link dies, counted from when it was made.
+ */
+export function inviteExpiryLabel(invite: Pick<Invite, 'max_age' | 'created_at'>, now = Date.now()): string {
+  const seconds = invite.max_age ?? 0;
+  if (seconds <= 0) return 'never';
+  const created = Date.parse(invite.created_at);
+  const remaining = Number.isFinite(created) ? (created + seconds * 1000 - now) / 1000 : seconds;
+  if (remaining <= 0) return 'expired';
+  const units: [number, string][] = [[86400, 'day'], [3600, 'hour'], [60, 'minute']];
+  for (const [size, name] of units) {
+    if (remaining >= size) {
+      const count = Math.round(remaining / size);
+      return `in ${count} ${name}${count === 1 ? '' : 's'}`;
+    }
+  }
+  return 'in under a minute';
+}
+
 function SettingsPanel({ children }: { children: ReactNode }) {
   return <div className="flex flex-col gap-8">{children}</div>;
 }
@@ -939,7 +962,7 @@ export function InvitesSection({
                     {invite.uses}/{invite.max_uses || '∞'}
                   </span>
                   <span className="pc-mono text-meta text-text-muted sm:w-28">
-                    {invite.max_age || 'never'}
+                    {inviteExpiryLabel(invite)}
                   </span>
                   <Button
                     variant="danger"

@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { type Mock, describe, expect, it, vi } from 'vitest';
 import type { Guild, Member, Role } from '../../types';
-import { ACTION_LABELS, InvitesSection, OverviewSection, RolesSection } from './GuildSettingsSections';
+import { ACTION_LABELS, InvitesSection, OverviewSection, RolesSection, inviteExpiryLabel } from './GuildSettingsSections';
 
 const guild: Guild = {
   id: 'guild-1',
@@ -334,5 +334,29 @@ describe('audit log action labels', () => {
     expect(unlabelled).toEqual([]);
     // And nothing here that the server never emits.
     expect(Object.keys(ACTION_LABELS).map(Number).sort((a, b) => a - b)).toEqual(serverActions);
+  });
+});
+
+describe('inviteExpiryLabel', () => {
+  const created = '2026-01-01T00:00:00.000Z';
+  const now = Date.parse(created);
+
+  it('says never when the link has no lifespan', () => {
+    expect(inviteExpiryLabel({ max_age: 0, created_at: created }, now)).toBe('never');
+    expect(inviteExpiryLabel({ max_age: null, created_at: created }, now)).toBe('never');
+  });
+
+  it('says when the link dies, never the raw second count', () => {
+    // The bug this covers: "Expires 86400" under a column headed Expires.
+    expect(inviteExpiryLabel({ max_age: 86400, created_at: created }, now)).toBe('in 1 day');
+    expect(inviteExpiryLabel({ max_age: 604800, created_at: created }, now)).toBe('in 7 days');
+    expect(inviteExpiryLabel({ max_age: 3600, created_at: created }, now)).toBe('in 1 hour');
+    expect(inviteExpiryLabel({ max_age: 1800, created_at: created }, now)).toBe('in 30 minutes');
+  });
+
+  it('counts down from when the link was made', () => {
+    const halfADayLater = now + 12 * 3600 * 1000;
+    expect(inviteExpiryLabel({ max_age: 86400, created_at: created }, halfADayLater)).toBe('in 12 hours');
+    expect(inviteExpiryLabel({ max_age: 86400, created_at: created }, now + 86400 * 1000)).toBe('expired');
   });
 });

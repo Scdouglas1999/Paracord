@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import { useCurrentGuilds } from '../hooks/useGuilds';
 import { GuildSettings } from '../components/guild/GuildSettings';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
@@ -32,6 +33,24 @@ export function GuildSettingsPage() {
   const guild = guilds.find((g) => g.id === guildId);
   const { permissions, isAdmin, isLoading } = usePermissions(guildId || null);
   const canOpenSettings = canAccessGuildSettings(permissions, isAdmin);
+
+  // `usePermissions` re-fetches this building's roles whenever the gateway
+  // reports a role change — including the role YOU just created or saved on the
+  // Roles screen. Swapping in the spinner on that refresh unmounts
+  // `GuildSettings`, and with it every piece of its state: the section you were
+  // on, the role you were editing, half-typed fields in any other section. It
+  // came back at Overview and your work was gone. The spinner is a first-answer
+  // state, so show it only until this building's permissions resolve once.
+  const [resolvedGuildId, setResolvedGuildId] = useState<string | null>(null);
+  const lastGuildId = useRef<string | null>(guildId);
+  if (lastGuildId.current !== guildId) {
+    lastGuildId.current = guildId;
+    if (resolvedGuildId !== guildId) setResolvedGuildId(null);
+  }
+  useEffect(() => {
+    if (!isLoading && guildId) setResolvedGuildId(guildId);
+  }, [isLoading, guildId]);
+  const awaitingFirstAnswer = isLoading && resolvedGuildId !== guildId;
   const closeSettings = () => {
     setGuildSettingsId(null);
     if (!isOverlay && routeGuildId) {
@@ -41,7 +60,7 @@ export function GuildSettingsPage() {
 
   // Both pre-flight states render on the settings plate itself (spec §4), so the
   // surface the reader lands on is the same one the settings will occupy.
-  if (isLoading) {
+  if (awaitingFirstAnswer) {
     return (
       <div className="pc-plate flex h-full min-h-0 items-center px-6 sm:px-10">
         <LoadingSpinner size="sm" label="Checking your permissions in this building" />
