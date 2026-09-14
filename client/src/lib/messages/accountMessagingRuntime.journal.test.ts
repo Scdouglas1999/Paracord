@@ -353,6 +353,61 @@ describe('production authoritative recovery gate', () => {
     expect(await local.vault.transact(tx => tx.list('messages.deleted'))).toEqual([]);
     expect(await local.vault.transact(tx => tx.get('messages.recovery-blocks', '10'))).toEqual({ reason: 'unavailable', status: 403 });
   });
+  // Desktop 3.0.0's native adapter dropped `config.params`, so every recovery
+  // request reached the server with no `after` and the server answered 400.
+  // 403/404 were contained; a 400 was rethrown, which aborted the whole channel
+  // loop, left `synchronization` on 'recovering' and disabled sending for the
+  // entire account — and the failing channel is rebuilt from the durable cursor
+  // rows on every handshake, so it came back after each relaunch. Every profile
+  // that ran 3.0.0 is in that state.
+  it('discards this device’s refused recovery position once, out loud, and recovers the conversation from the start', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await local.vault.transact(async tx => tx.put('messages.recovery-cursors', '10', { cursor: '7', through: null, complete: false }));
+    fixture.recovery.mockRejectedValueOnce(Object.assign(new Error('Bad Request'), {
+      isAxiosError: true, response: { status: 400, data: { error: 'Invalid message recovery revision or identifier' } },
+    }));
+    installFeed([], [], '0');
+
+    await runtime.acceptHandshake();
+
+    expect(runtime.store.getState().synchronization).toBe('ready');
+    expect(runtime.store.getState().channelErrors).toEqual({});
+    // The retry went out from the start, not from the position the server refused.
+    expect(fixture.recovery).toHaveBeenCalledTimes(2);
+    expect(fixture.recovery.mock.calls[1][0]).toMatchObject({ params: expect.objectContaining({ after: '0' }) });
+    // Discarding saved state is never silent.
+    expect(warn.mock.calls.flat().join(' ')).toContain('Discarding it');
+    warn.mockRestore();
+  });
+
+  it('contains a conversation the server keeps refusing instead of killing the account', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    runtime.registerKnownMessages(() => [message('100')]);
+    const refusal = () => Object.assign(new Error('Bad Request'), { isAxiosError: true, response: { status: 400 } });
+    fixture.recovery.mockRejectedValueOnce(refusal()).mockRejectedValueOnce(refusal());
+
+    await runtime.acceptHandshake();
+
+    // The account is usable; only the one conversation is blocked, and the
+    // block is durable so the next handshake does not re-run the same refusal.
+    expect(runtime.store.getState().synchronization).toBe('ready');
+    expect(runtime.store.getState().channelErrors?.['10']).toContain('could not be recovered');
+    expect(await local.vault.transact(tx => tx.get('messages.recovery-blocks', '10'))).toEqual({ reason: 'refused', status: 400 });
+  });
+
+  it('leaves a failed handshake in a state that says so, not one that reads as still running', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    runtime.registerKnownMessages(() => [message('100')]);
+    // A 500 is not a refusal: it must still abort, but it must not leave the
+    // store on 'recovering', which nothing polls and which renders no notice.
+    fixture.recovery.mockRejectedValue(Object.assign(new Error('Server Error'), { isAxiosError: true, response: { status: 500 } }));
+
+    await expect(runtime.acceptHandshake()).rejects.toThrow();
+
+    expect(runtime.store.getState().synchronization).toBe('awaiting-handshake');
+    expect(runtime.store.getState().error).toBeTruthy();
+  });
+
   it('uses a bound plaintext snapshot after a retention gap without requiring Signal enrollment', async () => {
     useChannelStore.getState().reset(); useChannelStore.getState().addChannel({ id: '10', type: 0, channel_type: 0, guild_id: '50' } as never, scope);
     runtime.registerKnownMessages(() => [{ ...message('100'), e2ee: null }]);

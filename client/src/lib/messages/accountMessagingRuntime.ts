@@ -38,6 +38,16 @@ import type { VaultTransaction } from '../crypto/accountVault';
 import { createMessageRecoveryTransport, MessageRecoveryGapError, recoverChannelMessages, RECOVERY_ARCHIVE_NAMESPACE, RECOVERY_CURSOR_NAMESPACE, RECOVERY_STATE_NAMESPACE,
   stageLiveRecoveryMutation, withMessageRecoveryLock, type LiveRecoveryMutation, type RecoveryArchive, type RecoveryCursor, type RecoveryPage, type StoredRecoveryState } from './messageRecovery';
 
+/**
+ * A 4xx the server will keep answering the same way for the same request.
+ *
+ * 409 is excluded: that is the gap signal, which has its own handling. 429 is
+ * excluded: a rate limit is temporary and must not durably block a channel.
+ */
+function isRecoveryRefusal(status: number | undefined): boolean {
+  return status !== undefined && status >= 400 && status < 500 && status !== 409 && status !== 429;
+}
+
 /** No open is in flight, or its history could not be read. Never a real epoch. */
 const NO_OPEN_EPOCH = Symbol('no-open-epoch');
 
@@ -105,6 +115,12 @@ export class AccountMessagingRuntime {
   private recoveryAbort = new AbortController();
   private readonly recoveredChannels = new Set<string>();
   private readonly recoveryFailures = new Map<string, Error>();
+  /**
+   * Channels whose saved recovery position this runtime has already thrown
+   * away once. One discard per channel per runtime: a second refusal is the
+   * server's answer about the channel, not this device's stale bookmark.
+   */
+  private readonly discardedRecoveryCursors = new Set<string>();
   private readonly receiveFailures = new Map<string, Error>();
   private readonly knownMessageReaders = new Set<() => Message[]>();
   private readonly channelRecoveries = new Map<string, Promise<void>>();
@@ -204,7 +220,17 @@ export class AccountMessagingRuntime {
       await this.processEncryptedInbox(); lifetime.assertCurrent();
       this.startDrivers(); await this.refresh();
     } catch (error) {
-      lifetime.assertCurrent(); this.store.setState({ error: errorText(error) }); throw error;
+      lifetime.assertCurrent();
+      // A handshake that failed is not a handshake in progress. Leaving
+      // `synchronization` on 'recovering' is what turned one failure into a
+      // permanently unusable account: nothing polls that state, the composer
+      // stays disabled, and `MessagingRecoveryNotice` renders nothing for it —
+      // so the user was given neither an explanation nor a control. The honest
+      // state is 'awaiting-handshake', which the notice does explain and which
+      // the next READY/RESUMED retries from.
+      this.store.setState({ synchronization: 'awaiting-handshake', error: errorText(error) });
+      console.warn('[messages] This account\u2019s authenticated message recovery did not complete.', error);
+      throw error;
     }
   }
   private async stageRecoveredDeletions(tx: VaultTransaction, page: RecoveryPage) {
@@ -234,6 +260,49 @@ export class AccountMessagingRuntime {
     });
     ownership.assertCurrent(); local.session.assertCurrent(); if (result) for (const listener of this.listeners) listener(result);
   }
+  /**
+   * Deliberately throw away this device's saved recovery position for
+   * `channelId` and try the conversation again from the start. Answers whether
+   * that worked.
+   *
+   * A cursor is the one part of a recovery request this device chose, so it is
+   * the one part a refusal can be about — and a refused cursor is durable: it
+   * is re-read from the vault on every handshake, so the same request is
+   * re-sent, refused and rethrown for as long as the profile exists. Discarding
+   * it costs an extra page fetch and is announced in the log; keeping it costs
+   * the account.
+   */
+  private async retryFromDiscardedCursor(
+    channelId: string,
+    status: number,
+    local: { session: DeviceSession },
+    options: Parameters<typeof recoverChannelMessages>[0],
+  ): Promise<boolean> {
+    if (this.discardedRecoveryCursors.has(channelId)) return false;
+    this.discardedRecoveryCursors.add(channelId);
+    const discarded = await local.session.vault.transact(async tx => {
+      const stored = await tx.get<RecoveryCursor>(RECOVERY_CURSOR_NAMESPACE, channelId);
+      if (stored) tx.remove(RECOVERY_CURSOR_NAMESPACE, channelId);
+      return stored ?? null;
+    });
+    // Never silent: discarding a recovery position is a decision about this
+    // device's saved state and has to be readable afterwards.
+    console.warn(
+      `[messages] The server answered HTTP ${status} to this device's saved recovery position for channel ${channelId}` +
+        (discarded ? ` (cursor ${discarded.cursor}, complete=${discarded.complete})` : ' (no saved position)') +
+        '. Discarding it and recovering this conversation from the start.',
+    );
+    try {
+      await recoverChannelMessages({ ...options, through: undefined });
+      return true;
+    } catch (retryError) {
+      // An ownership or lifetime change is not this channel's failure.
+      options.lifetime.assertCurrent();
+      console.warn(`[messages] Recovering channel ${channelId} from the start also failed.`, retryError);
+      return false;
+    }
+  }
+
   private async recoverChannel(channelId: string, knownIds: string[] = [], through?: string): Promise<void> {
     const ownership = this.captureGatewayLease();
     const prior = this.channelRecoveries.get(channelId);
@@ -265,6 +334,24 @@ export class AccountMessagingRuntime {
           const unavailable = new Error('This conversation’s history is unavailable to this account. Saved messages remain retained for recovery review.');
           await local.session.vault.transact(async tx => tx.put('messages.recovery-blocks', channelId, { reason: 'unavailable', status: error.response!.status }));
           this.recoveryFailures.set(channelId, unavailable); this.store.setState({ error: unavailable.message });
+        } else if (axios.isAxiosError(error) && isRecoveryRefusal(error.response?.status)) {
+          // The server refuses this recovery *request*. 403 and 404 were the
+          // only refusals this contained; every other 4xx — a 400 above all —
+          // was rethrown, which aborts `acceptHandshake`'s channel loop, leaves
+          // `synchronization` on 'recovering' and disables sending for the
+          // WHOLE ACCOUNT because of one conversation. Desktop 3.0.0 sent every
+          // recovery request with no query string (the native adapter dropped
+          // `config.params`), so every profile that ran it took exactly this
+          // 400, and the channel set is rebuilt from the durable cursor rows on
+          // every handshake — so the failure came back after each relaunch.
+          const status = error.response!.status;
+          if (await this.retryFromDiscardedCursor(channelId, status, local, options)) {
+            this.recoveryFailures.delete(channelId); this.recoveredChannels.add(channelId);
+          } else {
+            const refused = new Error('This conversation’s history could not be recovered from this server. Saved messages remain retained for recovery review.');
+            await local.session.vault.transact(async tx => tx.put('messages.recovery-blocks', channelId, { reason: 'refused', status }));
+            this.recoveryFailures.set(channelId, refused); this.store.setState({ error: refused.message });
+          }
         } else throw error;
       }
       if (this.recoveredChannels.has(channelId)) await local.session.vault.transact(async tx => { lifetime.assertCurrent(); tx.remove('messages.recovery-blocks', channelId); });
