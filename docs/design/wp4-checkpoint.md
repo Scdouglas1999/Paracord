@@ -55,36 +55,36 @@ module, so the two never collide.
 
 ## 2. The surface, top to bottom (§7.3)
 
-**Header.** Building mark (`getIdentityColor`, never the emerald — a building is
+**Header.** Server mark (`getIdentityColor`, never the emerald — a server is
 not an action), the name at the Display step in Gabarito, and one line of facts:
 
-> 24 of 61 have their lights on · 2 rooms lit · thermal test at 1 pm
+> 24 of 61 have their lights on · 2 calls live · thermal test at 1 pm
 
 Each clause drops out rather than printing an empty one, and the denominator is
 dropped when the server has not told us the roll. Invite appears when there is a
-text room to invite somebody into; the settings gear is gated on
+text channel to invite somebody into; the settings gear is gated on
 `canAccessGuildSettings` exactly as the old header was. The Coins →
 "Space economy" entry is **not** carried over: the TopBar's "Space leaderboard"
 is the same destination, so nothing became unreachable.
 
-**Around now.** `AvatarStack` of the people the building's rooms can see (lit
+**Around now.** `AvatarStack` of the people the server's channels can see (lit
 first), WP1's `aroundNowSentence`, and `+N lights on` for everybody else. One
-correction to WP1's default empty sentence: with lights on but nobody in a room,
+correction to WP1's default empty sentence: with lights on but nobody in a channel,
 "Nobody's lights are on right now" would contradict the "+N lights on" beside
-it, so the Lobby passes **"Nobody's in a room right now"**. With nothing on at
+it, so the Lobby passes **"Nobody's in a voice channel right now"**. With nothing on at
 all, WP1's string stands.
 
-**Rooms grid.** Lit rooms as lit cards — `RoomThumbnail height={168}` with the
-live frame or a still plus the LIVE dot, the room name, `RoomDuration`, the
+**Channels grid.** Lit channels as lit cards — `RoomThumbnail height={168}` with the
+live frame or a still plus the LIVE dot, the channel name, `RoomDuration`, the
 occupant stack, "Mara speaking", and **Join in white light** (the one button in
-the product that spends a light token). Dark rooms as matte cards —
+the product that spends a light token). Dark channels as matte cards —
 "Dark · nobody's in" in the thumbnail, `last lit 2 h ago` (or **"never lit"**,
 never a fabricated hour), the invitation, and Open. An **add tile** only for
 somebody holding `MANAGE_CHANNELS`; for everybody else it is omitted, not
 disabled. Grid: 3-up at 1440 (`xl`), 2-up narrower (`sm`), 1-up on a phone.
 
 Two actions survive from the old card rather than being dropped: **Join** joins
-the call, and the lit thumbnail is a button that opens the room's own surface,
+the call, and the lit thumbnail is a button that opens the channel's own surface,
 setting `watchedStreamerId` first when somebody is sharing — the same handoff
 `GuildPage` has a regression test for. A Stage channel's button says "Enter" and
 routes instead of joining.
