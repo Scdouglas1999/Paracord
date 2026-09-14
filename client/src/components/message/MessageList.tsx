@@ -2898,6 +2898,27 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
         )}
         {menuMessageId === msg.id && canOpenMessageMenu && (
           <div
+            // The menu hangs below its trigger, which is fine in the middle of
+            // a timeline and wrong at the end of one: the newest message is the
+            // message people act on, it sits against the composer, and 235px of
+            // menu below it puts Create thread, Edit, Pin, Save for later and
+            // Delete past the bottom of the window. Nothing says so — there is
+            // no scrollbar on the menu and the timeline is already at rest — so
+            // the menu reads as a menu with two items. Measure once on mount
+            // and hang it above the row instead, when there is more room there.
+            ref={(node) => {
+              if (!node) return;
+              node.style.top = '';
+              node.style.bottom = '';
+              const menu = node.getBoundingClientRect();
+              if (menu.bottom <= window.innerHeight - 8) return;
+              const row = node.parentElement?.getBoundingClientRect();
+              const spaceAbove = row ? row.top : menu.top;
+              const spaceBelow = window.innerHeight - menu.top;
+              if (spaceAbove <= spaceBelow) return;
+              node.style.top = 'auto';
+              node.style.bottom = '100%';
+            }}
             className="pc-floating absolute right-1 top-11 z-10 min-w-[10rem] max-w-[calc(100vw-2.75rem)] p-1 sm:right-2"
           >
             {canAddReactions && (
