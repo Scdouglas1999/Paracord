@@ -54,3 +54,10 @@ default-features = false
 
 [build-dependencies.system-deps]
 version = "6"
+
+# Bindgen writes these patterns into the generated bindings; they are not ours
+# to fix and a vendored path dependency is not lint-capped the way a registry
+# dependency is, so `clippy -- -D warnings` fails on generated code. Cap them
+# here rather than weakening the workspace's own lint gate.
+[lints.rust]
+unnecessary_transmutes = "allow"

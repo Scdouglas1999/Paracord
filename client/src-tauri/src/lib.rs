@@ -2201,7 +2201,7 @@ mod bridge_contract_tests {
             assert!(count > 0, "{name} carries no parts");
             let form = build_native_multipart_form(parsed.parts)
                 .unwrap_or_else(|e| panic!("{name} does not build a form: {e}"));
-            assert_eq!(form.boundary().is_empty(), false);
+            assert!(!form.boundary().is_empty());
         }
     }
 

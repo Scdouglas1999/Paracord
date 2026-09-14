@@ -11,7 +11,10 @@ async function walk(dir) {
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       await walk(fullPath);
-    } else if (sourceExtensions.has(path.extname(entry.name))) {
+    } else if (sourceExtensions.has(path.extname(entry.name)) && !/\.test\.[jt]sx$/.test(entry.name)) {
+      // Test fixtures are not shipped UI. A <Tooltip> wrapping a plain
+      // <button>gear</button> in a unit test has an accessible name from its
+      // own text; the audit's rule is about product controls that have none.
       await auditFile(fullPath);
     }
   }
