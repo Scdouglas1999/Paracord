@@ -173,6 +173,16 @@ describe('DiscoveryPage', () => {
     expect(toast.success).not.toHaveBeenCalled();
   });
 
+  it('carries the category chips a 44px hit area on a coarse pointer', () => {
+    // §9: a chip a thumb has to hit is 44px even when its ink is 28. `pc-touch`
+    // (primitives.css, `@media (pointer: coarse)`) is the mechanism — the same
+    // one the Friends filter chips use. jsdom has no layout, so the guard is
+    // that the class is on the chip: without it there is no hit area to grow.
+    renderDiscoveryPage();
+    const chip = screen.getByRole('button', { name: 'Gaming' });
+    expect(chip.className).toContain('pc-touch');
+  });
+
   it('identifies federated listings and does not offer a join action that cannot work', async () => {
     const user = userEvent.setup();
     vi.mocked(apiClient.get).mockResolvedValue({

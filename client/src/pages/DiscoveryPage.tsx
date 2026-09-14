@@ -182,7 +182,13 @@ export function DiscoveryPage() {
           />
         </div>
 
-        <div className="mt-3 flex flex-wrap gap-2">
+        {/* §9: the chips are 28px of ink and carry a 44px hit area (`pc-touch`).
+            A wrapping row is the one case that cannot borrow space the way a lone
+            control can — with an 8px row gap the second row's hit area reaches up
+            into the first row's and steals its lower half, so the effective target
+            is 36px, not 44. A 16px row gap makes the 44px bands tile exactly.
+            It costs nothing at desktop width, where the row does not wrap. */}
+        <div className="mt-3 flex flex-wrap gap-x-2 gap-y-4">
           <CategoryPill active={selectedTag === null} onClick={() => setSelectedTag(null)}>
             All
           </CategoryPill>
@@ -486,7 +492,12 @@ function CategoryPill({
       onClick={onClick}
       aria-pressed={active}
       className={cn(
-        'inline-flex h-7 items-center rounded-full px-3 text-meta font-semibold outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
+        // pc-touch (§9): the chip stays 28px so the category row reads as a row
+        // of filters rather than a row of buttons; the *hit area* is 44px on a
+        // coarse pointer. The identical chip on Friends already does this — this
+        // one was the copy that got missed, and it is four targets deep in the
+        // one surface a phone user browses with a thumb.
+        'pc-touch inline-flex h-7 items-center rounded-full px-3 text-meta font-semibold outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
         active
           ? 'bg-accent-tint text-accent-primary'
           : 'bg-bg-mod-subtle text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary',
