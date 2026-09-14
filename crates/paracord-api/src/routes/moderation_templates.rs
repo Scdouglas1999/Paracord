@@ -100,6 +100,8 @@ pub async fn create_template(
     if paracord_util::validation::contains_dangerous_markup(name) {
         return Err(ApiError::BadRequest("name contains unsafe markup".into()));
     }
+    paracord_util::validation::validate_visible_label(name)
+        .map_err(|_| ApiError::BadRequest("name must be readable text".into()))?;
     if !matches!(
         body.action_type,
         ACTION_WARN | ACTION_TIMED_MUTE | ACTION_KICK | ACTION_BAN

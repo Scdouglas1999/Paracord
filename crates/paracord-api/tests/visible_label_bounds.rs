@@ -253,3 +253,159 @@ async fn ordinary_names_still_pass() -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+/// The subset that clears every *other* validator beside the label one.
+///
+/// `str::trim` treats a non-breaking space as whitespace and an empty string
+/// as empty, so those two cases are caught by the length bound that already
+/// sits above the label check on these routes — a 400, but not this bound's.
+/// These names all survive `trim()` non-empty and carry no markup, so the only
+/// thing standing between them and the database is `validate_visible_label`.
+const ONLY_THE_LABEL_BOUND_CATCHES: &[(&str, &str)] = &[
+    ("zero-width spaces", "\u{200B}\u{200B}\u{200B}"),
+    ("byte order mark", "\u{FEFF}\u{FEFF}"),
+    ("word joiner", "\u{2060}\u{2060}"),
+    ("hangul filler", "\u{3164}\u{3164}"),
+    ("newlines", "a\nb"),
+    ("nul byte", "a\u{0000}b"),
+    ("bidi override", "a\u{202E}gnp.exe"),
+    ("bidi isolate", "\u{2066}spoofed\u{2069}"),
+];
+
+/// The five display labels an administrator writes that the first pass of this
+/// bound did not reach.
+///
+/// A role name is drawn beside every member who carries it and in the
+/// permission matrix; a nickname replaces the member's name on every message
+/// they send in the space; an event name is the calendar row and the `SUMMARY:`
+/// of the `.ics`; a webhook name is the *author* of every message the hook
+/// posts; an AutoMod rule name is echoed in every hit row and moderator alert.
+/// Each one was accepting a name that renders as nothing, or as something other
+/// than what it stores.
+#[tokio::test]
+async fn administrator_written_labels_must_be_readable() -> anyhow::Result<()> {
+    let ctx = Ctx::new().await?;
+    let guild = ctx.guild().await?;
+    let channel = ctx.channel(&guild).await?;
+    let me = {
+        let (status, payload) = ctx.call(Method::GET, "/api/v1/users/@me", None).await?;
+        assert_eq!(status, StatusCode::OK, "GET /users/@me failed: {payload}");
+        payload["id"].as_str().context("own user id")?.to_string()
+    };
+    let start = "2099-01-01T10:00:00Z";
+    let end = "2099-01-01T11:00:00Z";
+
+    for (case, name) in ONLY_THE_LABEL_BOUND_CATCHES {
+        let (status, payload) = ctx
+            .call(
+                Method::POST,
+                &format!("/api/v1/guilds/{guild}/roles"),
+                Some(json!({ "name": name, "permissions": 0, "color": 0 })),
+            )
+            .await?;
+        assert_unreadable("role create", case, status, &payload);
+
+        let (status, payload) = ctx
+            .call(
+                Method::PATCH,
+                &format!("/api/v1/guilds/{guild}/members/{me}"),
+                Some(json!({ "nick": name })),
+            )
+            .await?;
+        assert_unreadable("nickname", case, status, &payload);
+
+        let (status, payload) = ctx
+            .call(
+                Method::POST,
+                &format!("/api/v1/guilds/{guild}/events"),
+                Some(json!({
+                    "name": name,
+                    "scheduled_start": start,
+                    "scheduled_end": end,
+                    "entity_type": 2,
+                    "location": "Somewhere"
+                })),
+            )
+            .await?;
+        assert_unreadable("event create", case, status, &payload);
+
+        let (status, payload) = ctx
+            .call(
+                Method::POST,
+                &format!("/api/v1/guilds/{guild}/webhooks"),
+                Some(json!({ "name": name, "channel_id": channel })),
+            )
+            .await?;
+        assert_unreadable("webhook create", case, status, &payload);
+
+        let (status, payload) = ctx
+            .call(
+                Method::POST,
+                &format!("/api/v1/guilds/{guild}/automod/rules"),
+                Some(json!({
+                    "name": name,
+                    "trigger_type": 1,
+                    "trigger_metadata": { "kind": "keyword", "keywords": ["zzz"] },
+                    "actions": [{ "kind": "block_message" }],
+                    "enabled": false
+                })),
+            )
+            .await?;
+        assert_unreadable("automod rule create", case, status, &payload);
+    }
+    Ok(())
+}
+
+/// A role name had no lower bound at all: `""` created a nameless row in the
+/// role list and the permission matrix.
+#[tokio::test]
+async fn an_empty_role_name_is_refused() -> anyhow::Result<()> {
+    let ctx = Ctx::new().await?;
+    let guild = ctx.guild().await?;
+    let (status, payload) = ctx
+        .call(
+            Method::POST,
+            &format!("/api/v1/guilds/{guild}/roles"),
+            Some(json!({ "name": "", "permissions": 0, "color": 0 })),
+        )
+        .await?;
+    assert_unreadable("role create", "empty", status, &payload);
+    Ok(())
+}
+
+/// And the bound must not cost an administrator a label they are entitled to.
+#[tokio::test]
+async fn ordinary_administrator_labels_still_pass() -> anyhow::Result<()> {
+    let ctx = Ctx::new().await?;
+    let guild = ctx.guild().await?;
+    let channel = ctx.channel(&guild).await?;
+
+    for (case, name) in READABLE {
+        let (status, payload) = ctx
+            .call(
+                Method::POST,
+                &format!("/api/v1/guilds/{guild}/roles"),
+                Some(json!({ "name": name, "permissions": 0, "color": 0 })),
+            )
+            .await?;
+        assert_eq!(
+            status,
+            StatusCode::CREATED,
+            "role create rejected {case}: {payload}"
+        );
+
+        let (status, payload) = ctx
+            .call(
+                Method::POST,
+                &format!("/api/v1/guilds/{guild}/webhooks"),
+                Some(json!({ "name": name, "channel_id": channel })),
+            )
+            .await?;
+        assert_eq!(
+            status,
+            StatusCode::CREATED,
+            "webhook create rejected {case}: {payload}"
+        );
+    }
+    Ok(())
+}

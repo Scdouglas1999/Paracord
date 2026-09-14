@@ -307,6 +307,11 @@ pub async fn create_webhook(
             "Webhook name contains unsafe markup".into(),
         ));
     }
+    // This is the author name every message the hook posts is attributed to,
+    // so a blank or bidi-reordered one is a message with no author or the
+    // wrong one.
+    paracord_util::validation::validate_visible_label(name)
+        .map_err(|_| ApiError::BadRequest("Webhook name must be readable text".into()))?;
 
     // Determine target channel: either from body or first text channel in guild
     let channel_id = if let Some(ref raw) = body.channel_id {
@@ -482,6 +487,8 @@ pub async fn update_webhook(
                 "Webhook name contains unsafe markup".into(),
             ));
         }
+        paracord_util::validation::validate_visible_label(trimmed)
+            .map_err(|_| ApiError::BadRequest("Webhook name must be readable text".into()))?;
     }
 
     let mut updated =

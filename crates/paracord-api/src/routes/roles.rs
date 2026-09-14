@@ -36,6 +36,13 @@ fn validate_role_name(name: &str) -> Result<(), ApiError> {
     if name.len() > MAX_ROLE_NAME_LEN {
         return Err(ApiError::BadRequest("Role name is too long".into()));
     }
+    // A label a person is asked to read has to render as something, and as
+    // itself: `validate_visible_label` rejects a name that draws no glyph
+    // (blank, non-breaking space, zero-width) and one that carries a bidi
+    // override, which renders "a\u{202E}gnp.exe" to every reader as
+    // "aexe.png". Guild and room names have been held to it since 884f3e8.
+    paracord_util::validation::validate_visible_label(name)
+        .map_err(|_| ApiError::BadRequest("Role name must be readable text".into()))?;
     // A role name is a pure display label — it is rendered next to every member
     // who carries it, listed in the permission matrix, and copied verbatim into
     // the audit log's change payload. Nothing about it legitimately contains

@@ -33,7 +33,7 @@ pub struct ListEventsQuery {
     pub offset: Option<usize>,
 }
 
-use paracord_util::validation::contains_dangerous_markup;
+use paracord_util::validation::{contains_dangerous_markup, validate_visible_label};
 
 fn normalize_event_image_url(raw: &str) -> Result<String, ApiError> {
     let trimmed = raw.trim();
@@ -450,6 +450,8 @@ pub async fn create_event(
             "Event name contains unsafe markup".into(),
         ));
     }
+    validate_visible_label(&body.name)
+        .map_err(|_| ApiError::BadRequest("Event name must be readable text".into()))?;
     if let Some(ref desc) = body.description {
         if desc.len() > MAX_EVENT_DESCRIPTION_LEN {
             return Err(ApiError::BadRequest("Description too long".into()));
@@ -615,6 +617,8 @@ pub async fn update_event(
                 "Event name contains unsafe markup".into(),
             ));
         }
+        validate_visible_label(name)
+            .map_err(|_| ApiError::BadRequest("Event name must be readable text".into()))?;
     }
     if let Some(status) = body.status {
         if !(1..=4).contains(&status) {

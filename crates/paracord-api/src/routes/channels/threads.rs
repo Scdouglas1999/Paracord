@@ -40,6 +40,8 @@ pub async fn create_thread(
             "Thread name contains unsafe markup".into(),
         ));
     }
+    validate_visible_label(&body.name)
+        .map_err(|_| ApiError::BadRequest("Thread name must be readable text".into()))?;
 
     let parent_channel = paracord_db::channels::get_channel(&state.db, channel_id)
         .await
@@ -254,6 +256,8 @@ pub async fn update_thread(
                 "Thread name contains unsafe markup".into(),
             ));
         }
+        validate_visible_label(name)
+            .map_err(|_| ApiError::BadRequest("Thread name must be readable text".into()))?;
     }
 
     let thread = paracord_db::channels::get_channel(&state.db, thread_id)

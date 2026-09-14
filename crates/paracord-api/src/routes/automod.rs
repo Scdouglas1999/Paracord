@@ -174,6 +174,8 @@ fn validate_name(name: &str) -> Result<String, ApiError> {
             "Rule name contains unsafe markup".into(),
         ));
     }
+    paracord_util::validation::validate_visible_label(trimmed)
+        .map_err(|_| ApiError::BadRequest("Rule name must be readable text".into()))?;
     Ok(trimmed.to_string())
 }
 

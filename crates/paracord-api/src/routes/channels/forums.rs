@@ -122,6 +122,8 @@ pub async fn create_forum_post(
             "Post title contains unsafe markup".into(),
         ));
     }
+    validate_visible_label(name)
+        .map_err(|_| ApiError::BadRequest("Post title must be readable text".into()))?;
 
     let forum_channel = paracord_db::channels::get_channel(&state.db, channel_id)
         .await
@@ -271,6 +273,8 @@ pub async fn create_forum_tag(
             "Tag name contains unsafe markup".into(),
         ));
     }
+    validate_visible_label(name)
+        .map_err(|_| ApiError::BadRequest("Tag name must be readable text".into()))?;
 
     let forum_channel = paracord_db::channels::get_channel(&state.db, channel_id)
         .await

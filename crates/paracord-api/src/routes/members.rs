@@ -114,6 +114,11 @@ pub async fn update_member(
         if paracord_util::validation::contains_dangerous_markup(nick) {
             return Err(ApiError::BadRequest("nick contains unsafe markup".into()));
         }
+        // A nickname replaces the member's name everywhere in the space. A
+        // blank one leaves an unnamed author on every message they send, and a
+        // bidi override rewrites the name the reader sees.
+        paracord_util::validation::validate_visible_label(nick)
+            .map_err(|_| ApiError::BadRequest("nick must be readable text".into()))?;
     }
     let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
         .await
