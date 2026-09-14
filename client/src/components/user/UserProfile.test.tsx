@@ -174,6 +174,21 @@ describe('UserProfilePopup action feedback', () => {
     expect(card.style.overflowY).toBe('auto');
   });
 
+  // The click-away catcher is `fixed inset-0` and swallows every pointer event
+  // under it, so a card opened from the keyboard could not be put down again.
+  it('closes on Escape', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(
+      <MemoryRouter>
+        <UserProfilePopup user={targetUser} position={{ x: 400, y: 100 }} onClose={onClose} />
+      </MemoryRouter>,
+    );
+
+    await user.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalled();
+  });
+
   it('shows API detail when starting a DM fails', async () => {
     const user = userEvent.setup();
     vi.mocked(dmApi.create).mockRejectedValue(apiError('Direct messages are disabled.'));

@@ -131,6 +131,17 @@ function UserProfileCard({
 }) {
   const navigate = useNavigate();
   const channelScope = useCurrentAccountScope();
+  // The card is a dialog over a click-away catcher, and the catcher swallows
+  // every pointer event underneath it — so somebody who opened this from the
+  // keyboard had no way to put it down again. Escape closes it, like every
+  // other dismissible surface in the app.
+  useEffect(() => {
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.stopPropagation(); onClose(); }
+    };
+    window.addEventListener('keydown', dismiss);
+    return () => window.removeEventListener('keydown', dismiss);
+  }, [onClose]);
   const popupWidth = Math.min(21.5 * 16, window.innerWidth - 16);
   const estimatedHeight = Math.min(32.5 * 16, window.innerHeight - 16);
   const fitsLeft = position.x - popupWidth - 16 > 0;
