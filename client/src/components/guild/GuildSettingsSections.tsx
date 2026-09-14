@@ -119,11 +119,15 @@ export function OverviewSection({
   onDeleteGuild,
 }: OverviewSectionProps) {
   const isOwner = guild && authUserId && guild.owner_id === authUserId;
+  // A readout that counts things says "1 Role", not "1 Roles". The strip was
+  // printing the plural beside every number, including the ones that are
+  // always 1 on a young building.
+  const countLabel = (n: number, one: string, many: string) => (n === 1 ? one : many);
   const stats: { label: string; value: number }[] = [
-    { label: 'Members', value: members.length },
-    { label: 'Roles', value: roles.length },
-    { label: 'Channels', value: channels.length },
-    { label: 'Active invites', value: invites.length },
+    { label: countLabel(members.length, 'Member', 'Members'), value: members.length },
+    { label: countLabel(roles.length, 'Role', 'Roles'), value: roles.length },
+    { label: countLabel(channels.length, 'Channel', 'Channels'), value: channels.length },
+    { label: countLabel(invites.length, 'Active invite', 'Active invites'), value: invites.length },
   ];
 
   return (
@@ -147,8 +151,13 @@ export function OverviewSection({
       <section className="flex flex-col gap-6 border-t border-border-subtle pt-6 sm:flex-row sm:gap-8">
         <label className="group shrink-0 cursor-pointer">
           <input type="file" accept="image/*" className="hidden" onChange={onIconChange} />
-          {/* The icon well: recessed, matte, no border-as-depth (§1.1). */}
-          <div className="pc-well flex h-24 w-24 flex-col items-center justify-center overflow-hidden rounded-[var(--radius-full)] transition-colors group-hover:bg-bg-mod-subtle">
+          {/* The icon well: recessed, matte, no border-as-depth (§1.1). It is
+              the SAME shape the building's mark is drawn in everywhere else —
+              the Lobby header, the collapsed rail and Home all round it to
+              --radius-card — so what you drop here is what you get. It asked
+              for --radius-full until D2 made call-site radii bind, and a round
+              crop of a square logo previewed a building nothing renders. */}
+          <div className="pc-well flex h-24 w-24 flex-col items-center justify-center overflow-hidden rounded-[var(--radius-card)] transition-colors group-hover:bg-bg-mod-subtle">
             {iconDataUrl ? (
               <img src={iconDataUrl} alt="Building icon" className="h-full w-full object-cover" />
             ) : (
@@ -225,7 +234,14 @@ export function OverviewSection({
             >
               {ownershipCandidates.map((member) => (
                 <option key={member.user.id} value={member.user.id}>
-                  {displayName(member.user, member.nick) + ' (' + member.user.id + ')'}
+                  {/* The disambiguator has to be something the person handing
+                      over their building can recognise. A snowflake is not: it
+                      told the owner "priya (357593456400404480)" and made them
+                      guess. A username is unique on this server and is what
+                      they already call each other. */}
+                  {displayName(member.user, member.nick).toLowerCase() === member.user.username.toLowerCase()
+                    ? `@${member.user.username}`
+                    : `${displayName(member.user, member.nick)} (@${member.user.username})`}
                 </option>
               ))}
             </Select>
