@@ -181,13 +181,21 @@ describe('useSettleIn', () => {
 
 const tops = new Map<string, number>();
 
+/**
+ * How far a running animation is currently DRAWING a row from where layout put
+ * it. The hook has to tell the two apart: it remembers the layout place and
+ * retargets from the drawn one, and reading the drawn one as the row's resting
+ * place is the compounding bug this covers.
+ */
+const drift = new Map<string, number>();
+
 /** The container's own viewport box — rows outside it have no leave to show. */
 const CONTAINER = { top: 0, height: 200 };
 
 function stubRects() {
   Element.prototype.getBoundingClientRect = function (this: Element) {
     const key = this.getAttribute?.('data-flip-key');
-    const top = key ? (tops.get(key) ?? 0) : CONTAINER.top;
+    const top = key ? (tops.get(key) ?? 0) + (drift.get(key) ?? 0) : CONTAINER.top;
     const height = key ? 10 : CONTAINER.height;
     return {
       left: 0,
@@ -201,6 +209,23 @@ function stubRects() {
       toJSON: () => ({}),
     } as DOMRect;
   };
+  // jsdom has no layout, so the offset chain the hook reads its resting boxes
+  // from has to be stubbed alongside the rects. Transform-free by definition:
+  // `drift` is deliberately absent here.
+  const layoutTop = function (this: HTMLElement) {
+    const key = this.getAttribute?.('data-flip-key');
+    return key ? (tops.get(key) ?? 0) : CONTAINER.top;
+  };
+  Object.defineProperty(HTMLElement.prototype, 'offsetTop', { configurable: true, get: layoutTop });
+  Object.defineProperty(HTMLElement.prototype, 'offsetLeft', { configurable: true, get: () => 0 });
+  Object.defineProperty(HTMLElement.prototype, 'offsetParent', { configurable: true, get: () => null });
+  Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get: () => 100 });
+  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.getAttribute?.('data-flip-key') ? 10 : CONTAINER.height;
+    },
+  });
 }
 
 function Rows({ keys, enter, own = [] }: { keys: string[]; enter?: 'rise' | 'pop'; own?: string[] }) {
@@ -216,11 +241,24 @@ function Rows({ keys, enter, own = [] }: { keys: string[]; enter?: 'rise' | 'pop
   );
 }
 
+/** A row inside a marked section — the Buildings column's own shape. */
+function Nested() {
+  const ref = useFlipList<HTMLDivElement>();
+  return (
+    <div ref={ref}>
+      <div data-flip-key="s">
+        <div data-flip-key="r" />
+      </div>
+    </div>
+  );
+}
+
 describe('useFlipList', () => {
   beforeEach(() => {
     stubMatchMedia(false);
     configureMotion('full');
     tops.clear();
+    drift.clear();
     CONTAINER.top = 0;
     CONTAINER.height = 200;
     stubRects();
@@ -354,6 +392,83 @@ describe('useFlipList', () => {
     tops.set('b', -30);
     rerender(<Rows keys={['a', 'b']} />);
     expect(waapi.played).toHaveLength(0);
+  });
+
+  it('a commit landing mid-move does not read the move as a reorder', () => {
+    // The bug the desktop client shipped with. A reorder starts; a burst of
+    // store updates commits again 6ms later while the row is still travelling;
+    // the hook measured the row where the ANIMATION had it, kept that as its
+    // resting place, and the next commit read the difference as a fresh move.
+    // The error compounded — 383px, 466, 849, 1315, 2176 … 28 300 — and the
+    // sidebar's rows flew in from off screen. Nothing moved in layout here, so
+    // nothing may be played, however far the transform has the row.
+    tops.set('a', 0);
+    tops.set('b', 10);
+    const { rerender } = render(<Rows keys={['a', 'b']} />);
+    tops.set('b', 0);
+    tops.set('a', 10);
+    rerender(<Rows keys={['b', 'a']} />);
+    expect(waapi.played).toHaveLength(2);
+    waapi.played.length = 0;
+    // Mid-flight: both rows are drawn most of the way back to where they were.
+    drift.set('a', -8);
+    drift.set('b', 8);
+    rerender(<Rows keys={['b', 'a']} />);
+    expect(waapi.played).toHaveLength(0);
+  });
+
+  it('an interrupted move retargets from where the row is drawn', () => {
+    tops.set('a', 0);
+    tops.set('b', 10);
+    tops.set('c', 20);
+    const { rerender } = render(<Rows keys={['a', 'b', 'c']} />);
+    // c climbs to the top: it travels 20px.
+    tops.set('c', 0);
+    tops.set('a', 10);
+    tops.set('b', 20);
+    rerender(<Rows keys={['c', 'a', 'b']} />);
+    waapi.played.length = 0;
+    // Half way through that climb, c is sent back down to the middle. It must
+    // start from where it is being DRAWN (10px of its 20px climb left, so 10px
+    // above the row it is heading for) — not restart from the full 20.
+    drift.set('c', 10);
+    tops.set('a', 0);
+    tops.set('c', 10);
+    rerender(<Rows keys={['a', 'c', 'b']} />);
+    const c = waapi.played.find((record) => (record.target as HTMLElement).dataset.flipKey === 'c')!;
+    // layout delta (0 - 10 = -10) + the 10px the old move still had it above
+    // its new row = 0: it is already exactly there, and simply settles.
+    expect(c.keyframes[0].transform).toBe('translate3d(0px, 0px, 0)');
+  });
+
+  it('a press is not a journey half-finished — only this engine\'s own drift counts', () => {
+    // `.pc-pressable` holds a row at `scale(.96)` while the finger is down and
+    // lifts it 1px on hover, so a row can be drawn off its layout box with no
+    // move in flight at all. Folding that into a reorder's start would make the
+    // row jump by the press.
+    tops.set('a', 0);
+    tops.set('b', 10);
+    const { rerender } = render(<Rows keys={['a', 'b']} />);
+    drift.set('a', 6);
+    tops.set('a', 36);
+    rerender(<Rows keys={['a', 'b']} />);
+    const a = waapi.played.find((record) => (record.target as HTMLElement).dataset.flipKey === 'a')!;
+    expect(a.keyframes[0].transform).toBe('translate3d(0px, -36px, 0)');
+  });
+
+  it('a plate that travels carries its own rows — one journey, not two', () => {
+    // Layout offsets are whole pixels, so a section and the rows inside it can
+    // report deltas a pixel apart while making the same journey. Animating both
+    // composes the two transforms and the row travels twice as far as the list
+    // did — which is the same off-screen flight, one level down.
+    tops.set('s', 0);
+    tops.set('r', 10);
+    const { rerender } = render(<Nested />);
+    tops.set('s', -200);
+    tops.set('r', -191);
+    rerender(<Nested />);
+    expect(waapi.played).toHaveLength(1);
+    expect((waapi.played[0].target as HTMLElement).dataset.flipKey).toBe('s');
   });
 
   it('plays nothing at all under reduced motion', () => {

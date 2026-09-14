@@ -61,19 +61,60 @@ function tag(animation: Animation, recipe: string): Animation {
 const MOVED_EPSILON_PX = 0.5;
 
 /**
- * A row's place in the container's own content box — NOT the viewport.
+ * `offsetTop`/`offsetLeft` are whole pixels, so a layout box can disagree with
+ * the rendered one by up to a pixel per axis without anything having moved.
+ * A real reorder in this column is 36 px; 1.5 keeps the rounding out.
+ */
+const LAYOUT_EPSILON_PX = 1.5;
+
+/**
+ * How far a row's delta may differ from its carrying ancestor's and still count
+ * as the same journey. Both deltas are differences of whole-pixel offsets, so
+ * each can be a pixel out and the difference two; anything smaller than a
+ * character is not a row moving independently of the plate it sits on. Getting
+ * this wrong animates the row AND the section it is in, and the two transforms
+ * compose into a row travelling twice as far as the list did.
+ */
+const CARRIED_EPSILON_PX = 2.5;
+
+/**
+ * A row's place in the container's own content box — NOT the viewport, and NOT
+ * where an animation currently has it.
  *
- * A viewport rect changes when the list scrolls, and a store update that
- * arrives mid-scroll would then read every row as having "moved" and animate
- * the whole column back to where the scroll had just taken it. Measuring
- * against the container's content origin takes the scroll out of the number,
- * so a delta only ever means a real reorder.
+ * Two things have to come out of the number before a delta can mean "this row
+ * reordered":
+ *
+ *   - **Scroll.** A viewport rect changes when the list scrolls, and a store
+ *     update that arrives mid-scroll would read every row as having moved and
+ *     animate the whole column back to where the scroll had just taken it.
+ *   - **The transform a FLIP is already playing.** `getBoundingClientRect`
+ *     reports where a row is being *drawn*, which during a move is somewhere
+ *     between its old place and its new one. Recording that as the row's
+ *     resting position feeds a mid-flight number back in as the next commit's
+ *     "before", and because a burst of store updates commits several times
+ *     inside one 380 ms move, the error compounds: the desktop client measured
+ *     383 px, then 466, 849, 1315, 2176 … 28 300 px — the Fibonacci sum of its
+ *     own mistakes — and the sidebar's rows were told to fly in from four
+ *     screens away. That is the "bounce" the user was reporting. A row must
+ *     animate from where it actually was, so the box we keep is the LAYOUT box:
+ *     the offset chain, which no transform can touch.
+ *
+ * What the running transform is worth is still needed — an interrupted move has
+ * to retarget from where the row is *drawn*, not restart from where layout put
+ * it — so it is measured as {@link Drift}: rendered minus layout, read fresh on
+ * the commit that needs it and never stored.
  */
 interface Box {
   left: number;
   top: number;
   width: number;
   height: number;
+}
+
+/** How far animations currently have a row from where layout put it. */
+interface Drift {
+  dx: number;
+  dy: number;
 }
 
 interface Frame {
@@ -83,10 +124,34 @@ interface Frame {
   scrollTop: number;
   right: number;
   bottom: number;
+  /** The container's own place in the offset chain, so rows can subtract it. */
+  offsetLeft: number;
+  offsetTop: number;
+}
+
+/**
+ * Where an element sits in the document's LAYOUT, walking the offset chain.
+ *
+ * `offsetLeft`/`offsetTop` are measured from an ancestor's padding edge and are
+ * defined on layout alone: they ignore both scroll and every transform in the
+ * chain, which is exactly what a FLIP's "before" needs. Summing the chain for
+ * a row and for its container and subtracting cancels everything they share.
+ */
+function layoutOrigin(el: HTMLElement): { left: number; top: number } {
+  let left = 0;
+  let top = 0;
+  let node: HTMLElement | null = el;
+  while (node) {
+    left += node.offsetLeft;
+    top += node.offsetTop;
+    node = node.offsetParent as HTMLElement | null;
+  }
+  return { left, top };
 }
 
 function frameOf(container: HTMLElement): Frame {
   const rect = container.getBoundingClientRect();
+  const origin = layoutOrigin(container);
   return {
     left: rect.left,
     top: rect.top,
@@ -94,17 +159,38 @@ function frameOf(container: HTMLElement): Frame {
     bottom: rect.bottom,
     scrollLeft: container.scrollLeft,
     scrollTop: container.scrollTop,
+    offsetLeft: origin.left,
+    offsetTop: origin.top,
   };
 }
 
+/** The row's resting place: layout only, immune to a move already in flight. */
 function boxOf(el: HTMLElement, frame: Frame): Box {
-  const rect = el.getBoundingClientRect();
+  const origin = layoutOrigin(el);
   return {
-    left: rect.left - frame.left + frame.scrollLeft,
-    top: rect.top - frame.top + frame.scrollTop,
-    width: rect.width,
-    height: rect.height,
+    left: origin.left - frame.offsetLeft,
+    top: origin.top - frame.offsetTop,
+    width: el.offsetWidth,
+    height: el.offsetHeight,
   };
+}
+
+/**
+ * Where the row is being *drawn* right now, minus where layout puts it — the
+ * sum of every transform between it and the container, however that transform
+ * got there. Zero unless something is mid-animation.
+ */
+function driftOf(el: HTMLElement, box: Box, frame: Frame): Drift | null {
+  const rect = el.getBoundingClientRect();
+  const dx = rect.left - frame.left + frame.scrollLeft - box.left;
+  const dy = rect.top - frame.top + frame.scrollTop - box.top;
+  if (Math.abs(dx) < LAYOUT_EPSILON_PX && Math.abs(dy) < LAYOUT_EPSILON_PX) return null;
+  return { dx, dy };
+}
+
+/** Is this one of ours, and still going? */
+function inFlight(animation: Animation | undefined): boolean {
+  return Boolean(animation) && animation!.playState === 'running';
 }
 
 function rowsOf(container: HTMLElement, attribute: string): HTMLElement[] {
@@ -251,9 +337,16 @@ export function useFlipList<T extends HTMLElement = HTMLElement>(
     const frame = frameOf(container);
     const rows = rowsOf(container, attribute);
     const now = new Map<string, Box>();
+    // Read once per row: the resting box that gets remembered, and the drift a
+    // move already in flight is drawing it at, which never does.
+    const drifts = new Map<HTMLElement, Drift>();
     for (const el of rows) {
       const key = el.getAttribute(attribute);
-      if (key) now.set(key, boxOf(el, frame));
+      if (!key) continue;
+      const box = boxOf(el, frame);
+      now.set(key, box);
+      const drift = driftOf(el, box, frame);
+      if (drift) drifts.set(el, drift);
     }
 
     const prev = boxes.current;
@@ -271,7 +364,7 @@ export function useFlipList<T extends HTMLElement = HTMLElement>(
         if (!from) continue;
         const dx = from.left - to.left;
         const dy = from.top - to.top;
-        if (Math.abs(dx) >= MOVED_EPSILON_PX || Math.abs(dy) >= MOVED_EPSILON_PX) {
+        if (Math.abs(dx) >= LAYOUT_EPSILON_PX || Math.abs(dy) >= LAYOUT_EPSILON_PX) {
           deltas.set(el, { dx, dy });
         }
       }
@@ -301,7 +394,12 @@ export function useFlipList<T extends HTMLElement = HTMLElement>(
           }
           if (typeof el.animate !== 'function') continue;
           const own = el.hasAttribute(FLIP_OWN_ATTR);
-          tag(
+          // Kept with the moves: an arrival is a transform on the row like any
+          // other, so a reorder that lands on top of it must cancel and
+          // retarget it rather than run a second transform against it.
+          running.current.set(
+            el,
+            tag(
             el.animate(
               enterStyle === 'pop'
                 ? [
@@ -319,6 +417,7 @@ export function useFlipList<T extends HTMLElement = HTMLElement>(
               },
             ),
             enterStyle === 'pop' ? 'pop' : 'enter',
+            ),
           );
           // The emoji itself over-rotates ±8° on your own reaction — the row
           // lands and the mark inside it settles a beat behind (§5.1).
@@ -342,19 +441,40 @@ export function useFlipList<T extends HTMLElement = HTMLElement>(
         }
         // The ancestor moved the same way — the parent carries this row.
         const parentDelta = ancestor ? deltas.get(ancestor) : undefined;
-        if (parentDelta && Math.abs(parentDelta.dx - delta.dx) < 0.5 && Math.abs(parentDelta.dy - delta.dy) < 0.5) {
+        if (
+          parentDelta
+          && Math.abs(parentDelta.dx - delta.dx) < CARRIED_EPSILON_PX
+          && Math.abs(parentDelta.dy - delta.dy) < CARRIED_EPSILON_PX
+        ) {
           continue;
         }
         if (typeof el.animate !== 'function') continue;
         const prior = running.current.get(el);
         const { velocity } = sampleRunning(prior);
+        // Retarget, never restart (§5.3). The row is being drawn `drift` away
+        // from where layout has just put it, so the replacement starts from
+        // there — the reorder it has to travel PLUS the part of the last move
+        // it had not finished — and carries the velocity it had. Starting from
+        // the bare layout delta would snap it back to the old row first.
+        //
+        // Only drift this engine put there: a press is `scale(.96)` and a hover
+        // a 1px lift, and neither is a journey half-finished. And only the row's
+        // OWN share of it — a rect is drawn through every transform above it, so
+        // a row inside a section that is itself travelling reads its ancestor's
+        // journey as well, and adding that here would compose the ancestor's
+        // move into the row a second time.
+        const drift = inFlight(prior) ? drifts.get(el) : undefined;
+        const carried =
+          ancestor && inFlight(running.current.get(ancestor)) ? drifts.get(ancestor) : undefined;
         prior?.cancel();
+        const fromX = delta.dx + (drift?.dx ?? 0) - (carried?.dx ?? 0);
+        const fromY = delta.dy + (drift?.dy ?? 0) - (carried?.dy ?? 0);
         running.current.set(
           el,
           tag(
             el.animate(
               [
-                { transform: `translate3d(${delta.dx}px, ${delta.dy}px, 0)` },
+                { transform: `translate3d(${fromX}px, ${fromY}px, 0)` },
                 { transform: 'translate3d(0, 0, 0)' },
               ],
               {
