@@ -3,12 +3,15 @@
  * command (Rust reqwest) instead of WebView2's fetch/XHR. This bypasses WebView2's
  * TLS restrictions so self-hosted servers with self-signed certs work.
  */
+import { AxiosHeaders } from 'axios';
 import type { AxiosResponse, InternalAxiosRequestConfig } from 'axios';
 import { isTauri } from './tauriEnv';
 
 interface NativeFetchResponse {
   status: number;
   body: unknown;
+  /** Lowercased response headers. Absent from shells older than this field. */
+  headers?: Record<string, string>;
 }
 
 let invokeCache: ((cmd: string, args: Record<string, unknown>) => Promise<unknown>) | null = null;
@@ -63,11 +66,17 @@ export async function tauriAdapter(config: InternalAxiosRequestConfig): Promise<
     },
   })) as NativeFetchResponse;
 
+  // Response headers are part of the API contract, not decoration: the
+  // operation context reads `X-Paracord-History-Epoch` off every response and
+  // treats a mismatch as the account's database history having changed. An
+  // empty header bag is a mismatch, so reporting `{}` here — which this adapter
+  // did — made every desktop request look like a history change, expiring the
+  // operation and tearing down the realtime stream behind it.
   const response: AxiosResponse = {
     data: resp.body,
     status: resp.status,
     statusText: '',
-    headers: {},
+    headers: AxiosHeaders.from(resp.headers ?? {}),
     config,
   };
 

@@ -933,6 +933,37 @@ struct NativeFetchRequest {
 struct NativeFetchResponse {
     status: u16,
     body: serde_json::Value,
+    /// Response headers, lowercased, so the renderer can read the ones the API
+    /// contract puts there.
+    ///
+    /// This used to be omitted entirely, and the axios adapter that consumes
+    /// this reported `headers: {}` for every desktop request. The API answers
+    /// every call with `X-Paracord-History-Epoch`, and the operation context
+    /// compares it against the epoch the operation captured: absent is not
+    /// equal, so on the desktop *every* response looked like the account's
+    /// database history had changed underneath it. That expired the operation
+    /// (an error on almost every screen) and asked for a history
+    /// reconciliation, which drops the realtime stream — so the desktop client
+    /// could not hold a connection for longer than it took to make one request.
+    headers: std::collections::HashMap<String, String>,
+}
+
+/// Collect a response's headers for the renderer.
+///
+/// `set-cookie` is withheld: it is not readable from JavaScript in a browser
+/// either, and the cookie jar is the shell's business. Values that are not
+/// valid UTF-8 are dropped rather than lossily transcoded.
+fn native_response_headers(resp: &reqwest::Response) -> std::collections::HashMap<String, String> {
+    resp.headers()
+        .iter()
+        .filter(|(name, _)| !name.as_str().eq_ignore_ascii_case("set-cookie"))
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|value| (name.as_str().to_ascii_lowercase(), value.to_string()))
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -959,9 +990,14 @@ async fn native_fetch(req: NativeFetchRequest) -> Result<NativeFetchResponse, St
     }
     let resp = builder.send().await.map_err(map_reqwest_error)?;
     let status = resp.status().as_u16();
+    let headers = native_response_headers(&resp);
     let bytes = read_limited_response(resp, MAX_NATIVE_JSON_RESPONSE_BYTES).await?;
     let body = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
-    Ok(NativeFetchResponse { status, body })
+    Ok(NativeFetchResponse {
+        status,
+        body,
+        headers,
+    })
 }
 
 #[derive(serde::Deserialize)]
@@ -1015,9 +1051,14 @@ async fn native_upload_file(req: NativeUploadFileRequest) -> Result<NativeFetchR
 
     let resp = builder.send().await.map_err(map_reqwest_error)?;
     let status = resp.status().as_u16();
+    let headers = native_response_headers(&resp);
     let bytes = read_limited_response(resp, MAX_NATIVE_JSON_RESPONSE_BYTES).await?;
     let body = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
-    Ok(NativeFetchResponse { status, body })
+    Ok(NativeFetchResponse {
+        status,
+        body,
+        headers,
+    })
 }
 
 #[derive(serde::Deserialize)]
@@ -1551,6 +1592,31 @@ mod tests {
         if let Ok(mut guard) = USER_APPROVED_SERVER_ORIGINS.write() {
             guard.clear();
         }
+    }
+
+    /// The native SSE parser must surface the server's idle heartbeat.
+    ///
+    /// The desktop client reads the realtime stream here rather than through a
+    /// browser `EventSource`, and this parser drops comment lines for the same
+    /// reason the specification tells a browser to: a comment carries nothing.
+    /// While the server's keepalive *was* a comment, an idle desktop client saw
+    /// literally nothing after READY and its liveness watchdog tore down a
+    /// healthy stream every ninety seconds. The keepalive is now a real frame;
+    /// this pins that this parser hands it to the frontend.
+    #[test]
+    fn native_sse_parser_surfaces_the_idle_heartbeat_and_still_drops_comments() {
+        let mut buffer =
+            String::from(": keep-alive\n\nevent: gateway\ndata: {\"op\":11,\"d\":null}\n\n");
+        let events = drain_sse_events(&mut buffer);
+        assert_eq!(
+            events,
+            vec![(
+                Some("gateway".to_string()),
+                "{\"op\":11,\"d\":null}".to_string()
+            )],
+            "a comment carries nothing to the frontend; the heartbeat frame must"
+        );
+        assert!(buffer.is_empty(), "both frames were consumed");
     }
 
     #[test]
