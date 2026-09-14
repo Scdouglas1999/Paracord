@@ -182,6 +182,29 @@ the maximum. Floating surfaces (menus) use `--bg-floating` + the plate shadow.
 The glass tokens (`--glass-*`), `--noise-texture`, `--ambient-glow-*` and
 `--panel-divider-glint` are deleted.
 
+**A card inside a plate wears a card's depth, not a plate's.** This is what
+"never nest a plate in a plate" means in tokens, and it is the rule the code
+was breaking silently until the `.pc-*` recipes moved into `@layer components`
+(D2, `cf75db8`) and let a call site's own utilities bind:
+
+| Object | Radius (§3) | Depth |
+|---|---|---|
+| Plate on the street — the Lobby, a text room, the Stage, a dialog | `--radius-plate` (14) | `--shadow-plate` (warm 1px top highlight **+** the deep drop) |
+| Card inside a plate — a building card, a room card, a DM or Friends row, a settings section, the add tile | `--radius-card` (12) | `--shadow-tile` (the warm 1px top highlight alone) |
+| Well inside a plate — search, form fields, Around now, the here-now strip | `--radius-well` (10) | `--shadow-well` (inset) |
+
+The deep drop is what says *this surface floats over the street*. A card that
+takes it is claiming to be a plate, and four of them down a column read as four
+planes at four distances instead of one plate with four things on it. The one
+sanctioned exception is a well that **holds a picture** — `StageTile` (§8) and
+the avatar/icon wells — which takes `--radius-card` so its crop matches the
+radius the same image is drawn at everywhere else. A well that holds words and
+faces stays at 10.
+
+A lit card is the other exception in the other direction: it is carrying a
+light source, so it may add `--ring-lit-plate` over the depth it already has
+(§5.1). Light, never elevation, is what a lit thing gains.
+
 ---
 
 ## 5. Motion — the building is alive

@@ -50,10 +50,15 @@ export const HereNowStrip = React.forwardRef<HTMLDivElement, HereNowStripProps>(
 
     return (
       <div ref={ref} className={cn('min-w-0', className)} {...props}>
+        {/* No radius here: §3 gives a well 10px and the recipe supplies it.
+            This asked for --radius-card, which nothing listened to until D2
+            made call-site radii bind — and then the strip and the Around-now
+            well rounded to 12 while the search well, every form field and the
+            DM filter beside them stayed at 10. Two radii for one object. */}
         <Well
           bare
           as="div"
-          className="flex min-w-0 items-center rounded-[var(--radius-card)] py-[5px] pl-[7px] pr-3"
+          className="flex min-w-0 items-center py-[5px] pl-[7px] pr-3"
         >
           <button
             ref={anchor}

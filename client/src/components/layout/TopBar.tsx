@@ -671,7 +671,7 @@ function OwnedTopBar({
             <Well
               bare
               as="div"
-              className="hidden min-w-0 items-center gap-2.5 rounded-[var(--radius-card)] py-[5px] pl-[7px] pr-3 md:flex"
+              className="hidden min-w-0 items-center gap-2.5 py-[5px] pl-[7px] pr-3 md:flex"
             >
               <LitAvatar person={dm.peer} size={24} hideLabel />
               <span className="min-w-0 truncate text-label text-text-body">

@@ -42,7 +42,7 @@ export const AroundNowWell = React.forwardRef<HTMLElement, AroundNowWellProps>(
         aria-label="Around now"
         bare
         className={cn(
-          'flex flex-col gap-2 rounded-[var(--radius-card)] px-3.5 py-2.5',
+          'flex flex-col gap-2 px-3.5 py-2.5',
           // On a phone the sentence gets the full width; squeezed into a row it
           // wraps one word per line.
           'sm:flex-row sm:items-center sm:gap-3.5',

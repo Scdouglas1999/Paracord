@@ -36,7 +36,7 @@ export function HomeAroundNow({ people, sentence, lightsOn }: HomeAroundNowProps
       bare
       as="section"
       aria-label="Around now"
-      className="flex flex-wrap items-center gap-x-3.5 gap-y-2 rounded-[var(--radius-card)] px-3.5 py-2.5"
+      className="flex flex-wrap items-center gap-x-3.5 gap-y-2 px-3.5 py-2.5"
     >
       <span className="shrink-0 text-meta text-text-faint">Around now</span>
       {people.length > 0 && (
