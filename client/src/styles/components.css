@@ -60,12 +60,6 @@
   transition-duration: 80ms;
 }
 
-.btn-primary:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-  animation: pc-ring-in var(--duration-fast) var(--ease-out);
-}
-
 .btn-primary:disabled {
   opacity: 0.62;
   cursor: not-allowed;
@@ -91,13 +85,19 @@
   transition: box-shadow var(--duration-fast) var(--ease-out);
 }
 
-.input-field:focus-visible {
-  box-shadow: var(--shadow-well), var(--focus-ring);
-  animation: pc-ring-in var(--duration-fast) var(--ease-out);
-}
-
 .input-field::placeholder {
   color: var(--text-faint);
+}
+
+/* An invalid field says so in the well, not only in the sentence beneath it
+   (§1.3: danger is ink and a 1px edge, never a red fill). It follows
+   `aria-invalid` rather than a parallel class, because that attribute is
+   already the DOM's own statement that the value is wrong — the register and
+   first-run setup forms set it on their confirm-password field, and the
+   TextField primitive sets it from its `error` prop. The focused version of
+   this edge lives in focus.css, with the rest of the ring. */
+.input-field[aria-invalid='true'] {
+  box-shadow: var(--shadow-well), 0 0 0 1px var(--accent-danger);
 }
 
 /* Icon button (top bar icons, close buttons) */
@@ -141,12 +141,6 @@
 .icon-btn.active {
   color: var(--text-primary);
   background-color: var(--bg-mod-strong);
-}
-
-.icon-btn:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-  animation: pc-ring-in var(--duration-fast) var(--ease-out);
 }
 
 .context-menu-item {
@@ -193,12 +187,6 @@
 .context-menu-item.danger:hover {
   background-color: var(--bg-mod-subtle);
   color: var(--accent-danger);
-}
-
-.context-menu-item:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-  animation: pc-ring-in var(--duration-fast) var(--ease-out);
 }
 
 /* Someone is in the room and talking (spec §5): the rim breathes between the
@@ -272,8 +260,14 @@
   container-type: inline-size;
   container-name: message-composer;
 }
+/* The two halves of the tool row. These own `display` outright — the call site
+   must NOT also carry an `inline-flex` utility, or the utility layer would win
+   and both halves would show at once (see ICON_BTN_BASE in MessageInput). */
 .message-composer-secondary {
   display: none;
+}
+.message-composer-more {
+  display: inline-flex;
 }
 @container message-composer (min-width: 640px) {
   .message-composer-secondary {
@@ -281,12 +275,6 @@
   }
   .message-composer-more {
     display: none;
-  }
-}
-@media (pointer: coarse) {
-  /* Avoid focus-triggered zoom in mobile browsers. */
-  .message-composer-surface textarea {
-    font-size: 16px;
   }
 }
 
@@ -309,7 +297,6 @@
 @container (min-width: 640px) {
   .chat-header-more-label { display: inline; font-size: .8125rem; font-weight: 500; }
 }
-
 
 @container (max-width: 480px) { .chat-header-avatar { display: none; } }
 @media (pointer: coarse) { .chat-header-navigation { min-width: 2.75rem; min-height: 2.75rem; } }

@@ -2769,13 +2769,9 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                           {att.size != null && (
                             <span className="pc-mono ml-auto shrink-0">{formatFileSize(att.size)}</span>
                           )}
-                          {/* The actions live inside their own row, so that no
-                              button is the immediate sibling of a text element:
-                              layout.css gives such a button a 1rem top margin —
-                              vertical rhythm for a block column, but here it
-                              dropped "Open" 8px below its neighbours, and it
-                              outranks any utility class (it is unlayered, and
-                              Tailwind's utilities are in a layer). */}
+                          {/* One row for the actions, so a narrow footer wraps
+                              them together under the filename rather than
+                              breaking the group across two lines. */}
                           <span className="flex flex-wrap items-center gap-2">
                             <Button variant="ghost" size="sm" onClick={() => void openImageLightbox()}>
                               Open
@@ -2833,7 +2829,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                       {att.filename}
                     </button>
                     {att.size != null && <span className="pc-mono text-text-faint">{formatFileSize(att.size)}</span>}
-                    {/* Own row — see the image footer above for why. */}
+                    {/* One row — see the image footer above. */}
                     <span className="flex flex-wrap items-center gap-2">
                       <Button
                         variant="ghost"

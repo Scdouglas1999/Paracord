@@ -1,0 +1,93 @@
+/* =============================================================================
+   §9 — the focus ring, and the one layer that outranks the utilities.
+
+   Every other recipe we write lives in `@layer components`, below Tailwind's
+   `utilities`, so a utility at the call site wins: that is the point of the
+   layering, and it is what lets `shadow-[…,0_0_0_1px_var(--accent-danger)]`
+   finally draw an error edge on a `.pc-well`.
+
+   A focus ring is the exception. It is not decoration a call site may restyle
+   by accident: the moment a control carries any `shadow-*` utility for its
+   resting state — `shadow-[var(--shadow-raised)]` on an active nav row,
+   `shadow-[var(--shadow-chip)]` on a raised icon button — that utility would
+   replace `box-shadow` wholesale in the focused state too, and the ring would
+   simply be gone. Nothing on the page would say so. That is how a keyboard
+   user loses a control, and it is the class of accident the layering was meant
+   to end, not to move somewhere new.
+
+   So the ring sits in its own layer, declared after `utilities` (see
+   globals.css). It is the last word on `box-shadow` for a focused control.
+   Two consequences to know:
+
+     - A call site cannot override these with `focus-visible:shadow-[…]`. If a
+       control genuinely needs a different ring, give it a recipe here, beside
+       the others, where the next person will find it.
+     - A control whose ring comes from its own utility — the `pc-well` fields,
+       whose `focus-visible:shadow-[var(--shadow-well),var(--focus-ring)]` also
+       carries the danger edge when the field is invalid — is deliberately NOT
+       listed here. Its ring composes with its error state at the call site,
+       and nothing in this layer may flatten that.
+
+   The generic `:focus-visible` outline in layout.css is the opposite end: it
+   lives in `@layer base`, below everything, so that a control with a ring of
+   its own and a control that opts out with `outline-none` both win over it.
+
+   docs/lantern-stage-spec.md §9.
+   ============================================================================= */
+
+@layer focus {
+  .pc-focusable:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+    animation: pc-ring-in var(--duration-fast) var(--ease-out);
+  }
+
+  /* Composed focus: a surface that already carries a shadow keeps it under the
+     ring. Set --pc-base-shadow on the element (the primitives do this). */
+  .pc-focusable-composed:focus-visible {
+    outline: none;
+    box-shadow: var(--pc-base-shadow, none), var(--focus-ring);
+    animation: pc-ring-in var(--duration-fast) var(--ease-out);
+  }
+
+  .pc-checkbox:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+    animation: pc-ring-in var(--duration-fast) var(--ease-out);
+  }
+
+  .btn-primary:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+    animation: pc-ring-in var(--duration-fast) var(--ease-out);
+  }
+
+  .input-field:focus-visible {
+    box-shadow: var(--shadow-well), var(--focus-ring);
+    animation: pc-ring-in var(--duration-fast) var(--ease-out);
+  }
+
+  /* Taking focus must not erase the reason the field is red. */
+  .input-field[aria-invalid='true']:focus-visible {
+    box-shadow: var(--shadow-well), 0 0 0 1px var(--accent-danger), var(--focus-ring);
+    animation: pc-ring-in var(--duration-fast) var(--ease-out);
+  }
+
+  .icon-btn:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+    animation: pc-ring-in var(--duration-fast) var(--ease-out);
+  }
+
+  .context-menu-item:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+    animation: pc-ring-in var(--duration-fast) var(--ease-out);
+  }
+
+  .command-icon-btn:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+    animation: pc-ring-in var(--duration-fast) var(--ease-out);
+  }
+}

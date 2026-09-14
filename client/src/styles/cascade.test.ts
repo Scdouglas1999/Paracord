@@ -84,12 +84,63 @@ describe('stylesheet cascade layers', () => {
     }
   });
 
-  it('gives a well the §9 ring from an unlayered rule, not from a utility', () => {
-    // `.pc-well` sets box-shadow from primitives.css, which is unlayered, so a
-    // `focus-visible:shadow-[…]` / `focus-within:shadow-[…]` utility on a
-    // pc-well element cannot win. The recipe has to live beside the class.
-    const css = read('primitives.css');
-    expect(css).toMatch(/\.pc-well:focus-visible\s*\{/);
-    expect(css).toMatch(/\.pc-well:has\(\s*>\s*input:focus-visible/);
+  it('imports the component recipes into @layer components', () => {
+    // The whole point: a `.pc-*` recipe must NOT outrank a utility written at
+    // the call site. That is what lets `shadow-[…,0_0_0_1px_var(--accent-danger)]`
+    // draw an error edge on a `.pc-well`, and `[&>button]:mt-0` straighten a row.
+    const globals = read('globals.css');
+    expect(globals).toMatch(/@import\s+'\.\/primitives\.css'\s+layer\(components\)/);
+    expect(globals).toMatch(/@import\s+'\.\/components\.css'\s+layer\(components\)/);
+    // tokens.css and utilities.css stay unlayered on purpose — the first is the
+    // token/element baseline, the second is all `!important`, and important
+    // declarations reverse the layer order.
+    expect(globals).toMatch(/@import\s+'\.\/tokens\.css';/);
+    expect(globals).toMatch(/@import\s+'\.\/utilities\.css';/);
+  });
+
+  it('keeps the §9 ring in one layer above the utilities', () => {
+    // A resting-state `shadow-*` utility replaces box-shadow wholesale. If the
+    // ring lived in `components` it would lose to one, and a keyboard user
+    // would simply lose the control. So it sits in `@layer focus`, declared
+    // after `utilities`, and nowhere else.
+    const globals = read('globals.css');
+    const utilitiesAt = globals.indexOf("'./utilities.css'");
+    const focusAt = globals.indexOf("'./focus.css'");
+    expect(focusAt, 'focus.css is not imported').toBeGreaterThan(-1);
+    expect(
+      focusAt,
+      'focus.css must be imported last, so `focus` is ordered after `utilities`',
+    ).toBeGreaterThan(utilitiesAt);
+
+    const focus = read('focus.css');
+    expect(focus).toMatch(/@layer\s+focus\s*\{/);
+    for (const recipe of [
+      '.pc-focusable:focus-visible',
+      '.pc-focusable-composed:focus-visible',
+      '.pc-checkbox:focus-visible',
+      '.btn-primary:focus-visible',
+      '.input-field:focus-visible',
+      '.icon-btn:focus-visible',
+      '.context-menu-item:focus-visible',
+      '.command-icon-btn:focus-visible',
+    ]) {
+      expect(focus.includes(recipe), `${recipe} is not in focus.css`).toBe(true);
+    }
+
+    // …and the recipe files must not keep a second copy, which would sit in
+    // `components` and lose to the very utilities this layer exists to beat.
+    for (const file of ['primitives.css', 'components.css', 'layout.css']) {
+      const stray = read(file).match(/^\s*\.[\w-]+(\[[^\]]*\])?:focus-visible[^{]*\{/gm);
+      expect(stray, `${file} still declares a class :focus-visible ring`).toBeNull();
+    }
+  });
+
+  it('leaves a pc-well field its own error edge', () => {
+    // The danger edge and the ring are one declaration at the call site
+    // (`shadow-[…danger] focus-visible:shadow-[…danger,ring]`). A `.pc-well`
+    // focus rule in the focus layer would flatten the edge the moment the field
+    // took focus, so there must not be one.
+    expect(read('primitives.css')).not.toMatch(/\.pc-well:focus-visible/);
+    expect(read('focus.css')).not.toMatch(/\.pc-well:focus-visible/);
   });
 });

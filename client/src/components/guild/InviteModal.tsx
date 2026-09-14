@@ -60,7 +60,9 @@ function InviteReadout({
       className={cn(
         'pc-well flex items-center gap-2 p-1.5 pl-3',
         'transition-opacity duration-[var(--duration-fast)] ease-[var(--ease-out)]',
-        'focus-within:shadow-[var(--shadow-well),var(--focus-ring)]',
+        // Keyed on the field, not `focus-within`: this well also holds Copy,
+        // which draws its own ring. §9 is one ring per control.
+        'has-[>input:focus-visible]:shadow-[var(--shadow-well),var(--focus-ring)]',
         dimmed && 'opacity-60',
       )}
     >

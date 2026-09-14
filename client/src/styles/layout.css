@@ -60,61 +60,71 @@ html[data-theme='high-contrast'] #root {
   }
 }
 
-/* Transitions */
-.transition-colors {
-  transition:
-    color var(--duration-normal) var(--ease-out),
-    background-color var(--duration-normal) var(--ease-out),
-    border-color var(--duration-normal) var(--ease-out);
-}
-
-.panel-divider {
-  border-color: var(--border-subtle);
-}
-
-.command-icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 2.375rem;
-  height: 2.375rem;
-  border-radius: var(--radius-control);
-  line-height: 1;
-  color: var(--text-secondary);
-  border: none;
-  background: transparent;
-  /* The §5.1 pressable recipe: 1px lift on hover, 0.96 for the 80ms press, a
-     spring back on release (see .pc-pressable in primitives.css). */
-  transition:
-    background-color var(--duration-normal) var(--ease-out),
-    color var(--duration-normal) var(--ease-out),
-    border-color var(--duration-normal) var(--ease-out),
-    transform var(--duration-normal) var(--ease-spring-settle);
-}
-
-@media (hover: hover) {
-  .command-icon-btn:hover:not(:disabled) {
-    color: var(--text-primary);
-    background: var(--bg-mod-subtle);
-    transform: translateY(-1px);
+/* `transition-colors` is not a recipe — it is a deliberate redefinition of
+   Tailwind's utility of the same name, so that the app's colour transitions
+   run on --duration-normal/--ease-out rather than Tailwind's 150ms linear.
+   It belongs in `utilities` beside the one it replaces: same layer, later in
+   source order, so ours wins without outranking the call site's own
+   `duration-*` / `transition-*` utilities. */
+@layer utilities {
+  .transition-colors {
+    transition:
+      color var(--duration-normal) var(--ease-out),
+      background-color var(--duration-normal) var(--ease-out),
+      border-color var(--duration-normal) var(--ease-out);
   }
 }
 
-.command-icon-btn:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-  animation: pc-ring-in var(--duration-fast) var(--ease-out);
+/* The component recipes this file owns. In `components` (see globals.css) so a
+   utility written at the call site outranks them. */
+@layer components {
+  .panel-divider {
+    border-color: var(--border-subtle);
+  }
+
+  .command-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.375rem;
+    height: 2.375rem;
+    border-radius: var(--radius-control);
+    line-height: 1;
+    color: var(--text-secondary);
+    border: none;
+    background: transparent;
+    /* The §5.1 pressable recipe: 1px lift on hover, 0.96 for the 80ms press, a
+       spring back on release (see .pc-pressable in primitives.css). */
+    transition:
+      background-color var(--duration-normal) var(--ease-out),
+      color var(--duration-normal) var(--ease-out),
+      border-color var(--duration-normal) var(--ease-out),
+      transform var(--duration-normal) var(--ease-spring-settle);
+  }
+
+  @media (hover: hover) {
+    .command-icon-btn:hover:not(:disabled) {
+      color: var(--text-primary);
+      background: var(--bg-mod-subtle);
+      transform: translateY(-1px);
+    }
+  }
+
+  .command-icon-btn:active:not(:disabled) {
+    transform: scale(0.96);
+    transition: transform 80ms var(--ease-out);
+  }
+
+  .modal-backdrop {
+    background: var(--overlay-backdrop);
+  }
 }
 
-.command-icon-btn:active:not(:disabled) {
-  transform: scale(0.96);
-  transition: transform 80ms var(--ease-out);
-}
-
-.modal-backdrop {
-  background: var(--overlay-backdrop);
-}
-
+/* Unlayered on purpose, with the native-underlay block below it. Both are
+   `!important` escape hatches, and important declarations reverse the layer
+   order: an important inside a layer beats an unlayered one. Layering this and
+   not that would flip which of the two wins on a Linux underlay, which is a
+   change to a feature, not to a utility. They stay peers. */
 .topbar-overlay-backdrop {
   background: transparent !important;
   -webkit-backdrop-filter: none !important;

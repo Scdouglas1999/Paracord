@@ -697,7 +697,11 @@
    tiles and window cells.
    -------------------------------------------------------------------------- */
 
-/* §5.3/WP9c: the ring fades in over --duration-fast rather than snapping on.
+/* The `:focus-visible` recipes themselves live in focus.css, in a layer above
+   Tailwind's utilities — a resting-state `shadow-*` utility must not be able to
+   delete a control's ring. The keyframe stays here with the rest of the motion.
+
+   §5.3/WP9c: the ring fades in over --duration-fast rather than snapping on.
    It is an animation, not a transition, so it never fights an element's own
    transition list: it plays the moment :focus-visible starts matching and is
    gone the moment it stops. 120ms still reads as instant to a keyboard user. */
@@ -710,49 +714,14 @@
   }
 }
 
-.pc-focusable:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-  animation: pc-ring-in var(--duration-fast) var(--ease-out);
-}
-
-/* Composed focus: a surface that already carries a shadow keeps it under the
-   ring. Set --pc-base-shadow on the element (the primitives do this). */
-.pc-focusable-composed:focus-visible {
-  outline: none;
-  box-shadow: var(--pc-base-shadow, none), var(--focus-ring);
-  animation: pc-ring-in var(--duration-fast) var(--ease-out);
-}
-
 /* A well is either the control itself (Input / Select / Textarea) or the plate
    that wraps one (TextField, SearchWell, the invite readout, the CSS editor,
-   the icon and banner drop targets). Either way the well carries the §9 ring,
-   and the ring cannot be spelled as a utility on those elements: `.pc-well`
-   sets `box-shadow` from this file, this file is unlayered, and an unlayered
-   declaration outranks every rule in Tailwind's `utilities` layer whatever its
-   specificity. Every `focus-visible:shadow-[…]` / `focus-within:shadow-[…]`
-   written on a `pc-well` element is therefore inert — the generic
-   `:focus-visible` outline in layout.css was hiding that, and moving it into
-   `@layer base` (where a utility can win) uncovered it. These two rules are the
-   recipe those utilities were asking for; keep the utilities beside them so the
-   call sites still read correctly if this file is ever layered.
-
-   The wrapper case keys on a *direct child* text control rather than plain
-   `:focus-within`, so a well that also holds a button — the invite readout's
-   Copy — lights for its field and lets the button draw its own ring. §9 is one
-   ring per control. */
-.pc-well:focus-visible {
-  --pc-base-shadow: var(--shadow-well);
-  outline: none;
-  box-shadow: var(--shadow-well), var(--focus-ring);
-  animation: pc-ring-in var(--duration-fast) var(--ease-out);
-}
-
-.pc-well:has(> input:focus-visible, > textarea:focus-visible, > select:focus-visible) {
-  --pc-base-shadow: var(--shadow-well);
-  box-shadow: var(--shadow-well), var(--focus-ring);
-  animation: pc-ring-in var(--duration-fast) var(--ease-out);
-}
+   the icon and banner drop targets). Its ring is NOT a recipe here: it is the
+   `focus-visible:shadow-[…]` / `focus-within:shadow-[…]` utility at the call
+   site, which now wins because this file sits in `@layer components`. That is
+   deliberate — an invalid field's `shadow-[…,0_0_0_1px_var(--accent-danger)]`
+   and its ring are one declaration at the call site, and a rule here would
+   flatten the danger edge the moment the field took focus. */
 
 /* §9 hit targets: a control a finger has to hit is 44px, whatever its ink.
    Some controls are deliberately smaller than that — a 28px "Open" in a quiet
@@ -791,11 +760,6 @@
   cursor: pointer;
 }
 
-.pc-checkbox:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-  animation: pc-ring-in var(--duration-fast) var(--ease-out);
-}
 
 .pc-checkbox:disabled {
   cursor: not-allowed;

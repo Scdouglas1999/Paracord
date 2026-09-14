@@ -35,7 +35,9 @@ const buttonVariants = cva(
         "pc-focusable",
         "relative inline-flex select-none items-center justify-center gap-[7px] whitespace-nowrap",
         "rounded-[var(--radius-control)] text-label font-medium outline-none",
-        "transition-[background-color,color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]",
+        // No `transition-*` utility here: `.pc-pressable` already transitions
+        // background, colour, shadow AND transform (the §5.1 spring). A utility
+        // naming a shorter list would now win and drop the press.
         "disabled:pointer-events-none disabled:opacity-60",
     ].join(" "),
     {

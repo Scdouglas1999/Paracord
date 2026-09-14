@@ -11,8 +11,36 @@
 @import "@fontsource/jetbrains-mono/600.css";
 @import "@fontsource/jetbrains-mono/700.css";
 @import "tailwindcss";
+
+/* Cascade layers, and why each sheet sits where it does.
+   -----------------------------------------------------
+   An UNLAYERED author declaration outranks every rule in a cascade layer,
+   whatever its specificity. Tailwind puts its utilities in `@layer utilities`,
+   so every class we write unlayered silently beats the whole utility layer:
+   `shadow-[…]` could not tint a `.pc-well`, `outline-none` could not quiet a
+   ring, `[&>button]:mt-0` could not straighten a row. That is backwards — a
+   utility at the call site is the more specific statement of intent.
+
+   So the component recipes live in `@layer components`, which Tailwind declares
+   BEFORE `utilities`: they still beat base and each other by source order
+   (primitives first, components after, as before), and a utility at the call
+   site now wins over both. What stays unlayered is deliberate:
+
+     tokens.css     tokens, the element baseline and its own `@layer base` block
+     primitives.css the `.pc-*` recipes                      -> components
+     layout.css     mixed; the layer blocks inside it say which is which
+     components.css the named component recipes              -> components
+     utilities.css  `!important` overrides, scrollbars, reduced motion
+
+   `utilities.css` stays unlayered on purpose: it is all `!important` and global
+   element rules. Important declarations reverse the layer order — an important
+   inside a layer beats an unlayered important — so layering that file would
+   change which escape hatch wins, not just which utility does. */
 @import './tokens.css';
-@import './primitives.css';
+@import './primitives.css' layer(components);
 @import './layout.css';
-@import './components.css';
+@import './components.css' layer(components);
 @import './utilities.css';
+/* Last, and in a layer of its own: the §9 focus ring outranks the utilities, so
+   a resting-state `shadow-*` cannot silently delete it. See focus.css. */
+@import './focus.css';

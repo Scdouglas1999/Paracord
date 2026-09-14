@@ -242,7 +242,7 @@ export function AccountPlate({
           <input
             id="account-plate-custom-status"
             aria-label="Custom status"
-            className="pc-well min-w-0 flex-1 px-2.5 py-1 text-meta text-text-primary outline-none placeholder:text-text-faint"
+            className="pc-well min-w-0 flex-1 px-2.5 py-1 text-meta text-text-primary outline-none focus-visible:shadow-[var(--shadow-well),var(--focus-ring)] placeholder:text-text-faint"
             value={customDraft}
             maxLength={128}
             placeholder="What's up?"

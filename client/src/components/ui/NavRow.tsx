@@ -39,7 +39,9 @@ export const NavRow = React.forwardRef<HTMLElement, NavRowProps>(function NavRow
         'pc-focusable pc-pressable flex w-full select-none items-center gap-2.5 text-left',
         'h-[var(--h-nav-row)] rounded-[var(--radius-control)] px-2.5',
         'text-label text-text-secondary',
-        'transition-[background-color,color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+        // The transition belongs to `.pc-pressable`: it covers these three plus
+        // transform, and a utility naming only three would now win and take the
+        // §5.1 press with it.
         active
           ? 'bg-bg-raised text-text-primary shadow-[var(--shadow-raised)]'
           : 'hover:bg-bg-mod-subtle hover:text-text-primary',

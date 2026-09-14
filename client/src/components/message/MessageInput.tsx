@@ -82,13 +82,19 @@ interface MessageInputProps {
 // ring, 44px min touch target on coarse pointers.
 // §8 Composer tool: a quiet 32px ghost control inside the raised bar (§3
 // control heights, §9 hit targets — 44px on a coarse pointer).
-const ICON_BTN =
-  'pc-focusable inline-flex h-8 w-8 shrink-0 items-center justify-center ' +
+// Everything but `display`. The tool buttons that the composer's container
+// query shows and hides (`.message-composer-secondary`, `.message-composer-more`
+// in components.css) must not also carry an `inline-flex` utility: utilities
+// outrank the component layer, so the utility would win and the hidden half of
+// the row would show at every width.
+const ICON_BTN_BASE =
+  'pc-focusable h-8 w-8 shrink-0 items-center justify-center ' +
   'rounded-[var(--radius-control)] text-text-muted ' +
   'transition-[color,background-color] duration-[140ms] ease-[var(--ease-out)] ' +
   'hover:bg-bg-mod-subtle hover:text-text-primary ' +
   'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent ' +
   '[@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:w-11';
+const ICON_BTN = `inline-flex ${ICON_BTN_BASE}`;
 
 // A composer mode that is switched on — the action colour, never a light token.
 const ICON_BTN_ACTIVE =
@@ -1527,7 +1533,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
         <button
           ref={toolsButtonRef}
           type="button"
-          className={cn(ICON_BTN, 'message-composer-more')}
+          className={cn(ICON_BTN_BASE, 'message-composer-more')}
           aria-label="More message tools"
           aria-haspopup="menu"
           aria-expanded={toolsPosition !== null}
@@ -1551,7 +1557,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
 
         <button
           onClick={attachFiles}
-          className={cn(ICON_BTN, 'message-composer-secondary')}
+          className={cn(ICON_BTN_BASE, 'message-composer-secondary')}
           disabled={showPollComposer || !canAttachFiles || !canSendMessages}
           aria-label="Attach files"
           title={actions.attach.reason ?? 'Attach files'}
@@ -1600,9 +1606,15 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
           // wraps and grows, which is what a draft should do.
           className={
             'min-w-[160px] flex-1 resize-none self-center bg-transparent px-1.5 py-2 text-body '
+            // 16px on a coarse pointer, or the mobile browser zooms the page when
+            // the field takes focus. It is a utility rather than a rule in
+            // components.css because `text-body` is a utility too, and since the
+            // component sheets moved into `@layer components` a rule there would
+            // lose to it.
+            + '[@media(pointer:coarse)]:text-[16px] '
             // The plate carries this field's focus ring (the shell above), so the
-            // field draws none — see the `[data-composer-input]` opt-out in
-            // layout.css, which is where that override can actually win.
+            // field draws none: `outline-none` is a utility and the generic
+            // `:focus-visible` fallback lives in `@layer base`, so it wins.
             + 'text-text-primary outline-none disabled:cursor-not-allowed disabled:opacity-70 '
             + 'placeholder:overflow-hidden placeholder:text-ellipsis placeholder:whitespace-nowrap '
             + 'placeholder:text-text-faint'
@@ -1615,7 +1627,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
           data-composer-picker-toggle="formatting"
           onMouseDown={(e) => e.stopPropagation()}
           onClick={() => setShowFormattingTools((prev) => !prev)}
-          className={cn(ICON_BTN, 'message-composer-secondary', showFormattingTools && ICON_BTN_ACTIVE)}
+          className={cn(ICON_BTN_BASE, 'message-composer-secondary', showFormattingTools && ICON_BTN_ACTIVE)}
           aria-label="Formatting tools"
           title="Formatting tools"
         >
@@ -1626,7 +1638,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
           <button
             type="button"
             onClick={togglePollComposer}
-            className={cn(ICON_BTN, 'message-composer-secondary', showPollComposer && ICON_BTN_ACTIVE)}
+            className={cn(ICON_BTN_BASE, 'message-composer-secondary', showPollComposer && ICON_BTN_ACTIVE)}
             disabled={!canCreatePoll && !showPollComposer}
             aria-label={showPollComposer ? 'Poll composer enabled' : 'Create a poll'}
             title={actions.poll.reason ?? (showPollComposer ? 'Poll composer enabled' : 'Create a poll')}
@@ -1638,7 +1650,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
         <button
           type="button"
           onClick={() => setShowScheduleComposer((prev) => !prev)}
-          className={cn(ICON_BTN, 'message-composer-secondary', showScheduleComposer && ICON_BTN_ACTIVE)}
+          className={cn(ICON_BTN_BASE, 'message-composer-secondary', showScheduleComposer && ICON_BTN_ACTIVE)}
           aria-label={showScheduleComposer ? 'Scheduling enabled' : 'Schedule message'}
           title={actions.schedule.reason ?? (showScheduleComposer ? 'Scheduling enabled' : 'Schedule message')}
           disabled={showPollComposer || (!showScheduleComposer && !actions.schedule.allowed)}
@@ -1649,7 +1661,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
         {guildId && (
           <div className="relative">
             <button
-              className={cn(ICON_BTN, 'message-composer-secondary')}
+              className={cn(ICON_BTN_BASE, 'message-composer-secondary')}
               data-composer-picker-toggle="sticker"
               onMouseDown={(e) => e.stopPropagation()}
               onClick={() => { setShowStickerPicker(!showStickerPicker); setShowGifPicker(false); setShowEmojiPicker(false); }}
@@ -1692,7 +1704,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
 
         <div className="relative">
           <button
-            className={cn(ICON_BTN, 'message-composer-secondary')}
+            className={cn(ICON_BTN_BASE, 'message-composer-secondary')}
             data-composer-picker-toggle="gif"
             onMouseDown={(e) => e.stopPropagation()}
             onClick={() => { setShowGifPicker(!showGifPicker); setShowEmojiPicker(false); setShowStickerPicker(false); }}
@@ -1727,7 +1739,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
 
         <div className="relative">
           <button
-            className={cn(ICON_BTN, 'message-composer-secondary')}
+            className={cn(ICON_BTN_BASE, 'message-composer-secondary')}
             data-composer-picker-toggle="emoji"
             onMouseDown={(e) => e.stopPropagation()}
             onClick={() => { setShowEmojiPicker(!showEmojiPicker); setShowGifPicker(false); setShowStickerPicker(false); }}
