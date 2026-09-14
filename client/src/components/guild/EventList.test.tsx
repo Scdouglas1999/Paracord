@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { EventList } from './EventList';
+import { EventList, defaultEventWindow } from './EventList';
 import { apiClient } from '../../api/client';
 import { toast } from '../../stores/toastStore';
 
@@ -256,5 +256,21 @@ describe('EventList', () => {
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith('Failed to update event: Event already started.');
     });
+  });
+});
+
+describe('defaultEventWindow', () => {
+  it('opens a new event on the next round hour, an hour long', () => {
+    // Local wall-clock, because that is what a datetime-local input speaks.
+    const now = new Date(2026, 5, 1, 14, 37, 12);
+    const { start, end } = defaultEventWindow(now);
+    expect(start).toBe('2026-06-01T15:00');
+    expect(end).toBe('2026-06-01T16:00');
+  });
+
+  it('rolls over midnight rather than producing an hour of 24', () => {
+    const { start, end } = defaultEventWindow(new Date(2026, 5, 1, 23, 5));
+    expect(start).toBe('2026-06-02T00:00');
+    expect(end).toBe('2026-06-02T01:00');
   });
 });

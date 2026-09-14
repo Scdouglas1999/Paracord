@@ -1,5 +1,5 @@
 import { useCurrentUser } from '../../hooks/useCurrentUser';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Calendar, Clock, MapPin, Users, Plus, Check, Download, Repeat, Bell } from 'lucide-react';
 import { extractApiError } from '../../api/client';
 import { getApi } from '../../api/activeClient';
@@ -111,8 +111,32 @@ function toDateTimeLocalValue(value: string | null | undefined): string {
   if (!value) return '';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
+  return localInputValue(date);
+}
+
+/** `datetime-local` wants wall-clock time, not UTC. */
+function localInputValue(date: Date): string {
   const offsetMs = date.getTimezoneOffset() * 60_000;
   return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+}
+
+/**
+ * When a new event starts, and when it ends: the next round hour, an hour long.
+ *
+ * A `datetime-local` input with an empty value still *paints* today's date and
+ * time, so the Start field looked filled when the form had nothing in it. Submit
+ * then bailed on `!scheduledStart` without a word — the button did nothing,
+ * forever, and no event could be created. Open the form on a real time instead.
+ */
+export function defaultEventWindow(now: Date = new Date()): { start: string; end: string } {
+  const start = new Date(now);
+  start.setSeconds(0, 0);
+  start.setMinutes(0);
+  start.setHours(start.getHours() + 1);
+  return {
+    start: localInputValue(start),
+    end: localInputValue(new Date(start.getTime() + 60 * 60_000)),
+  };
 }
 
 function toReminderSelectValue(
@@ -133,8 +157,13 @@ const ENTITY_TABS = [
 function EventFormModal({ guildId, event, onClose, onSaved }: EventFormModalProps) {
   const [name, setName] = useState(event?.name ?? '');
   const [description, setDescription] = useState(event?.description ?? '');
-  const [scheduledStart, setScheduledStart] = useState(toDateTimeLocalValue(event?.scheduled_start));
-  const [scheduledEnd, setScheduledEnd] = useState(toDateTimeLocalValue(event?.scheduled_end));
+  const fallbackWindow = useMemo(() => defaultEventWindow(), []);
+  const [scheduledStart, setScheduledStart] = useState(
+    toDateTimeLocalValue(event?.scheduled_start) || (event ? '' : fallbackWindow.start)
+  );
+  const [scheduledEnd, setScheduledEnd] = useState(
+    toDateTimeLocalValue(event?.scheduled_end) || (event ? '' : fallbackWindow.end)
+  );
   const [entityType, setEntityType] = useState(event?.entity_type ?? 2); // external by default
   const [location, setLocation] = useState(event?.location ?? '');
   const [recurrenceRule, setRecurrenceRule] = useState<'none' | 'daily' | 'weekly' | 'monthly'>(
@@ -150,7 +179,16 @@ function EventFormModal({ guildId, event, onClose, onSaved }: EventFormModalProp
   const isEditing = Boolean(event);
 
   const handleSubmit = async () => {
-    if (!name.trim() || !scheduledStart) return;
+    // Say why nothing happened. A bare `return` here is indistinguishable from
+    // a dead button.
+    if (!name.trim()) {
+      setError('Give the event a name.');
+      return;
+    }
+    if (!scheduledStart) {
+      setError('Pick when the event starts.');
+      return;
+    }
     setError('');
     setLoading(true);
     try {
