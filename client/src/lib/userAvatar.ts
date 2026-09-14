@@ -1,4 +1,4 @@
-import { resolveResourceUrl } from './config/apiBaseUrl';
+import { resolveResourceUrl, resourceNeedsDownloadTicket } from './config/apiBaseUrl';
 import { getDownloadTicket } from './downloadTicket';
 import { safeClientResourceUrl, safeStoredImageDataUrl } from './security';
 
@@ -20,5 +20,12 @@ export function resolveUserAvatarUrl(value: string | null | undefined): string |
   if (trimmed.includes('://') || trimmed.startsWith('//')) return null;
   const safe = safeClientResourceUrl(trimmed);
   if (!safe) return null;
-  return safeClientResourceUrl(resolveResourceUrl(safe, getDownloadTicket()));
+  const ticket = getDownloadTicket();
+  const resolved = resolveResourceUrl(safe, ticket);
+  // No ticket yet means this exact URL would come back 401. Say "no avatar" so
+  // the caller draws its initials chip, and let `useDownloadTicket` re-run this
+  // once the ticket lands — a broken-image glyph that never repairs is worse
+  // than the fallback the component already has.
+  if (!ticket && resourceNeedsDownloadTicket(resolved)) return null;
+  return safeClientResourceUrl(resolved);
 }

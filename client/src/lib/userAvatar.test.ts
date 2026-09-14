@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('./config/apiBaseUrl', () => ({
   resolveResourceUrl: (url: string) => url,
+  resourceNeedsDownloadTicket: () => false,
 }));
 vi.mock('./downloadTicket', () => ({
   getDownloadTicket: () => null,

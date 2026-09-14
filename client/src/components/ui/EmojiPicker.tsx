@@ -13,7 +13,9 @@ import {
 } from 'lucide-react';
 import type { GuildEmoji } from '../../types';
 import { emojiApi } from '../../api/emojis';
-import { buildGuildEmojiImageUrl, formatCustomEmojiToken } from '../../lib/customEmoji';
+import { formatCustomEmojiToken } from '../../lib/customEmoji';
+import { CustomEmojiImage } from './ResourceImage';
+import { useDownloadTicket } from '../../hooks/useDownloadTicket';
 import { cn } from '../../lib/utils';
 import { EmptyState } from './Feedback';
 import { Skeleton, SkeletonSwap } from './Skeleton';
@@ -267,6 +269,9 @@ interface EmojiPickerProps {
 }
 
 export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPickerProps) {
+  // Server emoji thumbnails are authenticated by a download ticket minted
+  // after the first paint; re-render once it lands.
+  useDownloadTicket();
   const [favorites, setFavorites] = useState<string[]>(loadFavorites);
   const [customizeMode, setCustomizeMode] = useState(false);
   const [customizeSlot, setCustomizeSlot] = useState<number | null>(null);
@@ -604,8 +609,9 @@ export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPicke
                     onClick={() => handleServerEmojiClick(emoji)}
                     className="flex min-h-[56px] flex-col items-center justify-center gap-1 rounded-chip px-1 py-1 outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
                   >
-                    <img
-                      src={buildGuildEmojiImageUrl(guildId, emoji.id)}
+                    <CustomEmojiImage
+                      guildId={guildId}
+                      emojiId={emoji.id}
                       alt={emoji.name}
                       loading="lazy"
                       className="h-[26px] w-[26px] object-contain"

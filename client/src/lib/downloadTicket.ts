@@ -16,6 +16,40 @@ interface DownloadTicketCache {
 let cache: DownloadTicketCache | null = null;
 let fetchPromise: { serverKey: string; promise: Promise<string | null> } | null = null;
 
+/**
+ * Everything that has an `<img src>` on screen whose URL carries a ticket.
+ *
+ * A ticket arrives asynchronously, but the URL builders that need it are plain
+ * functions read during render. Without a notification the first paint wins
+ * forever: whatever rendered before the mint landed keeps a ticket-less URL,
+ * the server answers 401, and nothing ever asks again. Every avatar, custom
+ * emoji and sticker in the app went through that path.
+ */
+const listeners = new Set<() => void>();
+
+function notifyTicketChanged(): void {
+  for (const listener of listeners) listener();
+}
+
+/**
+ * Subscribe to ticket changes (React `useSyncExternalStore` shape).
+ *
+ * Subscribing is also the signal that something on screen NEEDS a ticket, so
+ * it starts a mint when none is cached. That is the one reliable trigger:
+ * `startDownloadTicketLifecycle` fires on login and on an active-server
+ * change, and both can land while the active server and the client that would
+ * mint for it still disagree.
+ */
+export function subscribeDownloadTicket(listener: () => void): () => void {
+  listeners.add(listener);
+  if (!getDownloadTicket()) {
+    void ensureDownloadTicket();
+  }
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
 /** Origin of an API base URL, treating a relative base as the page origin. */
 function originOfApiBase(base: string): string | null {
   if (base.startsWith('http')) {
@@ -65,6 +99,50 @@ function currentServerKey(): string | null {
   return mintingOrigin() === active ? active : null;
 }
 
+/**
+ * Retry state for "the active server and the minting client do not agree yet".
+ *
+ * `currentServerKey()` is null for a window after sign-in and after an
+ * "Add server", while the per-server connection is still coming up. Minting
+ * then would cache server A's credential under server B's key, so we must not
+ * — but returning null and stopping was worse: nothing re-ran, so an account
+ * could sit with no ticket for its whole session and answer every image with a
+ * 401. Retry until the two agree, then give up loudly rather than silently.
+ */
+const SERVER_KEY_RETRY_MS = 250;
+const SERVER_KEY_RETRY_MAX_MS = 4000;
+const SERVER_KEY_RETRY_DEADLINE_MS = 60_000;
+let serverKeyRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let serverKeyRetryDelay = SERVER_KEY_RETRY_MS;
+let serverKeyRetryStartedAt: number | null = null;
+
+function cancelServerKeyRetry(): void {
+  if (serverKeyRetryTimer) clearTimeout(serverKeyRetryTimer);
+  serverKeyRetryTimer = null;
+  serverKeyRetryDelay = SERVER_KEY_RETRY_MS;
+  serverKeyRetryStartedAt = null;
+}
+
+function scheduleServerKeyRetry(): void {
+  if (serverKeyRetryTimer) return;
+  const now = Date.now();
+  if (serverKeyRetryStartedAt === null) serverKeyRetryStartedAt = now;
+  if (now - serverKeyRetryStartedAt > SERVER_KEY_RETRY_DEADLINE_MS) {
+    console.error(
+      '[download-ticket] No active server has claimed this session after 60s; ' +
+        'avatars, custom emoji and stickers cannot be authenticated for it.',
+    );
+    cancelServerKeyRetry();
+    return;
+  }
+  const delay = serverKeyRetryDelay;
+  serverKeyRetryDelay = Math.min(serverKeyRetryDelay * 2, SERVER_KEY_RETRY_MAX_MS);
+  serverKeyRetryTimer = setTimeout(() => {
+    serverKeyRetryTimer = null;
+    void ensureDownloadTicket();
+  }, delay);
+}
+
 function scheduleProactiveRefresh(): void {
   if (!cache) return;
   if (cache.refreshTimer) {
@@ -86,6 +164,8 @@ function storeTicket(serverKey: string, ticket: string): void {
       void ensureDownloadTicket();
     }, DOWNLOAD_TICKET_REFRESH_MS),
   };
+  cancelServerKeyRetry();
+  notifyTicketChanged();
 }
 
 export function getDownloadTicket(): string | null {
@@ -102,6 +182,8 @@ export function clearDownloadTicketCache(): void {
   }
   cache = null;
   fetchPromise = null;
+  cancelServerKeyRetry();
+  notifyTicketChanged();
 }
 
 /**
@@ -118,7 +200,11 @@ async function fetchDownloadTicket(): Promise<string | null> {
 
 export async function ensureDownloadTicket(): Promise<string | null> {
   const serverKey = currentServerKey();
-  if (!serverKey) return null;
+  if (!serverKey) {
+    scheduleServerKeyRetry();
+    return null;
+  }
+  cancelServerKeyRetry();
 
   if (cache && cache.serverKey === serverKey && cache.ticket) {
     scheduleProactiveRefresh();
@@ -144,6 +230,9 @@ export async function ensureDownloadTicket(): Promise<string | null> {
         }
         return null;
       } catch {
+        // A mint that failed (server down, token mid-refresh) must be retried:
+        // every ticketed image on screen is waiting on it.
+        scheduleServerKeyRetry();
         return null;
       } finally {
         if (fetchPromise?.serverKey === serverKey) {

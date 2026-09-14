@@ -169,6 +169,47 @@ describe('files native fetch credential binding', () => {
     expect(req.headers).toBeNull();
   });
 
+  /**
+   * D8 regression. An avatar, a custom emoji and a sticker used to be plain
+   * `<img src="http(s)://server/…">`. In the desktop shell that cannot work:
+   * the webview sets no Authorization header, carries no cookie (its page
+   * origin is `tauri://localhost`), and against a self-hosted server's
+   * self-signed certificate it will not complete the handshake at all — the
+   * pin that makes that server trustworthy lives in the native client. The
+   * bytes have to cross the bridge, with the credential, like an attachment.
+   */
+  it('fetches an authenticated image over the bridge, with the active server\'s token', async () => {
+    const { fileApi } = await setupTwoServerSession(HOSTILE_TOKEN);
+    mocks.invoke.mockResolvedValue({
+      status: 200,
+      content_type: 'image/png',
+      data_base64: '',
+    });
+
+    const src = await fileApi.resolveResourceObjectUrl('/api/v1/users/1/avatar');
+
+    expect(mocks.invoke).toHaveBeenCalledWith('native_download_file', expect.anything());
+    const req = lastNativeRequest();
+    expect(req.url).toBe(`${HOSTILE_ORIGIN}/api/v1/users/1/avatar`);
+    expect(req.headers?.Authorization).toBe(`Bearer ${HOSTILE_TOKEN}`);
+    expect(JSON.stringify(req.headers)).not.toContain(HOME_TOKEN);
+    // What the page is handed is a local blob, never a server URL.
+    expect(src.startsWith('blob:')).toBe(true);
+  });
+
+  it('refuses to hand the page an image the server would not serve', async () => {
+    const { fileApi } = await setupTwoServerSession(HOSTILE_TOKEN);
+    mocks.invoke.mockResolvedValue({
+      status: 401,
+      content_type: 'application/json',
+      data_base64: '',
+    });
+
+    await expect(
+      fileApi.resolveResourceObjectUrl('/api/v1/users/1/avatar'),
+    ).rejects.toThrow('401');
+  });
+
   it('still presents the global token to the home server it was issued for', async () => {
     vi.resetModules();
     mocks.invoke.mockReset();

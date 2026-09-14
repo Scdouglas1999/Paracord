@@ -461,6 +461,47 @@ export const fileApi = {
     return URL.createObjectURL(blob);
   },
 
+  /**
+   * Resolve an authenticated server resource — a user avatar, a custom emoji,
+   * a sticker — into a value an `<img>` can actually load.
+   *
+   * **Desktop.** A bare webview image load cannot reach these at all. It can
+   * set no Authorization header; it carries no cookie, because the page origin
+   * is `tauri://localhost` and the server is a different origin entirely; and
+   * against a self-hosted server with a self-signed certificate — the ordinary
+   * case — the webview's own TLS stack rejects the connection outright, while
+   * the certificate pin that makes that server trustworthy lives in the native
+   * client. So the bytes come across the bridge, the same way an attachment
+   * does, and the page gets a `blob:` URL.
+   *
+   * **Browser.** The page is normally the server's own origin and its cookies
+   * authenticate the load; a UI hosted elsewhere gets the download ticket
+   * appended. Either way the URL is handed back as-is, so the browser's own
+   * image cache keeps doing its job.
+   */
+  resolveResourceObjectUrl: async (url: string): Promise<string> => {
+    if (!isTauri()) {
+      await ensureDownloadTicket();
+      return resolveResourceUrl(url, getDownloadTicket());
+    }
+    const { invoke } = await import('@tauri-apps/api/core');
+    const absoluteUrl = toAbsoluteAttachmentUrl(url);
+    const headers = authHeaders(absoluteUrl);
+    const resp = (await invoke('native_download_file', {
+      req: {
+        url: absoluteUrl,
+        headers: Object.keys(headers).length > 0 ? headers : null,
+        timeout_ms: 30_000,
+      },
+    })) as NativeDownloadFileResponse;
+    if (resp.status < 200 || resp.status >= 300) {
+      throw new Error(`Request failed with status code ${resp.status}`);
+    }
+    const bytes = base64ToBytes(resp.data_base64);
+    const contentType = resp.content_type || 'application/octet-stream';
+    return URL.createObjectURL(new Blob([bytes], { type: contentType }));
+  },
+
   /** Delete an attachment. */
   delete: async (id: string) => getApi().delete(`/attachments/${id}`),
 };

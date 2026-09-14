@@ -288,6 +288,27 @@ export function resolveActiveServerOrigin(): string | null {
  * @param path - relative path, absolute path, or full URL
  * @param ticket - download ticket to append for same-active-server auth
  */
+/**
+ * True when a browser-native load of `url` can only be authenticated by a
+ * download ticket — the target is the active server and the page is a different
+ * origin, so no cookie travels and an `<img>`/`<video>` cannot set a header.
+ *
+ * The desktop shell is always this case: its page origin is `tauri://localhost`.
+ * A self-hosted web UI served by the same server is never this case; it
+ * authenticates with its own cookies.
+ */
+export function resourceNeedsDownloadTicket(url: string): boolean {
+  if (!url.startsWith('http')) return false;
+  try {
+    const parsed = new URL(url);
+    const apiOrigin = resolveActiveServerOrigin();
+    const pageOrigin = typeof window !== 'undefined' ? window.location.origin : null;
+    return apiOrigin !== null && parsed.origin === apiOrigin && parsed.origin !== pageOrigin;
+  } catch {
+    return false;
+  }
+}
+
 export function resolveResourceUrl(path: string, ticket?: string | null): string {
   const base = resolveActiveServerBaseUrl();
   let url: string;

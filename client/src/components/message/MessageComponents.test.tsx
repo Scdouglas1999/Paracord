@@ -21,6 +21,14 @@ vi.mock('../../api/activeClient', () => ({
   getApi: () => ({ post: mocks.post }),
 }));
 
+// This suite asserts on the interaction POST. The real download-ticket module
+// mints through the same `getApi()` the moment a component subscribes to it,
+// which would put `/download/ticket` first in `mocks.post.mock.calls`.
+vi.mock('../../lib/downloadTicket', () => ({
+  getDownloadTicket: () => null,
+  subscribeDownloadTicket: () => () => {},
+}));
+
 vi.mock('../../api/guilds', () => ({
   guildApi: {
     getChannels: vi.fn(),

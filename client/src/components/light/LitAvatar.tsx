@@ -1,5 +1,7 @@
 import * as React from 'react';
 
+import { useDownloadTicket } from '../../hooks/useDownloadTicket';
+import { useAuthenticatedImage } from '../../lib/authenticatedImage';
 import { getIdentityColor } from '../../lib/colors';
 import { resolveUserAvatarUrl } from '../../lib/userAvatar';
 import { cn } from '../../lib/utils';
@@ -53,7 +55,12 @@ export const LitAvatar = React.forwardRef<HTMLSpanElement, LitAvatarProps>(funct
   { person, size = 28, hideLabel = false, room = null, className, style, ...props },
   ref,
 ) {
-  const src = resolveUserAvatarUrl(person.avatar);
+  // The avatar URL carries the server's download ticket, which is minted after
+  // the first paint; without this the face stays a broken image all session.
+  const ticket = useDownloadTicket();
+  const src = useAuthenticatedImage(
+    React.useMemo(() => resolveUserAvatarUrl(person.avatar), [person.avatar, ticket]),
+  );
   const dimension = { width: size, height: size };
   const face = (
     <span

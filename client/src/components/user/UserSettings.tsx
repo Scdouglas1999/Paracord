@@ -68,6 +68,8 @@ import {
 import { formatIdentityFingerprint } from '../../lib/keyVerification';
 import { isAllowedImageMimeType, safeExternalUrl } from '../../lib/security';
 import { resolveUserAvatarUrl } from '../../lib/userAvatar';
+import { ResourceImage } from '../ui/ResourceImage';
+import { clearAuthenticatedImageCache } from '../../lib/authenticatedImage';
 import { displayName as resolveDisplayName } from '../../lib/displayName';
 import { getIdentityColor } from '../../lib/colors';
 import { personLight } from '../../lib/attention/light';
@@ -530,6 +532,10 @@ export function UserSettings({ onClose }: UserSettingsProps) {
     try {
       if (avatarFile) {
         const { data } = await authApi.uploadAvatar(avatarFile);
+        // The avatar's URL does not change when the picture does
+        // (`/users/{id}/avatar`), so every viewer of this device's resolved
+        // copy would keep the old face until it expired.
+        clearAuthenticatedImageCache();
         useAuthStore.setState({ user: data });
       }
       await updateUser({
@@ -1014,7 +1020,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                       className="pc-lit pc-display flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-full text-title text-text-on-light"
                       style={{ backgroundColor: getIdentityColor(user?.id ?? 'me') }}
                     >
-                      <img src={avatarPreview} alt="" className="h-full w-full object-cover" />
+                      <ResourceImage src={avatarPreview} alt="" className="h-full w-full object-cover" />
                     </span>
                   ) : (
                     <LitAvatar

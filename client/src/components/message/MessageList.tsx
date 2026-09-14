@@ -36,11 +36,13 @@ import { writeClipboardText } from '../../lib/clipboard';
 import { SkeletonMessage } from '../ui/Skeleton';
 import { fadeIn, flicker, motionToken, ms, onMotion, prefersReducedMotion, RollingNumber, settleIn, useFlipList, walkIntoRoom } from '../../lib/motion';
 import { parseMarkdown } from '../../lib/markdown';
+import { useDownloadTicket } from '../../hooks/useDownloadTicket';
 import { getHighestRoleColor } from '../../lib/colors';
 import { formatFileSize, formatTimestamp, relativeTime, wallClock } from '../../lib/formatters';
 import { useLightboxStore, type LightboxImage } from '../../stores/lightboxStore';
 import { confirm } from '../../stores/confirmStore';
-import { buildGuildEmojiImageUrl, parseCustomEmojiToken } from '../../lib/customEmoji';
+import { parseCustomEmojiToken } from '../../lib/customEmoji';
+import { CustomEmojiImage, ResourceImage } from '../ui/ResourceImage';
 import { isAllowedImageMimeType, safeClientResourceUrl } from '../../lib/security';
 import { mentionsEveryone } from '../../lib/mentions';
 import { MessageEmbedCard, extractUrls } from './MessageEmbed';
@@ -101,6 +103,9 @@ function ReactionRow({
   onToggle: (reaction: ReactionTally) => void;
 }) {
   const rowRef = useFlipList<HTMLDivElement>({ enter: 'pop' });
+  // A custom-emoji reaction is an authenticated image; re-render when the
+  // download ticket its URL needs is minted.
+  useDownloadTicket();
   return (
     <div ref={rowRef} className="mt-1 flex flex-wrap gap-1">
       {reactions.map((r, reactionIndex) => {
@@ -119,12 +124,14 @@ function ReactionRow({
           >
             <span data-flip-glyph>
               {parsedCustomEmoji && guildId ? (
-                <img
-                  src={buildGuildEmojiImageUrl(guildId, parsedCustomEmoji.id)}
+                <CustomEmojiImage
+                  guildId={guildId}
+                  emojiId={parsedCustomEmoji.id}
                   alt={parsedCustomEmoji.name}
                   title={`:${parsedCustomEmoji.name}:`}
                   style={{ width: 18, height: 18, objectFit: 'contain' }}
                   loading="lazy"
+                  fallback={<>{r.emoji}</>}
                 />
               ) : (
                 r.emoji
@@ -174,8 +181,13 @@ function getCachedParsedMarkdown(
   guildId: string | undefined,
   mentionMap: Map<string, string>,
   onMentionClick: ((userId: string) => void) | undefined,
+  // A custom emoji in this content renders as an `<img>` whose URL carries the
+  // download ticket, so a cached node tree built before the ticket arrived is
+  // a tree of permanently broken images. The ticket is part of the identity of
+  // what was parsed.
+  downloadTicket: string | null,
 ): ReactNode[] {
-  const key = `${messageId}\0${editedKey}\0${content}\0${guildId ?? ''}`;
+  const key = `${messageId}\0${editedKey}\0${content}\0${guildId ?? ''}\0${downloadTicket ?? ''}`;
   const hit = markdownParseCache.get(key);
   if (hit && hit.mentionMap === mentionMap && hit.onMentionClick === onMentionClick) {
     return hit.nodes;
@@ -632,6 +644,9 @@ function OwnedMessageList({
   // WP3: the Stage's chat ribbon. A presentation variant only — no branch below
   // changes what is fetched, rendered or announced.
   const ribbon = variant === 'ribbon';
+  // Custom emoji and attachment thumbnails are authenticated by a download
+  // ticket that is minted after the first paint; re-render when it lands.
+  const downloadTicket = useDownloadTicket();
   const lowBandwidthMode = useUIStore((s) => s.lowBandwidthMode);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -2662,6 +2677,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                         activeGuildId || undefined,
                         mentionMap,
                         handleMentionClick,
+                        downloadTicket,
                       )}
                     </div>
                   )}
@@ -2680,6 +2696,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                     activeGuildId || undefined,
                     mentionMap,
                     handleMentionClick,
+                    downloadTicket,
                   )}
                   {isGrouped && (msg.edited_timestamp || msg.edited_at) && (
                     <button
@@ -2773,15 +2790,13 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                     className="relative inline-flex flex-col items-center gap-1"
                     title={sticker.name}
                   >
-                    {stickerSrc ? (
-                      <img
-                        src={stickerSrc}
-                        alt={sticker.name}
-                        className="rounded-well object-contain"
-                        style={{ width: 128, height: 128 }}
-                        loading="lazy"
-                      />
-                    ) : (
+                    <ResourceImage
+                      src={stickerSrc}
+                      alt={sticker.name}
+                      className="rounded-well object-contain"
+                      style={{ width: 128, height: 128 }}
+                      loading="lazy"
+                      fallback={
                       <div className="inline-flex items-center gap-1.5 rounded-well border border-border-subtle bg-bg-mod-subtle px-2.5 py-1 text-xs font-semibold text-text-secondary">
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                           <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
@@ -2791,7 +2806,8 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                         </svg>
                         {sticker.name}
                       </div>
-                    )}
+                      }
+                    />
                   </div>
                 );
               })}

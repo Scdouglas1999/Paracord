@@ -98,6 +98,8 @@ vi.mock('../../api/guilds', () => ({
 vi.mock('../../lib/config/apiBaseUrl', () => ({
   resolveApiBaseUrl: () => '/api/v1',
   resolveResourceUrl: (url: string) => url,
+  resolveActiveServerOrigin: () => null,
+  resourceNeedsDownloadTicket: () => false,
 }));
 
 vi.mock('../../lib/authToken', () => ({

@@ -22,6 +22,7 @@ vi.mock('../../lib/config/apiBaseUrl', () => ({
 
 vi.mock('../../lib/downloadTicket', () => ({
   getDownloadTicket: () => null,
+  subscribeDownloadTicket: () => () => {},
 }));
 
 vi.mock('../../lib/authToken', () => ({

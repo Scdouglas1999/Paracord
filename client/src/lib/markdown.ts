@@ -4,7 +4,8 @@ import {
   type MouseEvent as ReactMouseEvent,
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
-import { buildGuildEmojiImageUrl, parseCustomEmojiToken } from './customEmoji';
+import { parseCustomEmojiToken } from './customEmoji';
+import { CustomEmojiImage } from '../components/ui/ResourceImage';
 import { safeExternalUrl } from './security';
 import CodeBlock from '../components/message/CodeBlock';
 
@@ -327,9 +328,13 @@ function renderInline(text: string, guildId?: string, mentionMap?: Map<string, s
         if (!guildId || !token.emojiId || !token.emojiName) {
           return token.content;
         }
-        return createElement('img', {
+        // Not a bare `<img>`: on the desktop shell the webview cannot fetch an
+        // authenticated emoji itself, so the component resolves it over the
+        // native bridge and renders the resulting `blob:`.
+        return createElement(CustomEmojiImage, {
           key: i,
-          src: buildGuildEmojiImageUrl(guildId, token.emojiId),
+          guildId,
+          emojiId: token.emojiId,
           alt: token.emojiName,
           title: `:${token.emojiName}:`,
           loading: 'lazy',

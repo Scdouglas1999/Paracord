@@ -5,8 +5,10 @@ import { guildApi } from '../../api/guilds';
 import type { Sticker } from '../../types/message.types';
 import { resolveResourceUrl } from '../../lib/config/apiBaseUrl';
 import { getDownloadTicket } from '../../lib/downloadTicket';
+import { useDownloadTicket } from '../../hooks/useDownloadTicket';
 import { safeClientResourceUrl } from '../../lib/security';
 import { EmptyState } from '../ui/Feedback';
+import { ResourceImage } from '../ui/ResourceImage';
 import { Skeleton, SkeletonSwap } from '../ui/Skeleton';
 
 interface StickerPickerProps {
@@ -28,6 +30,10 @@ function stickerPickerError(action: string, err: unknown): string {
 }
 
 export function StickerPicker({ guildId, onSelect, onClose }: StickerPickerProps) {
+  // Sticker images are authenticated by a download ticket minted after the
+  // first paint; re-render once it lands so the sheet is not a grid of
+  // broken images.
+  useDownloadTicket();
   const [stickers, setStickers] = useState<Sticker[]>([]);
   const [filtered, setFiltered] = useState<Sticker[]>([]);
   const [query, setQuery] = useState('');
@@ -178,18 +184,17 @@ export function StickerPicker({ guildId, onSelect, onClose }: StickerPickerProps
                   aria-label={`Select sticker ${sticker.name}`}
                   className="flex aspect-square items-center justify-center rounded-chip p-1 outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
                 >
-                  {imageUrl ? (
-                    <img
-                      src={imageUrl}
-                      alt={sticker.name}
-                      loading="lazy"
-                      className="block h-full w-full rounded-window object-contain"
-                    />
-                  ) : (
-                    <span className="flex h-full w-full items-center justify-center break-words p-0.5 text-center text-[10px] text-text-muted">
-                      {sticker.name}
-                    </span>
-                  )}
+                  <ResourceImage
+                    src={imageUrl}
+                    alt={sticker.name}
+                    loading="lazy"
+                    className="block h-full w-full rounded-window object-contain"
+                    fallback={
+                      <span className="flex h-full w-full items-center justify-center break-words p-0.5 text-center text-[10px] text-text-muted">
+                        {sticker.name}
+                      </span>
+                    }
+                  />
                 </button>
               );
             })}

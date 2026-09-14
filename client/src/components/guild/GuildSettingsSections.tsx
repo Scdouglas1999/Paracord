@@ -19,7 +19,8 @@ import type { BotApplication, GuildBotEntry } from '../../api/bots';
 import type { ApplyModerationTemplateRequest, ModerationTemplate } from '../../api/moderationTemplates';
 import { ACTION_TYPE_LABELS } from '../../api/moderationTemplates';
 import { Button, Chip, EmptyState, IconButton, Input, Select, Textarea } from '../ui';
-import { buildGuildEmojiImageUrl } from '../../lib/customEmoji';
+import { useDownloadTicket } from '../../hooks/useDownloadTicket';
+import { CustomEmojiImage } from '../ui/ResourceImage';
 import { cn } from '../../lib/utils';
 import { SectionHeader, GroupLabel, FieldLabel, ToggleRow, GateNotice } from './SettingsPrimitives';
 import { displayName } from '../../lib/displayName';
@@ -1022,6 +1023,9 @@ export function EmojisSection({
   onDeleteEmoji,
 }: EmojisSectionProps) {
   const newEmojiInputRef = useRef<HTMLInputElement>(null);
+  // Each emoji thumbnail is an authenticated image; re-render when the
+  // download ticket its URL needs is minted.
+  useDownloadTicket();
   return (
     <SettingsPanel>
       <SectionHeader
@@ -1108,8 +1112,9 @@ export function EmojisSection({
                 const editing = editingEmojiId === emoji.id;
                 return (
                   <div key={emoji.id} className="pc-well group flex items-start gap-3 p-3">
-                    <img
-                      src={buildGuildEmojiImageUrl(guildId, emoji.id)}
+                    <CustomEmojiImage
+                      guildId={guildId}
+                      emojiId={emoji.id}
                       alt={emoji.name}
                       className="h-11 w-11 shrink-0 rounded-[var(--radius-chip)] bg-bg-raised object-contain p-1"
                       loading="lazy"

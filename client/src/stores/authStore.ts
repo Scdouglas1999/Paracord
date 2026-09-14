@@ -15,6 +15,7 @@ import {
 import { resetRefreshCoordination } from '../lib/authRefreshCoordinator';
 import { clearSessionEndedNotice } from '../lib/sessionEnded';
 import { clearDownloadTicketCache, startDownloadTicketLifecycle } from '../lib/downloadTicket';
+import { clearAuthenticatedImageCache } from '../lib/authenticatedImage';
 import { clearPermissionDataCache } from '../lib/permissionDataCache';
 import { invalidateGuildPermissionCache } from '../hooks/usePermissions';
 import { toast } from './toastStore';
@@ -62,6 +63,10 @@ function clearAuthState(set: (partial: Partial<AuthState>) => void): Promise<voi
   clearSessionHint();
   clearLegacyPersistedAuth();
   clearDownloadTicketCache();
+  // The resolved avatars, emoji and stickers of the account that just left —
+  // real image bytes, held as object URLs — must not survive into the next
+  // sign-in on this device.
+  clearAuthenticatedImageCache();
   // Clear per-session transient state so stale typing indicators and their
   // pending expiry timers don't leak into the next session.
   useTypingStore.getState().reset();

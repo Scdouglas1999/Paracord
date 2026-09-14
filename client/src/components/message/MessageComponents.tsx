@@ -20,7 +20,8 @@ import { roleColorToHex } from '../../lib/colors';
 import { LoadingSpinner } from '../ui/Feedback';
 import { Button, type ButtonProps } from '../ui/Button';
 import { displayName } from '../../lib/displayName';
-import { buildGuildEmojiImageUrl } from '../../lib/customEmoji';
+import { useDownloadTicket } from '../../hooks/useDownloadTicket';
+import { CustomEmojiImage, ResourceImage } from '../ui/ResourceImage';
 
 interface MessageComponentsProps {
   components: Component[];
@@ -102,6 +103,9 @@ function ComponentButton({
   guildId?: string;
 }) {
   const [busy, setBusy] = useState(false);
+  // A custom-emoji button face is an authenticated image; re-render when the
+  // download ticket its URL needs is minted.
+  useDownloadTicket();
 
   const style = component.style ?? ButtonStyle.Secondary;
   const isLink = style === ButtonStyle.Link;
@@ -151,10 +155,12 @@ function ComponentButton({
   const emojiRender = emoji ? (
     <span className="text-base leading-none">
       {emoji.id && guildId ? (
-        <img
-          src={buildGuildEmojiImageUrl(guildId, emoji.id)}
+        <CustomEmojiImage
+          guildId={guildId}
+          emojiId={emoji.id}
           alt={emoji.name || ''}
           className="inline-block h-4 w-4"
+          fallback={<>{emoji.name}</>}
         />
       ) : (
         emoji.name
@@ -611,6 +617,9 @@ function UserSelectMenu({
   guildId?: string;
 }) {
   const channelsByGuild = useCurrentChannelStore((s) => s.channelsByGuild);
+  // Member avatars in this list are authenticated images; re-render when the
+  // download ticket lands.
+  const downloadTicket = useDownloadTicket();
 
   // Derive guildId from the channelId
   const guildId =
@@ -635,17 +644,16 @@ function UserSelectMenu({
     const avatarSrc = resolveUserAvatarUrl(item.avatar);
     return (
       <div className="flex min-w-0 items-center gap-2">
-        {avatarSrc ? (
-          <img
-            src={avatarSrc}
-            alt=""
-            className="h-6 w-6 shrink-0 rounded-full object-cover"
-          />
-        ) : (
-          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-bg-mod-strong">
-            <User size={12} className="text-text-muted" />
-          </span>
-        )}
+        <ResourceImage
+          src={avatarSrc}
+          alt=""
+          className="h-6 w-6 shrink-0 rounded-full object-cover"
+          fallback={
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-bg-mod-strong">
+              <User size={12} className="text-text-muted" />
+            </span>
+          }
+        />
         <div className="min-w-0">
           <div className="truncate text-sm font-medium text-text-primary">{item.label}</div>
           {item.sublabel && (
@@ -654,7 +662,7 @@ function UserSelectMenu({
         </div>
       </div>
     );
-  }, []);
+  }, [downloadTicket]);
 
   return (
     <EntitySelectMenu
@@ -754,6 +762,9 @@ function MentionableSelectMenu({
   guildId?: string;
 }) {
   const channelsByGuild = useCurrentChannelStore((s) => s.channelsByGuild);
+  // Member avatars in this list are authenticated images; re-render when the
+  // download ticket lands.
+  const downloadTicket = useDownloadTicket();
 
   const guildId =
     guildIdProp ??
@@ -799,16 +810,17 @@ function MentionableSelectMenu({
           >
             <Shield size={10} style={colorHex ? { color: colorHex } : undefined} className="text-text-muted" />
           </span>
-        ) : avatarSrc ? (
-          <img
+        ) : (
+          <ResourceImage
             src={avatarSrc}
             alt=""
             className="h-5 w-5 shrink-0 rounded-full object-cover"
+            fallback={
+              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-bg-mod-strong">
+                <User size={10} className="text-text-muted" />
+              </span>
+            }
           />
-        ) : (
-          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-bg-mod-strong">
-            <User size={10} className="text-text-muted" />
-          </span>
         )}
         <div className="min-w-0">
           <span
@@ -823,7 +835,7 @@ function MentionableSelectMenu({
         </div>
       </div>
     );
-  }, []);
+  }, [downloadTicket]);
 
   // Strip the type prefix before submitting (handled in EntitySelectMenu for MentionableSelect)
   const handleLoadItems = loadItems;

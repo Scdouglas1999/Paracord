@@ -133,6 +133,82 @@ describe('download ticket / resource URL server binding', () => {
     expect(getDownloadTicket()).toBeNull();
   });
 
+  /**
+   * D8 regression. `ensureDownloadTicket()` returned null and stopped whenever
+   * the active server and the client that would mint for it had not agreed
+   * yet — which is the ordinary state for a moment after sign-in. Nothing
+   * re-ran it, so an account could hold NO ticket for its entire session and
+   * the server answered 401 to every avatar, custom emoji and sticker the
+   * webview asked for. (On the desktop shell there is no cookie to fall back
+   * on: the page origin is `tauri://localhost`.)
+   */
+  it('retries the mint once the minting client and the active server agree', async () => {
+    vi.useFakeTimers();
+    try {
+      const { ensureDownloadTicket, getDownloadTicket } = await setup('remote', null);
+      mocks.post.mockResolvedValue({ data: { ticket: 'REMOTE-TICKET' } });
+
+      await expect(ensureDownloadTicket()).resolves.toBeNull();
+      expect(mocks.post).not.toHaveBeenCalled();
+
+      // The remote server's connection comes up.
+      mocks.activeClientBaseUrl = `${REMOTE_ORIGIN}/api/v1`;
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(mocks.post).toHaveBeenCalledWith('/download/ticket');
+      expect(getDownloadTicket()).toBe('REMOTE-TICKET');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
+   * The URL builders are plain functions read during render, so React has no
+   * reason to re-run them when the ticket finally lands. Without a
+   * notification the first paint wins forever and the broken image stays
+   * broken; `useDownloadTicket` is the subscriber.
+   */
+  it('tells subscribers when the ticket appears and when it is cleared', async () => {
+    const { ensureDownloadTicket, subscribeDownloadTicket, clearDownloadTicketCache } =
+      await setup('remote', REMOTE_ORIGIN);
+    mocks.post.mockResolvedValue({ data: { ticket: 'REMOTE-TICKET' } });
+
+    const seen = vi.fn();
+    const unsubscribe = subscribeDownloadTicket(seen);
+
+    await ensureDownloadTicket();
+    expect(seen).toHaveBeenCalledTimes(1);
+
+    clearDownloadTicketCache();
+    expect(seen).toHaveBeenCalledTimes(2);
+
+    unsubscribe();
+    await ensureDownloadTicket();
+    expect(seen).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * A URL we already know the server will answer 401 to is not an avatar. The
+   * component has an initials chip for "no avatar"; a broken-image glyph that
+   * never repairs is strictly worse, and that is what shipped.
+   */
+  it('reports no avatar rather than a URL that is certain to 401', async () => {
+    await setup('remote', REMOTE_ORIGIN);
+    const { resolveUserAvatarUrl } = await import('./userAvatar');
+
+    // No ticket minted yet: cross-origin, unauthenticable.
+    expect(resolveUserAvatarUrl('/api/v1/users/1/avatar')).toBeNull();
+
+    mocks.post.mockResolvedValue({ data: { ticket: 'REMOTE-TICKET' } });
+    const { ensureDownloadTicket } = await import('./downloadTicket');
+    await ensureDownloadTicket();
+
+    expect(resolveUserAvatarUrl('/api/v1/users/1/avatar')).toBe(
+      `${REMOTE_ORIGIN}/api/v1/users/1/avatar?ticket=REMOTE-TICKET`,
+    );
+  });
+
   it('never appends a ticket to a foreign origin', async () => {
     const { resolveResourceUrl } = await setup('remote', REMOTE_ORIGIN);
 
