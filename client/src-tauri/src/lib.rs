@@ -1224,8 +1224,9 @@ async fn native_multipart(req: NativeMultipartRequest) -> Result<NativeFetchResp
     ensure_native_fetch_target_is_trusted(&req.url)?;
     let client = tls_pinning_client_with_timeout(native_request_timeout(req.timeout_ms))?;
     let form = build_native_multipart_form(req.parts)?;
-    let builder = native_request_builder(&client, req.method.as_deref().or(Some("POST")), &req.url)?
-        .multipart(form);
+    let builder =
+        native_request_builder(&client, req.method.as_deref().or(Some("POST")), &req.url)?
+            .multipart(form);
     // reqwest owns `content-type` here: it carries the generated boundary, and
     // the caller's literal `multipart/form-data` (which axios sets, boundaryless)
     // would make the server unable to split the body.
@@ -2215,7 +2216,11 @@ mod bridge_contract_tests {
             .expect("the emoji case has an image part");
         assert_eq!(image.content_type.as_deref(), Some("image/png"));
         assert_eq!(image.filename.as_deref(), Some("party.png"));
-        let text = parsed.parts.iter().find(|part| part.name == "name").unwrap();
+        let text = parsed
+            .parts
+            .iter()
+            .find(|part| part.name == "name")
+            .unwrap();
         assert_eq!(text.value.as_deref(), Some("party"));
         assert!(text.data_base64.is_none());
     }
@@ -2296,8 +2301,7 @@ mod bridge_contract_tests {
         // A JSON or multipart body: the caller's content-type must be dropped,
         // because `RequestBuilder::header` appends and two content-type headers
         // is not a request any server reads the way the caller meant.
-        let dropped = native_request_builder(&client, Some("POST"), "https://x/")
-            .unwrap();
+        let dropped = native_request_builder(&client, Some("POST"), "https://x/").unwrap();
         let dropped = apply_native_headers(dropped, Some(headers.clone()), true)
             .build()
             .unwrap();
@@ -2306,7 +2310,9 @@ mod bridge_contract_tests {
 
         // A raw body carries the caller's own declared type.
         let kept = native_request_builder(&client, Some("POST"), "https://x/").unwrap();
-        let kept = apply_native_headers(kept, Some(headers), false).build().unwrap();
+        let kept = apply_native_headers(kept, Some(headers), false)
+            .build()
+            .unwrap();
         assert_eq!(kept.headers().get("content-type").unwrap(), "text/plain");
     }
 

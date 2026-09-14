@@ -941,7 +941,11 @@ mod activity_consent_tests {
     fn a_signal_dm_session_key_fits_the_secure_store() {
         // `paracord:signal:session:<my identity hex>:<peer identity hex>`, the
         // key `sessionManager` writes every ratchet state under.
-        let key = format!("paracord:signal:session:{}:{}", "a".repeat(64), "b".repeat(64));
+        let key = format!(
+            "paracord:signal:session:{}:{}",
+            "a".repeat(64),
+            "b".repeat(64)
+        );
         assert_eq!(key.len(), 153);
         assert!(validate_secure_store_key(&key).is_ok());
         assert!(validate_secure_store_key(&format!("paracord:{}", "x".repeat(512))).is_err());

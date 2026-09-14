@@ -18,6 +18,7 @@ import { MissingPrivatePrekeyError } from '../crypto/sessionManager';
 import { DmE2eeError } from '../dmCipher';
 import { registerIdentityTrustVault, releaseIdentityTrustVault } from '../crypto/identityTrust';
 import { getDatabaseHistoryEpoch, subscribeDatabaseHistory } from '../databaseHistory';
+import { logVoiceDiagnostic } from '../desktopDiagnostics';
 import { DatabaseHistoryExpiredError } from '../operationContext';
 import { accountScopeServerIds, getServerAccountScope, getServerUser } from '../serverIdentity';
 import { accountScopeKey, LOCAL_SERVER_ID, type AccountScope } from '../serverScope';
@@ -229,7 +230,9 @@ export class AccountMessagingRuntime {
       // state is 'awaiting-handshake', which the notice does explain and which
       // the next READY/RESUMED retries from.
       this.store.setState({ synchronization: 'awaiting-handshake', error: errorText(error) });
-      console.warn('[messages] This account\u2019s authenticated message recovery did not complete.', error);
+      const failed = '[messages] This account\u2019s authenticated message recovery did not complete.';
+      console.warn(failed, error);
+      logVoiceDiagnostic(failed, { error: errorText(error) });
       throw error;
     }
   }
@@ -286,19 +289,23 @@ export class AccountMessagingRuntime {
       return stored ?? null;
     });
     // Never silent: discarding a recovery position is a decision about this
-    // device's saved state and has to be readable afterwards.
-    console.warn(
+    // device's saved state, so it goes to the console *and* to the diagnostics
+    // log the user can retrieve, where it survives the session.
+    const announcement =
       `[messages] The server answered HTTP ${status} to this device's saved recovery position for channel ${channelId}` +
-        (discarded ? ` (cursor ${discarded.cursor}, complete=${discarded.complete})` : ' (no saved position)') +
-        '. Discarding it and recovering this conversation from the start.',
-    );
+      (discarded ? ` (cursor ${discarded.cursor}, complete=${discarded.complete})` : ' (no saved position)') +
+      '. Discarding it and recovering this conversation from the start.';
+    console.warn(announcement);
+    logVoiceDiagnostic(announcement);
     try {
       await recoverChannelMessages({ ...options, through: undefined });
       return true;
     } catch (retryError) {
       // An ownership or lifetime change is not this channel's failure.
       options.lifetime.assertCurrent();
-      console.warn(`[messages] Recovering channel ${channelId} from the start also failed.`, retryError);
+      const gaveUp = `[messages] Recovering channel ${channelId} from the start also failed; this conversation is blocked for review.`;
+      console.warn(gaveUp, retryError);
+      logVoiceDiagnostic(gaveUp, { error: errorText(retryError) });
       return false;
     }
   }
