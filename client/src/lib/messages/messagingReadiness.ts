@@ -18,11 +18,26 @@ export function isUnusableGroupDm(channelType?: number | null): boolean {
 export const GROUP_DM_LIMITATION =
   'Group conversations are not encrypted yet. Direct messages are end-to-end encrypted and the group form of that encryption has not shipped, so a group could be created and opened but no message would ever send in it.';
 
+/**
+ * The one sentence a group conversation's composer says. It is the *same fact*
+ * the timeline states above it ({@link GROUP_DM_LIMITATION}), written short
+ * enough to sit on one row.
+ */
+export const GROUP_DM_COMPOSER_REASON =
+  'Group conversations are not encrypted yet, so nothing can be sent here — your draft stays saved.';
+
 /** Server permission and encrypted device acceptance must both be ready. */
 export function runtimeSendDecision(server: ActionDecision, state: MessagingSnapshot, encrypted: boolean, channelId: string, channelType?: number): ActionDecision {
-  if (!server.allowed) return server;
   const block = (reason: string, supported = true) => ({ supported, allowed: false, reason });
-  if (isUnusableGroupDm(channelType)) return block('Group direct messages are waiting for account encryption migration. Your draft stays saved.', false);
+  // FIRST, before anything the server said. A group channel is marked
+  // `encrypted`, so the shared encryption ladder below reaches the
+  // identity-not-enrolled rung and answers "Set up encryption before sending
+  // this direct message" — a sentence written for a 1:1 DM, contradicting the
+  // timeline one line above it and pointing at a page that cannot make a group
+  // sendable. There is exactly one reason a group refuses, and it outranks
+  // every other one because it is the only one that is true.
+  if (isUnusableGroupDm(channelType)) return block(GROUP_DM_COMPOSER_REASON, false);
+  if (!server.allowed) return server;
   if (state.storage !== 'ready') return block(state.error ?? (state.storage === 'awaiting-handshake'
     ? 'Wait for this server’s authenticated connection before sending.' : 'Save this draft in encrypted device storage before sending.'));
   if (state.synchronization !== 'ready') return block('Wait for this account’s authenticated message recovery before sending.');

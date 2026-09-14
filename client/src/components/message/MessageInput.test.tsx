@@ -10,6 +10,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event';
 import { channelApi } from '../../api/channels';
 import { MessageInput } from './MessageInput';
+import { GROUP_DM_COMPOSER_REASON } from '../../lib/messages/messagingReadiness';
 
 const mockEncryption = vi.hoisted(() => ({ encrypted: false, encryption: 'ready' }));
 const mockActionOverrides = vi.hoisted(() => ({} as Record<string, { supported: boolean; allowed: boolean; reason: string | null }>));
@@ -52,12 +53,18 @@ vi.mock('../../stores/channelStore', () => ({
     (selector: (s: unknown) => unknown) =>
       selector({
         channelsByGuild: { g1: [{ id: 'ch1', type: 0, channel_type: 0, guild_id: 'g1', name: 'general', position: 0 }] },
-        channelsById: { ch1: { id: 'ch1', type: 0, channel_type: 0, guild_id: 'g1', name: 'general', position: 0 } },
+        channelsById: {
+          ch1: { id: 'ch1', type: 0, channel_type: 0, guild_id: 'g1', name: 'general', position: 0 },
+          gd1: { id: 'gd1', type: 3, channel_type: 3, name: 'Three of us', position: 0 },
+        },
       }),
     {
       getState: () => ({
         channelsByGuild: { g1: [{ id: 'ch1', type: 0, channel_type: 0, guild_id: 'g1', name: 'general', position: 0 }] },
-        channelsById: { ch1: { id: 'ch1', type: 0, channel_type: 0, guild_id: 'g1', name: 'general', position: 0 } },
+        channelsById: {
+          ch1: { id: 'ch1', type: 0, channel_type: 0, guild_id: 'g1', name: 'general', position: 0 },
+          gd1: { id: 'gd1', type: 3, channel_type: 3, name: 'Three of us', position: 0 },
+        },
       }),
     },
   ),
@@ -177,6 +184,20 @@ describe('MessageInput', () => {
     expect(destination.searchParams.get('user')).toBe(mockOwner.userId);
     expect(input).toHaveValue('Keep this private draft');
     expect(mockSendMessage).not.toHaveBeenCalled();
+  });
+
+  it('gives a group conversation one honest reason and no encryption route out', async () => {
+    // The server marks a group channel `encrypted`, so the composer used to
+    // reach the 1:1 rung and offer "Set up encryption" — an action that cannot
+    // make a group sendable, beside a timeline saying something else.
+    mockEncryption.encrypted = true; mockEncryption.encryption = 'setup';
+    mockActionOverrides.send = { supported: true, allowed: false, reason: 'Set up encryption before sending this direct message.' };
+    render(<MemoryRouter><MessageInput channelId="gd1" channelName="Three of us" /></MemoryRouter>);
+    const blocker = await screen.findByText(GROUP_DM_COMPOSER_REASON);
+    expect(blocker).toBeInTheDocument();
+    expect(screen.queryByText(/Set up encryption before sending this direct message/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Set up encryption' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Check again' })).not.toBeInTheDocument();
   });
 
   it('invites the reader by name rather than labelling the channel', () => {

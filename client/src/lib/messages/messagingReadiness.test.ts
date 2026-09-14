@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { runtimeSendDecision } from './messagingReadiness';
+import { GROUP_DM_COMPOSER_REASON, runtimeSendDecision } from './messagingReadiness';
 import type { MessagingSnapshot } from './accountMessagingRuntime';
 const allowed = { allowed: true, supported: true, reason: null };
 const ready: MessagingSnapshot = { storage: 'ready', synchronization: 'ready', encryption: 'ready', error: null, encryptionError: null, previousEpoch: null, draftGeneration: 0, queue: [], mutations: [], recovery: [] };
@@ -12,6 +12,15 @@ describe('production send readiness', () => {
   });
   it('blocks group encryption until its account-owned producer is integrated', () => {
     expect(runtimeSendDecision(allowed, ready, true, 'group', 3)).toMatchObject({ allowed: false, supported: false });
+  });
+  it('gives a group conversation its own reason, not a 1:1 DM encryption rung', () => {
+    // The server marks a group channel `encrypted`, so before this the shared
+    // encryption ladder answered "Set up encryption before sending this direct
+    // message" — contradicting the timeline and pointing at a page that cannot
+    // make a group sendable.
+    const notEnrolled = { allowed: false, supported: true, reason: 'Set up encryption before sending this direct message.' };
+    expect(runtimeSendDecision(notEnrolled, { ...ready, encryption: 'setup' }, true, 'group', 3))
+      .toEqual({ allowed: false, supported: false, reason: GROUP_DM_COMPOSER_REASON });
   });
   it('blocks only the conversation needing a legacy-session decision', () => {
     const state: MessagingSnapshot = { ...ready, encryptionRecovery: { kind: 'legacy-session', channelId: 'first' } };

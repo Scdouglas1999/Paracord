@@ -2,7 +2,7 @@ import { Link } from 'react-router';
 import { useStore } from 'zustand';
 import { useChannelStore } from '../../stores/channelStore';
 import { getAccountChannelView } from '../../lib/channelView';
-import { runtimeAttachDecision, runtimeSendDecision } from '../../lib/messages/messagingReadiness';
+import { isUnusableGroupDm, runtimeAttachDecision, runtimeSendDecision } from '../../lib/messages/messagingReadiness';
 import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
 import { entityScopeKey as memberScopeKey, type AccountScope } from '../../lib/serverScope';
 import { useState, useRef, useEffect, useMemo, useCallback, lazy, Suspense } from 'react';
@@ -404,6 +404,9 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
     const channel = getAccountChannelView(scope, state).channelsById[channelId];
     return channel?.channel_type ?? channel?.type;
   });
+  // A group conversation refuses for one reason and it is not an encryption
+  // rung: nothing on this row may offer a route out, because none exists yet.
+  const groupDmRefusal = isUnusableGroupDm(channelType);
   const actions = { ...serverActions,
     send: runtimeSendDecision(serverActions.send, runtimeState, encrypted, channelId, channelType),
     // Encrypted attachment seam: attaching needs the same unlocked encrypted
@@ -1200,19 +1203,21 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
       {!composerAction.allowed && blockerSettled && (
         <div role="status" className="rounded-[var(--radius-control)] bg-bg-raised px-3 py-2 text-meta text-text-muted shadow-[var(--shadow-raised)]">
           {composerAction.reason}
-          {encrypted && encryption === 'setup' && <Link className="ml-2 underline" to={`/setup?${new URLSearchParams({ migrate: '1', server: scope.serverId, user: scope.userId, returnTo: window.location.pathname + window.location.search })}`}>Set up encryption</Link>}
-          {encrypted && encryption === 'unlock' && <Link className="ml-2 underline" to={`/unlock?${new URLSearchParams({ returnTo: window.location.pathname + window.location.search })}`}>Unlock encryption</Link>}
+          {!groupDmRefusal && encrypted && encryption === 'setup' && <Link className="ml-2 underline" to={`/setup?${new URLSearchParams({ migrate: '1', server: scope.serverId, user: scope.userId, returnTo: window.location.pathname + window.location.search })}`}>Set up encryption</Link>}
+          {!groupDmRefusal && encrypted && encryption === 'unlock' && <Link className="ml-2 underline" to={`/unlock?${new URLSearchParams({ returnTo: window.location.pathname + window.location.search })}`}>Unlock encryption</Link>}
           {/* A second device — a fresh browser, a new laptop — signs in and
               lands here holding no identity, or a different one. Without this
               it was the one encryption blocker with no route out: nothing but
               "Check again". Setup is not the answer either — it refuses when
               the account already has an identity, and tells the user to restore
               the recovery phrase — so link straight at the page that does it. */}
-          {encrypted && encryption === 'identity_mismatch' && <Link className="ml-2 underline" to="/recover">Restore your identity</Link>}
+          {!groupDmRefusal && encrypted && encryption === 'identity_mismatch' && <Link className="ml-2 underline" to="/recover">Restore your identity</Link>}
           {/* A blocker can be resolved by someone else (a recipient finishing
               encryption setup, a restored permission), so the check is always
               repeatable from here instead of only after a request failure. */}
-          <button type="button" className="ml-2 underline" onClick={refreshActions}>{capabilityError ? 'Retry' : 'Check again'}</button>
+          {/* Nothing to check again: the group form of message encryption has
+              not shipped, so re-asking the server returns the same refusal. */}
+          {!groupDmRefusal && <button type="button" className="ml-2 underline" onClick={refreshActions}>{capabilityError ? 'Retry' : 'Check again'}</button>}
         </div>
       )}
       {isAnonymousChannel && (
