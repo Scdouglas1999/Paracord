@@ -86,6 +86,12 @@ function workerBridgeRequest(
   });
 }
 
+/** The shell's own verdict that this machine's keychain does not retain secrets. */
+function isSecureStoreUnavailable(err: unknown): boolean {
+  const text = typeof err === 'string' ? err : (err as { message?: string } | null)?.message;
+  return typeof text === 'string' && text.includes('secure store unavailable');
+}
+
 function warnSecureStorageDegraded(): void {
   if (hasWarnedSecureStorageDegrade) {
     return;
@@ -245,7 +251,13 @@ export function readStoredValueForMigration(key: string): Promise<string | null>
     if (isWorkerContext()) throw new Error('Private-key migration must run in the owning account window.');
     const native = isTauri();
     if (native && key.startsWith('paracord:')) {
-      const value = await invoke<string | null>('secure_store_get', { key });
+      // A keychain the shell has *proved* cannot retain secrets is not an
+      // unavailable keychain, it is a known-absent one: the shell says so in
+      // one sentence and every value lives in the encrypted fallback below.
+      // Throwing here instead would take the legacy-session check — and with
+      // it every encrypted direct message — down with it.
+      const value = await invoke<string | null>('secure_store_get', { key })
+        .catch((err) => { if (isSecureStoreUnavailable(err)) return null; throw err; });
       if (value !== null && value !== undefined) return value;
     }
     const memory = webMemoryStore.get(key);

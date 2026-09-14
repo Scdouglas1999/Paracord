@@ -424,37 +424,131 @@ pub fn get_client_log_path(app: tauri::AppHandle) -> Result<String, String> {
     diagnostics_log_path(&app).map(|p| p.display().to_string())
 }
 
-#[tauri::command]
-pub fn secure_store_set(key: String, value: String) -> Result<(), String> {
+/// Does this build's keyring actually keep what it is given?
+///
+/// A `keyring` built with no platform credential-store feature quietly selects
+/// the in-process *mock* store: `set_password` returns `Ok(())` and the next
+/// `Entry` for the same key answers `NoEntry`. Every write is accepted and
+/// every read comes back empty — and because nothing ever errors, the
+/// renderer's encrypted-file fallback (`secureStorage.ts`) is never reached,
+/// and it *deletes* its own fallback copy on each successful write. That is how
+/// the desktop lost the refresh token on every launch.
+///
+/// A keychain that cannot be read back is not a keychain. Probe it once, with
+/// the same two-`Entry` shape `secure_store_set`/`secure_store_get` use, and if
+/// the value does not survive, report the store as unavailable so every command
+/// returns `Err` and the renderer takes its encrypted-file path deliberately.
+fn keyring_round_trips() -> bool {
+    const PROBE_KEY: &str = "paracord:secure-store-selftest";
+    let probe_value = format!("selftest-{}", std::process::id());
+    let writer = match keyring::Entry::new(SECURE_STORE_SERVICE, PROBE_KEY) {
+        Ok(entry) => entry,
+        Err(_) => return false,
+    };
+    if writer.set_password(&probe_value).is_err() {
+        return false;
+    }
+    let reader = match keyring::Entry::new(SECURE_STORE_SERVICE, PROBE_KEY) {
+        Ok(entry) => entry,
+        Err(_) => return false,
+    };
+    let survived = matches!(reader.get_password(), Ok(read) if read == probe_value);
+    let _ = reader.delete_credential();
+    survived
+}
+
+/// A keychain that does not answer is a keychain that is not there.
+///
+/// Every one of these calls is a D-Bus round trip to whatever agent the desktop
+/// runs (gnome-keyring, kwallet, …), and an agent that is being activated, is
+/// waiting on a prompt, or is simply absent can take arbitrarily long. The
+/// renderer awaits the very first read before it can decide whether anyone is
+/// signed in, so an unbounded wait here is a window that never paints.
+const SECURE_STORE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+const SECURE_STORE_UNAVAILABLE: &str =
+    "secure store unavailable: the OS keychain does not retain secrets";
+
+fn within_timeout<T: Send + 'static>(
+    op: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    // Detached on purpose: a keychain agent that never answers must cost one
+    // parked thread, not the window. The verdict below is cached, so a store
+    // that times out once is not asked again in this run.
+    std::thread::spawn(move || {
+        let _ = tx.send(op());
+    });
+    match rx.recv_timeout(SECURE_STORE_TIMEOUT) {
+        Ok(result) => result,
+        Err(_) => Err(format!("{SECURE_STORE_UNAVAILABLE} (it did not answer)")),
+    }
+}
+
+fn secure_store_available() -> bool {
+    static AVAILABLE: LazyLock<bool> = LazyLock::new(|| {
+        let ok = within_timeout(|| Ok(keyring_round_trips())).unwrap_or(false);
+        if !ok {
+            eprintln!(
+                "[paracord] OS keychain does not retain secrets on this system; \
+                 using the encrypted local fallback store instead."
+            );
+        }
+        ok
+    });
+    *AVAILABLE
+}
+
+/// Ask the keychain the one question that matters while the window is still
+/// being built, so the renderer's first read does not pay for the answer.
+pub fn warm_secure_store() {
+    std::thread::spawn(|| {
+        let _ = secure_store_available();
+    });
+}
+
+fn secure_store_op<T: Send + 'static>(
+    key: String,
+    op: impl FnOnce(keyring::Entry) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
     validate_secure_store_key(&key)?;
-    let entry = keyring::Entry::new(SECURE_STORE_SERVICE, &key)
-        .map_err(|e| format!("secure store init failed: {e}"))?;
-    entry
-        .set_password(&value)
-        .map_err(|e| format!("secure store write failed: {e}"))
+    if !secure_store_available() {
+        return Err(SECURE_STORE_UNAVAILABLE.into());
+    }
+    within_timeout(move || {
+        let entry = keyring::Entry::new(SECURE_STORE_SERVICE, &key)
+            .map_err(|e| format!("secure store init failed: {e}"))?;
+        op(entry)
+    })
+}
+
+// `async` so Tauri runs these off the main thread: a sync command blocks the
+// window for as long as the keychain takes, and the first read happens during
+// startup.
+#[tauri::command]
+pub async fn secure_store_set(key: String, value: String) -> Result<(), String> {
+    secure_store_op(key, move |entry| {
+        entry
+            .set_password(&value)
+            .map_err(|e| format!("secure store write failed: {e}"))
+    })
 }
 
 #[tauri::command]
-pub fn secure_store_get(key: String) -> Result<Option<String>, String> {
-    validate_secure_store_key(&key)?;
-    let entry = keyring::Entry::new(SECURE_STORE_SERVICE, &key)
-        .map_err(|e| format!("secure store init failed: {e}"))?;
-    match entry.get_password() {
+pub async fn secure_store_get(key: String) -> Result<Option<String>, String> {
+    secure_store_op(key, |entry| match entry.get_password() {
         Ok(value) => Ok(Some(value)),
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(err) => Err(format!("secure store read failed: {err}")),
-    }
+    })
 }
 
 #[tauri::command]
-pub fn secure_store_delete(key: String) -> Result<(), String> {
-    validate_secure_store_key(&key)?;
-    let entry = keyring::Entry::new(SECURE_STORE_SERVICE, &key)
-        .map_err(|e| format!("secure store init failed: {e}"))?;
-    match entry.delete_credential() {
+pub async fn secure_store_delete(key: String) -> Result<(), String> {
+    secure_store_op(key, |entry| match entry.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(err) => Err(format!("secure store delete failed: {err}")),
-    }
+    })
 }
 
 #[tauri::command]
@@ -935,6 +1029,22 @@ mod activity_consent_tests {
 
         // Restore the default (redacted) posture for any other reader.
         ACTIVITY_TITLE_SHARING_ENABLED.store(false, Ordering::SeqCst);
+    }
+
+    /// The shape of the defect: a store that accepts every write and answers
+    /// `NoEntry` to the very next read. `keyring`'s mock store — the one a
+    /// build with no platform credential-store feature silently selects — is
+    /// exactly that, so it doubles as the fixture. If `keyring_round_trips`
+    /// ever calls this a working keychain again, the desktop goes back to
+    /// losing the refresh token, the encryption identity and every Signal
+    /// session on quit, silently, because nothing errors.
+    #[test]
+    fn a_store_that_cannot_be_read_back_is_not_a_keychain() {
+        keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        assert!(
+            !super::keyring_round_trips(),
+            "a write-only credential store must be reported unavailable"
+        );
     }
 
     #[test]

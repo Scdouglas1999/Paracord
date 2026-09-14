@@ -22,6 +22,15 @@ tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# `keyring` has NO default credential store: a build that names no
+# platform feature silently gets the in-process *mock* store, whose
+# `set_password` returns Ok and whose next `Entry` reads `NoEntry`. That is a
+# write-only black hole — it swallowed the refresh token, the encryption
+# identity, the Signal sessions and every per-server token — and because it
+# never errors, `secureStorage.ts` never reached its encrypted-file fallback.
+# The real store per platform is named in the `[target...]` blocks below;
+# `secure_store_selftest` (commands.rs) proves at startup that whatever we got
+# actually round-trips.
 keyring = "3"
 aes-gcm = "0.10"
 base64 = "0.22"
@@ -47,6 +56,7 @@ rustls = { version = "0.23", default-features = false, features = ["std", "ring"
 scap = "0.1.0-beta.1"
 
 [target.'cfg(windows)'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
 # Native camera capture (Media Foundation). Compile-gated arm — unverified on
 # the Linux toolchain used here.
 nokhwa = { version = "0.10", features = ["input-msmf"] }
@@ -73,6 +83,10 @@ windows = { version = "0.61", features = [
 paracord-codec = { workspace = true, features = ["lavc"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# Secret Service over pure-Rust zbus (no libdbus headers to install) on the
+# async-io reactor, deliberately NOT the `tokio` one: zbus's blocking wrapper
+# must not try to block on the ambient Tauri runtime.
+keyring = { version = "3", features = ["async-secret-service", "async-io", "crypto-rust"] }
 webkit2gtk = "2.0"
 libpulse-binding = "2"
 libpulse-simple-binding = "2"
@@ -91,6 +105,7 @@ libloading = "0.8"
 nokhwa = { version = "0.10", features = ["input-v4l"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
 # Native camera capture (AVFoundation). Compile-gated arm — unverified on the
 # Linux toolchain used here.
 nokhwa = { version = "0.10", features = ["input-avfoundation"] }

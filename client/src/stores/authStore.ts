@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { User, UserSettings } from '../types';
 import { authApi } from '../api/auth';
-import { extractApiError, refreshSharedSession } from '../api/client';
+import { canAttemptRefresh, extractApiError, refreshSharedSession } from '../api/client';
 import {
   clearLegacyPersistedAuth,
   clearSessionHint,
@@ -154,7 +154,12 @@ export const useAuthStore = create<AuthState>()((set) => ({
     // A browser that has never held a session here has nothing to refresh. It
     // used to ask anyway on every cold load, which is a console error for the
     // visitor and a WARN in the operator's log for every anonymous page view.
-    if (!hasSessionHint() && !getRefreshToken()) {
+    // Nothing to ask with. On the desktop the only credential that survives a
+    // quit is the stored refresh token — the page is `tauri://localhost`, so
+    // the instance's HttpOnly refresh cookie is never sent — and a refresh with
+    // an empty body is a 400, not an expired session. In a browser the cookie
+    // may still carry it, so there the hint alone is reason enough to ask.
+    if (!canAttemptRefresh(getRefreshToken()) || (!hasSessionHint() && !getRefreshToken())) {
       set({ token: null, sessionBootstrapComplete: true });
       return;
     }

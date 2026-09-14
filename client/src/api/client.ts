@@ -1,6 +1,7 @@
 import axios, { type AxiosError, type AxiosInstance } from 'axios';
 import { resolveApiBaseUrl } from '../lib/config/apiBaseUrl';
 import { getTauriAdapter } from '../lib/tauriAxiosAdapter';
+import { isTauri } from '../lib/tauriEnv';
 import {
   clearLegacyPersistedAuth,
   getAccessToken,
@@ -247,12 +248,40 @@ export function refreshSharedSession(): Promise<string> {
   return refreshLegacyToken();
 }
 
+/**
+ * A refresh with no credential in it.
+ *
+ * The refresh endpoint takes the rotating token in the body, or — same-origin
+ * in a browser — from the HttpOnly `paracord_refresh` cookie. The desktop has
+ * neither: its page is `tauri://localhost`, so no cookie of the instance's is
+ * ever sent, and a POST with no body is not an expired session, it is a
+ * malformed request. The server answered 400, the shell read "the session is
+ * gone" and showed the password screen — on every single launch, which is
+ * exactly how a lost refresh token wore the face of an expired one (a real
+ * credential that had gone bad would have answered 401).
+ *
+ * So: on the desktop, no stored refresh token means there is nothing to
+ * refresh. Say so here rather than asking the server to say it.
+ */
+export class NoRefreshCredentialError extends Error {
+  constructor() {
+    super('This device holds no saved session for this instance.');
+    this.name = 'NoRefreshCredentialError';
+  }
+}
+
+/** Whether a refresh may be attempted at all with the credential we hold. */
+export function canAttemptRefresh(refreshToken: string | null): boolean {
+  return Boolean(refreshToken) || !isTauri();
+}
+
 async function refreshLegacyToken(context?: ApiRequestContext): Promise<string> {
   const result = await coordinateRefresh(HOME_REFRESH_SCOPE, async () => {
     // Read the stored refresh token *inside* the flight: a value captured
     // before someone else's rotation is precisely the spent credential that
     // trips the server's reuse detection.
     const refreshToken = getRefreshToken();
+    if (!canAttemptRefresh(refreshToken)) throw new NoRefreshCredentialError();
     const refresh = await apiClient.post<{ token: string; refresh_token?: string }>(
       '/auth/refresh',
       refreshToken ? { refresh_token: refreshToken } : undefined,
@@ -426,6 +455,7 @@ export function createApiClient(
         // flight — a token captured before another caller's rotation is the
         // spent credential that trips reuse detection.
         const refreshToken = getRefreshToken?.() ?? null;
+        if (!canAttemptRefresh(refreshToken)) throw new NoRefreshCredentialError();
         const refresh = await client.post<{ token: string; refresh_token?: string }>(
           '/auth/refresh',
           refreshToken ? { refresh_token: refreshToken } : undefined,

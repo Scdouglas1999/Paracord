@@ -94,12 +94,52 @@ describe('conversation action ownership and refresh', () => {
     await act(async () => refresh.resolve(revoked));
     expect(result.current.actions.send.reason).toBe('Permission removed.');
   });
-  it('reports server unavailability without preserving the previous permission', async () => {
+  // The probe used to fail closed and never ask again, so a single 401 caught
+  // inside a token-refresh window left the composer dead — banner and all —
+  // for as long as the window kept focus, while messages carried on arriving.
+  // A check that never got an answer is not a permission decision.
+  it('leaves the composer usable when the check never gets an answer', async () => {
     const request = operation();
     const { result } = renderHook(() => useConversationActions('1'));
     await act(async () => request.reject(new Error('Offline')));
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.error).toContain('server is available');
+    expect(result.current.actions.send.allowed).toBe(true);
+    expect(result.current.actions.attach.allowed).toBe(true);
+  });
+  it('asks again on its own after a check that never got an answer', async () => {
+    vi.useFakeTimers();
+    try {
+      const request = operation();
+      renderHook(() => useConversationActions('1'));
+      await act(async () => { request.reject(new Error('Offline')); });
+      expect(request.context.request).toHaveBeenCalledTimes(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      expect(request.context.request).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  // An answer that arrived and named someone else is the instance disagreeing
+  // with us, not a race: refuse, and do not spin asking again.
+  it('fails closed when the instance answers about a different account', async () => {
+    const request = operation();
+    const { result } = renderHook(() => useConversationActions('1'));
+    await act(async () => request.resolve(response('1', 'someone-else')));
+    expect(result.current.error).toContain('could not be checked');
     expect(result.current.actions.send.allowed).toBe(false);
+  });
+  // A permission that was already granted survives a check that never landed;
+  // it does not survive an event saying the permission itself may have moved.
+  it('keeps a granted permission across a check that never gets an answer', async () => {
+    const first = operation(); const recheck = operation();
+    const { result } = renderHook(() => useConversationActions('1'));
+    await act(async () => first.resolve(response()));
+    expect(result.current.actions.send.allowed).toBe(true);
+    act(() => window.dispatchEvent(new Event('focus')));
+    expect(result.current.actions.send.allowed).toBe(true);
+    await act(async () => recheck.reject(new Error('Offline')));
+    expect(result.current.actions.send.allowed).toBe(true);
+    expect(result.current.error).toContain('server is available');
   });
 });

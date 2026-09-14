@@ -37,6 +37,9 @@ vi.mock('../api/auth', () => ({ authApi: mockAuthApi }));
 
 vi.mock('../api/client', () => ({
   refreshSharedSession: mockRefreshSharedSession,
+  // The real guard refuses an empty-bodied refresh on the desktop; these tests
+  // exercise the browser shape, where the HttpOnly cookie may still carry one.
+  canAttemptRefresh: () => true,
   extractApiError: vi.fn(
     (err: { response?: { data?: { message?: string; error?: string } }; message?: string } | unknown) => {
       const e = err as { response?: { data?: { message?: string; error?: string } }; message?: string };

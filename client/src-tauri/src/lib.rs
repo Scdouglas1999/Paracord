@@ -1689,6 +1689,7 @@ pub fn run() {
                 );
             }
             tray::setup_tray(app.handle())?;
+            commands::warm_secure_store();
             Ok(())
         });
 
