@@ -261,47 +261,72 @@ pub async fn stop_voice_session(
 
 /// A single enumerated audio device exposed to the renderer.
 ///
-/// `index` is the cpal host enumeration index and is exactly what the
-/// `voice_switch_{input,output}_device` commands consume. Host indices are
-/// assigned by iterating the device list at enumeration time, so they can shift
-/// when devices are added or removed. The renderer must therefore re-enumerate
-/// (via `voice_list_*_devices`) and switch as a paired operation rather than
-/// caching an index across device-topology changes.
+/// `id` is the stable identity to persist: the sound-server node name on Linux
+/// (`alsa_input.usb-Focusrite_Scarlett_Solo_USB-00.…`), the device name on
+/// Windows/macOS, or `@default` for the "System default" row. It survives a
+/// re-plug and an enumeration-order change, which a host index does not, and is
+/// exactly what `voice_switch_{input,output}_device` consumes.
 #[derive(Serialize)]
 pub struct AudioDeviceInfo {
-    pub index: usize,
+    pub id: String,
+    /// What to show the user — a real device name, not an ALSA PCM route.
     pub name: String,
+    /// Secondary line (the profile, or what "System default" resolves to now).
+    pub detail: Option<String>,
     pub is_default: bool,
+    /// `"system-default"`, `"device"`, or `"monitor"`. Monitors are loopbacks of
+    /// what is playing and belong to the share-system-audio feature, never to
+    /// the microphone list.
+    pub group: String,
+}
+
+/// An enumerated list plus which layer answered, so the renderer can say when
+/// it is showing driver names because no sound server replied.
+#[derive(Serialize)]
+pub struct AudioDeviceList {
+    pub devices: Vec<AudioDeviceInfo>,
+    pub backend: String,
+    pub warning: Option<String>,
+}
+
+fn to_device_list(list: paracord_codec::audio::devices::DeviceList) -> AudioDeviceList {
+    use paracord_codec::audio::devices::DeviceGroup;
+    AudioDeviceList {
+        devices: list
+            .devices
+            .into_iter()
+            .map(|device| AudioDeviceInfo {
+                id: device.id,
+                name: device.name,
+                detail: device.detail,
+                is_default: device.is_default,
+                group: match device.group {
+                    DeviceGroup::SystemDefault => "system-default",
+                    DeviceGroup::Device => "device",
+                    DeviceGroup::Monitor => "monitor",
+                }
+                .to_string(),
+            })
+            .collect(),
+        backend: list.backend.as_str().to_string(),
+        warning: list.warning,
+    }
 }
 
 #[tauri::command]
-pub async fn voice_list_output_devices() -> Result<Vec<AudioDeviceInfo>, String> {
+pub async fn voice_list_output_devices() -> Result<AudioDeviceList, String> {
     use paracord_codec::audio::playback::list_output_devices;
 
-    let devices = list_output_devices().map_err(|e| format!("list output devices: {e}"))?;
-    Ok(devices
-        .into_iter()
-        .map(|(index, name, is_default)| AudioDeviceInfo {
-            index,
-            name,
-            is_default,
-        })
-        .collect())
+    let list = list_output_devices().map_err(|e| format!("list output devices: {e}"))?;
+    Ok(to_device_list(list))
 }
 
 #[tauri::command]
-pub async fn voice_list_input_devices() -> Result<Vec<AudioDeviceInfo>, String> {
+pub async fn voice_list_input_devices() -> Result<AudioDeviceList, String> {
     use paracord_codec::audio::capture::list_input_devices;
 
-    let devices = list_input_devices().map_err(|e| format!("list input devices: {e}"))?;
-    Ok(devices
-        .into_iter()
-        .map(|(index, name, is_default)| AudioDeviceInfo {
-            index,
-            name,
-            is_default,
-        })
-        .collect())
+    let list = list_input_devices().map_err(|e| format!("list input devices: {e}"))?;
+    Ok(to_device_list(list))
 }
 
 // ── Mute / deaf / device switching ──────────────────────────────────────────
@@ -414,11 +439,10 @@ pub async fn voice_switch_input_device(
     let session = guard.as_mut().ok_or("no active session")?;
 
     // Start capture on the new device (the actor stops and drops the previous
-    // capture stream on its own thread).
-    let index: usize = device_id
-        .parse()
-        .map_err(|_| "invalid device index".to_string())?;
-    let rx = session.audio_actor.start_capture(Some(index)).await?;
+    // capture stream on its own thread). `device_id` is the stable id from
+    // `voice_list_input_devices`; the codec layer resolves it and falls back to
+    // the system default — saying so in the log — if it has gone away.
+    let rx = session.audio_actor.start_capture(Some(device_id)).await?;
     session.pcm_rx = Some(rx);
 
     Ok(())
@@ -433,17 +457,13 @@ pub async fn voice_switch_output_device(
     let _transition = state.calls.transition.lock().await;
     state.calls.check(&owner_id)?;
 
-    let index: usize = device_id
-        .parse()
-        .map_err(|_| "invalid output device index".to_string())?;
-
     let mut guard = state.session.lock().await;
     let session = guard.as_mut().ok_or("no active session")?;
 
     // Snapshot the live remote SSRCs so the actor can re-attach them to the new
     // output device. The actor builds the replacement device before tearing
-    // down the current one and falls back to the system default on a stale
-    // index, so a failed switch never leaves the user with no audio output.
+    // down the current one and falls back to the system default when the chosen
+    // device is gone, so a failed switch never leaves the user with no audio.
     // Both voice (mono) and screen-audio (stereo) sources must be rebuilt, else
     // stream audio would go permanently silent after an output switch (C4/AU4).
     let voice_ssrcs: Vec<u32> = {
@@ -454,9 +474,10 @@ pub async fn voice_switch_output_device(
         let stream = session.stream_remote_audio.lock().await;
         stream.keys().copied().collect()
     };
+    let chosen = device_id.clone();
     let switched = session
         .audio_actor
-        .switch_output_device(index, voice_ssrcs, stream_ssrcs)
+        .switch_output_device(device_id, voice_ssrcs, stream_ssrcs)
         .await?;
 
     let mut voice_senders = switched.voice;
@@ -478,7 +499,7 @@ pub async fn voice_switch_output_device(
         }
     }
 
-    tracing::debug!(device_index = index, "switched audio output device");
+    tracing::debug!(device_id = %chosen, "switched audio output device");
     Ok(())
 }
 

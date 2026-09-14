@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import { isTauri } from '../lib/tauriEnv';
 import {
-  listNativeInputDevices,
-  listNativeOutputDevices,
+  listNativeInputDeviceList,
+  listNativeOutputDeviceList,
   type AudioDeviceInfo,
+  type NativeDeviceList,
 } from '../stores/voice/nativeMediaController';
 
 export interface ListedMediaDevice {
@@ -13,6 +14,12 @@ export interface ListedMediaDevice {
   groupId: string;
   /** OS/browser default endpoint when the enumerator reports it. */
   isDefault?: boolean;
+  /**
+   * The label already came from the sound server and is a real device name —
+   * the picker must show it verbatim rather than running the ALSA/browser
+   * label cleanup over it (which would eat parts like "Digital Stereo (HDMI)").
+   */
+  labelIsFriendly?: boolean;
 }
 
 interface MediaDeviceState {
@@ -22,25 +29,55 @@ interface MediaDeviceState {
   selectedAudioInput: string | null;
   selectedAudioOutput: string | null;
   selectedVideoInput: string | null;
+  /** What "System default" currently resolves to, when the OS will say. */
+  defaultAudioInputLabel: string | null;
+  defaultAudioOutputLabel: string | null;
+  /**
+   * Set when the device names are degraded (no sound server answered, so these
+   * are raw driver names). Shown to the user — never silently degraded.
+   */
+  deviceNamingWarning: string | null;
 }
 
 /**
- * Adapt a native cpal device into the picker-facing device shape.
- * The cpal host index becomes the `deviceId` so selection callbacks can hand it
- * straight back to the native switch commands, while the real OS name (which
- * the WebView often hides for `navigator.mediaDevices`) surfaces as the label.
+ * Adapt a native device into the picker-facing device shape.
+ *
+ * The backend's **stable id** (a sound-server node name) becomes the
+ * `deviceId`, so the selection that gets persisted survives a re-plug and an
+ * enumeration-order change. The label is the device name the sound server
+ * already knows — the thing the WebView hides behind an empty
+ * `navigator.mediaDevices` label — with the profile appended when there is one.
  */
 function nativeToListedDevice(
   device: AudioDeviceInfo,
   kind: MediaDeviceKind
 ): ListedMediaDevice {
   return {
-    deviceId: String(device.index),
+    deviceId: device.id,
     kind,
-    label: device.name,
+    label: device.detail ? `${device.name} — ${device.detail}` : device.name,
     groupId: '',
     isDefault: Boolean(device.is_default),
+    labelIsFriendly: true,
   };
+}
+
+/** The "System default" row is rendered by the picker itself, not as a device. */
+function nativeSelectableDevices(
+  list: NativeDeviceList,
+  kind: MediaDeviceKind
+): ListedMediaDevice[] {
+  return list.devices
+    .filter((device) => device.group !== 'system-default')
+    .map((device) => nativeToListedDevice(device, kind));
+}
+
+function nativeDefaultLabel(list: NativeDeviceList): string | null {
+  const row = list.devices.find((device) => device.group === 'system-default');
+  if (!row) return null;
+  // The backend spells this "Currently: <device>".
+  const detail = row.detail?.replace(/^currently:\s*/i, '').trim();
+  return detail || null;
 }
 
 function fromBrowserDevice(device: MediaDeviceInfo): ListedMediaDevice {
@@ -63,6 +100,9 @@ export function useMediaDevices() {
     selectedAudioInput: null,
     selectedAudioOutput: null,
     selectedVideoInput: null,
+    defaultAudioInputLabel: null,
+    defaultAudioOutputLabel: null,
+    deviceNamingWarning: null,
   });
 
   const enumerate = useCallback(async () => {
@@ -72,10 +112,10 @@ export function useMediaDevices() {
     // enumeration path.
     if (isTauri()) {
       const [nativeInputs, nativeOutputs] = await Promise.all([
-        listNativeInputDevices(),
-        listNativeOutputDevices(),
+        listNativeInputDeviceList(),
+        listNativeOutputDeviceList(),
       ]);
-      if (nativeInputs.length > 0 || nativeOutputs.length > 0) {
+      if (nativeInputs.devices.length > 0 || nativeOutputs.devices.length > 0) {
         let videoInputDevices: ListedMediaDevice[] = [];
         try {
           const devices = await navigator.mediaDevices.enumerateDevices();
@@ -87,9 +127,12 @@ export function useMediaDevices() {
         }
         setState((s) => ({
           ...s,
-          audioInputDevices: nativeInputs.map((d) => nativeToListedDevice(d, 'audioinput')),
-          audioOutputDevices: nativeOutputs.map((d) => nativeToListedDevice(d, 'audiooutput')),
+          audioInputDevices: nativeSelectableDevices(nativeInputs, 'audioinput'),
+          audioOutputDevices: nativeSelectableDevices(nativeOutputs, 'audiooutput'),
           videoInputDevices,
+          defaultAudioInputLabel: nativeDefaultLabel(nativeInputs),
+          defaultAudioOutputLabel: nativeDefaultLabel(nativeOutputs),
+          deviceNamingWarning: nativeInputs.warning ?? nativeOutputs.warning ?? null,
         }));
         return;
       }

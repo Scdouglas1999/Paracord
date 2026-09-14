@@ -169,6 +169,53 @@ describe('buildDevicePickerOptions', () => {
     );
     expect(options[0]?.deviceId).toBe('b');
   });
+
+  it('shows a sound-server device name exactly as the sound server said it', () => {
+    // These arrive already named by PipeWire. Running the ALSA/browser rescue
+    // over them used to eat the part that tells two HDMI outputs apart.
+    const options = buildDevicePickerOptions(
+      [
+        {
+          deviceId: 'alsa_output.pci-0000_01_00.1.hdmi-stereo',
+          label: 'Odyssey G95SC — Digital Stereo (HDMI)',
+          kind: 'audiooutput',
+          labelIsFriendly: true,
+        },
+        {
+          deviceId: 'alsa_output.usb-Focusrite_Scarlett_Solo_USB-00.Direct__Direct__sink',
+          label: 'Scarlett Solo USB — Direct',
+          kind: 'audiooutput',
+          labelIsFriendly: true,
+        },
+      ],
+      {}
+    );
+    expect(options.map((o) => o.label)).toEqual([
+      'Odyssey G95SC — Digital Stereo (HDMI)',
+      'Scarlett Solo USB — Direct',
+    ]);
+  });
+
+  it('keeps a monitor of what is playing out of the default microphone list', () => {
+    const devices: RawMediaDevice[] = [
+      {
+        deviceId: 'alsa_input.usb-Focusrite_Scarlett_Solo_USB-00.Direct__Direct__source',
+        label: 'Scarlett Solo USB — Direct',
+        kind: 'audioinput',
+        labelIsFriendly: true,
+      },
+      {
+        deviceId: 'alsa_output.pci-0000_01_00.1.hdmi-stereo.monitor',
+        label: 'Monitor of Odyssey G95SC — Digital Stereo (HDMI)',
+        kind: 'audioinput',
+        labelIsFriendly: true,
+      },
+    ];
+    expect(buildDevicePickerOptions(devices, {}).map((o) => o.deviceId)).toEqual([
+      'alsa_input.usb-Focusrite_Scarlett_Solo_USB-00.Direct__Direct__source',
+    ]);
+    expect(buildDevicePickerOptions(devices, { showAll: true })).toHaveLength(2);
+  });
 });
 
 describe('systemDefaultOptionLabel', () => {

@@ -114,7 +114,7 @@ const NAV_GROUPS: { label?: string; items: NavItem[] }[] = [
     label: 'Advanced',
     items: [
       { id: 'identity', label: 'Identity', icon: Fingerprint },
-      { id: 'server', label: 'Server', icon: Server, adminOnly: true },
+      { id: 'server', label: 'Instance', icon: Server, adminOnly: true },
       { id: 'about', label: 'About', icon: Info },
     ],
   },
@@ -180,6 +180,9 @@ export function UserSettings({ onClose }: UserSettingsProps) {
     selectAudioInput,
     selectAudioOutput,
     selectVideoInput,
+    defaultAudioInputLabel,
+    defaultAudioOutputLabel,
+    deviceNamingWarning,
     enumerate,
   } = useMediaDevices();
   const [showAllAudioDevices, setShowAllAudioDevices] = useState(false);
@@ -742,7 +745,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
     const ok = await confirm({
       title: 'Delete your account?',
       description:
-        'This permanently erases your profile, messages, and memberships on this server. It cannot be undone.',
+        'This permanently erases your profile, messages, and memberships on this instance. It cannot be undone.',
       confirmLabel: 'Delete account',
       cancelLabel: 'Keep account',
       variant: 'danger',
@@ -924,7 +927,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
       if (typeof result.relationships_found === 'number' && result.relationships_found > 0)
         parts.push(`${result.relationships_found} relationships noted`);
       if (typeof result.guilds_noted === 'number' && result.guilds_noted > 0)
-        parts.push(`${result.guilds_noted} guild memberships noted`);
+        parts.push(`${result.guilds_noted} server memberships noted`);
       let msg = parts.length > 0 ? `Import complete: ${parts.join(', ')}.` : 'Import complete.';
       if (warnings.length > 0) {
         msg += ` Warnings: ${warnings.join('; ')}`;
@@ -1068,7 +1071,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                     <div className="flex flex-wrap items-center justify-between gap-4 py-4">
                       <div className="min-w-0">
                         <div className="text-label text-text-primary">Username</div>
-                        <p className="mt-0.5 text-meta text-text-secondary">Your unique handle across the server.</p>
+                        <p className="mt-0.5 text-meta text-text-secondary">Your unique handle across the instance.</p>
                       </div>
                       <span className="font-code text-body text-text-secondary">{user?.username || 'unknown'}</span>
                     </div>
@@ -1468,7 +1471,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                       <div className="min-w-0">
                         <h3 className="text-heading text-text-primary">Delete account</h3>
                         <p className="mt-1 max-w-xl text-body leading-relaxed text-text-secondary">
-                          Permanently erase your profile, messages, and memberships on this server. Friends lose the
+                          Permanently erase your profile, messages, and memberships on this instance. Friends lose the
                           connection and your username is freed. This can't be undone.
                         </p>
                         <div className="mt-4">
@@ -1552,6 +1555,11 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 />
                 <section>
                   <h3 className="text-section text-text-muted">Devices</h3>
+                  {deviceNamingWarning && (
+                    <p className="mt-2 rounded-md bg-bg-tertiary px-3 py-2 text-meta text-text-secondary">
+                      {deviceNamingWarning}
+                    </p>
+                  )}
                   <div className="mt-2 divide-y divide-border-subtle">
                     <div className="py-4">
                       <label htmlFor="voice-input" className="text-label text-text-primary">Input device</label>
@@ -1572,7 +1580,11 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                           });
                         }}
                       >
-                        <option value="">{systemDefaultOptionLabel('audioinput')}</option>
+                        <option value="">
+                          {defaultAudioInputLabel
+                            ? `${systemDefaultOptionLabel('audioinput')} (${defaultAudioInputLabel})`
+                            : systemDefaultOptionLabel('audioinput')}
+                        </option>
                         {audioInputOptions.map((device) => (
                           <option key={device.deviceId} value={device.deviceId}>
                             {device.isSystemDefault ? `${device.label} (system default)` : device.label}
@@ -1599,7 +1611,11 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                           });
                         }}
                       >
-                        <option value="">{systemDefaultOptionLabel('audiooutput')}</option>
+                        <option value="">
+                          {defaultAudioOutputLabel
+                            ? `${systemDefaultOptionLabel('audiooutput')} (${defaultAudioOutputLabel})`
+                            : systemDefaultOptionLabel('audiooutput')}
+                        </option>
                         {audioOutputOptions.map((device) => (
                           <option key={device.deviceId} value={device.deviceId}>
                             {device.isSystemDefault ? `${device.label} (system default)` : device.label}
@@ -1903,7 +1919,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
               <div>
                 <SettingsHeader
                   title="Identity portability"
-                  description="Verify your key, or move your identity between Paracord servers."
+                  description="Verify your key, or move your identity between Paracord instances."
                 />
 
                 {identityStatus && (
@@ -1940,7 +1956,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 <section className="mt-9 border-t border-border-subtle pt-8">
                   <h3 className="text-section text-text-muted">Export identity</h3>
                   <p className="mt-2 max-w-xl text-body text-text-secondary">
-                    Download a signed bundle you can import into another Paracord server.
+                    Download a signed bundle you can import into another Paracord instance.
                   </p>
                   <div className="mt-2 divide-y divide-border-subtle">
                     <ToggleRow
@@ -1967,7 +1983,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 <section className="mt-9 border-t border-border-subtle pt-8">
                   <h3 className="text-section text-text-muted">Import identity</h3>
                   <p className="mt-2 max-w-xl text-body text-text-secondary">
-                    Bring in a bundle from another server. Imported data is merged with this account.
+                    Bring in a bundle from another instance. Imported data is merged with this account.
                   </p>
                   <div className="mt-4">
                     <label htmlFor="identity-file" className="text-label text-text-primary">Bundle file</label>
@@ -1988,13 +2004,13 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                       <div className="text-section text-text-muted">Import preview</div>
                       <dl className="mt-3 space-y-2 text-body">
                         {([
-                          ['Origin server', String(importPreview.origin_server ?? 'Unknown')],
+                          ['Origin instance', String(importPreview.origin_server ?? 'Unknown')],
                           ['Username', (importPreview.user as Record<string, unknown>)?.username ? String((importPreview.user as Record<string, unknown>).username) : 'Unknown'],
                           ['Messages', String(Array.isArray(importPreview.messages) ? importPreview.messages.length : 0)],
                           ['Attachments', String(Array.isArray(importPreview.attachments) ? importPreview.attachments.length : 0)],
                           ['Prekeys', String(Array.isArray((importPreview.prekeys as Record<string, unknown> | undefined)?.one_time_prekeys) ? ((importPreview.prekeys as Record<string, unknown>).one_time_prekeys as unknown[]).length : 0)],
                           ['Relationships', String(Array.isArray(importPreview.relationships) ? importPreview.relationships.length : 0)],
-                          ['Guild memberships', String(Array.isArray(importPreview.guilds) ? importPreview.guilds.length : 0)],
+                          ['Server memberships', String(Array.isArray(importPreview.guilds) ? importPreview.guilds.length : 0)],
                           ['Exported at', importPreview.exported_at ? new Date(String(importPreview.exported_at)).toLocaleString() : 'Unknown'],
                         ] as [string, string][]).map(([label, value]) => (
                           <div key={label} className="flex justify-between gap-4">
@@ -2021,7 +2037,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
             {activeSection === 'server' && userIsAdmin && (
               <div>
                 <SettingsHeader
-                  title="Server"
+                  title="Instance"
                   description="Administrative controls for this Paracord instance."
                 />
                 <section>
@@ -2031,13 +2047,13 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                       <div className="min-w-0">
                         <h3 className="text-heading text-text-primary">Update &amp; restart</h3>
                         <p className="mt-1 max-w-xl text-body leading-relaxed text-text-secondary">
-                          Pull the latest code, rebuild the client and server, then restart. Everyone connected is
+                          Pull the latest code, rebuild the client and the instance, then restart. Everyone connected is
                           briefly disconnected.
                         </p>
                         <div className="mt-4">
                           {!restartConfirm ? (
                             <Button variant="secondary" disabled={restarting} onClick={() => setRestartConfirm(true)}>
-                              Update &amp; restart server
+                              Update &amp; restart instance
                             </Button>
                           ) : (
                             <div className="flex flex-wrap items-center gap-3">

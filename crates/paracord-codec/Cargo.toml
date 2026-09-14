@@ -53,6 +53,8 @@ tokio = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
+# Sound-server device enumeration parses `pactl -f json` output.
+serde_json = { workspace = true }
 
 # Error handling
 thiserror = { workspace = true }

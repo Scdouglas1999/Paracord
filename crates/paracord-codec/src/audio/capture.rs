@@ -9,6 +9,7 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
+use super::devices::{self, DeviceList, DeviceTarget, Direction};
 use super::opus::SAMPLE_RATE;
 
 /// Frame size: 20 ms at 48 kHz = 960 samples.
@@ -19,7 +20,9 @@ pub enum CaptureError {
     #[error("no input device available")]
     NoInputDevice,
     #[error("cpal device error: {0}")]
-    Device(#[from] cpal::DevicesError),
+    Cpal(#[from] cpal::DevicesError),
+    #[error("{0}")]
+    Device(devices::DeviceError),
     #[error("cpal default stream config error: {0}")]
     DefaultStreamConfig(#[from] cpal::DefaultStreamConfigError),
     #[error("cpal build stream error: {0}")]
@@ -32,30 +35,23 @@ pub enum CaptureError {
     Resampler(String),
 }
 
-/// Enumerate available audio input devices as `(index, name, is_default)`.
+/// Enumerate microphones the way a person recognises them.
 ///
-/// The `index` is the device's position in cpal's `input_devices()` iterator
-/// and is exactly what [`AudioCapture::start_device`] consumes via `.nth(index)`.
-/// These indices are enumeration-order only: they are assigned by iterating the
-/// host's device list at call time and can shift if devices are added or removed
-/// between calls (e.g. a USB microphone plugged in). Callers must therefore treat
-/// an enumeration result and a subsequent switch as a paired operation — never
-/// cache an index across device topology changes.
-pub fn list_input_devices() -> Result<Vec<(usize, String, bool)>, CaptureError> {
-    let host = cpal::default_host();
-    // The default device name is used to flag the default entry. cpal exposes no
-    // stable device identity, so name comparison is the only portable signal.
-    let default_name = host
-        .default_input_device()
-        .and_then(|device| device.name().ok());
+/// Delegates to [`devices::list_devices`], which asks the sound server for real
+/// device names and stable node ids and only falls back to raw cpal PCM names
+/// when no sound server answers (and says so when it does).
+pub fn list_input_devices() -> Result<DeviceList, CaptureError> {
+    devices::list_devices(Direction::Input).map_err(CaptureError::Device)
+}
 
-    let mut devices = Vec::new();
-    for (index, device) in host.input_devices()?.enumerate() {
-        let name = device.name().unwrap_or_else(|_| format!("Device {index}"));
-        let is_default = default_name.as_deref() == Some(name.as_str());
-        devices.push((index, name, is_default));
-    }
-    Ok(devices)
+/// The raw, uncollapsed cpal enumeration: `(index, name, is_default)`.
+///
+/// On Linux these are ALSA PCM routes (`front:CARD=USB,DEV=0`), not devices —
+/// several per card, and frequently missing the device the user wants. Kept for
+/// the naming fallback and for the before/after device-name proof; user-facing
+/// code must use [`list_input_devices`].
+pub fn list_input_devices_raw() -> Result<Vec<(usize, String, bool)>, CaptureError> {
+    devices::raw_cpal_devices(Direction::Input).map_err(CaptureError::Device)
 }
 
 /// Handle to a running audio capture session.
@@ -90,7 +86,43 @@ impl AudioCapture {
         Self::start_from_device(device)
     }
 
-    /// Start capturing from a specific device (by index from `list_input_devices`).
+    /// Start capturing from a specific device, named by the stable id from
+    /// [`list_input_devices`] (a sound-server node name, or a cpal PCM name on a
+    /// machine with no sound server). A legacy cpal index string is still
+    /// accepted so a selection saved by an older build keeps working.
+    ///
+    /// Returns the resolved [`DeviceTarget`] alongside the stream so the caller
+    /// can tell the user when the device they asked for was gone and the system
+    /// default was opened instead.
+    pub fn start_device_id(
+        id: &str,
+    ) -> Result<(Self, mpsc::Receiver<Vec<f32>>, DeviceTarget), CaptureError> {
+        let target = devices::resolve_target(Direction::Input, id).map_err(CaptureError::Device)?;
+        if target.fell_back_to_default {
+            warn!(
+                requested = %id,
+                opened = %target.display_name,
+                "selected microphone is gone; opening the system default instead"
+            );
+        }
+        let host = cpal::default_host();
+        let device = host
+            .input_devices()?
+            .nth(target.cpal_index)
+            .ok_or(CaptureError::NoInputDevice)?;
+
+        info!(device = %target.display_name, node = ?target.node, "opening audio input device");
+        let (capture, rx) =
+            devices::with_target_node(Direction::Input, target.node.as_deref(), || {
+                Self::start_from_device(device)
+            })?;
+        Ok((capture, rx, target))
+    }
+
+    /// Start capturing from a cpal enumeration index.
+    ///
+    /// Retained for callers that already hold a raw index; prefer
+    /// [`AudioCapture::start_device_id`], whose identity survives a re-plug.
     pub fn start_device(index: usize) -> Result<(Self, mpsc::Receiver<Vec<f32>>), CaptureError> {
         let host = cpal::default_host();
         let device = host

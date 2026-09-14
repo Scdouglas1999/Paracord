@@ -11,6 +11,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 use super::aec::{ReferenceProducer, ReferenceRing};
+use super::devices::{self, DeviceList, DeviceTarget, Direction};
 use super::opus::{FRAME_SIZE, SAMPLE_RATE};
 
 #[derive(Debug, Error)]
@@ -18,7 +19,9 @@ pub enum PlaybackError {
     #[error("no output device available")]
     NoOutputDevice,
     #[error("cpal device error: {0}")]
-    Device(#[from] cpal::DevicesError),
+    Cpal(#[from] cpal::DevicesError),
+    #[error("{0}")]
+    Device(devices::DeviceError),
     #[error("cpal default stream config error: {0}")]
     DefaultStreamConfig(#[from] cpal::DefaultStreamConfigError),
     #[error("cpal build stream error: {0}")]
@@ -29,30 +32,22 @@ pub enum PlaybackError {
     Resampler(String),
 }
 
-/// Enumerate available audio output devices as `(index, name, is_default)`.
+/// Enumerate speakers/headphones the way a person recognises them.
 ///
-/// The `index` is the device's position in cpal's `output_devices()` iterator
-/// and is exactly what [`AudioPlayback::start_device`] consumes via `.nth(index)`.
-/// These indices are enumeration-order only: they are assigned by iterating the
-/// host's device list at call time and can shift if devices are added or removed
-/// between calls (e.g. a USB headset plugged in). Callers must therefore treat an
-/// enumeration result and a subsequent switch as a paired operation — never cache
-/// an index across device topology changes.
-pub fn list_output_devices() -> Result<Vec<(usize, String, bool)>, PlaybackError> {
-    let host = cpal::default_host();
-    // The default device name is used to flag the default entry. cpal exposes no
-    // stable device identity, so name comparison is the only portable signal.
-    let default_name = host
-        .default_output_device()
-        .and_then(|device| device.name().ok());
+/// Delegates to [`devices::list_devices`], which asks the sound server for real
+/// device names and stable node ids and only falls back to raw cpal PCM names
+/// when no sound server answers (and says so when it does).
+pub fn list_output_devices() -> Result<DeviceList, PlaybackError> {
+    devices::list_devices(Direction::Output).map_err(PlaybackError::Device)
+}
 
-    let mut devices = Vec::new();
-    for (index, device) in host.output_devices()?.enumerate() {
-        let name = device.name().unwrap_or_else(|_| format!("Device {index}"));
-        let is_default = default_name.as_deref() == Some(name.as_str());
-        devices.push((index, name, is_default));
-    }
-    Ok(devices)
+/// The raw, uncollapsed cpal enumeration: `(index, name, is_default)`.
+///
+/// On Linux these are ALSA PCM routes (`hdmi:CARD=NVidia,DEV=3`), not devices.
+/// Kept for the naming fallback and for the before/after device-name proof;
+/// user-facing code must use [`list_output_devices`].
+pub fn list_output_devices_raw() -> Result<Vec<(usize, String, bool)>, PlaybackError> {
+    devices::raw_cpal_devices(Direction::Output).map_err(PlaybackError::Device)
 }
 
 /// Watermark band for playout-depth drift control (contract AU14). Kept small so
@@ -197,7 +192,44 @@ impl AudioPlayback {
         Self::start_from_device(device, reference)
     }
 
-    /// Start playback on an output device by host index.
+    /// Start playback on a specific device, named by the stable id from
+    /// [`list_output_devices`] (a sound-server node name, or a cpal PCM name on
+    /// a machine with no sound server). A legacy cpal index string is still
+    /// accepted so a selection saved by an older build keeps working.
+    ///
+    /// Returns the resolved [`DeviceTarget`] alongside the stream so the caller
+    /// can tell the user when the device they asked for was gone and the system
+    /// default was opened instead.
+    pub fn start_device_id(
+        id: &str,
+        reference: Option<Arc<ReferenceRing>>,
+    ) -> Result<(Self, DeviceTarget), PlaybackError> {
+        let target =
+            devices::resolve_target(Direction::Output, id).map_err(PlaybackError::Device)?;
+        if target.fell_back_to_default {
+            warn!(
+                requested = %id,
+                opened = %target.display_name,
+                "selected speaker is gone; opening the system default instead"
+            );
+        }
+        let host = cpal::default_host();
+        let device = host
+            .output_devices()?
+            .nth(target.cpal_index)
+            .ok_or(PlaybackError::NoOutputDevice)?;
+        info!(device = %target.display_name, node = ?target.node, "opening audio output device");
+        let playback =
+            devices::with_target_node(Direction::Output, target.node.as_deref(), || {
+                Self::start_from_device(device, reference)
+            })?;
+        Ok((playback, target))
+    }
+
+    /// Start playback on an output device by cpal enumeration index.
+    ///
+    /// Retained for callers that already hold a raw index; prefer
+    /// [`AudioPlayback::start_device_id`], whose identity survives a re-plug.
     pub fn start_device(
         index: usize,
         reference: Option<Arc<ReferenceRing>>,

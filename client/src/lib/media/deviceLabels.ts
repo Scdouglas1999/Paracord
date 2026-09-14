@@ -18,6 +18,12 @@ export interface RawMediaDevice {
   groupId?: string;
   /** OS/browser default endpoint, when the enumerator reports it. */
   isDefault?: boolean;
+  /**
+   * The label is already a real device name from the sound server. Skip the
+   * cleanup below, which exists to rescue ALSA/browser strings and would
+   * otherwise eat meaningful parts of a good name ("… Digital Stereo (HDMI)").
+   */
+  labelIsFriendly?: boolean;
 }
 
 /** One row ready to render in a `<select>` / menu. */
@@ -243,7 +249,9 @@ export function buildDevicePickerOptions(
     if (isBrowserPseudoDeviceId(device.deviceId)) continue;
 
     const rawLabel = collapseWs(device.label) || `${fallbackNoun} ${device.deviceId.slice(0, 6)}`;
-    const label = friendlyDeviceLabel(rawLabel, device.kind, device.deviceId);
+    const label = device.labelIsFriendly
+      ? rawLabel
+      : friendlyDeviceLabel(rawLabel, device.kind, device.deviceId);
     const isAdvanced = isAdvancedMediaDevice(device);
     prepared.push({
       deviceId: device.deviceId,

@@ -3,6 +3,7 @@ pub mod crypto;
 pub mod audio {
     pub mod aec;
     pub mod capture;
+    pub mod devices;
     pub mod jitter;
     pub mod noise;
     pub mod opus;

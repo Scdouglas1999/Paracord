@@ -211,6 +211,85 @@ pub(crate) fn describe_camera_open_error(raw: &str, device_count: usize) -> Stri
     }
 }
 
+/// Turn the backend's raw camera list into one readable row per real camera.
+///
+/// V4L2 publishes several `/dev/videoN` nodes per USB camera — the capture node
+/// plus metadata/output siblings — all carrying the *same* card name, so the raw
+/// list shows one webcam three times. When the kernel has no name at all,
+/// nokhwa falls back to the device path, and `/dev/video0` is not a name.
+///
+/// `hw_group` is an opaque per-physical-device key (on Linux, the sysfs parent
+/// the node hangs off). Nodes sharing one are the same camera, so only the
+/// first — the lowest index, which is the capture node — is kept. Two identical
+/// webcams have *different* groups and both survive, distinguished by a
+/// trailing number: two different cameras must never read as one string. Ids
+/// are never rewritten, so a saved selection keeps working.
+fn tidy_camera_devices(raw: Vec<(String, String, Option<String>)>) -> Vec<CameraDevice> {
+    use std::collections::{HashMap, HashSet};
+
+    let mut seen_groups: HashSet<String> = HashSet::new();
+    let mut devices: Vec<CameraDevice> = Vec::with_capacity(raw.len());
+
+    for (id, raw_label, hw_group) in raw {
+        if let Some(group) = hw_group {
+            if !seen_groups.insert(group) {
+                continue; // a sibling node of a camera already listed
+            }
+        }
+
+        let label = raw_label.trim();
+        let is_path = label.is_empty() || label.starts_with("/dev/") || label.starts_with(r"\\?\");
+        let label = if is_path {
+            match id.parse::<u32>() {
+                Ok(index) => format!("Camera {}", index + 1),
+                Err(_) => format!("Camera {id}"),
+            }
+        } else {
+            label.to_string()
+        };
+        devices.push(CameraDevice { id, label });
+    }
+
+    // Two cameras of the same model share a card name. Number them rather than
+    // letting the picker show the same string twice.
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for device in &devices {
+        *counts.entry(device.label.to_lowercase()).or_default() += 1;
+    }
+    let mut nth: HashMap<String, usize> = HashMap::new();
+    for device in devices.iter_mut() {
+        let key = device.label.to_lowercase();
+        if counts.get(&key).copied().unwrap_or(0) <= 1 {
+            continue;
+        }
+        let n = nth.entry(key).or_insert(0);
+        *n += 1;
+        device.label = format!("{} ({})", device.label, n);
+    }
+
+    devices
+}
+
+/// Opaque key identifying the physical camera a V4L2 node belongs to.
+///
+/// Every `/dev/videoN` of one USB camera hangs off the same sysfs parent, so
+/// the resolved `device` symlink separates "three nodes of one webcam" from
+/// "two webcams of the same model". `None` where the question does not arise
+/// (Windows/macOS enumerate one entry per camera already).
+#[cfg(target_os = "linux")]
+fn camera_hw_group(id: &str) -> Option<String> {
+    let index: u32 = id.parse().ok()?;
+    let link = format!("/sys/class/video4linux/video{index}/device");
+    std::fs::canonicalize(link)
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn camera_hw_group(_id: &str) -> Option<String> {
+    None
+}
+
 /// Enumerate available capture cameras (contract CAM1: `camera_list_devices`).
 pub fn list_devices() -> Result<Vec<CameraDevice>, String> {
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
@@ -220,19 +299,19 @@ pub fn list_devices() -> Result<Vec<CameraDevice>, String> {
 
         let infos =
             query(ApiBackend::Auto).map_err(|e| format!("camera enumeration failed: {e}"))?;
-        Ok(infos
-            .into_iter()
-            .map(|info| {
-                let id = match info.index() {
-                    CameraIndex::Index(index) => index.to_string(),
-                    CameraIndex::String(value) => value.clone(),
-                };
-                CameraDevice {
-                    id,
-                    label: info.human_name(),
-                }
-            })
-            .collect())
+        Ok(tidy_camera_devices(
+            infos
+                .into_iter()
+                .map(|info| {
+                    let id = match info.index() {
+                        CameraIndex::Index(index) => index.to_string(),
+                        CameraIndex::String(value) => value.clone(),
+                    };
+                    let group = camera_hw_group(&id);
+                    (id, info.human_name(), group)
+                })
+                .collect(),
+        ))
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
@@ -697,13 +776,78 @@ fn run_capture_loop(
 
 #[cfg(test)]
 mod tests {
-    use super::describe_camera_open_error;
+    use super::{describe_camera_open_error, tidy_camera_devices};
 
     /// The user clicked "turn on camera" on a machine with no `/dev/video*`.
     /// The backend knew that instantly and said so in V4L2's words; the app
     /// answered "Timed out while starting native camera capture." Neither the
     /// delay nor the cause was real. A missing camera must read as a missing
     /// camera.
+    /// The user clicked "turn on camera" on a machine with no `/dev/video*`.
+    /// The backend knew that instantly and said so in V4L2's words; the app
+    /// answered "Timed out while starting native camera capture." Neither the
+    /// delay nor the cause was real. A missing camera must read as a missing
+    /// camera.
+    #[test]
+    fn three_nodes_of_one_webcam_are_one_camera() {
+        let devices = tidy_camera_devices(vec![
+            (
+                "0".into(),
+                "HD Pro Webcam C920".into(),
+                Some("/sys/usb1".into()),
+            ),
+            (
+                "1".into(),
+                "HD Pro Webcam C920".into(),
+                Some("/sys/usb1".into()),
+            ),
+            (
+                "2".into(),
+                "HD Pro Webcam C920".into(),
+                Some("/sys/usb1".into()),
+            ),
+        ]);
+        assert_eq!(devices.len(), 1, "got {devices:?}");
+        assert_eq!(devices[0].id, "0", "the capture node is the lowest index");
+        assert_eq!(devices[0].label, "HD Pro Webcam C920");
+    }
+
+    #[test]
+    fn two_webcams_of_the_same_model_stay_two_cameras() {
+        let devices = tidy_camera_devices(vec![
+            (
+                "0".into(),
+                "HD Pro Webcam C920".into(),
+                Some("/sys/usb1".into()),
+            ),
+            (
+                "1".into(),
+                "HD Pro Webcam C920".into(),
+                Some("/sys/usb1".into()),
+            ),
+            (
+                "2".into(),
+                "HD Pro Webcam C920".into(),
+                Some("/sys/usb2".into()),
+            ),
+        ]);
+        assert_eq!(devices.len(), 2, "got {devices:?}");
+        assert_ne!(
+            devices[0].label, devices[1].label,
+            "two cameras read as the same string"
+        );
+    }
+
+    #[test]
+    fn a_device_path_is_not_a_name() {
+        let devices = tidy_camera_devices(vec![("0".into(), "/dev/video0".into(), None)]);
+        assert_eq!(devices[0].label, "Camera 1");
+        assert_eq!(
+            devices[0].id, "0",
+            "the id a selection is saved under is untouched"
+        );
+    }
+
     #[test]
     fn a_machine_with_no_camera_is_told_it_has_no_camera() {
         let message = describe_camera_open_error(

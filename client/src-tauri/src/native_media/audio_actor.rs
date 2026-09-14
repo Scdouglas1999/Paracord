@@ -29,12 +29,12 @@ type PcmFrame = Vec<f32>;
 
 enum AudioCommand {
     StartCapture {
-        device_index: Option<usize>,
+        device_id: Option<String>,
         reply: oneshot::Sender<Result<mpsc::Receiver<PcmFrame>, String>>,
     },
     StopCapture,
     StartPlayback {
-        device_index: Option<usize>,
+        device_id: Option<String>,
         reply: oneshot::Sender<Result<(), String>>,
     },
     StopPlayback,
@@ -54,7 +54,7 @@ enum AudioCommand {
         gain: f32,
     },
     SwitchOutputDevice {
-        device_index: usize,
+        device_id: String,
         voice_ssrcs: Vec<u32>,
         stream_ssrcs: Vec<u32>,
         reply: oneshot::Sender<Result<SwitchedSources, String>>,
@@ -202,13 +202,10 @@ impl AudioActor {
     /// stream. Any previously running capture is stopped and dropped first.
     pub async fn start_capture(
         &self,
-        device_index: Option<usize>,
+        device_id: Option<String>,
     ) -> Result<mpsc::Receiver<PcmFrame>, String> {
         let (reply, rx) = oneshot::channel();
-        self.send(AudioCommand::StartCapture {
-            device_index,
-            reply,
-        })?;
+        self.send(AudioCommand::StartCapture { device_id, reply })?;
         rx.await
             .map_err(|_| "audio actor dropped capture reply".to_string())?
     }
@@ -219,12 +216,9 @@ impl AudioActor {
     }
 
     /// Start (or replace) playback on the given device.
-    pub async fn start_playback(&self, device_index: Option<usize>) -> Result<(), String> {
+    pub async fn start_playback(&self, device_id: Option<String>) -> Result<(), String> {
         let (reply, rx) = oneshot::channel();
-        self.send(AudioCommand::StartPlayback {
-            device_index,
-            reply,
-        })?;
+        self.send(AudioCommand::StartPlayback { device_id, reply })?;
         rx.await
             .map_err(|_| "audio actor dropped playback reply".to_string())?
     }
@@ -264,18 +258,18 @@ impl AudioActor {
 
     /// Switch the output device, re-attaching the given remote sources to the
     /// new device and returning their fresh senders (voice mono + stream stereo,
-    /// kept separate so each is rebuilt with the right layout). A stale host
-    /// index falls back to the system default so a failed switch never silences
-    /// audio.
+    /// kept separate so each is rebuilt with the right layout). `device_id` is
+    /// the stable id from `list_output_devices`; a device that has gone away
+    /// falls back to the system default so a failed switch never silences audio.
     pub async fn switch_output_device(
         &self,
-        device_index: usize,
+        device_id: String,
         voice_ssrcs: Vec<u32>,
         stream_ssrcs: Vec<u32>,
     ) -> Result<SwitchedSources, String> {
         let (reply, rx) = oneshot::channel();
         self.send(AudioCommand::SwitchOutputDevice {
-            device_index,
+            device_id,
             voice_ssrcs,
             stream_ssrcs,
             reply,
@@ -310,15 +304,13 @@ fn run_audio_thread(
     // around the `add_source` calls that internally spawn a forwarding task.
     while let Some(command) = rx.blocking_recv() {
         match command {
-            AudioCommand::StartCapture {
-                device_index,
-                reply,
-            } => {
+            AudioCommand::StartCapture { device_id, reply } => {
                 if let Some(old) = capture.take() {
                     old.stop();
                 }
-                let result = match device_index {
-                    Some(index) => AudioCapture::start_device(index),
+                let result = match device_id.as_deref() {
+                    Some(id) => AudioCapture::start_device_id(id)
+                        .map(|(capture, pcm_rx, _target)| (capture, pcm_rx)),
                     None => AudioCapture::start(),
                 };
                 match result {
@@ -339,12 +331,10 @@ fn run_audio_thread(
                     old.stop();
                 }
             }
-            AudioCommand::StartPlayback {
-                device_index,
-                reply,
-            } => {
-                let result = match device_index {
-                    Some(index) => AudioPlayback::start_device(index, Some(reference.clone())),
+            AudioCommand::StartPlayback { device_id, reply } => {
+                let result = match device_id.as_deref() {
+                    Some(id) => AudioPlayback::start_device_id(id, Some(reference.clone()))
+                        .map(|(playback, _target)| playback),
                     None => AudioPlayback::start(Some(reference.clone())),
                 };
                 match result {
@@ -392,36 +382,34 @@ fn run_audio_thread(
                 }
             }
             AudioCommand::SwitchOutputDevice {
-                device_index,
+                device_id,
                 voice_ssrcs,
                 stream_ssrcs,
                 reply,
             } => {
                 // Build the replacement before tearing down the current output
                 // so a failed switch never leaves the user with no audio.
-                let replacement = match AudioPlayback::start_device(
-                    device_index,
-                    Some(reference.clone()),
-                ) {
-                    Ok(pb) => pb,
-                    Err(err) => {
-                        tracing::warn!(
-                            device_index,
-                            error = %err,
-                            "output device index unavailable; falling back to default output device"
-                        );
-                        match AudioPlayback::start(Some(reference.clone())) {
-                            Ok(pb) => pb,
-                            Err(err) => {
-                                let _ = reply.send(Err(describe_audio_device_error(
-                                    AudioDeviceRole::Speakers,
-                                    &format!("default output fallback: {err}"),
-                                )));
-                                continue;
+                let replacement =
+                    match AudioPlayback::start_device_id(&device_id, Some(reference.clone())) {
+                        Ok((pb, _target)) => pb,
+                        Err(err) => {
+                            tracing::warn!(
+                                device_id = %device_id,
+                                error = %err,
+                                "output device unavailable; falling back to default output device"
+                            );
+                            match AudioPlayback::start(Some(reference.clone())) {
+                                Ok(pb) => pb,
+                                Err(err) => {
+                                    let _ = reply.send(Err(describe_audio_device_error(
+                                        AudioDeviceRole::Speakers,
+                                        &format!("default output fallback: {err}"),
+                                    )));
+                                    continue;
+                                }
                             }
                         }
-                    }
-                };
+                    };
                 let switched = {
                     let _runtime = handle.enter();
                     SwitchedSources {

@@ -17,11 +17,15 @@ describe('voiceStore.applyAudioOutputDevice (native path)', () => {
     invokeMock.mockReset();
     invokeMock.mockImplementation((command: string) => {
       if (command === 'voice_list_output_devices') {
-        return Promise.resolve([
-          { index: 0, name: 'Built-in Output', is_default: true },
-          { index: 1, name: 'USB Headset' },
-          { index: 2, name: 'HDMI Audio' },
-        ]);
+        return Promise.resolve({
+          backend: 'sound-server',
+          warning: null,
+          devices: [
+            { id: '@default', name: 'System default', is_default: true, group: 'system-default' },
+            { id: 'alsa_output.usb-headset', name: 'USB Headset', group: 'device' },
+            { id: 'alsa_output.hdmi-stereo', name: 'HDMI Audio', group: 'device' },
+          ],
+        });
       }
       return Promise.resolve(undefined);
     });

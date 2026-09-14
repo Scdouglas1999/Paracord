@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { computeConnectRetryDelayMs, isTransientVoiceConnectError } from './reconnect';
 import { computeSpeaking, isStallWarningInterval, smoothVolume } from './timers';
-import { resolveNativeDeviceIndex, type AudioDeviceInfo } from './nativeMediaController';
+import {
+  resolveNativeDeviceId,
+  NATIVE_SYSTEM_DEFAULT_ID,
+  type AudioDeviceInfo,
+} from './nativeMediaController';
 import {
   isLoopbackHostname,
   isLivekitProxyPath,
@@ -86,28 +90,45 @@ describe('livekit url helpers', () => {
   });
 });
 
-describe('resolveNativeDeviceIndex', () => {
+describe('resolveNativeDeviceId', () => {
   const devices: AudioDeviceInfo[] = [
-    { index: 0, name: 'Built-in Output', is_default: true },
-    { index: 1, name: 'USB Headset' },
-    { index: 2, name: 'HDMI Audio' },
+    { id: '@default', name: 'System default', is_default: true, group: 'system-default' },
+    {
+      id: 'alsa_input.usb-Focusrite_Scarlett_Solo_USB-00.Direct__Direct__source',
+      name: 'Scarlett Solo USB',
+      detail: 'Direct',
+      group: 'device',
+    },
+    { id: 'alsa_output.pci-0000_01_00.1.hdmi-stereo', name: 'Odyssey G95SC', group: 'device' },
   ];
 
-  it('matches by native index string', () => {
-    expect(resolveNativeDeviceIndex(devices, '2')).toBe('2');
+  it('matches by stable id', () => {
+    expect(resolveNativeDeviceId(devices, 'alsa_output.pci-0000_01_00.1.hdmi-stereo')).toBe(
+      'alsa_output.pci-0000_01_00.1.hdmi-stereo'
+    );
   });
 
   it('matches by exact and case-insensitive name', () => {
-    expect(resolveNativeDeviceIndex(devices, 'USB Headset')).toBe('1');
-    expect(resolveNativeDeviceIndex(devices, 'hdmi audio')).toBe('2');
+    expect(resolveNativeDeviceId(devices, 'Scarlett Solo USB')).toBe(
+      'alsa_input.usb-Focusrite_Scarlett_Solo_USB-00.Direct__Direct__source'
+    );
+    expect(resolveNativeDeviceId(devices, 'odyssey g95sc')).toBe(
+      'alsa_output.pci-0000_01_00.1.hdmi-stereo'
+    );
   });
 
-  it('returns the default device for empty/default selection', () => {
-    expect(resolveNativeDeviceIndex(devices, null)).toBe('0');
-    expect(resolveNativeDeviceIndex(devices, 'default')).toBe('0');
+  it('returns the system default for empty/default selection', () => {
+    expect(resolveNativeDeviceId(devices, null)).toBe(NATIVE_SYSTEM_DEFAULT_ID);
+    expect(resolveNativeDeviceId(devices, 'default')).toBe(NATIVE_SYSTEM_DEFAULT_ID);
   });
 
-  it('falls back to index 0 when nothing matches', () => {
-    expect(resolveNativeDeviceIndex(devices, 'nonexistent-device-id')).toBe('0');
+  it('passes a legacy saved index straight through rather than guessing', () => {
+    expect(resolveNativeDeviceId(devices, '2')).toBe('2');
+  });
+
+  it('falls back to the system default when nothing matches', () => {
+    expect(resolveNativeDeviceId(devices, 'nonexistent-device-id')).toBe(
+      NATIVE_SYSTEM_DEFAULT_ID
+    );
   });
 });
