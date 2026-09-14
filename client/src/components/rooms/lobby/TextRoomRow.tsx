@@ -1,7 +1,7 @@
 import * as React from 'react';
-import { Pin } from 'lucide-react';
+import { MoreHorizontal, Pin } from 'lucide-react';
 
-import { Chip } from '../../ui';
+import { Chip, IconButton } from '../../ui';
 import { AvatarStack } from '../../light';
 import { readingCaption, type RoomLight } from '../../../lib/attention/light';
 import { cn } from '../../../lib/utils';
@@ -28,6 +28,14 @@ export interface TextRoomRowProps {
   /** The building's operator pinned this room, so it sorts first and says so. */
   featured?: boolean;
   onOpen: () => void;
+  /**
+   * Open the room menu — notification level, mark as read, copy link (§7.1).
+   *
+   * Wired to three gestures, because this row is a phone's only door to them:
+   * right-click, the `contextmenu` Chromium raises after a long touch press,
+   * and the "…" control, which is the only one a first-time reader can see.
+   */
+  onMenu?: (event: React.MouseEvent<HTMLElement>) => void;
 }
 
 /**
@@ -56,6 +64,7 @@ export const TextRoomRow = React.forwardRef<HTMLButtonElement, TextRoomRowProps>
       silent = false,
       featured = false,
       onOpen,
+      onMenu,
     },
     ref,
   ) {
@@ -63,11 +72,12 @@ export const TextRoomRow = React.forwardRef<HTMLButtonElement, TextRoomRowProps>
     const mentions = mentionCaption(mentionCount);
     const byline = silent ? NOTHING_SAID_YET : lastAuthorCaption(lastAuthor, lastAt);
 
-    return (
+    const row = (
       <button
         ref={ref}
         type="button"
         onClick={onOpen}
+        onContextMenu={onMenu}
         aria-current={active ? 'page' : undefined}
         className={cn(
           // §9: the row is the biggest target on this surface and a thumb has
@@ -140,6 +150,27 @@ export const TextRoomRow = React.forwardRef<HTMLButtonElement, TextRoomRowProps>
           )}
         </span>
       </button>
+    );
+
+    if (!onMenu) return row;
+    // The menu control is a sibling, never a child: a button inside a button is
+    // not a document, and the row is a button. `pc-touch` carries the "…" out to
+    // a 44px hit area on a coarse pointer without growing its ink (§9).
+    return (
+      <div className="flex min-w-0 items-center gap-0.5">
+        <span className="min-w-0 flex-1">{row}</span>
+        <IconButton
+          label={`Room options for ${room.name}`}
+          size="sm"
+          className="pc-touch shrink-0"
+          onClick={(event) => {
+            event.stopPropagation();
+            onMenu(event);
+          }}
+        >
+          <MoreHorizontal size={16} aria-hidden />
+        </IconButton>
+      </div>
     );
   },
 );

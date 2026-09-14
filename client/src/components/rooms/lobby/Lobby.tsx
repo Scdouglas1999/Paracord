@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 
 import { useCurrentChannelStore } from '../../../hooks/useChannels';
@@ -8,6 +8,7 @@ import { useGuild } from '../../../hooks/useGuilds';
 import { useAroundNow, useBuildingLight } from '../../../hooks/useLights';
 import { useRoomThumbnail } from '../../../hooks/useRoomThumbnail';
 import { useMutedGuilds } from '../../../hooks/useMutedGuilds';
+import { menuEventAt, useRoomMenu } from '../../../hooks/useRoomMenu';
 import { usePermissions } from '../../../hooks/usePermissions';
 import { useUnreadCounts } from '../../../hooks/useUnreadCounts';
 import { useVoice } from '../../../hooks/useVoice';
@@ -25,6 +26,7 @@ import { RECEDE_MARK, walkIntoRoom } from '../../../lib/motion';
 import { BuildingNotFound } from '../../guild/BuildingNotFound';
 import { InviteModal } from '../../guild/InviteModal';
 import { Plate } from '../../ui';
+import { ContextMenu, useContextMenu } from '../../ui/ContextMenu';
 import { AroundNowWell } from './AroundNowWell';
 import { EventCard } from './EventCard';
 import { LobbyHeader } from './LobbyHeader';
@@ -121,6 +123,18 @@ export function Lobby({ guildId }: LobbyProps) {
   const { joinChannel } = useVoice();
   const openGuildSettings = useUIStore((state) => state.openGuildSettings);
   const [showInvite, setShowInvite] = useState(false);
+  /**
+   * The room menu, the same one the Buildings column opens (§7.1).
+   *
+   * A phone never renders that column — it reaches its rooms through here — so
+   * until this the notification level, "mark room as read" and "copy link to
+   * room" existed for one form factor out of two. Every room row and card on
+   * this surface now takes a right-click, a long press, and a visible "…".
+   */
+  const { contextMenu, onContextMenu, closeContextMenu } = useContextMenu();
+  const roomMenu = useRoomMenu();
+  const openRoomMenu = (event: ReactMouseEvent<HTMLElement>, room: RoomLight) =>
+    onContextMenu(menuEventAt(event), roomMenu(room));
 
   useEffect(() => {
     if (guildId && channels.length === 0) void fetchChannels(guildId);
@@ -370,6 +384,7 @@ export function Lobby({ guildId }: LobbyProps) {
                       isStage={stageChannelIds.has(room.channelId)}
                       onEnter={(origin) => enterRoom(room, origin)}
                       onJoin={(origin) => joinRoom(room, origin)}
+                      onMenu={(event) => openRoomMenu(event, room)}
                     />
                   ))}
                 </div>
@@ -383,6 +398,7 @@ export function Lobby({ guildId }: LobbyProps) {
                       isStage={stageChannelIds.has(room.channelId)}
                       onEnter={(origin) => enterRoom(room, origin)}
                       onJoin={(origin) => joinRoom(room, origin)}
+                      onMenu={(event) => openRoomMenu(event, room)}
                     />
                   ))}
                   {canOpenRoom && (
@@ -457,6 +473,7 @@ export function Lobby({ guildId }: LobbyProps) {
                     silent={silent}
                     featured={featuredSet.has(room.channelId)}
                     onOpen={() => openChannel(room.channelId)}
+                    onMenu={(event) => openRoomMenu(event, room)}
                   />
                 );
               })}
@@ -464,6 +481,13 @@ export function Lobby({ guildId }: LobbyProps) {
           </section>
         )}
       </Plate>
+
+      <ContextMenu
+        open={contextMenu.isOpen}
+        items={contextMenu.items}
+        position={contextMenu.position}
+        onClose={closeContextMenu}
+      />
 
       {showInvite && inviteChannelId && (
         <InviteModal
@@ -504,11 +528,13 @@ function LobbyRoomCard({
   isStage,
   onEnter,
   onJoin,
+  onMenu,
 }: {
   room: RoomLight;
   isStage: boolean;
   onEnter: (origin?: Element | null) => void;
   onJoin: (origin?: Element | null) => void;
+  onMenu: (event: ReactMouseEvent<HTMLElement>) => void;
 }) {
   const { frame } = useRoomThumbnail(room);
   return (
@@ -518,6 +544,7 @@ function LobbyRoomCard({
       onEnter={room.lit ? onEnter : undefined}
       onJoin={onJoin}
       joinLabel={isStage ? 'Enter' : room.lit ? 'Join' : 'Open'}
+      onMenu={onMenu}
     />
   );
 }

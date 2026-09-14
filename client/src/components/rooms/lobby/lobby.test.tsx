@@ -220,6 +220,58 @@ describe('TextRoomRow', () => {
     fireEvent.click(screen.getByRole('button'));
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
+
+  it('has no menu control when the surface offers no menu', () => {
+    render(<TextRoomRow room={textRoom(true)} onOpen={vi.fn()} />);
+    expect(screen.getAllByRole('button')).toHaveLength(1);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* The room menu's second door (§7.1) — a phone never renders the Buildings    */
+/* column, so the Lobby's rows and cards carry it too.                         */
+/* -------------------------------------------------------------------------- */
+
+describe('the room menu on the Lobby', () => {
+  it('opens from a long press and from a visible control on a text row', () => {
+    const onMenu = vi.fn();
+    const onOpen = vi.fn();
+    render(<TextRoomRow room={textRoom(true)} onOpen={onOpen} onMenu={onMenu} />);
+
+    // Chromium raises `contextmenu` after a long touch press, which is the
+    // gesture a phone has instead of a right-click.
+    const [rowButton] = screen.getAllByRole('button');
+    fireEvent.contextMenu(rowButton);
+    expect(onMenu).toHaveBeenCalledTimes(1);
+
+    // …and the affordance a first-time reader can actually see.
+    const control = screen.getByRole('button', { name: 'Room options for build-log' });
+    expect(control.className).toContain('pc-touch');
+    fireEvent.click(control);
+    expect(onMenu).toHaveBeenCalledTimes(2);
+    // Opening the menu is not opening the room.
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it('opens from a lit card and a dark one', () => {
+    const onMenu = vi.fn();
+    const { container, rerender } = render(
+      <RoomCard room={litRoom()} onJoin={vi.fn()} onMenu={onMenu} nowMs={NOW} />,
+    );
+    fireEvent.contextMenu(container.querySelector('article')!);
+    fireEvent.click(screen.getByRole('button', { name: 'Room options for Shop floor' }));
+    expect(onMenu).toHaveBeenCalledTimes(2);
+
+    rerender(<RoomCard room={darkRoom()} onJoin={vi.fn()} onMenu={onMenu} nowMs={NOW} />);
+    fireEvent.contextMenu(container.querySelector('article')!);
+    fireEvent.click(screen.getByRole('button', { name: 'Room options for Lounge' }));
+    expect(onMenu).toHaveBeenCalledTimes(4);
+  });
+
+  it('leaves the cards alone when no menu is offered', () => {
+    render(<RoomCard room={darkRoom()} onJoin={vi.fn()} nowMs={NOW} />);
+    expect(screen.queryByRole('button', { name: /Room options/ })).not.toBeInTheDocument();
+  });
 });
 
 /* -------------------------------------------------------------------------- */

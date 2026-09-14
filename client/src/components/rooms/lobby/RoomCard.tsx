@@ -1,7 +1,7 @@
 import * as React from 'react';
-import { Plus } from 'lucide-react';
+import { MoreHorizontal, Plus } from 'lucide-react';
 
-import { Button } from '../../ui';
+import { Button, IconButton } from '../../ui';
 import { AvatarStack, RoomDuration, RoomThumbnail } from '../../light';
 import { darkRoomCaption, lastLitCaption, type RoomLight } from '../../../lib/attention/light';
 import type { RoomFrame } from '../../../lib/media/roomFrameTap';
@@ -28,6 +28,11 @@ export interface RoomCardProps {
   onJoin: (origin?: Element | null) => void;
   /** "Join" in a lit room, "Open" in a dark one, "Enter" for a stage. */
   joinLabel?: string;
+  /**
+   * Open the room menu — notification level, mark as read, copy link (§7.1).
+   * Right-click, a long touch press, or the visible "…" control.
+   */
+  onMenu?: (event: React.MouseEvent<HTMLElement>) => void;
   /** Injected clock, so "last lit 2 h ago" is testable. */
   nowMs?: number;
 }
@@ -49,7 +54,7 @@ export interface RoomCardProps {
  * the occupant stack's sentence, the speaking line, "Dark · nobody's in".
  */
 export const RoomCard = React.forwardRef<HTMLElement, RoomCardProps>(function RoomCard(
-  { room, frame = null, onEnter, onJoin, joinLabel, nowMs = Date.now() },
+  { room, frame = null, onEnter, onJoin, joinLabel, onMenu, nowMs = Date.now() },
   ref,
 ) {
   if (!room.lit) {
@@ -59,6 +64,7 @@ export const RoomCard = React.forwardRef<HTMLElement, RoomCardProps>(function Ro
         room={room}
         onOpen={onJoin}
         openLabel={joinLabel ?? 'Open'}
+        onMenu={onMenu}
         nowMs={nowMs}
       />
     );
@@ -76,6 +82,7 @@ export const RoomCard = React.forwardRef<HTMLElement, RoomCardProps>(function Ro
       // §5.1: the thing you click becomes the thing you look at. This card and
       // the Stage's dominant tile travel under the same name.
       data-motion-shared={roomSharedName(room.channelId)}
+      onContextMenu={onMenu}
       className={cn(
         'relative flex flex-col overflow-hidden rounded-[var(--radius-plate)] bg-bg-well',
         'shadow-[var(--shadow-tile),var(--ring-lit-plate)]',
@@ -112,6 +119,7 @@ export const RoomCard = React.forwardRef<HTMLElement, RoomCardProps>(function Ro
             {room.name}
           </h3>
           <RoomDuration durationMs={room.durationMs} />
+          <RoomMenuButton room={room} onMenu={onMenu} />
         </div>
 
         <div className="flex items-center gap-2.5">
@@ -140,7 +148,40 @@ export interface DarkRoomCardProps {
   room: RoomLight;
   onOpen: (origin?: Element | null) => void;
   openLabel?: string;
+  onMenu?: (event: React.MouseEvent<HTMLElement>) => void;
   nowMs?: number;
+}
+
+/**
+ * The "…" that opens the room menu.
+ *
+ * A phone never renders the Buildings column, so before this a room's
+ * notification level, "mark as read" and "copy link" had no door at all on that
+ * form factor. A long press raises `contextmenu` and reaches the same menu, but
+ * a gesture nothing on screen mentions is not an affordance — so the control is
+ * visible, and `pc-touch` carries it to 44px where a finger will use it (§9).
+ */
+function RoomMenuButton({
+  room,
+  onMenu,
+}: {
+  room: RoomLight;
+  onMenu?: (event: React.MouseEvent<HTMLElement>) => void;
+}) {
+  if (!onMenu) return null;
+  return (
+    <IconButton
+      label={`Room options for ${room.name}`}
+      size="sm"
+      className="pc-touch shrink-0"
+      onClick={(event) => {
+        event.stopPropagation();
+        onMenu(event);
+      }}
+    >
+      <MoreHorizontal size={16} aria-hidden />
+    </IconButton>
+  );
 }
 
 /**
@@ -164,11 +205,12 @@ export interface DarkRoomCardProps {
  * nobody is in the room (§0, §6.3). Hover lifts the plate and nothing else.
  */
 export const DarkRoomCard = React.forwardRef<HTMLElement, DarkRoomCardProps>(
-  function DarkRoomCard({ room, onOpen, openLabel = 'Open', nowMs = Date.now() }, ref) {
+  function DarkRoomCard({ room, onOpen, openLabel = 'Open', onMenu, nowMs = Date.now() }, ref) {
     return (
       <article
         ref={ref}
         data-motion-shared={roomSharedName(room.channelId)}
+        onContextMenu={onMenu}
         className={cn(
           'group/room relative flex items-center gap-3 rounded-[var(--radius-card)] bg-bg-plate',
           'px-3 py-3 shadow-[inset_0_0_0_1px_var(--border-subtle)]',
@@ -194,6 +236,7 @@ export const DarkRoomCard = React.forwardRef<HTMLElement, DarkRoomCardProps>(
         >
           {openLabel}
         </Button>
+        <RoomMenuButton room={room} onMenu={onMenu} />
       </article>
     );
   },
