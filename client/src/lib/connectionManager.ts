@@ -1,5 +1,5 @@
 ﻿import { type AxiosInstance } from 'axios';
-import { createApiClient } from '../api/client';
+import { apiErrorStatus, createApiClient } from '../api/client';
 import { responseContract } from '../api/responseContracts';
 import { isCurrentUser } from '../api/generated/validators';
 import { useServerListStore, type ServerEntry } from '../stores/serverListStore';
@@ -784,6 +784,24 @@ class ConnectionManager {
         server: serverId,
         error: String(err),
       });
+      // Only "this session is gone" throws the credential away. A refresh that
+      // failed because the server was restarting must leave it alone.
+      //
+      // Throwing it away matters: a stored token the server has already
+      // revoked still reads as a live session to the route guards, so the app
+      // sat in a shell with no name and no buildings, bouncing between /login
+      // and /app, instead of asking the user to sign in.
+      const status = apiErrorStatus(err);
+      if (status === 401 || status === 403) {
+        const store = useServerListStore.getState();
+        store.updateToken(serverId, '');
+        store.updateRefreshToken(serverId, null);
+        if (promoteToLocalAuth) {
+          setAccessToken(null);
+          setRefreshToken(null);
+          useAuthStore.setState({ token: null, user: null });
+        }
+      }
       return null;
     }
   }
@@ -1052,6 +1070,10 @@ class ConnectionManager {
 
     if (!serverToken && !localSessionToken) {
       if (!canUseChallengeAuth) {
+        // The end of the line: there is no credential left and no key to sign
+        // in with. Leave a sentence behind — this is the moment the app is
+        // about to strand the user on a screen that explains nothing.
+        noteSessionEnded(SESSION_REVOKED_MESSAGE);
         throw new Error('No server token and local account is not unlocked');
       }
       const token = await this.authenticate(client, server, account.publicKey!, account.username!);
