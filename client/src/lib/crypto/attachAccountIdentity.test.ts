@@ -6,7 +6,13 @@ import type { User } from '../../types';
 const fixture = vi.hoisted(() => ({ client: null as unknown }));
 vi.mock('../../api/activeClient', () => ({ getServerApi: () => fixture.client, getApi: () => fixture.client, getActiveApi: () => fixture.client }));
 vi.mock('../secureStorage', () => ({ secureSet: vi.fn(), secureGet: vi.fn(), secureDelete: vi.fn() }));
-vi.mock('../authToken', () => ({ setAccessToken: vi.fn(), setRefreshToken: vi.fn(), getAccessToken: () => null }));
+const tokens = vi.hoisted(() => ({ access: null as string | null, refresh: null as string | null }));
+vi.mock('../authToken', () => ({
+  setAccessToken: vi.fn(),
+  setRefreshToken: vi.fn(),
+  getAccessToken: () => tokens.access,
+  getRefreshToken: () => tokens.refresh,
+}));
 import { useAuthStore } from '../../stores/authStore';
 import { useServerListStore } from '../../stores/serverListStore';
 import { captureScopedOperation } from '../operationContext';
@@ -22,6 +28,7 @@ const context = () => captureScopedOperation({ serverId: 'a', userId: '42' });
 let client: ReturnType<typeof axios.create>;
 beforeEach(() => {
   vi.clearAllMocks();
+  tokens.access = null; tokens.refresh = null;
   client = axios.create(); fixture.client = client;
   setUnlockedPrivateKey(key.slice());
   useAuthStore.setState({ token: 'home-token', user: user('home') });
@@ -93,4 +100,35 @@ it('installs the home access token, refresh token and matching profile together'
   expect(setAccessToken).toHaveBeenCalledWith('new-home');
   expect(setRefreshToken).toHaveBeenCalledWith('new-refresh');
   expect(useAuthStore.getState()).toMatchObject({ token: 'new-home', user: { id: 'home', public_key: publicKey } });
+});
+
+// On the desktop the home session and the server-list entry for this instance
+// are the SAME session under two names. Attaching a key revokes that session
+// and issues a new one; the copy left holding the revoked token 401'd within
+// milliseconds, refreshed with the spent credential, and its `onAuthFailed`
+// tore down the home session mid-enrolment — "Waiting for your instance
+// account" on a setup the server had already accepted.
+it('hands the replacement session to every entry that held the revoked one', async () => {
+  tokens.access = 'home-token'; tokens.refresh = 'home-refresh';
+  useAuthStore.setState({ token: 'home-token', user: user('home') });
+  useServerListStore.setState({
+    activeServerId: 'home-entry',
+    servers: [
+      { id: 'home-entry', name: 'Home', url: 'https://example.test', token: 'home-token', refreshToken: 'home-refresh', userId: 'home', user: user('home'), connected: true },
+      { id: 'other', name: 'Other', url: 'https://other.test', token: 'other-token', refreshToken: 'other-refresh', userId: '99', user: user('99'), connected: true },
+    ],
+  });
+  client.defaults.adapter = async config => ({ config, status: 200, statusText: 'OK', headers: {}, data: config.url === '/auth/challenge'
+    ? { nonce: 'nonce', timestamp: Math.floor(Date.now() / 1000), server_origin: window.location.origin }
+    : { token: 'new-home', refresh_token: 'new-refresh', user: user('home', publicKey) } });
+
+  await attachAccountIdentity(captureScopedOperation({ serverId: '__local__', userId: 'home' }), 'secret');
+
+  expect(useServerListStore.getState().getServer('home-entry')).toMatchObject({
+    token: 'new-home',
+    refreshToken: 'new-refresh',
+    user: { id: 'home', public_key: publicKey },
+  });
+  // A genuinely different account's session is none of this operation's business.
+  expect(useServerListStore.getState().getServer('other')).toMatchObject({ token: 'other-token', refreshToken: 'other-refresh' });
 });

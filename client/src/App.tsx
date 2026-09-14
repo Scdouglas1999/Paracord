@@ -139,16 +139,46 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const sessionBootstrapComplete = useAuthStore((s) => s.sessionBootstrapComplete);
   const settings = useAuthStore((s) => s.settings);
   const hasFetchedSettings = useAuthStore((s) => s.hasFetchedSettings);
+  const settingsUnavailable = useAuthStore((s) => s.settingsUnavailable);
   const fetchSettings = useAuthStore((s) => s.fetchSettings);
   const serverStatus = useServerStatus();
-  const cryptoAuthEnabled = settings?.crypto_auth_enabled === true;
   const hasServerSession = tokensHydrated && hasHydratedServerSession(servers);
+  const hasSession = Boolean(token || hasServerSession);
+  /**
+   * Is the device-key gate on? Unknown must fail closed.
+   *
+   * `crypto_auth_enabled` is a security control, and the two ways this app had
+   * of not knowing its value both read as "off": a settings GET that 401'd was
+   * recorded as a completed fetch, and a session held only by a server-list
+   * entry (no home token) never triggered a fetch at all. Either way an account
+   * that had asked for device-key sign-in walked straight into the app with no
+   * unlock prompt, and nothing said so.
+   *
+   * With no answer, an enrolled device identity decides — it is the credential
+   * this feature exists to enforce, and the only one readable without a
+   * session. A device that has no identity has nothing to unlock, so gating it
+   * would lock the account out with no way back in; that case stays on the
+   * password path, which is where it already was.
+   */
+  const cryptoAuthEnabled = hasFetchedSettings
+    ? settings?.crypto_auth_enabled === true
+    : hasSession && hasAccount();
 
   useEffect(() => {
-    if (token && !hasFetchedSettings) {
+    if (hasSession && !hasFetchedSettings) {
       void fetchSettings();
     }
-  }, [token, hasFetchedSettings, fetchSettings]);
+  }, [hasSession, hasFetchedSettings, fetchSettings]);
+
+  // A failed read is retried rather than accepted: the gate above is holding
+  // the door shut on a guess until the instance answers for itself.
+  useEffect(() => {
+    if (!hasSession || hasFetchedSettings || !settingsUnavailable) return;
+    const timer = window.setInterval(() => {
+      void useAuthStore.getState().fetchSettings();
+    }, 5_000);
+    return () => window.clearInterval(timer);
+  }, [hasSession, hasFetchedSettings, settingsUnavailable]);
 
   if (!sessionBootstrapComplete || (servers.length > 0 && !tokensHydrated)) {
     return <BrandedSplash label="Restoring session..." />;
@@ -158,7 +188,10 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
     return <BrandedSplash label="Connecting..." />;
   }
 
-  if (token && !hasFetchedSettings) {
+  // Wait for the first answer, but only while one is still coming. Once the
+  // read has failed, the fail-closed default above decides rather than leaving
+  // an unreachable instance holding the app on a splash screen forever.
+  if (hasSession && !hasFetchedSettings && !settingsUnavailable) {
     return <BrandedSplash label="Loading account settings..." />;
   }
 

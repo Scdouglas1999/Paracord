@@ -33,6 +33,9 @@ const mockToast = vi.hoisted(() => ({
 
 vi.mock('./toastStore', () => ({ toast: mockToast }));
 
+const mockAccountSession = vi.hoisted(() => ({ clearUnlockedPrivateKey: vi.fn() }));
+vi.mock('../lib/accountSession', () => mockAccountSession);
+
 vi.mock('../api/auth', () => ({ authApi: mockAuthApi }));
 
 vi.mock('../api/client', () => ({
@@ -209,6 +212,18 @@ describe('authStore', () => {
       expect(state.hasFetchedSettings).toBe(false);
     });
 
+    // The device key is a credential of its own. Left unlocked, the gateway's
+    // challenge-response signed the account straight back in: `/auth/logout`
+    // 204, then `/auth/challenge` and `/auth/verify` four milliseconds later.
+    it('locks the device identity so nothing can sign back in with it', async () => {
+      mockAuthApi.logout.mockResolvedValue({});
+      mockAccountSession.clearUnlockedPrivateKey.mockClear();
+
+      await useAuthStore.getState().logout();
+
+      expect(mockAccountSession.clearUnlockedPrivateKey).toHaveBeenCalled();
+    });
+
     it('clears auth state even if logout API fails', async () => {
       useAuthStore.setState({ token: 'tok', user: fakeUser });
       mockAuthApi.logout.mockRejectedValue(new Error('Network error'));
@@ -255,12 +270,28 @@ describe('authStore', () => {
       expect(state.hasFetchedSettings).toBe(true);
     });
 
-    it('marks hasFetchedSettings true even on failure', async () => {
+    it('a read that failed is not an answer', async () => {
+      // `crypto_auth_enabled` lives in these settings. Recording a failure as
+      // a completed fetch made a security control that was ON read as off.
       mockAuthApi.getSettings.mockRejectedValue(new Error('fail'));
 
       await useAuthStore.getState().fetchSettings();
-      expect(useAuthStore.getState().hasFetchedSettings).toBe(true);
+      expect(useAuthStore.getState().hasFetchedSettings).toBe(false);
+      expect(useAuthStore.getState().settingsUnavailable).toBe(true);
       expect(useAuthStore.getState().settings).toBeNull();
+    });
+
+    it('a later success clears the unavailable mark', async () => {
+      mockAuthApi.getSettings.mockRejectedValueOnce(new Error('fail'));
+      await useAuthStore.getState().fetchSettings();
+      expect(useAuthStore.getState().settingsUnavailable).toBe(true);
+
+      mockAuthApi.getSettings.mockResolvedValue({ data: fakeSettings });
+      await useAuthStore.getState().fetchSettings();
+      const state = useAuthStore.getState();
+      expect(state.hasFetchedSettings).toBe(true);
+      expect(state.settingsUnavailable).toBe(false);
+      expect(state.settings).toEqual(fakeSettings);
     });
   });
 

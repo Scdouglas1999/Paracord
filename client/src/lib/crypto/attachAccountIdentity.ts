@@ -4,11 +4,58 @@ import { useAuthStore } from '../../stores/authStore';
 import { useServerListStore } from '../../stores/serverListStore';
 import { withUnlockedPrivateKey } from '../accountSession';
 import { signChallenge } from '../account';
-import { setAccessToken, setRefreshToken } from '../authToken';
+import { getAccessToken, getRefreshToken, setAccessToken, setRefreshToken } from '../authToken';
 import { resolveApiBaseUrl } from '../config/apiBaseUrl';
 import type { OperationContext } from '../operationContext';
+import { findHomeServerEntry } from '../serverIdentity';
 import { LOCAL_SERVER_ID } from '../serverScope';
 import { bytesToHex } from './util';
+
+/**
+ * Hand the replacement credential to every scope that was holding the dead one.
+ *
+ * Attaching a key revokes the login session it was authorised with, and the
+ * server answers with a brand-new one. Installing that reply in a single scope
+ * is not enough: on the desktop the *same* session is also held by the
+ * server-list entry for this instance (the shell has no origin server, so it
+ * always adds its own instance by address). That copy was left holding the
+ * token the attach had just revoked, and within milliseconds its own requests
+ * 401'd, its refresh presented the spent token, and `onAuthFailed` tore down
+ * the home session the copy was made from — mid-enrolment. The visible result
+ * was "Waiting for your instance account" on a setup that had in fact
+ * succeeded, a settings toggle that silently 401'd forever after, and
+ * "your session ended on the instance" over a live, healthy connection.
+ *
+ * Whoever carried the old credential carries the new one.
+ */
+function adoptReplacedCredential(params: {
+  previousAccessToken: string | null;
+  previousRefreshToken: string | null;
+  excludeServerId: string;
+  token: string;
+  refreshToken: string | null;
+  user: User;
+}): void {
+  const { previousAccessToken, previousRefreshToken, excludeServerId, token, refreshToken, user } = params;
+  const store = useServerListStore.getState();
+  // The entry that stands for the home server is the same session under
+  // another name even when its stored copy has drifted (a rotation it did not
+  // witness), so it is adopted on identity, not only on a matching token.
+  const homeEntryId = excludeServerId === LOCAL_SERVER_ID
+    ? findHomeServerEntry(store.servers, previousAccessToken)?.id
+    : undefined;
+  for (const server of store.servers) {
+    if (server.id === excludeServerId) continue;
+    const carriedDeadCredential =
+      (!!previousAccessToken && server.token === previousAccessToken) ||
+      (!!previousRefreshToken && server.refreshToken === previousRefreshToken) ||
+      (server.id === homeEntryId && server.userId === user.id);
+    if (!carriedDeadCredential) continue;
+    store.updateToken(server.id, token);
+    store.updateRefreshToken(server.id, refreshToken);
+    if (server.userId === user.id) store.setAuthenticatedUser(server.id, user);
+  }
+}
 
 /** Attach only to the captured account. Key replacement is a separate recovery operation. */
 export async function attachAccountIdentity(
@@ -63,6 +110,13 @@ export async function attachAccountIdentity(
     }
     // Attaching revokes the previous login session. Install the verified reply
     // before reconnecting; retaining the old token would immediately log out.
+    // Read the outgoing credential first — every copy of it has to be replaced,
+    // not just the one this operation was scoped to.
+    const previousAccessToken = getAccessToken();
+    const previousRefreshToken = getRefreshToken();
+    const previousServer = context.scope.serverId === LOCAL_SERVER_ID
+      ? null
+      : useServerListStore.getState().getServer(context.scope.serverId);
     context.dispose();
     if (context.scope.serverId === LOCAL_SERVER_ID) {
       setAccessToken(result.token); setRefreshToken(result.refresh_token ?? null);
@@ -72,7 +126,24 @@ export async function attachAccountIdentity(
       servers.updateToken(context.scope.serverId, result.token);
       servers.updateRefreshToken(context.scope.serverId, result.refresh_token ?? null);
       servers.setAuthenticatedUser(context.scope.serverId, result.user);
+      // The home session and this entry can be the same session under two
+      // names. If they were, the home copy is dead too.
+      const sharedHomeCredential =
+        (!!previousAccessToken && previousServer?.token === previousAccessToken) ||
+        (!!previousRefreshToken && previousServer?.refreshToken === previousRefreshToken);
+      if (sharedHomeCredential) {
+        setAccessToken(result.token); setRefreshToken(result.refresh_token ?? null);
+        useAuthStore.setState({ token: result.token, user: result.user });
+      }
     }
+    adoptReplacedCredential({
+      previousAccessToken,
+      previousRefreshToken,
+      excludeServerId: context.scope.serverId,
+      token: result.token,
+      refreshToken: result.refresh_token ?? null,
+      user: result.user,
+    });
     return result.user;
   });
 }

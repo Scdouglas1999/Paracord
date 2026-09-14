@@ -465,6 +465,32 @@ describe('connectionManager healthy-connection skip', () => {
     }
   });
 
+  // Sign out, and the entry's token goes but the connection object stays. Every
+  // later connectAll() then took the "already connected" branch, called
+  // connectRealtime, got "no token for server", and never reached the code that
+  // could authenticate again — so unlocking a device identity produced no
+  // /auth/challenge at all and the app said it could not sign in with its key.
+  it('drops a connection whose credential is gone so it can sign in again', async () => {
+    const connectSpy = vi.spyOn(internals, 'connectRealtime').mockImplementation(() => {});
+    useServerListStore.setState({
+      servers: [{ id: 'signed-out', name: 'Signed out', url: 'http://localhost:8090', connected: false, token: '', refreshToken: null, userId: '42' }],
+    });
+    useAuthStore.setState({ token: null });
+    const conn = makeConnection({ serverId: 'signed-out', connected: true, connecting: false, eventSource: { close() {} } as unknown as EventSource });
+
+    try {
+      await withConnectionAsync(conn, async () => {
+        // It reaches the credential path and fails there, rather than
+        // reporting the dead connection as already connected.
+        await expect(internals.connectServerInternal('signed-out')).rejects.toThrow(/not unlocked/);
+      });
+      expect(connectSpy).not.toHaveBeenCalled();
+      expect(manager.connections.has('signed-out')).toBe(false);
+    } finally {
+      connectSpy.mockRestore();
+    }
+  });
+
   it('reconnects when an existing connection is stale', async () => {
     const connectSpy = vi.spyOn(internals, 'connectRealtime').mockImplementation(() => {});
     const conn = makeConnection({
@@ -484,6 +510,37 @@ describe('connectionManager healthy-connection skip', () => {
     } finally {
       connectSpy.mockRestore();
     }
+  });
+});
+
+// "Your session ended on the instance" printed under "the instance is
+// restarting" — because a second entry for the same instance under another
+// spelling held an older token, and its 401 was read as news about the live
+// session. A refusal is only ever news about the credential that was refused.
+describe('connectionManager stale duplicate entries', () => {
+  type Internals = { entryCarriesHomeCredential: (id: string) => boolean };
+  const internals = manager as unknown as Internals;
+
+  beforeEach(() => {
+    useServerListStore.setState({
+      servers: [
+        { id: 'live', name: 'Home', url: 'http://127.0.0.1:18640', connected: true, token: 'home-token', refreshToken: 'home-refresh', userId: '42' },
+        { id: 'stale', name: 'Home again', url: 'http://localhost:18640', connected: false, token: 'yesterdays-token', refreshToken: 'yesterdays-refresh', userId: '42' },
+      ],
+    });
+    useAuthStore.setState({ token: 'home-token' });
+  });
+
+  it('recognises the entry carrying the live home credential', () => {
+    expect(internals.entryCarriesHomeCredential('live')).toBe(true);
+  });
+
+  it('does not let a stale duplicate speak for the home session', () => {
+    expect(internals.entryCarriesHomeCredential('stale')).toBe(false);
+  });
+
+  it('does not let an entry that is not in the list speak for it either', () => {
+    expect(internals.entryCarriesHomeCredential('gone')).toBe(false);
   });
 });
 

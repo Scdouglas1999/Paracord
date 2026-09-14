@@ -10,7 +10,7 @@ import {
   hasUnlockedPrivateKey,
   signServerChallengeWithUnlockedKey,
 } from './accountSession';
-import { getRefreshToken, setAccessToken, setRefreshToken } from './authToken';
+import { getAccessToken, getRefreshToken, setAccessToken, setRefreshToken } from './authToken';
 import { getCurrentOriginServerUrl, getStoredServerUrl } from './config/apiBaseUrl';
 import { isTauri } from './tauriEnv';
 import { syncTrustedHosts } from './trustedHosts';
@@ -22,7 +22,7 @@ import { logVoiceDiagnostic } from './desktopDiagnostics';
 import { LOCAL_SERVER_ID, sameServerUrl } from './serverScope';
 import { configuredHomeServerUrl, findHomeServerEntry, getServerAccountScope, resolveHomeServerUrl } from './serverIdentity';
 import { coordinateRefresh, HOME_REFRESH_SCOPE, serverRefreshScope } from './authRefreshCoordinator';
-import { noteSessionEnded, SESSION_REVOKED_MESSAGE } from './sessionEnded';
+import { clearSessionEndedNotice, noteSessionEnded, SESSION_REVOKED_MESSAGE } from './sessionEnded';
 import { acceptDatabaseHistoryEpoch, getDatabaseHistoryEpoch, registerHistoryReconciler } from './databaseHistory';
 import { toast } from '../stores/toastStore';
 import { notifyServerDisconnected } from './serverDisconnect';
@@ -820,7 +820,7 @@ class ConnectionManager {
     try {
       const result = await coordinateRefresh(scopeKey, async () => {
         const refreshToken = readRefreshToken();
-        if (!refreshToken) throw new Error('No refresh token for this server');
+        if (!refreshToken) throw new Error('No refresh token for this instance');
         const { data } = await client.post<{ token?: string; refresh_token?: string }>(
           '/auth/refresh',
           { refresh_token: refreshToken },
@@ -855,17 +855,24 @@ class ConnectionManager {
       const status = apiErrorStatus(err);
       if (status === 401 || status === 403) {
         const store = useServerListStore.getState();
+        // "This credential is gone" is only ever news about *this* entry's
+        // credential. A second entry for the same instance under another
+        // spelling — localhost beside 127.0.0.1 — holds an older copy, and its
+        // refusal used to end the live session belonging to the other one:
+        // "Your session ended on the instance" printed directly under "the
+        // instance is restarting, you'll reconnect automatically".
+        const endsHomeSession = promoteToLocalAuth && this.entryCarriesHomeCredential(serverId);
         store.updateToken(serverId, '');
         store.updateRefreshToken(serverId, null);
-        if (promoteToLocalAuth) {
+        if (endsHomeSession) {
           setAccessToken(null);
           setRefreshToken(null);
           useAuthStore.setState({ token: null, user: null });
         }
         // Said here, where the refusal actually happened, and nowhere else: an
         // unreachable server must never be reported to the user as a session
-        // that ended.
-        noteSessionEnded(SESSION_REVOKED_MESSAGE);
+        // that ended. And only the session that actually ended may say so.
+        if (endsHomeSession || !this.homeSessionIsLive()) noteSessionEnded(SESSION_REVOKED_MESSAGE);
       }
       return null;
     }
@@ -1000,9 +1007,63 @@ class ConnectionManager {
     this.connectRealtime(conn);
   }
 
+  /**
+   * Has this entry lost every credential it could authenticate with?
+   *
+   * A stored access token, a refresh token to rotate, or — for the entry that
+   * IS the home server — the home session's own. None of the three means the
+   * connection cannot be repaired by reconnecting; it has to sign in again.
+   *
+   * An entry that is no longer in the list is a different question, answered by
+   * `connectAll()`'s own reconciliation, so it is not this one's business.
+   */
+  private credentialIsGone(serverId: string): boolean {
+    const server = useServerListStore.getState().getServer(serverId);
+    if (!server) return false;
+    if (server.token || server.refreshToken) return false;
+    if (this.isConfiguredLocalServerUrl(server.url)
+      && (useAuthStore.getState().token || getRefreshToken())) return false;
+    return true;
+  }
+
+  /**
+   * Is this entry holding the home session's *current* credential?
+   *
+   * Being the home server by URL is not the same question. The same instance
+   * can appear twice under two spellings, and the stale entry's copy is a
+   * different, already-dead credential: its 401 says nothing about the session
+   * the app is using. Only the entry that carries today's token may end it.
+   */
+  private entryCarriesHomeCredential(serverId: string): boolean {
+    const entry = useServerListStore.getState().getServer(serverId);
+    if (!entry) return false;
+    const homeAccess = useAuthStore.getState().token ?? getAccessToken();
+    const homeRefresh = getRefreshToken();
+    if (!homeAccess && !homeRefresh) return true; // Nothing left to end anyway.
+    return (!!homeAccess && entry.token === homeAccess)
+      || (!!homeRefresh && entry.refreshToken === homeRefresh);
+  }
+
+  /** Whether a home session exists at all right now. */
+  private homeSessionIsLive(): boolean {
+    return Boolean(useAuthStore.getState().token || getAccessToken() || getRefreshToken());
+  }
+
   private async connectServerInternal(serverId: string): Promise<void> {
     const existing = this.connections.get(serverId);
-    if (existing) {
+    if (existing && this.credentialIsGone(serverId)) {
+      // The credential this connection was built on is gone — a sign-out, a
+      // revocation, a session replaced under it. Keeping the object is not
+      // harmless: every later `connectAll()` takes the branch below, calls
+      // `connectRealtime`, gets "no token for server", and never reaches the
+      // code that could sign in again. After a sign-out with an enrolled
+      // identity that meant the unlock succeeded and then nothing happened —
+      // no `/auth/challenge`, no session, and "This device could not sign in
+      // with its key" ten seconds later; a password sign-in afterwards landed
+      // in a shell with no name and no buildings for the same reason.
+      // Drop it and re-acquire a credential from scratch.
+      this.disconnectServer(serverId);
+    } else if (existing) {
       existing.allowReconnect = true;
       // Do not tear down a healthy SSE/WS on redundant connectAll() calls
       // (e.g. tab focus). Only reconnect when the transport is missing/stale,
@@ -1066,10 +1127,13 @@ class ConnectionManager {
       },
       () => {
         // Auth failed; clear token and disconnect.
+        // Ask *before* clearing it whether the credential that just died is
+        // the one the home session is using right now.
+        const endsHomeSession = isLocalServerEntry && this.entryCarriesHomeCredential(serverId);
         useServerListStore.getState().updateToken(serverId, '');
         useServerListStore.getState().updateRefreshToken(serverId, null);
         useServerListStore.getState().setApiReachable(serverId, false);
-        if (isLocalServerEntry) {
+        if (endsHomeSession) {
           // This entry carried the home session, so the app is about to land
           // on the sign-in screen. Give it a sentence to show.
           setAccessToken(null);
@@ -1143,6 +1207,25 @@ class ConnectionManager {
       const token = await this.authenticate(client, server, account.publicKey!, account.username!);
       useServerListStore.getState().updateToken(serverId, token);
       serverToken = token;
+      // A session that has just been re-established did not end. A spent
+      // refresh token during an instance restart 401s once, and the device key
+      // signs back in a few milliseconds later — the app must not be carrying a
+      // "your session ended on the instance" notice to the next sign-in screen
+      // over a blip the user never saw.
+      clearSessionEndedNotice();
+      // A device-key sign-in against the instance this app calls home IS the
+      // home session. Leaving it only on the entry left `authApi` — which is
+      // pinned to the home client by design, so account settings and passwords
+      // are never sent to a remote instance — with no credential at all: after
+      // an unlock the app was signed in, and `/users/@me/settings`,
+      // `/auth/sessions` and `/auth/mfa/status` answered 401 to a live session.
+      if (isLocalServerEntry) {
+        localSessionToken = token;
+        this.promoteLocalAuthSession(
+          token,
+          useServerListStore.getState().getServer(serverId)?.refreshToken ?? null,
+        );
+      }
     }
 
     // Always verify the current account and fetch its full private profile.
@@ -1729,7 +1812,7 @@ class ConnectionManager {
         try {
           if (getDatabaseHistoryEpoch(scope)) {
             this.disconnectServer(conn.serverId);
-            toast.error('This server did not confirm its database history. Reconnect after updating the server.');
+            toast.error('This instance did not confirm its database history. Reconnect after updating the instance.');
             return false;
           }
         } catch (error) { this.rejectHistory(conn, error); return false; }
@@ -1761,7 +1844,7 @@ class ConnectionManager {
 
   private rejectHistory(conn: ServerConnection, error: unknown): void {
     this.disconnectServer(conn.serverId);
-    toast.error(`Cannot reconcile this server's history. ${error instanceof Error ? error.message : 'Reconnect to try again.'}`);
+    toast.error(`Cannot reconcile this instance's history. ${error instanceof Error ? error.message : 'Reconnect to try again.'}`);
   }
 
   /** Drop the old transport and its queued commands before a fresh handshake. */

@@ -22,6 +22,7 @@ import { toast } from './toastStore';
 import { useTypingStore } from './typingStore';
 import { useReadStateStore } from './readStateStore';
 import { useSavedMessageStore } from './savedMessageStore';
+import { clearUnlockedPrivateKey } from '../lib/accountSession';
 import { resetSessionStores } from './sessionReset';
 
 function isUnauthorizedError(err: unknown): boolean {
@@ -33,6 +34,15 @@ interface AuthState {
   user: User | null;
   settings: UserSettings | null;
   hasFetchedSettings: boolean;
+  /**
+   * The last settings read failed and we still have no answer.
+   *
+   * Kept apart from `hasFetchedSettings` on purpose: `crypto_auth_enabled`
+   * lives in these settings, and a request that failed is not the answer
+   * "false". Consumers that gate on a security setting must be able to tell
+   * "off" from "we do not know" — see `ProtectedRoute`.
+   */
+  settingsUnavailable: boolean;
   sessionBootstrapComplete: boolean;
   isLoading: boolean;
   error: string | null;
@@ -57,6 +67,12 @@ interface AuthState {
 function clearAuthState(set: (partial: Partial<AuthState>) => void): Promise<void> {
   setAccessToken(null);
   setRefreshToken(null);
+  // Before anything else, and synchronously: the device key is a credential in
+  // its own right. The registered `account-identity` reset flips the store flag,
+  // but the resets run concurrently and the gateway reacts to the *first* of
+  // them, so the key itself goes here — otherwise the sign-out race is won by a
+  // challenge-response that signs the account straight back in.
+  clearUnlockedPrivateKey();
   // Forget the ended session's in-flight and recently-settled refreshes, so
   // the next sign-in is never answered out of the previous one's window.
   resetRefreshCoordination();
@@ -94,6 +110,7 @@ function clearAuthState(set: (partial: Partial<AuthState>) => void): Promise<voi
     user: null,
     settings: null,
     hasFetchedSettings: false,
+    settingsUnavailable: false,
   });
   return pending;
 }
@@ -103,6 +120,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
   user: null,
   settings: null,
   hasFetchedSettings: false,
+  settingsUnavailable: false,
   sessionBootstrapComplete: false,
   isLoading: false,
   error: null,
@@ -223,18 +241,26 @@ export const useAuthStore = create<AuthState>()((set) => ({
   fetchSettings: async () => {
     try {
       const { data } = await authApi.getSettings();
-      set({ settings: data, hasFetchedSettings: true });
+      set({ settings: data, hasFetchedSettings: true, settingsUnavailable: false });
     } catch (err) {
-      // Mark as fetched even on failure so consumers don't spin in a refetch
-      // loop; surface the failure to the user via a toast.
-      set({ hasFetchedSettings: true });
-      toast.error(`Failed to load settings: ${extractApiError(err)}`);
+      // A request that failed is not an answer. This used to set
+      // `hasFetchedSettings: true` anyway, so `crypto_auth_enabled` read as
+      // `false` and the device-key gate in `ProtectedRoute` was skipped
+      // entirely — a security control that was ON server-side was bypassed
+      // because one GET returned 401. Record the failure as a failure and let
+      // the consumer decide; the gate now fails closed on an unknown.
+      // Say it once. `ProtectedRoute` retries this on a timer while the answer
+      // is missing, and a toast per attempt is a stack of identical red cards
+      // over an app that is already telling the user it cannot get in.
+      const alreadyReported = useAuthStore.getState().settingsUnavailable;
+      set({ settingsUnavailable: true });
+      if (!alreadyReported) toast.error(`Failed to load settings: ${extractApiError(err)}`);
     }
   },
 
   updateSettings: async (settingsData) => {
     const { data } = await authApi.updateSettings(settingsData);
-    set({ settings: data, hasFetchedSettings: true });
+    set({ settings: data, hasFetchedSettings: true, settingsUnavailable: false });
   },
 
   clearError: () => set({ error: null }),

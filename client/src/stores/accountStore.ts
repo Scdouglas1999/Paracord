@@ -13,6 +13,7 @@ import {
   getRecoveryPhraseFromUnlockedKey,
   setUnlockedPrivateKey,
 } from '../lib/accountSession';
+import { registerSessionReset } from './sessionReset';
 
 interface AccountState {
   // Public info (persisted)
@@ -145,3 +146,16 @@ export const useAccountStore = create<AccountState>()(
     }
   )
 );
+
+/**
+ * Signing out locks the device identity.
+ *
+ * Nothing called `lock()` anywhere in the app, so the unlocked private key
+ * outlived the session it was unlocked for. With device-key sign-in working,
+ * that is not a stale flag: the gateway's challenge-response saw an unlocked
+ * key and signed straight back in — `POST /auth/logout` 204 followed four
+ * milliseconds later by `/auth/challenge` and `/auth/verify`, and the user who
+ * asked to sign out was still signed in. A session that ends takes the key
+ * that could reopen it with it.
+ */
+registerSessionReset('account-identity', () => useAccountStore.getState().lock());

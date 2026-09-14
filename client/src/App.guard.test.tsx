@@ -10,6 +10,7 @@ const authState = {
   sessionBootstrapComplete: true,
   settings: null as { crypto_auth_enabled: boolean } | null,
   hasFetchedSettings: true,
+  settingsUnavailable: false,
   fetchSettings: vi.fn(),
 };
 
@@ -78,6 +79,7 @@ describe('ProtectedRoute guard', () => {
     authState.token = null;
     authState.settings = null;
     authState.hasFetchedSettings = true;
+    authState.settingsUnavailable = false;
     accountState.isUnlocked = false;
     deviceHasIdentity = false;
     // A server in the list makes serverStatus resolve to 'ready' synchronously.
@@ -122,6 +124,42 @@ describe('ProtectedRoute guard', () => {
     expect(document.body.textContent).toContain("Signing in with this device's key");
   });
 
+  // Unknown must fail closed. A settings read that never landed used to leave
+  // `crypto_auth_enabled` reading as `false`, and an account that had asked for
+  // device-key sign-in walked straight into the app with no unlock prompt.
+  it('gates a session whose settings could not be read', () => {
+    authState.token = 'tok';
+    authState.hasFetchedSettings = false;
+    authState.settingsUnavailable = true;
+    deviceHasIdentity = true;
+    renderApp();
+    expect(screen.getByText('Unlock screen')).toBeInTheDocument();
+    expect(screen.queryByText('App shell')).not.toBeInTheDocument();
+  });
+
+  // The same session held only by a server-list entry — no home token — never
+  // triggered a settings fetch at all, so the gate was skipped the same way.
+  it('gates a server-list-only session whose settings are unknown', () => {
+    authState.token = null;
+    serverListState.servers = [{ id: 's1', token: 'entry-tok' }];
+    authState.hasFetchedSettings = false;
+    authState.settingsUnavailable = true;
+    deviceHasIdentity = true;
+    renderApp();
+    expect(screen.getByText('Unlock screen')).toBeInTheDocument();
+    expect(screen.queryByText('App shell')).not.toBeInTheDocument();
+  });
+
+  it('asks for the settings of a session held only by a server entry', () => {
+    authState.token = null;
+    serverListState.servers = [{ id: 's1', token: 'entry-tok' }];
+    authState.hasFetchedSettings = false;
+    authState.settingsUnavailable = false;
+    authState.fetchSettings.mockClear();
+    renderApp();
+    expect(authState.fetchSettings).toHaveBeenCalled();
+  });
+
   // The law this domain exists to enforce: whatever the state, something renders.
   it('never renders an empty window', () => {
     for (const token of [null, 'tok']) {
@@ -130,6 +168,8 @@ describe('ProtectedRoute guard', () => {
           for (const unlocked of [false, true]) {
             authState.token = token;
             authState.settings = crypto ? { crypto_auth_enabled: true } : null;
+            authState.hasFetchedSettings = true;
+            authState.settingsUnavailable = false;
             deviceHasIdentity = identity;
             accountState.isUnlocked = unlocked;
             const { unmount } = renderApp();
