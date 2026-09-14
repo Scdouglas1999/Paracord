@@ -213,6 +213,8 @@ class ConnectionManager {
   /** A new lane also fences asynchronous transport setup and old completions. */
   private readonly dispatchLanes = new WeakMap<ServerConnection, DispatchLane>();
   private readonly durableFailures = new WeakMap<ServerConnection, number>();
+  /** Events this connection could not store locally and skipped, keeping the stream. */
+  private readonly degradedDispatches = new WeakMap<ServerConnection, number>();
   private readonly accountHydrationWaits = new WeakMap<ServerConnection, () => void>();
   /** Consecutive missed liveness checks (heartbeat acks / SSE frames) before a
    *  connection is considered stale and torn down. Shared by WS and SSE. */
@@ -404,7 +406,7 @@ class ConnectionManager {
       const entry = lane.queue[0];
       let result: DispatchResult;
       try { result = this.handleDispatch(conn, entry.payload.t!, entry.payload.d, lane); }
-      catch { this.failDispatch(conn, lane, 'durable event storage failed', entry.payload.t); return; }
+      catch { if (!this.degradeDispatch(conn, lane, entry, 'durable event storage failed')) return; continue; }
       if (result !== undefined && result !== false) {
         void result.then(accepted => {
           if (!this.completeDispatch(conn, lane, entry, accepted)) return;
@@ -414,12 +416,71 @@ class ConnectionManager {
             conn.reconnectAttempts = 0;
           }
           this.drainDispatch(conn, lane);
-        }, () => this.failDispatch(conn, lane, 'durable event storage failed', entry.payload.t));
+        }, () => { if (this.degradeDispatch(conn, lane, entry, 'durable event storage failed')) this.drainDispatch(conn, lane); });
         return;
       }
       if (!this.completeDispatch(conn, lane, entry, result)) return;
     }
     lane.draining = false;
+  }
+
+  /**
+   * One event could not be written to this device's local store.
+   *
+   * Tearing the stream down is the wrong answer to that, and it is the pattern
+   * behind every reconnect bug this client has had: dropping a transport does
+   * not repair a local write, it only costs the live session — and because the
+   * replacement session immediately replays the same event into the same
+   * broken store, it costs it again, once per message, for as long as messages
+   * keep arriving. "Constant reconnecting to server" was this, seen from the
+   * outside.
+   *
+   * So degrade the *dispatch* instead: skip the event, say so in the console
+   * and in the diagnostics file, and keep the transport. Nothing is silently
+   * lost — the durable layer's recovery cursor was not advanced either, so the
+   * next update in that conversation is detected as a gap and re-recovers the
+   * range, and opening the conversation recovers it too.
+   *
+   * Two failures are still the transport's business and still reconnect:
+   * READY/RESUMED, because a session whose handshake never landed has no
+   * authoritative state to be live for; and a session that was replaced, which
+   * is reported by {@link failDispatch} as the replacement it is.
+   *
+   * Answers whether the caller may keep draining this lane.
+   */
+  private degradeDispatch(conn: ServerConnection, lane: DispatchLane, entry: DispatchEntry, reason: string): boolean {
+    if (!this.ownsTransport(conn, lane)) return false;
+    const event = entry.payload.t;
+    if (event === GatewayEvents.READY || event === GatewayEvents.RESUMED || this.tokenChanged(conn)) {
+      this.failDispatch(conn, lane, reason, event);
+      return false;
+    }
+    // A history that moved under the write is a different fact from a write
+    // that failed: the checkpoint this connection holds no longer belongs to
+    // the account, so it cannot be advanced past anything.
+    try {
+      const scope = getServerAccountScope(conn.serverId);
+      if (!scope || getDatabaseHistoryEpoch(scope) !== (conn.historyEpoch ?? null)) {
+        this.failDispatch(conn, lane, 'database history changed during event storage', event);
+        return false;
+      }
+    } catch {
+      this.failDispatch(conn, lane, 'database history metadata unavailable', event);
+      return false;
+    }
+    const degraded = (this.degradedDispatches.get(conn) ?? 0) + 1;
+    this.degradedDispatches.set(conn, degraded);
+    // Payloads, storage exception messages, tokens and URLs never enter
+    // diagnostics; the event name and the count do, because a store that keeps
+    // refusing writes must be visible in the log the user can hand over.
+    const diagnostic = { reason, event: event && /^[A-Z_]{1,64}$/.test(event) ? event : 'unknown', degraded };
+    console.error('[gateway] Could not save one update on this device; keeping the connection and repairing that conversation on its next update.', diagnostic);
+    logVoiceDiagnostic('[gateway] dispatch degraded, stream kept', { server: conn.serverId, ...diagnostic });
+    if (entry.payload.s != null) conn.sequence = entry.payload.s;
+    if (typeof entry.payload.event_id === 'number') conn.realtimeCursor = entry.payload.event_id;
+    lane.queue.shift();
+    lane.bytes -= entry.bytes;
+    return true;
   }
 
   private completeDispatch(conn: ServerConnection, lane: DispatchLane, entry: DispatchEntry, accepted: void | false): boolean {
@@ -759,7 +820,7 @@ class ConnectionManager {
     try {
       const result = await coordinateRefresh(scopeKey, async () => {
         const refreshToken = readRefreshToken();
-        if (!refreshToken) throw new Error('No refresh token for this instance');
+        if (!refreshToken) throw new Error('No refresh token for this server');
         const { data } = await client.post<{ token?: string; refresh_token?: string }>(
           '/auth/refresh',
           { refresh_token: refreshToken },
@@ -1668,7 +1729,7 @@ class ConnectionManager {
         try {
           if (getDatabaseHistoryEpoch(scope)) {
             this.disconnectServer(conn.serverId);
-            toast.error('This instance did not confirm its database history. Reconnect after updating the instance.');
+            toast.error('This server did not confirm its database history. Reconnect after updating the server.');
             return false;
           }
         } catch (error) { this.rejectHistory(conn, error); return false; }
@@ -1700,7 +1761,7 @@ class ConnectionManager {
 
   private rejectHistory(conn: ServerConnection, error: unknown): void {
     this.disconnectServer(conn.serverId);
-    toast.error(`Cannot reconcile this instance's history. ${error instanceof Error ? error.message : 'Reconnect to try again.'}`);
+    toast.error(`Cannot reconcile this server's history. ${error instanceof Error ? error.message : 'Reconnect to try again.'}`);
   }
 
   /** Drop the old transport and its queued commands before a fresh handshake. */

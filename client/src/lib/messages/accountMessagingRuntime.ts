@@ -1072,11 +1072,39 @@ export function getAccountMessagingRuntime(scope: AccountScope) {
 /** A newly created runtime is paused too, including token-only hydration. */
 export function pauseAccountMessagingForRecovery(scope: AccountScope) { getAccountMessagingRuntime(scope).pauseForRecovery(); }
 export function resetAccountMessagingRuntimes() { for (const runtime of runtimes.values()) runtime.dispose(); runtimes.clear(); }
+/**
+ * Keep one runtime per signed-in account, and throw away only the ones whose
+ * account really is gone.
+ *
+ * This runs on every change to the auth store, the server list and the account
+ * store, and it used to dispose a runtime whenever `getServerAccountScope`
+ * could not answer. That question is not only asked about accounts that ended:
+ * a server entry reads as "no account" for as long as its token is momentarily
+ * absent — through `hydrateTokens`, through a credential being re-verified,
+ * through a refresh that clears before it sets — while the entry, the session
+ * and the open realtime stream all still stand.
+ *
+ * Disposing there did real damage. The next `getAccountMessagingRuntime` built
+ * a *replacement* runtime, and a replacement has never accepted a handshake —
+ * only READY does that, and READY had already been and gone. So the first
+ * ordinary message to arrive afterwards threw "The message event preceded
+ * authenticated recovery", the gateway read that as a durable storage failure
+ * and destroyed a perfectly healthy transport. Then the replacement session's
+ * READY re-handshook, the same transient disposed it again, and the next
+ * message reconnected again: one reconnect per message, for as long as people
+ * were talking, which is the user's "constant reconnecting to server".
+ *
+ * An account is gone when its server entry is gone from the list, when the
+ * entry now names a *different* account, or when the home session has signed
+ * out. A scope that cannot be read this instant is none of those.
+ */
 export function reconcileAccountMessaging() {
+  const listed = new Set(accountScopeServerIds(useServerListStore.getState().servers.map(server => server.id)));
   for (const [key, runtime] of runtimes) {
     const current = getServerAccountScope(runtime.scope.serverId);
-    if (!current || accountScopeKey(current) !== key || (runtime.scope.serverId === LOCAL_SERVER_ID && !useAuthStore.getState().token)) { runtime.dispose(); runtimes.delete(key); }
-    else void runtime.reconcile().catch(() => {});
+    const signedOut = runtime.scope.serverId === LOCAL_SERVER_ID && !useAuthStore.getState().token;
+    if (!listed.has(runtime.scope.serverId) || (current && accountScopeKey(current) !== key) || signedOut) { runtime.dispose(); runtimes.delete(key); }
+    else if (current) void runtime.reconcile().catch(() => {});
   }
 }
 let stopLifecycle: (() => void) | null = null;

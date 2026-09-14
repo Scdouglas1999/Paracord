@@ -145,12 +145,12 @@ for (const kind of ['ws', 'sse'] as const) describe(`${kind} durable dispatch ow
     expect([conn.sequence, conn.realtimeCursor]).toEqual([11, 21]);
     second.resolve(); await settle(); expect([conn.sequence, conn.realtimeCursor]).toEqual([12, 22]);
   });
-  it('replays after rejection from the last completed checkpoint and discards followers', async () => {
+  it('replays after a rejected handshake from the last completed checkpoint and discards followers', async () => {
     reconnectAsTestTransport();
     const conn = makeConnection(); manager.connections.set(conn.serverId, conn);
     const write = deferred(); dispatch.mockReturnValueOnce(write.promise);
     const transport = await start(conn, kind);
-    transport.frame(message()); transport.frame(message(12, 22, 'follower'));
+    transport.frame(lifecycle('READY', 11, 21)); transport.frame(message(12, 22, 'follower'));
     write.reject(new Error('private-ticket secret-ciphertext account-key')); await settle();
     expect(transport.close).toHaveBeenCalledOnce(); expect(dispatch).toHaveBeenCalledOnce();
     expect([conn.sequence, conn.realtimeCursor, conn.sessionId]).toEqual([10, 20, 'session-before']);
@@ -193,12 +193,45 @@ for (const kind of ['ws', 'sse'] as const) describe(`${kind} durable dispatch ow
     write.resolve(); await settle(); transport.frame(message(30, 40, 'wrong-account'));
     expect(dispatch).toHaveBeenCalledOnce(); expect([conn.sequence, conn.realtimeCursor]).toEqual([10, 20]);
   });
-  it('does not swallow synchronous persistence throws or invalid checkpoint frames', async () => {
+  it('does not swallow a synchronous persistence throw on the handshake', async () => {
     const conn = makeConnection(); manager.connections.set(conn.serverId, conn);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     dispatch.mockImplementationOnce(() => { throw new Error('private vault failure'); });
-    const transport = await start(conn, kind); transport.frame(message());
+    const transport = await start(conn, kind); transport.frame(lifecycle('READY', 11, 21));
     expect(warn).not.toHaveBeenCalled(); expect(transport.close).toHaveBeenCalledOnce();
+    expect([conn.sequence, conn.realtimeCursor]).toEqual([10, 20]);
+  });
+  // A local write that fails is a local problem. Dropping the stream does not
+  // repair it, and the replacement session replays the same event into the same
+  // store — which is how one unstorable message became a reconnect per message.
+  it.each(['async', 'sync'] as const)('keeps the stream when an ordinary event cannot be stored (%s)', async shape => {
+    const conn = makeConnection(); manager.connections.set(conn.serverId, conn);
+    const write = deferred();
+    if (shape === 'async') dispatch.mockReturnValueOnce(write.promise);
+    else dispatch.mockImplementationOnce(() => { throw new Error('private-ticket secret-ciphertext account-key'); });
+    const transport = await start(conn, kind);
+    transport.frame(message()); transport.frame(message(12, 22, 'follower'));
+    if (shape === 'async') write.reject(new Error('private-ticket secret-ciphertext account-key'));
+    await settle();
+    expect(transport.close).not.toHaveBeenCalled();
+    expect(conn.connected).toBe(true);
+    expect(conn.reconnectTimer).toBeNull();
+    expect(conn.reconnectAttempts).toBe(0);
+    // The unstorable event is skipped and the ones behind it are still delivered.
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect([conn.sequence, conn.realtimeCursor]).toEqual([12, 22]);
+    const console_ = vi.mocked(console.error).mock.calls;
+    expect(JSON.stringify(console_)).not.toMatch(/private-ticket|secret-ciphertext|account-key/);
+    expect(JSON.stringify(console_)).toMatch(/MESSAGE_CREATE/);
+  });
+  it('still reconnects when the account history moves under an unstorable event', async () => {
+    reconnectAsTestTransport();
+    const conn = makeConnection(); manager.connections.set(conn.serverId, conn);
+    const write = deferred(); dispatch.mockReturnValueOnce(write.promise);
+    const transport = await start(conn, kind); transport.frame(message());
+    acceptDatabaseHistoryEpoch(scope, restored);
+    write.reject(new Error('late')); await settle();
+    expect(transport.close).toHaveBeenCalledOnce();
     expect([conn.sequence, conn.realtimeCursor]).toEqual([10, 20]);
   });
   it('rejects an invalid dispatch checkpoint before durable work begins', async () => {
@@ -282,7 +315,7 @@ for (const kind of ['ws', 'sse'] as const) describe(`${kind} durable dispatch ow
     let transport = await start(conn, kind);
     for (const delay of [1000, 2000, 4000, 8000, 16000, 30000, 30000]) {
       transport.frame(lifecycle('READY')); dispatch.mockReturnValueOnce(Promise.reject(new Error('quota')));
-      transport.frame(message()); await settle(); const old = transport;
+      transport.frame(lifecycle('RESUMED', 11, 21)); await settle(); const old = transport;
       await vi.advanceTimersByTimeAsync(delay - 1); await settle();
       expect(kind === 'ws' ? Socket.instances.at(-1) : Stream.instances.at(-1)).toBe(old);
       await vi.advanceTimersByTimeAsync(1); await settle();
