@@ -1521,6 +1521,18 @@ function OwnedMessageList({
     prevMessagesLenRef.current = messages.length;
   }, [channelId, channelServerId, messages.length, lastMessageId]);
 
+  // The "… is typing" row is appended to the end of the timeline, so it makes
+  // the list taller without changing the message count — and the effect above
+  // only re-scrolls when a message arrives. A reader sitting at the bottom
+  // therefore got the indicator painted just below the fold: in two desktop
+  // clients side by side, typing in one never showed in the other unless the
+  // reader happened to scroll down by hand. Hold the bottom when it appears.
+  useEffect(() => {
+    if (!activeTyping.length) return;
+    const { isNearBottom, scrollToEnd } = scrollDepsRef.current;
+    if (isNearBottom()) scrollToEnd();
+  }, [activeTyping.length]);
+
   const highlightJumpTarget = useCallback((messageId: string) => {
     setJumpHighlightId(messageId);
     if (jumpHighlightTimerRef.current) clearTimeout(jumpHighlightTimerRef.current);
