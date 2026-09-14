@@ -116,6 +116,15 @@ export function Tooltip({
             className="relative flex items-center justify-center"
             onMouseEnter={showTooltip}
             onMouseLeave={hideTooltip}
+            // A tooltip for a control that opens something has to let go when
+            // you use it. The pointer never leaves the trigger — the dialog
+            // just appears underneath it — so no mouseleave ever fires, and the
+            // label stayed pinned at z-9999 on top of the dialog it opened
+            // ("Open user settings" over the settings panel, "Building
+            // settings" over the building panel). Acting on the control is
+            // reason enough to drop its label: you already know what you
+            // pressed.
+            onPointerDown={hideTooltip}
             onFocus={showTooltipOnFocus}
             onBlur={hideTooltip}
             aria-describedby={isVisible ? tooltipId : undefined}
