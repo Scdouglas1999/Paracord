@@ -1226,7 +1226,15 @@ function OwnedMessageList({
    * Where the reader was standing when a page of older messages was asked for,
    * so the prepend can be put underneath them instead of moving them.
    */
-  const prependAnchorRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
+  const prependAnchorRef = useRef<{
+    scrollHeight: number;
+    scrollTop: number;
+    /** The message the reader was standing on, so the prepend can be measured
+     *  against the row itself rather than against the list's total height. */
+    messageId: string | null;
+    /** That row's offset from the top of the scroll port when it was recorded. */
+    offset: number;
+  } | null>(null);
 
   /**
    * Keep the reader on the message they were looking at when older history
@@ -1243,14 +1251,48 @@ function OwnedMessageList({
     const element = scrollRef.current;
     prependAnchorRef.current = null;
     if (!anchor || !element) return;
+    // Where the anchor row has to end up: its own start offset, less the gap it
+    // had from the top of the port when the reader asked for the page.
+    //
+    // The list's total height is not enough on its own. Once a channel is at
+    // its 500-message cap (MAX_MESSAGES_PER_CHANNEL) a prepended page is paid
+    // for by trimming the same number of messages off the *newest* end:
+    // `scrollHeight` does not change, the old `grown` was 0, and the restore
+    // left the reader pinned at scrollTop 0 — where no scroll event can fire,
+    // so `handleScroll` never asked for another page. Measured on a
+    // 600-message channel: ten pages loaded and then nothing, ever, with
+    // messages 1-50 unreachable and "Jump to present" landing on 550.
+    // The anchor row's own element is no help either: at scrollTop 0 it is
+    // fifty rows down the list and the virtualizer has not mounted it.
+    const anchorIndex = anchor.messageId
+      ? rows.findIndex((r) => r.type === 'message' && r.message.id === anchor.messageId)
+      : -1;
+    const offsetForAnchor =
+      anchorIndex >= 0 ? virtualizer.getOffsetForIndex(anchorIndex, 'start')?.[0] : undefined;
     let frames = 0;
     let settled = 0;
     let applied = element.scrollTop;
     const drive = () => {
       // The reader moved under us; their position wins over the restore.
       if (Math.abs(element.scrollTop - applied) > 2) return;
-      const grown = Math.max(0, element.scrollHeight - anchor.scrollHeight);
-      const target = anchor.scrollTop + grown;
+      const anchorRow = anchor.messageId
+        ? document.getElementById(`msg-${anchor.messageId}`)
+        : null;
+      let target: number;
+      if (anchorRow) {
+        // Mounted: correct against the row itself, which survives every
+        // re-measure underneath it.
+        target =
+          element.scrollTop +
+          (anchorRow.getBoundingClientRect().top -
+            element.getBoundingClientRect().top -
+            anchor.offset);
+      } else if (offsetForAnchor !== undefined) {
+        target = offsetForAnchor - anchor.offset;
+      } else {
+        target = anchor.scrollTop + Math.max(0, element.scrollHeight - anchor.scrollHeight);
+      }
+      target = Math.max(0, Math.min(target, Math.max(0, element.scrollHeight - element.clientHeight)));
       if (Math.abs(element.scrollTop - target) <= 1) {
         if (++settled >= 2) return;
       } else {
@@ -1261,7 +1303,7 @@ function OwnedMessageList({
       if (++frames < 30) requestAnimationFrame(drive);
     };
     requestAnimationFrame(drive);
-  }, []);
+  }, [rows, virtualizer]);
 
   // Roving-tabindex bookkeeping for the message feed. Only one message row is a
   // tab stop at a time; ArrowUp/Down/Home/End move focus (and the tab stop)
@@ -1750,17 +1792,41 @@ function OwnedMessageList({
     // Load older messages when scrolled near top
     if (scrollTop < 200 && hasMore && !isLoading) {
       isLoadingMoreRef.current = true;
-      prependAnchorRef.current = { scrollHeight, scrollTop };
+      const anchorId = messages[0]?.id ?? null;
+      const anchorRow = anchorId ? document.getElementById(`msg-${anchorId}`) : null;
+      prependAnchorRef.current = {
+        scrollHeight,
+        scrollTop,
+        messageId: anchorId,
+        offset: anchorRow
+          ? anchorRow.getBoundingClientRect().top -
+            scrollRef.current.getBoundingClientRect().top
+          : 0,
+      };
       loadMore();
     }
-  }, [hasMore, isLoading, loadMore, markLatestRead]);
+  }, [hasMore, isLoading, loadMore, markLatestRead, messages]);
 
   const scrollToBottom = useCallback(() => {
+    // "Jump to present" has to mean the present. A reader who scrolled a long
+    // way back paid for every older page by having the same number of messages
+    // trimmed off the *newest* end of the window (MAX_MESSAGES_PER_CHANNEL), so
+    // the end of what is loaded can be a hundred messages short of the
+    // channel's actual last message. Measured on a 600-message channel after a
+    // full scrollback: one press landed on message 500 and presented it as the
+    // newest, with the composer sitting under it and no sign that a hundred
+    // messages were missing. Fetch the newest page back before travelling to
+    // it — the plain fetch caps from the other end and keeps the newest.
+    const newestLoaded = messages[messages.length - 1]?.id;
+    const newestKnown = activeChannel?.last_message_id ?? null;
+    if (newestKnown && newestLoaded && String(newestLoaded) !== String(newestKnown)) {
+      void fetchMessages(channelId).then(() => scrollToEnd());
+    }
     scrollToEnd();
     markLatestRead();
     setShowScrollButton(false);
     setNewMessageCount(0);
-  }, [scrollToEnd, markLatestRead]);
+  }, [scrollToEnd, markLatestRead, messages, activeChannel, fetchMessages, channelId]);
 
   const openReactionPicker = (e: React.MouseEvent, messageId: string) => {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
