@@ -1,0 +1,188 @@
+{
+  "$comment": [
+    "The native bridge contract, in one file, read by BOTH sides.",
+    "",
+    "Five release blockers in a row were the same bug: the renderer and the Rust",
+    "command disagreed about the shape of what crosses `invoke`, and nothing in",
+    "CI could see it because headless-Chromium E2E never runs the desktop shell.",
+    "Response headers were dropped; `config.params` was dropped; a FormData body",
+    "serialised to `{}`; a claim the server sends as a string was declared `i64`.",
+    "",
+    "Each case below is one exact IPC payload.",
+    "  - client/src/lib/tauriAxiosAdapter.contract.test.ts drives the real",
+    "    adapter with the described request and asserts it emits exactly this.",
+    "  - the `bridge_contract` tests in client/src-tauri/src/lib.rs deserialize",
+    "    exactly this into the command's argument struct and assert the fields",
+    "    arrive intact.",
+    "Drift on either side fails a test instead of shipping."
+  ],
+  "cases": [
+    {
+      "name": "get-with-params",
+      "why": "A parameterised GET must arrive with its query string. Recovery lost its mandatory `after` and 400d, which is what poisoned every 3.0.0 profile.",
+      "command": "native_fetch",
+      "req": {
+        "url": "https://server.example/api/v1/channels/5/messages/recovery?after=0&limit=100&known_ids=",
+        "method": "GET",
+        "body": null,
+        "body_base64": null,
+        "headers": { "Authorization": "Bearer t" },
+        "timeout_ms": null,
+        "response_type": null
+      }
+    },
+    {
+      "name": "json-post",
+      "why": "A JSON body travels as a value, and the caller's deadline travels with it.",
+      "command": "native_fetch",
+      "req": {
+        "url": "https://server.example/api/v1/channels/5/messages",
+        "method": "POST",
+        "body": { "content": "hello" },
+        "body_base64": null,
+        "headers": { "Content-Type": "application/json" },
+        "timeout_ms": 30000,
+        "response_type": null
+      }
+    },
+    {
+      "name": "form-urlencoded-post",
+      "why": "A non-JSON string body goes on the wire verbatim under its own content type, not wrapped in JSON quotes.",
+      "command": "native_fetch",
+      "req": {
+        "url": "https://server.example/api/v1/thing",
+        "method": "POST",
+        "body": null,
+        "body_base64": "YT0xJmI9Mg==",
+        "headers": { "Content-Type": "application/x-www-form-urlencoded" },
+        "timeout_ms": null,
+        "response_type": null
+      }
+    },
+    {
+      "name": "binary-response",
+      "why": "responseType blob/arraybuffer must not be forced through serde_json::Value.",
+      "command": "native_fetch",
+      "req": {
+        "url": "https://server.example/api/v1/attachments/9",
+        "method": "GET",
+        "body": null,
+        "body_base64": null,
+        "headers": null,
+        "timeout_ms": null,
+        "response_type": "binary"
+      }
+    },
+    {
+      "name": "multipart-upload",
+      "why": "Bug 5. A FormData handed to invoke() serialises to {} — it has no enumerable own properties — so every upload arrived as an empty JSON object and 400d.",
+      "command": "native_multipart",
+      "req": {
+        "url": "https://server.example/api/v1/guilds/7/emojis",
+        "method": "POST",
+        "parts": [
+          { "name": "name", "value": "party" },
+          {
+            "name": "image",
+            "filename": "party.png",
+            "content_type": "image/png",
+            "data_base64": "iVBORw0KGgo="
+          }
+        ],
+        "headers": { "Content-Type": "multipart/form-data" },
+        "timeout_ms": null
+      }
+    },
+    {
+      "name": "multipart-opaque-blob",
+      "why": "An encrypted attachment is an unnamed Blob; a browser calls that part \"blob\" and stamps it application/octet-stream.",
+      "command": "native_multipart",
+      "req": {
+        "url": "https://server.example/api/v1/channels/5/attachments",
+        "method": "POST",
+        "parts": [
+          {
+            "name": "file",
+            "filename": "0123456789abcdef0123456789abcdef.bin",
+            "content_type": "application/octet-stream",
+            "data_base64": "AAECAw=="
+          }
+        ],
+        "headers": { "Content-Type": "multipart/form-data" },
+        "timeout_ms": 120000
+      }
+    },
+    {
+      "name": "single-file-upload",
+      "why": "The attachment path's own command. It shares one multipart implementation with native_multipart so a fix to one is a fix to both.",
+      "command": "native_upload_file",
+      "req": {
+        "url": "https://server.example/api/v1/channels/5/attachments",
+        "filename": "photo.jpg",
+        "content_type": "image/jpeg",
+        "data_base64": "/9j/4AAQ",
+        "headers": { "Authorization": "Bearer t" },
+        "timeout_ms": 120000
+      }
+    },
+    {
+      "name": "download",
+      "why": "Attachment download. A multi-megabyte body does not finish inside the 15 s default.",
+      "command": "native_download_file",
+      "req": {
+        "url": "https://server.example/api/v1/attachments/9",
+        "headers": { "Authorization": "Bearer t" },
+        "timeout_ms": 120000
+      }
+    }
+  ],
+  "responses": [
+    {
+      "name": "headers-are-returned",
+      "why": "Bug 1. native_fetch returned only status and body, so the operation context compared an absent X-Paracord-History-Epoch against the captured one, called every response a history change, and tore down the realtime stream.",
+      "response": {
+        "status": 200,
+        "body": { "id": "42" },
+        "headers": {
+          "content-type": "application/json",
+          "x-paracord-history-epoch": "7257b8f7-610e-4a8b-a20c-5a94a7b98428"
+        }
+      }
+    },
+    {
+      "name": "non-json-body-is-text",
+      "why": "Axios leaves an unparseable body on response.data as text. Answering null threw away every plain-text error the server can send.",
+      "response": {
+        "status": 502,
+        "body": "<html>bad gateway</html>",
+        "headers": { "content-type": "text/html" }
+      }
+    }
+  ],
+  "server_payloads": [
+    {
+      "name": "media-token-claims-string-sub",
+      "why": "Bug 3. The server mints `sub` as a JSON string because a snowflake is past 2^53. The desktop declared it i64 and every native voice join failed with \"invalid type: string\".",
+      "claims": { "sub": "357881425447358464", "exp": 1800000000, "sid": "s1", "room": "r1" }
+    },
+    {
+      "name": "media-token-claims-number-sub",
+      "why": "An older server still sends a bare number; both shapes must read.",
+      "claims": { "sub": 357881425447358464, "exp": 1800000000, "sid": "s1", "room": "r1" }
+    }
+  ],
+  "secure_store_keys": [
+    {
+      "name": "signal-dm-session",
+      "why": "Bug 4. A Signal DM session key is `paracord:signal:session:<64 hex>:<64 hex>` = 153 bytes. A 128-byte cap rejected every one of them, so no encrypted DM could be sent from the desktop.",
+      "key": "paracord:signal:session:0000000000000000000000000000000000000000000000000000000000000000:1111111111111111111111111111111111111111111111111111111111111111",
+      "accepted": true
+    },
+    {
+      "name": "unprefixed",
+      "why": "The prefix is the namespace guard and still applies.",
+      "key": "signal:session:legacy",
+      "accepted": false
+    }
+  ]
+}

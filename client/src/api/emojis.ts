@@ -44,7 +44,14 @@ export const emojiApi = {
     formData.append('name', name);
     formData.append('image', data.file);
     return responseContract(
-      getApi().post(`/guilds/${guildId}/emojis`, formData),
+      // The shared client declares `application/json`, and axios turns a
+      // FormData body into `JSON.stringify(formDataToJSON(data))` when that is
+      // the declared type — so the image arrived as the JSON object `{}` and
+      // the server answered 400 "Missing emoji image". Declaring multipart
+      // makes axios hand the body to the transport intact.
+      getApi().post(`/guilds/${guildId}/emojis`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      }),
       isGuildEmoji,
       'GuildEmoji',
     );

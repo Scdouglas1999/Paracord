@@ -958,3 +958,31 @@ mod activity_consent_tests {
         assert!(sanitize_diagnostic_line(&"x".repeat(10_000)).len() <= MAX_DIAGNOSTIC_LINE_BYTES);
     }
 }
+
+/// The secure-store half of the bridge contract.
+/// See `client/src-tauri/bridge-contract.json`.
+#[cfg(test)]
+mod secure_store_contract_tests {
+    use super::validate_secure_store_key;
+    use crate::bridge_contract::entries;
+
+    #[test]
+    fn every_key_the_app_writes_is_accepted() {
+        // Bug 4: the cap was 128 bytes and a Signal DM session key is 153, so
+        // `readStoredValueForMigration` threw "secure store key is too long"
+        // and no encrypted direct message could be sent from the desktop at
+        // all. A browser never runs this code, so nothing caught it.
+        for case in entries("secure_store_keys") {
+            let key = case["key"].as_str().unwrap();
+            let accepted = case["accepted"].as_bool().unwrap();
+            let name = case["name"].as_str().unwrap();
+            assert_eq!(
+                validate_secure_store_key(key).is_ok(),
+                accepted,
+                "{name} ({} bytes): {}",
+                key.len(),
+                case["why"].as_str().unwrap_or_default()
+            );
+        }
+    }
+}

@@ -620,3 +620,26 @@ pub struct RemoteSessionParticipant {
     /// The hex X25519 call key this peer published for this call.
     pub media_public_key: Option<String>,
 }
+
+/// The media-token half of the bridge contract.
+/// See `client/src-tauri/bridge-contract.json`.
+#[cfg(test)]
+mod media_token_contract_tests {
+    use super::MediaTokenClaims;
+    use crate::bridge_contract::entries;
+
+    #[test]
+    fn a_snowflake_claim_reads_in_both_wire_shapes() {
+        // Bug 3: the server mints `sub` as a JSON *string* (a snowflake is past
+        // 2^53, so a bare number would round in a browser). The desktop
+        // declared it `i64`, so every native voice join failed with
+        // "token claims parse failed: invalid type: string" — all voice, dead,
+        // on the desktop only.
+        for case in entries("server_payloads") {
+            let name = case["name"].as_str().unwrap();
+            let claims: MediaTokenClaims = serde_json::from_value(case["claims"].clone())
+                .unwrap_or_else(|e| panic!("{name} does not parse: {e}"));
+            assert_eq!(claims.sub, 357881425447358464_i64, "{name}");
+        }
+    }
+}

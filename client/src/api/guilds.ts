@@ -164,7 +164,12 @@ export function createGuildApi(getApi: () => RestClient) {
       formData.append('name', payload.name);
       if (payload.description) formData.append('description', payload.description);
       formData.append('image', payload.file);
-      return getApi().post<Sticker>(`/guilds/${guildId}/stickers`, formData);
+      // Without an explicit multipart content type axios re-encodes the
+      // FormData as JSON (the client's declared default), which loses the
+      // image and 400s. See the same note on emoji creation.
+      return getApi().post<Sticker>(`/guilds/${guildId}/stickers`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
     },
     deleteSticker: async (guildId: string, stickerId: string) =>
       getApi().delete(`/guilds/${guildId}/stickers/${stickerId}`),

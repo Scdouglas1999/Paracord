@@ -59,6 +59,15 @@ const MAX_NATIVE_JSON_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_NATIVE_DOWNLOAD_BYTES: usize = 256 * 1024 * 1024;
 const MAX_NATIVE_UPLOAD_BYTES: usize = 256 * 1024 * 1024;
 const MAX_NATIVE_SSE_BUFFER_BYTES: usize = 1024 * 1024;
+/// What a native request gets when the caller names no deadline — the same
+/// 15 s the axios clients declare as their default `timeout`.
+const DEFAULT_NATIVE_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+/// The longest deadline a caller may ask for. Every native request used to
+/// share one hard 15 s client timeout regardless of `config.timeout`, so a call
+/// the browser is allowed two minutes for — `uploadOpaqueCiphertext` asks for
+/// 120 s, and a multi-megabyte attachment needs it — died at 15 s on the
+/// desktop with "Connection timed out." while the same code worked in a browser.
+const MAX_NATIVE_REQUEST_TIMEOUT_MS: u64 = 10 * 60 * 1000;
 
 fn trusted_origin_from_url(raw_url: &str) -> Option<String> {
     let parsed = url::Url::parse(raw_url).ok()?;
@@ -926,7 +935,92 @@ struct NativeFetchRequest {
     url: String,
     method: Option<String>,
     body: Option<serde_json::Value>,
+    /// A body that is not JSON, as base64 of the exact bytes to put on the
+    /// wire, with the caller's own `content-type` left untouched. Everything
+    /// non-JSON a browser can send — a form-encoded string, a `Blob`, an
+    /// `ArrayBuffer` — used to be coerced through `serde_json::Value` and
+    /// arrive as a quoted JSON string or an empty object.
+    #[serde(default)]
+    body_base64: Option<String>,
     headers: Option<std::collections::HashMap<String, String>>,
+    /// Per-request deadline in milliseconds, mirroring axios `config.timeout`.
+    /// Absent means [`DEFAULT_NATIVE_REQUEST_TIMEOUT`].
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+    /// How the renderer wants the body back: `"json"` (the default — parse as
+    /// JSON, fall back to the raw text exactly as axios does) or `"binary"`,
+    /// which answers with `body_base64` instead and is how `responseType:
+    /// 'blob' | 'arraybuffer'` reaches a non-JSON endpoint.
+    #[serde(default)]
+    response_type: Option<String>,
+}
+
+/// Resolve a caller-supplied deadline into one reqwest will accept.
+///
+/// `Some(0)` is axios' "no timeout"; it is clamped to the maximum rather than
+/// made unbounded, because a native request with no deadline at all wedges the
+/// UI action behind it forever when a server stops answering mid-body.
+fn native_request_timeout(timeout_ms: Option<u64>) -> Duration {
+    match timeout_ms {
+        None => DEFAULT_NATIVE_REQUEST_TIMEOUT,
+        Some(0) => Duration::from_millis(MAX_NATIVE_REQUEST_TIMEOUT_MS),
+        Some(ms) => Duration::from_millis(ms.min(MAX_NATIVE_REQUEST_TIMEOUT_MS)),
+    }
+}
+
+/// Turn a response body into what `response.data` would hold in a browser.
+///
+/// Axios leaves a body it cannot parse as JSON on `response.data` as the raw
+/// text. This used to answer `null` for anything that was not valid JSON, so
+/// every plain-text error page, every `text/plain` endpoint and every
+/// non-JSON 4xx explanation arrived at the renderer as an empty body and the
+/// UI reported "Request failed" with no reason.
+fn native_body_value(bytes: &[u8]) -> serde_json::Value {
+    if bytes.is_empty() {
+        // Axios gives `data: ''` for an empty body (a 204, say). Match it, so
+        // `if (!response.data)` behaves the same on both shells.
+        return serde_json::Value::String(String::new());
+    }
+    match serde_json::from_slice(bytes) {
+        Ok(value) => value,
+        Err(_) => serde_json::Value::String(String::from_utf8_lossy(bytes).into_owned()),
+    }
+}
+
+/// Build the request for `method`, supporting every method a browser can send
+/// rather than silently turning the unknown ones into a GET — which is what
+/// this did to HEAD and OPTIONS.
+fn native_request_builder(
+    client: &reqwest::Client,
+    method: Option<&str>,
+    url: &str,
+) -> Result<reqwest::RequestBuilder, String> {
+    let method = method.unwrap_or("GET").to_uppercase();
+    let method = reqwest::Method::from_bytes(method.as_bytes())
+        .map_err(|_| format!("Unsupported HTTP method: {method}"))?;
+    Ok(client.request(method, url))
+}
+
+/// Apply caller headers, dropping the ones the transport owns.
+///
+/// `content-type` is skipped when the transport sets its own (a JSON body, or
+/// a multipart form whose boundary reqwest generates): `RequestBuilder::header`
+/// *appends*, so leaving the caller's value in place sent two `content-type`
+/// headers and the server read whichever came first.
+fn apply_native_headers(
+    mut builder: reqwest::RequestBuilder,
+    headers: Option<std::collections::HashMap<String, String>>,
+    skip_content_type: bool,
+) -> reqwest::RequestBuilder {
+    if let Some(headers) = headers {
+        for (k, v) in headers {
+            if skip_content_type && k.eq_ignore_ascii_case("content-type") {
+                continue;
+            }
+            builder = builder.header(&k, &v);
+        }
+    }
+    builder
 }
 
 #[derive(serde::Serialize)]
@@ -946,6 +1040,12 @@ struct NativeFetchResponse {
     /// reconciliation, which drops the realtime stream — so the desktop client
     /// could not hold a connection for longer than it took to make one request.
     headers: std::collections::HashMap<String, String>,
+    /// The raw body, base64-encoded, when the caller asked for
+    /// `response_type: "binary"` (axios `responseType: 'blob' |
+    /// 'arraybuffer'`). `body` is left null in that case: a PNG forced through
+    /// `serde_json::Value` is not a round trip.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    body_base64: Option<String>,
 }
 
 /// Collect a response's headers for the renderer.
@@ -966,38 +1066,171 @@ fn native_response_headers(resp: &reqwest::Response) -> std::collections::HashMa
         .collect()
 }
 
+/// Send a built request and shape the answer the way the renderer expects.
+///
+/// Shared by every native HTTP command so a fix to one — response headers, the
+/// non-JSON body fallback, the size cap — is a fix to all of them. Diverging
+/// copies of this tail are how `native_fetch` came to drop response headers
+/// while `native_upload_file` did not.
+async fn send_native_request(
+    builder: reqwest::RequestBuilder,
+    binary: bool,
+) -> Result<NativeFetchResponse, String> {
+    use base64::Engine as _;
+
+    let resp = builder.send().await.map_err(map_reqwest_error)?;
+    let status = resp.status().as_u16();
+    let headers = native_response_headers(&resp);
+    let limit = if binary {
+        MAX_NATIVE_DOWNLOAD_BYTES
+    } else {
+        MAX_NATIVE_JSON_RESPONSE_BYTES
+    };
+    let bytes = read_limited_response(resp, limit).await?;
+    if binary {
+        return Ok(NativeFetchResponse {
+            status,
+            body: serde_json::Value::Null,
+            headers,
+            body_base64: Some(base64::engine::general_purpose::STANDARD.encode(&bytes)),
+        });
+    }
+    Ok(NativeFetchResponse {
+        status,
+        body: native_body_value(&bytes),
+        headers,
+        body_base64: None,
+    })
+}
+
 #[tauri::command]
 async fn native_fetch(req: NativeFetchRequest) -> Result<NativeFetchResponse, String> {
     ensure_native_fetch_target_is_trusted(&req.url)?;
-    let client = tls_pinning_client()?;
-    let method = req.method.as_deref().unwrap_or("GET");
-    let mut builder = match method.to_uppercase().as_str() {
-        "POST" => client.post(&req.url),
-        "PUT" => client.put(&req.url),
-        "PATCH" => client.patch(&req.url),
-        "DELETE" => client.delete(&req.url),
-        _ => client.get(&req.url),
-    };
-    if let Some(headers) = req.headers {
-        for (k, v) in headers {
-            builder = builder.header(&k, &v);
+    let client = tls_pinning_client_with_timeout(native_request_timeout(req.timeout_ms))?;
+    let mut builder = native_request_builder(&client, req.method.as_deref(), &req.url)?;
+    // Only a JSON body makes the transport own `content-type`; a raw body
+    // carries the caller's own declared type.
+    let json_body = req.body.filter(|_| req.body_base64.is_none());
+    builder = apply_native_headers(builder, req.headers, json_body.is_some());
+    if let Some(body_base64) = req.body_base64 {
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(body_base64.as_bytes())
+            .map_err(|e| format!("Invalid request body encoding: {e}"))?;
+        if bytes.len() > MAX_NATIVE_UPLOAD_BYTES {
+            return Err(format!(
+                "Request body exceeds the {MAX_NATIVE_UPLOAD_BYTES} byte native limit"
+            ));
         }
-    }
-    if let Some(body) = req.body {
+        builder = builder.body(bytes);
+    } else if let Some(body) = json_body {
         builder = builder
             .header("content-type", "application/json")
             .json(&body);
     }
-    let resp = builder.send().await.map_err(map_reqwest_error)?;
-    let status = resp.status().as_u16();
-    let headers = native_response_headers(&resp);
-    let bytes = read_limited_response(resp, MAX_NATIVE_JSON_RESPONSE_BYTES).await?;
-    let body = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
-    Ok(NativeFetchResponse {
-        status,
-        body,
-        headers,
-    })
+    let binary = req.response_type.as_deref() == Some("binary");
+    send_native_request(builder, binary).await
+}
+
+/// One part of a multipart form crossing the bridge.
+///
+/// Either a text field (`value`) or a file field (`data_base64`, with the
+/// `filename` and `content_type` the browser would have attached).
+#[derive(serde::Deserialize)]
+struct NativeMultipartPart {
+    name: String,
+    #[serde(default)]
+    value: Option<String>,
+    #[serde(default)]
+    filename: Option<String>,
+    #[serde(default)]
+    content_type: Option<String>,
+    #[serde(default)]
+    data_base64: Option<String>,
+}
+
+/// A multipart/form-data request with arbitrary fields and files.
+///
+/// The bridge had no such route. A `FormData` handed to `invoke('native_fetch')`
+/// is serialised by `structuredClone`/JSON as `{}` — it has no enumerable own
+/// properties — so on the desktop every multipart call arrived with the body
+/// `{}` and `content-type: application/json`, and the server answered 400
+/// "Missing …". That killed encrypted DM attachments, custom emoji, stickers
+/// and avatar uploads, while the browser (where axios hands FormData straight
+/// to XHR) was fine — so nothing in CI saw it.
+#[derive(serde::Deserialize)]
+struct NativeMultipartRequest {
+    url: String,
+    #[serde(default)]
+    method: Option<String>,
+    parts: Vec<NativeMultipartPart>,
+    #[serde(default)]
+    headers: Option<std::collections::HashMap<String, String>>,
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+}
+
+/// Assemble the reqwest form, enforcing the upload cap across *all* parts.
+fn build_native_multipart_form(
+    parts: Vec<NativeMultipartPart>,
+) -> Result<reqwest::multipart::Form, String> {
+    use base64::Engine as _;
+
+    if parts.is_empty() {
+        return Err("A multipart request needs at least one part".to_string());
+    }
+    let mut total = 0usize;
+    let mut form = reqwest::multipart::Form::new();
+    for part in parts {
+        if let Some(data_base64) = part.data_base64 {
+            let data = base64::engine::general_purpose::STANDARD
+                .decode(data_base64.as_bytes())
+                .map_err(|e| format!("Invalid upload payload encoding: {e}"))?;
+            total = total.saturating_add(data.len());
+            if total > MAX_NATIVE_UPLOAD_BYTES {
+                return Err(format!(
+                    "Upload exceeds the {MAX_NATIVE_UPLOAD_BYTES} byte native limit"
+                ));
+            }
+            let mut file = reqwest::multipart::Part::bytes(data);
+            if let Some(filename) = part.filename {
+                file = file.file_name(filename);
+            }
+            // A browser stamps a Blob part with its own type, defaulting to
+            // application/octet-stream. Match that: the emoji and avatar
+            // routes sniff `field.content_type()` to pick the stored extension.
+            let mime = part
+                .content_type
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "application/octet-stream".to_string());
+            file = file.mime_str(&mime).map_err(|e| e.to_string())?;
+            form = form.part(part.name, file);
+        } else {
+            let value = part.value.unwrap_or_default();
+            total = total.saturating_add(value.len());
+            if total > MAX_NATIVE_UPLOAD_BYTES {
+                return Err(format!(
+                    "Upload exceeds the {MAX_NATIVE_UPLOAD_BYTES} byte native limit"
+                ));
+            }
+            form = form.text(part.name, value);
+        }
+    }
+    Ok(form)
+}
+
+#[tauri::command]
+async fn native_multipart(req: NativeMultipartRequest) -> Result<NativeFetchResponse, String> {
+    ensure_native_fetch_target_is_trusted(&req.url)?;
+    let client = tls_pinning_client_with_timeout(native_request_timeout(req.timeout_ms))?;
+    let form = build_native_multipart_form(req.parts)?;
+    let builder = native_request_builder(&client, req.method.as_deref().or(Some("POST")), &req.url)?
+        .multipart(form);
+    // reqwest owns `content-type` here: it carries the generated boundary, and
+    // the caller's literal `multipart/form-data` (which axios sets, boundaryless)
+    // would make the server unable to split the body.
+    let builder = apply_native_headers(builder, req.headers, true);
+    send_native_request(builder, false).await
 }
 
 #[derive(serde::Deserialize)]
@@ -1011,14 +1244,16 @@ struct NativeUploadFileRequest {
     // previously produced an empty multipart body and a 400 from the server.
     data_base64: String,
     headers: Option<std::collections::HashMap<String, String>>,
+    #[serde(default)]
+    timeout_ms: Option<u64>,
 }
 
+/// The single-file upload the attachment path has always used. Kept as its own
+/// command for that caller, but expressed in terms of [`native_multipart`] so
+/// there is exactly one multipart implementation to be right.
 #[tauri::command]
 async fn native_upload_file(req: NativeUploadFileRequest) -> Result<NativeFetchResponse, String> {
     use base64::Engine as _;
-
-    ensure_native_fetch_target_is_trusted(&req.url)?;
-    let client = tls_pinning_client()?;
 
     let data = base64::engine::general_purpose::STANDARD
         .decode(req.data_base64.as_bytes())
@@ -1026,45 +1261,32 @@ async fn native_upload_file(req: NativeUploadFileRequest) -> Result<NativeFetchR
     if data.is_empty() {
         return Err("Upload payload was empty".to_string());
     }
-    if data.len() > MAX_NATIVE_UPLOAD_BYTES {
-        return Err(format!(
-            "Upload exceeds the {} byte native limit",
-            MAX_NATIVE_UPLOAD_BYTES
-        ));
-    }
 
-    let part = reqwest::multipart::Part::bytes(data)
-        .file_name(req.filename)
-        .mime_str(&req.content_type)
-        .map_err(|e| e.to_string())?;
-    let form = reqwest::multipart::Form::new().part("file", part);
-
-    let mut builder = client.post(&req.url).multipart(form);
-    if let Some(headers) = req.headers {
-        for (k, v) in headers {
-            if k.eq_ignore_ascii_case("content-type") {
-                continue;
-            }
-            builder = builder.header(&k, &v);
-        }
-    }
-
-    let resp = builder.send().await.map_err(map_reqwest_error)?;
-    let status = resp.status().as_u16();
-    let headers = native_response_headers(&resp);
-    let bytes = read_limited_response(resp, MAX_NATIVE_JSON_RESPONSE_BYTES).await?;
-    let body = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
-    Ok(NativeFetchResponse {
-        status,
-        body,
-        headers,
+    native_multipart(NativeMultipartRequest {
+        url: req.url,
+        method: Some("POST".to_string()),
+        parts: vec![NativeMultipartPart {
+            name: "file".to_string(),
+            value: None,
+            filename: Some(req.filename),
+            content_type: Some(req.content_type),
+            data_base64: Some(req.data_base64),
+        }],
+        headers: req.headers,
+        // An attachment can be hundreds of megabytes; the old shared 15 s
+        // client timeout aborted it mid-body. Default to the browser's upload
+        // allowance when the caller names none.
+        timeout_ms: Some(req.timeout_ms.unwrap_or(120_000)),
     })
+    .await
 }
 
 #[derive(serde::Deserialize)]
 struct NativeDownloadFileRequest {
     url: String,
     headers: Option<std::collections::HashMap<String, String>>,
+    #[serde(default)]
+    timeout_ms: Option<u64>,
 }
 
 #[derive(serde::Serialize)]
@@ -1086,13 +1308,11 @@ async fn native_download_file(
     use base64::Engine as _;
 
     ensure_native_fetch_target_is_trusted(&req.url)?;
-    let client = tls_pinning_client()?;
-    let mut builder = client.get(&req.url);
-    if let Some(headers) = req.headers {
-        for (k, v) in headers {
-            builder = builder.header(&k, &v);
-        }
-    }
+    // A multi-megabyte attachment does not finish inside the 15 s default.
+    let client = tls_pinning_client_with_timeout(native_request_timeout(Some(
+        req.timeout_ms.unwrap_or(120_000),
+    )))?;
+    let builder = apply_native_headers(client.get(&req.url), req.headers, false);
     let resp = builder.send().await.map_err(map_reqwest_error)?;
     let status = resp.status().as_u16();
     let content_type = resp
@@ -1488,6 +1708,7 @@ pub fn run() {
         probe_server,
         native_fetch,
         native_upload_file,
+        native_multipart,
         native_download_file,
         start_native_sse_stream,
         stop_native_sse_stream,
@@ -1887,5 +2108,232 @@ mod tests {
         );
         assert!(health_url_for_server("file:///tmp/server").is_err());
         assert!(health_url_for_server("/relative").is_err());
+    }
+}
+
+/// The desktop bridge contract, from the Rust side.
+///
+/// `client/src-tauri/bridge-contract.json` is the one description of what
+/// crosses `invoke`, and `client/src/lib/tauriAxiosAdapter.contract.test.ts`
+/// asserts the renderer emits exactly these payloads. Here we assert the
+/// commands *accept* them and keep every field.
+///
+/// Five release blockers were the same bug — the two sides disagreeing about a
+/// shape that no browser test can observe. This pair of suites is what makes
+/// that disagreement a failing test instead of a dead feature.
+#[cfg(test)]
+pub(crate) mod bridge_contract {
+    pub(crate) const CONTRACT_JSON: &str = include_str!("../bridge-contract.json");
+
+    pub(crate) fn contract() -> serde_json::Value {
+        serde_json::from_str(CONTRACT_JSON).expect("bridge-contract.json must be valid JSON")
+    }
+
+    /// Every entry of `key` whose `name` is not `"$comment"`.
+    pub(crate) fn entries(key: &str) -> Vec<serde_json::Value> {
+        contract()[key]
+            .as_array()
+            .unwrap_or_else(|| panic!("bridge-contract.json has no \"{key}\" array"))
+            .clone()
+    }
+
+    pub(crate) fn entry(key: &str, name: &str) -> serde_json::Value {
+        entries(key)
+            .into_iter()
+            .find(|value| value["name"] == name)
+            .unwrap_or_else(|| panic!("bridge-contract.json has no {key} entry named {name}"))
+    }
+}
+
+#[cfg(test)]
+mod bridge_contract_tests {
+    use super::bridge_contract::{entries, entry};
+    use super::*;
+
+    fn req(name: &str) -> serde_json::Value {
+        entry("cases", name)["req"].clone()
+    }
+
+    #[test]
+    fn every_case_deserializes_into_the_command_it_names() {
+        for case in entries("cases") {
+            let name = case["name"].as_str().unwrap().to_string();
+            let command = case["command"].as_str().unwrap().to_string();
+            let req = case["req"].clone();
+            let outcome: Result<(), String> = match command.as_str() {
+                "native_fetch" => serde_json::from_value::<NativeFetchRequest>(req)
+                    .map(|_| ())
+                    .map_err(|e| e.to_string()),
+                "native_multipart" => serde_json::from_value::<NativeMultipartRequest>(req)
+                    .map(|_| ())
+                    .map_err(|e| e.to_string()),
+                "native_upload_file" => serde_json::from_value::<NativeUploadFileRequest>(req)
+                    .map(|_| ())
+                    .map_err(|e| e.to_string()),
+                "native_download_file" => serde_json::from_value::<NativeDownloadFileRequest>(req)
+                    .map(|_| ())
+                    .map_err(|e| e.to_string()),
+                other => panic!("case {name} names unknown command {other}"),
+            };
+            outcome.unwrap_or_else(|e| panic!("case {name} ({command}) does not deserialize: {e}"));
+        }
+    }
+
+    #[test]
+    fn a_parameterised_get_keeps_its_query_string() {
+        // Bug 2: the adapter dropped `config.params`, so recovery arrived with
+        // no `after` and the server answered 400 — which is what left every
+        // 3.0.0 profile unable to reach a ready message runtime.
+        let parsed: NativeFetchRequest = serde_json::from_value(req("get-with-params")).unwrap();
+        assert!(parsed.url.contains("?after=0&limit=100&known_ids="));
+        assert_eq!(parsed.method.as_deref(), Some("GET"));
+        assert!(parsed.body.is_none() && parsed.body_base64.is_none());
+    }
+
+    #[test]
+    fn a_multipart_case_becomes_a_form_with_every_part() {
+        // Bug 5: a FormData handed to invoke() arrives as `{}`. These parts are
+        // the shape that replaces it, and the form must build from them.
+        for name in ["multipart-upload", "multipart-opaque-blob"] {
+            let parsed: NativeMultipartRequest = serde_json::from_value(req(name)).unwrap();
+            let count = parsed.parts.len();
+            assert!(count > 0, "{name} carries no parts");
+            let form = build_native_multipart_form(parsed.parts)
+                .unwrap_or_else(|e| panic!("{name} does not build a form: {e}"));
+            assert_eq!(form.boundary().is_empty(), false);
+        }
+    }
+
+    #[test]
+    fn a_multipart_part_defaults_to_octet_stream_but_keeps_a_declared_type() {
+        let parsed: NativeMultipartRequest =
+            serde_json::from_value(req("multipart-upload")).unwrap();
+        let image = parsed
+            .parts
+            .iter()
+            .find(|part| part.name == "image")
+            .expect("the emoji case has an image part");
+        assert_eq!(image.content_type.as_deref(), Some("image/png"));
+        assert_eq!(image.filename.as_deref(), Some("party.png"));
+        let text = parsed.parts.iter().find(|part| part.name == "name").unwrap();
+        assert_eq!(text.value.as_deref(), Some("party"));
+        assert!(text.data_base64.is_none());
+    }
+
+    #[test]
+    fn the_callers_deadline_is_honoured_within_the_bound() {
+        // Every native request used to share one hard 15 s client timeout, so
+        // an upload the browser allows 120 s died mid-body.
+        let upload: NativeMultipartRequest =
+            serde_json::from_value(req("multipart-opaque-blob")).unwrap();
+        assert_eq!(
+            native_request_timeout(upload.timeout_ms),
+            Duration::from_millis(120_000)
+        );
+        assert_eq!(
+            native_request_timeout(None),
+            DEFAULT_NATIVE_REQUEST_TIMEOUT,
+            "a caller that names no deadline gets the axios default"
+        );
+        assert_eq!(
+            native_request_timeout(Some(0)),
+            Duration::from_millis(MAX_NATIVE_REQUEST_TIMEOUT_MS),
+            "axios' 'no timeout' is bounded, not unbounded"
+        );
+        assert_eq!(
+            native_request_timeout(Some(u64::MAX)),
+            Duration::from_millis(MAX_NATIVE_REQUEST_TIMEOUT_MS)
+        );
+    }
+
+    #[test]
+    fn every_method_a_browser_can_send_survives() {
+        let client = reqwest::Client::new();
+        for method in ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"] {
+            let built =
+                native_request_builder(&client, Some(method), "https://server.example/api/v1/x")
+                    .unwrap_or_else(|e| panic!("{method}: {e}"))
+                    .build()
+                    .unwrap();
+            // HEAD and OPTIONS used to fall through a match arm into a GET.
+            assert_eq!(built.method().as_str(), method);
+        }
+        assert!(native_request_builder(&client, Some("TRACEROUTE"), "https://x/").is_ok());
+        assert!(native_request_builder(&client, Some("bad method"), "https://x/").is_err());
+    }
+
+    #[test]
+    fn a_response_body_reads_the_way_axios_reads_it() {
+        let json = entry("responses", "headers-are-returned")["response"].clone();
+        assert_eq!(
+            native_body_value(serde_json::to_string(&json["body"]).unwrap().as_bytes()),
+            json["body"]
+        );
+        // Bug: a body that is not JSON used to become `null`, so every
+        // plain-text error the server can answer with reached the UI empty.
+        let text = entry("responses", "non-json-body-is-text")["response"]["body"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            native_body_value(text.as_bytes()),
+            serde_json::Value::String(text)
+        );
+        // Axios reports an empty body (a 204) as `''`, not null.
+        assert_eq!(
+            native_body_value(b""),
+            serde_json::Value::String(String::new())
+        );
+    }
+
+    #[test]
+    fn the_transport_owns_content_type_only_when_it_supplies_one() {
+        let client = reqwest::Client::new();
+        let mut headers = std::collections::HashMap::new();
+        headers.insert("content-type".to_string(), "text/plain".to_string());
+        headers.insert("authorization".to_string(), "Bearer t".to_string());
+
+        // A JSON or multipart body: the caller's content-type must be dropped,
+        // because `RequestBuilder::header` appends and two content-type headers
+        // is not a request any server reads the way the caller meant.
+        let dropped = native_request_builder(&client, Some("POST"), "https://x/")
+            .unwrap();
+        let dropped = apply_native_headers(dropped, Some(headers.clone()), true)
+            .build()
+            .unwrap();
+        assert!(dropped.headers().get("content-type").is_none());
+        assert!(dropped.headers().get("authorization").is_some());
+
+        // A raw body carries the caller's own declared type.
+        let kept = native_request_builder(&client, Some("POST"), "https://x/").unwrap();
+        let kept = apply_native_headers(kept, Some(headers), false).build().unwrap();
+        assert_eq!(kept.headers().get("content-type").unwrap(), "text/plain");
+    }
+
+    #[test]
+    fn an_oversized_multipart_is_refused_across_all_parts_together() {
+        use base64::Engine as _;
+        let chunk = base64::engine::general_purpose::STANDARD.encode(vec![0u8; 1024]);
+        let parts = vec![
+            NativeMultipartPart {
+                name: "a".into(),
+                value: None,
+                filename: Some("a.bin".into()),
+                content_type: None,
+                data_base64: Some(chunk.clone()),
+            },
+            NativeMultipartPart {
+                name: "b".into(),
+                value: None,
+                filename: Some("b.bin".into()),
+                content_type: None,
+                data_base64: Some(chunk),
+            },
+        ];
+        assert!(build_native_multipart_form(parts).is_ok());
+        assert!(
+            build_native_multipart_form(Vec::new()).is_err(),
+            "a multipart request with no parts is not a request"
+        );
     }
 }
