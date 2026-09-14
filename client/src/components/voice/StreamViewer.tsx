@@ -22,6 +22,7 @@ import {
 } from './streamOverlayPortal';
 import { LiveDot } from '../light';
 import { cn } from '../../lib/utils';
+import { reportGroundColor } from '../../lib/nativeGround';
 
 /**
  * A control on the tile itself: the name-tag fill, so it stays readable over
@@ -58,8 +59,14 @@ interface StreamViewerProps {
 let underlayHoleCount = 0;
 function setUnderlayHole(open: boolean) {
   if (typeof document === 'undefined') return;
+  const wasOpen = underlayHoleCount > 0;
   underlayHoleCount = Math.max(0, underlayHoleCount + (open ? 1 : -1));
   document.documentElement.toggleAttribute('data-native-underlay', underlayHoleCount > 0);
+  // The moment the hole opens, the GTK toplevel under the webview becomes
+  // visible around the tile — so the shell is told the ground colour again
+  // here as well as on every theme change, and a hole never opens onto a
+  // colour the shell was told before the last restyle.
+  if (!wasOpen && underlayHoleCount > 0) void reportGroundColor();
 }
 
 export function StreamViewer({

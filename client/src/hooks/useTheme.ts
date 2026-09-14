@@ -6,6 +6,7 @@ import { sanitizeCustomCss } from '../lib/security';
 import { clearCustomCss, renderCustomCss } from '../lib/customCss';
 import { toast } from '../stores/toastStore';
 import { logVoiceDiagnostic } from '../lib/desktopDiagnostics';
+import { reportGroundColor } from '../lib/nativeGround';
 
 type ThemeName = 'dark' | 'light' | 'amoled' | 'high-contrast';
 
@@ -185,6 +186,7 @@ export function useTheme() {
     root.style.setProperty('--ui-chroma', String(baseTint));
   }, [baseHue, baseTint]);
 
+
   // §5.3's one switch. The stored preference is the only thing that reaches it;
   // the OS media query is read inside `configureMotion`, never here, and the
   // answer is published as `data-motion` on <html> for CSS to follow.
@@ -232,6 +234,18 @@ export function useTheme() {
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [setCustomCss]);
+
+  // …and the desktop shell is told what all of that came out as. The GTK
+  // toplevel is what shows through wherever the DOM is transparent over a
+  // native video underlay, so it has to be painted the ground the person
+  // actually chose rather than a colour compiled into the shell. LAST of the
+  // appearance effects on purpose: by the time it runs, <html> carries the new
+  // theme, the new hue and tint, and the committed custom CSS — which can
+  // redefine `--bg-base` itself — so what it reads is the ground as it will be
+  // drawn. See `lib/nativeGround.ts`.
+  useEffect(() => {
+    void reportGroundColor();
+  }, [activeTheme, accentPreset, baseHue, baseTint, customCss, settings?.custom_css]);
 
   return { theme: activeTheme };
 }

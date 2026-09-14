@@ -1760,6 +1760,7 @@ pub fn run() {
         native_media::native_render::native_render_attach,
         native_media::native_render::native_render_update_geometry,
         native_media::native_render::native_render_detach,
+        native_media::native_render::native_render_set_ground_color,
     ]);
 
     let app = builder

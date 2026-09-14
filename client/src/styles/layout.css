@@ -138,9 +138,12 @@ html[data-theme='high-contrast'] #root {
    transparent — html/body/#root plus the AppShell wrappers marked
    `data-native-underlay-clear` — so the tile's cleared pixels form a real
    hole down to the video. Panels (sidebar, topbar, chat) keep their own
-   opaque backgrounds, and the GTK toplevel beneath is painted the same base
-   color (#0a0c10) as the default --bg-base, so punched regions read as
-   the app's own background. Never set in the browser build or on overlay
+   opaque backgrounds, and the GTK toplevel beneath is painted whatever
+   --bg-base currently resolves to — the renderer reports it to the shell
+   (`lib/nativeGround.ts` → `native_render_set_ground_color`) on every theme,
+   base-hue and base-tint change, because the ground is the person's to pick
+   and the shell cannot hold a literal for it. So punched regions read as the
+   app's own background. Never set in the browser build or on overlay
    platforms (macOS).
 
    Floating overlays that cover the hole must stay opaque: translucent

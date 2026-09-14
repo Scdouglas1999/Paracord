@@ -720,6 +720,80 @@ struct RenderHost {
     overlay: gtk::Overlay,
     webview: gtk::Widget,
     last_configure_pulse: RefCell<Option<Instant>>,
+    /// The provider that paints the toplevel the app's ground colour. Held so
+    /// a later `--bg-base` change can reload it in place (see [`GROUND_COLOR`]).
+    ground: gtk::CssProvider,
+}
+
+/// The app's ground colour — `--bg-base` — exactly as the renderer resolved it,
+/// as `#rrggbb`.
+///
+/// Pixels the DOM leaves transparent with no GLArea beneath them (the shell
+/// gutters while a stream is live, a hidden surface's backdrop) fall through to
+/// the GTK toplevel, and they have to read as the app's own background rather
+/// than as GTK theme grey. That colour used to be the literal `#0a0c10`, which
+/// was `--bg-base` when the ground was fixed. It is not fixed any more: the
+/// base is `oklch(16.5% calc(0.007 * var(--ui-chroma)) var(--ui-hue))` and the
+/// person picks the hue and the tint, so a literal reads cold against every
+/// setting but the one it was copied from. The renderer is the only thing that
+/// knows what the ground is, so the renderer says
+/// (`native_render_set_ground_color`) and the shell repeats it.
+///
+/// `None` until the renderer has spoken. The toplevel is only ever visible once
+/// the webview's own background has been cleared, which happens at host install
+/// — and the renderer reports on mount, long before any video — so in practice
+/// the colour is in hand before a hole can open. If it is not, the shell paints
+/// nothing rather than inventing a colour.
+static GROUND_COLOR: Mutex<Option<String>> = Mutex::new(None);
+
+/// `#rrggbb`, and nothing else.
+///
+/// The string crosses the IPC boundary and is pasted into a GTK stylesheet, so
+/// it is validated as a colour and not merely trusted to be one; anything else
+/// is a loud error (spec §3.7), never a quietly ignored one.
+fn validated_ground_color(color: &str) -> Result<String, String> {
+    let trimmed = color.trim();
+    let hex = trimmed.strip_prefix('#').unwrap_or("");
+    if hex.len() == 6 && hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Ok(format!("#{}", hex.to_ascii_lowercase()));
+    }
+    Err(format!(
+        "ground colour {trimmed:?} is not #rrggbb; the shell will not paint a colour it cannot read"
+    ))
+}
+
+/// Load `color` into the toplevel's provider. Main thread.
+fn paint_ground_on_main(app: &tauri::AppHandle, color: &str) {
+    RENDER_HOST.with(|host| {
+        if let Some(host) = host.borrow().as_ref() {
+            let css = format!("window {{ background-color: {color}; }}");
+            let outcome = match host.ground.load_from_data(css.as_bytes()) {
+                Ok(()) => {
+                    format!("[native-render] underlay ground colour is now {color} (--bg-base)")
+                }
+                Err(err) => {
+                    format!("[native-render] underlay ground colour {color} refused by GTK: {err}")
+                }
+            };
+            let _ = crate::commands::append_client_log(app.clone(), outcome);
+        }
+    });
+}
+
+/// The renderer's answer for `--bg-base`. Remembered even when no host is
+/// installed yet, so the colour is already in hand when one is.
+pub fn set_ground_color(app: &tauri::AppHandle, color: &str) -> Result<(), String> {
+    let color = validated_ground_color(color)?;
+    {
+        let mut slot = GROUND_COLOR.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.as_deref() == Some(color.as_str()) {
+            return Ok(());
+        }
+        *slot = Some(color.clone());
+    }
+    let handle = app.clone();
+    app.run_on_main_thread(move || paint_ground_on_main(&handle, &color))
+        .map_err(|e| format!("run_on_main_thread (ground colour) failed: {e}"))
 }
 
 thread_local! {
@@ -789,20 +863,16 @@ pub fn install_render_host(app: &tauri::AppHandle) -> Result<(), String> {
     };
     webkit2gtk::WebViewExt::set_background_color(wk_view, &gtk::gdk::RGBA::new(0.0, 0.0, 0.0, 0.0));
 
-    // Paint the toplevel window in the app's dark base color (--bg-primary):
-    // pixels the DOM leaves transparent that have no GLArea beneath them (the
-    // shell gutters while a stream is live, a hidden surface's backdrop) land
-    // here and must read as the app's own background, not GTK theme gray.
+    // Paint the toplevel window the app's own ground colour — see
+    // [`GROUND_COLOR`]. The provider is attached empty and filled in when the
+    // renderer reports `--bg-base`, which it does on mount and on every change
+    // to the base hue or tint, so the gutters follow the ground the person
+    // actually chose instead of a colour compiled in here.
+    let ground = gtk::CssProvider::new();
     if let Some(toplevel) = vbox.toplevel() {
-        let provider = gtk::CssProvider::new();
-        if provider
-            .load_from_data(b"window { background-color: #0a0c10; }")
-            .is_ok()
-        {
-            toplevel
-                .style_context()
-                .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
-        }
+        toplevel
+            .style_context()
+            .add_provider(&ground, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
     }
 
     RENDER_HOST.with(|h| {
@@ -811,8 +881,18 @@ pub fn install_render_host(app: &tauri::AppHandle) -> Result<(), String> {
             overlay,
             webview,
             last_configure_pulse: RefCell::new(None),
+            ground,
         })
     });
+    // A colour reported before the host existed (a host installed late, a
+    // renderer that was already running) is not lost.
+    let known = GROUND_COLOR
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    if let Some(color) = known {
+        paint_ground_on_main(app, &color);
+    }
     tracing::info!(
         "native surface backend installed: GTK GLArea UNDERLAY (webview \
          transparent above), tier-2 (CPU I420 → glTexSubImage2D). Tier-1 GPU \
@@ -1206,6 +1286,29 @@ impl Drop for LinuxVideoSurface {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_ground_colour_is_read_as_a_colour_not_trusted_as_one() {
+        // The renderer's answer is pasted into a GTK stylesheet, so it is read
+        // before it is repeated, and normalised so a re-report of the same
+        // colour in different case is the same colour.
+        assert_eq!(validated_ground_color("#0A0C10").unwrap(), "#0a0c10");
+        assert_eq!(validated_ground_color("  #100f0c  ").unwrap(), "#100f0c");
+        for refused in [
+            "",
+            "#0a0c1",
+            "#0a0c100",
+            "0a0c10",
+            "red",
+            "oklch(16.5% 0.007 65)",
+            "#0a0c10; } * { background-image: url(http://x/) ",
+        ] {
+            assert!(
+                validated_ground_color(refused).is_err(),
+                "{refused:?} is not #rrggbb and must be refused, not painted"
+            );
+        }
+    }
 
     #[test]
     fn bt709_matrix_matches_cpu_converter_reference() {

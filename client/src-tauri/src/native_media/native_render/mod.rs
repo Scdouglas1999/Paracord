@@ -326,6 +326,30 @@ pub async fn native_render_update_geometry(
     guard.update_geometry(geometry)
 }
 
+/// Tell the shell what the app's ground colour is — `--bg-base`, as the
+/// renderer resolved it, `#rrggbb`.
+///
+/// Only the Linux underlay has anywhere to put it: there the webview's own
+/// background is cleared so video can show through, and whatever the DOM leaves
+/// transparent falls through to the GTK toplevel. The base is user-chosen
+/// (`oklch`, with the hue and the tint on `<html>`), so the shell cannot hold a
+/// literal — it repeats what the renderer says, on mount and on every change.
+/// A no-op on the platforms whose shells paint nothing of their own.
+#[tauri::command]
+pub async fn native_render_set_ground_color(
+    #[allow(unused_variables)] app: tauri::AppHandle,
+    #[allow(unused_variables)] color: String,
+) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::set_ground_color(&app, &color)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Ok(())
+    }
+}
+
 /// Destroy a native surface (spec §3.6): removes it from the registry and the
 /// dispatch layer's per-track binding; the backend `Drop` tears down the toolkit
 /// widgets once both `Arc`s are gone.
