@@ -200,6 +200,15 @@ export function messageMentionsUser(msg: Message, userId: string | undefined | n
 }
 
 const MAX_REPLY_NEST_DEPTH = 6;
+
+/**
+ * The shortest the message actions menu may be squeezed to before it scrolls.
+ *
+ * A short room on a short window can leave less room on both sides than the
+ * menu needs; below this the menu stops being a menu, so it keeps this much
+ * and scrolls the rest.
+ */
+const MIN_MESSAGE_MENU_HEIGHT = 120;
 const REPLY_INDENT_PX = 18;
 const THREAD_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const _threadHydratedAt = new Map<string, number>();
@@ -1163,6 +1172,57 @@ function OwnedMessageList({
   }, []);
 
   /**
+   * Put one message in the middle of the timeline and hold it there while the
+   * rows around it measure themselves.
+   *
+   * `virtualizer.scrollToIndex` cannot do this, for the same reason it could
+   * not open a busy channel at its newest message: every row it travels past
+   * measures to something other than its estimate, the offset it was aiming at
+   * moves, and TanStack gives up after ten corrections ("Failed to scroll to
+   * index N after 10 attempts") — and `behavior: 'smooth'` is what it warns
+   * about on a dynamically sized list in the first place. Measured on an
+   * 81-message room: clicking a pin forty messages back landed the reader on
+   * message 1, thirty rows short of the message they asked for, and left them
+   * there with no error and nothing to retry.
+   *
+   * Getting close with the virtualizer and then correcting against the row's
+   * own rect, frame by frame until it stops moving, lands on the message
+   * itself whatever the list does underneath.
+   */
+  const scrollMessageIntoView = useCallback(
+    (messageId: string, rowIndex: number) => {
+      const element = scrollRef.current;
+      if (!element) return;
+      virtualizer.scrollToIndex(rowIndex, { align: 'center' });
+      let frames = 0;
+      let settled = 0;
+      const drive = () => {
+        const row = document.getElementById(`msg-${messageId}`);
+        if (row) {
+          const port = element.getBoundingClientRect();
+          const rect = row.getBoundingClientRect();
+          const delta = rect.top + rect.height / 2 - (port.top + port.height / 2);
+          if (Math.abs(delta) <= 2) {
+            // Three quiet frames: nothing above the row is still growing.
+            if (++settled >= 3) return;
+          } else {
+            settled = 0;
+            element.scrollTop = Math.max(
+              0,
+              Math.min(element.scrollTop + delta, element.scrollHeight - element.clientHeight),
+            );
+          }
+        } else {
+          settled = 0;
+        }
+        if (++frames < 90) requestAnimationFrame(drive);
+      };
+      requestAnimationFrame(drive);
+    },
+    [virtualizer],
+  );
+
+  /**
    * Where the reader was standing when a page of older messages was asked for,
    * so the prepend can be put underneath them instead of moving them.
    */
@@ -1465,7 +1525,7 @@ function OwnedMessageList({
     );
     if (rowIndex >= 0) {
       hashJumpDoneRef.current = msgId;
-      virtualizer.scrollToIndex(rowIndex, { align: 'center', behavior: 'smooth' });
+      scrollMessageIntoView(msgId, rowIndex);
       highlightJumpTarget(msgId);
       jumpFetchAttemptedRef.current = msgId;
       // Consume the hash the same way `?message=` is stripped once its target
@@ -1500,14 +1560,14 @@ function OwnedMessageList({
     return () => {
       cancelled = true;
     };
-  }, [messages.length, channelId, fetchMessages, highlightJumpTarget, hashJumpTick, rows, virtualizer]);
+  }, [messages.length, channelId, fetchMessages, highlightJumpTarget, hashJumpTick, rows, scrollMessageIntoView]);
 
   const scrollToMessage = useCallback((messageId: string) => {
     const rowIndex = rows.findIndex(
       (entry) => entry.type === 'message' && entry.message.id === messageId
     );
     if (rowIndex >= 0) {
-      virtualizer.scrollToIndex(rowIndex, { align: 'center', behavior: 'smooth' });
+      scrollMessageIntoView(messageId, rowIndex);
       highlightJumpTarget(messageId);
       return;
     }
@@ -1521,7 +1581,7 @@ function OwnedMessageList({
         toast.error(`Failed to jump to message: ${extractApiError(err)}`);
       }
     })();
-  }, [rows, virtualizer, highlightJumpTarget, fetchMessages, channelId]);
+  }, [rows, scrollMessageIntoView, highlightJumpTarget, fetchMessages, channelId]);
 
   useEffect(() => {
     const messageId = pendingScrollMessageRef.current;
@@ -1531,9 +1591,9 @@ function OwnedMessageList({
     );
     if (rowIndex < 0) return;
     pendingScrollMessageRef.current = null;
-    virtualizer.scrollToIndex(rowIndex, { align: 'center', behavior: 'smooth' });
+    scrollMessageIntoView(messageId, rowIndex);
     highlightJumpTarget(messageId);
-  }, [rows, virtualizer, highlightJumpTarget]);
+  }, [rows, scrollMessageIntoView, highlightJumpTarget]);
 
   useEffect(() => {
     const messageId = searchParams.get('message');
@@ -2906,18 +2966,55 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
             // no scrollbar on the menu and the timeline is already at rest — so
             // the menu reads as a menu with two items. Measure once on mount
             // and hang it above the row instead, when there is more room there.
+            //
+            // The floor is NOT the window. The composer plate is painted over
+            // the bottom ~90px of it, and a menu that ends between the two is
+            // fully on screen and still unclickable — `elementFromPoint` on
+            // "Delete" returns the composer surface. Measured at 1440x900: the
+            // composer starts at y=809, and three of the eight newest messages
+            // put one or two rows of their menu underneath it. The timeline's
+            // own scroll port is the frame that matters; its bottom edge is
+            // exactly where the composer begins and its top edge is where the
+            // channel header ends. When neither side has room the menu scrolls
+            // rather than hiding rows nothing says are there.
             ref={(node) => {
               if (!node) return;
               node.style.top = '';
               node.style.bottom = '';
-              const menu = node.getBoundingClientRect();
-              if (menu.bottom <= window.innerHeight - 8) return;
+              node.style.maxHeight = '';
+              node.style.overflowY = '';
               const row = node.parentElement?.getBoundingClientRect();
-              const spaceAbove = row ? row.top : menu.top;
-              const spaceBelow = window.innerHeight - menu.top;
-              if (spaceAbove <= spaceBelow) return;
-              node.style.top = 'auto';
-              node.style.bottom = '100%';
+              if (!row) return;
+              let port: HTMLElement | null = node.parentElement;
+              while (port && port !== document.body) {
+                const overflowY = getComputedStyle(port).overflowY;
+                if (overflowY === 'auto' || overflowY === 'scroll') break;
+                port = port.parentElement;
+              }
+              const frame =
+                port && port !== document.body
+                  ? port.getBoundingClientRect()
+                  : { top: 0, bottom: window.innerHeight };
+              const floor = Math.min(frame.bottom, window.innerHeight) - 8;
+              const ceiling = Math.max(frame.top, 0) + 8;
+              const menu = node.getBoundingClientRect();
+              const offset = menu.top - row.top;
+              let height = menu.height;
+              if (height > floor - ceiling) {
+                height = Math.max(MIN_MESSAGE_MENU_HEIGHT, floor - ceiling);
+                node.style.maxHeight = `${height}px`;
+                node.style.overflowY = 'auto';
+              }
+              let top = row.top + offset;
+              // Below the trigger first, above the row when that runs past the
+              // floor, and pinned to the floor when neither fits — the newest
+              // rows sit *under* the composer plate, so "above the row" alone
+              // still left Delete beneath it.
+              if (top + height > floor) top = row.top - height;
+              if (top + height > floor) top = floor - height;
+              if (top < ceiling) top = ceiling;
+              if (Math.abs(top - (row.top + offset)) < 0.5) return;
+              node.style.top = `${Math.round(top - row.top)}px`;
             }}
             className="pc-floating absolute right-1 top-11 z-10 min-w-[10rem] max-w-[calc(100vw-2.75rem)] p-1 sm:right-2"
           >
