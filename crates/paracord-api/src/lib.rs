@@ -1808,6 +1808,25 @@ const CSP_APP_PLAIN_HTTP: &str = "default-src 'self'; base-uri 'self'; frame-anc
 
 pub async fn security_headers_middleware(req: Request, next: Next) -> Response {
     let path = req.uri().path().to_string();
+    // An avatar, a custom emoji, a sticker or an attachment is fetched by the
+    // browser itself, straight into an `<img>`/`<video>`, from a page that is
+    // routinely a different origin: the desktop shell's page origin is
+    // `tauri://localhost`, and a web UI can be hosted apart from its API.
+    //
+    // `Cross-Origin-Resource-Policy: same-origin` made every one of those loads
+    // fail in a way that is close to invisible — the request reaches the server
+    // and is answered 200, and the browser then discards the response, so the
+    // operator's log shows a healthy download and the user sees a broken image
+    // that nothing explains. That is what happened to every avatar and custom
+    // emoji on the desktop client.
+    //
+    // CORP exists to stop a hostile page pulling in a resource that the browser
+    // will attach the victim's ambient credentials to. These routes have no
+    // ambient credentials to attach: they are authenticated by an explicit
+    // download ticket in the URL, which the hostile page does not have, and
+    // without it the server answers 401. They keep every other header —
+    // `nosniff`, `default-src 'none'`, `X-Frame-Options: DENY`.
+    let embeddable = crate::middleware::is_ticket_authenticated_resource(req.method(), &path);
     let is_https = req
         .headers()
         .get("x-forwarded-proto")
@@ -1848,7 +1867,11 @@ pub async fn security_headers_middleware(req: Request, next: Next) -> Response {
     );
     headers.insert(
         HeaderName::from_static("cross-origin-resource-policy"),
-        HeaderValue::from_static("same-origin"),
+        HeaderValue::from_static(if embeddable {
+            "cross-origin"
+        } else {
+            "same-origin"
+        }),
     );
     if path == "/health"
         || path == "/metrics"
@@ -1992,6 +2015,55 @@ mod rate_limit_policy_tests {
                 parse_rate_limit_override(Some(raw), DEFAULT_GLOBAL_LIMIT_PER_SECOND),
                 DEFAULT_GLOBAL_LIMIT_PER_SECOND,
                 "override {raw:?} should have been ignored"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod embeddable_resource_tests {
+    use crate::middleware::is_ticket_authenticated_resource;
+    use axum::http::Method;
+
+    /// D8 regression. These routes are loaded by the browser itself into an
+    /// `<img>`, from a page whose origin is not the server's — always on the
+    /// desktop shell, where it is `tauri://localhost`. Under
+    /// `Cross-Origin-Resource-Policy: same-origin` the request was answered 200
+    /// and the response then thrown away by the browser, which is the hardest
+    /// possible failure to diagnose: a healthy server log and a broken image.
+    #[test]
+    fn every_resource_a_webview_embeds_is_readable_cross_origin() {
+        for path in [
+            "/api/v1/users/357911791646281728/avatar",
+            "/api/v1/guilds/1/emojis/2/image",
+            "/api/v1/guilds/1/stickers/2/image",
+            "/api/v1/attachments/357913100403347456",
+            "/api/v1/federated-files/peer.example/12345",
+        ] {
+            assert!(
+                is_ticket_authenticated_resource(&Method::GET, path),
+                "{path} must be embeddable from another origin AND reachable with a download ticket",
+            );
+        }
+    }
+
+    /// The set stays exactly the set that a ticket authenticates: anything
+    /// wider would hand a cross-origin page a response the browser fetched with
+    /// the user's ambient credentials.
+    #[test]
+    fn nothing_else_is_relaxed() {
+        for (method, path) in [
+            (Method::GET, "/api/v1/users/@me"),
+            (Method::GET, "/api/v1/guilds/1/emojis"),
+            (Method::GET, "/api/v1/channels/1/messages"),
+            (Method::GET, "/api/v1/attachments/1/metadata"),
+            (Method::GET, "/api/v1/users/1/avatar/raw"),
+            (Method::POST, "/api/v1/users/@me/avatar"),
+            (Method::DELETE, "/api/v1/attachments/1"),
+        ] {
+            assert!(
+                !is_ticket_authenticated_resource(&method, path),
+                "{method} {path} must stay same-origin only",
             );
         }
     }

@@ -87,40 +87,46 @@ fn get_query_download_ticket(uri: &Uri) -> Option<String> {
     })
 }
 
-fn allows_query_download_ticket(parts: &Parts) -> bool {
-    let path = parts.uri.path();
-    if parts.method == Method::GET && path.starts_with("/api/v1/federated-files/") {
+/// The routes a client may read with a download ticket in the query string —
+/// the resources a webview loads directly into an `<img>`/`<video>`, where no
+/// Authorization header can be set.
+///
+/// This is also the exact set that must be embeddable from another origin (see
+/// `is_embeddable_resource_response` in `lib.rs`), so the two answers are
+/// computed from one list.
+pub(crate) fn is_ticket_authenticated_resource(method: &Method, path: &str) -> bool {
+    if method != Method::GET {
+        return false;
+    }
+    if path.starts_with("/api/v1/federated-files/") {
         return true;
     }
     // Attachment GETs only — never mutate/list via ticket auth.
-    if parts.method == Method::GET {
-        let rest = path.strip_prefix("/api/v1/attachments/");
-        if let Some(id) = rest {
-            // Single path segment: attachment id (no nested routes).
-            if !id.is_empty() && !id.contains('/') {
-                return true;
-            }
+    if let Some(id) = path.strip_prefix("/api/v1/attachments/") {
+        // Single path segment: attachment id (no nested routes).
+        if !id.is_empty() && !id.contains('/') {
+            return true;
         }
     }
-    if parts.method == Method::GET
-        && path.starts_with("/api/v1/guilds/")
+    if path.starts_with("/api/v1/guilds/")
         && path.ends_with("/image")
         && (path.contains("/emojis/") || path.contains("/stickers/"))
     {
         return true;
     }
     // User avatar GETs — same ticket auth as emoji/sticker images for <img> tags.
-    if parts.method == Method::GET {
-        let rest = path.strip_prefix("/api/v1/users/");
-        if let Some(rest) = rest {
-            if let Some((id, "avatar")) = rest.split_once('/') {
-                if !id.is_empty() && !id.contains('/') {
-                    return true;
-                }
+    if let Some(rest) = path.strip_prefix("/api/v1/users/") {
+        if let Some((id, "avatar")) = rest.split_once('/') {
+            if !id.is_empty() && !id.contains('/') {
+                return true;
             }
         }
     }
     false
+}
+
+fn allows_query_download_ticket(parts: &Parts) -> bool {
+    is_ticket_authenticated_resource(&parts.method, parts.uri.path())
 }
 
 async fn validate_auth(
