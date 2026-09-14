@@ -1597,7 +1597,7 @@ test.describe('the motion gate (§5.3)', () => {
     }, 600);
 
     // 6 — the tab indicator sliding (item 2).
-    const tabs = page.getByRole('tablist', { name: 'Space settings', exact: true }).first();
+    const tabs = page.getByRole('tablist', { name: 'Building settings', exact: true }).first();
     if (await tabs.count()) {
       await tabs.scrollIntoViewIfNeeded();
       await page.waitForTimeout(400);

@@ -252,7 +252,7 @@ test.describe('first-owner claim on a real unclaimed server', () => {
       await page.getByLabel(/Confirm password/).fill(OWNER_PASSWORD);
       await page.getByLabel(/Email/).fill(`${ownerName}@example.test`);
       await page.getByLabel(/Server name/).fill('Riverside Studio');
-      await page.getByLabel(/First space name/).fill('The Lounge');
+      await page.getByLabel(/First building name/).fill('The Lounge');
       await page.getByRole('button', { name: 'Claim this server' }).click();
       await expect(page.getByRole('button', { name: 'Claim this server' })).toBeEnabled();
       await expect(page).toHaveURL(/\/setup-server$/);

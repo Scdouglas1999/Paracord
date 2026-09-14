@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { connect } from 'node:http2';
 import { isGuildDetail, isGuildSummaryList } from '../src/api/generated/validators';
 
@@ -21,6 +21,22 @@ import { isGuildDetail, isGuildSummaryList } from '../src/api/generated/validato
 
 const PORT = process.env.PARACORD_E2E_PORT ?? '18150';
 const BASE = `http://127.0.0.1:${PORT}`;
+
+/** Click away the shell tour and the welcome screen in whatever order they arrive. */
+async function dismissFirstRunOverlays(page: Page, quietMs = 2_500, deadlineMs = 30_000): Promise<void> {
+  const deadline = Date.now() + deadlineMs;
+  let lastSeen = Date.now();
+  while (Date.now() < deadline && Date.now() - lastSeen < quietMs) {
+    for (const name of ['Close welcome screen', 'Skip tour']) {
+      const control = page.getByRole('button', { name, exact: true });
+      if (await control.isVisible().catch(() => false)) {
+        await control.click();
+        lastSeen = Date.now();
+      }
+    }
+    await page.waitForTimeout(250);
+  }
+}
 
 test('embedded UI boots and real auth round trip succeeds', async ({ page, request, playwright }) => {
   const pageErrors: string[] = [];
@@ -262,8 +278,10 @@ test('real message edits retain readable history after reload', async ({ page, r
     await page.getByRole('button', { name: 'Log in', exact: true }).click();
     await expect(page).toHaveURL(/\/app/);
     await page.goto(`/app/guilds/${guild.id}/channels/${channel.id}`);
-    await page.getByRole('button', { name: 'Skip tour', exact: true }).click();
-    await page.getByRole('button', { name: 'Close welcome screen', exact: true }).click();
+    // First-run overlays arrive one at a time and not in a fixed order (the
+    // tour, then the welcome screen a beat later, or the reverse), so keep
+    // dismissing whichever is up until neither has appeared for a while.
+    await dismissFirstRunOverlays(page);
     const original = 'First version from the real composer';
     await page.getByPlaceholder('Say something in edit-history', { exact: true }).fill(original);
     const creation = page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith(`/channels/${channel.id}/messages`));
