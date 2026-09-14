@@ -709,10 +709,11 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   await page.keyboard.press('Escape');
   await expect(serverSettingsDialog).toBeHidden();
 
-  // Text-room navigation + keyboard activation from the Lobby.
-  const textChannelButton = textChannelsRegion.getByRole('button', {
-    name: /qa-general-channel/i,
-  });
+  // Text-room navigation + keyboard activation from the Lobby. The row and its
+  // "…" (the room menu's phone door) both name the room; the row is `.first()`.
+  const textChannelButton = textChannelsRegion
+    .getByRole('button', { name: /qa-general-channel/i })
+    .first();
   await textChannelButton.focus();
   await expect(textChannelButton).toBeFocused();
   await page.keyboard.press('Enter');
