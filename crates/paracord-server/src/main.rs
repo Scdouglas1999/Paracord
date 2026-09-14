@@ -916,6 +916,7 @@ async fn main() -> Result<()> {
         tls_port,
         needs_manual_forwarding,
         server_public_port,
+        config.voice.port,
         &voice_status,
     );
 
@@ -2895,7 +2896,33 @@ fn print_claim_instructions(share_url: &str, pending: &PendingSetup) {
 /// Friendly onboarding block, printed on a genuine first run and by `init`.
 /// Uses a single left border (not a fully-closed box) so variable-width URLs
 /// never produce a ragged right edge across terminals.
-fn print_next_steps(share_url: &str, media_port: u16, claim_required: bool) {
+/// `web_port` is the TCP port a browser reaches this server on (the TLS port
+/// when HTTPS is on, otherwise the bind port). `voice_port` is the UDP port the
+/// native QUIC media endpoint binds — `[voice] port`, a different setting.
+/// Under the generated defaults they are both 8443 and the distinction is
+/// invisible; the moment an operator moves either one, naming only the web port
+/// sends them to forward a port that carries no media.
+/// The ports an operator has to open, as the box's narrow lines.
+///
+/// Two different settings: the TCP port a browser reaches the app on, and
+/// `[voice] port`, the UDP port the native QUIC media endpoint binds. The
+/// generated config puts both at 8443, which is why one number read correctly
+/// for so long; with TLS off, or `[voice] port` moved, the web port carries no
+/// media and forwarding it alone leaves every outside caller silent.
+fn forwarding_lines(web_port: u16, voice_port: u16) -> Vec<String> {
+    if web_port == voice_port {
+        vec![format!(
+            "forward port {web_port} (TCP + UDP) on your router."
+        )]
+    } else {
+        vec![
+            format!("forward TCP {web_port} (the app) and UDP {voice_port}"),
+            "(voice & video) on your router.".to_string(),
+        ]
+    }
+}
+
+fn print_next_steps(share_url: &str, web_port: u16, voice_port: u16, claim_required: bool) {
     println!();
     println!("  ┌─ Next steps ───────────────────────────────────────");
     println!("  │");
@@ -2929,7 +2956,9 @@ fn print_next_steps(share_url: &str, media_port: u16, claim_required: bool) {
     println!("  │");
     println!("  │  4. Voice & video run on Paracord's native QUIC engine");
     println!("  │     — no extra setup. For access outside your network,");
-    println!("  │     forward port {media_port} (UDP + TCP) on your router.");
+    for line in forwarding_lines(web_port, voice_port) {
+        println!("  │     {line}");
+    }
     println!("  │");
     println!("  └────────────────────────────────────────────────────");
 }
@@ -2949,6 +2978,7 @@ fn print_startup_banner(
     tls_port: u16,
     needs_manual_forwarding: bool,
     server_port: u16,
+    voice_port: u16,
     voice_status: &str,
 ) {
     println!();
@@ -2994,7 +3024,7 @@ fn print_startup_banner(
     if first_run {
         // Genuine first run: the Next-steps block already covers the port to
         // forward, so the standalone forwarding box below is redundant here.
-        print_next_steps(share_url, server_port, pending_setup.is_some());
+        print_next_steps(share_url, server_port, voice_port, pending_setup.is_some());
     } else if needs_manual_forwarding {
         println!();
         println!("  ╔══════════════════════════════════════════════════╗");
@@ -3056,7 +3086,7 @@ fn run_init(init_args: &cli::InitArgs, default_config: &str) -> Result<()> {
         .and_then(|p| p.parse().ok())
         .unwrap_or(8090);
     let tls_port = config.tls.port;
-    let media_port = if tls_active { tls_port } else { bind_port };
+    let web_port = if tls_active { tls_port } else { bind_port };
     let share_url = derive_share_url(
         &config.server.public_url,
         &config.server.bind_address,
@@ -3068,7 +3098,12 @@ fn run_init(init_args: &cli::InitArgs, default_config: &str) -> Result<()> {
 
     println!();
     println!("  Generated a new Paracord config at: {path}");
-    print_next_steps(&share_url, media_port, config.setup.require_claim);
+    print_next_steps(
+        &share_url,
+        web_port,
+        config.voice.port,
+        config.setup.require_claim,
+    );
     println!();
     println!("  Start the server with:  paracord-server -c {path}");
     println!();
@@ -3911,6 +3946,28 @@ async fn handle_webtransport_connection(
 
 #[cfg(test)]
 mod tests {
+    use super::forwarding_lines;
+
+    /// The generated config puts the app and the media endpoint on the same
+    /// 8443, and one number is the honest thing to print for it.
+    #[test]
+    fn coincident_ports_are_named_once() {
+        assert_eq!(
+            forwarding_lines(8443, 8443),
+            vec!["forward port 8443 (TCP + UDP) on your router.".to_string()]
+        );
+    }
+
+    /// The regression: with TLS off the app is on the bind port while voice
+    /// stays on `[voice] port`, and naming only the first sent the operator to
+    /// forward a port that carries no media.
+    #[test]
+    fn a_moved_voice_port_is_named_too() {
+        let lines = forwarding_lines(8090, 8443).join(" ");
+        assert!(lines.contains("TCP 8090"), "{lines}");
+        assert!(lines.contains("UDP 8443"), "{lines}");
+    }
+
     use super::{
         build_at_rest_profile, derive_share_url, describe_http_bind_error,
         ensure_federation_signing_key_file, livekit_credentials_look_insecure,
