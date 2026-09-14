@@ -13,7 +13,7 @@ import { Input } from '../components/ui/Input';
 import { Divider } from '../components/ui/Divider';
 import { syncTrustedHosts } from '../lib/trustedHosts';
 import { isTauri } from '../lib/tauriEnv';
-import { AuthCanvas, AuthCard, AuthHeading, Field } from './authScaffold';
+import { AUTH_FORM, AuthCanvas, AuthCard, AuthHeading, AuthScroll, Field } from './authScaffold';
 
 const PUBLIC_DEMO_SERVER_URL = (
   import.meta.env.VITE_PUBLIC_DEMO_SERVER_URL || 'https://demo.paracord.chat'
@@ -441,9 +441,9 @@ export function ServerConnectPage() {
 
   return (
     <AuthCanvas>
-      <div className="mx-auto flex w-full max-w-md flex-col gap-5">
+      <div className="mx-auto flex w-full min-h-0 max-w-md flex-col gap-5 sm:max-h-full short-window:max-w-2xl">
         <AuthCard>
-          <form onSubmit={handleSubmit} className="flex flex-col gap-6 p-7 sm:p-8">
+          <form onSubmit={handleSubmit} className={AUTH_FORM}>
             <AuthHeading
               title="Connect to a server"
               subtitle="Paste a server address, invite, or portable link. Paracord probes it before you sign in."
@@ -451,6 +451,10 @@ export function ServerConnectPage() {
 
             {error && <ErrorBanner multiline message={error} />}
 
+            {/* The accepted formats are reference material, so on a short,
+                wide window they sit beside the box they describe rather than
+                below it. */}
+            <AuthScroll paired>
             <Field label="Server URL or Invite link" required>
               <Input
                 type="text"
@@ -465,12 +469,15 @@ export function ServerConnectPage() {
 
             <div className="pc-well px-4 py-3">
               <span className="text-section text-text-faint">Accepted formats</span>
-              <ul className="mt-2 space-y-1 pc-mono text-meta leading-relaxed text-text-secondary">
+              {/* URLs have no spaces to break at: without this they run out
+                  of the well rather than wrapping inside it. */}
+              <ul className="mt-2 space-y-1 break-all pc-mono text-meta leading-relaxed text-text-secondary">
                 <li>paracord://invite/aBcDeFgH…</li>
                 <li>http://192.168.1.5:8090/invite/abc123</li>
                 <li>192.168.1.5:8090 · chat.example.com</li>
               </ul>
             </div>
+            </AuthScroll>
 
             {status && (
               <div
@@ -504,12 +511,12 @@ export function ServerConnectPage() {
             hairline rather than tiled as identical cards (spec §6.8). */}
         {servers.length > 0 && (
           <AuthCard>
-            <div className="p-4 sm:p-5">
+            <div className="flex min-h-0 flex-col p-4 sm:p-5">
               <div className="flex items-center justify-between px-2 pb-1">
                 <h2 className="pc-display text-heading text-text-primary">Your servers</h2>
                 <span className="pc-mono text-meta text-text-faint">{servers.length}</span>
               </div>
-              <ul className="mt-1 flex flex-col">
+              <ul className="mt-1 flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
                 {servers.map((server, index) => {
                   // Presence here is a word, never a coloured dot (spec §1.5, §6.6).
                   const stateLabel = server.connected

@@ -6,7 +6,7 @@ import {
 } from '../../lib/versionedStorage';
 import { Button } from '../ui/Button';
 import { Divider } from '../ui/Divider';
-import { AuthCanvas, AuthCard } from '../../pages/authScaffold';
+import { AUTH_FORM, AuthCanvas, AuthCard, AuthScroll } from '../../pages/authScaffold';
 
 interface OnboardingWizardProps {
   onComplete: () => void;
@@ -53,7 +53,7 @@ const STEPS = [
     subtitle: 'A self-hosted, decentralized place for your people',
     icon: Globe,
     content: (
-      <div className="flex flex-col gap-4">
+      <>
         <p className="text-body text-text-secondary">
           Unlike centralized platforms, Paracord gives you{' '}
           <strong className="font-semibold text-text-primary">full control</strong> over your
@@ -78,7 +78,7 @@ const STEPS = [
             },
           ]}
         />
-      </div>
+      </>
     ),
   },
   {
@@ -86,7 +86,7 @@ const STEPS = [
     subtitle: 'You need a server to get started',
     icon: Server,
     content: (
-      <div className="flex flex-col gap-4">
+      <>
         <p className="text-body text-text-secondary">
           To use Paracord, you connect to a server hosted by you or someone you trust.
         </p>
@@ -113,7 +113,7 @@ const STEPS = [
             </div>
           </div>
         </div>
-      </div>
+      </>
     ),
   },
 ];
@@ -145,8 +145,8 @@ export function OnboardingWizard({ onComplete, onTryDemo }: OnboardingWizardProp
 
   return (
     <AuthCanvas>
-      <AuthCard className="max-w-lg">
-        <div className="flex flex-col gap-6 p-7 sm:p-8">
+      <AuthCard className="max-w-lg short-window:max-w-3xl">
+        <div className={AUTH_FORM}>
           {/* Step indicator — the count is in the DOM as words too, so the bars
               are never the only cue (spec §9). */}
           <div
@@ -175,24 +175,32 @@ export function OnboardingWizard({ onComplete, onTryDemo }: OnboardingWizardProp
           {/* Header */}
           <div>
             <div
-              className="pc-well mb-4 flex h-12 w-12 items-center justify-center text-text-secondary"
+              className="pc-well mb-4 flex h-12 w-12 items-center justify-center text-text-secondary short-window:hidden"
               aria-hidden
             >
               <Icon size={24} />
             </div>
             <h1 className="pc-display text-title text-text-primary">{current.title}</h1>
-            <p className="mt-1.5 text-body text-text-secondary">{current.subtitle}</p>
+            {/* The step's one-line gloss is what a short window gives up: the
+                title carries the meaning, and the content below it does not. */}
+            <p className="mt-1.5 text-body text-text-secondary short-window:hidden">
+              {current.subtitle}
+            </p>
           </div>
 
-          {/* Content */}
-          <div className="flex flex-col gap-4">
-            <div>{current.content}</div>
-            {step === 1 && onTryDemo && (
-              <Button type="button" variant="ghost" size="lg" onClick={onTryDemo} className="w-full">
-                Try a public demo server
-              </Button>
-            )}
-          </div>
+          {/* Content — the one region that may scroll, so the step indicator
+              above it and Next below it are never off the window (§7). */}
+          <AuthScroll className="gap-4" paired>
+            {current.content}
+          </AuthScroll>
+
+          {/* An alternative to the step's own action, so it sits with the
+              actions rather than inside the region that may scroll. */}
+          {step === 1 && onTryDemo && (
+            <Button type="button" variant="ghost" size="lg" onClick={onTryDemo} className="w-full">
+              Try a public demo server
+            </Button>
+          )}
 
           {/* Navigation */}
           <div className="flex items-center gap-3">

@@ -10,7 +10,7 @@ import { ErrorBanner } from '../components/ui/Feedback';
 import { Divider } from '../components/ui/Divider';
 import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
-import { AuthCanvas, AuthCard, AuthHeading, Field } from './authScaffold';
+import { AUTH_FORM, AuthCanvas, AuthCard, AuthHeading, AuthScroll, Field } from './authScaffold';
 
 export function AccountUnlockPage() {
   const [password, setPassword] = useState('');
@@ -114,7 +114,7 @@ export function AccountUnlockPage() {
   return (
     <AuthCanvas>
       <AuthCard className="max-w-md">
-        <form onSubmit={handleSubmit} className="flex flex-col gap-6 p-7 sm:p-8">
+        <form onSubmit={handleSubmit} className={AUTH_FORM}>
           <AuthHeading title="Welcome back" subtitle="Unlock your local identity to pick up where you left off." />
 
           {username && (
@@ -131,17 +131,19 @@ export function AccountUnlockPage() {
 
           {error && <ErrorBanner multiline message={error} />}
 
-          <Field label="Password" required>
-            <Input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              placeholder="Enter your password"
-              autoComplete="current-password"
-              autoFocus
-            />
-          </Field>
+          <AuthScroll>
+            <Field label="Password" required>
+              <Input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                placeholder="Enter your password"
+                autoComplete="current-password"
+                autoFocus
+              />
+            </Field>
+          </AuthScroll>
 
           <Button
             type="submit"

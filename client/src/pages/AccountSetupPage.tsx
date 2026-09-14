@@ -13,7 +13,15 @@ import { MIN_PASSWORD_LENGTH } from '../lib/constants';
 import { ErrorBanner } from '../components/ui/Feedback';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
-import { AuthCanvas, AuthCard, AuthHeading, Field } from './authScaffold';
+import {
+  AUTH_FORM,
+  AuthCanvas,
+  AuthCard,
+  AuthHeading,
+  AuthScroll,
+  AuthSteps,
+  Field,
+} from './authScaffold';
 
 export function AccountSetupPage() {
   const [params] = useSearchParams();
@@ -30,7 +38,7 @@ export function AccountSetupPage() {
       return (
         <AuthCanvas>
           <AuthCard className="max-w-md">
-            <div className="flex flex-col items-start gap-4 p-7 sm:p-8">
+            <div className={`${AUTH_FORM} items-start`}>
               <AuthHeading
                 title={user ? 'Account changed' : 'Waiting for your server account'}
                 subtitle="Sign in to the intended server account before setting up encryption."
@@ -170,11 +178,12 @@ function OwnedAccountSetupPage() {
     return (
       <AuthCanvas>
         <AuthCard className="max-w-lg">
-          <div className="flex flex-col gap-6 p-7 sm:p-8">
-            <div>
-              <p className="text-section text-text-faint">Step 2 of 2</p>
+          <div className={AUTH_FORM}>
+            <div className="flex flex-col gap-2">
+              <AuthSteps step={2} count={2} />
               <AuthHeading
                 mark={false}
+                dense
                 title="Recovery phrase"
                 subtitle={
                   <>
@@ -194,7 +203,8 @@ function OwnedAccountSetupPage() {
               </span>
             </div>
 
-            <div>
+            <AuthScroll>
+              <div>
               <div className="pc-well grid grid-cols-2 gap-2 p-4 sm:grid-cols-3">
                 {words.map((word, i) => (
                   <div
@@ -217,7 +227,7 @@ function OwnedAccountSetupPage() {
                 {copied ? <Check size={14} /> : <Copy size={14} />}
                 {copied ? 'Copied to clipboard' : 'Copy phrase'}
               </button>
-            </div>
+              </div>
 
             <label className="flex cursor-pointer items-start gap-2.5 rounded-[var(--radius-control)] bg-bg-raised px-4 py-3.5 shadow-[var(--shadow-raised)] transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong">
               <input
@@ -230,6 +240,7 @@ function OwnedAccountSetupPage() {
                 I’ve written down my recovery phrase and stored it somewhere safe.
               </span>
             </label>
+            </AuthScroll>
 
             <Button onClick={handleContinue} size="lg" disabled={!savedPhrase} className="w-full">
               Continue
@@ -242,12 +253,13 @@ function OwnedAccountSetupPage() {
 
   return (
     <AuthCanvas>
-      <AuthCard className="max-w-md">
-        <form onSubmit={handleCreate} className="flex flex-col gap-6 p-7 sm:p-8">
-          <div>
-            <p className="text-section text-text-faint">Step 1 of 2</p>
+      <AuthCard className="max-w-md short-window:max-w-2xl">
+        <form onSubmit={handleCreate} className={AUTH_FORM}>
+          <div className="flex flex-col gap-2">
+            <AuthSteps step={1} count={2} />
             <AuthHeading
               mark={false}
+              dense
               title={isMigration ? 'Secure your account' : 'Set up a local identity'}
               subtitle={
                 isMigration
@@ -265,7 +277,7 @@ function OwnedAccountSetupPage() {
           )}
           {error && <ErrorBanner multiline message={error} />}
 
-          <div className="flex flex-col gap-5">
+          <AuthScroll paired>
             <Field label="Username" required>
               <Input
                 type="text"
@@ -328,7 +340,7 @@ function OwnedAccountSetupPage() {
                 <Input value={mfaCode} onChange={e => setMfaCode(e.target.value)} autoComplete="one-time-code" className="pc-mono" />
               </Field>
             </>}
-          </div>
+          </AuthScroll>
 
           <Button type="submit" size="lg" loading={loading} disabled={loading} className="w-full">
             <KeyRound size={16} aria-hidden />

@@ -12,7 +12,7 @@ import { ErrorBanner } from '../components/ui/Feedback';
 import { Button } from '../components/ui/Button';
 import { Textarea } from '../components/ui/Input';
 import { Divider } from '../components/ui/Divider';
-import { AuthCanvas, AuthCard } from './authScaffold';
+import { AUTH_FORM, AuthCanvas, AuthCard, AuthScroll } from './authScaffold';
 import type { InvitePreview } from '../api/generated/InvitePreview';
 
 export function InvitePage() {
@@ -81,7 +81,7 @@ export function InvitePage() {
   return (
     <AuthCanvas>
       <AuthCard className="max-w-md">
-        <div className="flex flex-col gap-6 p-7 sm:p-8">
+        <div className={AUTH_FORM}>
           {/* Who is inviting you — one identity row, no gradient banner and no
               floating circle (spec §6.1, §6.2). */}
           <div>
@@ -129,6 +129,7 @@ export function InvitePage() {
             </div>
           )}
 
+          <AuthScroll>
           {!error && (
             <p className="text-body text-text-secondary">
               {guild?.name
@@ -156,6 +157,7 @@ export function InvitePage() {
               />
             </div>
           )}
+          </AuthScroll>
 
           <Button
             onClick={handleAccept}

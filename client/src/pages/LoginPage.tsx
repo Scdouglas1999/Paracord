@@ -13,9 +13,11 @@ import { MIN_PASSWORD_LENGTH } from '../lib/constants';
 import { ErrorBanner } from '../components/ui/Feedback';
 import { Button } from '../components/ui/Button';
 import {
+  AUTH_FORM,
   AuthCanvas,
   AuthCard,
   AuthHeading,
+  AuthScroll,
   Field,
   SuccessNote,
 } from './authScaffold';
@@ -316,7 +318,7 @@ export function LoginPage() {
     return (
       <AuthCanvas>
         <AuthCard className="max-w-md">
-          <form onSubmit={handleMfaSubmit} className="flex flex-col gap-6 p-8">
+          <form onSubmit={handleMfaSubmit} className={AUTH_FORM}>
             <AuthHeading
               title="Two-factor authentication"
               subtitle="Enter the 6-digit code from your authenticator app, or one of your backup codes."
@@ -324,8 +326,9 @@ export function LoginPage() {
 
             {error && <ErrorBanner message={error} />}
 
-            <Field label="Authentication code" required>
-              <input
+            <AuthScroll>
+              <Field label="Authentication code" required>
+                <input
                 type="text"
                 inputMode="numeric"
                 autoComplete="one-time-code"
@@ -333,11 +336,12 @@ export function LoginPage() {
                 onChange={(e) => setMfaCode(e.target.value)}
                 required
                 className="input-field text-center font-code text-2xl tracking-[0.4em]"
-                placeholder="000000"
-                maxLength={20}
-                autoFocus
-              />
-            </Field>
+                  placeholder="000000"
+                  maxLength={20}
+                  autoFocus
+                />
+              </Field>
+            </AuthScroll>
 
             <Button type="submit" loading={loading} disabled={loading || !mfaCode.trim()} className="w-full">
               Verify
@@ -355,7 +359,7 @@ export function LoginPage() {
     return (
       <AuthCanvas>
         <AuthCard className="max-w-md">
-          <form onSubmit={handleForgotPassword} className="flex flex-col gap-6 p-8">
+          <form onSubmit={handleForgotPassword} className={AUTH_FORM}>
             <AuthHeading
               title="Reset your password"
               subtitle="Enter your email or username and we’ll generate a reset token you can redeem below."
@@ -364,16 +368,18 @@ export function LoginPage() {
             {error && <ErrorBanner message={error} />}
             {successMsg && <SuccessNote>{successMsg}</SuccessNote>}
 
-            <Field label="Email or Username" required>
-              <input
-                type="text"
-                value={resetIdentifier}
-                onChange={(e) => setResetIdentifier(e.target.value)}
-                required
-                className="input-field"
-                placeholder="you@example.com or username"
-              />
-            </Field>
+            <AuthScroll>
+              <Field label="Email or Username" required>
+                <input
+                  type="text"
+                  value={resetIdentifier}
+                  onChange={(e) => setResetIdentifier(e.target.value)}
+                  required
+                  className="input-field"
+                  placeholder="you@example.com or username"
+                />
+              </Field>
+            </AuthScroll>
 
             <Button type="submit" loading={loading} disabled={loading} className="w-full">
               Request reset token
@@ -400,7 +406,7 @@ export function LoginPage() {
     return (
       <AuthCanvas>
         <AuthCard className="max-w-md">
-          <form onSubmit={handleResetPassword} className="flex flex-col gap-6 p-8">
+          <form onSubmit={handleResetPassword} className={AUTH_FORM}>
             <AuthHeading
               title="Set new password"
               subtitle="Paste the reset token from your administrator, then choose a new password."
@@ -409,7 +415,7 @@ export function LoginPage() {
             {error && <ErrorBanner message={error} />}
             {successMsg && <SuccessNote>{successMsg}</SuccessNote>}
 
-            <div className="flex flex-col gap-5">
+            <AuthScroll>
               <Field label="Reset token" required>
                 <input
                   type="text"
@@ -444,7 +450,7 @@ export function LoginPage() {
                   autoComplete="new-password"
                 />
               </Field>
-            </div>
+            </AuthScroll>
 
             <Button type="submit" loading={loading} disabled={loading} className="w-full">
               Set new password
@@ -470,7 +476,7 @@ export function LoginPage() {
     return (
       <AuthCanvas>
         <AuthCard className="max-w-md">
-          <form onSubmit={handleVerifyEmail} className="flex flex-col gap-6 p-8">
+          <form onSubmit={handleVerifyEmail} className={AUTH_FORM}>
             <AuthHeading
               title="Verify email"
               subtitle="Enter the verification token your server administrator issued for your account."
@@ -479,16 +485,18 @@ export function LoginPage() {
             {error && <ErrorBanner message={error} />}
             {successMsg && <SuccessNote>{successMsg}</SuccessNote>}
 
-            <Field label="Verification token" required>
-              <input
-                type="text"
-                value={verifyEmailToken}
-                onChange={(e) => setVerifyEmailToken(e.target.value)}
-                required
-                className="input-field font-code"
-                placeholder="Paste verification token"
-              />
-            </Field>
+            <AuthScroll>
+              <Field label="Verification token" required>
+                <input
+                  type="text"
+                  value={verifyEmailToken}
+                  onChange={(e) => setVerifyEmailToken(e.target.value)}
+                  required
+                  className="input-field font-code"
+                  placeholder="Paste verification token"
+                />
+              </Field>
+            </AuthScroll>
 
             <Button type="submit" loading={loading} disabled={loading || !verifyEmailToken.trim()} className="w-full">
               Verify email
@@ -505,7 +513,7 @@ export function LoginPage() {
     <AuthCanvas>
       <AuthCard className="max-w-md">
         <div>
-          <form onSubmit={handleSubmit} className="flex flex-1 flex-col gap-6 p-7 sm:p-8">
+          <form onSubmit={handleSubmit} className={AUTH_FORM}>
             <AuthHeading
               title="Welcome back"
               subtitle="Sign in to pick up where you left off across your buildings."
@@ -513,7 +521,7 @@ export function LoginPage() {
 
             {error && <ErrorBanner message={error} />}
 
-            <div className="flex flex-col gap-5">
+            <AuthScroll>
               <Field label={identifierMode.label} required>
                 <input
                   type={identifierMode.inputType}
@@ -537,7 +545,7 @@ export function LoginPage() {
                   autoComplete="current-password"
                 />
               </Field>
-            </div>
+            </AuthScroll>
 
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-text-muted">
               <button

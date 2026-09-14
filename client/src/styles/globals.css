@@ -12,6 +12,12 @@
 @import "@fontsource/jetbrains-mono/700.css";
 @import "tailwindcss";
 
+/* A window with width to spare and no height to spare — the desktop client
+   resized towards its 940×560 minimum. First-run plates answer it by using the
+   width instead of scrolling (see `.pc-auth-fields.is-paired` in
+   primitives.css). Named once here so no call site re-types the query. */
+@custom-variant short-window (@media (min-width: 640px) and (max-height: 700px));
+
 /* Cascade layers, and why each sheet sits where it does.
    -----------------------------------------------------
    An UNLAYERED author declaration outranks every rule in a cascade layer,

@@ -813,3 +813,106 @@
   background: var(--light-white);
   box-shadow: var(--glow-live-dot);
 }
+
+/* -----------------------------------------------------------------------------
+   The first-run plates — login, register, the first-owner claim, account setup.
+
+   §3's rhythm assumes a window with room in it. The desktop client's window
+   goes down to 940×560 (`client/src-tauri/tauri.conf.json`), and at that height
+   a plate laid out on the full rhythm is taller than the window — which is how
+   a native app ends up scrolling like a webpage, with its one action below the
+   fold. So the rhythm is a pair of custom properties and it tightens exactly
+   once, at the height where it has to. Still on the 4px grid.
+
+   Below `sm` none of this applies: that is a browser at phone width, where a
+   page that scrolls is the normal and correct thing.
+   -------------------------------------------------------------------------- */
+.pc-auth-form {
+  --auth-pad: 28px;
+  --auth-gap: 24px;
+  --auth-field-gap: 20px;
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--auth-gap);
+  padding: var(--auth-pad);
+}
+
+@media (min-width: 640px) {
+  .pc-auth-form {
+    --auth-pad: 32px;
+  }
+}
+
+@media (min-width: 640px) and (max-height: 700px) {
+  .pc-auth-form {
+    --auth-pad: 16px;
+    --auth-gap: 14px;
+    --auth-field-gap: 12px;
+  }
+}
+
+/* The one region inside a first-run plate that may scroll, for the surface that
+   genuinely cannot fit 940×500 — a 24-word phrase, a list of servers. The
+   heading above it and the action below it never move, so "Continue" is never
+   below a fold. */
+.pc-auth-fields {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--auth-field-gap, 20px);
+  /* Room for the §9 focus ring: an `overflow` ancestor would otherwise shave
+     the ring off the left and right edges of every control inside it. */
+  margin-inline: -4px;
+  padding-inline: 4px;
+  padding-block: 1px;
+}
+
+/* Only a window that is being asked to hold the whole plate makes this a scroll
+   container. Below `sm` the page scrolls, so this must NOT be one: an
+   `overflow` box with `overscroll-behavior: contain` swallows a wheel event
+   that belongs to the page behind it, and the phone layout stops scrolling
+   under the pointer. */
+@media (min-width: 640px) {
+  .pc-auth-fields {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+}
+
+/* Which way a bounded field region continues. A hairline, never a gradient
+   wash (§6.2), and an inset shadow rather than a border so it cannot change
+   the height it is reporting on. `data-overflow` is set by AuthScroll. */
+.pc-auth-fields[data-overflow='top'] {
+  box-shadow: inset 0 1px 0 var(--border-subtle);
+}
+
+.pc-auth-fields[data-overflow='bottom'] {
+  box-shadow: inset 0 -1px 0 var(--border-subtle);
+}
+
+.pc-auth-fields[data-overflow='both'] {
+  box-shadow:
+    inset 0 1px 0 var(--border-subtle),
+    inset 0 -1px 0 var(--border-subtle);
+}
+
+/* A short, wide window has room the plate is not using. A paired field region
+   lays its fields out in two columns there rather than making a native window
+   scroll two inches of form — the app uses the window it was given. A field
+   that must keep the full measure (a phrase box, a paragraph) carries
+   `.pc-auth-span`. */
+@media (min-width: 640px) and (max-height: 700px) {
+  .pc-auth-fields.is-paired {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 20px;
+    align-content: start;
+  }
+
+  .pc-auth-fields.is-paired > .pc-auth-span {
+    grid-column: 1 / -1;
+  }
+}
