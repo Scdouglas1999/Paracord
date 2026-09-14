@@ -599,6 +599,22 @@ pub async fn join_public_guild(
             );
         }
 
+        // Same as the invite path: the joiner's other sessions learn the
+        // server from an event or not at all, and GUILD_MEMBER_ADD carries no
+        // guild to put in the sidebar.
+        match crate::routes::guilds::guild_detail(&guild, joined.member_count).and_then(|detail| {
+            serde_json::to_value(&detail).map_err(|e| ApiError::Internal(e.into()))
+        }) {
+            Ok(detail) => {
+                state
+                    .event_bus
+                    .dispatch_to_users("GUILD_CREATE", detail, vec![auth.user_id])
+            }
+            Err(error) => {
+                tracing::warn!(%error, "failed to announce the joined space to its new member")
+            }
+        }
+
         // Same as the invite path: the join is what lets the joiner and the
         // people already inside see each other's light.
         crate::routes::realtime::announce_guild_join(&state, guild_id, auth.user_id).await;

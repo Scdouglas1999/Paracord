@@ -1,11 +1,23 @@
+use crate::events::EventBus;
 use dashmap::DashMap;
 use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
 
 /// In-memory index: Guild -> Set<UserId>.
 /// Loaded from DB at server start and kept in sync via event-driven updates.
 /// Eliminates per-guild DB queries during presence dispatch.
 pub struct MemberIndex {
     guilds: DashMap<i64, HashSet<i64>>,
+    /// Realtime fan-out index, attached once at startup.
+    ///
+    /// Membership is what decides a guild event's audience, and this index is
+    /// where membership is recorded first — every route that adds a member
+    /// updates it *before* dispatching the event that announces the change.
+    /// Hanging the event bus off it means a new membership widens the fan-out
+    /// in the same call, so no route can add a member and forget to tell the
+    /// gateway (which is exactly how a newly created guild ended up with an
+    /// audience of nobody).
+    event_bus: OnceLock<EventBus>,
 }
 
 impl MemberIndex {
@@ -13,6 +25,29 @@ impl MemberIndex {
     pub fn empty() -> Self {
         MemberIndex {
             guilds: DashMap::new(),
+            event_bus: OnceLock::new(),
+        }
+    }
+
+    /// Wire this index to the realtime fan-out. Called once, at startup.
+    pub fn attach_event_bus(&self, event_bus: EventBus) {
+        let _ = self.event_bus.set(event_bus);
+    }
+
+    /// Whether `user_id` is a member of `guild_id` right now.
+    ///
+    /// The gateway's per-session guild set is a connect-time snapshot; this is
+    /// the live answer, and the two are checked together so a membership gained
+    /// mid-session still delivers.
+    pub fn is_member(&self, guild_id: i64, user_id: i64) -> bool {
+        self.guilds
+            .get(&guild_id)
+            .is_some_and(|members| members.contains(&user_id))
+    }
+
+    fn widen_event_scope(&self, guild_id: i64, user_id: i64) {
+        if let Some(event_bus) = self.event_bus.get() {
+            event_bus.add_user_guild(user_id, guild_id);
         }
     }
 
@@ -47,8 +82,16 @@ impl MemberIndex {
     }
 
     /// Track a new member (called on GUILD_MEMBER_ADD).
+    ///
+    /// Also widens the new member's live sessions to this guild, so the event
+    /// the caller is about to dispatch has them in its audience. Removal is
+    /// deliberately *not* mirrored: a kicked member's session has to stay in
+    /// the fan-out long enough to receive the `GUILD_MEMBER_REMOVE`/
+    /// `GUILD_DELETE` that tells it to leave, and it drops the guild itself on
+    /// receipt.
     pub fn add_member(&self, guild_id: i64, user_id: i64) {
         self.guilds.entry(guild_id).or_default().insert(user_id);
+        self.widen_event_scope(guild_id, user_id);
     }
 
     /// Remove a member (called on GUILD_MEMBER_REMOVE).
@@ -80,15 +123,23 @@ impl MemberIndex {
         let mut present: HashSet<i64> = HashSet::with_capacity(desired.len());
         for (guild_id, members) in desired {
             present.insert(guild_id);
-            match self.guilds.get_mut(&guild_id) {
-                Some(existing) if *existing == members => {}
+            let changed = match self.guilds.get_mut(&guild_id) {
+                Some(existing) if *existing == members => false,
                 Some(mut existing) => {
-                    *existing = members;
-                    healed += 1;
+                    *existing = members.clone();
+                    true
                 }
                 None => {
-                    self.guilds.insert(guild_id, members);
-                    healed += 1;
+                    self.guilds.insert(guild_id, members.clone());
+                    true
+                }
+            };
+            if changed {
+                healed += 1;
+                // A membership this process never saw recorded is also a
+                // fan-out scope it never widened; healing one heals the other.
+                for user_id in members {
+                    self.widen_event_scope(guild_id, user_id);
                 }
             }
         }
@@ -130,6 +181,47 @@ mod tests {
 
         assert_eq!(index.members_of(2), vec![20]);
         assert!(index.members_of(3).is_empty());
+    }
+
+    // The wiring itself is the fix: every route records the membership in this
+    // index before dispatching the event that announces it, so recording one
+    // has to be what widens the realtime fan-out. Without this, a guild created
+    // mid-session was published to an empty audience.
+    #[test]
+    fn recording_a_membership_widens_the_event_fan_out() {
+        let bus = crate::events::EventBus::new(16);
+        let mut session = bus.register_session("live", 7, &[]).expect("register");
+        let index = MemberIndex::empty();
+        index.attach_event_bus(bus.clone());
+
+        index.add_member(4242, 7);
+        bus.dispatch("GUILD_CREATE", serde_json::json!({}), Some(4242));
+
+        assert_eq!(
+            session.try_recv().expect("creator was told").event_type,
+            "GUILD_CREATE"
+        );
+        assert!(index.is_member(4242, 7));
+        assert!(!index.is_member(4242, 8));
+    }
+
+    // Healing a membership this process never saw recorded must heal the
+    // fan-out scope it never widened, or a session stays deaf to a guild it
+    // really is in.
+    #[test]
+    fn reconcile_widens_the_event_fan_out_for_healed_memberships() {
+        let bus = crate::events::EventBus::new(16);
+        let mut session = bus.register_session("live", 7, &[]).expect("register");
+        let index = MemberIndex::empty();
+        index.attach_event_bus(bus.clone());
+
+        index.reconcile(vec![(4242, 7)]);
+        bus.dispatch("CHANNEL_CREATE", serde_json::json!({}), Some(4242));
+
+        assert_eq!(
+            session.try_recv().expect("member was told").event_type,
+            "CHANNEL_CREATE"
+        );
     }
 
     #[test]

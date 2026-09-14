@@ -733,6 +733,12 @@ async fn main() -> Result<()> {
             .build(),
     };
 
+    // Membership is what decides a guild event's audience. Wiring the index to
+    // the bus here means every route that records a membership widens the
+    // realtime fan-out in the same call — the reason a guild created after a
+    // client connected now reaches that client instead of nobody.
+    state.member_index.attach_event_bus(state.event_bus.clone());
+
     // ── Native QUIC media server ─────────────────────────────────────────────
     // Uses a single UDP port (defaults to 8443, same as TLS) with ALPN-based
     // routing: `h3` → WebTransport (browsers), anything else → raw QUIC

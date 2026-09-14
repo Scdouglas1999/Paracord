@@ -69,13 +69,34 @@ impl Session {
         guild_id: Option<i64>,
         target_user_ids: Option<&[i64]>,
     ) -> bool {
+        self.should_receive_event_with(
+            |gid| self.guild_ids.contains(&gid),
+            guild_id,
+            target_user_ids,
+        )
+    }
+
+    /// As [`Session::should_receive_event`], but with membership decided by the
+    /// caller.
+    ///
+    /// `guild_ids` is a snapshot taken at IDENTIFY: it cannot know about a
+    /// guild this user created or joined since. The gateway therefore passes a
+    /// predicate that also consults the live membership index, so an event for
+    /// a guild gained mid-session is delivered instead of silently dropped —
+    /// while still being a membership test, not a free pass.
+    pub fn should_receive_event_with(
+        &self,
+        is_member_of: impl Fn(i64) -> bool,
+        guild_id: Option<i64>,
+        target_user_ids: Option<&[i64]>,
+    ) -> bool {
         // If the event targets specific users, only deliver to them.
         if let Some(targets) = target_user_ids {
             return targets.contains(&self.user_id);
         }
         match guild_id {
             None => true,
-            Some(gid) => self.guild_ids.contains(&gid),
+            Some(gid) => is_member_of(gid),
         }
     }
 

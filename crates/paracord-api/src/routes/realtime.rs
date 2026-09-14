@@ -1043,13 +1043,36 @@ async fn session_pump(
                     break;
                 };
                 // ── Recipient filtering (mirrors the gateway) ──
+                // `guild_owner_ids` is this pump's connect-time membership
+                // snapshot; the member index is the live answer. A guild gained
+                // while the stream was open is only in the second.
                 if !session_should_receive_event(
                     user_id,
-                    |gid| guild_owner_ids.contains_key(&gid),
+                    |gid| {
+                        guild_owner_ids.contains_key(&gid)
+                            || state.member_index.is_member(gid, user_id)
+                    },
                     event.guild_id,
                     event.target_user_ids.as_deref(),
                 ) {
                     continue;
+                }
+
+                // First event from a guild this session gained while connected:
+                // adopt it now, so the channel check below has the owner id.
+                if let Some(guild_id) = event.guild_id {
+                    if let std::collections::hash_map::Entry::Vacant(slot) =
+                        guild_owner_ids.entry(guild_id)
+                    {
+                        let owner_id = paracord_db::guilds::get_guild(&state.db, guild_id)
+                            .await
+                            .ok()
+                            .flatten()
+                            .map(|guild| guild.owner_id)
+                            .unwrap_or(0);
+                        slot.insert(owner_id);
+                        state.event_bus.add_session_guild(&session_id, guild_id);
+                    }
                 }
 
                 // ── Channel permission filtering (mirrors WS handler) ──

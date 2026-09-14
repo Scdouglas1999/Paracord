@@ -370,6 +370,30 @@ impl EventBus {
         }
     }
 
+    /// Bring every live session of `user_id` into `guild_id`'s fan-out scope.
+    ///
+    /// A session's guild set is a snapshot taken at IDENTIFY, and the only
+    /// things that grew it were events the session had to already be in the
+    /// guild to receive. So a guild created — or joined — *after* a client
+    /// connected was in no session's set, and every guild-scoped event for it
+    /// (`GUILD_CREATE` first of all, then channels, roles and member events)
+    /// was published to an empty audience. The creator watched their own new
+    /// server fail to appear until they relaunched.
+    ///
+    /// `MemberIndex` calls this whenever a membership is recorded, before the
+    /// route dispatches the event that announces it, so the audience exists by
+    /// the time it is published. Idempotent, and a no-op for a user with no
+    /// live session.
+    pub fn add_user_guild(&self, user_id: i64, guild_id: i64) {
+        let session_ids: Vec<String> = match self.user_sessions.get(&user_id) {
+            Some(sessions) => sessions.iter().cloned().collect(),
+            None => return,
+        };
+        for session_id in session_ids {
+            self.add_session_guild(&session_id, guild_id);
+        }
+    }
+
     pub fn remove_session_guild(&self, session_id: &str, guild_id: i64) {
         if let Some(mut sub) = self.sessions.get_mut(session_id) {
             sub.guild_ids.remove(&guild_id);
@@ -589,6 +613,54 @@ mod tests {
             assert!(event.guild_id.is_none());
             assert!(event.target_user_ids.is_none());
         }
+    }
+
+    // A guild created (or joined) after a client connected is in no session's
+    // connect-time guild set, so a guild-scoped dispatch for it reached nobody:
+    // the creator's own new server did not appear until they relaunched. The
+    // membership index widens the fan-out through `add_user_guild` before the
+    // route dispatches, so the audience exists by the time the event is
+    // published.
+    #[test]
+    fn a_guild_gained_while_connected_joins_the_fan_out() {
+        let bus = EventBus::new(16);
+        let mut creator = bus.register_session("creator", 7, &[]).expect("register");
+        let mut stranger = bus.register_session("stranger", 8, &[]).expect("register");
+
+        let new_guild = 4242;
+        bus.publish(test_event(Some(new_guild), None));
+        assert!(
+            creator.try_recv().is_err(),
+            "a guild nobody is a member of has no audience"
+        );
+
+        bus.add_user_guild(7, new_guild);
+        bus.publish(test_event(Some(new_guild), None));
+
+        assert_eq!(
+            creator.try_recv().expect("creator was told").guild_id,
+            Some(new_guild)
+        );
+        assert!(
+            stranger.try_recv().is_err(),
+            "widening one user's scope must not widen anybody else's"
+        );
+    }
+
+    // Every session of that user, not just the one that made the request: the
+    // person creating a server on their desktop is often signed in on a phone
+    // too.
+    #[test]
+    fn widening_a_users_scope_reaches_all_of_their_sessions() {
+        let bus = EventBus::new(16);
+        let mut desktop = bus.register_session("desktop", 7, &[]).expect("register");
+        let mut phone = bus.register_session("phone", 7, &[]).expect("register");
+
+        bus.add_user_guild(7, 4242);
+        bus.publish(test_event(Some(4242), None));
+
+        assert!(desktop.try_recv().is_ok());
+        assert!(phone.try_recv().is_ok());
     }
 
     #[test]

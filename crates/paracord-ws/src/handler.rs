@@ -2370,13 +2370,42 @@ async fn run_session_with_events(
             event = event_rx.recv() => {
                 match event {
                     Ok(mut event) => {
-                        if !session.should_receive_event(event.guild_id, event.target_user_ids.as_deref()) {
+                        // The session's own guild set is a connect-time
+                        // snapshot; the member index is the live answer. A
+                        // guild created or joined since this socket opened is
+                        // only in the second, and an event for it used to be
+                        // dropped here even after the bus delivered it.
+                        if !session.should_receive_event_with(
+                            |gid| {
+                                session.guild_ids.contains(&gid)
+                                    || state.member_index.is_member(gid, session.user_id)
+                            },
+                            event.guild_id,
+                            event.target_user_ids.as_deref(),
+                        ) {
                             continue;
                         }
 
-                        // `should_receive_event` above already verified guild
-                        // membership, so only the finer per-channel authorization
-                        // check remains for channel-scoped events.
+                        // First event from a guild this session gained while
+                        // connected: adopt it into the session's scope now, so
+                        // the channel check below has the guild's owner id and
+                        // later events take the cheap path.
+                        if let Some(guild_id) = event.guild_id {
+                            if !session.guild_ids.contains(&guild_id) {
+                                let owner_id = paracord_db::guilds::get_guild(&state.db, guild_id)
+                                    .await
+                                    .ok()
+                                    .flatten()
+                                    .map(|guild| guild.owner_id)
+                                    .unwrap_or(0);
+                                session.add_guild(guild_id, owner_id);
+                                state.event_bus.add_session_guild(&session.session_id, guild_id);
+                            }
+                        }
+
+                        // The membership check above already ran, so only the
+                        // finer per-channel authorization check remains for
+                        // channel-scoped events.
                         if let Some(guild_id) = event.guild_id {
                             if let Some(channel_id) =
                                 extract_channel_id_from_event(&event.event_type, &event.payload)

@@ -572,6 +572,24 @@ pub async fn accept_invite(
             Some(guild.id),
         );
 
+        // The client that redeemed the invite learns the server from this
+        // response. Every *other* session of the same account — the desktop app
+        // left open while they accepted on their phone — only ever learns from
+        // an event, and `GUILD_MEMBER_ADD` carries no guild to put in the
+        // sidebar. So the joiner is told the same way the creator is.
+        match crate::routes::guilds::guild_detail(&guild, i64::from(member_count)).and_then(
+            |detail| serde_json::to_value(&detail).map_err(|e| ApiError::Internal(e.into())),
+        ) {
+            Ok(detail) => {
+                state
+                    .event_bus
+                    .dispatch_to_users("GUILD_CREATE", detail, vec![auth.user_id])
+            }
+            Err(error) => {
+                tracing::warn!(%error, "failed to announce the joined space to its new member")
+            }
+        }
+
         // Walking in is the moment these people can see each other. Without
         // this the joiner and everybody already inside stay dark to one
         // another for the whole session — see `announce_guild_join`.

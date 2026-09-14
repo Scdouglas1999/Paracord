@@ -466,6 +466,10 @@ pub async fn build_test_app(options: TestAppOptions) -> anyhow::Result<TestApp> 
             .build(),
     };
 
+    // Production wiring (see `paracord-server/src/main.rs`): recording a
+    // membership widens the realtime fan-out in the same call.
+    state.member_index.attach_event_bus(state.event_bus.clone());
+
     // The HTTP rate limiter is a process-global keyed on the peer IP. Test
     // requests carry no `ConnectInfo`, so without this every test app would
     // share the "unknown" bucket and collectively trip the global limit when
