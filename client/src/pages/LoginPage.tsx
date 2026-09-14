@@ -231,8 +231,20 @@ export function LoginPage() {
       setCooldownUntil(0);
       await completeLoginFlow();
     } catch (err) {
-      const serverMessage =
-        (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      const response = (err as { response?: { data?: { message?: string } } })?.response;
+      // No response at all means the server never answered — it is down, or
+      // this machine cannot reach it. Telling someone to check the password
+      // they typed correctly is a lie, and counting it toward the lockout
+      // backoff then silently swallows their next few attempts: during a
+      // restart the button simply stops doing anything, with the wrong
+      // sentence still on screen.
+      if (!response) {
+        setError(
+          `Could not reach ${serverUrl ?? 'the server'}. It may be restarting, or this machine cannot see it. Your password was not the problem.`,
+        );
+        return;
+      }
+      const serverMessage = response.data?.message;
       const nextFailures = failedAttempts + 1;
       setFailedAttempts(nextFailures);
       if (nextFailures >= 3) {

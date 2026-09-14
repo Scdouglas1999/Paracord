@@ -801,6 +801,10 @@ class ConnectionManager {
           setRefreshToken(null);
           useAuthStore.setState({ token: null, user: null });
         }
+        // Said here, where the refusal actually happened, and nowhere else: an
+        // unreachable server must never be reported to the user as a session
+        // that ended.
+        noteSessionEnded(SESSION_REVOKED_MESSAGE);
       }
       return null;
     }
@@ -1070,10 +1074,9 @@ class ConnectionManager {
 
     if (!serverToken && !localSessionToken) {
       if (!canUseChallengeAuth) {
-        // The end of the line: there is no credential left and no key to sign
-        // in with. Leave a sentence behind — this is the moment the app is
-        // about to strand the user on a screen that explains nothing.
-        noteSessionEnded(SESSION_REVOKED_MESSAGE);
+        // No credential left and no key to sign in with. Whether that is worth
+        // a sentence to the user was decided where the credential died — an
+        // unreachable server reaches here too, and it has ended nothing.
         throw new Error('No server token and local account is not unlocked');
       }
       const token = await this.authenticate(client, server, account.publicKey!, account.username!);
