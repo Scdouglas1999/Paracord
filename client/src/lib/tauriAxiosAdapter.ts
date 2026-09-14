@@ -3,7 +3,7 @@
  * command (Rust reqwest) instead of WebView2's fetch/XHR. This bypasses WebView2's
  * TLS restrictions so self-hosted servers with self-signed certs work.
  */
-import { AxiosHeaders } from 'axios';
+import axios, { AxiosHeaders } from 'axios';
 import type { AxiosResponse, InternalAxiosRequestConfig } from 'axios';
 import { isTauri } from './tauriEnv';
 
@@ -31,9 +31,18 @@ export async function tauriAdapter(config: InternalAxiosRequestConfig): Promise<
   const invoke = await getInvoke();
 
   const baseURL = config.baseURL ?? '';
-  const url = config.url?.startsWith('http')
+  const path = config.url?.startsWith('http')
     ? config.url
     : `${baseURL.replace(/\/+$/, '')}/${(config.url ?? '').replace(/^\/+/, '')}`;
+  // `params` are part of the request, not decoration. This adapter built the
+  // URL from baseURL + url alone and dropped the query string, so on the
+  // desktop every parameterised call arrived bare: message history lost
+  // `limit`/`before`, and `GET /channels/{id}/messages/recovery` arrived with
+  // no `after` at all — a 400 that left the account stuck at "wait for this
+  // account's authenticated message recovery" and made the channel unusable.
+  // Serialise through axios itself so arrays, a custom `paramsSerializer` and
+  // an existing query string in `url` behave exactly as they do in the browser.
+  const url = axios.getUri({ ...config, url: path, baseURL: undefined });
 
   const headers: Record<string, string> = {};
   if (config.headers) {

@@ -50,6 +50,27 @@ describe('the desktop HTTP adapter', () => {
     expect((response.headers as AxiosHeaders).get(DATABASE_HISTORY_HEADER)).toBe(epoch);
   });
 
+  it('sends the query parameters the request carries', async () => {
+    vi.mocked(invoke).mockResolvedValue({ status: 200, body: {}, headers: {} } as never);
+
+    await tauriAdapter({ ...request(), url: '/channels/5/messages/recovery',
+      params: { after: '0', through: undefined, limit: 100, known_ids: '' } } as InternalAxiosRequestConfig);
+
+    expect(vi.mocked(invoke).mock.calls[0][1]).toMatchObject({
+      req: { url: 'https://server.example/api/v1/channels/5/messages/recovery?after=0&limit=100&known_ids=' },
+    });
+  });
+
+  it('keeps a query string already present on the url', async () => {
+    vi.mocked(invoke).mockResolvedValue({ status: 200, body: {}, headers: {} } as never);
+
+    await tauriAdapter({ ...request(), url: '/messages?limit=50', params: { before: '9' } } as InternalAxiosRequestConfig);
+
+    expect(vi.mocked(invoke).mock.calls[0][1]).toMatchObject({
+      req: { url: 'https://server.example/api/v1/messages?limit=50&before=9' },
+    });
+  });
+
   it('still answers when the shell is older than the headers field', async () => {
     vi.mocked(invoke).mockResolvedValue({ status: 200, body: { id: '42' } } as never);
 
