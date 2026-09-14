@@ -25,7 +25,19 @@ interface LegalDocumentProps {
  */
 export function LegalDocument({ eyebrow, icon: Icon, title, updated, intro, sections }: LegalDocumentProps) {
   return (
-    <div className="min-h-dvh bg-bg-base">
+    // `html, body, #root` are `overflow: hidden` (tokens.css): nothing in this
+    // app scrolls the document, every scroll belongs to a named region. A
+    // `min-h-dvh` page inside that is not a long page — it is a clipped one,
+    // and these documents run to ~2100px, so everything past the first screen
+    // was unreachable. The region owns its own scrolling, and takes focus so a
+    // keyboard can drive it with Page Down / Home / End.
+    <div
+      role="region"
+      aria-label={title}
+      // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- Keyboard users must be able to scroll this viewport with Page Up/Down and Home/End.
+      tabIndex={0}
+      className="h-dvh overflow-y-auto bg-bg-base"
+    >
       <div className="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6 sm:py-12">
         <Link
           to="/register"
