@@ -47,7 +47,7 @@ describe('the desktop HTTP adapter', () => {
 
     expect(response.status).toBe(200);
     // Read case-insensitively, exactly as the operation context does.
-    expect(AxiosHeaders.from(response.headers).get(DATABASE_HISTORY_HEADER)).toBe(epoch);
+    expect((response.headers as AxiosHeaders).get(DATABASE_HISTORY_HEADER)).toBe(epoch);
   });
 
   it('still answers when the shell is older than the headers field', async () => {
@@ -56,7 +56,7 @@ describe('the desktop HTTP adapter', () => {
     const response = await tauriAdapter(request());
 
     expect(response.status).toBe(200);
-    expect(AxiosHeaders.from(response.headers).get(DATABASE_HISTORY_HEADER)).toBeFalsy();
+    expect((response.headers as AxiosHeaders).get(DATABASE_HISTORY_HEADER)).toBeFalsy();
   });
 
   it('carries the headers on the error it throws for a failed status', async () => {

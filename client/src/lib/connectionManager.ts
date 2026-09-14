@@ -1654,6 +1654,16 @@ class ConnectionManager {
   /** Drop the old transport and its queued commands before a fresh handshake. */
   private reconcileHistory(conn: ServerConnection): void {
     if (!this.isCurrentConnection(conn) || !conn.allowReconnect) return;
+    // The other path that drops a live stream, and the one that did it on the
+    // desktop: any response whose history-epoch header does not match the one
+    // the operation captured asks for a reconciliation. It is the right answer
+    // when the account's history really did change, and it was silent, so a
+    // client dropping its stream on every single request looked from its own
+    // diagnostics like a stream that kept dying of nothing.
+    logVoiceDiagnostic('[gateway] history reconciliation, reconnecting', {
+      server: conn.serverId,
+      attempt: conn.reconnectAttempts,
+    });
     const ws = conn.ws;
     const events = conn.eventSource;
     conn.ws = null; conn.eventSource = null;
