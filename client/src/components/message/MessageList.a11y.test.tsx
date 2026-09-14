@@ -125,6 +125,7 @@ vi.mock('../../stores/channelStore', () => {
     channelsById: {
       ch1: { id: 'ch1', guild_id: 'g1', type: 0, channel_type: 0, name: 'general', position: 0 },
       ch2: { id: 'ch2', guild_id: 'g1', type: 0, channel_type: 0, name: 'random', position: 1 },
+      th1: { id: 'th1', guild_id: 'g1', type: 6, channel_type: 6, name: 'Bracket tolerance', parent_id: 'ch1', position: 0 },
       dm1: { id: 'dm1', guild_id: null, type: 1, channel_type: 1, position: 0,
         recipient: { id: 'author-1', username: 'Alice', discriminator: '0001' } },
     },
@@ -382,6 +383,24 @@ describe('MessageList keyboard accessibility and error state', () => {
 
     expect(await screen.findByText('general is dark')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('does not tell an empty thread it is a dark room', async () => {
+    // A thread is not a room (§7.1): it never "is dark" and nothing in it
+    // "lights up". An empty one is a thread nobody has replied in yet.
+    mocks.useMessagesReturn.messages = [];
+    mocks.useMessagesReturn.error = null;
+
+    render(
+      <MemoryRouter>
+        <MessageList channelId="th1" />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('No replies yet')).toBeInTheDocument();
+    expect(screen.getByText('Nobody has replied in this thread yet. Say the first thing.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Send the first reply/ })).toBeInTheDocument();
+    expect(screen.queryByText(/is dark/)).toBeNull();
   });
 
   it('marks a re-entered channel read even when the cached message count is unchanged', async () => {

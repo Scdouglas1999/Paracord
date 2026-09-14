@@ -67,23 +67,20 @@ const isGroupDmChannel = (channel: Channel | undefined): boolean =>
   channel?.type === 3 || channel?.channel_type === 3;
 
 /**
- * Derive the active-thread descriptor from the current channel when the ChatView
- * has not supplied one explicitly. A thread channel (type 6) surfaces its own
- * conversation in the `threads` mode, with its parent channel name for context.
+ * Which room's threads this panel lists.
+ *
+ * A threadable room lists its own. Standing **inside** a thread it lists the
+ * room's — the siblings of the thread you are reading — because the thread
+ * itself is the page behind this panel now (§7.1: a thread belongs to its room;
+ * `pages/guild/TextChannelView.tsx`). Before that, opening Threads from inside
+ * a thread drew a second copy of the conversation already on screen.
  */
-function deriveActiveThread(
+function threadListParentOf(
+  channel: Channel | undefined,
   channelId: string | null | undefined,
-  channelsById: Record<string, Channel>,
-): ContextPanelThread | null {
-  if (!channelId) return null;
-  const channel = channelsById[channelId];
-  if (!isThreadChannel(channel)) return null;
-  const parent = channel?.parent_id ? channelsById[channel.parent_id] : undefined;
-  return {
-    threadChannelId: channel!.id,
-    threadName: channel!.name || 'Thread',
-    parentChannelName: parent?.name || 'unknown',
-  };
+): string | null {
+  if (isThreadChannel(channel)) return channel?.parent_id ?? null;
+  return isThreadableChannel(channel, channelId) ? channelId! : null;
 }
 
 function sortThreads(threads: Channel[]): Channel[] {
@@ -159,11 +156,15 @@ export function ContextPanel({
   const [threadsError, setThreadsError] = useState<string | null>(null);
   const [fetchedThreadParentIds, setFetchedThreadParentIds] = useState<Set<string>>(() => new Set());
 
-  const resolvedChannelName =
-    channelName ?? (channelId ? channelsById[channelId]?.name ?? null : null);
   const activeChannel = channelId ? channelsById[channelId] : undefined;
   const threadListParentId =
-    shown === 'threads' && isThreadableChannel(activeChannel, channelId) ? channelId! : null;
+    shown === 'threads' ? threadListParentOf(activeChannel, channelId) : null;
+  // The panel's subtitle names the room whose threads are listed, which inside
+  // a thread is the parent rather than the channel you are looking at.
+  const resolvedChannelName =
+    (threadListParentId ? channelsById[threadListParentId]?.name : null)
+    ?? channelName
+    ?? (channelId ? channelsById[channelId]?.name ?? null : null);
   const channelThreads = useMemo(
     () =>
       sortThreads(
@@ -312,7 +313,7 @@ export function ContextPanel({
   // active thread is supplied by the ChatView or derived from the current
   // (thread) channel.
   if (shown === 'threads') {
-    const thread = activeThread ?? deriveActiveThread(channelId, channelsById);
+    const thread = activeThread ?? null;
     const threadGuildId = guildId ?? (channelId ? channelsById[channelId]?.guild_id ?? null : null);
     if (!thread && threadListParentId && threadGuildId) {
       const openThread = (threadId: string) => {
@@ -370,12 +371,20 @@ export function ContextPanel({
               <div className="flex flex-col gap-1">
                 {channelThreads.map((thread) => {
                   const isArchived = thread.thread_metadata?.archived === true;
+                  // The thread you are reading is one of these rows. Say so,
+                  // rather than letting the list look like somewhere else.
+                  const here = thread.id === channelId;
                   return (
                     <button
                       key={thread.id}
                       type="button"
                       onClick={() => openThread(thread.id)}
-                      className="flex min-h-[44px] w-full items-center gap-2 rounded-chip px-2.5 py-2 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
+                      aria-current={here ? 'page' : undefined}
+                      className={
+                        'flex min-h-[44px] w-full items-center gap-2 rounded-chip px-2.5 py-2 text-left outline-none '
+                        + 'transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] '
+                        + (here ? 'bg-bg-raised shadow-[var(--shadow-raised)]' : 'hover:bg-bg-mod-subtle')
+                      }
                     >
                       {isArchived ? (
                         <Archive size={16} className="shrink-0 text-text-muted" aria-hidden />
@@ -386,8 +395,10 @@ export function ContextPanel({
                         <span className="block truncate text-label font-medium text-text-primary">
                           {thread.name || 'Thread'}
                         </span>
-                        {isArchived && (
-                          <span className="text-meta text-text-muted">Archived</span>
+                        {(here || isArchived) && (
+                          <span className="text-meta text-text-muted">
+                            {here ? (isArchived ? 'You’re here · archived' : 'You’re here') : 'Archived'}
+                          </span>
                         )}
                       </span>
                     </button>

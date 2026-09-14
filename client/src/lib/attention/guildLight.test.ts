@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { EPOCH_MS } from './conversationModel';
-import { guildLight, guildPeople, guildRooms, recentAuthorsOf, type GuildLightInput } from './guildLight';
+import { guildLight, guildPeople, guildRooms, recentAuthorsOf, threadParents, type GuildLightInput } from './guildLight';
 import { createLitHistory } from './litHistory';
 import { ChannelType, type Member, type VoiceState } from '../../types';
 
@@ -72,6 +72,27 @@ describe('guildLight — the store seam', () => {
       'build-log',
       'general',
     ]);
+  });
+
+  it('does not draw a thread as a room of the building', () => {
+    // A thread took a room's slot in the Buildings column and could push its
+    // own parent behind "1 more room" — and appeared in the Lobby's text-room
+    // rows as a sibling of the room it lives inside (§7.1, §7.3).
+    const withThread = input({
+      channels: [
+        ...input().channels,
+        { id: 'th1', type: ChannelType.Thread, name: 'Bracket tolerance', position: 5, parent_id: 't1' },
+      ],
+    });
+    const building = guildLight(withThread);
+    expect(building.rooms.map((room) => room.name)).toEqual([
+      'Shop floor',
+      'Lounge',
+      'build-log',
+      'general',
+    ]);
+    expect(building.windows.map((window) => window.name)).not.toContain('Bracket tolerance');
+    expect(threadParents(withThread.channels)).toEqual(new Map([['th1', 't1']]));
   });
 
   it('lights a voice room from the gateway voice states', () => {

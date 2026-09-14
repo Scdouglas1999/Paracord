@@ -19,9 +19,10 @@ import { findScopedGuild } from '../../../lib/guildScope';
 import { walkIntoRoom } from '../../../lib/motion';
 import { accountScopeKey, entityScopeKey, LOCAL_SERVER_ID } from '../../../lib/serverScope';
 import { getServerAccountScope } from '../../../lib/serverIdentity';
-import { isAdmin as isGlobalAdmin } from '../../../types';
+import { ChannelType, isAdmin as isGlobalAdmin } from '../../../types';
 import { useAuthStore } from '../../../stores/authStore';
 import { confirm } from '../../../stores/confirmStore';
+import { useChannelStore } from '../../../stores/channelStore';
 import { useGuildStore } from '../../../stores/guildStore';
 import { useServerListStore } from '../../../stores/serverListStore';
 import { toast } from '../../../stores/toastStore';
@@ -29,6 +30,7 @@ import { useUIStore } from '../../../stores/uiStore';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '../../ui/ContextMenu';
 import { CreateGuildModal } from '../../guild/CreateGuildModal';
 import { AccountPlate } from './AccountPlate';
+import type { OpenThread } from './BuildingSection';
 import { BuildingsColumn } from './BuildingsColumn';
 import { CallDock } from './CallDock';
 import { CollapsedRail } from './CollapsedRail';
@@ -71,18 +73,45 @@ export function UnifiedSidebar() {
   const mutedBuildingKeys = useMemo(() => new Set(mutedGuildKeys), [mutedGuildKeys]);
 
   /**
+   * Every thread, as the key of the room it belongs to (§7.1).
+   *
+   * A thread is not a room: it never takes a room's row and it never carries
+   * its own light. What it *does* carry is attention, and that attention is the
+   * room's — an unread reply in a thread means the room it lives in wants you.
+   */
+  const channelsById = useChannelStore((state) => state.channelsById);
+  const threadParentKeys = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const channel of Object.values(channelsById)) {
+      const type = channel.channel_type ?? channel.type;
+      if (type !== ChannelType.Thread || !channel.parent_id) continue;
+      map.set(channel.key, entityScopeKey(channel.scope, channel.parent_id));
+    }
+    return map;
+  }, [channelsById]);
+
+  /**
    * Unread / mention state per room. A `ConversationEntry.key` and a
    * `RoomLight.key` are the same `entityScopeKey(scope, channelId)`, so the two
-   * merges line up without a second resolution pass.
+   * merges line up without a second resolution pass — except for a thread,
+   * whose attention is folded onto the room that owns it.
    */
   const attention = useMemo(() => {
     const map = new Map<string, RoomAttention>();
+    const counted = new Set<string>();
     for (const entry of [...needsYou, ...pinned, ...recent]) {
-      if (!entry.guildId) continue;
-      map.set(entry.key, { unread: entry.unread, mentionCount: entry.mentionCount });
+      // The three lists overlap; a conversation must not be counted twice.
+      if (!entry.guildId || counted.has(entry.key)) continue;
+      counted.add(entry.key);
+      const key = threadParentKeys.get(entry.key) ?? entry.key;
+      const carried = map.get(key);
+      map.set(key, {
+        unread: (carried?.unread ?? false) || entry.unread,
+        mentionCount: (carried?.mentionCount ?? 0) + entry.mentionCount,
+      });
     }
     return map;
-  }, [needsYou, pinned, recent]);
+  }, [needsYou, pinned, recent, threadParentKeys]);
 
   /**
    * The Home chip: everything the attention ranking says is waiting on you —
@@ -109,8 +138,32 @@ export function UnifiedSidebar() {
     activeScope && params.guildId && !params.channelId
       ? entityScopeKey(activeScope, params.guildId)
       : null;
-  const activeRoomKey =
+  const activeChannelKey =
     activeScope && params.channelId ? entityScopeKey(activeScope, params.channelId) : null;
+  /**
+   * The open room. Standing in a thread, that is the room the thread is in —
+   * the thread itself is the indented row beneath it, not a room of its own.
+   */
+  const activeRoomKey = activeChannelKey
+    ? threadParentKeys.get(activeChannelKey) ?? activeChannelKey
+    : null;
+  const openThread = useMemo<OpenThread | null>(() => {
+    if (!activeChannelKey) return null;
+    const parentKey = threadParentKeys.get(activeChannelKey);
+    if (!parentKey) return null;
+    return {
+      key: activeChannelKey,
+      parentKey,
+      name: channelsById[activeChannelKey]?.name || 'Thread',
+    };
+  }, [activeChannelKey, channelsById, threadParentKeys]);
+  const openThreadChannelId = params.channelId;
+  const openThreadGuildId = params.guildId;
+  const onOpenThread = useCallback(() => {
+    if (openThreadGuildId && openThreadChannelId) {
+      navigate(`/app/guilds/${openThreadGuildId}/channels/${openThreadChannelId}`);
+    }
+  }, [navigate, openThreadChannelId, openThreadGuildId]);
 
   const account = useMemo(
     () =>
@@ -311,6 +364,8 @@ export function UnifiedSidebar() {
             onAddBuilding={openCreateGuild}
             onBuildingContextMenu={onBuildingContextMenu}
             onRoomContextMenu={onRoomContextMenu}
+            openThread={openThread}
+            onOpenThread={onOpenThread}
             footer={
               <div className="flex flex-col gap-2">
                 <CallDock />

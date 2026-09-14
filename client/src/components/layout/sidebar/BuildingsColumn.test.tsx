@@ -207,6 +207,34 @@ describe('BuildingsColumn', () => {
     );
   });
 
+  it('hangs the open thread off its room without spending a room slot', () => {
+    // A thread is not a room (§7.1). It never competes for the fold, it never
+    // pushes its own parent behind "N more rooms", and the one you are in is an
+    // indented row under the room that owns it so the column can say where you
+    // are.
+    const onOpenThread = vi.fn();
+    renderColumn({
+      activeRoomKey: READ_TEXT.key,
+      openThread: { key: 'srv:th1', parentKey: READ_TEXT.key, name: 'Bracket tolerance' },
+      onOpenThread,
+    });
+    const section = screen.getByRole('group', { name: 'Kestrel Robotics' });
+    const rows = within(section).getAllByRole('option');
+    // Plate, four rooms, and the thread — no expander: the rooms still fit.
+    expect(rows).toHaveLength(6);
+    const thread = within(section).getByRole('option', {
+      name: 'Bracket tolerance — a thread in build-log',
+    });
+    // Directly under its room, and the Tab stop, because it is where you are.
+    expect(rows.indexOf(thread)).toBe(rows.findIndex((row) => row.getAttribute('aria-selected') === 'true' && row !== thread) + 1);
+    expect(rows.filter((row) => row.getAttribute('tabindex') === '0')).toEqual([thread]);
+    // The flat arrow order still has no gaps.
+    expect(rows.map((row) => Number(row.getAttribute('data-nav-index')))).toEqual([2, 3, 4, 5, 6, 7]);
+
+    fireEvent.click(thread);
+    expect(onOpenThread).toHaveBeenCalledTimes(1);
+  });
+
   it('asks for the first building in the metaphor when there are none', () => {
     renderColumn({ buildings: [] });
     expect(

@@ -33,6 +33,34 @@ export interface LightChannel {
   type: ChannelType;
   name?: string | null;
   position?: number;
+  /** A thread's room. Threads are not rooms of the building — see {@link isThread}. */
+  parent_id?: string | null;
+}
+
+/**
+ * A thread is **not a room** (docs/lantern-stage-spec.md §7.1, §7.3).
+ *
+ * It was drawn as one: a new thread took a slot in the Buildings column's room
+ * list and pushed its own parent behind "1 more room", and it appeared in the
+ * Lobby's text-room rows as a sibling of the room it lives inside. A building's
+ * rooms are the rooms its people arranged; a thread is one conversation inside
+ * one of them, and it belongs to that room — reachable from the room's threads,
+ * and lighting the room's own row when it needs you.
+ *
+ * So the light derivation skips threads, and `threadParents` gives every
+ * surface the same way to fold a thread back onto the room that owns it.
+ */
+export function isThread(type: ChannelType): boolean {
+  return type === ChannelType.Thread;
+}
+
+/** Thread channel id → the id of the room it lives in. */
+export function threadParents(channels: readonly LightChannel[]): Map<string, string> {
+  const parents = new Map<string, string>();
+  for (const channel of channels) {
+    if (isThread(channel.type) && channel.parent_id) parents.set(channel.id, channel.parent_id);
+  }
+  return parents;
 }
 
 /** Only the message fields the "authored" reading term reads. */
@@ -149,6 +177,8 @@ export function guildRooms(input: GuildLightInput, people: readonly PersonLight[
 
   for (const channel of input.channels) {
     if (channel.type === ChannelType.Category) continue;
+    // A thread belongs to its parent room, not beside it (see `isThread`).
+    if (isThread(channel.type)) continue;
     const name = channel.name ?? 'unknown';
     const key = entityScopeKey(input.scope, channel.id);
 

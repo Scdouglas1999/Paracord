@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { UnifiedSidebar } from './UnifiedSidebar';
 import { useAuthStore } from '../../../stores/authStore';
+import { useChannelStore } from '../../../stores/channelStore';
 import { usePresenceStore } from '../../../stores/presenceStore';
 import { useServerListStore } from '../../../stores/serverListStore';
 import { useUIStore } from '../../../stores/uiStore';
@@ -18,6 +19,8 @@ import {
   type RoomLight,
 } from '../../../lib/attention/light';
 import type { UnifiedConversations } from '../../../hooks/useUnifiedConversations';
+import type { ConversationEntry } from '../../../lib/attention/conversationModel';
+import { entityScopeKey } from '../../../lib/serverScope';
 
 /**
  * The sidebar container (docs/lantern-stage-spec.md §7.1).
@@ -83,6 +86,46 @@ const KESTREL = buildingLight({
   memberCount: 24,
 });
 
+/** A thread of build-log, as the channel store holds it. */
+const THREAD_KEY = entityScopeKey(SCOPE, '2003');
+function seedThread() {
+  useChannelStore.setState({
+    channelsById: {
+      [THREAD_KEY]: {
+        id: '2003',
+        key: THREAD_KEY,
+        scope: SCOPE,
+        guild_id: 'g1',
+        type: 6,
+        channel_type: 6,
+        name: 'Bracket tolerance',
+        parent_id: '2001',
+      } as never,
+    },
+  });
+}
+
+function entry(over: Partial<ConversationEntry> = {}): ConversationEntry {
+  return {
+    key: THREAD_KEY,
+    scope: SCOPE,
+    serverId: 'srv',
+    channelId: '2003',
+    guildId: 'g1',
+    kind: 'thread',
+    title: 'Bracket tolerance',
+    contextLabel: null,
+    lastActivityId: null,
+    unread: true,
+    mentionCount: 2,
+    isDMUnread: false,
+    isThreadReply: true,
+    hasVoiceActivity: false,
+    pinned: false,
+    ...over,
+  };
+}
+
 function conversations(over: Partial<UnifiedConversations> = {}): UnifiedConversations {
   return {
     needsYou: [],
@@ -122,6 +165,7 @@ beforeEach(() => {
     settings: { status: 'online', custom_status: null } as never,
   });
   useUIStore.setState({ sidebarCollapsed: false });
+  useChannelStore.setState({ channelsById: {} });
   useVoiceStore.setState({ connected: false });
   useServerListStore.setState({
     activeServerId: 'srv',
@@ -198,6 +242,30 @@ describe('UnifiedSidebar', () => {
     expect(follow).toHaveAttribute('aria-checked', 'true');
     expect(within(menu).getByText('Mark room as read')).toBeInTheDocument();
     expect(within(menu).getByText('Copy link to room')).toBeInTheDocument();
+  });
+
+  it('gives a thread\u2019s attention to the room it lives in, not a room of its own', () => {
+    // A thread is not a room (§7.1): it has no row of its own competing for the
+    // fold, so an unread reply has to light the room it is inside or it lights
+    // nothing at all.
+    seedThread();
+    vi.mocked(useUnifiedConversations).mockReturnValue(conversations({ needsYou: [entry()] }));
+    renderSidebar();
+    const room = screen.getByRole('option', { name: /build-log/ });
+    expect(within(room).getByLabelText('2 mentions')).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /Bracket tolerance/ })).not.toBeInTheDocument();
+  });
+
+  it('hangs the thread you are in under its room, and keeps the room marked open', () => {
+    seedThread();
+    renderSidebar('/app/guilds/g1/channels/2003');
+    expect(screen.getByRole('option', { name: /^build-log/ })).toHaveAttribute('aria-selected', 'true');
+    const thread = screen.getByRole('option', {
+      name: 'Bracket tolerance — a thread in build-log',
+    });
+    expect(thread).toHaveAttribute('aria-selected', 'true');
+    fireEvent.click(thread);
+    expect(screen.getByTestId('pathname')).toHaveTextContent('/app/guilds/g1/channels/2003');
   });
 
   it('offers the create/join flow from the persistent Add a building row', () => {

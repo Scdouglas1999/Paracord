@@ -22,7 +22,7 @@ import { fileApi } from '../../api/files';
 import { EncryptedAttachment } from '../file/EncryptedAttachment';
 import { hasEncryptedAttachments } from '../../lib/messages/attachments/messageBodyProjection';
 import { extractApiError } from '../../api/client';
-import { MessageType, Permissions, hasPermission, type Channel, type ChannelOverwrite, type Member, type Message, type Role } from '../../types';
+import { ChannelType, MessageType, Permissions, hasPermission, type Channel, type ChannelOverwrite, type Member, type Message, type Role } from '../../types';
 import { guildApi } from '../../api/guilds';
 import { UserProfilePopup } from '../user/UserProfile';
 import { GROUP_DM_LIMITATION, isUnusableGroupDm } from '../../lib/messages/messagingReadiness';
@@ -778,6 +778,12 @@ function OwnedMessageList({
   // A group DM refuses every message it is offered (docs/known-limitations.md),
   // so its empty state says so instead of inviting the one action that fails.
   const emptyGroupDm = isUnusableGroupDm(activeChannelType);
+  /**
+   * A thread is not a room, so it never "is dark" and nothing ever "lights up"
+   * in it (§7.1). An empty one is a thread nobody has replied in yet, and that
+   * is what it should say — the room vocabulary belongs to the room it lives in.
+   */
+  const emptyThread = activeChannelType === ChannelType.Thread;
   const canCreateThreads =
     Boolean(activeGuildId) &&
     (activeChannelType === 0 || activeChannelType === 5) &&
@@ -3230,11 +3236,15 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
               <h3 className="pc-display text-heading text-text-primary">
                 {emptyGroupDm
                   ? 'Nothing can be said here yet'
+                  : emptyThread
+                  ? 'No replies yet'
                   : activeChannel?.name ? `${activeChannel.name} is dark` : 'Nobody has said anything here yet'}
               </h3>
               <p className="mt-1 max-w-md text-body text-text-body">
                 {emptyGroupDm
                   ? GROUP_DM_LIMITATION
+                  : emptyThread
+                  ? 'Nobody has replied in this thread yet. Say the first thing.'
                   : activeChannel?.name
                   ? `Nobody has posted in ${activeChannel.name} yet. Say something and the room lights up.`
                   : 'Say something and the room lights up.'}
@@ -3250,7 +3260,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
               }}
             >
               <Send size={16} />
-              Send the first message
+              {emptyThread ? 'Send the first reply' : 'Send the first message'}
             </Button>}
           </div>
         ) : (

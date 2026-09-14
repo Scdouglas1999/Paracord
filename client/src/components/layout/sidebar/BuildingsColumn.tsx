@@ -7,7 +7,7 @@ import { Home, MessageSquare, Plus } from 'lucide-react';
 import { RollingNumber, useFlipList } from '../../../lib/motion';
 import { Button, Chip, NavRow, Well } from '../../ui';
 import type { BuildingLight, RoomLight } from '../../../lib/attention/light';
-import { BuildingSection } from './BuildingSection';
+import { BuildingSection, type OpenThread } from './BuildingSection';
 import type { RoomAttention } from './RoomRow';
 import { SidebarSearch } from './SidebarSearch';
 
@@ -75,6 +75,11 @@ export function roomsWithinFold(
 /** Past this many buildings, dark ones fold until asked. */
 export const ACCORDION_THRESHOLD = 8;
 
+/** How many flat nav ordinals a section spends: plate, rooms, thread, expander. */
+function sectionRows(section: Section): number {
+  return 1 + section.rooms.length + (section.threadRow ? 1 : 0) + (section.showExpander ? 1 : 0);
+}
+
 export interface BuildingsColumnProps {
   buildings: readonly BuildingLight[];
   /** Conversations that need you — the Home chip (Home owns Needs-you now). */
@@ -97,6 +102,12 @@ export interface BuildingsColumnProps {
   onBuildingContextMenu?: (event: MouseEvent, building: BuildingLight) => void;
   /** Right-click on a room row: notifications, mark as read, copy link (§7.1). */
   onRoomContextMenu?: (event: MouseEvent, room: RoomLight) => void;
+  /**
+   * The thread this client has open. It is not a room and takes no room slot;
+   * it draws one indented row under the room that owns it (§7.1).
+   */
+  openThread?: OpenThread | null;
+  onOpenThread?: (thread: OpenThread) => void;
   /** The account plate, and the call dock while you are in a room. */
   footer?: ReactNode;
 }
@@ -107,6 +118,8 @@ interface Section {
   hiddenRoomCount: number;
   expanded: boolean;
   showExpander: boolean;
+  /** The open thread hangs off one of this section's rooms, so it costs a row. */
+  threadRow: boolean;
   navIndexStart: number;
 }
 
@@ -127,6 +140,8 @@ export function BuildingsColumn({
   onAddBuilding,
   onBuildingContextMenu,
   onRoomContextMenu,
+  openThread = null,
+  onOpenThread,
   footer,
 }: BuildingsColumnProps) {
   const [openBuildings, setOpenBuildings] = useState<ReadonlySet<string>>(() => new Set<string>());
@@ -163,19 +178,16 @@ export function BuildingsColumn({
           : roomsWithinFold(building.rooms, attention, ROOM_ROWS_VISIBLE);
       const hiddenRoomCount = building.rooms.length - rooms.length;
       const showExpander = hiddenRoomCount > 0 || expanded;
+      const threadRow = Boolean(openThread && rooms.some((room) => room.key === openThread.parentKey));
       const previous = built[built.length - 1];
-      const navIndexStart = previous
-        ? previous.navIndexStart + 1 + previous.rooms.length + (previous.showExpander ? 1 : 0)
-        : 2;
-      built.push({ building, rooms, hiddenRoomCount, expanded, showExpander, navIndexStart });
+      const navIndexStart = previous ? previous.navIndexStart + sectionRows(previous) : 2;
+      built.push({ building, rooms, hiddenRoomCount, expanded, showExpander, threadRow, navIndexStart });
     }
     return built;
-  }, [activeBuildingKey, activeRoomKey, attention, buildings, openBuildings]);
+  }, [activeBuildingKey, activeRoomKey, attention, buildings, openBuildings, openThread]);
 
   const last = sections[sections.length - 1];
-  const addBuildingIndex = last
-    ? last.navIndexStart + 1 + last.rooms.length + (last.showExpander ? 1 : 0)
-    : 2;
+  const addBuildingIndex = last ? last.navIndexStart + sectionRows(last) : 2;
 
   // Roving tabindex (layout-spec §5): exactly ONE element is a Tab stop and the
   // arrows move between rows. Prefer the open room, then the open Lobby, then
@@ -184,11 +196,19 @@ export function BuildingsColumn({
     for (const section of sections) {
       if (section.building.key === activeBuildingKey) return section.navIndexStart;
       const roomIndex = section.rooms.findIndex((room) => room.key === activeRoomKey);
-      if (roomIndex >= 0) return section.navIndexStart + 1 + roomIndex;
+      if (roomIndex < 0) continue;
+      // The open thread's row sits directly under its room and is where you
+      // actually are, so it takes the Tab stop from the room it hangs off.
+      const threadIndex = section.threadRow
+        ? section.rooms.findIndex((room) => room.key === openThread?.parentKey)
+        : -1;
+      const shift = threadIndex >= 0 && threadIndex < roomIndex ? 1 : 0;
+      const index = section.navIndexStart + 1 + roomIndex + shift;
+      return threadIndex === roomIndex ? index + 1 : index;
     }
     if (messagesActive) return 1;
     return 0;
-  }, [activeBuildingKey, activeRoomKey, messagesActive, sections]);
+  }, [activeBuildingKey, activeRoomKey, messagesActive, openThread, sections]);
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col gap-2">
@@ -277,6 +297,8 @@ export function BuildingsColumn({
             onOpenRoom={onOpenRoom}
             onContextMenu={onBuildingContextMenu}
             onRoomContextMenu={onRoomContextMenu}
+            openThread={section.threadRow ? openThread : null}
+            onOpenThread={onOpenThread}
             navIndexStart={section.navIndexStart}
             activeNavIndex={activeNavIndex}
           />

@@ -6,7 +6,22 @@ import { cn } from '../../../lib/utils';
 import { NavRow, SectionLabel } from '../../ui';
 import { BuildingPlate } from '../../light';
 import { litMembersCaption, type BuildingLight, type RoomLight } from '../../../lib/attention/light';
-import { RoomRow, type RoomAttention } from './RoomRow';
+import { RoomRow, ThreadRow, type RoomAttention } from './RoomRow';
+
+/**
+ * The thread this client has open, and the room it belongs to.
+ *
+ * A thread is not a room (§7.1): it never takes a room's slot and never counts
+ * against the fold. The one you are *in* still gets a row, indented under its
+ * room, so the column can say where you are.
+ */
+export interface OpenThread {
+  /** `entityScopeKey(scope, threadChannelId)`. */
+  key: string;
+  /** The `RoomLight.key` of the room it hangs off. */
+  parentKey: string;
+  name: string;
+}
 
 /**
  * One building in the Buildings column (docs/lantern-stage-spec.md §7.1).
@@ -41,6 +56,9 @@ export interface BuildingSectionProps {
   onContextMenu?: (event: MouseEvent, building: BuildingLight) => void;
   /** Right-click on one of this building's rooms. */
   onRoomContextMenu?: (event: MouseEvent, room: RoomLight) => void;
+  /** The open thread, when it belongs to one of `rooms`. */
+  openThread?: OpenThread | null;
+  onOpenThread?: (thread: OpenThread) => void;
   /** Flat roving-tabindex ordinal of this section's first row (the plate). */
   navIndexStart: number;
   /** The column's single Tab stop. */
@@ -61,11 +79,16 @@ export function BuildingSection({
   onOpenRoom,
   onContextMenu,
   onRoomContextMenu,
+  openThread = null,
+  onOpenThread,
   navIndexStart,
   activeNavIndex,
 }: BuildingSectionProps) {
   const plateIndex = navIndexStart;
   const showExpander = hiddenRoomCount > 0 || expanded;
+  // The open thread's row sits between its room and the next one, so every
+  // ordinal after it shifts by one. Walk the rows once and count as we go.
+  let cursor = plateIndex + 1;
 
   return (
     <div
@@ -117,25 +140,42 @@ export function BuildingSection({
         <BuildingPlate building={building} scale="sidebar" />
       </button>
 
-      {rooms.map((room, index) => (
-        <RoomRow
-          key={room.key}
-          room={room}
-          active={room.key === activeRoomKey}
-          attention={attention?.get(room.key)}
-          navIndex={plateIndex + 1 + index}
-          tabStop={plateIndex + 1 + index === activeNavIndex}
-          onOpen={onOpenRoom}
-          onContextMenu={onRoomContextMenu}
-        />
-      ))}
+      {rooms.flatMap((room) => {
+        const roomIndex = cursor++;
+        const rows = [
+          <RoomRow
+            key={room.key}
+            room={room}
+            active={room.key === activeRoomKey}
+            attention={attention?.get(room.key)}
+            navIndex={roomIndex}
+            tabStop={roomIndex === activeNavIndex}
+            onOpen={onOpenRoom}
+            onContextMenu={onRoomContextMenu}
+          />,
+        ];
+        if (openThread?.parentKey === room.key) {
+          const threadIndex = cursor++;
+          rows.push(
+            <ThreadRow
+              key={openThread.key}
+              name={openThread.name}
+              parentName={room.name}
+              navIndex={threadIndex}
+              tabStop={threadIndex === activeNavIndex}
+              onOpen={() => onOpenThread?.(openThread)}
+            />,
+          );
+        }
+        return rows;
+      })}
 
       {showExpander && (
         <NavRow
           role="option"
           aria-selected={false}
-          data-nav-index={plateIndex + 1 + rooms.length}
-          tabIndex={plateIndex + 1 + rooms.length === activeNavIndex ? 0 : -1}
+          data-nav-index={cursor}
+          tabIndex={cursor === activeNavIndex ? 0 : -1}
           icon={expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
           onClick={() => onToggleRooms(building)}
           className="text-text-faint"

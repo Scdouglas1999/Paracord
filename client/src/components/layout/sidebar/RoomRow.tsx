@@ -1,4 +1,5 @@
 import { memo, type MouseEvent } from 'react';
+import { MessageSquare } from 'lucide-react';
 
 import { RollingNumber } from '../../../lib/motion';
 import { cn } from '../../../lib/utils';
@@ -206,3 +207,48 @@ export function RoomRow(props: RoomRowProps) {
   if (props.room.kind === 'voice' && props.room.lit) return <LiveRoomRow {...props} />;
   return <QuietRoomRow {...props} />;
 }
+
+export interface ThreadRowProps {
+  /** The thread's own name — this row is about the thread, not its room. */
+  name: string;
+  /** The room it hangs off, for the accessible name. */
+  parentName: string;
+  navIndex: number;
+  tabStop: boolean;
+  onOpen: () => void;
+}
+
+/**
+ * The thread you have open, hanging off its room (§7.1).
+ *
+ * A thread used to be drawn as a *room*: it took one of the building's eight
+ * row slots and could push its own parent behind "1 more room". It is not a
+ * room — it is one conversation inside one — so it no longer competes for the
+ * fold. Only the thread you are actually in gets a row, indented under the room
+ * that owns it, so the column can still say where you are; every other thread
+ * lives behind its room's threads.
+ */
+export const ThreadRow = memo(function ThreadRow({
+  name,
+  parentName,
+  navIndex,
+  tabStop,
+  onOpen,
+}: ThreadRowProps) {
+  return (
+    <div className="ml-3.5 border-l border-border-subtle pl-1.5">
+      <NavRow
+        role="option"
+        aria-selected
+        aria-label={`${name} — a thread in ${parentName}`}
+        data-nav-index={navIndex}
+        tabIndex={tabStop ? 0 : -1}
+        active
+        icon={<MessageSquare size={13} />}
+        onClick={onOpen}
+      >
+        {name}
+      </NavRow>
+    </div>
+  );
+});
