@@ -247,6 +247,37 @@ describe('createApiClient token refresh', () => {
     expect(onAuthFailed).not.toHaveBeenCalled();
   });
 
+  it('does not claim a session ended on a profile that never had one', async () => {
+    // A fresh install meets 401s before anyone has signed in. Telling that
+    // person "your session ended on the server" is a lie on the first screen.
+    const { peekSessionEndedNotice, clearSessionEndedNotice } = await import('../lib/sessionEnded');
+    clearSessionEndedNotice();
+    const adapter: AxiosAdapter = async (config: InternalAxiosRequestConfig) => {
+      const error = new Error('Request failed with status code 401') as Error & {
+        config: InternalAxiosRequestConfig;
+        response: AxiosResponse;
+        isAxiosError: boolean;
+      };
+      error.config = config;
+      error.response = {
+        data: { code: 'unauthorized', message: 'no session' },
+        status: 401,
+        statusText: '',
+        headers: AxiosHeaders.from({ 'content-type': 'application/json' }),
+        config,
+      };
+      error.isAxiosError = true;
+      throw error;
+    };
+
+    // No access token and no refresh token: nobody is signed in here.
+    const client = createApiClient('http://server.example/api/v1', () => '', undefined, undefined, undefined, () => null);
+    client.defaults.adapter = adapter;
+
+    await expect(client.get('/users/@me')).rejects.toBeTruthy();
+    expect(peekSessionEndedNotice()).toBeNull();
+  });
+
   it('omits the refresh body when no per-server refresh token is available', async () => {
     const { adapter, getRefreshBodies } = makeRefreshAdapter();
     let currentToken: string | null = 'stale-access-token';

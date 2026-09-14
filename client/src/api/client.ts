@@ -226,7 +226,11 @@ function endHomeSession(reason: string): void {
     store.updateRefreshToken(server.id, null);
   }
 
-  noteSessionEnded(reason);
+  // Only a session that existed can have ended. A brand-new profile that has
+  // never signed in still meets 401s (a probe, a stale saved server), and
+  // telling that person "your session ended on the server" is a lie on the
+  // very first screen they see.
+  if (deadAccess || deadRefresh) noteSessionEnded(reason);
 }
 
 /**
