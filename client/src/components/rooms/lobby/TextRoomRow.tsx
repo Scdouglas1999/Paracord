@@ -87,7 +87,7 @@ export const TextRoomRow = React.forwardRef<HTMLButtonElement, TextRoomRowProps>
           'rounded-[var(--radius-well)] px-3 py-2.5 text-left',
           'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
           active
-            ? 'bg-bg-raised shadow-[var(--shadow-raised)]'
+            ? 'bg-[var(--row-selected)] shadow-[var(--shadow-raised)]'
             : 'hover:bg-bg-mod-subtle',
         )}
       >

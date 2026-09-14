@@ -189,19 +189,28 @@ function TokenGrid({ names, kind }: { names: string[]; kind: 'fill' | 'ink' | 's
 /* -------------------------------------------------------------------------- */
 
 const SURFACES = ['--bg-base', '--bg-plate', '--bg-raised', '--bg-well', '--bg-floating', '--window-dark'];
-const WASHES = ['--bg-mod-subtle', '--bg-mod-strong', '--border-subtle', '--border-strong'];
+const WASHES = ['--bg-mod-subtle', '--bg-mod-strong', '--bg-selected', '--border-subtle', '--border-strong'];
 const LIGHTS = ['--light-white', '--light-amber', '--accent-primary'];
 const SEMANTIC = ['--accent-danger', '--accent-warning', '--accent-info', '--danger-well'];
 const TEXT_RAMP = ['--text-primary', '--text-body-ink', '--text-secondary', '--text-muted', '--text-faint'];
 const ON_FILLS = ['--text-on-light', '--text-on-accent', '--text-on-danger'];
-const AVATARS = ['--color-avatar-1', '--color-avatar-2', '--color-avatar-3', '--color-avatar-4', '--color-avatar-5'];
+const AVATARS = [
+  '--color-avatar-1',
+  '--color-avatar-2',
+  '--color-avatar-3',
+  '--color-avatar-4',
+  '--color-avatar-5',
+  '--color-avatar-6',
+  '--color-avatar-7',
+  '--color-avatar-8',
+];
 const DEPTH = ['--shadow-plate', '--shadow-well', '--shadow-raised', '--shadow-lifted', '--shadow-composer', '--shadow-chip', '--shadow-tile'];
 const GLOWS = ['--ring-lit', '--ring-speaking', '--ring-lit-plate', '--glow-light-fill', '--glow-control-on', '--glow-window-white', '--glow-window-amber'];
 
 const TYPE_STEPS: Array<{ cls: string; name: string; face: string; use: string }> = [
   { cls: 'text-display pc-display', name: 'Display · 28/700', face: 'Gabarito', use: 'Lobby and Home titles' },
-  { cls: 'text-title pc-display', name: 'Title · 22/700', face: 'Gabarito', use: 'Stage room name, text-room header' },
-  { cls: 'text-heading pc-display', name: 'Heading · 18/700', face: 'Gabarito', use: 'Building names, room card titles' },
+  { cls: 'text-title pc-display', name: 'Title · 22/700', face: 'Gabarito', use: 'Stage channel name, text-channel header' },
+  { cls: 'text-heading pc-display', name: 'Heading · 18/700', face: 'Gabarito', use: 'Server names, channel card titles' },
   { cls: 'text-name pc-display', name: 'Name · 15.5/600', face: 'Gabarito', use: 'Author names, list item titles' },
   { cls: 'text-body', name: 'Body · 15/400', face: 'Onest', use: 'Messages, prose' },
   { cls: 'text-ribbon', name: 'Ribbon · 14/400', face: 'Onest', use: 'The chat ribbon beside the Stage' },

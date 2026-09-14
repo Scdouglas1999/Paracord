@@ -182,7 +182,9 @@ describe('NavRow', () => {
     render(<NavRow active>Shop floor</NavRow>);
     const row = screen.getByRole('button', { name: 'Shop floor' });
     expect(row).toHaveAttribute('aria-current', 'page');
-    expect(row).toHaveClass('bg-bg-raised');
+    // The row you are on is the selection wash, which a server's own colour can
+    // take over (`--row-selected`), not a fixed grey step.
+    expect(row).toHaveClass('bg-[var(--row-selected)]');
   });
 
   it('uses the 34px nav-row height token', () => {

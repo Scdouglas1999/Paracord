@@ -20,9 +20,9 @@ export interface NavRowProps extends Omit<React.HTMLAttributes<HTMLElement>, 'ti
 }
 
 /**
- * NavRow — the 34px row the Buildings column is built from (spec §3, §7.1).
- * Grid is `icon · name · trailing`; the active row is raised with a warm top
- * highlight, never an accent bar.
+ * NavRow — the 34px row the servers column is built from (spec §3, §7.1).
+ * Grid is `icon · name · trailing`; the active row is a warm wash under a warm
+ * top highlight, never an accent bar.
  */
 export const NavRow = React.forwardRef<HTMLElement, NavRowProps>(function NavRow(
   { icon, children, trailing, active = false, display = false, href, className, ...props },
@@ -42,8 +42,11 @@ export const NavRow = React.forwardRef<HTMLElement, NavRowProps>(function NavRow
         // The transition belongs to `.pc-pressable`: it covers these three plus
         // transform, and a utility naming only three would now win and take the
         // §5.1 press with it.
+        // The selected row is a wash in the base hue rather than a grey step,
+        // and inside a server's group it is a wash in THAT server's colour —
+        // `--row-selected` is written per group by BuildingSection (§7.1).
         active
-          ? 'bg-bg-raised text-text-primary shadow-[var(--shadow-raised)]'
+          ? 'bg-[var(--row-selected)] text-text-primary shadow-[var(--shadow-raised)]'
           : 'hover:bg-bg-mod-subtle hover:text-text-primary',
         className,
       )}

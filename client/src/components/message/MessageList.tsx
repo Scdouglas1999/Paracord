@@ -37,7 +37,7 @@ import { SkeletonMessage } from '../ui/Skeleton';
 import { fadeIn, flicker, motionToken, ms, onMotion, prefersReducedMotion, RollingNumber, settleIn, useFlipList, walkIntoRoom } from '../../lib/motion';
 import { parseMarkdown } from '../../lib/markdown';
 import { useDownloadTicket } from '../../hooks/useDownloadTicket';
-import { getHighestRoleColor } from '../../lib/colors';
+import { getHighestRoleColor, getIdentityInk } from '../../lib/colors';
 import { formatFileSize, formatTimestamp, relativeTime, wallClock } from '../../lib/formatters';
 import { useLightboxStore, type LightboxImage } from '../../stores/lightboxStore';
 import { confirm } from '../../stores/confirmStore';
@@ -2573,7 +2573,11 @@ function OwnedMessageList({
               <button
                 type="button"
                 className="pc-display rounded-[var(--radius-window)] text-left text-name leading-tight hover:underline focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-                style={{ color: authorRoleColor ?? 'var(--text-primary)' }}
+                /* A name is written in the person's own colour, unless a role
+                   has coloured it — a role outranks identity because a role is
+                   something the server said about them. The ink set is per
+                   theme, so this clears AA on paper as well as on the dark. */
+                style={{ color: authorRoleColor ?? getIdentityInk(msg.author.id) }}
                 aria-label={`Open profile for ${authorName}`}
                 onClick={(e) => openAuthorProfile(e, msg)}
               >

@@ -1,7 +1,8 @@
 import { BellOff, ChevronDown, ChevronRight } from 'lucide-react';
-import type { MouseEvent } from 'react';
+import type { CSSProperties, MouseEvent } from 'react';
 
 import { RollingNumber } from '../../../lib/motion';
+import { getIdentityColor } from '../../../lib/colors';
 import { cn } from '../../../lib/utils';
 import { NavRow, SectionLabel } from '../../ui';
 import { BuildingPlate } from '../../light';
@@ -85,6 +86,10 @@ export function BuildingSection({
   activeNavIndex,
 }: BuildingSectionProps) {
   const plateIndex = navIndexStart;
+  // The server's own colour — the same one its Home card and its Lobby header
+  // wear, so the eye learns it. Identity, never state (§6.3): it says WHICH
+  // server this is, and it says nothing at all about who is in it.
+  const identity = getIdentityColor(building.guildId);
   const showExpander = hiddenRoomCount > 0 || expanded;
   // The open thread's row sits between its room and the next one, so every
   // ordinal after it shifts by one. Walk the rows once and count as we go.
@@ -96,6 +101,13 @@ export function BuildingSection({
       aria-label={building.name}
       data-flip-key={building.key}
       className="flex flex-col gap-0.5"
+      style={{
+        '--identity': identity,
+        // Inside this group the row you are on wears the server's colour
+        // instead of the neutral wash. 16% is the measured step: enough to
+        // name the server, quiet enough that the row's ink is untouched.
+        '--row-selected': 'color-mix(in srgb, var(--identity) 16%, transparent)',
+      } as CSSProperties}
     >
       <SectionLabel
         meta={
@@ -116,6 +128,7 @@ export function BuildingSection({
         }
         className={cn(active && 'text-text-primary')}
       >
+        <span className="pc-identity-mark" aria-hidden />
         {building.name}
       </SectionLabel>
 

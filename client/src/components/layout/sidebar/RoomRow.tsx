@@ -176,7 +176,7 @@ export const LiveRoomRowView = memo(function LiveRoomRowView({
         'rounded-[var(--radius-control)]',
         'transition-[background-color,color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
         active
-          ? 'bg-bg-raised text-text-primary shadow-[var(--shadow-raised)]'
+          ? 'bg-[var(--row-selected)] text-text-primary shadow-[var(--shadow-raised)]'
           : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
       )}
     >

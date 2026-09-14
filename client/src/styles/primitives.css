@@ -524,6 +524,22 @@
    §5 Loading and presence indicators.
    -------------------------------------------------------------------------- */
 
+/* The 10px mark that carries a server's identity colour, in front of its
+   section label in the sidebar — the same colour as that server's Home card and
+   its Lobby header, so the eye learns it. Identity, never state (§6.3): it is
+   not a light, it never glows, and it says nothing about who is in there.
+   `--identity` is written on the group by `BuildingSection`. */
+.pc-identity-mark {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  flex: none;
+  margin-right: 7px;
+  vertical-align: -1px;
+  border-radius: 3px;
+  background: var(--identity, var(--text-faint));
+}
+
 /* A matte placeholder pulse — the breath timing, like every other slow pulse
    in the product, and it stops dead under reduced motion rather than freezing
    wherever the global 0.01ms override happens to land. */
