@@ -19,7 +19,7 @@ use paracord_media::{
 };
 use serde_json::{json, Value};
 use tempfile::TempDir;
-use tokio::sync::{Notify, RwLock};
+use tokio::sync::RwLock;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -452,7 +452,7 @@ pub async fn build_test_app(options: TestAppOptions) -> anyhow::Result<TestApp> 
             allowed_extensions: None,
         })),
         storage_backend: Arc::new(Storage::Local(LocalStorage::new(storage_dir.path()))),
-        shutdown: Arc::new(Notify::new()),
+        shutdown: paracord_core::shutdown::ShutdownSignal::new(),
         online_users: Arc::new(DashSet::new()),
         user_presences: Arc::new(DashMap::new()),
         permission_cache: build_permission_cache(10_000),

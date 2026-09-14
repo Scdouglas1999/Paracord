@@ -24,7 +24,7 @@ use paracord_models::permissions::Permissions;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio::sync::{Notify, RwLock};
+use tokio::sync::RwLock;
 use tokio::time::{timeout, Duration};
 
 use paracord_ws::{
@@ -211,7 +211,7 @@ async fn build_env() -> TestEnv {
             allowed_extensions: None,
         })),
         storage_backend: Arc::new(Storage::Local(LocalStorage::new(storage_dir.path()))),
-        shutdown: Arc::new(Notify::new()),
+        shutdown: paracord_core::shutdown::ShutdownSignal::new(),
         online_users: Arc::new(DashSet::new()),
         user_presences: Arc::new(DashMap::new()),
         permission_cache: build_permission_cache(10_000),
@@ -1081,4 +1081,58 @@ async fn websocket_snapshot_query_failures_never_publish_empty_ready_state() {
         .unwrap();
     }
     server.abort();
+}
+
+// ── run_session: shutdown ───────────────────────────────────────────────────
+
+/// A gateway socket is open until a client closes it, and axum's graceful
+/// shutdown waits for every in-flight connection — so a session that ignores
+/// the shutdown signal is a server that never restarts while anyone is
+/// connected. The order matters as much as the fact: the notice that explains
+/// the close has to reach the client before the close does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_shutting_down_server_closes_its_sessions_after_the_restart_notice() {
+    let env = build_env().await;
+    let (user_id, _token) = make_user_token(&env).await;
+    let session = Session::new(user_id, vec![], Default::default());
+
+    // `client_tx` is held for the whole test: this is a client that is doing
+    // nothing wrong and simply keeping its socket open, which is exactly the
+    // client that used to hold the process up.
+    let (handle, _client_tx, mut server_rx) = spawn_session(session, env.state.clone());
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    // Exactly what the shutdown path does, in its order: publish the notice,
+    // then latch the signal.
+    env.state
+        .event_bus
+        .dispatch("SERVER_RESTART", json!({}), None);
+    env.state.shutdown.trigger();
+
+    let notice = next_text(&mut server_rx, 2000)
+        .await
+        .expect("the restart notice must arrive");
+    assert_eq!(
+        notice["t"], "SERVER_RESTART",
+        "the client is told why before it is closed"
+    );
+
+    let mut saw_close = false;
+    while let Ok(Some(frame)) = timeout(Duration::from_secs(5), server_rx.recv()).await {
+        if let Message::Close(Some(close)) = frame {
+            assert_eq!(
+                close.code, 1012,
+                "a restart closes with 1012 Service Restart"
+            );
+            saw_close = true;
+            break;
+        }
+    }
+    assert!(saw_close, "the session must close its own socket");
+
+    let ended = timeout(Duration::from_secs(5), handle).await;
+    assert!(
+        ended.is_ok(),
+        "the session must end itself: nothing else will, and the drain waits for it"
+    );
 }

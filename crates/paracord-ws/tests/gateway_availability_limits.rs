@@ -31,7 +31,7 @@ use paracord_models::gateway::{
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio::sync::{Notify, RwLock};
+use tokio::sync::RwLock;
 
 use paracord_ws::{
     run_session, test_acquire_ip_connection_slot, test_allow_gateway_handshake,
@@ -226,7 +226,7 @@ async fn build_env() -> TestEnv {
             allowed_extensions: None,
         })),
         storage_backend: Arc::new(Storage::Local(LocalStorage::new(storage_dir.path()))),
-        shutdown: Arc::new(Notify::new()),
+        shutdown: paracord_core::shutdown::ShutdownSignal::new(),
         online_users: Arc::new(DashSet::new()),
         user_presences: Arc::new(DashMap::new()),
         permission_cache: build_permission_cache(10_000),

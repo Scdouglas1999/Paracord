@@ -28,7 +28,7 @@ use paracord_models::gateway::{OP_IDENTIFY, OP_RESUME};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio::sync::{Notify, RwLock};
+use tokio::sync::RwLock;
 use tokio::time::{timeout, Duration};
 
 use paracord_ws::{run_session, wait_for_identify_or_resume, Session, WsCompressor};
@@ -242,7 +242,7 @@ async fn build_env() -> TestEnv {
             allowed_extensions: None,
         })),
         storage_backend: Arc::new(Storage::Local(LocalStorage::new(storage_dir.path()))),
-        shutdown: Arc::new(Notify::new()),
+        shutdown: paracord_core::shutdown::ShutdownSignal::new(),
         online_users: Arc::new(DashSet::new()),
         user_presences: Arc::new(DashMap::new()),
         permission_cache: build_permission_cache(10_000),

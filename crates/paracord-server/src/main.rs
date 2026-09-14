@@ -31,6 +31,136 @@ const WORKER_SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_sec
 /// channel when `dispatch` returns; this only lets the gateway's send loop run.
 const RESTART_NOTICE_FLUSH: std::time::Duration = std::time::Duration::from_millis(250);
 
+/// Hard ceiling on how long axum may wait for in-flight connections to finish
+/// after the shutdown future returns.
+///
+/// `with_graceful_shutdown` waits for *every* open connection, and the two
+/// connections a browser always holds — the realtime SSE stream and the gateway
+/// websocket — are open by design until someone closes them. Both now end
+/// themselves when `ShutdownSignal` latches, so the drain is normally instant;
+/// this is the backstop for the one that does not (a wedged socket, a client
+/// that stopped reading). A restart must never hang on a stuck client, so past
+/// this deadline the process exits anyway and says how many were still open.
+const CONNECTION_DRAIN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Wait for the drain to start, then for `CONNECTION_DRAIN_DEADLINE` to pass.
+///
+/// Resolves only after the shutdown future has returned (which is when axum
+/// actually begins draining), so the deadline measures the drain and not the
+/// worker grace period that precedes it.
+async fn connection_drain_deadline(started: tokio::sync::oneshot::Receiver<()>) {
+    if started.await.is_err() {
+        // The shutdown future was dropped without signalling; nothing to bound.
+        std::future::pending::<()>().await;
+    }
+    tokio::time::sleep(CONNECTION_DRAIN_DEADLINE).await;
+}
+
+/// Accepted HTTP connections this process has not finished with.
+static OPEN_HTTP_CONNECTIONS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// The bound listener, wrapped so every connection it hands out is counted.
+///
+/// Nothing else can answer "how many are still open": axum owns the connections
+/// once it has accepted them and keeps no public gauge, and a per-handler count
+/// only ever knows about the handlers it was added to. The drain deadline needs
+/// the real number — including the connection nobody thought to instrument.
+struct CountingListener(tokio::net::TcpListener);
+
+impl axum::serve::Listener for CountingListener {
+    type Io = CountedStream;
+    type Addr = std::net::SocketAddr;
+
+    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        let (io, addr) = axum::serve::Listener::accept(&mut self.0).await;
+        (CountedStream::new(io), addr)
+    }
+
+    fn local_addr(&self) -> std::io::Result<Self::Addr> {
+        self.0.local_addr()
+    }
+}
+
+/// A `TcpStream` that counts itself as open until it is dropped.
+struct CountedStream(tokio::net::TcpStream);
+
+impl CountedStream {
+    fn new(inner: tokio::net::TcpStream) -> Self {
+        OPEN_HTTP_CONNECTIONS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self(inner)
+    }
+}
+
+impl Drop for CountedStream {
+    fn drop(&mut self) {
+        OPEN_HTTP_CONNECTIONS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl tokio::io::AsyncRead for CountedStream {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.0).poll_read(cx, buf)
+    }
+}
+
+impl tokio::io::AsyncWrite for CountedStream {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.0).poll_write(cx, buf)
+    }
+
+    fn poll_write_vectored(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        bufs: &[std::io::IoSlice<'_>],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.0).poll_write_vectored(cx, bufs)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.0.is_write_vectored()
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.0).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.0).poll_shutdown(cx)
+    }
+}
+
+/// Describe what is still attached when the drain deadline expires, for the
+/// WARN that explains why the process is exiting with connections open.
+///
+/// The connection count is the whole truth; the three that follow are the kinds
+/// this server holds open by design, named because they are the ones an
+/// operator can act on.
+fn open_connection_summary() -> String {
+    format!(
+        "{} HTTP connection(s) still open ({} gateway, {} realtime stream(s), {} voice \
+         signaling socket(s))",
+        OPEN_HTTP_CONNECTIONS.load(std::sync::atomic::Ordering::SeqCst),
+        paracord_ws::live_connection_count(),
+        paracord_api::live_stream_count(),
+        paracord_api::live_voice_signaling_count(),
+    )
+}
+
 fn parse_detected_public_ip(text: &str) -> Option<String> {
     let ip = text.trim();
     if ip.is_empty() || ip.parse::<std::net::IpAddr>().is_err() {
@@ -483,7 +613,11 @@ async fn main() -> Result<()> {
         std::env::set_var("PARACORD_PUBLIC_URL", public_url);
     }
 
-    let shutdown_notify = Arc::new(tokio::sync::Notify::new());
+    // Latched, so a connection that arms its wait *after* the signal fires —
+    // an SSE stream a browser opened mid-drain — still sees it. Workers keep
+    // taking the bare `Notify` behind it.
+    let shutdown_signal = paracord_core::shutdown::ShutdownSignal::new();
+    let shutdown_notify = shutdown_signal.notify_handle();
 
     // Build a pre-initialized FederationService so routes don't re-parse
     // environment variables on every request.
@@ -524,7 +658,7 @@ async fn main() -> Result<()> {
         db,
         event_bus: paracord_core::events::EventBus::default(),
         runtime,
-        shutdown: shutdown_notify.clone(),
+        shutdown: shutdown_signal.clone(),
         config: paracord_core::AppConfig {
             jwt_secret: config.auth.jwt_secret.clone(),
             jwt_expiry_seconds: config.auth.jwt_expiry_seconds,
@@ -808,6 +942,14 @@ async fn main() -> Result<()> {
         .map_err(|err| {
             anyhow::anyhow!(describe_http_bind_error(&err, &config.server.bind_address))
         })?;
+    // Counted from here on, so the drain deadline can say what it gave up on.
+    // The no-op `tap_io` is not decoration: `SocketAddr: Connected<..>` — what
+    // `into_make_service_with_connect_info` needs, and what every handler that
+    // reads a client IP depends on — is implemented for `TcpListener` and for
+    // any tapped listener, and the orphan rule forbids implementing it here for
+    // a listener of our own. Going through `TapIo` is how a custom listener
+    // keeps connect info.
+    let listener = axum::serve::ListenerExt::tap_io(CountingListener(listener), |_io| {});
 
     // ── TLS / HTTPS setup ───────────────────────────────────────────────────
     let tls_enabled = config.tls.enabled;
@@ -926,7 +1068,10 @@ async fn main() -> Result<()> {
     // `admin::restart_update` endpoint is permanently disabled for security
     // (it returns Forbidden and never signals shutdown), so no in-process
     // caller fires `shutdown_notify`. Only OS signals initiate shutdown here.
-    let shutdown_notify_http = shutdown_notify.clone();
+    let shutdown_signal_http_handle = shutdown_signal.clone();
+    // Told when the shutdown future returns, i.e. when axum actually starts
+    // draining connections, so the drain deadline below times the drain itself.
+    let (drain_started_tx, drain_started_rx) = tokio::sync::oneshot::channel::<()>();
     let shutdown_signal_http = async move {
         #[cfg(windows)]
         {
@@ -977,21 +1122,32 @@ async fn main() -> Result<()> {
         // short enough that it costs nothing an operator would notice.
         tokio::time::sleep(RESTART_NOTICE_FLUSH).await;
 
-        // Signal every background worker (retention, backups, federation
-        // delivery, scheduled/disappearing messages, bot manager, rate-limit
-        // and attachment cleanup, ...) to stop. They all park on
-        // `shutdown.notified()` inside their select loops, so a single
-        // `notify_waiters()` wakes all of them at once.
-        shutdown_notify_http.notify_waiters();
+        // Latch the signal. This does two things at once:
+        //
+        // - wakes every background worker (retention, backups, federation
+        //   delivery, scheduled/disappearing messages, bot manager, rate-limit
+        //   and attachment cleanup, ...). They park on `shutdown.notified()`
+        //   inside their select loops, so one `notify_waiters()` wakes them all;
+        // - tells the long-lived connection handlers to end. The realtime SSE
+        //   stream and every gateway session watch this latch and close as soon
+        //   as it is set — the notice above is already on the wire by now.
+        //   Without that, `with_graceful_shutdown` waited on connections that
+        //   are open by design until a client closes them, and any attached
+        //   browser meant the process never exited at all.
+        shutdown_signal_http_handle.trigger();
 
         // Give workers a bounded grace period to finish the current iteration
         // (e.g. a retention or backup batch already in flight) before we return
-        // and let axum tear down the HTTP servers.
+        // and let axum tear down the HTTP servers. The connections are closing
+        // themselves concurrently, so this costs the drain nothing.
         tokio::time::sleep(WORKER_SHUTDOWN_GRACE).await;
 
         if let Some(mut lk) = managed_livekit {
             lk.kill().await;
         }
+
+        // From here axum waits for whatever is still open; start the clock.
+        let _ = drain_started_tx.send(());
     };
 
     if let Some(rustls_config) = tls_rustls_config {
@@ -1035,18 +1191,37 @@ async fn main() -> Result<()> {
         tokio::select! {
             result = http_server => { result?; }
             result = https_server => { result?; }
+            _ = connection_drain_deadline(drain_started_rx) => {
+                warn_drain_deadline_expired();
+            }
         }
     } else {
         // HTTP only
-        axum::serve(
+        let server = axum::serve(
             listener,
             app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
         )
-        .with_graceful_shutdown(shutdown_signal_http)
-        .await?;
+        .with_graceful_shutdown(shutdown_signal_http);
+
+        tokio::select! {
+            result = server => { result?; }
+            _ = connection_drain_deadline(drain_started_rx) => {
+                warn_drain_deadline_expired();
+            }
+        }
     }
 
     Ok(())
+}
+
+/// Report an exit that did not wait for every connection to close.
+fn warn_drain_deadline_expired() {
+    tracing::warn!(
+        "Exiting after a {}s drain deadline: {}. A restart does not wait on a client that \
+         will not let go.",
+        CONNECTION_DRAIN_DEADLINE.as_secs(),
+        open_connection_summary()
+    );
 }
 
 /// Run the `migrate-to-postgres` subcommand: copy a SQLite database into a

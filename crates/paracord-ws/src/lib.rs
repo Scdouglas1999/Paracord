@@ -29,6 +29,10 @@ pub use handler::{
 #[doc(hidden)]
 pub use session::Session;
 
+/// Live gateway connection count, read by the shutdown path when its drain
+/// deadline expires.
+pub use handler::live_connection_count;
+
 use axum::{
     extract::{ws::WebSocketUpgrade, ConnectInfo, Query, State},
     http::{header, HeaderMap, StatusCode},
@@ -173,6 +177,13 @@ async fn ws_upgrade(
 ) -> impl IntoResponse {
     if !is_origin_allowed(&headers, &state) {
         return StatusCode::FORBIDDEN.into_response();
+    }
+
+    // A client reconnecting on the restart notice must not be handed a socket by
+    // the server that is in the middle of going away: the drain would then be
+    // waiting on a connection opened after the notice went out. It reconnects.
+    if state.shutdown.is_shutting_down() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
 
     let peer_ip = client_ip(&headers, connect_info.0);

@@ -6,6 +6,15 @@ server is going away *before* the listeners are torn down, so the client can
 show "Server is restarting — you'll reconnect automatically" instead of a bare
 connection loss. On POSIX the signal used is SIGTERM, because that is what
 `systemctl restart` and `docker stop` actually send.
+
+And it covers the drain the notice precedes. A browser holds two connections
+open for as long as its tab is: the realtime SSE stream and the gateway
+websocket. `with_graceful_shutdown` waits for every in-flight connection, so
+until those two end themselves a restart never completed at all — the process
+sat there until something SIGKILLed it. This smoke attaches both, and requires
+that each is told before it is closed, that the process exits within the
+graceful budget, and that it exits because the connections went rather than
+because the drain deadline ran out.
 """
 
 from __future__ import annotations
@@ -73,8 +82,12 @@ def recv_json(ws: "websocket.WebSocket", label: str) -> dict[str, Any]:
         raise AssertionError(f"{label}: invalid JSON websocket payload: {raw!r}") from exc
 
 
-def connect_identified_gateway(base_url: str, port: int) -> "websocket.WebSocket":
-    """Register an account and bring one gateway session to READY."""
+def connect_identified_gateway(base_url: str, port: int) -> tuple["websocket.WebSocket", str]:
+    """Register an account and bring one gateway session to READY.
+
+    Returns the live socket and the account's access token, which the realtime
+    stream below needs to mint its own ticket.
+    """
     account = {
         "username": "shutdownwatcher",
         "email": "shutdown-watcher@example.com",
@@ -95,8 +108,78 @@ def connect_identified_gateway(base_url: str, port: int) -> "websocket.WebSocket
     while time.time() < deadline:
         frame = recv_json(ws, "READY")
         if frame.get("op") == 0 and frame.get("t") == "READY":
-            return ws
+            return ws, token
     raise TimeoutError("gateway session never reached READY")
+
+
+def open_realtime_stream(base_url: str, token: str, timeout_seconds: float):
+    """Attach the SSE realtime stream and read it up to its READY frame.
+
+    This is the connection a browser holds open for the life of the tab, and the
+    one that used to make `with_graceful_shutdown` wait forever.
+    """
+    ticket_resp = requests.post(
+        f"{base_url}/api/v1/stream/ticket",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=10,
+    )
+    ticket_resp.raise_for_status()
+    ticket = ticket_resp.json()["ticket"]
+
+    stream = requests.get(
+        f"{base_url}/api/v2/rt/events",
+        params={"ticket": ticket},
+        headers={"Accept": "text/event-stream"},
+        stream=True,
+        timeout=(10, timeout_seconds),
+    )
+    stream.raise_for_status()
+    lines = stream.iter_lines(decode_unicode=True)
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        frame = next_stream_frame(lines)
+        if frame is None:
+            raise AssertionError("the realtime stream ended before READY")
+        if frame.get("t") == "READY":
+            return stream, lines
+    raise TimeoutError("realtime stream never reached READY")
+
+
+def next_stream_frame(lines) -> dict[str, Any] | None:
+    """Next parsed `data:` frame from an SSE line iterator, or None at end."""
+    for line in lines:
+        if not line or not line.startswith("data:"):
+            continue
+        payload = line[len("data:") :].strip()
+        if not payload or payload == "keep-alive":
+            continue
+        try:
+            return json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise AssertionError(f"invalid JSON SSE payload: {payload!r}") from exc
+    return None
+
+
+def wait_for_stream_restart_notice(lines, timeout_seconds: float) -> None:
+    """The stream must carry the notice and then end, by itself, promptly."""
+    deadline = time.time() + timeout_seconds
+    saw_notice = False
+    while time.time() < deadline:
+        try:
+            frame = next_stream_frame(lines)
+        except requests.RequestException as exc:
+            raise AssertionError(
+                "the realtime stream was cut off instead of being closed cleanly"
+            ) from exc
+        if frame is None:
+            if not saw_notice:
+                raise AssertionError(
+                    "the realtime stream ended without a SERVER_RESTART notice"
+                )
+            return
+        if frame.get("t") == "SERVER_RESTART":
+            saw_notice = True
+    raise AssertionError("the realtime stream neither notified nor ended before the timeout")
 
 
 def wait_for_restart_notice(ws: "websocket.WebSocket", timeout_seconds: float) -> None:
@@ -163,20 +246,33 @@ def run_smoke(args: argparse.Namespace) -> None:
             )
             forced = False
             watcher: "websocket.WebSocket | None" = None
+            stream = None
+            exit_seconds = 0.0
             try:
                 startup_seconds = wait_for_health(base_url, proc)
-                watcher = connect_identified_gateway(base_url, args.port)
+                watcher, token = connect_identified_gateway(base_url, args.port)
+                # Both of the connections a real client holds open, attached at
+                # once: this is the state in which the process used to hang.
+                stream, stream_lines = open_realtime_stream(base_url, token, args.timeout)
+                signalled_at = time.time()
                 send_interrupt(proc)
-                # Read the notice off the live socket before the process is
+                # Read the notice off each live connection before the process is
                 # gone: it has to arrive ahead of the teardown, not after it.
                 wait_for_restart_notice(watcher, args.timeout)
+                wait_for_stream_restart_notice(stream_lines, args.timeout)
                 try:
                     proc.wait(timeout=args.timeout)
+                    exit_seconds = time.time() - signalled_at
                 except subprocess.TimeoutExpired:
                     forced = True
                     proc.kill()
                     proc.wait(timeout=10)
             finally:
+                if stream is not None:
+                    try:
+                        stream.close()
+                    except OSError:
+                        pass
                 if watcher is not None:
                     try:
                         watcher.close()
@@ -197,11 +293,25 @@ def run_smoke(args: argparse.Namespace) -> None:
             raise AssertionError(f"unexpected shutdown return code {proc.returncode}")
         if "Shutting down" not in log_text:
             raise AssertionError(f"shutdown log line missing from captured logs: {log_text[-1000:]}")
+        # The deadline is the backstop for a client that will not let go, not
+        # the way a healthy restart ends. Reaching it here would mean the
+        # connections never closed themselves after all.
+        if "Exiting with connections still open" in log_text:
+            raise AssertionError(
+                "the drain deadline expired: attached connections did not end themselves\n"
+                f"{log_text[-1500:]}"
+            )
+        if exit_seconds > args.exit_deadline:
+            raise AssertionError(
+                f"exit took {exit_seconds:.2f}s with clients attached, over the "
+                f"{args.exit_deadline:.2f}s budget"
+            )
         print(
             "PASS: release server graceful shutdown smoke passed "
-            "(SIGTERM handled, SERVER_RESTART delivered before teardown); "
-            f"startup_health_seconds={startup_seconds:.2f}; returncode={proc.returncode}; "
-            f"log_bytes={len(log_text)}"
+            "(SIGTERM handled, SERVER_RESTART delivered to gateway and realtime stream "
+            "before teardown, both connections drained without the deadline); "
+            f"startup_health_seconds={startup_seconds:.2f}; exit_seconds={exit_seconds:.2f}; "
+            f"returncode={proc.returncode}; log_bytes={len(log_text)}"
         )
 
 
@@ -210,6 +320,9 @@ def main() -> int:
     parser.add_argument("--server", help="Path to release server binary")
     parser.add_argument("--port", type=int, default=18126)
     parser.add_argument("--timeout", type=float, default=12.0)
+    # The graceful budget with clients attached: the restart-notice flush, the
+    # worker grace period, and the connection drain deadline, plus slack.
+    parser.add_argument("--exit-deadline", type=float, default=11.0)
     args = parser.parse_args()
     run_smoke(args)
     return 0

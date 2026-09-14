@@ -415,6 +415,33 @@ fn release_attachment_slot(user_id: i64) {
     }
 }
 
+/// How long an attached stream keeps delivering after the shutdown latch is
+/// set, before it ends itself.
+///
+/// The restart notice is dispatched a beat *before* the latch, and it reaches
+/// this stream through the session channel's background pump — a hop that is
+/// scheduled, not instant. This window is what makes the event arm of the tail
+/// win that race: a stream is never ended on top of the very frame that
+/// explains why it ended.
+const STREAM_SHUTDOWN_CLOSE_DELAY: Duration = Duration::from_millis(100);
+
+/// Resolve when this stream should end because the server is shutting down.
+async fn stream_shutdown_due(state: &AppState) {
+    state.shutdown.notified().await;
+    tokio::time::sleep(STREAM_SHUTDOWN_CLOSE_DELAY).await;
+}
+
+/// Total live SSE attachments across every user.
+///
+/// Read by the shutdown path, which reports what is still attached when the
+/// drain deadline expires.
+pub fn live_stream_count() -> usize {
+    user_attachment_counts()
+        .iter()
+        .map(|entry| *entry.value())
+        .sum()
+}
+
 /// Current number of live stream attachments for `user_id`.
 fn attachment_count(user_id: i64) -> usize {
     user_attachment_counts()
@@ -1446,6 +1473,17 @@ pub async fn stream_events(
     State(state): State<AppState>,
     Query(query): Query<RealtimeEventsQuery>,
 ) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    // Once shutdown has latched, refuse to open another long-lived stream.
+    // The client is already reconnecting because we just told it to; letting it
+    // attach here would hand the drain a brand-new connection to wait for, one
+    // opened after the restart notice went out and so never told anything. A
+    // 503 is what it should see from a server that is going away.
+    if state.shutdown.is_shutting_down() {
+        return Err(ApiError::ServiceUnavailable(
+            "server is shutting down".to_string(),
+        ));
+    }
+
     // The stream authenticates solely via a single-use ticket (minted by
     // `POST /api/v1/stream/ticket`), never the raw access token in the query
     // string. Reject missing/expired/reused tickets.
@@ -1604,7 +1642,22 @@ pub async fn stream_events(
             if stream_should_terminate(&mut st).await {
                 return None;
             }
-            let recv = tokio::time::timeout(STREAM_REVALIDATE_INTERVAL, st.live_rx.recv()).await;
+            let recv = tokio::select! {
+                // Biased, and the event arm first: anything already queued —
+                // the SERVER_RESTART notice above all — goes out before the
+                // stream is allowed to end. The shutdown arm only wins once
+                // there is nothing left to deliver.
+                biased;
+                recv = tokio::time::timeout(STREAM_REVALIDATE_INTERVAL, st.live_rx.recv()) => recv,
+                // The listener is draining. This stream is open by design until
+                // a client closes it, so until it ends itself the process has
+                // no way to exit: `with_graceful_shutdown` waits for every
+                // in-flight connection, and a browser holds this one for as
+                // long as the tab is open. Ending it here is what lets the
+                // restart actually happen — and the client, which has the
+                // notice, reconnects on its own.
+                _ = stream_shutdown_due(&st.app_state) => return None,
+            };
             let Ok(recv) = recv else {
                 // Idle tick: loop back into the revalidation check above.
                 continue;

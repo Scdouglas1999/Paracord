@@ -20,6 +20,7 @@ pub mod message_attention;
 pub mod observability;
 pub mod permissions;
 pub mod presence_manager;
+pub mod shutdown;
 pub mod user;
 pub mod voice_cleanup;
 
@@ -36,7 +37,7 @@ use paracord_relay::speaker::SpeakerDetector;
 #[cfg(feature = "native-media")]
 use paracord_transport::endpoint::MediaEndpoint;
 use std::sync::Arc;
-use tokio::sync::{Notify, RwLock};
+use tokio::sync::RwLock;
 
 /// Bit flag: user is a server-wide admin.
 pub const USER_FLAG_ADMIN: i32 = 1 << 0;
@@ -102,7 +103,11 @@ pub struct AppState {
     pub storage: Arc<StorageManager>,
     /// Pluggable storage backend (local filesystem or S3-compatible).
     pub storage_backend: Arc<Storage>,
-    pub shutdown: Arc<Notify>,
+    /// Latched process-wide shutdown signal. Background workers take the bare
+    /// `Notify` behind it (`shutdown.notify_handle()`); connection handlers —
+    /// the SSE stream and the gateway session, which otherwise hold the
+    /// listener open forever — observe the latch itself.
+    pub shutdown: shutdown::ShutdownSignal,
     /// Set of user IDs currently connected to the gateway (online).
     pub online_users: Arc<DashSet<i64>>,
     /// Live presence payloads keyed by user ID.

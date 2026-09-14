@@ -15,7 +15,7 @@ use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use paracord_core::AppState;
 use serde::Deserialize;
 use std::{
-    sync::atomic::{AtomicU64, Ordering},
+    sync::atomic::{AtomicU64, AtomicUsize, Ordering},
     time::Duration,
 };
 
@@ -25,6 +25,30 @@ const LIVEKIT_PROXY_HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 const LIVEKIT_PROXY_MAX_HTTP_REQUEST_BODY_SIZE: usize = 10 * 1024 * 1024;
 const LIVEKIT_PROXY_MAX_HTTP_RESPONSE_BODY_SIZE: usize = 1024 * 1024;
 static LIVEKIT_PROXY_CONN_SEQ: AtomicU64 = AtomicU64::new(1);
+/// Voice signaling sockets currently proxied. A gauge, unlike the sequence
+/// above: the shutdown path reports it when the drain deadline expires.
+static LIVEKIT_PROXY_LIVE_CONNS: AtomicUsize = AtomicUsize::new(0);
+
+/// Number of voice signaling sockets this process is still proxying.
+pub fn live_voice_signaling_count() -> usize {
+    LIVEKIT_PROXY_LIVE_CONNS.load(Ordering::SeqCst)
+}
+
+/// Decrements the live-proxy gauge however `proxy_ws` returns.
+struct ProxyConnectionGuard;
+
+impl ProxyConnectionGuard {
+    fn new() -> Self {
+        LIVEKIT_PROXY_LIVE_CONNS.fetch_add(1, Ordering::SeqCst);
+        Self
+    }
+}
+
+impl Drop for ProxyConnectionGuard {
+    fn drop(&mut self) {
+        LIVEKIT_PROXY_LIVE_CONNS.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 #[derive(Debug, Deserialize)]
 struct LiveKitProxyClaims {
@@ -249,7 +273,9 @@ fn handle_ws(state: AppState, ws: WebSocketUpgrade, req: Request) -> Response {
     // Keep signaling payload limits explicit and conservative.
     ws.max_message_size(LIVEKIT_PROXY_MAX_MESSAGE_SIZE)
         .max_frame_size(LIVEKIT_PROXY_MAX_FRAME_SIZE)
-        .on_upgrade(move |client_socket| proxy_ws(client_socket, target, conn_id))
+        .on_upgrade(move |client_socket| {
+            proxy_ws(client_socket, target, conn_id, state.shutdown.clone())
+        })
 }
 
 fn axum_to_tungstenite_message(
@@ -321,10 +347,17 @@ fn decode_first_protobuf_tag(bytes: &[u8]) -> Option<(u32, u8)> {
 ///
 /// We keep one writer per side (client->backend and backend->client).
 /// Data, close, and control frames are forwarded transparently end-to-end.
-async fn proxy_ws(client_socket: WebSocket, target: String, conn_id: u64) {
+async fn proxy_ws(
+    client_socket: WebSocket,
+    target: String,
+    conn_id: u64,
+    shutdown: paracord_core::shutdown::ShutdownSignal,
+) {
     use axum::extract::ws::Message as AMsg;
     use std::sync::Arc;
     use tokio_tungstenite::tungstenite::Message as TMsg;
+
+    let _live = ProxyConnectionGuard::new();
 
     // On Windows, "localhost" can resolve to IPv6 [::1] which hangs if
     // LiveKit only listens on IPv4.  Force 127.0.0.1 for reliability.
@@ -408,6 +441,28 @@ async fn proxy_ws(client_socket: WebSocket, target: String, conn_id: u64) {
 
     // Cancellation token: when one direction exits, signal the other to stop.
     let cancel = tokio_util::sync::CancellationToken::new();
+
+    // A voice signaling socket lasts as long as the call, so it holds the
+    // listener open through a restart exactly as a gateway socket does. Cancel
+    // both directions when the server is going away; the client has the restart
+    // notice and rejoins with everything else.
+    {
+        let shutdown_cancel = cancel.clone();
+        let watched = cancel.clone();
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = shutdown.notified() => {
+                    tracing::info!(
+                        "LiveKit WS proxy[{}]: closing, server is shutting down",
+                        conn_id
+                    );
+                    shutdown_cancel.cancel();
+                }
+                // The proxy ended on its own; stop watching.
+                _ = watched.cancelled() => {}
+            }
+        });
+    }
 
     let (backend_write, mut backend_read) = backend.split();
     let (client_write, mut client_read) = client_socket.split();

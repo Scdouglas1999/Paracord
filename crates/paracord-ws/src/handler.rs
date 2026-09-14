@@ -96,6 +96,17 @@ const WS_MAX_REVALIDATION_FAILURES: u32 = 5;
 /// slot of the 4000-range gateway codes; the client reconnects and re-IDENTIFYs,
 /// which re-runs the full token check.
 const WS_CLOSE_AUTH_REVOKED: u16 = 4004;
+/// Close code sent when the server itself is going away: RFC 6455's 1012
+/// "Service Restart". The client already has the SERVER_RESTART notice and
+/// reconnects on its own.
+const WS_CLOSE_SERVER_RESTART: u16 = 1012;
+/// How long a session keeps delivering after the shutdown latch is set, before
+/// it closes its socket.
+///
+/// The restart notice is dispatched a beat *before* the latch, so this window
+/// is what makes the event arm of the session loop win deterministically: a
+/// socket is never closed on top of the very frame that explains the close.
+const WS_SHUTDOWN_CLOSE_DELAY: Duration = Duration::from_millis(100);
 const WS_MAX_PRESENCE_UPDATES_PER_MINUTE_DEFAULT: u32 = 60;
 const WS_MAX_TYPING_EVENTS_PER_MINUTE_DEFAULT: u32 = 120;
 const WS_MAX_VOICE_UPDATES_PER_MINUTE_DEFAULT: u32 = 60;
@@ -639,6 +650,23 @@ impl Drop for ConnectionGuard {
             ACTIVE_CONNECTIONS.fetch_sub(1, AtomicOrdering::SeqCst);
         }
     }
+}
+
+/// Resolve when this session should close because the server is shutting down.
+async fn shutdown_close_due(state: &AppState) {
+    state.shutdown.notified().await;
+    tokio::time::sleep(WS_SHUTDOWN_CLOSE_DELAY).await;
+}
+
+/// Sockets this process is currently holding open: authenticated sessions plus
+/// handshakes that have not identified yet.
+///
+/// Read by the shutdown path, which reports what is still attached when the
+/// drain deadline expires.
+pub fn live_connection_count() -> usize {
+    ACTIVE_CONNECTIONS
+        .load(AtomicOrdering::SeqCst)
+        .saturating_add(PREAUTH_CONNECTIONS.load(AtomicOrdering::SeqCst))
 }
 
 fn try_acquire_global_connection_slot() -> bool {
@@ -1226,12 +1254,28 @@ pub async fn handle_connection(
 
     // Wait for IDENTIFY (timeout 30s)
     let identify_timeout = Duration::from_secs(30);
-    let (mut session, resumed, requested_seq) = match tokio::time::timeout(
-        identify_timeout,
-        wait_for_identify_or_resume(&mut receiver, &state),
-    )
-    .await
-    {
+    let identify_result = tokio::select! {
+        result = tokio::time::timeout(
+            identify_timeout,
+            wait_for_identify_or_resume(&mut receiver, &state),
+        ) => result,
+        // A socket that upgraded but never identified would otherwise hold the
+        // listener open for the full 30s timeout after a restart signal — far
+        // past the drain deadline, for a connection that has told us nothing.
+        _ = state.shutdown.notified() => {
+            let _ = send_ws_close_logged(
+                &mut sender,
+                WS_CLOSE_SERVER_RESTART,
+                "Server is restarting",
+                None,
+                None,
+                "server_restart_preauth_close",
+            )
+            .await;
+            return;
+        }
+    };
+    let (mut session, resumed, requested_seq) = match identify_result {
         Ok(Some(result)) => result,
         _ => {
             let _ = send_ws_text_logged(
@@ -2510,6 +2554,25 @@ async fn run_session_with_events(
                 if sender.send(Message::Ping(Vec::new().into())).await.is_err() {
                     break ("websocket ping send error".to_string(), false);
                 }
+            }
+            _ = shutdown_close_due(&state) => {
+                // A gateway socket is open by design until a client closes it,
+                // and `with_graceful_shutdown` waits for every connection that
+                // is still in flight — so before this arm existed, one attached
+                // browser was enough to keep the process alive through a
+                // restart until something SIGKILLed it. The SERVER_RESTART
+                // notice went out a beat ago and the delay above let this loop
+                // deliver it; closing now is what lets the listener drain.
+                let _ = send_ws_close_logged(
+                    &mut sender,
+                    WS_CLOSE_SERVER_RESTART,
+                    "Server is restarting",
+                    Some(session.user_id),
+                    Some(session.session_id.as_str()),
+                    "server_restart_close",
+                )
+                .await;
+                break ("server is shutting down".to_string(), false);
             }
             _ = revalidate_interval.tick() => {
                 match revalidate_session_credential(&state, &session).await {
