@@ -46,7 +46,7 @@ export default defineConfig({
     ? [
         {
           name: 'real-server',
-          testMatch: /real-server(?:\.smoke|\.voice-check|\.voice-join|-restore|-setup)\.spec\.ts$/,
+          testMatch: /real-server(?:\.smoke|\.voice-check|\.voice-join|\.realtime-hold|-restore|-setup)\.spec\.ts$/,
           use: { ...devices['Desktop Chrome'] },
         },
       ]
@@ -76,6 +76,14 @@ export default defineConfig({
           name: 'chromium',
           // Anchor so this never picks up real-server.smoke.spec.ts.
           testMatch: /[\\/]smoke\.spec\.ts$/,
+          use: { ...devices['Desktop Chrome'] },
+        },
+        {
+          // The fit gate for the first-run and account screens: a native window
+          // does not scroll. Its own project because it drives its viewport
+          // per-assertion rather than inheriting one.
+          name: 'auth-fit',
+          testMatch: /[\\/]auth-fit\.spec\.ts$/,
           use: { ...devices['Desktop Chrome'] },
         },
         {
