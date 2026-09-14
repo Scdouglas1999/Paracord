@@ -324,7 +324,7 @@ export function LoginPage() {
               subtitle="Enter the 6-digit code from your authenticator app, or one of your backup codes."
             />
 
-            {error && <ErrorBanner message={error} />}
+            {error && <ErrorBanner multiline message={error} />}
 
             <AuthScroll>
               <Field label="Authentication code" required>
@@ -365,7 +365,7 @@ export function LoginPage() {
               subtitle="Enter your email or username and we’ll generate a reset token you can redeem below."
             />
 
-            {error && <ErrorBanner message={error} />}
+            {error && <ErrorBanner multiline message={error} />}
             {successMsg && <SuccessNote>{successMsg}</SuccessNote>}
 
             <AuthScroll>
@@ -412,7 +412,7 @@ export function LoginPage() {
               subtitle="Paste the reset token from your administrator, then choose a new password."
             />
 
-            {error && <ErrorBanner message={error} />}
+            {error && <ErrorBanner multiline message={error} />}
             {successMsg && <SuccessNote>{successMsg}</SuccessNote>}
 
             <AuthScroll>
@@ -482,7 +482,7 @@ export function LoginPage() {
               subtitle="Enter the verification token your server administrator issued for your account."
             />
 
-            {error && <ErrorBanner message={error} />}
+            {error && <ErrorBanner multiline message={error} />}
             {successMsg && <SuccessNote>{successMsg}</SuccessNote>}
 
             <AuthScroll>
@@ -519,7 +519,7 @@ export function LoginPage() {
               subtitle="Sign in to pick up where you left off across your buildings."
             />
 
-            {error && <ErrorBanner message={error} />}
+            {error && <ErrorBanner multiline message={error} />}
 
             <AuthScroll>
               <Field label={identifierMode.label} required>

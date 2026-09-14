@@ -229,6 +229,11 @@ function OwnedAccountSetupPage() {
               </button>
               </div>
 
+            </AuthScroll>
+
+            {/* The control that enables Continue never lives inside the scroll
+                region: on a short window it landed below the fold, so Continue
+                stayed disabled with nothing on screen explaining why. */}
             <label className="flex cursor-pointer items-start gap-2.5 rounded-[var(--radius-control)] bg-bg-raised px-4 py-3.5 shadow-[var(--shadow-raised)] transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-strong">
               <input
                 type="checkbox"
@@ -240,7 +245,6 @@ function OwnedAccountSetupPage() {
                 I’ve written down my recovery phrase and stored it somewhere safe.
               </span>
             </label>
-            </AuthScroll>
 
             <Button onClick={handleContinue} size="lg" disabled={!savedPhrase} className="w-full">
               Continue
