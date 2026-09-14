@@ -111,11 +111,13 @@ vi.mock('./MessageInput', () => ({
   MessageInput: ({
     replyingTo,
     onCancelReply,
+    narrow,
   }: {
     replyingTo?: { id: string; author: string; content: string } | null;
     onCancelReply?: () => void;
+    narrow?: boolean;
   }) => (
-    <div>
+    <div data-narrow={narrow ? 'true' : 'false'}>
       <div>{replyingTo ? `Replying to ${replyingTo.author}` : 'Message composer'}</div>
       {replyingTo && (
         <button type="button" onClick={() => onCancelReply?.()}>
@@ -215,6 +217,32 @@ describe('ThreadPanel', () => {
 
     expect(screen.getByRole('button', { name: 'Restore' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
+  });
+
+  it('asks the composer for a short invitation, because the panel is narrow', () => {
+    // The panel is clamp(14rem, 24vw, 20rem), which leaves the field 148px once
+    // the attach and send controls have theirs. "Say something in Bracket
+    // tolerance" needs 251px, so it arrived cut mid-word: "Say something in
+    // Bra". The thread's name is the heading at the top of this panel already.
+    mockState.channelsById = {
+      'thread-1': {
+        id: 'thread-1',
+        parent_id: 'parent-1',
+        owner_id: 'viewer',
+        thread_metadata: { archived: false },
+      },
+    };
+    renderThreadPanel(
+      <ThreadPanel
+        guildId="guild-1"
+        threadChannelId="thread-1"
+        threadName="Bracket tolerance"
+        parentChannelName="design-notes"
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Message composer').parentElement).toHaveAttribute('data-narrow', 'true');
   });
 
   it('uses the parent breadcrumb to return to the parent conversation', async () => {

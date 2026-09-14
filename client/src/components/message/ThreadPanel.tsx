@@ -169,6 +169,9 @@ export function ThreadPanel({
             channelId={threadChannelId}
             guildId={guildId}
             channelName={threadName}
+            // The panel is 320px at most and the thread's name is the heading
+            // at the top of it, so the field asks for a short invitation.
+            narrow
             replyingTo={replyingTo}
             onCancelReply={() => setReplyingTo(null)}
           />

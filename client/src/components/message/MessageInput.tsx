@@ -75,6 +75,17 @@ interface MessageInputProps {
    * now. Nothing about sending changes.
    */
   variant?: 'default' | 'ribbon';
+  /**
+   * This composer stands in a column too narrow for a sentence, and whatever it
+   * would have named is in the heading directly above it. The invitation drops
+   * to "Say something" — the same string the ribbon uses, for the same reason.
+   *
+   * The thread panel is `clamp(14rem, 24vw, 20rem)` wide, which leaves 148px for
+   * the field once the attach and send controls have theirs. "Say something in
+   * Bracket tolerance" needs 251px, so every thread whose name runs past about
+   * four characters arrived cut mid-word: "Say something in Bra".
+   */
+  narrow?: boolean;
 }
 
 // 36px icon control (lantern-stage-spec §8): radius-sm, --interactive-normal →
@@ -339,7 +350,7 @@ export function MessageInput(props: MessageInputProps) {
   return <OwnedMessageInput key={memberScopeKey(scope, props.channelId)} {...props} scope={scope} messageStore={messageStore} />;
 }
 
-function OwnedMessageInput({ channelId, guildId, channelName, conversationKind = 'room', replyingTo, onCancelReply, variant = 'default', scope, messageStore }: MessageInputProps & {
+function OwnedMessageInput({ channelId, guildId, channelName, conversationKind = 'room', replyingTo, onCancelReply, variant = 'default', narrow = false, scope, messageStore }: MessageInputProps & {
   scope: AccountScope;
   messageStore: ReturnType<typeof useCurrentMessageStoreApi>;
 }) {
@@ -1588,11 +1599,13 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
                 ? 'The question above is what gets sent'
                 : showScheduleComposer
                   ? `Schedule a message for ${channelName ?? 'this conversation'}`
-                  : ribbon
-                    ? // §7.2's ribbon is a 336px plate, and the room it names is in
-                      // the heading directly above this field. "Say something to
-                      // the room" needed 192px of a 185px box, so it arrived
-                      // ellipsised mid-word — "Say something to the roor".
+                  : ribbon || narrow
+                    ? // §7.2's ribbon is a 336px plate and the thread panel is
+                      // narrower still, and in both the room this field belongs
+                      // to is named in the heading directly above it. "Say
+                      // something to the room" needed 192px of a 185px box, so
+                      // it arrived ellipsised mid-word — "Say something to the
+                      // roor" on the Stage, "Say something in Bra" in a thread.
                       'Say something'
                     : composerPlaceholder(readingOthers, channelName, conversationKind)
           }
