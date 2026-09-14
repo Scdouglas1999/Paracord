@@ -10,7 +10,7 @@ import {
   ratchetEncrypt,
   ratchetDecrypt,
 } from './crypto/doubleRatchet';
-import { consumeLocalOPK, getSignedPrekeyPair } from './crypto/sessionManager';
+import { consumeLocalOPK, getSignedPrekeyPair, MissingPrivatePrekeyError } from './crypto/sessionManager';
 import type { loadSession, saveSession, loadPrekeyStore, savePrekeyStore } from './crypto/sessionManager';
 import type { LocalPrekeyStore, MessageHeader, PrekeyBundle, RatchetState } from './crypto/types';
 import { IdentityPinError } from './keyVerification';
@@ -492,7 +492,17 @@ export function createDmCipher(dependencies: DmCipherDependencies) {
     }
 
     if (!isX3dhInitial || sessionMode === 'existing') {
-      throw new Error('No session found and message is not an X3DH initial message');
+      // Reaching here means only that this device holds no ratchet for the peer
+      // and the message is not one that could start one. That is the same fact
+      // as a missing private prekey — the key was never here — and not an
+      // authentication failure, so it is raised as such: the reader shows
+      // "[Encrypted message]" and the conversation carries on. It is the normal
+      // shape of history after a recovery-phrase restore, where every reply the
+      // peer sent into the old session lands exactly here, and fencing on it
+      // left the restored device unable to send at all.
+      throw new MissingPrivatePrekeyError(
+        'No session for this conversation exists on this device, and this message cannot start one',
+      );
     }
 
     return decryptViaX3dhResponder(

@@ -15,6 +15,7 @@ import { openAccountVault } from '../crypto/accountVaultSession';
 import { openDeviceAccountVault } from '../crypto/deviceAccountVault';
 import { createAccountPrekeyEnrollment, PrekeyEnrollmentError } from '../crypto/prekeyEnrollment';
 import { MissingPrivatePrekeyError } from '../crypto/sessionManager';
+import { DmE2eeError } from '../dmCipher';
 import { registerIdentityTrustVault, releaseIdentityTrustVault } from '../crypto/identityTrust';
 import { getDatabaseHistoryEpoch, subscribeDatabaseHistory } from '../databaseHistory';
 import { DatabaseHistoryExpiredError } from '../operationContext';
@@ -674,6 +675,19 @@ export class AccountMessagingRuntime {
             // nobody has. The envelope stays durable in case a backup is
             // imported later.
             if (error instanceof MissingPrivatePrekeyError) continue;
+            // The account's OWN outbound copy, on a device that has no plaintext
+            // for it. Ordinarily `durableDm.decrypt` answers one of these from
+            // the plaintext it cached when it sent it, and the inbound path is
+            // never reached; a device restored from the recovery phrase has no
+            // such cache, so the copy goes through the peer reader — whose first
+            // act is to refuse a header identity key that is not the peer's.
+            // That header carries THIS account's identity key, by construction,
+            // so the refusal is right and means only "not readable here". It is
+            // the same fact as MissingPrivatePrekeyError above and must not fence
+            // the conversation: before this, anyone who had ever sent a message
+            // could restore their identity and then never send again.
+            if (value.author.id === this.scope.userId
+              && error instanceof DmE2eeError && error.code === 'PEER_IDENTITY_MISMATCH') continue;
             // The encrypted envelope remains durable for a later recovery attempt.
             this.store.setState({ encryptionError: errorText(error) });
             this.receiveFailures.set(value.channel_id, error instanceof Error ? error : new Error(errorText(error)));

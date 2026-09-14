@@ -25,6 +25,7 @@ vi.mock('./durableDm', () => ({ createDurableDm: (vault: AccountVault) => ({
 
 import { AccountMessagingRuntime } from './accountMessagingRuntime';
 import { MissingPrivatePrekeyError } from '../crypto/sessionManager';
+import { DmE2eeError } from '../dmCipher';
 import { useAuthStore } from '../../stores/authStore';
 import { useServerListStore } from '../../stores/serverListStore';
 import { useAccountStore } from '../../stores/accountStore';
@@ -170,6 +171,35 @@ describe('production encrypted event journal', () => {
     // And the next message in the same conversation is still read.
     await runtime.ingestEncryptedMessage(message('101'));
     expect(fixture.decrypt).toHaveBeenCalledTimes(3);
+  });
+  // The account's OWN outbound copy on a device that has no plaintext for it.
+  // `durableDm.decrypt` normally answers one of these from the cache it wrote
+  // when it sent the message; a device restored from the recovery phrase has no
+  // cache, so the copy reaches the peer reader, whose first act is to refuse a
+  // header identity key that is not the peer's — and that header carries this
+  // account's own key. Fencing on it meant anyone who had ever SENT a message
+  // could restore their identity and then never send again.
+  it('leaves a conversation usable when its own outbound copy cannot be read here', async () => {
+    useAccountStore.setState({ isUnlocked: true }); await runtime.enroll();
+    const own = { ...message('100'), author: { id: scope.userId, username: 'Ada', discriminator: '0002' } };
+    fixture.decrypt.mockRejectedValueOnce(
+      new DmE2eeError('PEER_IDENTITY_MISMATCH',
+        'Refusing to decrypt DM: message claims an identity key that is not this conversation peer'));
+    await runtime.ingestEncryptedMessage(own);
+    const state = runtime.store.getState();
+    expect(state.encryptionError).toBeNull();
+    expect(state.channelErrors?.['10']).toBeUndefined();
+    expect(await local.vault.transact(tx => tx.list('messages.encrypted-inbox'))).toHaveLength(1);
+  });
+  // The same refusal on a message the PEER authored is the real thing — someone
+  // presented a key that is not the peer's — and still stops the conversation.
+  it('still fences when a peer message claims an identity key that is not the peer', async () => {
+    useAccountStore.setState({ isUnlocked: true }); await runtime.enroll();
+    fixture.decrypt.mockRejectedValueOnce(
+      new DmE2eeError('PEER_IDENTITY_MISMATCH',
+        'Refusing to decrypt DM: message claims an identity key that is not this conversation peer'));
+    await runtime.ingestEncryptedMessage(message('100'));
+    expect(runtime.store.getState().encryptionError).toMatch(/not this conversation peer/);
   });
   // A failed AEAD open is a DOMException named OperationError whose message is
   // the empty string; the composer's recovery notice and the per-channel error

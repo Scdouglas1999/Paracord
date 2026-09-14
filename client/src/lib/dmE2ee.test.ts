@@ -135,6 +135,26 @@ describe('dmE2ee identity binding', () => {
     ).resolves.toBe('hello bob');
   });
 
+  it('names a peer reply that no session here can open as a key this device never held', async () => {
+    // Alice starts the conversation and sends a SECOND message: a ratchet
+    // continuation with no X3DH material. A device that lost its keys and
+    // restored only its identity holds no session, so this is unreadable there
+    // — a missing key, not a failed authentication. Reporting it as a generic
+    // failure fenced the conversation, and every restored device whose peer had
+    // replied more than once could never send again.
+    selectProfile(alice.id);
+    await encryptDmMessageV2(channelId, 'first', alice.privateKey, bob.publicKeyHex, bob.id);
+    const continuation = await encryptDmMessageV2(
+      channelId, 'second', alice.privateKey, bob.publicKeyHex, bob.id,
+    );
+
+    selectProfile(bob.id);
+    mocks.activeStore = new Map<string, string>(); // a device holding nothing
+    await expect(
+      decryptDmMessage(channelId, continuation, bob.privateKey, alice.publicKeyHex),
+    ).rejects.toMatchObject({ name: 'MissingPrivatePrekeyError' });
+  });
+
   it('rejects a message whose header identity key is not the DM peer', async () => {
     // Mallory can insert messages into the channel (hostile server / delivery
     // path). Her X3DH initial message is well formed — it is simply not from
