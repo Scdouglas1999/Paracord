@@ -50,17 +50,51 @@ preserved in every theme by remapping, not removed.
 
 ## 1. Color
 
+### 1.0 The base hue — one number the whole neutral ramp turns on
+
+Every ground, well, hairline, wash, scrim and grey ink is written
+`oklch(L C var(--ui-hue))`. **L and C are the ramp** — fixed per token, per
+theme — and **only H moves**, under the reader's control in Settings ›
+Appearance (`--ui-hue` in degrees, `--ui-chroma` 0–1 for how much of it).
+
+This is what makes the base colour safe to hand to a person. Relative luminance
+is carried almost entirely by L at these chromas, so holding L and C and varying
+H leaves every contrast pair where the ramp put it: the interface cannot be made
+illegible by a colour choice, at any setting. `npm run test:contrast` proves it
+rather than asserting it — the whole circle every 30°, at full tint and none,
+across all four themes, plus an sRGB gamut check on every token.
+
+What does **not** follow the hue, and why:
+
+- the two lights (§1.2) and every glow, ring and lamp recipe made from them.
+  Light is state; §6.3 will not let a preference recolour it.
+- the semantic accents (§1.3) and the identity palette. They carry meaning, and
+  a meaning that drifts is not one.
+- a plate's warm 1px top highlight — it is the lamp above the plate, so it stays
+  the colour of the light rather than the colour of the wall.
+
+Where an accent sits *on* the ground — a selection wash, a hover wash — it **is**
+written in the base hue. That is what keeps the chrome of one piece.
+
+Default: `--ui-hue: 65`, `--ui-chroma: 1` ("Hearth", a warm charcoal). Stored
+per device like the theme, applied live by `useTheme`; no relaunch.
+
 ### 1.1 Surfaces (Night — the default)
+
+Values below are Night's L and C; the hue is `--ui-hue` (§1.0). The hex in
+brackets is the default setting, for reference only — never hard-code it.
 
 | Token | Value | Use |
 |---|---|---|
-| `--bg-base` | `#0A0C10` | App base behind everything; the "street". |
-| `--bg-plate` | `#14171C` | Plates: the Stage, the Lobby, a text room, the chat ribbon, cards that hold content. |
-| `--bg-raised` | `#1A1E24` | Raised inside a plate: selected rows, chips, composer, hover cards, popovers. |
-| `--bg-well` | `#0E1014` | Recessed inside a plate: search, tiles' background, "here now" strip, event cards. |
-| `--bg-floating` | `rgba(20,23,28,.97)` | Menus, tooltips over content. |
-| `--bg-mod-subtle` | `rgba(243,234,216,.04)` | Hover wash on rows. |
-| `--bg-mod-strong` | `rgba(243,234,216,.10)` | Pressed / selected wash. |
+| `--bg-base` | `oklch(16.5% .007 H)` (`#100E0B`) | App base behind everything; the "street". |
+| `--bg-plate` | `oklch(21.3% .009 H)` (`#1C1815`) | Plates: the Stage, the Lobby, a text channel, the chat ribbon, cards that hold content. |
+| `--bg-raised` | `oklch(25.2% .012 H)` (`#26211C`) | Raised inside a plate: chips, composer, hover cards, popovers. |
+| `--bg-well` | `oklch(17.1% .0065 H)` (`#120F0D`) | Recessed inside a plate: search, tiles' background, "here now" strip, event cards. |
+| `--bg-floating` | `oklch(21.3% .009 H / .97)` | Menus, tooltips over content. |
+| `--bg-mod-subtle` | `oklch(84% .07 H / .05)` | Hover wash on rows — warm, not grey. |
+| `--bg-mod-strong` | `oklch(84% .07 H / .12)` | Pressed wash. |
+| `--bg-selected` | `oklch(84% .07 H / .10)` | The row you are on. |
+| `--row-selected` | `var(--bg-selected)` | The same, but a server's group overrides it with `color-mix(in srgb, var(--identity) 16%, transparent)` so the selected row wears that server's colour. |
 
 Depth is delivered by a **1px warm top highlight** (`0 1px 0 rgba(243,234,216,.07) inset`)
 plus a deep shadow (`0 20px 44px rgba(0,0,0,.5)`) on plates, and an **inset
@@ -152,11 +186,22 @@ Themes remap the *tokens*, never the recipes:
   *(Corrected in WP0: the amber read `#A8763C`, which measures 3.17:1 on
   `--bg-well`. Amber is a label as well as a fill — "5 reading" — so it has to
   clear §9's 4.5:1; `#855E30` is the smallest deepening that does.)*
-- **AMOLED** — `--bg-base #000`, plates `#0B0C0F`; light recipes unchanged.
+- **AMOLED** — `--bg-base #000` (true black is hueless), plates and everything
+  above them take the base hue; light recipes unchanged.
 - **High contrast** — rims 2px, alpha ×1.5, text ramp collapsed to two steps.
+  **It takes the base hue in the chrome only.** The two extremes that do its
+  legibility work — the black street and wells, and the white ink — are literal
+  black and white and carry no hue at all, so no colour choice can soften them;
+  the surfaces between them and the hairlines follow `--ui-hue`, so the reader's
+  choice is still visible and the chrome is still of one piece.
+
+Every theme's ramp is expressed the same way (§1.0), so a theme and a base
+colour compose rather than fight: picking Daylight and picking Harbour are two
+independent choices and every pair of them passes §9.
 
 Accent presets (existing `ACCENT_PRESETS`) recolour `--accent-primary` only.
-They never touch the light tokens.
+Base-colour presets (`BASE_HUE_PRESETS`) move `--ui-hue` / `--ui-chroma` only.
+Neither ever touches the light tokens.
 
 ---
 

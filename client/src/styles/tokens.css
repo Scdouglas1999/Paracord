@@ -120,13 +120,21 @@
   --color-interactive-active: var(--interactive-active);
   --color-interactive-muted: var(--interactive-muted);
 
-  /* Avatar hues (the reference palette; identity, never state). Fixed across
-     themes: a person's colour is who they are, not where the app is. */
-  --color-avatar-1: #7fb7a3;
-  --color-avatar-2: #c9a27c;
-  --color-avatar-3: #9aa3b5;
-  --color-avatar-4: #d9a38f;
-  --color-avatar-5: #b58cc2;
+  /* Identity hues — the fill a person or a server wears (a 28px circle, a
+     server's mark). Identity, never state. Fixed across themes AND across the
+     base hue below: a person's colour is who they are, not where the app is and
+     not what ground the reader picked. Eight of them, so a channel with a dozen
+     people in it rarely repeats one.
+     Written as TEXT, an identity needs its own ink on paper — the timeline
+     writes an author's name in `--identity-ink-*`, not in the fill. */
+  --color-avatar-1: #e6a96a; /* apricot */
+  --color-avatar-2: #8db3ea; /* sky */
+  --color-avatar-3: #74c6a8; /* mint */
+  --color-avatar-4: #ea9a8a; /* coral */
+  --color-avatar-5: #c7a0e6; /* lilac */
+  --color-avatar-6: #dcc86c; /* straw */
+  --color-avatar-7: #7ec9d8; /* aqua */
+  --color-avatar-8: #ea9cc2; /* pink */
 
   /* ---- §2 Type faces ------------------------------------------------------ */
   /* Display / names — room and building names, page titles, author names. */
@@ -303,6 +311,39 @@
 }
 
 /* =============================================================================
+   §1.0 The base hue — the one number the whole neutral ramp turns on.
+
+   Every ground, well, hairline, wash, scrim and grey ink below is written
+   `oklch(L C var(--ui-hue))`. L and C are the ramp — fixed, per token, per
+   theme — and only H moves. Because relative luminance is carried almost
+   entirely by L at these chromas, holding L and C and varying H keeps every
+   contrast pair where it was: the ramp cannot be made illegible by a colour
+   choice, at any hue. `npm run test:contrast` proves it, sweeping the whole
+   circle every 30 degrees against all four themes.
+
+   `--ui-chroma` is how much of the hue to take: 1 is the full tint, 0 is a true
+   neutral charcoal (H then means nothing). Both are written on <html> by
+   `useTheme` from the stored preference, so the choice is live and per device.
+
+   What does NOT turn on the hue, and why:
+     - the two lights (`--light-white`, `--light-amber`) and every glow, ring
+       and lamp recipe made from them. Light is state — a person is there right
+       now — and §6.3 will not let a preference recolour it.
+     - the semantic accents (action green, warning gold, danger, info) and the
+       identity palette. They carry meaning; a meaning that drifts is not one.
+     - a plate's warm 1px top highlight. It is the lamp above the plate, so it
+       stays the colour of the light rather than the colour of the wall.
+   Where an accent sits ON the ground — a selection wash, a hover wash — it is
+   written in the base hue, which is what keeps the chrome of one piece.
+   ============================================================================= */
+:root {
+  /* Hearth's warm charcoal. Presets and the free control in Settings ›
+     Appearance write this; `ThemeSelector` names them for people, not degrees. */
+  --ui-hue: 65;
+  --ui-chroma: 1;
+}
+
+/* =============================================================================
    Night — the default theme. Effect recipes (§1.1, §1.2) live here as tokens so
    a component never re-derives a shadow. Every theme below redefines this same
    set; no theme adds or removes a name.
@@ -320,25 +361,32 @@
 :root {
   color-scheme: dark;
 
-  /* ---- §1.1 Surfaces — the literal Night values ---------------------------- */
+  /* ---- §1.1 Surfaces — Night's ramp, in the base hue ----------------------- */
   /* The street: app base behind everything. */
-  --bg-base: #0a0c10;
-  /* Plates: the Stage, the Lobby, a text room, the chat ribbon, content cards. */
-  --bg-plate: #14171c;
-  /* Raised inside a plate: selected rows, chips, composer, hover cards, popovers. */
-  --bg-raised: #1a1e24;
+  --bg-base: oklch(16.5% calc(0.007 * var(--ui-chroma)) var(--ui-hue));
+  /* Plates: the Stage, the Lobby, a text channel, the chat ribbon, content cards. */
+  --bg-plate: oklch(21.3% calc(0.009 * var(--ui-chroma)) var(--ui-hue));
+  /* Raised inside a plate: chips, composer, hover cards, popovers. */
+  --bg-raised: oklch(25.2% calc(0.012 * var(--ui-chroma)) var(--ui-hue));
   /* Recessed inside a plate: search, tile grounds, "here now" strip, event cards. */
-  --bg-well: #0e1014;
+  --bg-well: oklch(17.1% calc(0.0065 * var(--ui-chroma)) var(--ui-hue));
   /* Menus and tooltips over content. */
-  --bg-floating: rgba(20, 23, 28, 0.97);
-  --bg-mod-subtle: rgba(243, 234, 216, 0.04);
-  --bg-mod-strong: rgba(243, 234, 216, 0.1);
+  --bg-floating: oklch(21.3% calc(0.009 * var(--ui-chroma)) var(--ui-hue) / 0.97);
+  /* Hover and press washes. Warm rather than grey: the same hue as the ground,
+     carried at a light L so it lifts the surface instead of greying it. */
+  --bg-mod-subtle: oklch(84% calc(0.07 * var(--ui-chroma)) var(--ui-hue) / 0.05);
+  --bg-mod-strong: oklch(84% calc(0.07 * var(--ui-chroma)) var(--ui-hue) / 0.12);
+  /* The row you are on. A wash in the base hue, not a grey step — and a row
+     inside a server's group takes that server's colour instead, which is what
+     `--row-selected` is for (BuildingSection writes it per group). */
+  --bg-selected: oklch(84% calc(0.07 * var(--ui-chroma)) var(--ui-hue) / 0.1);
+  --row-selected: var(--bg-selected);
   /* An unlit window: a hole in the wall, DARKER than the plate it sits in.
-     It read lighter than the plate until WP-QA, which made a two-room
-     building's window map look like two grey avatar skeletons that never
+     It read lighter than the plate until WP-QA, which made a two-channel
+     server's window map look like two grey avatar skeletons that never
      resolved rather than two dark windows. */
-  --window-dark: #0b0d11;
-  --overlay-backdrop: rgba(10, 12, 16, 0.72);
+  --window-dark: oklch(16% calc(0.007 * var(--ui-chroma)) var(--ui-hue));
+  --overlay-backdrop: oklch(16.5% calc(0.007 * var(--ui-chroma)) var(--ui-hue) / 0.72);
   /* A spoiler is a well you have not opened yet; revealed, it is a hover wash. */
   --spoiler-bg: var(--bg-well);
   --spoiler-bg-revealed: var(--bg-mod-strong);
@@ -352,19 +400,19 @@
   --light-amber: #e2c98f;
 
   /* ---- §1.4 Text ramp ------------------------------------------------------ */
-  --text-primary: #f1eee7;
+  --text-primary: oklch(95% calc(0.01 * var(--ui-chroma)) var(--ui-hue));
   /* NOTE: `--text-body` is Tailwind's *body type step* (a font-size), so the
      body ink cannot share that name. Consume it as the `text-text-body`
      utility, or as `var(--text-body-ink)` in a raw style. */
-  --text-body-ink: #d4d1ca;
-  --text-secondary: #b3b0a8;
-  --text-muted: #8b8d8e;
+  --text-body-ink: oklch(86.1% calc(0.01 * var(--ui-chroma)) var(--ui-hue));
+  --text-secondary: oklch(75.7% calc(0.012 * var(--ui-chroma)) var(--ui-hue));
+  --text-muted: oklch(65.2% calc(0.012 * var(--ui-chroma)) var(--ui-hue));
   /* §9 floor: meta must clear 4.5:1. The reference render's #6C6E70 measures
-     3.51:1 on --bg-plate, so the faint step is lifted to the minimum value that
-     clears 4.5:1 on all four Night grounds. See docs/design/wp0-checkpoint.md. */
-  --text-faint: #838587;
-  /* Ink on white light (16.4:1) and on emerald (8.5:1). */
-  --text-on-light: #0a0c10;
+     3.51:1 on --bg-plate, so the faint step sits at the L that clears 4.5:1 on
+     all four Night grounds — at every hue. See docs/design/wp0-checkpoint.md. */
+  --text-faint: oklch(64.6% calc(0.01 * var(--ui-chroma)) var(--ui-hue));
+  /* Ink on white light, and on emerald. */
+  --text-on-light: oklch(16.5% calc(0.007 * var(--ui-chroma)) var(--ui-hue));
   --text-on-accent: #06241a;
   /* A danger control is a danger *well* carrying danger ink, never a red fill. */
   --text-on-danger: var(--accent-danger);
@@ -398,16 +446,16 @@
   --info-tint: rgba(143, 169, 217, 0.14);
 
   /* ---- §1.6 Borders + interactive ------------------------------------------ */
-  --border-subtle: rgba(243, 234, 216, 0.06);
-  --border-strong: rgba(243, 234, 216, 0.14);
+  --border-subtle: oklch(94% calc(0.022 * var(--ui-chroma)) var(--ui-hue) / 0.07);
+  --border-strong: oklch(94% calc(0.022 * var(--ui-chroma)) var(--ui-hue) / 0.14);
   --channel-icon: var(--text-muted);
   --interactive-normal: var(--text-secondary);
   --interactive-hover: var(--text-primary);
   --interactive-active: var(--text-primary);
   --interactive-muted: var(--text-faint);
   --scrollbar-auto-track: transparent;
-  --scrollbar-auto-thumb: rgba(243, 234, 216, 0.16);
-  --scrollbar-auto-thumb-hover: rgba(243, 234, 216, 0.3);
+  --scrollbar-auto-thumb: oklch(94% calc(0.022 * var(--ui-chroma)) var(--ui-hue) / 0.16);
+  --scrollbar-auto-thumb-hover: oklch(94% calc(0.022 * var(--ui-chroma)) var(--ui-hue) / 0.3);
 
   /* ---- §1.1 Depth: a warm 1px top highlight + a deep shadow ---------------- */
   --shadow-plate: 0 1px 0 rgba(243, 234, 216, 0.07) inset, 0 20px 44px rgba(0, 0, 0, 0.5);
@@ -472,12 +520,25 @@
   /* A lit room thumbnail. NOT the lamp: the reference renders paint the glow
      INTO the frame (`radial-gradient(70% 120% at 20% 0%)` over a tinted ground),
      so it hugs the top-left corner of the window instead of fogging it. */
-  --thumb-frame-lit: #101a16;
+  --thumb-frame-lit: oklch(21.7% calc(0.014 * var(--ui-chroma)) var(--ui-hue));
   --thumb-glow: radial-gradient(70% 120% at 20% 0%, rgba(243, 234, 216, 0.16), rgba(243, 234, 216, 0));
   /* Away / offline. No rim. */
   --dim-filter: saturate(0.35) brightness(0.72);
   /* A name tag over a live tile. */
-  --tag-fill: rgba(10, 12, 16, 0.78);
+  --tag-fill: oklch(16.5% calc(0.007 * var(--ui-chroma)) var(--ui-hue) / 0.78);
+
+  /* ---- Identity as INK ----------------------------------------------------
+     An author's name in the timeline is written in their own colour. On a dark
+     ground the fill IS the ink — every one of the eight clears 7:1 on all four
+     Night grounds at every base hue. Daylight needs its own, deeper set. */
+  --identity-ink-1: var(--color-avatar-1);
+  --identity-ink-2: var(--color-avatar-2);
+  --identity-ink-3: var(--color-avatar-3);
+  --identity-ink-4: var(--color-avatar-4);
+  --identity-ink-5: var(--color-avatar-5);
+  --identity-ink-6: var(--color-avatar-6);
+  --identity-ink-7: var(--color-avatar-7);
+  --identity-ink-8: var(--color-avatar-8);
 
   /* A native <select>'s own arrow is never used; this is the tokenised one
      (`.pc-select`). The literal lives here, with every other literal, because a
@@ -586,15 +647,18 @@
 [data-theme='light'] {
   color-scheme: light;
 
-  --bg-base: #f4f1ea;
-  --bg-plate: #fbf9f4;
-  --bg-raised: #f3efe5;
-  --bg-well: #ebe6dc;
-  --bg-floating: rgba(251, 249, 244, 0.97);
-  --bg-mod-subtle: rgba(23, 23, 15, 0.05);
-  --bg-mod-strong: rgba(23, 23, 15, 0.1);
-  --window-dark: #ded8cb;
-  --overlay-backdrop: rgba(23, 23, 15, 0.4);
+  --bg-base: oklch(95.9% calc(0.01 * var(--ui-chroma)) var(--ui-hue));
+  --bg-plate: oklch(98.2% calc(0.007 * var(--ui-chroma)) var(--ui-hue));
+  --bg-raised: oklch(95.3% calc(0.014 * var(--ui-chroma)) var(--ui-hue));
+  --bg-well: oklch(92.6% calc(0.014 * var(--ui-chroma)) var(--ui-hue));
+  --bg-floating: oklch(98.2% calc(0.007 * var(--ui-chroma)) var(--ui-hue) / 0.97);
+  --bg-mod-subtle: oklch(20.2% calc(0.015 * var(--ui-chroma)) var(--ui-hue) / 0.05);
+  --bg-mod-strong: oklch(20.2% calc(0.015 * var(--ui-chroma)) var(--ui-hue) / 0.1);
+  /* On paper the selection wash is ink-side of the ground, not light-side. */
+  --bg-selected: oklch(55% calc(0.09 * var(--ui-chroma)) var(--ui-hue) / 0.14);
+  --row-selected: var(--bg-selected);
+  --window-dark: oklch(88.3% calc(0.019 * var(--ui-chroma)) var(--ui-hue));
+  --overlay-backdrop: oklch(20.2% calc(0.015 * var(--ui-chroma)) var(--ui-hue) / 0.4);
   --bg-code: var(--bg-well);
   --border-code: var(--border-subtle);
 
@@ -604,15 +668,19 @@
      every Daylight surface. The window fills below carry the same value, so a
      lit window and its caption stay the same colour. */
   --light-white: #17170f;
-  --light-amber: #855e30;
+  /* Deepened once more when the grounds became hue-configurable: the old value
+     cleared 4.5:1 against a single fixed paper, and the sweep found it at 4.61
+     on the warmest well the hue control can produce. This holds 4.9:1 at every
+     setting. */
+  --light-amber: #7d5829;
 
-  --text-primary: #17170f;
-  --text-body-ink: #33332a;
-  --text-secondary: #46463c;
-  --text-muted: #57574d;
-  --text-faint: #66665c;
+  --text-primary: oklch(20.2% calc(0.015 * var(--ui-chroma)) var(--ui-hue));
+  --text-body-ink: oklch(31.8% calc(0.016 * var(--ui-chroma)) var(--ui-hue));
+  --text-secondary: oklch(39.1% calc(0.016 * var(--ui-chroma)) var(--ui-hue));
+  --text-muted: oklch(45.4% calc(0.016 * var(--ui-chroma)) var(--ui-hue));
+  --text-faint: oklch(50.7% calc(0.015 * var(--ui-chroma)) var(--ui-hue));
   /* On a light "light", the ink flips: paper on ink. */
-  --text-on-light: #fbf9f4;
+  --text-on-light: oklch(98.2% calc(0.007 * var(--ui-chroma)) var(--ui-hue));
   --text-on-accent: #ffffff;
   --text-on-danger: var(--accent-danger);
   --text-link: var(--accent-primary);
@@ -638,16 +706,16 @@
   --info-tint: rgba(64, 96, 143, 0.12);
 
   --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2357574D' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-  --border-subtle: rgba(23, 23, 15, 0.1);
-  --border-strong: rgba(23, 23, 15, 0.2);
+  --border-subtle: oklch(20.2% calc(0.015 * var(--ui-chroma)) var(--ui-hue) / 0.1);
+  --border-strong: oklch(20.2% calc(0.015 * var(--ui-chroma)) var(--ui-hue) / 0.2);
   --channel-icon: var(--text-muted);
   --interactive-normal: var(--text-secondary);
   --interactive-hover: var(--text-primary);
   --interactive-active: var(--text-primary);
   --interactive-muted: var(--text-faint);
   --scrollbar-auto-track: transparent;
-  --scrollbar-auto-thumb: rgba(23, 23, 15, 0.18);
-  --scrollbar-auto-thumb-hover: rgba(23, 23, 15, 0.32);
+  --scrollbar-auto-thumb: oklch(20.2% calc(0.015 * var(--ui-chroma)) var(--ui-hue) / 0.18);
+  --scrollbar-auto-thumb-hover: oklch(20.2% calc(0.015 * var(--ui-chroma)) var(--ui-hue) / 0.32);
 
   /* Depth on paper: the highlight is white, the shadow is soft ink. */
   --shadow-plate: 0 1px 0 rgba(255, 255, 255, 0.9) inset, 0 12px 30px rgba(23, 23, 15, 0.1);
@@ -662,10 +730,10 @@
 
   /* Same recipes, ink instead of light, half alpha. */
   --glow-window-white: 0 0 6px rgba(23, 23, 15, 0.28);
-  --glow-window-amber: 0 0 6px rgba(133, 94, 48, 0.25);
-  --glow-window-amber-breathe: 0 0 9px rgba(133, 94, 48, 0.31);
+  --glow-window-amber: 0 0 6px rgba(125, 88, 41, 0.25);
+  --glow-window-amber-breathe: 0 0 9px rgba(125, 88, 41, 0.31);
   --glow-window-white-lg: 0 0 8px rgba(23, 23, 15, 0.28);
-  --glow-window-amber-lg: 0 0 8px rgba(133, 94, 48, 0.25);
+  --glow-window-amber-lg: 0 0 8px rgba(125, 88, 41, 0.25);
   --glow-live-dot: 0 0 6px rgba(23, 23, 15, 0.4);
   --glow-light-fill: 0 0 16px rgba(23, 23, 15, 0.13);
   --glow-control-on: 0 0 18px rgba(23, 23, 15, 0.18);
@@ -685,11 +753,27 @@
   --ring-speaking-peak: 0 0 0 var(--ring-edge) rgba(var(--light-ring-rgb), var(--ring-a-peak-edge)),
     0 0 var(--ring-glow-speaking) rgba(var(--light-ring-rgb), var(--ring-a-speaking-glow));
   --ring-lit-plate: 0 0 0 1px rgba(23, 23, 15, 0.16), 0 0 34px rgba(23, 23, 15, 0.05);
-  --lamp-radial: radial-gradient(closest-side, rgba(133, 94, 48, 0.14), rgba(133, 94, 48, 0));
-  --thumb-frame-lit: #e4e8e1;
-  --thumb-glow: radial-gradient(70% 120% at 20% 0%, rgba(133, 94, 48, 0.14), rgba(133, 94, 48, 0));
+  --lamp-radial: radial-gradient(closest-side, rgba(125, 88, 41, 0.14), rgba(125, 88, 41, 0));
+  --thumb-frame-lit: oklch(92.6% calc(0.01 * var(--ui-chroma)) var(--ui-hue));
+  --thumb-glow: radial-gradient(70% 120% at 20% 0%, rgba(125, 88, 41, 0.14), rgba(125, 88, 41, 0));
   --dim-filter: saturate(0.35) brightness(1.06) opacity(0.62);
-  --tag-fill: rgba(251, 249, 244, 0.82);
+  --tag-fill: oklch(98.2% calc(0.007 * var(--ui-chroma)) var(--ui-hue) / 0.82);
+
+  /* ---- Identity as INK, on paper ------------------------------------------
+     Company's open item. The identity FILL is who a person is and never moves
+     (apricot stays apricot in the avatar circle), but apricot written as text
+     on warm paper measures about 2:1. So the eight hues get a deepened ink set
+     for Daylight: same hue, held at L 48% with the most chroma that stays in
+     sRGB, which clears 4.9:1 on the darkest paper ground at every base hue.
+     Fills and marks are unchanged — this set is only ever used as text. */
+  --identity-ink-1: oklch(48% 0.1 66);
+  --identity-ink-2: oklch(48% 0.13 258);
+  --identity-ink-3: oklch(48% 0.09 168);
+  --identity-ink-4: oklch(48% 0.13 32);
+  --identity-ink-5: oklch(48% 0.13 309);
+  --identity-ink-6: oklch(48% 0.092 97);
+  --identity-ink-7: oklch(48% 0.076 212);
+  --identity-ink-8: oklch(48% 0.13 349);
 
   --sidebar-bg: var(--bg-base);
   --sidebar-border: var(--border-subtle);
@@ -700,21 +784,24 @@
    §1.7 AMOLED — a true-black street. Light recipes unchanged.
    ============================================================================= */
 [data-theme='amoled'] {
+  /* True black is hueless by definition; everything above it takes the hue. */
   --bg-base: #000000;
-  --bg-plate: #0b0c0f;
-  --bg-raised: #16181d;
-  --bg-well: #050608;
-  --bg-floating: rgba(11, 12, 15, 0.98);
-  --bg-mod-subtle: rgba(243, 234, 216, 0.055);
-  --bg-mod-strong: rgba(243, 234, 216, 0.12);
+  --bg-plate: oklch(15.5% calc(0.0066 * var(--ui-chroma)) var(--ui-hue));
+  --bg-raised: oklch(20.9% calc(0.0104 * var(--ui-chroma)) var(--ui-hue));
+  --bg-well: oklch(12.2% calc(0.0062 * var(--ui-chroma)) var(--ui-hue));
+  --bg-floating: oklch(15.5% calc(0.0066 * var(--ui-chroma)) var(--ui-hue) / 0.98);
+  --bg-mod-subtle: oklch(84% calc(0.07 * var(--ui-chroma)) var(--ui-hue) / 0.06);
+  --bg-mod-strong: oklch(84% calc(0.07 * var(--ui-chroma)) var(--ui-hue) / 0.14);
+  --bg-selected: oklch(84% calc(0.07 * var(--ui-chroma)) var(--ui-hue) / 0.12);
+  --row-selected: var(--bg-selected);
   --window-dark: #000000;
   --overlay-backdrop: rgba(0, 0, 0, 0.88);
-  --thumb-frame-lit: #080d0b;
+  --thumb-frame-lit: oklch(15.3% calc(0.0093 * var(--ui-chroma)) var(--ui-hue));
 
-  --border-subtle: rgba(243, 234, 216, 0.1);
-  --border-strong: rgba(243, 234, 216, 0.18);
-  --scrollbar-auto-thumb: rgba(243, 234, 216, 0.22);
-  --scrollbar-auto-thumb-hover: rgba(243, 234, 216, 0.36);
+  --border-subtle: oklch(94% calc(0.022 * var(--ui-chroma)) var(--ui-hue) / 0.1);
+  --border-strong: oklch(94% calc(0.022 * var(--ui-chroma)) var(--ui-hue) / 0.18);
+  --scrollbar-auto-thumb: oklch(94% calc(0.022 * var(--ui-chroma)) var(--ui-hue) / 0.22);
+  --scrollbar-auto-thumb-hover: oklch(94% calc(0.022 * var(--ui-chroma)) var(--ui-hue) / 0.36);
 
   --shadow-plate: 0 1px 0 rgba(243, 234, 216, 0.07) inset, 0 20px 44px rgba(0, 0, 0, 0.8);
   --shadow-plate-phone: 0 1px 0 rgba(243, 234, 216, 0.07) inset, 0 16px 36px rgba(0, 0, 0, 0.8);
@@ -728,14 +815,22 @@
    steps. Every token name still exists; only the values change.
    ============================================================================= */
 [data-theme='high-contrast'] {
+  /* HIGH CONTRAST TAKES THE HUE ONLY IN THE CHROME (§1.0). The two extremes
+     that do the legibility work — the black street and the white ink — are
+     literal black and white and carry no hue at all, so no colour choice can
+     soften them. The surfaces BETWEEN them (plate, raised, the unlit window)
+     and the hairlines follow `--ui-hue`, so the user's choice is still visible
+     and the chrome is still of one piece. */
   --bg-base: #000000;
-  --bg-plate: #0b0d11;
-  --bg-raised: #1a1e24;
+  --bg-plate: oklch(15.9% calc(0.009 * var(--ui-chroma)) var(--ui-hue));
+  --bg-raised: oklch(23.4% calc(0.013 * var(--ui-chroma)) var(--ui-hue));
   --bg-well: #000000;
   --bg-floating: rgba(0, 0, 0, 0.98);
-  --bg-mod-subtle: rgba(243, 234, 216, 0.12);
-  --bg-mod-strong: rgba(243, 234, 216, 0.22);
-  --window-dark: #2a2f36;
+  --bg-mod-subtle: oklch(94% calc(0.022 * var(--ui-chroma)) var(--ui-hue) / 0.12);
+  --bg-mod-strong: oklch(94% calc(0.022 * var(--ui-chroma)) var(--ui-hue) / 0.22);
+  --bg-selected: oklch(94% calc(0.022 * var(--ui-chroma)) var(--ui-hue) / 0.22);
+  --row-selected: var(--bg-selected);
+  --window-dark: oklch(30.3% calc(0.0145 * var(--ui-chroma)) var(--ui-hue));
   --overlay-backdrop: rgba(0, 0, 0, 0.94);
 
   /* Two steps only: full ink, and one secondary. */
@@ -768,13 +863,13 @@
   --danger-tint: rgba(255, 143, 143, 0.2);
   --info-tint: rgba(157, 188, 255, 0.2);
 
-  --border-subtle: rgba(243, 234, 216, 0.4);
-  --border-strong: rgba(243, 234, 216, 0.65);
+  --border-subtle: oklch(94% calc(0.022 * var(--ui-chroma)) var(--ui-hue) / 0.4);
+  --border-strong: oklch(94% calc(0.022 * var(--ui-chroma)) var(--ui-hue) / 0.65);
   --channel-icon: var(--text-secondary);
   --interactive-normal: var(--text-secondary);
   --interactive-muted: var(--text-secondary);
-  --scrollbar-auto-thumb: rgba(243, 234, 216, 0.45);
-  --scrollbar-auto-thumb-hover: rgba(243, 234, 216, 0.7);
+  --scrollbar-auto-thumb: oklch(94% calc(0.022 * var(--ui-chroma)) var(--ui-hue) / 0.45);
+  --scrollbar-auto-thumb-hover: oklch(94% calc(0.022 * var(--ui-chroma)) var(--ui-hue) / 0.7);
 
   --shadow-plate: 0 0 0 1px rgba(243, 234, 216, 0.4) inset, 0 20px 44px rgba(0, 0, 0, 0.8);
   --shadow-plate-phone: 0 0 0 1px rgba(243, 234, 216, 0.4) inset, 0 16px 36px rgba(0, 0, 0, 0.8);
@@ -811,7 +906,7 @@
     0 0 var(--ring-glow-speaking) rgba(var(--light-ring-rgb), var(--ring-a-speaking-glow));
   --ring-lit-plate: 0 0 0 2px rgba(243, 234, 216, 0.24), 0 0 34px rgba(243, 234, 216, 0.15);
   --lamp-radial: radial-gradient(closest-side, rgba(243, 234, 216, 0.24), rgba(243, 234, 216, 0));
-  --thumb-frame-lit: #0b1210;
+  --thumb-frame-lit: oklch(17.4% calc(0.0115 * var(--ui-chroma)) var(--ui-hue));
   --thumb-glow: radial-gradient(70% 120% at 20% 0%, rgba(243, 234, 216, 0.24), rgba(243, 234, 216, 0));
   --dim-filter: saturate(0.35) brightness(0.72);
   --tag-fill: rgba(0, 0, 0, 0.9);
