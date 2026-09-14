@@ -206,7 +206,9 @@ describe('TextRoomRow', () => {
     render(<TextRoomRow room={textRoom(true)} active onOpen={vi.fn()} />);
     const row = screen.getByRole('button');
     expect(row).toHaveAttribute('aria-current', 'page');
-    expect(row.className).toContain('bg-bg-raised');
+    // The row you are on is the selection wash, which a server's own colour can
+    // take over (`--row-selected`), not a fixed grey step.
+    expect(row.className).toContain('bg-[var(--row-selected)]');
   });
 
   it('marks unread traffic in words as well as with a dot', () => {
