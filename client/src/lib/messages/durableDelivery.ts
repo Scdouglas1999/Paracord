@@ -126,6 +126,15 @@ export function classifyDeliveryFailure(error: unknown, attempts: number, now: n
     status: retryable ? 'pending' as const : 'failed' as const,
     nextAttemptAt: retryable ? Math.max(now + retryDelay(attempts, random), retryAt ?? 0) : 0,
     retryAfterAt: retryAt ?? 0,
+    // A 4xx the server did not ask us to come back for is a *decision about
+    // this message*: an AutoMod block, a permission that is gone, a body it
+    // will not accept. Replaying the same bytes gets the same answer forever,
+    // so the queue must not offer to. 408/425/429 are the server asking for
+    // patience, and everything else — a dropped connection, a 5xx, a client
+    // error with no response at all — is a delivery that never happened. 401 is
+    // the one 4xx left out: it says the session is gone, not that this message
+    // is unacceptable, and it comes back the moment the account signs in again.
+    refused: http && status !== undefined && status >= 400 && status < 500 && status !== 401 && !retryable,
     error: refusedMessage ?? serverMessage ?? (error instanceof Error ? error.message : 'Message delivery failed.'),
   };
 }
@@ -216,7 +225,7 @@ export class DurableDelivery {
         if (current?.mutation?.kind !== 'edit' || current.mutation.editNonce !== mutation.editNonce) return;
         if (!current.mutation.next) throw new Error('The replacement edit intent is missing.');
         tx.put(OUTBOX_NAMESPACE, current.id, { ...current, mutation: { kind: 'edit', ...current.mutation.next },
-          status: 'pending', error: null, attempts: 0, nextAttemptAt: Math.max(this.now(), current.retryAfterAt ?? 0) });
+          status: 'pending', error: null, refused: false, attempts: 0, nextAttemptAt: Math.max(this.now(), current.retryAfterAt ?? 0) });
       });
       return null;
     }
@@ -363,7 +372,7 @@ export class DurableDelivery {
             if (!current) throw new Error('The attempted message is missing from the outbox.');
             const failure = classifyDeliveryFailure(error, failedAttempt.attempts, this.now(), this.random());
             const updated = current.mutation && queuedMutationRevision(current) !== queuedMutationRevision(failedAttempt)
-              ? { ...current, status: 'pending' as const, error: null,
+              ? { ...current, status: 'pending' as const, error: null, refused: false,
                 retryAfterAt: Math.max(current.retryAfterAt ?? 0, failure.retryAfterAt),
                 nextAttemptAt: Math.max(this.now(), current.retryAfterAt ?? 0, failure.retryAfterAt) }
               : { ...current, ...failure };
@@ -419,7 +428,7 @@ export class DurableDelivery {
         const prepared = await tx.get<DurableSend>(OUTBOX_NAMESPACE, id);
         const current = prepared ?? await tx.get<DurableIntent>(INTENT_NAMESPACE, id);
         if (!current) throw new Error('This message is no longer in the outbox.');
-        tx.put(prepared ? OUTBOX_NAMESPACE : INTENT_NAMESPACE, id, { ...current, status: 'pending', error: null, nextAttemptAt: Math.max(this.now(), current.retryAfterAt ?? 0) });
+        tx.put(prepared ? OUTBOX_NAMESPACE : INTENT_NAMESPACE, id, { ...current, status: 'pending', error: null, refused: false, nextAttemptAt: Math.max(this.now(), current.retryAfterAt ?? 0) });
       });
     });
     this.options.onChange?.();
@@ -438,7 +447,7 @@ export class DurableDelivery {
       const mutation = current.mutation?.prepared
         ? { ...current.mutation, next: edit }
         : { kind: 'edit' as const, ...edit };
-      tx.put(OUTBOX_NAMESPACE, id, { ...current, draft: { content }, mutation, status: 'pending', error: null,
+      tx.put(OUTBOX_NAMESPACE, id, { ...current, draft: { content }, mutation, status: 'pending', error: null, refused: false,
         nextAttemptAt: Math.max(this.now(), current.retryAfterAt ?? 0) });
     });
     this.options.onChange?.(); this.wake();
@@ -451,7 +460,7 @@ export class DurableDelivery {
       const current = await tx.get<DurableSend>(OUTBOX_NAMESPACE, id);
       if (!current) throw new Error('This message is no longer queued. If it was delivered, delete it from the conversation.');
       tx.put(OUTBOX_NAMESPACE, id, { ...current, mutation: { kind: 'discard' }, status: 'pending',
-        error: null, nextAttemptAt: Math.max(this.now(), current.retryAfterAt ?? 0) });
+        error: null, refused: false, nextAttemptAt: Math.max(this.now(), current.retryAfterAt ?? 0) });
     });
     this.options.onChange?.(); this.wake();
   }

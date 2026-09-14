@@ -62,6 +62,21 @@ describe('durable retry policy', () => {
   it.each([400, 401, 403, 404, 409, 413, 422])('retains HTTP %s as an explicit failed draft', status => {
     expect(classifyDeliveryFailure(failure(status), 1, 1000, 0.5)).toMatchObject({ status: 'failed', nextAttemptAt: 0, error: 'Keep my draft' });
   });
+  it('marks a policy refusal terminal and leaves a retryable failure alone', () => {
+    // A 4xx the server did not ask us to come back for is a decision about this
+    // message — an AutoMod block, a permission that is gone, a body it will not
+    // take. Replaying the same bytes gets the same answer, so the queue must
+    // not offer to. 401 is the session, not the message; 408/425/429 and 5xx
+    // are the server asking for patience; a dropped connection is no answer.
+    for (const status of [400, 403, 404, 409, 413, 422]) {
+      expect(classifyDeliveryFailure(failure(status), 1, 1000, 0.5)).toMatchObject({ status: 'failed', refused: true });
+    }
+    for (const status of [401, 408, 425, 429, 500, 503]) {
+      expect(classifyDeliveryFailure(failure(status), 1, 1000, 0.5).refused).toBe(false);
+    }
+    expect(classifyDeliveryFailure(new AxiosError('Network Error', 'ERR_NETWORK'), 1, 1000, 0.5).refused).toBe(false);
+    expect(classifyDeliveryFailure(new Error('offline'), 1, 1000, 0.5).refused).toBe(false);
+  });
   it('says a refused send cannot be delivered rather than repeating "forbidden"', () => {
     // The server answers a blocked sender with a bare FORBIDDEN on purpose —
     // being told you were blocked is the thing a block must not reveal — so the

@@ -183,6 +183,39 @@ test('the running sender notices a new enqueue while its previous attempt is in 
 });
 
 
+test('a policy refusal is recorded as terminal; a lost connection is not', async ({ page }) => {
+  // An AutoMod block answers 403 with its reason and will answer the same way
+  // for the same bytes forever, so the queue row must stop offering Retry. A
+  // connection that dropped is a delivery that never happened and keeps it.
+  let mode: 'automod' | 'reset' = 'automod';
+  await page.route('**/api/v1/channels/dm/messages', async route => {
+    if (mode === 'reset') { await route.abort('connectionreset'); return; }
+    await route.fulfill({ status: 403, json: { code: 'AUTOMOD_BLOCKED', message: 'Blocked by a server rule' } });
+  });
+  await setup(page, true);
+  const blocked = await prepare(page, 'dm', 'Say the banned word');
+  const refusal = await page.evaluate(async () => {
+    const f = window.deliveryTest;
+    return { run: await f.driver.drain(), remaining: await f.list(f.alice) };
+  });
+  expect(refusal.run.sent).toBe(0);
+  expect(refusal.remaining[0]).toMatchObject({ id: blocked.id, status: 'failed', refused: true, error: 'Blocked by a server rule' });
+  // Asking for one more attempt clears the mark with the error it explained.
+  const retried = await page.evaluate(async id => {
+    const f = window.deliveryTest;
+    await f.driver.retry(id);
+    return f.list(f.alice);
+  }, blocked.id);
+  expect(retried[0]).toMatchObject({ status: 'pending', refused: false, error: null });
+  mode = 'reset';
+  const lost = await page.evaluate(async () => {
+    const f = window.deliveryTest;
+    await f.driver.drain();
+    return f.list(f.alice);
+  });
+  expect(lost[0]).toMatchObject({ status: 'pending', refused: false });
+});
+
 test('queued intents stay editable behind a failed lane head without advancing its ratchet', async ({ page }) => {
   let blocked = true; const bodies: Array<{ channel: string; body: string }> = [];
   await page.route('**/api/v1/channels/*/messages', async route => {

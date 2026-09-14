@@ -26,6 +26,15 @@ export interface DurableSend {
   /** Server-mandated earliest retry; manual retry cannot bypass it. */
   retryAfterAt?: number;
   error: string | null;
+  /**
+   * The server *refused* this message on policy — an AutoMod block, a lost
+   * permission, a validation 4xx — rather than failing to take it. A refusal is
+   * terminal: the same bytes under the same nonce will be refused identically
+   * for as long as the rule stands, so the queue must offer Edit and Discard
+   * and must never offer Retry. A network failure, a 5xx or a timeout is not a
+   * refusal and keeps its retry.
+   */
+  refused?: boolean;
 }
 
 /** Build ciphertext and persist its ratchet state and original request atomically. */
@@ -133,7 +142,7 @@ export async function editMessageIntent(vault: AccountVault, id: string, revisio
   return vault.transact(async tx => {
     const current = await requireEditableIntent(tx, id, revision);
     const updated = { ...current, draft: { content }, revision: crypto.randomUUID(), status: 'pending' as const,
-      error: null, nextAttemptAt: current.retryAfterAt ?? 0 };
+      error: null, refused: false, nextAttemptAt: current.retryAfterAt ?? 0 };
     tx.put(INTENT_NAMESPACE, id, updated);
     return updated;
   });

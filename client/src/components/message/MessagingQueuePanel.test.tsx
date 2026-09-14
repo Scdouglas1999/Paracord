@@ -33,6 +33,42 @@ describe('MessagingQueuePanel', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it('treats a policy refusal as terminal: the reason, Edit and Discard, never Retry', async () => {
+    // An AutoMod block is a 403 the server will give again for the same bytes.
+    // The generic durable-send row offered "Retry delivery" forever and told
+    // the author the delivery "may already have committed" — a refusal is proof
+    // it did not.
+    const { runtime } = createMessagingPanelRuntime({
+      queue: [
+        preparedSendRow({
+          status: 'failed',
+          refused: true,
+          error: 'Blocked by a server rule',
+          draft: { content: 'the blocked line' },
+        }),
+      ],
+    });
+    render(<MessagingQueuePanel runtime={runtime} channelId="chan-1" />);
+    expect(screen.getByText('Refused — not delivered')).toBeInTheDocument();
+    expect(screen.getByText('Blocked by a server rule')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry delivery' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/may already have committed/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit queued text' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Discard draft' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Copy text' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Edit queued text' }));
+    expect(screen.getByLabelText(/Replacement text/)).toHaveValue('the blocked line');
+  });
+
+  it('keeps Retry on a delivery that merely failed to land', () => {
+    const { runtime } = createMessagingPanelRuntime({
+      queue: [preparedSendRow({ status: 'failed', error: 'Network Error' })],
+    });
+    render(<MessagingQueuePanel runtime={runtime} channelId="chan-1" />);
+    expect(screen.getByText('Delivery needs attention')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry delivery' })).toBeInTheDocument();
+  });
+
   it('shows pending and failed queued drafts with the delivery error', () => {
     const { runtime } = createMessagingPanelRuntime({
       queue: [

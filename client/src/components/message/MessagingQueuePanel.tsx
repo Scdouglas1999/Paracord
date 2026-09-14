@@ -68,6 +68,17 @@ function QueueEntry({ runtime, row, copy }: { runtime: AccountMessagingRuntime; 
   const [error, setError] = useState<string | null>(null);
   const prepared = isPreparedSend(row.record);
   const discarding = prepared && row.record.mutation?.kind === 'discard';
+  /**
+   * The server *refused* this message — an AutoMod block, a permission that is
+   * gone, a body it will not accept — rather than failing to take it.
+   *
+   * Two of this row's three sentences were false for a refusal: "Retry
+   * delivery" offered an attempt that would be refused identically forever,
+   * and the prepared-send note said the delivery "may already have committed"
+   * when a refusal is proof it did not. A refusal is terminal, so the row says
+   * so and offers the two things that can actually resolve it.
+   */
+  const refused = Boolean(row.record.refused) && !discarding;
   async function act(action: 'retry' | 'discard' | 'edit') {
     setBusy(true); setError(null);
     try { await runtime.queueAction(action === 'edit' ? editRow.current ?? row : row, action, content); setEditing(false); }
@@ -75,10 +86,12 @@ function QueueEntry({ runtime, row, copy }: { runtime: AccountMessagingRuntime; 
     finally { setBusy(false); }
   }
   return <DeliveryRow>
-    <RowTitle>{discarding ? 'Resolving discard' : row.record.status === 'failed' ? 'Delivery needs attention' : 'Queued message'}</RowTitle>
+    <RowTitle>{discarding ? 'Resolving discard' : refused ? 'Refused — not delivered' : row.record.status === 'failed' ? 'Delivery needs attention' : 'Queued message'}</RowTitle>
     <p className="mt-1 whitespace-pre-wrap break-words text-body text-text-body">{row.record.draft.content || 'Attachment or sticker message'}</p>
     {row.record.error && <p className="mt-2 break-words text-meta text-text-muted">{row.record.error}</p>}
-    {prepared && <p className="mt-1 break-words text-meta text-text-faint">Delivery may already have committed. Editing or discarding resolves the original request first.</p>}
+    {refused
+      ? <p className="mt-1 break-words text-meta text-text-faint">Sending this again would be refused the same way. Change the message and it goes back in the queue, or discard it.</p>
+      : prepared && <p className="mt-1 break-words text-meta text-text-faint">Delivery may already have committed. Editing or discarding resolves the original request first.</p>}
     {editing && <label className="mt-2 block text-meta text-text-secondary">Replacement text
       <textarea
         className="mt-1 w-full resize-y rounded-[var(--radius-well)] bg-bg-well px-3 py-2 text-body text-text-primary shadow-[var(--shadow-well)] outline-none focus-visible:shadow-[var(--focus-ring-input)]"
@@ -93,10 +106,10 @@ function QueueEntry({ runtime, row, copy }: { runtime: AccountMessagingRuntime; 
         <Button size="sm" disabled={busy || !content.trim()} onClick={() => void act('edit')}>Save queued edit</Button>
         <Button variant="ghost" size="sm" disabled={busy} onClick={() => setEditing(false)}>Cancel edit</Button>
       </> : <>
-        <Button variant="ghost" size="sm" disabled={busy} onClick={() => void act('retry')}>Retry delivery</Button>
+        {!refused && <Button variant="ghost" size="sm" disabled={busy} onClick={() => void act('retry')}>Retry delivery</Button>}
         <Button variant="ghost" size="sm" disabled={!row.record.draft.content} onClick={() => copy(row.record.draft.content)}>Copy text</Button>
         <Button variant="ghost" size="sm" disabled={busy || discarding} onClick={() => { editRow.current = row; setContent(row.record.draft.content); setEditing(true); }}>Edit queued text</Button>
-        <Button variant="ghost" size="sm" disabled={busy || discarding} onClick={() => void act('discard')}>{prepared ? 'Resolve and discard' : 'Discard draft'}</Button>
+        <Button variant="ghost" size="sm" disabled={busy || discarding} onClick={() => void act('discard')}>{prepared && !refused ? 'Resolve and discard' : 'Discard draft'}</Button>
       </>}
     </div>
     {error && <p role="alert" className="mt-2 break-words text-meta text-accent-danger">{error}</p>}
