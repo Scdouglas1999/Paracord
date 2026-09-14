@@ -1,6 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{
-    atomic::{AtomicU32, AtomicU64, Ordering},
+    atomic::{AtomicU64, Ordering},
     Arc, OnceLock, Weak,
 };
 use std::time::{Duration, Instant};
@@ -128,8 +128,6 @@ const UPSWITCH_HOLD: Duration = Duration::from_secs(5);
 /// most one request per this interval protects the whole stream.
 const KEYFRAME_REQUEST_MIN_INTERVAL: Duration = Duration::from_millis(500);
 
-static RELAY_VIDEO_FORWARD_DEBUG_COUNT: AtomicU32 = AtomicU32::new(0);
-
 /// Maximum concurrent in-flight keyframe uni streams the relay keeps open toward
 /// a single bridged (WebTransport) viewer.
 ///
@@ -248,8 +246,6 @@ pub(crate) struct CachedRecipients {
     room_generation: u64,
     /// Connection-set generation this snapshot was computed at.
     conn_generation: u64,
-    /// The published track this ssrc resolves to, retained for diagnostics.
-    published_track: Option<PublishedTrack>,
     /// Resolved recipient connection handles to fan the datagram out to.
     pub(crate) recipients: Vec<ConnectionHandle>,
 }
@@ -1682,26 +1678,6 @@ impl RelayForwarder {
                 );
             }
         }
-
-        if matches!(
-            header.track_type,
-            paracord_transport::protocol::TrackType::Video
-        ) {
-            let debug_index = RELAY_VIDEO_FORWARD_DEBUG_COUNT.fetch_add(1, Ordering::Relaxed);
-            if debug_index < 48 {
-                warn!(
-                    sender = sender_id,
-                    room_id = %room_id,
-                    ssrc = header.ssrc,
-                    seq = header.sequence,
-                    layer = header.simulcast_layer,
-                    epoch = header.key_epoch,
-                    has_track = snapshot.published_track.is_some(),
-                    recipients = snapshot.recipients.len(),
-                    "relay-video-debug: routed video datagram"
-                );
-            }
-        }
     }
 
     /// Resolve (from cache, or rebuild) the fan-out plan for `(sender_id, ssrc)`.
@@ -1763,7 +1739,6 @@ impl RelayForwarder {
         let empty = || CachedRecipients {
             room_generation,
             conn_generation,
-            published_track: None,
             recipients: Vec::new(),
         };
 
@@ -1800,7 +1775,6 @@ impl RelayForwarder {
             CachedRecipients {
                 room_generation,
                 conn_generation,
-                published_track,
                 recipients,
             }
         });
@@ -4187,7 +4161,11 @@ mod tests {
             "the keyframe reaches exactly the two subscribed viewers"
         );
         assert!(
-            snapshot.published_track.is_some(),
+            mgr.with_room(&room_id, |room| resolve_published_track_for_ssrc(
+                room, 1, 500
+            )
+            .is_some())
+                .unwrap_or(false),
             "the published video track resolves from its layer ssrc"
         );
 
