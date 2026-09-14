@@ -26,7 +26,7 @@ function engineFor(capabilities: MediaStreamCapabilities) {
   } as unknown as MediaEngine;
 }
 
-function room(channelId = 'v1') {
+function room(channelId = 'v1', nowMs = 0) {
   return voiceRoomLight({
     scope: SCOPE,
     guildId: 'g1',
@@ -38,7 +38,7 @@ function room(channelId = 'v1') {
         sharingScreen: true,
       },
     ],
-    nowMs: 0,
+    nowMs,
   });
 }
 
@@ -111,6 +111,68 @@ describe('useRoomThumbnail', () => {
     await waitFor(() => expect(result.current.state.live).toBe(true));
     unmount();
     expect(release).toHaveBeenCalled();
+  });
+
+  it('does not re-subscribe when the same room is handed over as a fresh object', async () => {
+    // A `RoomLight` is rebuilt from scratch whenever any light input moves —
+    // the 1 Hz call clock alone does it once a second, and a speaking change
+    // does it oftener. Keying the subscription on that object meant the
+    // thumbnail released and re-opened its engine subscription several times a
+    // second, and each re-open built a `VideoDecoder` and a WebGL context:
+    // 812 of each per browser in 90 seconds of a measured two-party call.
+    const release = vi.fn();
+    const engine = engineFor(caps());
+    (engine.subscribeVideo as unknown as ReturnType<typeof vi.fn>).mockReturnValue(release);
+    useVoiceStore.setState({
+      mediaEngine: engine,
+      channelId: 'v1',
+      callScope: SCOPE,
+      connected: true,
+    });
+    const { result, rerender } = renderHook(({ nowMs }) => useRoomThumbnail(room('v1', nowMs)), {
+      initialProps: { nowMs: 0 },
+    });
+    await waitFor(() => expect(result.current.state.live).toBe(true));
+    expect(engine.subscribeVideo).toHaveBeenCalledTimes(1);
+
+    for (let tick = 1; tick <= 20; tick += 1) {
+      rerender({ nowMs: tick * 1_000 });
+    }
+
+    expect(engine.subscribeVideo).toHaveBeenCalledTimes(1);
+    expect(release).not.toHaveBeenCalled();
+  });
+
+  it('re-subscribes when the publisher actually changes', async () => {
+    const engine = engineFor(caps());
+    useVoiceStore.setState({
+      mediaEngine: engine,
+      channelId: 'v1',
+      callScope: SCOPE,
+      connected: true,
+    });
+    const other = () =>
+      voiceRoomLight({
+        scope: SCOPE,
+        guildId: 'g1',
+        channelId: 'v1',
+        name: 'Shop floor',
+        occupants: [
+          {
+            person: personLight({ userId: '2', name: 'Ines', status: 'online' }),
+            sharingScreen: true,
+          },
+        ],
+        nowMs: 0,
+      });
+    const { result, rerender } = renderHook(({ who }) => useRoomThumbnail(who === 'mara' ? room() : other()), {
+      initialProps: { who: 'mara' },
+    });
+    await waitFor(() => expect(result.current.state.live).toBe(true));
+    rerender({ who: 'ines' });
+    await waitFor(() => expect(engine.subscribeVideo).toHaveBeenCalledTimes(2));
+    const second = (engine.subscribeVideo as unknown as ReturnType<typeof vi.fn>).mock.calls[1];
+    expect(second[0]).toBe('2');
   });
 
   it('never subscribes for a room with nobody publishing', async () => {

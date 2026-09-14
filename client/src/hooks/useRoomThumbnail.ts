@@ -82,13 +82,23 @@ export function useRoomThumbnail(room: RoomLight | null): RoomThumbnailFeed {
   }, [engine, joinedKey, connected, capabilities]);
 
   const publisher = room?.screenSharer ?? room?.cameraSharer ?? null;
-  const track = room?.screenSharer ? 'screen' : 'camera';
+  const track: 'screen' | 'camera' = room?.screenSharer ? 'screen' : 'camera';
+  // Keyed on the three PRIMITIVES the request is made of, never on the
+  // `RoomLight` it was read from.
+  //
+  // A `RoomLight` is rebuilt from scratch every time any light input moves —
+  // the 1 Hz call clock, a speaking change, a presence tick — so keying this
+  // memo on the object handed it a new `request` several times a second, the
+  // subscribe effect below re-ran on every one, and each re-run released the
+  // engine subscription and opened another. Measured on a real two-party call
+  // with a camera and a screen share: 812 `VideoDecoder`s and 812 WebGL
+  // contexts built and thrown away in 90 seconds, per browser, ~9 per second,
+  // for a thumbnail that is allowed two frames a second.
+  const roomKey = room?.key ?? null;
+  const publisherUserId = publisher?.person.userId ?? null;
   const request = useMemo(
-    () =>
-      room
-        ? { roomKey: room.key, userId: publisher?.person.userId ?? null, track: track as 'screen' | 'camera' }
-        : null,
-    [room, publisher, track],
+    () => (roomKey ? { roomKey, userId: publisherUserId, track } : null),
+    [roomKey, publisherUserId, track],
   );
 
   const state = useMemo(
