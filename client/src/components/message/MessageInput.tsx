@@ -69,7 +69,8 @@ interface MessageInputProps {
   conversationKind?: 'room' | 'person';
   /**
    * WP3 (spec §7.2, §8), additive: `ribbon` is the composer inside the Stage's
-   * chat ribbon — 42px instead of 50, "Say something to the room", and a send
+   * chat ribbon — 42px instead of 50, a short "Say something" that fits the
+   * plate's 185px of composer, and a send
    * button in white light, because everybody it reaches is in the room right
    * now. Nothing about sending changes.
    */
@@ -1582,7 +1583,11 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
                 : showScheduleComposer
                   ? `Schedule a message for ${channelName ?? 'this conversation'}`
                   : ribbon
-                    ? 'Say something to the room'
+                    ? // §7.2's ribbon is a 336px plate, and the room it names is in
+                      // the heading directly above this field. "Say something to
+                      // the room" needed 192px of a 185px box, so it arrived
+                      // ellipsised mid-word — "Say something to the roor".
+                      'Say something'
                     : composerPlaceholder(readingOthers, channelName, conversationKind)
           }
           rows={1}

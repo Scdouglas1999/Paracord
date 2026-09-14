@@ -33,8 +33,9 @@ export interface RoomChatRibbonProps extends Omit<React.HTMLAttributes<HTMLEleme
  * (docs/lantern-stage-spec.md §7.2, §8).
  *
  * A 336px plate: the amber window dot, the channel name, the compact timeline,
- * and a composer that says "Say something to the room". On a phone it is the
- * sheet under the controls, with a drag handle.
+ * and a composer that says "Say something" — the room it means is the name in
+ * the heading above it. On a phone it is the sheet under the controls, with a
+ * drag handle.
  *
  * It holds no messages of its own — the timeline and the composer are the same
  * components a text room uses, handed in as children.
