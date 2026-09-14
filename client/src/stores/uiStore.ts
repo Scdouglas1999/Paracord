@@ -19,6 +19,29 @@ export type AccentPreset =
 type ConnectionStatus = 'connected' | 'connecting' | 'reconnecting' | 'disconnected';
 
 /**
+ * The base colour of the whole neutral ramp, as an oklch hue in degrees plus
+ * how much of it to take (tokens.css §1.0). Every ground, well, hairline, wash
+ * and grey ink is written `oklch(L C var(--ui-hue))`, so this one number turns
+ * the interface from warm brown to slate to green without moving a single
+ * lightness — which is why `npm run test:contrast` can prove it safe at every
+ * setting rather than at the five we happened to name.
+ *
+ * Per device, like the theme: it is about the screen you are looking at.
+ */
+export const BASE_HUE_DEFAULT = 65;
+export const BASE_TINT_DEFAULT = 1;
+
+const clampHue = (deg: number): number => {
+  if (!Number.isFinite(deg)) return BASE_HUE_DEFAULT;
+  return ((Math.round(deg) % 360) + 360) % 360;
+};
+
+const clampTint = (tint: number): number => {
+  if (!Number.isFinite(tint)) return BASE_TINT_DEFAULT;
+  return Math.min(1, Math.max(0, tint));
+};
+
+/**
  * The single source of truth for the toggleable right-hand context panel
  * (layout-spec §1). Exactly one mode is active at a time; `null` = closed.
  * All readers select `contextPanelMode` directly — the wave-2 mirrored
@@ -43,6 +66,10 @@ const clampSidebarWidth = (px: number): number => {
 interface UIState {
   theme: Theme;
   accentPreset: AccentPreset;
+  /** The base hue, 0–359 degrees (oklch). */
+  baseHue: number;
+  /** How much of it: 1 is the full tint, 0 is a true neutral charcoal. */
+  baseTint: number;
   /**
    * How much this app is allowed to move (docs/lantern-stage-spec.md §5.3).
    * `system` follows `prefers-reduced-motion`; `full` and `reduced` override
@@ -67,6 +94,8 @@ interface UIState {
 
   setTheme: (theme: Theme) => void;
   setAccentPreset: (accentPreset: AccentPreset) => void;
+  setBaseHue: (deg: number) => void;
+  setBaseTint: (tint: number) => void;
   setMotion: (motion: MotionPreference) => void;
   setCustomCss: (css: string) => void;
   setServerRestarting: (v: boolean) => void;
@@ -90,6 +119,8 @@ export const useUIStore = create<UIState>()(
     (set) => ({
       theme: 'dark',
       accentPreset: 'emerald',
+      baseHue: BASE_HUE_DEFAULT,
+      baseTint: BASE_TINT_DEFAULT,
       motion: 'system' as MotionPreference,
       customCss: '',
       serverRestarting: false,
@@ -108,6 +139,8 @@ export const useUIStore = create<UIState>()(
 
       setTheme: (theme) => set({ theme }),
       setAccentPreset: (accentPreset) => set({ accentPreset }),
+      setBaseHue: (deg) => set({ baseHue: clampHue(deg) }),
+      setBaseTint: (tint) => set({ baseTint: clampTint(tint) }),
       setMotion: (motion) => set({ motion }),
       setCustomCss: (customCss) => set({ customCss }),
       setServerRestarting: (serverRestarting) => set({ serverRestarting }),
@@ -145,6 +178,8 @@ export const useUIStore = create<UIState>()(
       partialize: (state) => ({
         theme: state.theme,
         accentPreset: state.accentPreset,
+        baseHue: state.baseHue,
+        baseTint: state.baseTint,
         motion: state.motion,
         customCss: state.customCss,
         // Context panels are transient route context. Persisting one makes an

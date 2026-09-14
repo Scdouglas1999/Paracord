@@ -1,7 +1,7 @@
 import { useId } from 'react';
 import { Moon, Sun, Monitor, Eye, Check } from 'lucide-react';
 import { useUIStore, type AccentPreset } from '../../stores/uiStore';
-import { ACCENT_PRESETS } from '../../hooks/useTheme';
+import { ACCENT_PRESETS, BASE_HUE_PRESETS, type BaseHuePreset } from '../../hooks/useTheme';
 import { changeLights, useReducedMotion, type MotionPreference } from '../../lib/motion';
 import { cn } from '../../lib/utils';
 
@@ -88,6 +88,31 @@ function ThemePreview({ id }: { id: ThemeId }) {
   );
 }
 
+/**
+ * A base-colour preset, painted in the theme you are actually in.
+ *
+ * Not a swatch: the base colour is not one colour, it is a whole ramp, and the
+ * only honest preview of it is the ramp. `data-theme` plus the two custom
+ * properties is the real mechanism — `tokens.css` re-resolves every surface on
+ * a `[data-theme]` subtree, and each one reads the `--ui-hue` / `--ui-chroma`
+ * declared right here — so these three bars are the app's own grounds at that
+ * setting, not an approximation of them.
+ */
+function BasePreview({ theme, hue, tint }: { theme: ThemeId; hue: number; tint: number }) {
+  return (
+    <div
+      data-theme={theme}
+      aria-hidden
+      style={{ '--ui-hue': String(hue), '--ui-chroma': String(tint) } as React.CSSProperties}
+      className="flex h-9 w-full gap-1 rounded-[var(--radius-well)] bg-bg-base p-1.5"
+    >
+      <span className="w-1/4 rounded-[var(--radius-window)] bg-bg-well" />
+      <span className="flex-1 rounded-[var(--radius-window)] bg-bg-plate" />
+      <span className="w-1/4 rounded-[var(--radius-window)] bg-bg-raised" />
+    </div>
+  );
+}
+
 export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProps) {
   const storeTheme = useUIStore((state) => state.theme);
   const setTheme = useUIStore((state) => state.setTheme);
@@ -95,11 +120,23 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
   const setAccentPreset = useUIStore((state) => state.setAccentPreset);
   const motion = useUIStore((state) => state.motion);
   const setMotion = useUIStore((state) => state.setMotion);
+  const baseHue = useUIStore((state) => state.baseHue);
+  const baseTint = useUIStore((state) => state.baseTint);
+  const setBaseHue = useUIStore((state) => state.setBaseHue);
+  const setBaseTint = useUIStore((state) => state.setBaseTint);
   const reduced = useReducedMotion();
   const theme = currentTheme ?? storeTheme;
   const themeLabelId = useId();
+  const baseLabelId = useId();
+  const hueSliderId = useId();
   const accentLabelId = useId();
   const motionLabelId = useId();
+  // A preset with no tint is chosen by its tint alone: at chroma 0 the hue
+  // stops meaning anything, so an Ash at 245 degrees is still Ash.
+  const activePreset = (Object.keys(BASE_HUE_PRESETS) as BaseHuePreset[]).find((name) => {
+    const preset = BASE_HUE_PRESETS[name];
+    return preset.tint === 0 ? baseTint === 0 : baseTint === preset.tint && baseHue === preset.hue;
+  });
 
   return (
     <div className="flex flex-col gap-7">
@@ -168,6 +205,84 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
             );
           })}
         </div>
+      </section>
+
+      <section aria-labelledby={baseLabelId}>
+        <h3 id={baseLabelId} className="mb-3 text-section text-text-secondary">
+          Base color
+        </h3>
+        <div className="grid gap-2.5 sm:grid-cols-3">
+          {(Object.keys(BASE_HUE_PRESETS) as BaseHuePreset[]).map((name) => {
+            const preset = BASE_HUE_PRESETS[name];
+            const active = activePreset === name;
+            return (
+              <button
+                key={name}
+                type="button"
+                aria-pressed={active}
+                onClick={() => {
+                  setBaseHue(preset.hue);
+                  setBaseTint(preset.tint);
+                }}
+                className={cn(
+                  'pc-focusable flex flex-col rounded-[var(--radius-card)] p-2.5 text-left',
+                  'transition-[background-color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+                  active
+                    ? 'bg-bg-raised shadow-[var(--shadow-raised),0_0_0_1px_var(--accent-primary)]'
+                    : 'bg-bg-mod-subtle hover:bg-bg-mod-strong',
+                )}
+              >
+                <BasePreview theme={theme} hue={preset.hue} tint={preset.tint} />
+                <span className="mt-2.5 flex items-center gap-2">
+                  <span className="pc-display text-name text-text-primary">{preset.label}</span>
+                  {active && (
+                    <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-meta font-semibold text-accent-primary">
+                      <Check size={14} aria-hidden />
+                      Selected
+                    </span>
+                  )}
+                </span>
+                <span className="mt-0.5 text-meta leading-relaxed text-text-faint">
+                  {preset.hint}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <label htmlFor={hueSliderId} className="text-label text-text-secondary">
+            Any other color
+          </label>
+          <input
+            id={hueSliderId}
+            type="range"
+            min={0}
+            max={359}
+            step={1}
+            value={baseHue}
+            onChange={(event) => {
+              setBaseHue(Number(event.target.value));
+              // Moving the hue while the tint is off would do nothing at all
+              // and look broken. Reaching for this control means you want a
+              // colour, so it turns the tint back on.
+              if (baseTint === 0) setBaseTint(1);
+            }}
+            className="pc-focusable h-[var(--h-control)] w-48 accent-accent-primary"
+            aria-describedby={`${hueSliderId}-hint`}
+          />
+          <span className="pc-mono w-12 text-meta text-text-faint">{baseHue}&deg;</span>
+          <span aria-hidden className="ml-1 block w-28 shrink-0">
+            <BasePreview theme={theme} hue={baseHue} tint={baseTint} />
+          </span>
+        </div>
+        <p id={`${hueSliderId}-hint`} className="mt-3 max-w-prose text-meta leading-relaxed text-text-faint">
+          The base color is every surface, hairline, wash and grey the app paints — nothing else
+          moves with it. The light that shows who is in a channel, the emerald that means an action
+          you can take, warnings and danger, and the color a person or a server wears all stay
+          exactly where they are. Every setting keeps the same contrast, because only the hue
+          changes and never the lightness. High contrast takes it in the chrome only — the two
+          extremes that do its legibility work never tint at all.
+        </p>
       </section>
 
       <section aria-labelledby={accentLabelId}>

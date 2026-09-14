@@ -30,6 +30,29 @@ export const ACCENT_PRESETS = {
   slate: '#7a879f',
 } as const;
 
+/**
+ * The base colour of the neutral ramp, named for people rather than by degrees.
+ *
+ * These are NOT colours — they are an oklch hue and how much of it to take, and
+ * `tokens.css` §1.0 spends them on every ground, well, hairline, wash and grey
+ * ink while holding each token's lightness and chroma exactly where the ramp
+ * put them. That is why this is safe to hand to a user: contrast is preserved
+ * by construction at every setting, and `npm run test:contrast` sweeps the
+ * whole circle every 30 degrees across all four themes to prove it.
+ *
+ * Nothing that carries meaning follows them: the two lights, the action green,
+ * the semantic accents and the identity palette all stay exactly where they are.
+ */
+export const BASE_HUE_PRESETS = {
+  hearth: { label: 'Hearth', hint: 'Warm brown, lamp-lit — the default', hue: 65, tint: 1 },
+  ash: { label: 'Ash', hint: 'A true neutral charcoal, no tint at all', hue: 65, tint: 0 },
+  harbour: { label: 'Harbour', hint: 'Cool slate, like weather off the water', hue: 245, tint: 1 },
+  moss: { label: 'Moss', hint: 'Green-leaning, quiet and outdoors', hue: 150, tint: 1 },
+  dusk: { label: 'Dusk', hint: 'Violet-leaning, late in the evening', hue: 305, tint: 1 },
+} as const;
+
+export type BaseHuePreset = keyof typeof BASE_HUE_PRESETS;
+
 /** Lighten toward white by `amount` (0–1) while preserving the hue. */
 function shadeHex(hex: string, amount: number): string {
   const normalized = hex.replace('#', '');
@@ -86,6 +109,8 @@ const LIGHT_ACCENT_ACTIVE_SCALE = 0.4;
 export function useTheme() {
   const theme = useUIStore((s) => s.theme);
   const accentPreset = useUIStore((s) => s.accentPreset);
+  const baseHue = useUIStore((s) => s.baseHue);
+  const baseTint = useUIStore((s) => s.baseTint);
   const setTheme = useUIStore((s) => s.setTheme);
   const lowBandwidthMode = useUIStore((s) => s.lowBandwidthMode);
   const motion = useUIStore((s) => s.motion);
@@ -146,6 +171,15 @@ export function useTheme() {
       root.style.setProperty(name, value);
     }
   }, [activeTheme, accentPreset]);
+
+  // The base colour. Two numbers on <html>, and every neutral in `tokens.css`
+  // re-resolves against them — no relaunch, no reload, and no second place
+  // where a colour is written down.
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty('--ui-hue', String(baseHue));
+    root.style.setProperty('--ui-chroma', String(baseTint));
+  }, [baseHue, baseTint]);
 
   // §5.3's one switch. The stored preference is the only thing that reaches it;
   // the OS media query is read inside `configureMotion`, never here, and the
