@@ -44,6 +44,10 @@ paracord-codec = { workspace = true }
 tokio = { workspace = true }
 bytes = { workspace = true }
 tracing = { workspace = true }
+# Without a subscriber every `tracing` event in this crate, `paracord-codec`,
+# `paracord-transport` and `paracord-relay` is discarded. That is why a client
+# log could contain two voice joins and not one line about the microphone.
+tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 uuid = { workspace = true }
 quinn = { workspace = true }

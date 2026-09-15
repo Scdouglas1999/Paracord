@@ -1587,7 +1587,41 @@ fn linux_native_render_enabled() -> bool {
     false
 }
 
+/// Route the native layers' `tracing` events to stderr, which is where the
+/// desktop log already collects everything else this process prints.
+///
+/// Until this existed the desktop binary installed no subscriber at all, so
+/// every `info!`/`warn!`/`error!` in `paracord-codec` (microphone open, device
+/// resolution, resampling, stream errors), `paracord-transport` and this crate
+/// was compiled in and then thrown away. A client log could therefore contain
+/// two voice joins and not a single line about the microphone — not a failure
+/// that went unreported, but a report that had nowhere to go.
+///
+/// `PARACORD_LOG` (else `RUST_LOG`) overrides the default filter.
+fn init_tracing() {
+    use tracing_subscriber::EnvFilter;
+    let filter = std::env::var("PARACORD_LOG")
+        .or_else(|_| std::env::var("RUST_LOG"))
+        .unwrap_or_else(|_| {
+            // Loud enough that a microphone that will not open says so, quiet
+            // enough that per-frame media paths do not drown the log.
+            "info,paracord_codec=info,paracord_transport=info,quinn=warn,rustls=warn".to_string()
+        });
+    let filter = EnvFilter::try_new(&filter).unwrap_or_else(|_| EnvFilter::new("info"));
+    if tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .with_target(true)
+        .with_ansi(false)
+        .try_init()
+        .is_err()
+    {
+        eprintln!("[desktop] tracing subscriber already installed");
+    }
+}
+
 pub fn run() {
+    init_tracing();
     configure_linux_gstreamer_audio_backend();
 
     let builder = tauri::Builder::default()

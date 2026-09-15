@@ -34,6 +34,25 @@ describe('native adapter deferred ownership', () => {
     expect(ipc.invoke).not.toHaveBeenCalledWith('stop_voice_session', expect.anything());
   });
 
+  // The desktop engine owns the capture graph, so nothing in the webview can
+  // measure the local microphone. Until it reported one, `micInputLevel` had no
+  // writer on this engine at all and the level bar sat at zero for every call.
+  it('reports the local microphone level so the meter has a writer', async () => {
+    let deliver!: (event: { payload: unknown }) => void;
+    ipc.listen.mockImplementation((_event, callback) => { deliver = callback; return Promise.resolve(vi.fn()); });
+    const mic = vi.fn();
+    const value = engine(); value.onLocalMicLevel(mic); await flush();
+    expect(ipc.listen).toHaveBeenCalledWith(`media_local_mic_level:${value.sessionOwnerId}`, expect.any(Function));
+    deliver({ payload: { audioLevel: 22, active: true } }); await flush();
+    expect(mic).toHaveBeenCalledWith(22, true);
+    // A microphone delivering nothing must read as inactive, not merely quiet.
+    deliver({ payload: { audioLevel: 127, active: false } }); await flush();
+    expect(mic).toHaveBeenLastCalledWith(127, false);
+    // Malformed payloads are dropped rather than reported as silence.
+    deliver({ payload: null }); await flush();
+    expect(mic).toHaveBeenCalledTimes(2);
+  });
+
   it('stops only the dispatched owner when a native connect result is late', async () => {
     const start = deferred<unknown>();
     ipc.invoke.mockImplementation((command) => command === 'start_voice_session' ? start.promise : Promise.resolve([]));

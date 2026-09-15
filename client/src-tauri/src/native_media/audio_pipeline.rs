@@ -60,6 +60,9 @@ fn stream_audio_publisher_for_ssrc(
     None
 }
 
+/// Top of the RTP audio-level scale: silence. Mirrors [`compute_audio_level`].
+const AUDIO_LEVEL_SILENCE: u8 = 127;
+
 /// Spawn the audio send task: captures mic → noise suppress → Opus encode → encrypt → QUIC datagram.
 pub fn spawn_audio_send_task(session: &mut NativeMediaSession) {
     let muted = session.muted.clone();
@@ -82,6 +85,12 @@ pub fn spawn_audio_send_task(session: &mut NativeMediaSession) {
     let mut reference_consumer = session.audio_actor.reference_consumer();
     let echo_cancellation_enabled = session.audio_actor.echo_cancellation_flag();
     let agc_enabled = session.audio_actor.agc_flag();
+    // What the meter is made of. Written here because this is the only place
+    // that sees the microphone after the processing chain — which is also what
+    // the far end hears, so the bar answers "am I being heard", not "is there
+    // sound near the microphone".
+    let local_mic_level = session.local_mic_level.clone();
+    let local_mic_frames = session.local_mic_frames.clone();
 
     let handle = tokio::spawn(async move {
         // Per-task codec instances (avoids borrowing from session across await)
@@ -108,12 +117,22 @@ pub fn spawn_audio_send_task(session: &mut NativeMediaSession) {
                 frame = pcm_rx.recv() => {
                     let Some(pcm) = frame else { break };
 
+                    // Count every frame that arrives, before any decision about
+                    // what to do with it: this counter is how the tick below
+                    // tells "the microphone is delivering" from "the microphone
+                    // opened and went quiet".
+                    local_mic_frames.fetch_add(1, Ordering::Relaxed);
+
                     // Always drain the far-end reference so it stays time-aligned
                     // with live playback across mute gaps (keeps the ring fresh).
                     let reference = reference_consumer.next_frame(FRAME_SIZE);
 
                     let mic_muted = muted.load(Ordering::SeqCst);
                     if mic_muted {
+                        // Muted is silent on the wire, so it must read as silent
+                        // on the meter too — a bar that keeps moving while you
+                        // are muted is the same lie in the other direction.
+                        local_mic_level.store(AUDIO_LEVEL_SILENCE, Ordering::Relaxed);
                         continue;
                     }
 
@@ -151,6 +170,7 @@ pub fn spawn_audio_send_task(session: &mut NativeMediaSession) {
 
                     // Compute audio level (RMS → dBov approximation)
                     let audio_level = compute_audio_level(&mixed);
+                    local_mic_level.store(audio_level, Ordering::Relaxed);
 
                     // Opus encode
                     let opus_data = match opus_encoder.encode(&mixed) {

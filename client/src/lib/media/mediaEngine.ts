@@ -187,6 +187,13 @@ export interface MediaEngine {
    * graph, so they report it.
    */
   onLocalMicLevel?(cb: (audioLevel: number, active: boolean) => void): void;
+  /**
+   * Fired when the microphone opened but is delivering nothing — the failure
+   * that is indistinguishable from a quiet room until somebody says it out
+   * loud. Engine-specific: only the native desktop engine owns a capture graph
+   * that can open successfully and then produce no frames.
+   */
+  onMicFailure?(cb: (message: string) => void): void;
   /** Fired when the camera pipeline fails hard mid-session (device unplugged,
    *  format loss). Engine-specific: only the native desktop engine runs a
    *  camera capture pipeline that can fail this way after enableVideo resolved. */

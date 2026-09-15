@@ -3205,6 +3205,10 @@ function bindEngine(owner: CallSession, engine: MediaEngine): void {
     owner.phase = interrupted ? 'reconnecting' : 'connected';
     useVoiceStore.setState({ callPhase: interrupted ? 'reconnecting' : 'connected' });
   }));
+  engine.onMicFailure?.(owner.guard(message => {
+    useVoiceStore.setState({ micInputActive: false, micInputLevel: 0 });
+    useToastStore.getState().addToast('error', message);
+  }));
   engine.onCameraFailure?.(owner.guard(error => {
     useVoiceStore.setState({ selfVideo: false });
     useToastStore.getState().addToast('error', error.message);

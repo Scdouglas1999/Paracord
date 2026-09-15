@@ -25,6 +25,10 @@ const SPEAKING_HOLD: Duration = Duration::from_millis(300);
 /// Maximum value of the audio-level scale (silence), used to normalize the
 /// reported speaking intensity into `0.0..=1.0`.
 const AUDIO_LEVEL_SILENCE: u8 = 127;
+/// How long a call waits for the first microphone frame before saying, out
+/// loud, that nothing is arriving. Long enough for a device to settle, short
+/// enough that the person is still wondering why nobody answered.
+const MIC_SILENCE_DEADLINE: Duration = Duration::from_secs(3);
 
 /// Per-speaker hysteresis state for the speaking detector. Debounces the raw
 /// audio level into a stable speaking/not-speaking signal.
@@ -67,10 +71,24 @@ impl SpeakerHysteresis {
 pub fn spawn_speaking_detector(session: &mut NativeMediaSession, app: super::CallEventSink) {
     let shutdown = session.shutdown.clone();
     let remote_audio = session.remote_audio.clone();
+    // Your own microphone, on the same clock as everybody else's. The desktop
+    // engine owns the capture graph, so nothing in the webview can measure this
+    // — the level bar in the mic button and the in-call "is my microphone
+    // working" readout sat at zero for the whole call until this reported it.
+    let local_mic_level = session.local_mic_level.clone();
+    let local_mic_frames = session.local_mic_frames.clone();
+    let muted = session.muted.clone();
 
     let handle = tokio::spawn(async move {
         let mut tick = interval(Duration::from_millis(100));
         let mut hysteresis: HashMap<u32, SpeakerHysteresis> = HashMap::new();
+        let mut last_frame_count = local_mic_frames.load(Ordering::Relaxed);
+        let mut last_local_emit: Option<(u8, bool)> = None;
+        // A microphone that opened and then delivered nothing is the failure
+        // that took a day to find, because it looks exactly like a quiet room.
+        // Give it a deadline and then say so, once.
+        let started = Instant::now();
+        let mut silence_reported = false;
         // Last emitted speaker set (SSRC ids only). Levels still ride along in
         // the payload, but we only emit when membership changes so a steady
         // talker does not spam the webview at 10 Hz.
@@ -106,6 +124,44 @@ pub fn spawn_speaking_detector(session: &mut NativeMediaSession, app: super::Cal
                     if membership_changed {
                         last_speaker_ids = speakers.keys().cloned().collect();
                         let _ = app.emit("media_speaking_change", &speakers);
+                    }
+                    drop(remote);
+
+                    // ── Your own microphone ──────────────────────────────────
+                    let frames = local_mic_frames.load(Ordering::Relaxed);
+                    let delivering = frames != last_frame_count;
+                    last_frame_count = frames;
+                    let level = local_mic_level.load(Ordering::Relaxed);
+                    let is_muted = muted.load(Ordering::SeqCst);
+                    // "Active" is about the capture path, not about loudness: a
+                    // meter that only comes alive once you are already audible
+                    // cannot tell you that your microphone is dead.
+                    let active = delivering && !is_muted;
+                    let reported = (level, active);
+                    // Emit every tick while the mic is live (the level *is* the
+                    // animation), and on change when it is not.
+                    if active || last_local_emit != Some(reported) {
+                        last_local_emit = Some(reported);
+                        let _ = app.emit(
+                            "media_local_mic_level",
+                            serde_json::json!({ "audioLevel": level, "active": active }),
+                        );
+                    }
+
+                    if !silence_reported
+                        && frames == 0
+                        && started.elapsed() >= MIC_SILENCE_DEADLINE
+                    {
+                        silence_reported = true;
+                        tracing::error!(
+                            elapsed_ms = started.elapsed().as_millis() as u64,
+                            "microphone opened but delivered no frames"
+                        );
+                        let _ = app.emit(
+                            "media_mic_silent",
+                            "Your microphone opened but is not sending any audio. \
+                             Pick a different input device in Settings \u{2192} Voice & video.",
+                        );
                     }
                 }
             }

@@ -936,6 +936,47 @@ export class TauriMediaEngine implements MediaEngine {
     this.listenerPromises.push(p);
   }
 
+  /**
+   * Your own microphone level, from the process that actually owns the capture
+   * graph.
+   *
+   * The store's `startLocalMicAnalyser` reads LiveKit's `room.localParticipant`
+   * — an object this engine does not have — so on the desktop build, which is
+   * the only build that runs this engine, `micInputLevel` and `micInputActive`
+   * had no writer at all: the bar inside the mic button stayed at `width: 0%`
+   * and the in-call "is my microphone working" readout answered nothing, for
+   * every call, on real hardware that was capturing perfectly. The native side
+   * measures the level on the same 10 Hz tick it already runs for remote
+   * speakers, after the processing chain, so the bar shows what the far end
+   * hears.
+   */
+  onLocalMicLevel(cb: (audioLevel: number, active: boolean) => void): void {
+    const p = tauriReady.then(async () => {
+      const unlisten = await this.listenOwned('media_local_mic_level', (event) => {
+        const payload = event.payload as { audioLevel?: unknown; active?: unknown } | null;
+        if (!payload || typeof payload !== 'object') return;
+        const level = typeof payload.audioLevel === 'number' ? payload.audioLevel : 127;
+        cb(level, payload.active === true);
+      });
+      this.unlisteners.push(unlisten);
+    });
+    this.listenerPromises.push(p);
+  }
+
+  /**
+   * The microphone opened and then delivered no frames. Said once, in words, on
+   * screen — silence was what made this take a day to find.
+   */
+  onMicFailure(cb: (message: string) => void): void {
+    const p = tauriReady.then(async () => {
+      const unlisten = await this.listenOwned('media_mic_silent', (event) => {
+        if (typeof event.payload === 'string') cb(event.payload);
+      });
+      this.unlisteners.push(unlisten);
+    });
+    this.listenerPromises.push(p);
+  }
+
   onParticipantJoin(cb: (userId: string) => void): void {
     const p = tauriReady.then(async () => {
       const unlisten = await this.listenOwned('media_participant_join', (event) => {

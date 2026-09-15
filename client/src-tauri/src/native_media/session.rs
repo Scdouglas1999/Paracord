@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8};
 use std::sync::Arc;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -26,6 +26,29 @@ use paracord_transport::stream::{PublishedTrack, StreamId, TrackId, VideoCodecCa
 const DNS_RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
 const QUIC_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const AUDIO_DEVICE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Top of the RTP audio-level scale: silence. Mirrors
+/// `audio_pipeline::compute_audio_level`.
+const AUDIO_LEVEL_SILENCE: u8 = 127;
+
+/// Pump one capture generation's frames into the call's stable PCM channel.
+///
+/// Ends on its own when the cpal stream behind `device_rx` is dropped, so
+/// replacing the input device is "abort the old forwarder, start a new one" and
+/// the send task never notices the seam.
+pub fn spawn_capture_forwarder(
+    mut device_rx: mpsc::Receiver<Vec<f32>>,
+    stable_tx: mpsc::Sender<Vec<f32>>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(frame) = device_rx.recv().await {
+            // Drop rather than block: the send task runs on a 20 ms clock and a
+            // stalled consumer must not back-pressure the audio thread.
+            if stable_tx.try_send(frame).is_err() && stable_tx.is_closed() {
+                break;
+            }
+        }
+    })
+}
 
 #[cfg(feature = "vpx")]
 pub struct NativeSimulcastState {
@@ -75,7 +98,31 @@ pub struct NativeMediaSession {
     // Audio capture. The cpal-backed capture/playback streams live on the
     // audio actor's dedicated thread (see `AudioActor`); this session only ever
     // holds the actor handle and the PCM frame receiver it hands back.
+    /// The **stable** microphone frame channel the send task reads from, for
+    /// the life of the call. It is deliberately not the channel a `cpal` stream
+    /// hands back: switching the input device replaces the cpal stream (and so
+    /// its channel), and the send task took its receiver once at spawn. Before
+    /// this indirection, a mid-call device switch closed the channel the send
+    /// task was still reading, the task broke out of its loop, and the
+    /// microphone stayed off for the rest of the call — which is exactly what a
+    /// person does when they think they are not being heard.
     pub pcm_rx: Option<mpsc::Receiver<Vec<f32>>>,
+    /// Producer end of that stable channel; each capture generation gets a
+    /// forwarder task holding a clone.
+    pub pcm_tx: mpsc::Sender<Vec<f32>>,
+    /// Pump from the current cpal capture channel into [`Self::pcm_tx`].
+    /// Replacing the input device aborts this and starts a new one.
+    pub capture_forward_task: Option<JoinHandle<()>>,
+    /// Last microphone level the send task measured, in the RTP convention
+    /// (0 = loudest, 127 = silence). Read on the speaking-detector tick and
+    /// reported to the UI: this is what the level bar inside the mic button is
+    /// made of on the desktop path.
+    pub local_mic_level: Arc<AtomicU8>,
+    /// Monotonic count of microphone frames that reached the send task. The
+    /// difference between two ticks is the only honest answer to "is the
+    /// microphone delivering anything at all" — a stream that opened and then
+    /// went quiet is indistinguishable from a working one by level alone.
+    pub local_mic_frames: Arc<AtomicU64>,
     pub screen_audio_rx: Option<mpsc::Receiver<Vec<f32>>>,
     pub screen_audio_tx: mpsc::Sender<Vec<f32>>,
     pub screen_audio_enabled: Arc<AtomicBool>,
@@ -380,6 +427,11 @@ impl NativeMediaSession {
                     AUDIO_DEVICE_TIMEOUT.as_secs()
                 )
             })??;
+        // Put the stable channel between the cpal capture stream and the send
+        // task (see `pcm_rx`), and pump the first capture generation into it.
+        let (stable_pcm_tx, stable_pcm_rx) = mpsc::channel::<Vec<f32>>(50);
+        let capture_forward_task = spawn_capture_forwarder(pcm_rx, stable_pcm_tx.clone());
+
         let (screen_audio_tx, screen_audio_rx) = mpsc::channel::<Vec<f32>>(64);
 
         // Deterministic SSRCs avoid the need for a separate native
@@ -400,7 +452,11 @@ impl NativeMediaSession {
             owner_id: String::new(),
             endpoint,
             connection,
-            pcm_rx: Some(pcm_rx),
+            pcm_rx: Some(stable_pcm_rx),
+            pcm_tx: stable_pcm_tx,
+            capture_forward_task: Some(capture_forward_task),
+            local_mic_level: Arc::new(AtomicU8::new(AUDIO_LEVEL_SILENCE)),
+            local_mic_frames: Arc::new(AtomicU64::new(0)),
             screen_audio_rx: Some(screen_audio_rx),
             screen_audio_tx,
             screen_audio_enabled: Arc::new(AtomicBool::new(false)),
@@ -502,6 +558,9 @@ impl NativeMediaSession {
         if let Some(h) = self.audio_send_task.take() {
             h.abort();
         }
+        if let Some(h) = self.capture_forward_task.take() {
+            h.abort();
+        }
         if let Some(h) = self.datagram_recv_task.take() {
             h.abort();
         }
@@ -574,6 +633,7 @@ impl Drop for NativeMediaSession {
         self.shutdown.notify_waiters();
         for handle in [
             self.audio_send_task.take(),
+            self.capture_forward_task.take(),
             self.datagram_recv_task.take(),
             self.uni_stream_recv_task.take(),
             self.playout_task.take(),
@@ -623,6 +683,78 @@ pub struct RemoteSessionParticipant {
 
 /// The media-token half of the bridge contract.
 /// See `client/src-tauri/bridge-contract.json`.
+#[cfg(test)]
+mod capture_forwarder_tests {
+    use super::spawn_capture_forwarder;
+    use tokio::sync::mpsc;
+
+    /// Switching microphone mid-call used to end the mic send task for good.
+    /// The task takes the PCM receiver once, at spawn; the switch replaced the
+    /// `pcm_rx` *field* (which reached nobody) and dropped the old cpal stream,
+    /// closing the channel the task was still reading — so it broke out of its
+    /// loop and nothing ever sent audio again. The person who switched device
+    /// because they thought they were not being heard then genuinely was not.
+    ///
+    /// The stable channel plus a per-device forwarder means the receiver the
+    /// send task holds never closes across a switch.
+    #[tokio::test]
+    async fn switching_the_microphone_does_not_close_the_send_task_channel() {
+        let (stable_tx, mut stable_rx) = mpsc::channel::<Vec<f32>>(8);
+
+        let (first_tx, first_rx) = mpsc::channel::<Vec<f32>>(8);
+        let first = spawn_capture_forwarder(first_rx, stable_tx.clone());
+        first_tx
+            .send(vec![0.25; 4])
+            .await
+            .expect("first device sends");
+        assert_eq!(
+            stable_rx
+                .recv()
+                .await
+                .expect("frame from first device")
+                .len(),
+            4
+        );
+
+        // The switch: abort the forwarder, drop the old device's channel (as
+        // dropping the cpal stream does), start a forwarder on the new one.
+        first.abort();
+        drop(first_tx);
+        let (second_tx, second_rx) = mpsc::channel::<Vec<f32>>(8);
+        let _second = spawn_capture_forwarder(second_rx, stable_tx);
+
+        second_tx
+            .send(vec![0.5; 6])
+            .await
+            .expect("second device sends");
+        let frame = stable_rx
+            .recv()
+            .await
+            .expect("the send task's channel must survive a device switch");
+        assert_eq!(frame.len(), 6);
+        assert_eq!(
+            frame[0], 0.5,
+            "frames must come from the newly chosen device"
+        );
+    }
+
+    /// A forwarder whose consumer has gone must not outlive it.
+    #[tokio::test]
+    async fn a_forwarder_ends_when_the_call_does() {
+        let (stable_tx, stable_rx) = mpsc::channel::<Vec<f32>>(1);
+        let (device_tx, device_rx) = mpsc::channel::<Vec<f32>>(8);
+        let handle = spawn_capture_forwarder(device_rx, stable_tx);
+        drop(stable_rx);
+        for _ in 0..4 {
+            let _ = device_tx.send(vec![0.1; 2]).await;
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(2), handle)
+            .await
+            .expect("forwarder must end once the call's channel is gone")
+            .expect("forwarder task must not panic");
+    }
+}
+
 #[cfg(test)]
 mod media_token_contract_tests {
     use super::MediaTokenClaims;
