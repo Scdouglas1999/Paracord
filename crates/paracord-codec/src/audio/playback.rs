@@ -213,16 +213,23 @@ impl AudioPlayback {
                 "selected speaker is gone; opening the system default instead"
             );
         }
-        let host = cpal::default_host();
-        let device = host
-            .output_devices()?
-            .nth(target.cpal_index)
-            .ok_or(PlaybackError::NoOutputDevice)?;
         info!(device = %target.display_name, node = ?target.node, "opening audio output device");
-        let playback =
-            devices::with_target_node(Direction::Output, target.node.as_deref(), || {
+        // Enumerate inside the targeting window: cpal's ALSA device iterator
+        // opens (and caches) each PCM as it yields it, so a `Device` obtained
+        // before the environment was set is a PCM that was already open with no
+        // target. See the matching note in `capture::start_device_id`.
+        let playback = devices::with_target_node(
+            Direction::Output,
+            target.node.as_deref(),
+            || -> Result<_, PlaybackError> {
+                let host = cpal::default_host();
+                let device = host
+                    .output_devices()?
+                    .nth(target.cpal_index)
+                    .ok_or(PlaybackError::NoOutputDevice)?;
                 Self::start_from_device(device, reference)
-            })?;
+            },
+        )?;
         Ok((playback, target))
     }
 
@@ -246,6 +253,7 @@ impl AudioPlayback {
         device: Device,
         reference: Option<Arc<ReferenceRing>>,
     ) -> Result<Self, PlaybackError> {
+        devices::silence_alsa_probe_errors();
         let config = device.default_output_config()?;
         let device_sample_rate = config.sample_rate().0;
         let device_channels = config.channels() as usize;

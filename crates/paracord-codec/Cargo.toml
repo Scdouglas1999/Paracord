@@ -87,3 +87,10 @@ windows = { version = "0.61", features = [
   "Win32_Graphics_Direct3D11",
   "Win32_Graphics_Dxgi_Common",
 ] }
+
+# Linux only: cpal's ALSA host narrates every failed PCM probe (`/dev/dsp`, the
+# OSS shim) onto stderr. `snd_lib_error_set_handler` is the supported way to own
+# that output; see `audio::devices::silence_alsa_probe_errors`. Already in the
+# tree as a transitive cpal dependency, so this adds no new crate.
+[target.'cfg(target_os = "linux")'.dependencies]
+alsa-sys = "0.3"

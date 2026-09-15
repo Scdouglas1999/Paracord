@@ -105,17 +105,29 @@ impl AudioCapture {
                 "selected microphone is gone; opening the system default instead"
             );
         }
-        let host = cpal::default_host();
-        let device = host
-            .input_devices()?
-            .nth(target.cpal_index)
-            .ok_or(CaptureError::NoInputDevice)?;
-
         info!(device = %target.display_name, node = ?target.node, "opening audio input device");
-        let (capture, rx) =
-            devices::with_target_node(Direction::Input, target.node.as_deref(), || {
+        // The enumeration must happen *inside* the targeting window, not before
+        // it. cpal's ALSA `Devices` iterator calls `DeviceHandles::open(name)`
+        // on every hint it yields and caches the resulting PCM handle on the
+        // `Device`; `build_input_stream` then reuses that cached handle rather
+        // than opening anything. So a `Device` obtained before the environment
+        // was set is a PCM that was *already open* with no target — and the
+        // sound-server plugins read their target at `snd_pcm_open`. Selecting a
+        // microphone therefore resolved correctly, logged correctly, and then
+        // captured from the system default, every time, invisibly whenever the
+        // two happened to be the same device.
+        let (capture, rx) = devices::with_target_node(
+            Direction::Input,
+            target.node.as_deref(),
+            || -> Result<_, CaptureError> {
+                let host = cpal::default_host();
+                let device = host
+                    .input_devices()?
+                    .nth(target.cpal_index)
+                    .ok_or(CaptureError::NoInputDevice)?;
                 Self::start_from_device(device)
-            })?;
+            },
+        )?;
         Ok((capture, rx, target))
     }
 
@@ -134,6 +146,7 @@ impl AudioCapture {
     }
 
     fn start_from_device(device: Device) -> Result<(Self, mpsc::Receiver<Vec<f32>>), CaptureError> {
+        devices::silence_alsa_probe_errors();
         let config = device.default_input_config()?;
         let device_sample_rate = config.sample_rate().0;
         let device_channels = config.channels() as usize;

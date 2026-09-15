@@ -5578,6 +5578,7 @@ version = "3.0.0"
 dependencies = [
  "aec-rs-sys",
  "aes-gcm",
+ "alsa-sys",
  "anyhow",
  "audiopus",
  "bytes",
@@ -5697,6 +5698,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "url",
  "uuid",
  "wasapi",

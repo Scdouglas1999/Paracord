@@ -197,6 +197,7 @@ pub fn list_devices(direction: Direction) -> Result<DeviceList, DeviceError> {
 /// it is both the naming fallback and the thing the device-name proof example
 /// prints as "before".
 pub fn raw_cpal_devices(direction: Direction) -> Result<Vec<(usize, String, bool)>, DeviceError> {
+    silence_alsa_probe_errors();
     let host = cpal::default_host();
     let default_name = match direction {
         Direction::Input => host.default_input_device(),
@@ -673,7 +674,7 @@ pub fn resolve_target(direction: Direction, id: &str) -> Result<DeviceTarget, De
             .map(|n| compose_name(n).0)
     });
     let default_target = |fell_back: bool| -> DeviceTarget {
-        let (index, name) = server_pcm_index(&raw)
+        let (index, name) = server_pcm_index(&raw, false)
             .or_else(|| {
                 raw.iter()
                     .find(|(_, _, is_default)| *is_default)
@@ -703,7 +704,7 @@ pub fn resolve_target(direction: Direction, id: &str) -> Result<DeviceTarget, De
     if let Some(nodes) = query_server_nodes(direction) {
         if let Some(node) = nodes.iter().find(|n| n.name == wanted) {
             let (index, _) =
-                server_pcm_index(&raw).ok_or(DeviceError::NoDevice(direction.noun()))?;
+                server_pcm_index(&raw, true).ok_or(DeviceError::NoDevice(direction.noun()))?;
             let (display_name, _) = compose_name(node);
             return Ok(DeviceTarget {
                 cpal_index: index,
@@ -743,15 +744,87 @@ pub fn resolve_target(direction: Direction, id: &str) -> Result<DeviceTarget, De
     Ok(default_target(true))
 }
 
-/// Index of the PCM that routes through the sound server, most specific first.
-fn server_pcm_index(raw: &[(usize, String, bool)]) -> Option<(usize, String)> {
-    for wanted in ["pipewire", "pulse", "default"] {
+/// Index of the PCM that routes through the sound server.
+///
+/// The order depends on whether this open is aimed at a particular node,
+/// because the two server PCMs do not both honour a target.
+///
+/// Measured on PipeWire 1.6.8 (`arecord -D <pcm>` + `pactl list source-outputs`):
+///
+/// | PCM        | env var        | stream landed on          |
+/// |------------|----------------|---------------------------|
+/// | `pipewire` | `PIPEWIRE_NODE`| the **default** source     |
+/// | `pulse`    | `PULSE_SOURCE` | the **requested** node     |
+///
+/// `PIPEWIRE_NODE` is ignored because the shipped ALSA config
+/// (`/usr/share/alsa/alsa.conf.d/99-pipewire-default.conf`) passes
+/// `capture_node "-1"` / `playback_node "-1"` explicitly, and an explicit
+/// plugin argument wins over the environment. So a device chosen in the picker
+/// was resolved correctly, reported correctly, and then opened on whatever the
+/// system default happened to be — silently right whenever the two agreed.
+///
+/// When a node is being targeted, prefer `pulse`, which does honour it. With no
+/// target, keep `pipewire`: it is the shorter path to the same graph.
+fn server_pcm_index(raw: &[(usize, String, bool)], targeted: bool) -> Option<(usize, String)> {
+    let order: [&str; 3] = if targeted {
+        ["pulse", "pipewire", "default"]
+    } else {
+        ["pipewire", "pulse", "default"]
+    };
+    for wanted in order {
         if let Some((index, name, _)) = raw.iter().find(|(_, name, _)| name == wanted) {
             return Some((*index, name.clone()));
         }
     }
     None
 }
+
+// ── ALSA's own chatter ──────────────────────────────────────────────────────
+
+/// Stop ALSA writing its enumeration failures onto this process's stderr.
+///
+/// Every cpal enumeration walks every PCM the ALSA config names, and that list
+/// includes the OSS compatibility shim. On a machine with no `/dev/dsp` — every
+/// modern Linux box — each walk prints
+/// `ALSA lib pcm_oss.c:404:(_snd_pcm_oss_open) Cannot open device /dev/dsp`
+/// straight to stderr, four times a pass, dozens of times over a session. It is
+/// noise about a device nobody asked for, and it buries the lines that matter.
+///
+/// ALSA lets a program own that output, so take it: install a handler that
+/// drops the message. Nothing else in this process writes through
+/// `snd_lib_error`, and the errors that *are* ours still come back as return
+/// codes from `snd_pcm_open`, which is where we read them.
+#[cfg(target_os = "linux")]
+pub fn silence_alsa_probe_errors() {
+    use std::os::raw::{c_char, c_int};
+    use std::sync::Once;
+
+    /// The real handler is variadic (`const char *fmt, ...`). Rust cannot
+    /// *define* a C-variadic function on stable, so define one with the fixed
+    /// prefix and transmute. This is ABI-safe in the only direction it is used:
+    /// the callee simply never touches the variadic tail.
+    unsafe extern "C" fn discard(
+        _file: *const c_char,
+        _line: c_int,
+        _function: *const c_char,
+        _err: c_int,
+        _fmt: *const c_char,
+    ) {
+    }
+
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| unsafe {
+        let handler: alsa_sys::snd_lib_error_handler_t = Some(std::mem::transmute::<
+            unsafe extern "C" fn(*const c_char, c_int, *const c_char, c_int, *const c_char),
+            unsafe extern "C" fn(*const c_char, c_int, *const c_char, c_int, *const c_char, ...),
+        >(discard));
+        alsa_sys::snd_lib_error_set_handler(handler);
+    });
+}
+
+/// No-op off Linux: ALSA is the only backend that narrates its probing.
+#[cfg(not(target_os = "linux"))]
+pub fn silence_alsa_probe_errors() {}
 
 // ── Pinning a stream to a node for the duration of the open ─────────────────
 
@@ -965,6 +1038,52 @@ mod tests {
             friendly_cpal_name("MacBook Pro Speakers"),
             "MacBook Pro Speakers"
         );
+    }
+
+    /// Measured on PipeWire 1.6.8: `arecord -D pipewire` with `PIPEWIRE_NODE`
+    /// set lands on the *default* source, while `arecord -D pulse` with
+    /// `PULSE_SOURCE` set lands on the *requested* one — the shipped ALSA config
+    /// passes `capture_node "-1"` explicitly and an explicit plugin argument
+    /// beats the environment. So an open that is aimed at a node must go through
+    /// the PCM that can be aimed.
+    #[test]
+    fn an_aimed_open_takes_the_pcm_that_can_be_aimed() {
+        let raw = vec![
+            (0, "pipewire".to_string(), false),
+            (1, "pulse".to_string(), false),
+            (2, "default".to_string(), true),
+        ];
+        assert_eq!(
+            server_pcm_index(&raw, true).map(|(i, n)| (i, n)),
+            Some((1, "pulse".to_string())),
+            "a targeted open must use the pulse PCM"
+        );
+        assert_eq!(
+            server_pcm_index(&raw, false).map(|(i, n)| (i, n)),
+            Some((0, "pipewire".to_string())),
+            "an untargeted open keeps the shorter pipewire path"
+        );
+    }
+
+    /// With no `pulse` PCM there is still a sound server to reach; fall through
+    /// rather than refusing to open anything.
+    #[test]
+    fn a_machine_without_the_pulse_pcm_still_opens_something() {
+        let raw = vec![
+            (0, "pipewire".to_string(), false),
+            (1, "default".to_string(), true),
+        ];
+        assert_eq!(
+            server_pcm_index(&raw, true).map(|(i, _)| i),
+            Some(0),
+            "no pulse PCM: fall through to pipewire"
+        );
+        let only_default = vec![(0, "default".to_string(), true)];
+        assert_eq!(
+            server_pcm_index(&only_default, true).map(|(i, _)| i),
+            Some(0)
+        );
+        assert_eq!(server_pcm_index(&[], true), None);
     }
 
     #[test]
