@@ -50,6 +50,13 @@ const ALLOWED = new Map([
     'components/customization/CustomCSS.tsx',
     'the example CSS shown in the editor placeholder, which has to look like CSS',
   ],
+  [
+    'lib/nativeGround.ts',
+    'SENTINEL: a magenta painted into a 1x1 canvas and read back to prove the '
+      + 'canvas can parse a colour at all, before the real ground is offered to '
+      + 'it. Its whole job is to be a colour no theme defines, so a token is '
+      + 'exactly what it must not be',
+  ],
 ]);
 
 /** A file is skipped entirely when its path matches one of these. */
