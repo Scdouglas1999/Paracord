@@ -77,6 +77,7 @@ import { LitAvatar } from '../light';
 import { formatShortcut } from '../../lib/keyboardShortcuts';
 import { CustomCSS } from '../customization/CustomCSS';
 import { VoiceConnectionCheckButton } from '../voice/VoiceConnectionCheckButton';
+import { getSystemAudioGrant, revokeSystemAudioGrant, type SystemAudioGrant } from '../../lib/media/systemAudioGrant';
 import { ThemeSelector } from '../customization/ThemeSelector';
 
 interface UserSettingsProps {
@@ -375,6 +376,22 @@ export function UserSettings({ onClose }: UserSettingsProps) {
       }
     }
   }, [settings, setLowBandwidthModeUI, selectAudioInput, selectAudioOutput, selectVideoInput]);
+
+  const [systemAudioGrant, setSystemAudioGrant] = useState<SystemAudioGrant | null>(null);
+  useEffect(() => {
+    if (activeSection !== 'voice') return;
+    let cancelled = false;
+    void getSystemAudioGrant()
+      .then((grant) => {
+        if (!cancelled) setSystemAudioGrant(grant);
+      })
+      .catch(() => {
+        /* a browser build has no desktop audio to manage */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSection]);
 
   useEffect(() => {
     if (activeSection !== 'voice') return;
@@ -1698,6 +1715,47 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                     />
                   </div>
                 </section>
+
+                {systemAudioGrant && (
+                  <section className="mt-9 border-t border-border-subtle pt-8">
+                    <h3 className="text-section text-text-muted">Desktop audio</h3>
+                    {systemAudioGrant.required ? (
+                      <>
+                        <p className="mt-2 max-w-xl text-body text-text-secondary">
+                          When you stream with desktop audio, Paracord records the sound of every
+                          other application on this computer and shares it in the call. It asks for
+                          this once and remembers the answer, so starting a stream never stops to
+                          ask again.
+                        </p>
+                        <div className="mt-3 flex items-center gap-3">
+                          <span className="text-body text-text-primary">
+                            {systemAudioGrant.granted
+                              ? 'This computer is allowed to share its own sound.'
+                              : 'Paracord will ask the first time you stream with desktop audio.'}
+                          </span>
+                          {systemAudioGrant.granted && (
+                            <Button
+                              variant="secondary"
+                              onClick={() => {
+                                void revokeSystemAudioGrant()
+                                  .then(getSystemAudioGrant)
+                                  .then(setSystemAudioGrant);
+                              }}
+                            >
+                              Withdraw
+                            </Button>
+                          )}
+                        </div>
+                      </>
+                    ) : (
+                      <p className="mt-2 max-w-xl text-body text-text-secondary">
+                        Desktop audio is granted by the screen-sharing window your desktop shows
+                        when you start a stream — that choice is the permission, and it is not
+                        Paracord&rsquo;s to keep or revoke. There is nothing to manage here.
+                      </p>
+                    )}
+                  </section>
+                )}
 
                 <section className="mt-9 border-t border-border-subtle pt-8">
                   <h3 className="text-section text-text-muted">Trouble with calls</h3>

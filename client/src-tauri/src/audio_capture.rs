@@ -103,17 +103,39 @@ struct CaptureHandle {
 
 static CAPTURE: Mutex<Option<CaptureHandle>> = Mutex::new(None);
 static SYSTEM_AUDIO_CAPTURE_ENABLED: AtomicBool = AtomicBool::new(false);
-// Trusted, out-of-webview consent gate. The renderer can flip
-// SYSTEM_AUDIO_CAPTURE_ENABLED via IPC, so on its own that flag is NOT a
-// security boundary — an XSS in the webview could set it and start capture
-// silently. This flag is only ever set by prompt_native_consent(), a native
-// OS confirmation the webview cannot forge or click. It is required in addition
-// to SYSTEM_AUDIO_CAPTURE_ENABLED before any capture begins, and is reset each
-// time the session is torn down so consent must be re-confirmed per session.
-static NATIVE_CONSENT_GRANTED: AtomicBool = AtomicBool::new(false);
 /// Backstop for a sound server that neither opens the capture source nor
 /// refuses it. A missing server or a refused source answers immediately.
 const SYSTEM_AUDIO_START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+// ---------------------------------------------------------------------------
+// Consent model for system-audio capture (CWE-862/CWE-359)
+//
+// Capturing system audio records every other application on the machine and
+// puts it in a call, so it needs a grant the webview cannot forge. Where that
+// grant comes from differs by platform, and neither route asks again on every
+// stream:
+//
+//   Linux: the grant IS the desktop portal. Screen audio is only ever captured
+//     as part of a screen share, and a screen share starts by answering the
+//     xdg-desktop-portal picker — an out-of-process, compositor-owned surface a
+//     compromised renderer can neither fake nor auto-approve. Paracord used to
+//     put a second zenity/kdialog confirmation on top of that; it was redundant,
+//     it asked again every single stream, and on a Wayland session the helper
+//     inherited display state it could not use, died with "Error 71 (Protocol
+//     error)" before anyone saw it, and its non-zero exit was read as "the user
+//     said no" (2026-09-14: "System audio capture was denied at the native
+//     confirmation prompt", 1.55s after the click, nobody asked). It is gone.
+//
+//   Windows: there is no portal. The Process Loopback Exclusion API hands us
+//     every other process's audio with no OS-level prompt at all, so Paracord
+//     asks once per install and remembers the answer on disk
+//     (`windows_grant::ensure`). Settings -> Voice & video revokes it.
+//
+// `SYSTEM_AUDIO_CAPTURE_ENABLED` below is NOT part of that boundary: the
+// renderer flips it over IPC and an XSS could do the same. It only says
+// "a stream wants audio", and on Windows the persisted grant is checked
+// independently before any capture begins.
+// ---------------------------------------------------------------------------
 
 /// NOT a Tauri command. It used to carry `#[tauri::command]` and was never
 /// registered in `generate_handler!`, so the only caller that ever invoked it
@@ -122,110 +144,172 @@ const SYSTEM_AUDIO_START_TIMEOUT: std::time::Duration = std::time::Duration::fro
 /// this is its Rust-side switch.
 pub fn set_system_audio_capture_enabled(enabled: bool) {
     SYSTEM_AUDIO_CAPTURE_ENABLED.store(enabled, Ordering::SeqCst);
-    // Session teardown (JS calls this with `false` when stopping capture):
-    // drop the native consent so the next capture session must be re-confirmed
-    // out-of-band via the native prompt.
-    if !enabled {
-        NATIVE_CONSENT_GRANTED.store(false, Ordering::SeqCst);
+}
+
+/// Whether this platform needs a Paracord-owned grant before system audio can
+/// be captured, and whether that grant currently exists. Drives the
+/// Settings -> Voice & video control; see the consent model note above.
+pub fn system_audio_grant_state(app: &tauri::AppHandle) -> (bool, bool) {
+    #[cfg(target_os = "windows")]
+    {
+        (true, windows_grant::is_granted(app))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+        (false, true)
     }
 }
 
-/// Require a trusted, native (out-of-webview) confirmation before capturing
-/// system audio. The result is cached for the lifetime of the session so the
-/// JS stop/start recovery sequence does not re-prompt; it is cleared when
-/// `set_system_audio_capture_enabled(false)` is called on teardown.
-fn require_native_consent() -> Result<(), String> {
-    if NATIVE_CONSENT_GRANTED.load(Ordering::SeqCst) {
-        return Ok(());
+/// Withdraw the persisted grant. Only ever removes one — the renderer can take
+/// this permission away but can never hand itself one, which is the direction
+/// that matters.
+pub fn revoke_system_audio_grant(app: &tauri::AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        windows_grant::revoke(app)
     }
-    if prompt_native_consent() {
-        NATIVE_CONSENT_GRANTED.store(true, Ordering::SeqCst);
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
         Ok(())
-    } else {
-        Err("System audio capture was denied at the native confirmation prompt".into())
     }
 }
 
-/// Obtain the native system-audio consent up front, before the caller takes any
-/// lock the rest of the app needs.
+/// Make sure this machine has granted system-audio capture, asking once if it
+/// never has. A no-op on Linux and macOS, where the grant belongs to the
+/// portal/screen-capture consent the stream already went through.
 ///
-/// The prompt is a separate process the user has to read and answer, and it used
-/// to be raised from inside the media transition lock — which is held by mute,
-/// deafen, screen share, and every other media command. The app was unusable
-/// until the dialog was answered. Blocking: call it from `spawn_blocking`.
-pub fn ensure_system_audio_consent() -> Result<(), String> {
-    require_native_consent()
-}
-
-/// Show a native OS confirmation asking the user to allow system-audio capture.
-/// Returns true only if the user explicitly approves. This runs outside the
-/// webview so a renderer-context compromise (XSS) cannot approve it.
-fn prompt_native_consent() -> bool {
-    if crate::NATIVE_PRIVILEGE_PROMPT_ACTIVE
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
+/// Blocking on Windows (it raises a modal): call it from `spawn_blocking`, and
+/// call it *before* taking the media transition lock — every other media command
+/// queues behind that lock, and a modal held under it freezes the call.
+pub fn ensure_system_audio_grant(app: &tauri::AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
     {
-        return false;
+        windows_grant::ensure(app)
     }
-    let approved = show_native_consent_dialog();
-    crate::NATIVE_PRIVILEGE_PROMPT_ACTIVE.store(false, Ordering::SeqCst);
-    approved
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+        Ok(())
+    }
 }
 
+/// Windows-only persistent grant. See the consent model note above for why this
+/// platform is the one that asks.
 #[cfg(target_os = "windows")]
-fn show_native_consent_dialog() -> bool {
-    use windows::Win32::UI::WindowsAndMessaging::{
-        MessageBoxW, IDYES, MB_ICONWARNING, MB_SETFOREGROUND, MB_TOPMOST, MB_YESNO,
-    };
-    unsafe {
-        MessageBoxW(
-            None,
-            windows::core::w!(
-                "Paracord is requesting to capture your system audio — this records sound \
-                 from ALL other applications on this device and shares it in your call.\r\n\r\n\
-                 Only allow this if you intended to share your system audio.\r\n\r\n\
-                 Allow system audio capture for this session?"
-            ),
-            windows::core::w!("Paracord — System Audio Capture"),
-            MB_YESNO | MB_ICONWARNING | MB_TOPMOST | MB_SETFOREGROUND,
-        ) == IDYES
-    }
-}
+mod windows_grant {
+    use std::path::PathBuf;
 
-/// Linux: shell out to a native dialog helper (a separate, trusted process the
-/// webview cannot drive). Fails closed if no dialog helper is available.
-#[cfg(target_os = "linux")]
-fn show_native_consent_dialog() -> bool {
-    use std::process::Command;
+    use tauri::Manager;
 
-    const TITLE: &str = "Paracord — System Audio Capture";
-    const BODY: &str = "Paracord is requesting to capture your system audio — this records sound \
-         from ALL other applications on this device and shares it in your call.\n\n\
-         Only allow this if you intended to share your system audio.\n\n\
-         Allow system audio capture for this session?";
+    const GRANTED: &str = "granted";
 
-    if let Ok(status) = Command::new("zenity")
-        .arg("--question")
-        .arg("--no-wrap")
-        .arg(format!("--title={TITLE}"))
-        .arg(format!("--text={BODY}"))
-        .status()
-    {
-        return status.success();
+    fn grant_file(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+        let mut dir = app
+            .path()
+            .app_config_dir()
+            .map_err(|e| format!("failed to resolve the app config directory: {e}"))?;
+        dir.push("Paracord");
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("failed to create the app config directory: {e}"))?;
+        dir.push("system-audio-grant");
+        Ok(dir)
     }
 
-    if let Ok(status) = Command::new("kdialog")
-        .args(["--title", TITLE, "--yesno", BODY])
-        .status()
-    {
-        return status.success();
+    pub fn is_granted(app: &tauri::AppHandle) -> bool {
+        grant_file(app)
+            .ok()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .is_some_and(|body| body.trim() == GRANTED)
     }
 
-    eprintln!(
-        "[audio_capture] No native dialog helper (zenity/kdialog) available to confirm \
-         system audio capture; denying. Install zenity or kdialog to enable this feature."
-    );
-    false
+    pub fn revoke(app: &tauri::AppHandle) -> Result<(), String> {
+        let path = grant_file(app)?;
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(format!("failed to withdraw the system audio grant: {err}")),
+        }
+    }
+
+    pub fn ensure(app: &tauri::AppHandle) -> Result<(), String> {
+        if is_granted(app) {
+            return Ok(());
+        }
+        if crate::NATIVE_PRIVILEGE_PROMPT_ACTIVE
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            )
+            .is_err()
+        {
+            // We could not ask, which is not the same as being told no.
+            return Err(
+                "Another Paracord permission dialog is already open. Close it and \
+                        start the stream again."
+                    .into(),
+            );
+        }
+        let answer = prompt();
+        crate::NATIVE_PRIVILEGE_PROMPT_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
+
+        match answer {
+            Answer::Allowed => {
+                let path = grant_file(app)?;
+                std::fs::write(&path, GRANTED)
+                    .map_err(|e| format!("failed to record the system audio grant: {e}"))?;
+                Ok(())
+            }
+            Answer::Declined => Err("Desktop audio is off because this computer has not been \
+                                     allowed to share its own sound. You can allow it the next \
+                                     time you start a stream."
+                .into()),
+            Answer::CouldNotAsk(detail) => {
+                eprintln!("[audio_capture] system audio grant prompt failed: {detail}");
+                Err(
+                    "Paracord could not show the confirmation dialog for desktop audio, so it \
+                     did not start capturing. Try starting the stream again."
+                        .into(),
+                )
+            }
+        }
+    }
+
+    enum Answer {
+        Allowed,
+        Declined,
+        /// The prompt itself failed. Never reported to the user as a refusal.
+        CouldNotAsk(String),
+    }
+
+    fn prompt() -> Answer {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            MessageBoxW, IDNO, IDYES, MB_ICONWARNING, MB_SETFOREGROUND, MB_TOPMOST, MB_YESNO,
+        };
+        let result = unsafe {
+            MessageBoxW(
+                None,
+                windows::core::w!(
+                    "Paracord is asking once to capture this computer's audio when you stream — \
+                     this records sound from ALL other applications and shares it in your call.\r\n\r\n\
+                     Only allow this if you intend to share your computer's sound.\r\n\r\n\
+                     You can withdraw this in Settings > Voice & video at any time.\r\n\r\n\
+                     Allow Paracord to capture this computer's audio?"
+                ),
+                windows::core::w!("Paracord — Desktop Audio"),
+                MB_YESNO | MB_ICONWARNING | MB_TOPMOST | MB_SETFOREGROUND,
+            )
+        };
+        match result {
+            IDYES => Answer::Allowed,
+            IDNO => Answer::Declined,
+            // 0 means the message box could not be created at all.
+            other => Answer::CouldNotAsk(format!("MessageBoxW returned {}", other.0)),
+        }
+    }
 }
 
 /// macOS and other platforms: native capture is unsupported (`capture_loop`
@@ -250,10 +334,22 @@ pub fn start_system_audio_capture_into(
         return Err("System audio capture disabled".into());
     }
 
-    // The webview can set the ENABLED flag above, but it cannot approve this
-    // native prompt — so a renderer XSS cannot start covert system-audio
-    // capture on its own. This is the actual consent boundary (CWE-862/CWE-359).
-    require_native_consent()?;
+    // The flag above is renderer-settable and proves nothing. On Windows the
+    // persisted grant is the boundary: only `ensure_system_audio_grant`, which
+    // reads it off disk and can only be satisfied by the native prompt, raises
+    // the flag below — so no path into this function can start capture on a
+    // machine that never allowed it, whatever the renderer asks for. On Linux
+    // the grant is the desktop portal the screen share already went through
+    // (see the consent model note at the top of this file).
+    #[cfg(target_os = "windows")]
+    if !WINDOWS_GRANT_VERIFIED.load(Ordering::SeqCst) {
+        return Err(
+            "Desktop audio is off because this computer has not been allowed to share its own \
+             sound."
+                .into(),
+        );
+    }
+
     if stop_flag.load(Ordering::SeqCst) {
         return Err("system audio capture was canceled".into());
     }
@@ -992,26 +1088,124 @@ fn interleaved_to_mono_f32(data: &[u8], num_channels: usize, bytes_per_sample: u
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
 
-    // Exercises the native-consent lifecycle without ever triggering the native
-    // prompt (which would block CI) or starting real capture: we pre-seed the
-    // cached grant, confirm it short-circuits the prompt, then confirm that
-    // disabling the session clears both the enabled flag and the native consent
-    // so the next session must be re-confirmed out-of-band.
+    /// The renderer-settable flag is a request for audio, not a permission.
+    /// Nothing about it should read as consent to a future reader — the grant
+    /// lives with the portal on Linux and on disk on Windows.
     #[test]
-    fn native_consent_is_cached_then_cleared_on_teardown() {
-        // Simulate a session where native consent was already granted.
-        NATIVE_CONSENT_GRANTED.store(true, Ordering::SeqCst);
-        SYSTEM_AUDIO_CAPTURE_ENABLED.store(true, Ordering::SeqCst);
-
-        // Cached grant must be honored without re-prompting.
-        assert!(require_native_consent().is_ok());
-
-        // Session teardown must revoke consent (and the enabled flag), so a
-        // subsequent capture cannot proceed on a stale grant.
+    fn the_enable_flag_is_only_a_request_for_audio() {
+        set_system_audio_capture_enabled(true);
+        assert!(SYSTEM_AUDIO_CAPTURE_ENABLED.load(Ordering::SeqCst));
         set_system_audio_capture_enabled(false);
-        assert!(!NATIVE_CONSENT_GRANTED.load(Ordering::SeqCst));
         assert!(!SYSTEM_AUDIO_CAPTURE_ENABLED.load(Ordering::SeqCst));
+    }
+
+    /// Real capture, against a real sound server, with no display attached.
+    ///
+    /// Two things are proved at once. Audio actually arrives — the handshake
+    /// says "open" and 48kHz stereo frames land in the sink. And nothing in the
+    /// path asks the user anything: the test runs with `DISPLAY` and
+    /// `WAYLAND_DISPLAY` cleared, so a zenity/kdialog confirmation could not
+    /// have been shown even if one were still there. That prompt used to sit in
+    /// front of every single stream, and on a Wayland session it died before it
+    /// was ever seen and its exit code was read as a refusal.
+    ///
+    /// Needs a sound server, so it does not run in CI. Run it against an
+    /// isolated one:
+    ///
+    /// ```text
+    /// XDG_RUNTIME_DIR=/path/to/private/runtime \
+    ///   cargo test -p paracord-desktop --lib real_system_audio -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "needs a running sound server; run explicitly (see doc comment)"]
+    fn real_system_audio_is_captured_without_asking_anyone() {
+        use std::io::Write;
+
+        // If a prompt were still in the path it could not possibly be answered.
+        std::env::remove_var("DISPLAY");
+        std::env::remove_var("WAYLAND_DISPLAY");
+
+        let tone = std::env::temp_dir().join("paracord-qa-tone.wav");
+        write_sine_wav(&tone, 6).expect("write tone");
+
+        set_system_audio_capture_enabled(true);
+        let (tx, mut rx) = mpsc::channel::<Vec<f32>>(512);
+        let stop = Arc::new(AtomicBool::new(false));
+
+        start_system_audio_capture_into(tx, stop.clone()).expect("capture must start");
+        println!("capture started; no dialog was shown (DISPLAY/WAYLAND_DISPLAY are unset)");
+
+        let mut player = std::process::Command::new("paplay")
+            .arg(&tone)
+            .spawn()
+            .expect("paplay");
+
+        let deadline = Instant::now() + Duration::from_secs(12);
+        let mut frames = 0usize;
+        let mut loudest = 0.0f32;
+        while Instant::now() < deadline {
+            match rx.try_recv() {
+                Ok(frame) => {
+                    frames += 1;
+                    for sample in &frame {
+                        loudest = loudest.max(sample.abs());
+                    }
+                    if frames > 50 && loudest > 0.01 {
+                        break;
+                    }
+                }
+                Err(_) => thread::sleep(Duration::from_millis(20)),
+            }
+        }
+
+        let _ = player.kill();
+        let _ = player.wait();
+        let _ = stop_system_audio_capture();
+        set_system_audio_capture_enabled(false);
+        let _ = std::fs::remove_file(&tone);
+
+        println!("captured {frames} frames, peak amplitude {loudest:.4}");
+        assert!(
+            frames > 50,
+            "expected a stream of captured frames, got {frames}"
+        );
+        assert!(
+            loudest > 0.01,
+            "captured frames were silent (peak {loudest:.5}); audio is not reaching the sink"
+        );
+        let _ = std::io::stdout().flush();
+    }
+
+    /// A few seconds of 440Hz, 16-bit stereo 48kHz, as a WAV on disk.
+    #[cfg(test)]
+    fn write_sine_wav(path: &std::path::Path, seconds: u32) -> std::io::Result<()> {
+        use std::io::Write;
+        let rate = 48_000u32;
+        let total = rate * seconds;
+        let data_len = total * 4; // 2 channels * 2 bytes
+        let mut out = Vec::with_capacity(44 + data_len as usize);
+        out.extend_from_slice(b"RIFF");
+        out.extend_from_slice(&(36 + data_len).to_le_bytes());
+        out.extend_from_slice(b"WAVEfmt ");
+        out.extend_from_slice(&16u32.to_le_bytes());
+        out.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        out.extend_from_slice(&2u16.to_le_bytes()); // stereo
+        out.extend_from_slice(&rate.to_le_bytes());
+        out.extend_from_slice(&(rate * 4).to_le_bytes());
+        out.extend_from_slice(&4u16.to_le_bytes());
+        out.extend_from_slice(&16u16.to_le_bytes());
+        out.extend_from_slice(b"data");
+        out.extend_from_slice(&data_len.to_le_bytes());
+        for n in 0..total {
+            let phase = 2.0 * std::f32::consts::PI * 440.0 * (n as f32) / rate as f32;
+            let value = (phase.sin() * 12_000.0) as i16;
+            out.extend_from_slice(&value.to_le_bytes());
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        let mut file = std::fs::File::create(path)?;
+        file.write_all(&out)
     }
 
     /// A capture loop that dies before the device opens must hand the caller the

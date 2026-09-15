@@ -443,7 +443,22 @@ pub async fn voice_switch_input_device(
     // `voice_list_input_devices`; the codec layer resolves it and falls back to
     // the system default — saying so in the log — if it has gone away.
     let rx = session.audio_actor.start_capture(Some(device_id)).await?;
-    session.pcm_rx = Some(rx);
+
+    // Re-aim the forwarder at the new capture stream rather than replacing
+    // `session.pcm_rx`. The send task took that receiver once, at spawn, and
+    // holds it for the life of the call: assigning a fresh receiver to the
+    // field reached nobody, while dropping the old cpal stream closed the
+    // channel the send task was still reading, ending it for good. Switching
+    // microphone therefore *silenced* the person who switched — the one action
+    // somebody takes when they think they are not being heard.
+    if let Some(old) = session.capture_forward_task.take() {
+        old.abort();
+    }
+    session.capture_forward_task = Some(super::session::spawn_capture_forwarder(
+        rx,
+        session.pcm_tx.clone(),
+    ));
+    tracing::info!("microphone switched; capture forwarder re-aimed at the new device");
 
     Ok(())
 }
@@ -656,17 +671,21 @@ pub async fn voice_set_screen_audio_enabled(
     state: State<'_, MediaState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    // The system-audio consent prompt is a separate dialog process the user has
-    // to answer. Raise it before the media transition lock, not under it — every
-    // other media command queues behind that lock.
+    // On Linux and macOS this is a no-op: the screen share the audio belongs to
+    // already went through the desktop portal / screen-capture consent, and that
+    // is the grant. On Windows it raises the once-per-install prompt. Either way
+    // it happens BEFORE the media transition lock — every other media command
+    // queues behind that lock, and a modal held under it freezes the call.
     #[cfg(not(target_os = "macos"))]
     if enabled {
         crate::audio_capture::set_system_audio_capture_enabled(true);
-        let consent =
-            tokio::task::spawn_blocking(crate::audio_capture::ensure_system_audio_consent)
-                .await
-                .map_err(|err| format!("system audio consent failed: {err}"))?;
-        if let Err(err) = consent {
+        let grant_app = app.clone();
+        let granted = tokio::task::spawn_blocking(move || {
+            crate::audio_capture::ensure_system_audio_grant(&grant_app)
+        })
+        .await
+        .map_err(|err| format!("system audio grant check failed: {err}"))?;
+        if let Err(err) = granted {
             crate::audio_capture::set_system_audio_capture_enabled(false);
             return Err(err);
         }
@@ -748,6 +767,30 @@ pub async fn voice_set_screen_audio_enabled(
         }
     }
     Ok(())
+}
+
+/// Whether this platform needs a Paracord-owned grant to capture desktop audio,
+/// and whether it currently has one (Settings -> Voice & video).
+#[tauri::command]
+pub async fn system_audio_grant_state(app: tauri::AppHandle) -> Result<SystemAudioGrant, String> {
+    let (required, granted) = crate::audio_capture::system_audio_grant_state(&app);
+    Ok(SystemAudioGrant { required, granted })
+}
+
+/// Withdraw the persisted desktop-audio grant. The renderer can take this
+/// permission away; it can never give itself one.
+#[tauri::command]
+pub async fn revoke_system_audio_grant(app: tauri::AppHandle) -> Result<(), String> {
+    crate::audio_capture::revoke_system_audio_grant(&app)
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemAudioGrant {
+    /// False where the grant belongs to the OS (Linux's desktop portal), in
+    /// which case there is nothing for the user to manage inside Paracord.
+    pub required: bool,
+    pub granted: bool,
 }
 
 #[tauri::command]

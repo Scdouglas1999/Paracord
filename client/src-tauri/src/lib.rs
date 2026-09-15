@@ -1736,6 +1736,8 @@ pub fn run() {
         native_media::commands::screen_share_start,
         native_media::commands::screen_share_stop,
         native_media::commands::voice_set_screen_audio_enabled,
+        native_media::commands::system_audio_grant_state,
+        native_media::commands::revoke_system_audio_grant,
         native_media::commands::media_request_keyframe,
         native_media::commands::media_set_stream_visibility,
         native_media::commands::media_get_stream_capabilities,
