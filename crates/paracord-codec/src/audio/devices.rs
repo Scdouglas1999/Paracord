@@ -1054,12 +1054,12 @@ mod tests {
             (2, "default".to_string(), true),
         ];
         assert_eq!(
-            server_pcm_index(&raw, true).map(|(i, n)| (i, n)),
+            server_pcm_index(&raw, true),
             Some((1, "pulse".to_string())),
             "a targeted open must use the pulse PCM"
         );
         assert_eq!(
-            server_pcm_index(&raw, false).map(|(i, n)| (i, n)),
+            server_pcm_index(&raw, false),
             Some((0, "pipewire".to_string())),
             "an untargeted open keeps the shorter pipewire path"
         );
