@@ -55,7 +55,23 @@ export default defineConfig({
         {
           name: 'motion-gate',
           testMatch: /[\\/]motion-gate\.spec\.ts$/,
-          use: { ...devices['Desktop Chrome'] },
+          // This project MEASURES; it does not just assert. Every case samples
+          // requestAnimationFrame across a moment on a runner with no GPU, so a
+          // reading taken while the box stalls is not evidence about the engine
+          // either way — and a stall that lands inside the window the engine is
+          // animating leaves nothing outside it to catch it by. A regression
+          // reproduces, by definition; a load spike almost never survives three
+          // readings. Nothing is hidden by this: a case that needed a retry is
+          // reported as FLAKY by name, and no budget moves by a millisecond.
+          retries: 2,
+          use: {
+            ...devices['Desktop Chrome'],
+            // …and the tracer must not perturb the thing being traced. The
+            // default `on-first-retry` would run every retried frame-timing
+            // measurement with the recorder attached, which costs frames in
+            // exactly the moment being measured.
+            trace: 'off',
+          },
         },
       ]
     : DESIGN_REVIEW
