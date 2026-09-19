@@ -1,7 +1,6 @@
 import { format, isSameDay } from 'date-fns';
 
-import { Button, SectionLabel, Well } from '../ui';
-import { cn } from '../../lib/utils';
+import { Button } from '../ui';
 import type { ComingUpEvent } from './useComingUp';
 
 export interface HomeComingUpProps {
@@ -33,10 +32,8 @@ export function eventMeta(event: ComingUpEvent, nowMs: number): string {
 /**
  * EventCard — one scheduled event (docs/lantern-stage-spec.md §8).
  *
- * A well with a day tile, the title, one meta line and **one** action. The day
- * tile pairs the mono weekday against the Gabarito date exactly as §2 sets the
- * two faces against each other; nothing here glows, because an event is not a
- * person (§0).
+ * A quiet event row: date, name, context and one RSVP action. Real schedules
+ * remain available without giving Home the weight of an agenda.
  */
 function EventCard({
   event,
@@ -47,50 +44,34 @@ function EventCard({
   nowMs: number;
   onSetGoing: (event: ComingUpEvent, going: boolean) => void;
 }) {
-  const start = new Date(event.startsAtMs);
   return (
-    <Well
-      bare
-      as="li"
-      className="flex items-center gap-3.5 rounded-[var(--radius-card)] px-3.5 py-3"
-    >
-      <span
-        aria-hidden
-        className={cn(
-          'flex w-11 shrink-0 flex-col items-center rounded-[var(--radius-control)] py-1.5',
-          'bg-bg-raised shadow-[var(--shadow-raised)]',
-        )}
-      >
-        {/* §6.8 bans uppercase; the mono face and the size already make this
-            read as a label, so "Sat" is enough. */}
-        <span className="pc-mono text-[10.5px] text-text-faint">{format(start, 'EEE')}</span>
-        <span className="pc-display text-heading font-bold leading-none text-text-primary">
-          {format(start, 'd')}
-        </span>
-      </span>
-      <span className="flex min-w-0 flex-col gap-0.5">
-        <span className="pc-display truncate text-name font-semibold text-text-primary">
+    <li className="flex min-w-0 flex-col items-start gap-1 py-2">
+      <time dateTime={new Date(event.startsAtMs).toISOString()} className="text-meta text-text-muted">
+        {eventWhen(event.startsAtMs, nowMs)}
+      </time>
+      <span className="flex min-w-0 max-w-full flex-col gap-1">
+        <span className="pc-display break-words text-name font-semibold text-text-primary">
           {event.name}
         </span>
-        <span className="truncate text-meta text-text-faint">{eventMeta(event, nowMs)}</span>
+        <span className="break-words text-meta text-text-faint">
+          {[event.buildingName, event.roomName ?? event.location, event.going > 0 ? `${event.going} going` : null].filter(Boolean).join(' · ')}
+        </span>
       </span>
       <Button
         size="sm"
         variant="ghost"
         onClick={() => onSetGoing(event, !event.rsvp)}
+        aria-pressed={event.rsvp}
         aria-label={
           event.rsvp
             ? `You are going to ${event.name} — tap to change your mind`
             : `Say you are going to ${event.name}`
         }
-        className={cn(
-          'ml-auto shrink-0',
-          !event.rsvp && 'shadow-[inset_0_0_0_1px_var(--border-strong)]',
-        )}
+        className="-ml-2.5 mt-1 text-text-link"
       >
         {event.rsvp ? "You're going" : "I'm going"}
       </Button>
-    </Well>
+    </li>
   );
 }
 
@@ -103,9 +84,9 @@ function EventCard({
 export function HomeComingUp({ events, nowMs, onSetGoing }: HomeComingUpProps) {
   if (events.length === 0) return null;
   return (
-    <section aria-label="Coming up" className="flex flex-col gap-2">
-      <SectionLabel className="px-0 pb-1 pt-2">Coming up</SectionLabel>
-      <ul className="flex flex-col gap-2">
+    <section aria-label="Coming up" className="flex min-w-0 flex-col gap-2">
+      <h2 className="pc-display text-heading font-semibold text-text-primary">Coming up</h2>
+      <ul className="flex min-w-0 flex-col gap-3">
         {events.map((event) => (
           <EventCard key={event.key} event={event} nowMs={nowMs} onSetGoing={onSetGoing} />
         ))}

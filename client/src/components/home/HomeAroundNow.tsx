@@ -1,8 +1,7 @@
-import { Well } from '../ui';
 import { AvatarStack } from '../light';
 import { lightsOnOverflowCaption, type PersonLight } from '../../lib/attention/light';
 
-/** How many faces the well shows before the rest become the "+N lights on" tail. */
+/** How many faces the quiet Home header shows before its overflow caption. */
 export const AROUND_NOW_FACES = 7;
 
 export interface HomeAroundNowProps {
@@ -12,17 +11,19 @@ export interface HomeAroundNowProps {
   sentence: string;
   /** Everyone with their lights on across every building. */
   lightsOn: number;
+  /** Voice cards already name their people; avoid repeating those faces above them. */
+  showFaces?: boolean;
 }
 
 /**
- * Around now — the well under Home's title (docs/lantern-stage-spec.md §7.3, §7.5).
+ * Around now — the plain presence summary under Home's greeting (§7.5).
  *
- * A stack of lit faces, WP1's one sentence naming who is where, and the count
- * of everyone else whose lights are on. It asserts nothing of its own: every
+ * The sentence names who is where. When voice cards are absent, faces and a
+ * remaining-person count accompany it. It asserts nothing of its own: every
  * face is a `PersonLight` and the sentence comes from `aroundNowSentence`, so
  * this cannot disagree with the sidebar or the Lobby.
  */
-export function HomeAroundNow({ people, sentence, lightsOn }: HomeAroundNowProps) {
+export function HomeAroundNow({ people, sentence, lightsOn, showFaces = true }: HomeAroundNowProps) {
   // Only the faces actually on screen count against the tail, and only the lit
   // ones: the stack can carry a dim face, and "+N lights on" must stay a count
   // of lights rather than of avatars.
@@ -32,26 +33,21 @@ export function HomeAroundNow({ people, sentence, lightsOn }: HomeAroundNowProps
   const overflow = Math.max(0, lightsOn - shownLit);
 
   return (
-    <Well
-      bare
-      as="section"
+    <section
       aria-label="Around now"
-      className="flex flex-wrap items-center gap-x-3.5 gap-y-2 px-3.5 py-2.5"
+      className="flex min-w-0 flex-wrap items-center gap-x-3.5 gap-y-3"
     >
-      <span className="shrink-0 text-meta text-text-faint">Around now</span>
-      {people.length > 0 && (
-        <AvatarStack people={people} size={28} max={AROUND_NOW_FACES} overlap={6} />
-      )}
-      {/* Narrow: the faces and the count keep the first line and the sentence
-          wraps under them, rather than being squeezed into a column. */}
-      <p className="order-2 min-w-0 flex-1 basis-full text-[13px] leading-snug text-text-body sm:order-none sm:basis-0">
+      <p className="w-full min-w-0 text-label leading-relaxed text-text-secondary">
         {sentence}
       </p>
-      {overflow > 0 && (
-        <span className="order-1 ml-auto shrink-0 text-meta text-text-faint sm:order-none">
+      {showFaces && people.length > 0 && (
+        <AvatarStack people={people} size={36} max={AROUND_NOW_FACES} overlap={5} />
+      )}
+      {showFaces && overflow > 0 && (
+        <span className="text-meta text-text-faint">
           {lightsOnOverflowCaption(overflow)}
         </span>
       )}
-    </Well>
+    </section>
   );
 }

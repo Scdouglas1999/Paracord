@@ -115,7 +115,7 @@ describe('BuildingsColumn', () => {
 
     expect(screen.getByRole('button', { name: /open command palette/i })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: /^Home/ })).toBeInTheDocument();
-    expect(screen.getByLabelText('3 conversations need you')).toHaveTextContent('3');
+    expect(screen.getByLabelText('3 updates for you')).toHaveTextContent('3');
     expect(screen.getByLabelText('2 unread conversations')).toHaveTextContent('2');
 
     fireEvent.click(screen.getByRole('option', { name: /^Home/ }));

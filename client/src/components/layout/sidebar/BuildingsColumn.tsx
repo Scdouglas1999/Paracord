@@ -240,7 +240,7 @@ export function BuildingsColumn({
               <Chip
                 size="sm"
                 tone="talking"
-                aria-label={`${needsYouCount} ${needsYouCount === 1 ? 'conversation needs' : 'conversations need'} you`}
+                aria-label={`${needsYouCount} ${needsYouCount === 1 ? 'update' : 'updates'} for you`}
               >
                 <RollingNumber
                   value={needsYouCount}

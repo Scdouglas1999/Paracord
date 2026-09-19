@@ -9,11 +9,12 @@ import { HomeComingUp } from '../components/home/HomeComingUp';
 import { HomeNeedsYou, homeAttention, type NeedsYouStatus } from '../components/home/HomeNeedsYou';
 import { HomePickUp } from '../components/home/HomePickUp';
 import { aroundNowPeople } from '../components/home/homeModel';
-import { homeSentence, timeOfDayWord } from '../components/home/timeOfDay';
+import { homeGreeting } from '../components/home/timeOfDay';
 import { useComingUp } from '../components/home/useComingUp';
 import { CreateGuildModal } from '../components/guild/CreateGuildModal';
 
 import { useAvailableAccountScopes } from '../hooks/useAvailableAccountScopes';
+import { useCurrentUser } from '../hooks/useCurrentUser';
 import { useAvailableGuilds } from '../hooks/useGuilds';
 import { useBuildingRosters } from '../hooks/useBuildingRosters';
 import {
@@ -33,23 +34,20 @@ import { activateConversation } from '../lib/attention/conversationNavigation';
 import { accountScopeKey } from '../lib/serverScope';
 import { cn } from '../lib/utils';
 import type { BuildingLight, RoomLight } from '../lib/attention/light';
-import type { ConversationEntry } from '../lib/attention/conversationModel';
+import { snowflakeToMs, type ConversationEntry } from '../lib/attention/conversationModel';
 import { useChannelStore } from '../stores/channelStore';
 import { useReadStateStore } from '../stores/readStateStore';
 import { useRelationshipStore } from '../stores/relationshipStore';
 import { toast } from '../stores/toastStore';
 
-/** The right column is a shortlist; the buildings column carries the rest. */
+/** A short set of conversations leaves room for the people here now. */
 const PICK_UP_CAP = 6;
 /** Home's own clock: the title word and "Today 1:00 pm" only move by the minute. */
 const HOME_CLOCK_MS = 60_000;
 
 /**
- * App Home — the street outside your buildings (docs/lantern-stage-spec.md §7.5).
- *
- * Title, one sentence of fact, the Around-now well, **your buildings brightest
- * first**, what is coming up, and — down the right — what needs you and what
- * you can pick back up.
+ * Home puts people and their servers first, then conversations to return to.
+ * Direct attention and upcoming events sit alongside those conversations.
  *
  * Every light on this page comes from `useBuildingLights()`; the ranking in
  * Needs-you comes from the unified list's own scorer. Home derives no presence,
@@ -59,6 +57,7 @@ const HOME_CLOCK_MS = 60_000;
  */
 export function HomePage() {
   const navigate = useNavigate();
+  const user = useCurrentUser();
   const nowMs = useLightClock(true, HOME_CLOCK_MS);
 
   const guilds = useAvailableGuilds();
@@ -100,8 +99,14 @@ export function HomePage() {
   );
   const pickUp = useMemo(() => {
     const claimed = new Set(attention.map((entry) => entry.key));
-    return recent.filter((entry) => entry.lastActivityId && !claimed.has(entry.key)).slice(0, PICK_UP_CAP);
-  }, [recent, attention]);
+    const conversations = new Map([...needsYou, ...pinned, ...recent].map((entry) => [entry.key, entry]));
+    return [...conversations.values()]
+      .filter((entry) => entry.lastActivityId && !claimed.has(entry.key))
+      .sort((a, b) =>
+        snowflakeToMs(b.lastActivityId!) - snowflakeToMs(a.lastActivityId!) || a.key.localeCompare(b.key),
+      )
+      .slice(0, PICK_UP_CAP);
+  }, [needsYou, pinned, recent, attention]);
 
   /** Mentions by room key, so a building's text rooms can say "1 mention for you". */
   const mentions = useMemo(() => {
@@ -216,73 +221,55 @@ export function HomePage() {
     ]);
   }, [guilds, fetchChannels]);
 
-  const needsYouFirst = attention.length + requests.length > 0;
-
   return (
     <div className="h-full overflow-y-auto scrollbar-thin">
-      <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-5 px-4 py-5 sm:px-7 sm:py-6">
-        <header className="flex flex-wrap items-baseline gap-x-3.5 gap-y-1">
-          <h1 className="pc-display text-display font-bold text-text-primary">
-            {timeOfDayWord(new Date(nowMs))}
+      <div className="mx-auto flex w-full max-w-[1120px] flex-col gap-7 px-4 py-6 sm:px-8 sm:py-8">
+        <header className="flex min-w-0 flex-col gap-3">
+          <h1 className="pc-display break-words text-display font-bold text-text-primary">
+            {homeGreeting(new Date(nowMs), user?.display_name || user?.username)}
           </h1>
-          <p className="min-w-0 text-[13px] text-text-faint">
-            {homeSentence(new Date(nowMs), lightsOn, buildings.length)}
-          </p>
+          <HomeAroundNow
+            people={people}
+            sentence={aroundNow}
+            lightsOn={lightsOn}
+            showFaces={!buildings.some((building) => building.brightestRoom)}
+          />
         </header>
 
-        <HomeAroundNow people={people} sentence={aroundNow} lightsOn={lightsOn} />
+        <section aria-label="Your servers" className="flex min-w-0 flex-col gap-3">
+          <SectionLabel className="px-0 pb-0 pt-0">Your servers</SectionLabel>
+          {buildings.map((building) => (
+            <HomeBuildingCard
+              key={building.key}
+              building={building}
+              mentions={mentions}
+              onOpenBuilding={openBuilding}
+              onOpenRoom={openRoom}
+              onJoinRoom={joinRoom}
+            />
+          ))}
+          <HomeAddBuilding onClick={() => setShowCreateModal(true)} />
+        </section>
 
-        <div className="grid min-w-0 grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_380px]">
-          {/* Your buildings — brightest first (§7.1 ordering, §7.5 presentation). */}
-          <div className="order-2 flex min-w-0 flex-col gap-3 lg:order-1">
-            <SectionLabel
-              className="px-0 pb-0.5 pt-0"
-              meta={buildings.length > 1 ? 'brightest first' : undefined}
-            >
-              Your servers
-            </SectionLabel>
-            {buildings.map((building) => (
-              <HomeBuildingCard
-                key={building.key}
-                building={building}
-                mentions={mentions}
-                onOpenBuilding={openBuilding}
-                onOpenRoom={openRoom}
-                onJoinRoom={joinRoom}
-              />
-            ))}
+        <div className={cn('grid min-w-0 grid-cols-1 gap-7 lg:gap-8', pickUp.length > 0 && 'lg:grid-cols-[minmax(0,1fr)_300px]')}>
+          <HomePickUp entries={pickUp} litRooms={litRooms} onOpen={openConversation} />
+          <div className={cn(
+            'flex min-w-0 flex-col gap-6',
+            pickUp.length > 0 && 'border-t border-border-subtle pt-6 lg:col-start-2 lg:border-l lg:border-t-0 lg:pl-7 lg:pt-0',
+          )}>
+            <HomeNeedsYou
+              entries={attention}
+              requests={requests}
+              status={activityStatus}
+              onOpen={openConversation}
+              onAccept={acceptRequest}
+              onRefresh={refreshActivity}
+            />
             <HomeComingUp
               events={events}
               nowMs={nowMs}
               onSetGoing={(event, going) => void setGoing(event, going)}
             />
-            <HomeAddBuilding onClick={() => setShowCreateModal(true)} />
-          </div>
-
-          {/*
-            Needs you + Pick up.
-
-            On a phone the column dissolves (`display: contents`) so its two
-            blocks take their own place in the single column: work somebody is
-            waiting on you for leads, then the buildings, then what you can
-            pick back up (§6, layout-spec §6). On a wide viewport it is one
-            right-hand column again, and the same two order values keep the
-            blocks in the same sequence inside it.
-          */}
-          <div className="contents lg:order-2 lg:flex lg:min-w-0 lg:flex-col lg:gap-4">
-            <div className={cn('min-w-0', needsYouFirst ? 'order-1' : 'order-3')}>
-              <HomeNeedsYou
-                entries={attention}
-                requests={requests}
-                status={activityStatus}
-                onOpen={openConversation}
-                onAccept={acceptRequest}
-                onRefresh={refreshActivity}
-              />
-            </div>
-            <div className="order-4 min-w-0">
-              <HomePickUp entries={pickUp} litRooms={litRooms} onOpen={openConversation} />
-            </div>
           </div>
         </div>
       </div>

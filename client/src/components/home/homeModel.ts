@@ -75,9 +75,8 @@ export function activeTextRoom(building: BuildingLight): RoomLight | null {
 }
 
 /**
- * A building is drawn as the wide card only when a voice room in it is lit —
- * that card exists to show the room's live thumbnail, and there is no honest
- * thumbnail without a room to look into (§6.4: no fake video).
+ * A server gets a live card when there is an occupied voice channel. Its
+ * people supply the preview; a media frame is optional (§6.4: no fake video).
  */
 export function isLitBuilding(building: BuildingLight): boolean {
   return building.brightestRoom !== null;

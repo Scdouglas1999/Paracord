@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  homeDateLine,
-  homeSentence,
-  lightsOnAcrossBuildingsCaption,
   shortAgo,
   timeOfDayWord,
   timeOfDayWordForHour,
@@ -15,12 +12,12 @@ function at(hours: number, minutes = 0): Date {
 }
 
 describe('the time-of-day word', () => {
-  it('is Tonight from 18:00 until 04:59, across midnight', () => {
-    expect(timeOfDayWordForHour(18)).toBe('Tonight');
-    expect(timeOfDayWordForHour(21)).toBe('Tonight');
-    expect(timeOfDayWordForHour(23)).toBe('Tonight');
-    expect(timeOfDayWordForHour(0)).toBe('Tonight');
-    expect(timeOfDayWordForHour(4)).toBe('Tonight');
+  it('is Evening from 18:00 until 04:59, across midnight', () => {
+    expect(timeOfDayWordForHour(18)).toBe('Evening');
+    expect(timeOfDayWordForHour(21)).toBe('Evening');
+    expect(timeOfDayWordForHour(23)).toBe('Evening');
+    expect(timeOfDayWordForHour(0)).toBe('Evening');
+    expect(timeOfDayWordForHour(4)).toBe('Evening');
   });
 
   it('is Morning from 05:00 until 11:59', () => {
@@ -34,41 +31,12 @@ describe('the time-of-day word', () => {
   });
 
   it('flips exactly on the boundary, never a minute early', () => {
-    expect(timeOfDayWord(at(4, 59))).toBe('Tonight');
+    expect(timeOfDayWord(at(4, 59))).toBe('Evening');
     expect(timeOfDayWord(at(5, 0))).toBe('Morning');
     expect(timeOfDayWord(at(11, 59))).toBe('Morning');
     expect(timeOfDayWord(at(12, 0))).toBe('Afternoon');
     expect(timeOfDayWord(at(17, 59))).toBe('Afternoon');
-    expect(timeOfDayWord(at(18, 0))).toBe('Tonight');
-  });
-});
-
-describe("Home's one sentence", () => {
-  it('reads the date the way the reference render does', () => {
-    expect(homeDateLine(at(20))).toBe('Saturday 12 September');
-  });
-
-  it('counts people and servers, and agrees with itself at one', () => {
-    expect(lightsOnAcrossBuildingsCaption(30, 2)).toBe(
-      '30 people have their lights on across your 2 servers',
-    );
-    expect(lightsOnAcrossBuildingsCaption(1, 1)).toBe(
-      '1 person has their lights on across your server',
-    );
-  });
-
-  it('says nobody rather than dressing a zero up as activity', () => {
-    expect(lightsOnAcrossBuildingsCaption(0, 2)).toBe(
-      'nobody has their lights on across your 2 servers',
-    );
-    expect(lightsOnAcrossBuildingsCaption(0, 0)).toBe('you have not joined a server yet');
-    expect(lightsOnAcrossBuildingsCaption(0, 0)).not.toMatch(/No data|quiet/i);
-  });
-
-  it('joins the two halves with the separator the render uses', () => {
-    expect(homeSentence(at(20), 30, 2)).toBe(
-      'Saturday 12 September · 30 people have their lights on across your 2 servers',
-    );
+    expect(timeOfDayWord(at(18, 0))).toBe('Evening');
   });
 });
 

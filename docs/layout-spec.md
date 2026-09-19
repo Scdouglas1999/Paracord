@@ -413,6 +413,15 @@ shell, with the Servers column beside it.
 `HomeBuildingCard`, `HomeNeedsYou`, `HomeComingUp`, `HomeAddBuilding`,
 `HomePickUp` (lantern-stage-spec §7.5). Brightest server first.
 
+Home's September 2026 refinement follows `lantern-stage-spec.md` §7.5: greeting
+and shared presence, servers with named voice participants, then recent message
+previews alongside **For you** and upcoming events. The narrow layout keeps that
+same order. Home's direct attention and navigation count include mentions,
+unread DMs, thread replies and friend requests; ordinary unread channels and
+voice activity remain discoverable without increasing that count. The existing
+unified-list partition and scoring remain shared data primitives; Home combines
+their pools before selecting direct attention and recent conversations.
+
 ### 7.6 The text channel and DMs (`components/message/`, `components/layout/TopBar.tsx`)
 
 `TopBar` is the channel header: window dot, `ChannelSwitcher`, the server as

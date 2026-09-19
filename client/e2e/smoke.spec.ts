@@ -733,20 +733,24 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
 
   await page.goto(`/app/guilds/${guildId}/channels/999999999`);
   await expect(page.getByRole('heading', { name: 'Channel not found' })).toBeVisible();
-  // Home must prioritize unread work over presence-based quiet copy (§7.5:
-  // Needs-you is the right column, and it never calls an unknown state quiet).
+  // Home keeps direct mentions visible and never calls an unknown state quiet.
   headerAttention = 'mentions';
   showHomeFixtures = true;
   await page.goto('/app');
   const home = page.getByRole('main');
   await expect(home.getByText('Your servers')).toBeVisible();
-  const attention = home.getByRole('region', { name: 'Needs you' });
+  const attention = home.getByRole('region', { name: 'For you' });
   // The attention preview's author is the reader, so the row keeps the count.
   await expect(attention.getByText('3 mentions for you', { exact: true })).toBeVisible();
   await expect(attention.getByText(/An update waiting for you/)).toBeVisible();
-  await expect(attention.getByText(/^Design · /)).toBeVisible();
-  await expect(attention.getByText(/^Support · /)).toBeVisible();
-  await expect(home.getByText(/is quiet|No data|Nothing is waiting on you/)).toHaveCount(0);
+  const conversations = home.getByRole('region', { name: 'Pick up the conversation' });
+  for (const channel of homeChannels) {
+    await expect(attention.getByRole('button', { name: `Open ${channel.name}` })).toHaveCount(0);
+    const conversation = conversations.getByRole('button', { name: `Open ${channel.name}` });
+    await expect(conversation).toContainText(`Could you review ${channel.name}?`);
+    await expect(conversation).toHaveAccessibleDescription(new RegExp(homeSpaces.find(space => space.id === channel.guild_id)!.name));
+  }
+  await expect(home.getByText(/is quiet|No data|Nothing new for you/)).toHaveCount(0);
   const openAttention = attention.getByRole('button', { name: `Open ${attentionChannel.name}` });
   for (const width of [320, 390, 768, 1280]) {
     await page.setViewportSize({ width, height: 900 });

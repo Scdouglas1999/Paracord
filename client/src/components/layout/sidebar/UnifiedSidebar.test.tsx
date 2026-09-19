@@ -194,13 +194,18 @@ describe('UnifiedSidebar', () => {
     expect(screen.getByRole('option', { name: /build-log/ })).toBeInTheDocument();
   });
 
-  it('has no Needs-you section — Home owns the list and keeps the count', () => {
+  it('counts unique direct updates and requests, excluding casual unread and voice activity', () => {
     vi.mocked(useUnifiedConversations).mockReturnValue(
-      conversations({ needsYouOverflowCount: 3 }),
+      conversations({
+        needsYou: [entry(), entry({ key: 'casual', mentionCount: 0, isThreadReply: false, hasVoiceActivity: true })],
+        recent: [entry(), entry({ key: 'overflow', mentionCount: 1 })],
+        requests: [{ key: 'request:2', userId: '2', username: 'Ren', createdMs: NOW }],
+        needsYouOverflowCount: 3,
+      }),
     );
     renderSidebar();
     expect(screen.queryByRole('heading', { name: 'Needs you' })).not.toBeInTheDocument();
-    expect(screen.getByLabelText('3 conversations need you')).toHaveTextContent('3');
+    expect(screen.getByLabelText('3 updates for you')).toHaveTextContent('3');
   });
 
   it('pins the account plate to the bottom with its light in words', () => {

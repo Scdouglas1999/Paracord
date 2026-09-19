@@ -49,7 +49,9 @@ test('capture the design-review screens', async ({ page }) => {
   test.setTimeout(WP === 'wp7' ? 2_400_000 : 180_000);
   await mkdir(OUT_DIR, { recursive: true });
 
-  const nowIso = new Date().toISOString();
+  const nowIso = WP === 'warmth'
+    ? new Date('2026-09-12T21:30:00').toISOString()
+    : new Date().toISOString();
   const historyEpoch = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
   const user = {
@@ -124,6 +126,9 @@ test('capture the design-review screens', async ({ page }) => {
   // these screens are meant to show the steady state.
   await page.addInitScript(() => {
     try {
+      // Like the smoke fixture, this is a returning browser: a cold anonymous
+      // origin does not attempt cookie refresh until it has held a session.
+      window.localStorage.setItem('paracord:auth:session-seen', '1');
       window.localStorage.setItem('paracord:v2:layout-tour-shell', 'done');
       window.localStorage.setItem('paracord:v2:layout-tour-guild-home', 'done');
       window.localStorage.setItem('paracord:v2:onboarding-complete', '1');
@@ -832,13 +837,20 @@ test('capture the design-review screens', async ({ page }) => {
   /* event tonight, work waiting) and an **all-quiet morning** (the same two */
   /* buildings, nobody in). Opt in with                                      */
   /*   PARACORD_E2E_DESIGN=1 PARACORD_E2E_DESIGN_WP=wp6 npx playwright test  */
+  /* Use WP=warmth for two communities with conversation previews, a direct */
+  /* mention, a DM, casual unread activity, and people in an audio-only call.*/
   /*                                                                        */
   /* The light comes from the gateway, not from REST, so the realtime stream */
   /* is served here as a finite SSE body carrying READY plus the presence,   */
   /* voice and typing frames the scenario needs. It is the same wire format  */
   /* `e2e/realtime-stub.mjs` serves; only the contents differ.               */
   /* ---------------------------------------------------------------------- */
-  if (WP === 'wp6') {
+  if (WP === 'wp6' || WP === 'warmth') {
+    // A social Home review: the same real data paths as WP6, with everyday
+    // conversation, an audio-only call, and a DM alongside one direct mention.
+    const warmth = WP === 'warmth';
+    const kestrelName = warmth ? 'The usual crowd' : 'Kestrel Robotics';
+    const saltName = warmth ? 'Saturday outside' : 'Saltmarsh Sailing';
     const SALT_ID = '1002';
     const KESTREL_TEXT = ['2001', '2005', '2006', '2007', '2008'];
     const KESTREL_VOICE = ['2002', '2009', '2010'];
@@ -904,19 +916,19 @@ test('capture the design-review screens', async ({ page }) => {
     });
 
     const kestrelChannels = [
-      channel('2002', GUILD_ID, 'Shop floor', 2, 0),
-      channel('2009', GUILD_ID, 'Paint booth', 2, 1),
+      channel('2002', GUILD_ID, warmth ? 'The couch' : 'Shop floor', 2, 0),
+      channel('2009', GUILD_ID, warmth ? 'A game or two' : 'Paint booth', 2, 1),
       channel('2010', GUILD_ID, 'Quiet corner', 2, 2),
-      channel('2001', GUILD_ID, 'build-log', 0, 3),
+      channel('2001', GUILD_ID, warmth ? 'weekend-plans' : 'build-log', 0, 3),
       channel('2005', GUILD_ID, 'general', 0, 4),
-      channel('2006', GUILD_ID, 'parts-orders', 0, 5),
-      channel('2007', GUILD_ID, 'shop-safety', 0, 6),
+      channel('2006', GUILD_ID, warmth ? 'music' : 'parts-orders', 0, 5),
+      channel('2007', GUILD_ID, warmth ? 'games' : 'shop-safety', 0, 6),
       channel('2008', GUILD_ID, 'off-topic', 0, 7),
     ];
     const saltChannels = [
       channel('2102', SALT_ID, 'Clubhouse', 2, 0),
-      channel('2101', SALT_ID, 'regatta-2026', 0, 1),
-      channel('2103', SALT_ID, 'crew-list', 0, 2),
+      channel('2101', SALT_ID, warmth ? 'trail-notes' : 'regatta-2026', 0, 1),
+      channel('2103', SALT_ID, warmth ? 'next-walk' : 'crew-list', 0, 2),
     ];
 
     const eventToday = {
@@ -924,9 +936,9 @@ test('capture the design-review screens', async ({ page }) => {
       guild_id: GUILD_ID,
       channel_id: '2002',
       creator_id: user.id,
-      name: 'Thermal test — driver v3',
+      name: warmth ? 'Sunday walk by the river' : 'Thermal test — driver v3',
       description: null,
-      scheduled_start: new Date('2026-09-12T22:30:00').toISOString(),
+      scheduled_start: new Date(warmth ? '2026-09-13T10:30:00' : '2026-09-12T22:30:00').toISOString(),
       scheduled_end: null,
       status: 1,
       entity_type: 1,
@@ -939,6 +951,47 @@ test('capture the design-review screens', async ({ page }) => {
 
     type Scenario = 'lit' | 'quiet';
     let scenario: Scenario = 'lit';
+
+    const homeMessageText: Record<string, string> = {
+      '2001': '<@42> are you still up for noodles on Sunday?',
+      '2005': 'Made it home. That last round was ridiculous.',
+      '2006': 'That live recording is even better than the album.',
+      '2007': 'One more round tomorrow? Same terrible team.',
+      '2008': 'The bread finally turned out right. Only took three weekends.',
+      '2101': 'The river path is open again. Took the long way back.',
+      '2103': 'Sunday looks dry. Shall we meet at the footbridge?',
+    };
+    const homeMessages = [...kestrelChannels, ...saltChannels]
+      .filter((item) => item.type === 0)
+      .map((item, index) => ({
+        id: (BigInt(tail) + BigInt(index)).toString(),
+        channel_id: item.id,
+        author: CAST[index % CAST.length],
+        content: homeMessageText[item.id],
+        created_at: new Date('2026-09-12T21:28:00').toISOString(),
+        attachments: [],
+        reactions: [],
+      }));
+    const warmthDm = {
+      ...dmChannel,
+      recipient: CAST[2],
+      recipients: [CAST[2]],
+      last_message_id: (BigInt(tail) + 20n).toString(),
+    };
+    const warmthDmMessage = {
+      ...homeMessages[0],
+      id: warmthDm.last_message_id,
+      channel_id: DM_CHANNEL_ID,
+      author: CAST[2],
+      content: 'Found the song you were trying to remember. Sending it now.',
+    };
+    const warmthMessages = [...homeMessages, warmthDmMessage];
+    if (warmth) {
+      for (const item of [...kestrelChannels, ...saltChannels]) {
+        const last = homeMessages.find((message) => message.channel_id === item.id);
+        if (last) item.last_message_id = last.id;
+      }
+    }
 
     const frame = (t: string, d: unknown) =>
       `event: gateway\ndata: ${JSON.stringify({ op: 0, t, d })}\n\n`;
@@ -987,7 +1040,7 @@ test('capture the design-review screens', async ({ page }) => {
     const voiceStates = () =>
       scenario === 'lit'
         ? [
-            { who: CAST[0], self_stream: true },
+            { who: CAST[0], self_stream: !warmth },
             { who: CAST[1], self_stream: false },
             { who: CAST[2], self_stream: false },
           ].map(({ who, self_stream }) => ({
@@ -1025,7 +1078,7 @@ test('capture the design-review screens', async ({ page }) => {
         guilds: [
           readyGuild(
             GUILD_ID,
-            'Kestrel Robotics',
+            kestrelName,
             61,
             kestrelChannels,
             voiceStates(),
@@ -1033,7 +1086,7 @@ test('capture the design-review screens', async ({ page }) => {
           ),
           readyGuild(
             SALT_ID,
-            'Saltmarsh Sailing',
+            saltName,
             20,
             saltChannels,
             [],
@@ -1052,7 +1105,25 @@ test('capture the design-review screens', async ({ page }) => {
           body: realtimeBody(),
         }),
       );
-    await routeRealtime();
+    if (!warmth) await routeRealtime();
+
+    const prepareWarmthRealtime = async () => {
+      // Reuse the smoke harness's persistent SSE connection. A fulfilled SSE
+      // body ends immediately and can cover a Home capture with reconnect UI.
+      const response = await page.request.post(`http://127.0.0.1:${process.env.PARACORD_E2E_RT_PORT ?? '4175'}/__standing`, {
+        data: {
+          world: {
+            guilds: [
+              readyGuild(GUILD_ID, kestrelName, KESTREL_MEMBERS.length, kestrelChannels,
+                voiceStates(), [...CAST, ...extras].map((who, index) => presenceOf(index, who.id))),
+              readyGuild(SALT_ID, saltName, SALT_MEMBERS.length, saltChannels,
+                [], SALT_MEMBERS.map((entry, index) => presenceOf(index, entry.user.id))),
+            ],
+          },
+        },
+      });
+      expect(response.ok()).toBe(true);
+    };
 
     // Scenario-specific REST, added last so it wins over the base handler.
     await page.route('**/api/v1/**', async (route) => {
@@ -1069,7 +1140,7 @@ test('capture the design-review screens', async ({ page }) => {
         return json([
           guildSummaryFixture({
             id: GUILD_ID,
-            name: 'Kestrel Robotics',
+            name: kestrelName,
             server_url: 'https://design.paracord.local',
             owner_id: user.id,
             member_count: 61,
@@ -1077,7 +1148,7 @@ test('capture the design-review screens', async ({ page }) => {
           }),
           guildSummaryFixture({
             id: SALT_ID,
-            name: 'Saltmarsh Sailing',
+            name: saltName,
             server_url: 'https://design.paracord.local',
             owner_id: user.id,
             member_count: 20,
@@ -1089,7 +1160,7 @@ test('capture the design-review screens', async ({ page }) => {
         return json(
           guildDetailFixture({
             id: SALT_ID,
-            name: 'Saltmarsh Sailing',
+            name: saltName,
             server_url: 'https://design.paracord.local',
             owner_id: user.id,
             member_count: 20,
@@ -1107,7 +1178,40 @@ test('capture the design-review screens', async ({ page }) => {
       if (pathname === `/api/v1/guilds/${SALT_ID}/members`) return json(SALT_MEMBERS);
       if (pathname === `/api/v1/guilds/${GUILD_ID}/events`)
         return json(scenario === 'lit' ? [eventToday] : []);
+      if (warmth && pathname === '/api/v1/users/@me/dms') return json([warmthDm]);
+      if (warmth && pathname === `/api/v1/channels/${DM_CHANNEL_ID}`) return json(warmthDm);
+      if (warmth && pathname.endsWith('/messages/recovery')) {
+        const url = new URL(route.request().url());
+        const channelId = pathname.split('/')[4];
+        const after = url.searchParams.get('after') ?? '0';
+        const knownIds = (url.searchParams.get('known_ids') ?? '').split(',').filter(Boolean);
+        return json({
+          database_history_epoch: historyEpoch,
+          channel_id: channelId,
+          after, through: after, floor: '0', next: after, complete: true,
+          projection_head: after,
+          changes: [],
+          states: knownIds.map((id) => ({
+            message_id: id,
+            state: 'present',
+            revision: after,
+            message: { ...warmthMessages.find((message) => message.id === id), message_revision: after },
+          })),
+        });
+      }
+      if (warmth && pathname.endsWith('/messages')) {
+        return json(warmthMessages.filter((message) => message.channel_id === pathname.split('/')[4]));
+      }
       if (pathname === '/api/v1/users/@me/read-states') {
+        if (warmth) {
+          return json(warmthMessages.map((message) => ({
+            channel_id: message.channel_id,
+            last_message_id: scenario === 'lit' && ['2001', '2005', DM_CHANNEL_ID].includes(message.channel_id)
+              ? read
+              : message.id,
+            mention_count: scenario === 'lit' && message.channel_id === '2001' ? 1 : 0,
+          })));
+        }
         // Everything is read except build-log, which holds the one mention —
         // Needs-you is a shortlist, not a list of every channel with a tail.
         const caughtUp = [...KESTREL_TEXT, ...SALT_TEXT]
@@ -1147,7 +1251,7 @@ test('capture the design-review screens', async ({ page }) => {
           channel_id: channelId,
           user_id: user.id,
           kind: new URL(route.request().url()).searchParams.get('kind'),
-          message: {
+          message: warmth ? warmthMessages.find((message) => message.channel_id === channelId) : {
             id: tail,
             channel_id: channelId,
             author: CAST[1],
@@ -1165,6 +1269,7 @@ test('capture the design-review screens', async ({ page }) => {
     // from the first response header. Learning it EXPIRES every operation
     // captured before it was known — including the one-shot guild fetch, which
     // is never retried. Warm the epoch into localStorage first, then shoot.
+    if (warmth) await prepareWarmthRealtime();
     await page.goto('/app');
     await page.waitForTimeout(1200);
 
@@ -1173,7 +1278,8 @@ test('capture the design-review screens', async ({ page }) => {
       ['quiet-morning', 'quiet', '2026-09-12T08:30:00'],
     ] as const) {
       scenario = when as Scenario;
-      await page.clock.setFixedTime(new Date(clock));
+      await page.clock.setFixedTime(new Date(warmth && when === 'quiet' ? '2026-09-13T08:30:00' : clock));
+      if (warmth) await prepareWarmthRealtime();
       for (const [size, viewport] of [
         ['1440x900', DESKTOP],
         ['390x844', PHONE],
@@ -1185,14 +1291,23 @@ test('capture the design-review screens', async ({ page }) => {
         await expect(main.getByText('Your servers')).toBeVisible();
         // Wait for the light itself, not just the frame.
         if (scenario === 'lit') {
-          await expect(main.getByText(/is sharing a screen/).first()).toBeVisible({ timeout: 30_000 });
-          // NOTE: amber "reading" light cannot be staged here. It is derived
+          if (warmth) {
+            await expect(main.getByRole('article', { name: kestrelName })).toBeVisible();
+            await expect(main.getByText('Mara Okafor').first()).toBeVisible();
+            await expect(main.getByText('Made it home. That last round was ridiculous.')).toBeVisible();
+            await expect(main.getByText(/are you still up for noodles on Sunday/)).toBeVisible();
+            await expect(main.getByText(/Found the song you were trying to remember/)).toBeVisible();
+          } else {
+            await expect(main.getByText(/is sharing a screen/).first()).toBeVisible({ timeout: 30_000 });
+          }
+          // NOTE: WP6's amber "reading" light cannot be staged here. It is derived
           // from a typing / authored / self-viewing signal, and this harness's
           // realtime stream is a finite body: only the frames carried INSIDE
           // READY (voice states and presences) survive. The reading line is
           // covered by `components/home/home.test.tsx` instead.
         } else {
-          await expect(main.getByText(/Dark · nobody in/).first()).toBeVisible({ timeout: 30_000 });
+          await expect(main.getByRole('group', { name: kestrelName })).toBeVisible({ timeout: 30_000 });
+          await expect(main.getByRole('button', { name: 'Join voice', exact: true })).toHaveCount(0);
         }
         await page
           .getByText('Reconnecting to the server')
@@ -1202,10 +1317,19 @@ test('capture the design-review screens', async ({ page }) => {
         // The phone frame is taller than its viewport; keep a full-page copy so
         // the buildings below the fold can be reviewed too.
         if (size === '390x844') {
-          await page.screenshot({
-            path: path.join(OUT_DIR, `home-${label}-${size}-full.png`),
-            fullPage: true,
-          });
+          if (warmth) {
+            // Home owns an inner scroller, so a full-page browser screenshot
+            // cannot reveal its lower sections. Capture them after scrolling.
+            await main.getByRole('region', { name: 'Pick up the conversation' }).scrollIntoViewIfNeeded({ timeout: 10_000 });
+            await shoot(`home-${label}-${size}-conversations`);
+            await main.getByRole('region', { name: 'For you' }).scrollIntoViewIfNeeded({ timeout: 10_000 });
+            await shoot(`home-${label}-${size}-for-you`);
+          } else {
+            await page.screenshot({
+              path: path.join(OUT_DIR, `home-${label}-${size}-full.png`),
+              fullPage: true,
+            });
+          }
         }
       }
     }

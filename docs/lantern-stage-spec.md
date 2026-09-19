@@ -446,7 +446,7 @@ on `/design-tokens` › Motion with a Replay button and the tokens it spends.
 6. **No status-colour dots.** Presence is light (§1.5).
 7. **No LIVE badge louder than the channel.** The LIVE dot is 6px and the label is 10.5–11px; the thumbnail carries the weight.
 8. **No emoji as UI chrome; no uppercase section labels; no over-rounding** (radii in §3); **no identical-card tiling** (the Lobby mixes a lit card, a dark card and an add tile; text channels are rows, not cards).
-9. **Copy is specific and in the metaphor**: "5 reading", "3 talking", "lights on", "Dark · nobody's in", "Say something to the 5 people here". Never "No data", "It's quiet here", "Online".
+9. **Copy is specific and truthful.** Use the light vocabulary for presence ("5 reading", "3 talking", "lights on"). Everyday greetings, participant names and "Quiet for now" are welcome where they describe the actual state. Do not manufacture activity or make ordinary conversation sound like work the reader owes somebody.
 10. Everything from `docs/design-spec.md` §6 that is not superseded above still applies (buttons solid/tactile, empty states left-aligned with an action, density matched to surface, intentional rhythm).
 
 ---
@@ -460,11 +460,13 @@ server**: a section label ("Kestrel Robotics · 24 in"), the **window map
 plate** (one window per channel; lamp radial only if a channel is lit; caption
 "2 calls live · 3 reading"), then channels as rows — a **lit voice
 channel renders as a live thumbnail row** (thumbnail 64px tall, LIVE dot,
-occupant stack, name + "you're here"/"N talking"), dark voice channels as plain
+named participant preview when there is no media, name + "you're here"/"N talking"), dark voice channels as plain
 rows ("Dark · nobody in"), text channels as rows with an amber/dark window dot
 and "N reading" · repeat for each server · account plate pinned to the bottom
-("Lights on"). Needs-you no longer lives in the sidebar (it lives on Home and as
-the Home count); the cross-server merge from `layout-spec` §3 still drives
+("Lights on"). Direct updates live in Home's **For you** section; the Home
+count includes unique conversations with mentions, unread DMs or thread replies,
+plus incoming friend requests. Ordinary unread channels and voice activity do
+not add to this count. The cross-server merge from `layout-spec` §3 still drives
 ordering (brightest server first, then most recent). The landmark is
 `Servers and channels`.
 
@@ -486,7 +488,8 @@ controls, then a chat sheet (drag handle) — no fake status bar.
 Header (server mark, name, "24 of 61 have their lights on · 2 calls live ·
 next event") · **Around now** well (lit avatar stack + one sentence naming
 who is where) · **voice channels grid** (landmark `Voice channels`): lit channels
-as lit cards with the live thumbnail, duration, occupants, "Mara speaking",
+as lit cards with a real media preview or named participants for an audio-only
+call, duration, occupants, "Mara speaking",
 **Join in white light**; dark channels as matte cards ("Dark · nobody's in",
 "last lit 2 h ago", Open); an add tile ("Add a voice channel") ·
 **Coming up** event card + **Recently in the shop** media strip · **text channels
@@ -504,13 +507,45 @@ and Ren are in there now · Join") · composer "Say something to the 5 people
 reading". Pending/failed delivery rows keep their current region above the
 composer, restyled as raised rows.
 
-### 7.5 Home — artboard 4
+### 7.5 Home — familiar people and conversations
 
-Title "Tonight" (time-of-day word: Morning / Afternoon / Tonight) + one
-sentence · Around now well · **Your servers** (brightest first; a lit server
-renders with its live thumbnail beside the window map, then its lit text
-channels) · Coming up · Add a server · right column **Needs you** (lit avatar,
-one-line reason, one action) and **Pick up where you left off**.
+The September 2026 Home refinement supersedes artboard 4 and the older mobile
+rule that put attention before servers. Keep the existing fonts, theme tokens,
+light semantics, navigation and account boundaries.
+
+Home begins with a restrained local-time greeting (Morning / Afternoon /
+Evening), using the current account's chosen display name without guessing a
+first name. Under it, the shared presence sentence names who is where. Do not
+repeat a date-and-count report. The separate avatar strip appears when there
+is no live voice card to show those participants.
+
+**Your servers** stays brightest first. Community icons and names are readable
+anchors. A live server card names its voice channel, shows larger real avatars
+and participant names, and offers **Join voice**. Audio-only calls use people
+as their preview; real screen/camera frames retain their media preview. Keep a
+small window map as the signature, without repeating its aggregate counts.
+Quieter servers are compact, flat rows. Joining or creating a server remains
+available through a quiet text action, including when the list is empty.
+
+Below the servers, **Pick up the conversation** is the primary column: recent
+conversations with actual author/message previews, context and time. Merge
+the existing recent, pinned and attention pools, deduplicate by account-scoped
+conversation key, exclude conversations already in For you, and order by
+message recency. Ordinary unread activity belongs here, not in direct attention.
+
+The secondary column holds **For you** (direct mentions, unread DMs, thread
+replies and friend requests) and **Coming up**. Keep attention's existing
+scoring and stable interaction order. Event rows use date, name, context and
+one RSVP action without stacked agenda panels. On narrow screens the sequence
+is servers, conversations, then direct updates and events; updates do not move
+the layout around as they arrive.
+
+Message previews use existing scoped read endpoints. They must never decrypt
+messages in the background or advance read state, and must discard data after
+account, history-epoch or permission changes. Encrypted conversations keep an
+explicit encrypted preview; unknown or failed requests keep truthful states
+and a retry. Path-based avatars from another account use initials until the
+image transport can resolve their owning scope safely.
 
 ### 7.6 Messages / DMs
 
@@ -533,7 +568,8 @@ setup states keep their current copy, restyled.
 
 - **WindowMap** — grid of `.win` cells; `on`/`warm`/dark; ≤2 rows; caption.
 - **BuildingPlate** — plate + WindowMap + caption; `lit` variant adds the lamp radial.
-- **RoomThumbnail** — 8px radius well, live frame or still, LIVE dot + label, occupant stack bottom-right; heights 64 (sidebar), 168 (Lobby card), 176 (Home).
+- **RoomThumbnail** — radius-well surface; real live frame or supplied still with a restrained LIVE marker. Without media, use named participants, compact at 64px in the sidebar and wrapping in larger cards. Home includes a media surface only when a real sampled frame exists.
+- **VoiceParticipants** — actual occupant avatars and names; compact overlapping faces in the sidebar, larger individually named faces elsewhere, with accessible overflow names. Never invent an image or a participant.
 - **RoomCard** — plate; `lit` variant (light ring + lamp) with duration, occupant stack, speaking line, **Join in white light**; `dark` variant with "last lit" and Open.
 - **LitAvatar** — avatar + `.lit` rim; `speaking` breathes; `dim` for away.
 - **HereNowStrip** — well; avatar stack (max 5) + "N here · M lights on"; click opens the people sheet (the only place a full list lives).
@@ -541,8 +577,8 @@ setup states keep their current copy, restyled.
 - **ControlBar** — 46px controls, 13px radius; mic-on is white light; leave is danger; phone 50px.
 - **RoomChatRibbon** — plate, 336px; compact messages (28px avatars); "from the call" raised message; composer 42px.
 - **TextRoomRow** — grid `22px 1fr auto`; window dot, name + last author/time, preview, reader stack, mention chip; `active` raised.
-- **NeedsYouRow** — grid `32px 1fr auto`; lit avatar, reason, single action.
-- **EventCard** — well; day tile (mono weekday + Gabarito date), title, meta, one action.
+- **Home direct-update row** — 40px avatar, wrapping reason, context and time; the row opens the conversation, while a friend request has its own Accept action.
+- **Home event row** — date, title, context and one RSVP action on a quiet surface. The Lobby's event-card recipe remains unchanged.
 - **Composer** — raised, 50px, plus / text / image / emoji / send (send = emerald, or white light inside the Stage ribbon).
 - **OnAirPill**, **SearchWell**, **NavRow**, **AccountPlate** as drawn.
 

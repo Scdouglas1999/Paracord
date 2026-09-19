@@ -185,10 +185,10 @@ describe('a lit server card', () => {
     const on = handlers();
     render(<HomeBuildingCard building={litBuilding()} mentions={new Map()} {...on} />);
     const card = screen.getByRole('article', { name: 'Kestrel Robotics' });
-    expect(within(card).getByText(/LIVE/)).toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: 'Shop floor' })).toBeInTheDocument();
     expect(within(card).getByText('Mara is sharing a screen')).toBeInTheDocument();
-    expect(within(card).getByText(/^3 in · 1 call live/)).toBeInTheDocument();
-    const join = within(card).getByRole('button', { name: 'Join' });
+    expect(within(card).getByRole('list', { name: 'In Shop floor' })).toHaveTextContent('Mara');
+    const join = within(card).getByRole('button', { name: 'Join voice' });
     expect(join.className).toContain('bg-light-white');
     await userEvent.click(join);
     expect(on.onJoinRoom).toHaveBeenCalledWith(
@@ -228,10 +228,10 @@ describe('a quiet server row', () => {
     const handle = handlers();
     render(<HomeBuildingCard building={quietBuilding()} mentions={new Map()} {...handle} />);
     const row = screen.getByRole('group', { name: 'Saltmarsh Sailing' });
-    expect(within(row).getByText('1 in · 1 reading')).toBeInTheDocument();
+    expect(within(row).getByText('1 reading')).toBeInTheDocument();
     expect(within(row).getByText('build-log')).toBeInTheDocument();
     expect(within(row).queryByText(/LIVE/)).not.toBeInTheDocument();
-    expect(within(row).queryByRole('button', { name: 'Join' })).not.toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: 'Join voice' })).not.toBeInTheDocument();
   });
 
   it('opens the server from its name', async () => {
@@ -251,7 +251,7 @@ describe('a quiet server row', () => {
     });
     render(<HomeBuildingCard building={dark} mentions={new Map()} {...handlers()} />);
     const row = screen.getByRole('group', { name: 'Empty Hall' });
-    expect(within(row).getByText('Dark · nobody in')).toBeInTheDocument();
+    expect(within(row).getByText('Quiet for now')).toBeInTheDocument();
     expect(within(row).queryByText('build-log')).not.toBeInTheDocument();
   });
 });
@@ -319,7 +319,7 @@ describe('Coming up', () => {
   });
 });
 
-describe('Pick up where you left off', () => {
+describe('Pick up the conversation', () => {
   function entry(over: Partial<ConversationEntry> = {}): ConversationEntry {
     return {
       scope: SCOPE,
@@ -372,7 +372,7 @@ describe('Pick up where you left off', () => {
     const onOpen = vi.fn();
     const row = entry();
     render(<HomePickUp entries={[row]} litRooms={new Set()} onOpen={onOpen} />);
-    await userEvent.click(screen.getByRole('button', { name: /regatta-2026/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'Open regatta-2026' }));
     expect(onOpen).toHaveBeenCalledWith(row);
   });
 });

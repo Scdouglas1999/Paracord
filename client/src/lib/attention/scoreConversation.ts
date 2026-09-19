@@ -36,6 +36,11 @@ const VOICE_ACTIVITY_WEIGHT = 30;
 const RECENCY_WEIGHT = 8;
 const RECENCY_HALFLIFE_HOURS = 12;
 
+/** Home's direct attention, shared with its navigation count. */
+export function hasDirectAttention(entry: ConversationEntry): boolean {
+  return entry.mentionCount > 0 || entry.isDMUnread || entry.isThreadReply;
+}
+
 export function scoreEntry(e: ConversationEntry, nowMs: number): number {
   let score = 0;
 

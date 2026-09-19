@@ -2,11 +2,13 @@ import * as React from 'react';
 import { useEffect, useRef } from 'react';
 
 import { useSettleIn } from '../../lib/motion';
+import { avatarForScope, useAvatarScope } from '../../hooks/useScopedAvatar';
 import { cn, mergeRefs } from '../../lib/utils';
 import { darkRoomCaption, type RoomLight } from '../../lib/attention/light';
 import type { RoomFrame } from '../../lib/media/roomFrameTap';
 import { AvatarStack } from './AvatarStack';
 import { LiveDot } from './LiveDot';
+import { VoiceParticipants } from './VoiceParticipants';
 
 /** The three heights the contract names (§8): sidebar, Lobby card, Home. */
 export type RoomThumbnailHeight = 64 | 168 | 176;
@@ -23,7 +25,7 @@ export interface RoomThumbnailProps extends Omit<React.HTMLAttributes<HTMLDivEle
   frame?: RoomFrame | null;
   /** A poster still for a room that cannot produce live frames. */
   still?: string | null;
-  /** Show the occupant stack in the corner. */
+  /** Show the occupant stack over a media preview. The audio fallback always shows faces. */
   showOccupants?: boolean;
   /** A Join button, rendered bottom-right over the frame. */
   action?: React.ReactNode;
@@ -35,7 +37,7 @@ export interface RoomThumbnailProps extends Omit<React.HTMLAttributes<HTMLDivEle
  *
  * **Live vs still is not a style choice.** `room.thumbnail.live` is true only
  * when real frames are arriving from the media pipeline; in every other case
- * the component paints a still and the LIVE dot, and the reason is in the
+ * the component paints a supplied still or the people in the call, and the reason is in the
  * model (`not-joined`, `native-surface`, `no-publisher`, `no-engine`). There is
  * no fake motion here and no waveform animation (§5, §6.4).
  *
@@ -46,9 +48,16 @@ export const RoomThumbnail = React.forwardRef<HTMLDivElement, RoomThumbnailProps
     { room, height = 64, frame = null, still = null, showOccupants = true, action, className, style, ...props },
     ref,
   ) {
-    const occupants = room.occupants.map((occupant) => occupant.person);
+    const avatarScope = useAvatarScope();
+    const occupants = room.occupants.map(({ person }) => ({
+      ...person,
+      avatar: avatarForScope(person.avatar, room.scope, avatarScope),
+    }));
     const compact = height < 120;
     const pad = compact ? 8 : 12;
+    const hasMedia = Boolean((room.thumbnail.live && frame) || still);
+    const peoplePreview = room.lit && !hasMedia;
+    const hasPublisher = Boolean(room.screenSharer || room.cameraSharer);
     // §5.1: a thumbnail arriving in a painted street settles 14px onto it.
     const settleRef = useSettleIn<HTMLDivElement>();
 
@@ -59,17 +68,17 @@ export const RoomThumbnail = React.forwardRef<HTMLDivElement, RoomThumbnailProps
           'relative w-full shrink-0 overflow-hidden shadow-[var(--shadow-tile)]',
           'rounded-[var(--radius-thumb)]',
           // A lit window has a tinted frame; a dark one is the plain matte well.
-          room.lit ? 'bg-[var(--thumb-frame-lit)]' : 'bg-bg-well',
+          room.lit && hasMedia ? 'bg-[var(--thumb-frame-lit)]' : 'bg-bg-well',
           className,
         )}
-        style={{ height, ...style }}
+        style={{ height: peoplePreview && !compact ? undefined : height, ...style }}
         {...props}
       >
         {/* The thumbnail's own glow — `pc-thumb-glow`, not the card lamp. The
             reference renders paint it into the frame
             (`radial-gradient(70% 120% at 20% 0%)`), so it hugs the top-left
             corner of the window instead of fogging it (§1.2, §8). */}
-        {room.lit && <span aria-hidden className="pc-thumb-glow" />}
+        {room.lit && hasMedia && <span aria-hidden className="pc-thumb-glow" />}
 
         {room.thumbnail.live && frame ? (
           <FrameCanvas frame={frame} />
@@ -77,7 +86,14 @@ export const RoomThumbnail = React.forwardRef<HTMLDivElement, RoomThumbnailProps
           <img src={still} alt="" className="absolute inset-0 h-full w-full object-cover" />
         ) : null}
 
-        {room.lit ? (
+        {peoplePreview ? (
+          <div className={cn('relative flex min-w-0 gap-3 p-3', compact ? 'h-full items-center' : 'min-h-[128px] flex-col justify-center')}>
+            {hasPublisher && !compact && <LiveDot label={room.thumbnail.label} className="min-w-0 max-w-full" />}
+            <VoiceParticipants room={room} compact={compact} className={compact ? 'flex-1' : 'mx-auto w-full'} />
+            {(!hasPublisher || compact) && <span className="sr-only">{room.thumbnail.label}</span>}
+            {action && <span className="flex shrink-0 justify-end">{action}</span>}
+          </div>
+        ) : room.lit ? (
           <>
             <LiveDot
               label={room.thumbnail.label}

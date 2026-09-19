@@ -1,25 +1,18 @@
-import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useId, useMemo, useState, type ReactNode } from 'react';
 
-import { Button, SectionLabel } from '../ui';
+import { Button } from '../ui';
 import { LitAvatar } from '../light';
 import { cn } from '../../lib/utils';
 import { personLight, type PersonLight } from '../../lib/attention/light';
 import type { ConversationEntry } from '../../lib/attention/conversationModel';
 import { snowflakeToMs } from '../../lib/attention/conversationModel';
-import { scoreEntry } from '../../lib/attention/scoreConversation';
-import { captureScopedOperation } from '../../lib/operationContext';
-import {
-  getDatabaseHistoryEpoch,
-  requestHistoryReconciliation,
-  subscribeDatabaseHistory,
-} from '../../lib/databaseHistory';
-import { accountScopeKey } from '../../lib/serverScope';
+import { hasDirectAttention, scoreEntry } from '../../lib/attention/scoreConversation';
 import { usePresenceStore } from '../../stores/presenceStore';
-import { useReadStateStore } from '../../stores/readStateStore';
 import type { FriendRequestEntry } from '../../hooks/useUnifiedConversations';
-import type { Message } from '../../types';
 import { mentionCaption, NEEDS_YOU_QUIET } from './homeCaptions';
 import { shortAgo } from './timeOfDay';
+import { useHomeMessagePreview } from './useHomeMessagePreview';
+import { useScopedAvatar } from '../../hooks/useScopedAvatar';
 
 /** Rows shown before the "show more" control — the column is a shortlist. */
 const VISIBLE_ROWS = 6;
@@ -27,24 +20,18 @@ const VISIBLE_ROWS = 6;
 export type NeedsYouStatus = 'loading' | 'ready' | 'error';
 
 /**
- * The Needs-you ranking, unchanged from the unified list (layout-spec §3.3).
+ * Direct attention uses the unified list’s existing ranking (layout-spec §3.3).
  *
  * Pinned entries and the overflow past the sidebar's cap are folded back in:
- * pinning a conversation must never hide work, and Home is where the whole
- * list lives. `scoreEntry` is the single scorer — Home does not re-rank.
+ * pinning a conversation must never hide a direct reply. Ordinary unread
+ * channels and voice activity belong among the conversations you can return to.
+ * `scoreEntry` is the single scorer — Home does not re-rank.
  */
 export function homeAttention(entries: ConversationEntry[]) {
   const unique = new Map(entries.map((entry) => [entry.key, entry]));
   const now = Date.now();
   return [...unique.values()]
-    .filter(
-      (entry) =>
-        entry.mentionCount > 0 ||
-        entry.isDMUnread ||
-        entry.isThreadReply ||
-        entry.unread ||
-        entry.hasVoiceActivity,
-    )
+    .filter(hasDirectAttention)
     .sort((a, b) => scoreEntry(b, now) - scoreEntry(a, now) || a.key.localeCompare(b.key));
 }
 
@@ -72,23 +59,6 @@ export function needsYouReason(entry: ConversationEntry, authorName: string | nu
   return `${entry.title} lit up`;
 }
 
-/** The message body a row previews — never decrypted, never invented. */
-function previewOf(message: Message | null, userId: string): { author: string | null; text: string } {
-  if (!message) return { author: null, text: 'No message preview available' };
-  // Home never decrypts or advances a DM ratchet in the background.
-  if (message.e2ee) {
-    return { author: null, text: 'Encrypted message — open the conversation to read' };
-  }
-  const author = message.author.display_name || message.author.username;
-  const content = message.content
-    ?.trim()
-    .replace(/<@!?([0-9]+)>/g, (token, id: string) => (id === userId ? '@you' : token));
-  if (content) return { author, text: content };
-  if (message.poll) return { author, text: `Poll: ${message.poll.question}` };
-  if (message.attachments?.length) return { author, text: 'Attachment' };
-  return { author, text: 'New activity' };
-}
-
 /** §1.5: presence is a rim of light, never a coloured dot. */
 function usePersonLight(
   userId: string | null | undefined,
@@ -113,41 +83,64 @@ interface RowShellProps {
   reason: string;
   time: string | null;
   context: ReactNode;
-  action: ReactNode;
-  /** The first row is raised — the one thing most likely to need you. */
+  action?: ReactNode;
+  onActivate?: () => void;
+  actionLabel?: string;
+  /** A quiet highlight keeps the first direct reply easy to find. */
   raised?: boolean;
   trailing?: ReactNode;
   dataKey?: string;
 }
 
 /**
- * NeedsYouRow — `32px 1fr auto` (docs/lantern-stage-spec.md §8).
- *
- * Lit avatar, the reason in Gabarito, one line of context, and exactly one
- * action. The row itself is not a button: a row with an action inside it and a
- * click target around it is two targets pretending to be one.
+ * One full-row conversation action. Request acceptance and retry are separate
+ * controls, so no button contains another button.
  */
-function NeedsYouRow({ lead, reason, time, context, action, raised, trailing, dataKey }: RowShellProps) {
+function NeedsYouRow({
+  lead, reason, time, context, action, onActivate, actionLabel, raised, trailing, dataKey,
+}: RowShellProps) {
+  const reasonId = useId();
+  const contextId = useId();
+  const content = (
+    <>
+      {lead}
+      <span className="min-w-0 flex-1">
+        <span className="flex items-baseline gap-2">
+          <span id={reasonId} className="pc-display min-w-0 line-clamp-2 break-words text-name font-semibold text-text-primary">
+            {reason}
+          </span>
+          {time && <span className="ml-auto shrink-0 text-meta text-text-faint">{time}</span>}
+        </span>
+        <span id={contextId} className="mt-1 block text-[13px] leading-relaxed text-text-secondary">
+          <span className="line-clamp-2 break-words">{context}</span>
+        </span>
+      </span>
+    </>
+  );
   return (
     <li
       data-conversation-key={dataKey}
       className={cn(
-        'relative grid min-w-0 grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1',
-        'rounded-[var(--radius-card)] px-3.5 py-3',
-        raised && 'bg-bg-raised shadow-[var(--shadow-raised)]',
+        'min-w-0 rounded-[var(--radius-control)]',
+        raised && 'bg-bg-mod-subtle',
       )}
     >
-      {lead}
-      <span className="min-w-0">
-        <span className="flex items-baseline gap-2">
-          <span className="pc-display truncate text-name font-semibold text-text-primary">
-            {reason}
-          </span>
-          {time && <span className="shrink-0 text-meta text-text-faint">{time}</span>}
-        </span>
-        <span className="mt-0.5 block truncate text-[13px] text-text-secondary">{context}</span>
-      </span>
-      {action}
+      {onActivate ? (
+        <button
+          type="button"
+          onClick={onActivate}
+          aria-label={actionLabel}
+          aria-describedby={`${reasonId} ${contextId}`}
+          className="pc-focusable flex w-full min-w-0 items-start gap-3 rounded-[var(--radius-control)] px-3 py-3.5 text-left transition-colors hover:bg-bg-mod-subtle"
+        >
+          {content}
+        </button>
+      ) : (
+        <div className="flex min-w-0 items-center gap-3 px-3 py-3.5">
+          {content}
+          {action}
+        </div>
+      )}
       {trailing}
     </li>
   );
@@ -162,7 +155,7 @@ function NeedsYouRow({ lead, reason, time, context, action, raised, trailing, da
  */
 function RoomLead({ talking = false }: { talking?: boolean }) {
   return (
-    <span className="flex h-8 w-8 items-center justify-center" aria-hidden>
+    <span className="flex h-10 w-10 shrink-0 items-center justify-center" aria-hidden>
       <span className={cn('pc-window', talking && 'is-talking')} style={{ width: 10, height: 13 }} />
     </span>
   );
@@ -181,7 +174,7 @@ function RequestRow({
   return (
     <NeedsYouRow
       raised={raised}
-      lead={person ? <LitAvatar person={person} size={32} /> : <RoomLead />}
+      lead={person ? <LitAvatar person={person} size={40} /> : <RoomLead />}
       reason={request.username}
       time={shortAgo(request.createdMs, Date.now())}
       context="wants to be friends"
@@ -209,153 +202,17 @@ function AttentionRow({
   raised: boolean;
   onOpen: (entry: ConversationEntry, messageId?: string) => void;
 }) {
-  const after = useReadStateStore(
-    (state) => state.byAccount[accountScopeKey(entry.scope)]?.[entry.channelId]?.last_message_id ?? '0',
-  );
-  const attentionRevision = useReadStateStore(
-    (state) => state.attentionRevisions[accountScopeKey(entry.scope)]?.[entry.channelId] ?? 0,
-  );
-  const historyEpoch = useSyncExternalStore(subscribeDatabaseHistory, () => {
-    try {
-      return getDatabaseHistoryEpoch(entry.scope);
-    } catch {
-      return 'unavailable' as const;
-    }
-  });
-  const historyUnavailable = historyEpoch === 'unavailable';
-  const kind = entry.mentionCount > 0 ? 'mention' : 'unread';
-  const [preview, setPreview] = useState<{
-    revision: string;
-    author: string | null;
-    authorId: string | null;
-    avatar: string | null;
-    text: string;
-    messageId?: string;
-    failed?: boolean;
-  } | null>(null);
-  const [retry, setRetry] = useState(0);
-  const revision = JSON.stringify([
-    entry.key,
-    historyEpoch,
-    entry.lastActivityId,
-    entry.mentionCount,
-    kind,
-    after,
-    retry,
-    attentionRevision,
-  ]);
-  const failed = historyUnavailable || (preview?.revision === revision && preview.failed);
-  const voiceOnly =
-    entry.hasVoiceActivity &&
-    !entry.unread &&
-    !entry.isDMUnread &&
-    !entry.isThreadReply &&
-    !entry.mentionCount;
+  const { preview: fresh, text, failed, historyUnavailable, retry } = useHomeMessagePreview(entry, 'attention');
   const { serverId, userId } = entry.scope;
-
-  useEffect(() => {
-    if (voiceOnly || !entry.lastActivityId || historyUnavailable) return;
-    let disposed = false;
-    let context: ReturnType<typeof captureScopedOperation> | undefined;
-    void (async () => {
-      try {
-        context = captureScopedOperation({ serverId, userId });
-        const { data } = await context.request<{
-          channel_id: string;
-          user_id: string;
-          kind: string;
-          message: Message | null;
-        }>({
-          method: 'GET',
-          url: `/channels/${encodeURIComponent(entry.channelId)}/messages/attention`,
-          params: { kind, after },
-          timeout: 15_000,
-        });
-        if (disposed) return;
-        if (
-          data.channel_id !== entry.channelId ||
-          data.user_id !== userId ||
-          data.kind !== kind ||
-          (data.message !== null &&
-            (!data.message ||
-              data.message.channel_id !== entry.channelId ||
-              typeof data.message.id !== 'string' ||
-              !/^[1-9][0-9]*$/.test(data.message.id) ||
-              BigInt(data.message.id) <= BigInt(after)))
-        ) {
-          throw new Error('Invalid attention response');
-        }
-        const body = data.message
-          ? previewOf(data.message, userId)
-          : {
-              author: null,
-              text:
-                kind === 'mention'
-                  ? 'No unread mention target is available'
-                  : 'No unread message remains',
-            };
-        setPreview({
-          revision,
-          author: body.author,
-          authorId: data.message?.author?.id ?? null,
-          avatar: data.message?.author?.avatar_hash ?? null,
-          text: body.text,
-          messageId: data.message?.id,
-        });
-      } catch {
-        if (!disposed) {
-          setPreview({
-            revision,
-            author: null,
-            authorId: null,
-            avatar: null,
-            text: 'Preview unavailable',
-            failed: true,
-          });
-        }
-      } finally {
-        context?.dispose();
-      }
-    })();
-    return () => {
-      disposed = true;
-      context?.dispose();
-    };
-  }, [
-    entry.channelId,
-    entry.lastActivityId,
-    serverId,
-    userId,
-    revision,
-    retry,
-    voiceOnly,
-    kind,
-    after,
-    historyUnavailable,
-  ]);
-
-  const fresh = preview?.revision === revision && !preview.failed ? preview : null;
   const targetId = fresh?.messageId;
   // A mention by yourself is not a mention worth naming (see `needsYouReason`).
   const authorName = fresh && fresh.authorId && fresh.authorId !== userId ? fresh.author : null;
   const reason = needsYouReason(entry, authorName);
   const action = actionFor(entry);
 
-  const previewLine = voiceOnly
-    ? 'Open this channel to join what is happening'
-    : historyUnavailable
-      ? 'Reconnect this account to restore previews'
-      : failed
-        ? 'Preview unavailable'
-        : fresh
-          ? entry.mentionCount > 0
-            ? fresh.text
-            : fresh.author
-              ? `${fresh.author}: ${fresh.text}`
-              : fresh.text
-          : entry.lastActivityId
-            ? 'Loading…'
-            : 'No message preview available';
+  const previewLine = fresh?.author && entry.mentionCount === 0
+    ? `${fresh.author}: ${text}`
+    : text;
 
   const place =
     entry.mentionCount > 0
@@ -371,7 +228,8 @@ function AttentionRow({
   const leadName =
     entry.kind === 'dm' ? entry.title : (fresh?.author ?? entry.title);
   const leadAvatar = entry.kind === 'dm' ? (entry.avatar ?? null) : (fresh?.avatar ?? null);
-  const person = usePersonLight(leadUserId, leadName, serverId, leadAvatar);
+  const avatar = useScopedAvatar(leadAvatar, entry.scope);
+  const person = usePersonLight(leadUserId, leadName, serverId, avatar);
 
   return (
     <NeedsYouRow
@@ -379,34 +237,23 @@ function AttentionRow({
       raised={raised}
       lead={
         person ? (
-          <LitAvatar person={person} size={32} />
+          <LitAvatar person={person} size={40} />
         ) : (
           <RoomLead talking={entry.hasVoiceActivity} />
         )
       }
       reason={`${reason}${entry.pinned ? ' · pinned' : ''}`}
-      time={shortAgo(entry.lastActivityId ? snowflakeToMs(entry.lastActivityId) : null, Date.now())}
+      time={shortAgo(targetId ? snowflakeToMs(targetId) : entry.lastActivityId ? snowflakeToMs(entry.lastActivityId) : null, Date.now())}
       context={context}
-      action={
-        <Button
-          size="sm"
-          variant="ghost"
-          className={cn('shrink-0', raised && 'shadow-[inset_0_0_0_1px_var(--border-strong)]')}
-          onClick={() => onOpen(entry, targetId)}
-          aria-label={`${action} ${entry.title}`}
-        >
-          {action}
-        </Button>
-      }
+      onActivate={() => onOpen(entry, targetId)}
+      actionLabel={`${action} ${entry.title}`}
       trailing={
-        failed && !voiceOnly ? (
+        failed ? (
           <button
             type="button"
-            onClick={() =>
-              historyUnavailable ? requestHistoryReconciliation(entry.scope) : setRetry((v) => v + 1)
-            }
+            onClick={retry}
             aria-label={`${historyUnavailable ? 'Reconnect to load' : 'Retry'} preview for ${entry.title}`}
-            className="pc-focusable col-start-2 justify-self-start rounded-[var(--radius-control)] px-1.5 py-0.5 text-meta font-semibold text-accent-primary hover:bg-bg-mod-subtle"
+            className="pc-focusable mb-2 ml-[61px] rounded-[var(--radius-control)] px-1.5 py-0.5 text-meta font-semibold text-accent-primary hover:bg-bg-mod-subtle"
           >
             {historyUnavailable ? 'Reconnect' : 'Retry'}
           </button>
@@ -427,7 +274,7 @@ export interface HomeNeedsYouProps {
 }
 
 /**
- * Needs you — the right column of Home (docs/lantern-stage-spec.md §7.5).
+ * For you — direct replies and friend requests on Home.
  *
  * Friend requests first (somebody is literally waiting on an answer), then the
  * unified list's own ranking. The order is **held** while a pointer is over the
@@ -469,7 +316,7 @@ export function HomeNeedsYou({
 
   return (
     <section
-      aria-label="Needs you"
+      aria-label="For you"
       className="flex min-w-0 flex-col gap-2"
       onPointerEnter={(event) => {
         if (event.pointerType !== 'touch') {
@@ -492,12 +339,10 @@ export function HomeNeedsYou({
         }
       }}
     >
-      <SectionLabel
-        className="px-0 pb-0.5 pt-0"
-        meta={total > 0 ? <span className="text-text-primary">{total}</span> : undefined}
-      >
-        Needs you
-      </SectionLabel>
+      <div className="flex items-baseline justify-between gap-2 pb-1">
+        <h2 className="pc-display text-[18px] font-semibold text-text-primary">For you</h2>
+        {total > 0 && <span className="text-meta text-text-muted">{total}</span>}
+      </div>
 
       {total === 0 ? (
         <p className="text-[13px] text-text-muted">
@@ -536,7 +381,7 @@ export function HomeNeedsYou({
         </ul>
       )}
 
-      {entries.length > VISIBLE_ROWS && (
+      {total > VISIBLE_ROWS && (
         <button
           type="button"
           onClick={() =>

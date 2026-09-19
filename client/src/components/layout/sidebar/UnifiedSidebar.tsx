@@ -11,6 +11,7 @@ import { useRoomMenu } from '../../../hooks/useRoomMenu';
 import { useUnifiedConversations } from '../../../hooks/useUnifiedConversations';
 import { useVoice } from '../../../hooks/useVoice';
 import { personLight, type BuildingLight, type RoomLight } from '../../../lib/attention/light';
+import { hasDirectAttention } from '../../../lib/attention/scoreConversation';
 import { activateGuild } from '../../../lib/guildNavigation';
 import { markGuildRead } from '../../../lib/guildActions';
 import { canAccessGuildSettingsSync } from '../../../lib/guildSettingsAccess';
@@ -68,7 +69,7 @@ export function UnifiedSidebar() {
   useBuildingRosters();
   const buildings = useBuildingLights();
   const { mutedGuildKeys, toggleMute, saving } = useMutedGuilds();
-  const { needsYou, needsYouOverflowCount, recent, pinned } = useUnifiedConversations(mutedGuildKeys);
+  const { needsYou, recent, pinned, requests } = useUnifiedConversations(mutedGuildKeys);
 
   const mutedBuildingKeys = useMemo(() => new Set(mutedGuildKeys), [mutedGuildKeys]);
 
@@ -113,12 +114,11 @@ export function UnifiedSidebar() {
     return map;
   }, [needsYou, pinned, recent, threadParentKeys]);
 
-  /**
-   * The Home chip: everything the attention ranking says is waiting on you —
-   * the capped Needs-you list plus the count that continues past the cap. Home
-   * owns the list now (§7.1); the column keeps only the number.
-   */
-  const needsYouCount = needsYou.length + needsYouOverflowCount;
+  /** Match Home's For-you list, including direct entries beyond the shortlist. */
+  const needsYouCount = useMemo(
+    () => new Set([...needsYou, ...pinned, ...recent].filter(hasDirectAttention).map((entry) => entry.key)).size + requests.length,
+    [needsYou, pinned, recent, requests],
+  );
 
   /** The Messages chip: direct and group conversations carrying unread. */
   const messagesCount = useMemo(

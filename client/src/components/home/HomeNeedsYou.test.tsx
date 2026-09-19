@@ -122,7 +122,7 @@ describe('Home attention', () => {
     }
   });
 
-  it('includes pinned and overflow attention, deduplicates, and ranks by reason', () => {
+  it('reserves attention for direct replies, deduplicates pinned entries, and keeps their ranking', () => {
     const pinned = entry('pinned', { pinned: true, mentionCount: 1 });
     const dm = entry('dm', { unread: false, isDMUnread: true });
     const thread = entry('thread', { unread: false, isThreadReply: true });
@@ -130,7 +130,7 @@ describe('Home attention', () => {
     const read = entry('read', { unread: false });
     expect(
       homeAttention([voice, read, thread, dm, pinned, pinned, entry('plain')]).map((row) => row.title),
-    ).toEqual(['pinned', 'dm', 'thread', 'plain', 'voice']);
+    ).toEqual(['pinned', 'dm', 'thread']);
   });
 
   it('shows the reason and the server, and opens the conversation the row owns', async () => {
@@ -221,7 +221,7 @@ describe('Home attention', () => {
     const onOpen = vi.fn();
     const { rerender } = render(<HomeNeedsYou {...shell({ entries: rows, onOpen })} />);
     await screen.findAllByText(/Ada:/);
-    const region = screen.getByRole('region', { name: 'Needs you' });
+    const region = screen.getByRole('region', { name: 'For you' });
     const first = within(region).getAllByRole('button')[0];
     act(() => first.focus());
     rerender(<HomeNeedsYou {...shell({ entries: [rows[1], rows[0]], onOpen })} />);
@@ -278,6 +278,22 @@ describe('Home attention', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Open chat' }));
     expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({ channelId: 'chat' }), undefined);
   });
+
+  it('discards a mention preview and its jump target when reading history is revoked', async () => {
+    const row = entry('chat', { mentionCount: 1 });
+    const onOpen = vi.fn();
+    render(<HomeNeedsYou {...shell({ entries: [row], onOpen })} />);
+    await screen.findByText('Ada mentioned you');
+    request.mockRejectedValueOnce({ response: { status: 403 } });
+    act(() => window.dispatchEvent(new CustomEvent('paracord:conversation-capabilities-changed', {
+      detail: row.scope,
+    })));
+    expect(screen.queryByText('Ada mentioned you')).not.toBeInTheDocument();
+    expect(screen.queryByText(/The build is ready/)).not.toBeInTheDocument();
+    await screen.findByRole('button', { name: 'Retry preview for chat' });
+    await userEvent.click(screen.getByRole('button', { name: 'Open chat' }));
+    expect(onOpen).toHaveBeenCalledWith(row, undefined);
+  });
 });
 
 describe('friend requests and the quiet column', () => {
@@ -291,7 +307,7 @@ describe('friend requests and the quiet column', () => {
   it('puts a friend request above the conversations with one Accept action', async () => {
     const onAccept = vi.fn();
     render(<HomeNeedsYou {...shell({ entries: [entry('chat')], requests: [request1], onAccept })} />);
-    const rows = screen.getByRole('region', { name: 'Needs you' }).querySelectorAll('li');
+    const rows = screen.getByRole('region', { name: 'For you' }).querySelectorAll('li');
     expect(rows[0].textContent).toContain('Devon Park');
     expect(rows[0].textContent).toContain('wants to be friends');
     await userEvent.click(
@@ -302,11 +318,19 @@ describe('friend requests and the quiet column', () => {
     expect(screen.getByText('2')).toBeInTheDocument();
   });
 
+  it('keeps a direct reply reachable when a friend request occupies a visible row', async () => {
+    const rows = Array.from({ length: 6 }, (_, index) => entry(`channel-${index}`, { isThreadReply: true }));
+    render(<HomeNeedsYou {...shell({ entries: rows, requests: [request1] })} />);
+    expect(screen.queryByRole('button', { name: 'Open channel-5' })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Show 1 more' }));
+    expect(screen.getByRole('button', { name: 'Open channel-5' })).toBeVisible();
+  });
+
   it('never claims nothing needs you while the answer is still unknown', () => {
     const onRefresh = vi.fn();
     const { rerender } = render(<HomeNeedsYou {...shell({ status: 'loading' })} />);
-    expect(screen.getByText(/Still checking your servers/)).toBeInTheDocument();
-    expect(screen.queryByText(/Nothing is waiting on you/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Checking for new messages/)).toBeInTheDocument();
+    expect(screen.queryByText(/Nothing new for you/)).not.toBeInTheDocument();
 
     rerender(<HomeNeedsYou {...shell({ status: 'error', onRefresh })} />);
     expect(screen.getByText(/could not be checked/)).toBeInTheDocument();
@@ -314,7 +338,7 @@ describe('friend requests and the quiet column', () => {
     expect(onRefresh).toHaveBeenCalled();
 
     rerender(<HomeNeedsYou {...shell({ status: 'ready' })} />);
-    expect(screen.getByText('Nothing is waiting on you right now.')).toBeInTheDocument();
+    expect(screen.getByText('Nothing new for you right now.')).toBeInTheDocument();
     // §6.9: never "No data", never "It's quiet here".
     expect(screen.queryByText(/No data|It's quiet/)).not.toBeInTheDocument();
   });

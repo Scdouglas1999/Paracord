@@ -77,14 +77,10 @@ export function textRoomCaption(room: RoomLight, mentionCount = 0): string {
 export const ADD_BUILDING_LABEL = 'Add a server — join with an invite, or start your own';
 
 /**
- * "Nothing is waiting on you right now" and the two states that are NOT that.
- *
- * A quiet Needs-you column must never claim nothing needs you while the answer
- * is still unknown, so loading and failure keep their own words (this is the
- * truthful quiet copy the previous Home earned, re-said in the metaphor).
+ * For-you empty states distinguish a checked inbox from an unknown answer.
  */
 export const NEEDS_YOU_QUIET = {
-  ready: 'Nothing is waiting on you right now.',
-  loading: 'Still checking your servers for anything waiting on you…',
-  error: 'Some activity could not be checked — refresh to see what needs you.',
+  ready: 'Nothing new for you right now.',
+  loading: 'Checking for new messages…',
+  error: 'Some activity could not be checked — refresh to try again.',
 } as const;

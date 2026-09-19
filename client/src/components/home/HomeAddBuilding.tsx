@@ -10,10 +10,8 @@ export interface HomeAddBuildingProps {
 /**
  * The add-a-building row (docs/lantern-stage-spec.md §7.5).
  *
- * An outline tile, never a card: it is the one thing in the column that is not
- * a building, and it stays visible whether you have twelve buildings or none —
- * an empty street should still have a door in it (lantern-stage-spec §6, empty states
- * are left-aligned with an action).
+ * A quiet text action that stays visible whether the person has twelve
+ * servers or none. Empty states retain a clear way to join or create one.
  */
 export function HomeAddBuilding({ onClick }: HomeAddBuildingProps) {
   return (
@@ -24,9 +22,8 @@ export function HomeAddBuilding({ onClick }: HomeAddBuildingProps) {
       // audit, which cannot tell this leading glyph from an icon-only control.
       aria-label={ADD_BUILDING_LABEL}
       className={cn(
-        'pc-focusable flex min-h-11 w-full items-center gap-2.5 rounded-[var(--radius-card)] px-4 py-3',
-        'text-left text-[13.5px] text-text-muted',
-        'shadow-[inset_0_0_0_1px_var(--border-subtle)]',
+        'pc-focusable flex min-h-11 w-full items-center gap-2.5 rounded-[var(--radius-control)] px-2 py-2',
+        'text-left text-[13px] text-text-muted',
         'transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
         'hover:bg-bg-mod-subtle hover:text-text-secondary',
       )}

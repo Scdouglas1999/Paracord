@@ -234,27 +234,23 @@ beforeEach(() => {
 
 /* -------------------------------------------------------------------------- */
 
-describe('Home, the street outside your servers', () => {
-  it('opens with the time-of-day word and one sentence of fact', () => {
+describe('Home, people and conversations', () => {
+  it('opens with a greeting and the current presence summary', () => {
     lights.buildings = [litBuilding(), quietBuilding()];
     lights.lightsOn = 30;
     renderHome();
-    expect(screen.getByRole('heading', { name: 'Tonight' })).toBeInTheDocument();
-    expect(
-      screen.getByText(/Saturday 12 September · 30 people have their lights on across your 2 servers/),
-    ).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Evening' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Around now' })).toHaveTextContent(lights.sentence);
   });
 
-  it('carries WP1s Around-now sentence and the lights it has not drawn', () => {
+  it('keeps the shared presence summary above the named voice cards', () => {
     lights.buildings = [litBuilding()];
     lights.lightsOn = 9;
     lights.sentence = 'Mara and Priya are in Shop floor';
     renderHome();
     const well = screen.getByRole('region', { name: 'Around now' });
     expect(within(well).getByText('Mara and Priya are in Shop floor')).toBeInTheDocument();
-    // Three of the building's people are drawn as faces; the tail counts the
-    // lights the well did not draw.
-    expect(within(well).getByText('+6 lights on')).toBeInTheDocument();
+    expect(within(well).queryByText(/lights on/)).not.toBeInTheDocument();
   });
 
   it('draws each server in the order the light hook gave them', () => {
@@ -262,13 +258,16 @@ describe('Home, the street outside your servers', () => {
     renderHome();
     expect(screen.getByRole('article', { name: 'Kestrel Robotics' })).toBeInTheDocument();
     expect(screen.getByRole('group', { name: 'Saltmarsh Sailing' })).toBeInTheDocument();
-    expect(screen.getByText('brightest first')).toBeInTheDocument();
+    const servers = screen.getByRole('region', { name: 'Your servers' });
+    expect(within(servers).getByRole('article', { name: 'Kestrel Robotics' }).compareDocumentPosition(
+      within(servers).getByRole('group', { name: 'Saltmarsh Sailing' }),
+    ) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('joins a lit room in the room it is showing, not the server', async () => {
     lights.buildings = [litBuilding()];
     renderHome();
-    await userEvent.click(screen.getByRole('button', { name: 'Join' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Join voice' }));
     expect(stores.activateChannel).toHaveBeenCalledWith({ scope: SCOPE, id: 'voice-1' });
     expect(stores.joinChannel).toHaveBeenCalledWith('voice-1', 'guild-1');
     expect(await screen.findByText('Room route')).toBeInTheDocument();
@@ -334,7 +333,7 @@ describe('Coming up on Home', () => {
     const section = screen.getByRole('region', { name: 'Coming up' });
     expect(within(section).getByText('Thermal test — driver v3')).toBeInTheDocument();
     expect(
-      within(section).getByText('Today 9:00 pm · Kestrel Robotics · Shop floor · 6 going'),
+      within(section).getByText('Kestrel Robotics · Shop floor · 6 going'),
     ).toBeInTheDocument();
   });
 
@@ -345,8 +344,8 @@ describe('Coming up on Home', () => {
   });
 });
 
-describe('Needs you and Pick up', () => {
-  it('ranks work, accepts a friend request, and never repeats a row in Pick up', async () => {
+describe('For you and Pick up', () => {
+  it('ranks direct attention, accepts a friend request, and never repeats a row in Pick up', async () => {
     unified.needsYou = [conversation({ key: 'mention', mentionCount: 2 })];
     unified.recent = [
       conversation({ key: 'mention', mentionCount: 2 }),
@@ -357,11 +356,11 @@ describe('Needs you and Pick up', () => {
     ];
     renderHome();
 
-    const needs = screen.getByRole('region', { name: 'Needs you' });
+    const needs = screen.getByRole('region', { name: 'For you' });
     expect(within(needs).getByText('Devon Park')).toBeInTheDocument();
     expect(within(needs).getByText('2 mentions for you')).toBeInTheDocument();
 
-    const pickUp = screen.getByRole('region', { name: 'Pick up where you left off' });
+    const pickUp = screen.getByRole('region', { name: 'Pick up the conversation' });
     expect(within(pickUp).getByText('regatta-2026')).toBeInTheDocument();
     expect(within(pickUp).queryByText(/mention/)).not.toBeInTheDocument();
 
@@ -376,31 +375,27 @@ describe('Needs you and Pick up', () => {
     stores.channelErrors = { k1: 'offline' };
     renderHome();
     expect(screen.getByText(/Some activity could not be checked/)).toBeInTheDocument();
-    expect(screen.queryByText(/Nothing is waiting on you/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Nothing new for you/)).not.toBeInTheDocument();
   });
 
   it('says nothing is waiting only once it knows', () => {
     renderHome();
-    expect(screen.getByText('Nothing is waiting on you right now.')).toBeInTheDocument();
+    expect(screen.getByText('Nothing new for you right now.')).toBeInTheDocument();
     expect(screen.queryByText(/No data|It's quiet/)).not.toBeInTheDocument();
   });
 
-  it('leads the phone column with work you owe somebody, and follows it when there is none', () => {
-    const { rerender } = renderHome();
-    const needs = () => screen.getByRole('region', { name: 'Needs you' }).parentElement!;
-    // Nothing waiting: the buildings lead and Needs-you follows them.
-    expect(needs().className).toContain('order-3');
-
-    unified.needsYou = [conversation({ key: 'mention', mentionCount: 1 })];
-    rerender(tree());
-    expect(needs().className).toContain('order-1');
-
-    // Pick-up is never glued to Needs-you on a phone: it sorts after the
-    // buildings, so work leads, the street follows, and continuity is last.
-    const buildings = screen.getByText('Your servers').closest('div')!.parentElement!;
-    expect(buildings.className).toContain('order-2');
-    // The right-hand column only exists on a wide viewport.
-    expect(needs().parentElement!.className).toContain('contents');
-    expect(needs().parentElement!.className).toContain('lg:flex');
+  it('keeps casual unread conversations visible without turning them into direct attention', () => {
+    const casual = conversation({ key: 'casual', channelId: 'text-9', title: 'music' });
+    unified.needsYou = [casual, conversation({ key: 'mention', mentionCount: 1 })];
+    unified.pinned = [casual];
+    lights.buildings = [litBuilding()];
+    renderHome();
+    const direct = screen.getByRole('region', { name: 'For you' });
+    const pickUp = screen.getByRole('region', { name: 'Pick up the conversation' });
+    expect(within(direct).queryByRole('button', { name: 'Open music' })).not.toBeInTheDocument();
+    expect(within(pickUp).getAllByRole('button', { name: 'Open music' })).toHaveLength(1);
+    const servers = screen.getByRole('region', { name: 'Your servers' });
+    expect(servers.compareDocumentPosition(pickUp) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(pickUp.compareDocumentPosition(direct) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

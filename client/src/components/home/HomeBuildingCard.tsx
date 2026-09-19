@@ -1,11 +1,13 @@
-import { Button, Lamp, Plate } from '../ui';
-import { AvatarStack, BuildingPlate, RoomThumbnail, WindowMap } from '../light';
+import { Volume2 } from 'lucide-react';
+import { Button } from '../ui';
+import { RoomThumbnail, WindowMap } from '../light';
+import { VoiceParticipants } from '../light/VoiceParticipants';
 import { useRoomThumbnail } from '../../hooks/useRoomThumbnail';
 import { getIdentityColor } from '../../lib/colors';
 import { guildInitials, resolveGuildIconUrl } from '../../lib/guildIcon';
 import { cn } from '../../lib/utils';
 import type { BuildingLight, RoomLight } from '../../lib/attention/light';
-import { buildingMetaCaption, roomActivityLine, textRoomCaption } from './homeCaptions';
+import { roomActivityLine, textRoomCaption } from './homeCaptions';
 import { activeTextRoom, isLitBuilding, litTextRooms } from './homeModel';
 
 export interface HomeBuildingCardProps {
@@ -17,80 +19,47 @@ export interface HomeBuildingCardProps {
   onJoinRoom: (building: BuildingLight, room: RoomLight) => void;
 }
 
-/**
- * One building on Home (docs/lantern-stage-spec.md §7.5).
- *
- * **Two shapes, and which one you get is state, not taste.** A building with a
- * lit voice room is a wide card: the room's 176px thumbnail, who is in it, what
- * they are doing, and Join in white light, beside the building's mark, its
- * window map and its lit text rooms. A building with nothing talking is a
- * compact row — mark, name, counts, window map, and the one text room somebody
- * is actually reading. Nothing tiles identically (§6.8), because nothing about
- * these two buildings is identical.
- */
+/** Active calls make space for people; quieter servers stay a familiar, compact row. */
 export function HomeBuildingCard(props: HomeBuildingCardProps) {
-  return isLitBuilding(props.building) ? (
-    <LitBuildingCard {...props} />
-  ) : (
-    <QuietBuildingRow {...props} />
-  );
+  return isLitBuilding(props.building) ? <LitBuildingCard {...props} /> : <QuietBuildingRow {...props} />;
 }
 
-/** The building's mark — its icon, or its initials on its own identity colour. */
-function BuildingMark({ building, dim }: { building: BuildingLight; dim?: boolean }) {
-  const src = resolveGuildIconUrl({ icon: building.icon });
-  return (
-    <span
-      aria-hidden
-      className={cn(
-        'pc-display flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-[8px]',
-        'text-[10px] font-bold text-text-on-light',
-        dim && 'pc-dim',
-      )}
-      style={{ background: src ? undefined : getIdentityColor(building.guildId) }}
-    >
-      {src ? (
-        <img src={src} alt="" className="h-full w-full object-cover" draggable={false} />
-      ) : (
-        guildInitials(building.name)
-      )}
-    </span>
-  );
-}
-
-/** The building's name, as the control that opens it. */
-function BuildingName({
-  building,
-  dim,
-  onOpen,
-}: {
+function BuildingHeader({ building, onOpen }: {
   building: BuildingLight;
-  dim?: boolean;
   onOpen: (building: BuildingLight) => void;
 }) {
+  const src = resolveGuildIconUrl({ icon: building.icon });
   return (
-    <button
-      type="button"
-      onClick={() => onOpen(building)}
-      className={cn(
-        'pc-display pc-focusable min-w-0 truncate rounded-[var(--radius-control)] text-left',
-        'text-heading font-bold',
-        dim ? 'text-text-secondary' : 'text-text-primary',
-        'hover:text-text-primary',
-      )}
-    >
-      {building.name}
-    </button>
+    <div className="relative flex min-w-0 flex-wrap items-center gap-x-4 gap-y-3">
+      <button
+        type="button"
+        onClick={() => onOpen(building)}
+        className="pc-focusable flex min-w-0 flex-[1_1_180px] items-center gap-3 rounded-[var(--radius-control)] text-left"
+        title={building.name}
+      >
+        <span
+          aria-hidden
+          className="pc-display flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-[var(--radius-card)] text-name font-bold text-text-on-light"
+          style={{ background: src ? undefined : getIdentityColor(building.guildId) }}
+        >
+          {src ? <img src={src} alt="" className="h-full w-full object-cover" draggable={false} /> : guildInitials(building.name)}
+        </span>
+        <span className="pc-display min-w-0 truncate text-heading font-bold text-text-primary">
+          {building.name}
+        </span>
+      </button>
+      <WindowMap
+        windows={building.windows}
+        overflowCount={building.overflowCount}
+        scale="home"
+        columns={Math.min(8, Math.max(1, building.windows.length))}
+        className="shrink-0"
+      />
+    </div>
   );
 }
 
-/** One lit text room under a building's windows. */
-function TextRoomLine({
-  building,
-  room,
-  mentions,
-  onOpenRoom,
-}: {
+function TextRoomLine({ building, room, mentions, onOpenRoom }: {
   building: BuildingLight;
   room: RoomLight;
   mentions: number;
@@ -100,169 +69,84 @@ function TextRoomLine({
     <button
       type="button"
       onClick={() => onOpenRoom(building, room)}
-      className={cn(
-        'pc-focusable -mx-1.5 flex min-h-8 w-full min-w-0 items-center gap-2 rounded-[var(--radius-control)] px-1.5',
-        'text-left transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]',
-        'hover:bg-bg-mod-subtle',
-      )}
+      className="pc-focusable flex min-h-8 w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 rounded-[var(--radius-control)] py-1 text-left hover:bg-bg-mod-subtle"
     >
-      <span
-        aria-hidden
-        className={cn('pc-window shrink-0', room.lit && 'is-reading')}
-        style={{ width: 8, height: 8 }}
-      />
-      <span className="shrink-0 truncate text-[13px] font-semibold text-text-primary">
+      <span aria-hidden className={cn('pc-window shrink-0', room.lit && 'is-reading')} style={{ width: 8, height: 8 }} />
+      <span className="pc-display min-w-0 max-w-full truncate text-label font-semibold text-text-primary" title={room.name}>
         {room.name}
       </span>
-      <span className="min-w-0 truncate text-meta text-text-faint">
-        {textRoomCaption(room, mentions)}
-      </span>
+      <span className="min-w-0 text-meta text-text-muted">{textRoomCaption(room, mentions)}</span>
     </button>
   );
 }
 
-/**
- * A building whose voice room is lit: the wide card.
- *
- * The thumbnail is WP1's — it decides on its own whether real frames exist and
- * paints a still plus the LIVE dot when they do not (§5). The occupant stack
- * and the activity line sit over it as one group so the stack's width can never
- * push the sentence off the frame.
- */
-function LitBuildingCard({
-  building,
-  mentions,
-  onOpenBuilding,
-  onOpenRoom,
-  onJoinRoom,
-}: HomeBuildingCardProps) {
+function LitBuildingCard({ building, mentions, onOpenBuilding, onOpenRoom, onJoinRoom }: HomeBuildingCardProps) {
   const room = building.brightestRoom as RoomLight;
   const feed = useRoomThumbnail(room);
-  const occupants = room.occupants.map((occupant) => occupant.person);
+  const hasMedia = feed.state.live && feed.frame !== null;
+  const hasPublisher = Boolean(room.screenSharer || room.cameraSharer);
   const textRooms = litTextRooms(building);
 
   return (
-    <Plate
-      bare
-      lit
-      as="article"
+    <article
       aria-label={building.name}
-      className="grid grid-cols-1 overflow-hidden rounded-[var(--radius-plate)] md:grid-cols-[300px_minmax(0,1fr)]"
+      className="relative min-w-0 rounded-[var(--radius-card)] bg-bg-well p-4"
     >
-      <div className="relative min-w-0">
-        <RoomThumbnail
-          room={room}
-          height={176}
-          frame={feed.frame}
-          showOccupants={false}
-          className="h-full rounded-none shadow-none"
-          action={
-            <Button size="sm" variant="light" onClick={() => onJoinRoom(building, room)}>
-              Join
+      <BuildingHeader building={building} onOpen={onOpenBuilding} />
+      <div className={cn('mt-4 grid min-w-0 gap-4', hasMedia && 'lg:grid-cols-[minmax(0,1fr)_minmax(180px,0.8fr)]')}>
+        <div className="min-w-0">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+            <button
+              type="button"
+              onClick={() => onOpenRoom(building, room)}
+              className="pc-display pc-focusable flex min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-control)] text-left text-heading font-semibold text-text-primary"
+              title={room.name}
+            >
+              <Volume2 size={17} aria-hidden className="shrink-0 text-light-white" />
+              <span className="min-w-0 truncate">{room.name}</span>
+            </button>
+            <Button size="md" variant="light" className="shrink-0" onClick={() => onJoinRoom(building, room)}>
+              Join voice
             </Button>
-          }
-        />
-        {/* Who is in there, and what they are doing — stacked rather than side
-            by side, because a real display name is not four letters and this
-            frame is 300px wide. The Join button sits beside the stack. */}
-        <div className="pointer-events-none absolute bottom-3 left-3 right-20 flex flex-col items-start gap-1.5">
-          <span className="max-w-full truncate text-meta text-text-primary">
-            {roomActivityLine(room)}
-          </span>
-          {occupants.length > 0 && (
-            <AvatarStack
-              people={occupants}
-              size={22}
-              max={3}
-              overlap={5}
-              context={`in ${room.name}`}
-            />
-          )}
-        </div>
-      </div>
-
-      <div className="relative flex min-w-0 flex-col gap-3 p-4">
-        {/* The lamp over the building's own panel — one per lit card (§1.2),
-            and it only exists because a room in here is lit. */}
-        <Lamp width={200} height={110} style={{ left: -40, top: -30 }} />
-        <div className="relative flex min-w-0 items-center gap-2.5">
-          <BuildingMark building={building} />
-          <BuildingName building={building} onOpen={onOpenBuilding} />
-          <span className="ml-auto shrink-0 text-meta text-text-faint">
-            {buildingMetaCaption(building)}
-          </span>
-        </div>
-        <WindowMap
-          windows={building.windows}
-          overflowCount={building.overflowCount}
-          scale="home"
-          className="relative"
-        />
-        {textRooms.length > 0 && (
-          <div className="relative mt-auto flex min-w-0 flex-col gap-1">
-            {textRooms.map((textRoom) => (
-              <TextRoomLine
-                key={textRoom.key}
-                building={building}
-                room={textRoom}
-                mentions={mentions.get(textRoom.key) ?? 0}
-                onOpenRoom={onOpenRoom}
-              />
-            ))}
           </div>
+          <VoiceParticipants room={room} className="mt-3" />
+          {hasPublisher && <p className="mt-3 break-words text-meta text-text-secondary">{roomActivityLine(room)}</p>}
+        </div>
+        {hasMedia && (
+          <RoomThumbnail
+            room={{ ...room, thumbnail: feed.state }}
+            height={144}
+            frame={feed.frame}
+            showOccupants={false}
+            className="self-center"
+          />
         )}
       </div>
-    </Plate>
+      {textRooms.length > 0 && (
+        <div className="mt-4 flex min-w-0 flex-col gap-1 border-t border-border-subtle pt-3">
+          {textRooms.map((textRoom) => (
+            <TextRoomLine key={textRoom.key} building={building} room={textRoom} mentions={mentions.get(textRoom.key) ?? 0} onOpenRoom={onOpenRoom} />
+          ))}
+        </div>
+      )}
+    </article>
   );
 }
 
-/**
- * A building with nothing talking: the compact row.
- *
- * `BuildingPlate` is the building seen from the street — it owns the window
- * map, the lamp (only when something in there is lit) and the quiet tile
- * highlight. The one text room somebody is reading wraps onto its own line so
- * it survives a narrow viewport instead of squeezing the map.
- */
-function QuietBuildingRow({
-  building,
-  mentions,
-  onOpenBuilding,
-  onOpenRoom,
-}: HomeBuildingCardProps) {
+function QuietBuildingRow({ building, mentions, onOpenBuilding, onOpenRoom }: HomeBuildingCardProps) {
   const textRoom = activeTextRoom(building);
-  const dim = building.lightsOn === 0;
-
   return (
-    <BuildingPlate
-      building={building}
-      scale="home"
-      /* The map keeps its own screen-reader sentence; the counts are rendered
-         once, below, so they are never announced or laid out twice. */
-      caption=""
-      role="group"
-      aria-label={building.name}
-      className="flex-wrap items-center gap-x-4 gap-y-2.5 px-4 py-3"
-    >
-      <BuildingMark building={building} dim={dim} />
-      <BuildingName building={building} dim onOpen={onOpenBuilding} />
-      {/* The counts are ordered AFTER the window map rather than handed to it
-          as its caption: inside the map they share a truncating box with the
-          windows and vanish first on a phone. Out here the name truncates
-          instead, which is the half a reader can afford to lose. */}
-      <span className="order-1 ml-auto shrink-0 text-meta text-text-faint">
-        {buildingMetaCaption(building)}
-      </span>
-      {textRoom && (
-        <div className="relative order-2 basis-full">
-          <TextRoomLine
-            building={building}
-            room={textRoom}
-            mentions={mentions.get(textRoom.key) ?? 0}
-            onOpenRoom={onOpenRoom}
-          />
-        </div>
-      )}
-    </BuildingPlate>
+    <div role="group" aria-label={building.name} className="min-w-0 px-4 py-3 sm:px-5">
+      <BuildingHeader building={building} onOpen={onOpenBuilding} />
+      <div className="mt-1 min-w-0 pl-14">
+        {textRoom ? (
+          <TextRoomLine building={building} room={textRoom} mentions={mentions.get(textRoom.key) ?? 0} onOpenRoom={onOpenRoom} />
+        ) : (
+          <p className="py-1 text-meta text-text-muted">
+            {building.lightsOn > 0 ? `${building.lightsOn} around` : 'Quiet for now'}
+          </p>
+        )}
+      </div>
+    </div>
   );
 }
