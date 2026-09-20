@@ -251,6 +251,163 @@ jobs:
           path: dist/paracord-server-linux-x64-*.tar.gz
           if-no-files-found: error
 
+  build-server-macos:
+    name: Build Server (macOS ${{ matrix.arch }})
+    runs-on: macos-14
+    needs: validate-release-version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-apple-darwin
+            livekit: darwin_arm64
+          - arch: x64
+            target: x86_64-apple-darwin
+            livekit: darwin_amd64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.91"
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: server-${{ matrix.target }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install native dependencies
+        run: |
+          set -euo pipefail
+          brew update
+          brew install libvpx ffmpeg pkg-config speexdsp
+
+      - name: Install client dependencies
+        working-directory: client
+        run: npm ci
+
+      - name: Build embedded web client
+        working-directory: client
+        run: npm run build
+
+      - name: Build server binary
+        run: cargo build --release --target ${{ matrix.target }} --bin paracord-server
+
+      - name: Download LiveKit (macOS)
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${LIVEKIT_VERSION}"
+          version_num="${version#v}"
+          url="https://github.com/livekit/livekit/releases/download/${version}/livekit_${version_num}_${{ matrix.livekit }}.tar.gz"
+          curl -fsSL "$url" -o livekit.tar.gz
+          mkdir -p livekit-extracted
+          tar -xzf livekit.tar.gz -C livekit-extracted
+
+      - name: Package server artifact (macOS)
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/paracord-server" dist/
+          cp livekit-extracted/livekit-server dist/
+          chmod +x dist/paracord-server dist/livekit-server
+          tar -czf "dist/paracord-server-macos-${{ matrix.arch }}-${version}.tar.gz" \
+            -C dist paracord-server livekit-server
+
+      - name: Upload server artifact (macOS)
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-macos-${{ matrix.arch }}
+          path: dist/paracord-server-macos-*.tar.gz
+          if-no-files-found: error
+
+  build-client-macos:
+    name: Build Client (macOS ${{ matrix.arch }})
+    runs-on: macos-14
+    needs: validate-release-version
+    strategy:
+      # One failing architecture must not hide the other's result.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+            target: aarch64-apple-darwin
+          - arch: x86_64
+            target: x86_64-apple-darwin
+    env:
+      # Presence flag only — never the key itself. See build-client-windows.
+      HAS_SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: "1.91"
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: client/src-tauri
+          key: ${{ matrix.target }}
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+
+      # libvpx is required: VP9 is how screen share and video calls encode, and
+      # the `vpx` feature is on by default. Building without it produces a
+      # client that silently cannot stream, so it is a dependency, not an
+      # optional extra (see CLAUDE.md).
+      - name: Install native dependencies
+        run: |
+          set -euo pipefail
+          brew update
+          brew install libvpx ffmpeg pkg-config speexdsp
+          pkg-config --modversion vpx
+
+      - name: Install client dependencies
+        working-directory: client
+        run: npm ci
+
+      - name: Enable signed updater artifacts
+        if: ${{ env.HAS_SIGNING_KEY == 'true' }}
+        run: |
+          node -e "const fs=require('fs'); const p='client/src-tauri/tauri.conf.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.bundle.createUpdaterArtifacts=true; fs.writeFileSync(p, JSON.stringify(j,null,2)+'\n');"
+
+      # Unsigned by design unless an Apple Developer ID is configured: an
+      # unsigned .app still installs, with a one-time right-click → Open (the
+      # README says so). Shipping nothing at all is the worse failure, so the
+      # notarisation secrets are optional rather than required.
+      - name: Build Tauri bundles (macOS)
+        working-directory: client
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npx tauri build --target ${{ matrix.target }} --bundles app,dmg
+
+      - name: Upload client macOS bundles
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: client-macos-${{ matrix.arch }}
+          path: |
+            target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz
+            target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz.sig
+          if-no-files-found: error
+
   build-client-windows:
     name: Build Client (Windows x64)
     runs-on: windows-latest
@@ -433,7 +590,7 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npx tauri build --bundles appimage,deb
+        run: npx tauri build --bundles appimage,deb,rpm
 
       - name: Upload client AppImage
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -453,13 +610,24 @@ jobs:
             target/release/bundle/deb/*.deb.sig
           if-no-files-found: error
 
+      - name: Upload client rpm
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: client-linux-rpm
+          path: |
+            target/release/bundle/rpm/*.rpm
+            target/release/bundle/rpm/*.rpm.sig
+          if-no-files-found: error
+
   release:
     name: Create Release
     needs:
       - build-server-windows
       - build-server-linux
+      - build-server-macos
       - build-client-windows
       - build-client-linux
+      - build-client-macos
     runs-on: ubuntu-latest
     # The only job that mutates the repository: it deletes stale release assets
     # and publishes the new ones.
@@ -486,11 +654,20 @@ jobs:
           msi_sig_path="$(find artifacts/client-windows-msi -maxdepth 1 -type f -name '*.msi.sig' 2>/dev/null | head -n1)"
           appimage_sig_path="$(find artifacts/client-linux-appimage -maxdepth 1 -type f -name '*.AppImage.sig' 2>/dev/null | head -n1)"
           deb_sig_path="$(find artifacts/client-linux-deb -maxdepth 1 -type f -name '*.deb.sig' 2>/dev/null | head -n1)"
+          mac_arm_sig_path="$(find artifacts/client-macos-aarch64 -maxdepth 1 -type f -name '*.app.tar.gz.sig' 2>/dev/null | head -n1)"
+          mac_x64_sig_path="$(find artifacts/client-macos-x86_64 -maxdepth 1 -type f -name '*.app.tar.gz.sig' 2>/dev/null | head -n1)"
 
           # Only generate latest.json if all signature files exist (signing key was configured)
           if [ -z "$msi_sig_path" ] || [ -z "$appimage_sig_path" ] || [ -z "$deb_sig_path" ]; then
             echo "Signing artifacts not found - skipping latest.json generation"
             exit 0
+          fi
+
+          # A macOS entry is only written when that architecture actually built.
+          # Publishing a platform key with no artifact behind it is worse than
+          # omitting it: the updater would offer an update it cannot fetch.
+          if [ -z "$mac_arm_sig_path" ] || [ -z "$mac_x64_sig_path" ]; then
+            echo "::warning::macOS updater artifacts missing - latest.json will not offer macOS updates"
           fi
 
           msi_path="${msi_sig_path%.sig}"
@@ -504,6 +681,17 @@ jobs:
           msi_sig="$(tr -d '\r\n' < "$msi_sig_path")"
           appimage_sig="$(tr -d '\r\n' < "$appimage_sig_path")"
           deb_sig="$(tr -d '\r\n' < "$deb_sig_path")"
+
+          mac_arm_url=""; mac_arm_sig=""
+          if [ -n "$mac_arm_sig_path" ]; then
+            mac_arm_sig="$(tr -d '\r\n' < "$mac_arm_sig_path")"
+            mac_arm_url="https://github.com/${repo}/releases/download/${tag}/$(basename "${mac_arm_sig_path%.sig}")"
+          fi
+          mac_x64_url=""; mac_x64_sig=""
+          if [ -n "$mac_x64_sig_path" ]; then
+            mac_x64_sig="$(tr -d '\r\n' < "$mac_x64_sig_path")"
+            mac_x64_url="https://github.com/${repo}/releases/download/${tag}/$(basename "${mac_x64_sig_path%.sig}")"
+          fi
 
           msi_url="https://github.com/${repo}/releases/download/${tag}/${msi_name}"
           appimage_url="https://github.com/${repo}/releases/download/${tag}/${appimage_name}"
@@ -519,16 +707,24 @@ jobs:
             --arg appimage_sig "$appimage_sig" \
             --arg deb_url "$deb_url" \
             --arg deb_sig "$deb_sig" \
+            --arg mac_arm_url "$mac_arm_url" \
+            --arg mac_arm_sig "$mac_arm_sig" \
+            --arg mac_x64_url "$mac_x64_url" \
+            --arg mac_x64_sig "$mac_x64_sig" \
             '{
               version: $version,
               notes: $notes,
               pub_date: $pub_date,
-              platforms: {
+              platforms: ({
                 "windows-x86_64": { url: $msi_url, signature: $msi_sig },
                 "linux-x86_64": { url: $deb_url, signature: $deb_sig },
                 "linux-x86_64-deb": { url: $deb_url, signature: $deb_sig },
                 "linux-x86_64-appimage": { url: $appimage_url, signature: $appimage_sig }
               }
+              + (if $mac_arm_url == "" then {} else
+                  { "darwin-aarch64": { url: $mac_arm_url, signature: $mac_arm_sig } } end)
+              + (if $mac_x64_url == "" then {} else
+                  { "darwin-x86_64": { url: $mac_x64_url, signature: $mac_x64_sig } } end))
             }' > artifacts/latest.json
 
           cat artifacts/latest.json
@@ -565,6 +761,10 @@ jobs:
           | Client MSI (Windows) | `Paracord_*_x64_en-US.msi` |
           | Client AppImage (Linux) | `Paracord_*.AppImage` |
           | Client deb (Linux) | `paracord_*_amd64.deb` |
+          | Client rpm (Fedora/RHEL) | `paracord-*.x86_64.rpm` |
+          | Client (macOS, Apple Silicon) | `Paracord_*_aarch64.dmg` |
+          | Client (macOS, Intel) | `Paracord_*_x64.dmg` |
+          | Server (macOS) | `paracord-server-macos-*.tar.gz` |
           | Signed updater manifest, when signing artifacts are configured | `latest.json` |
           DOWNLOADS
 
@@ -623,4 +823,14 @@ jobs:
             artifacts/client-linux-appimage/*.AppImage.sig
             artifacts/client-linux-deb/*.deb
             artifacts/client-linux-deb/*.deb.sig
+            artifacts/client-linux-rpm/*.rpm
+            artifacts/client-linux-rpm/*.rpm.sig
+            artifacts/server-macos-arm64/*.tar.gz
+            artifacts/server-macos-x64/*.tar.gz
+            artifacts/client-macos-aarch64/*.dmg
+            artifacts/client-macos-aarch64/*.app.tar.gz
+            artifacts/client-macos-aarch64/*.app.tar.gz.sig
+            artifacts/client-macos-x86_64/*.dmg
+            artifacts/client-macos-x86_64/*.app.tar.gz
+            artifacts/client-macos-x86_64/*.app.tar.gz.sig
             artifacts/latest.json

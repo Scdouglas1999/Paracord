@@ -9,7 +9,7 @@ impl RawCapturer<'_> {
     ) -> Result<(arc::R<cm::SampleBuf>, sc::stream::OutputType), mpsc::RecvError> {
         use std::time::Duration;
 
-        let capturer = &self.capturer;
+        let capturer = self._capturer;
 
         loop {
             let error_flag = capturer

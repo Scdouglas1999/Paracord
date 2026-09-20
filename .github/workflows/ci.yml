@@ -393,6 +393,24 @@ jobs:
       - name: Rust check (no default features)
         run: cargo check --workspace --no-default-features
 
+      # The desktop crate is its own workspace, so `cargo check --workspace`
+      # above never reaches it, and the macOS arms of its code (AVFoundation
+      # capture, the CoreAnimation render surface, the apple-native keyring)
+      # were compiled by nothing at all — `client/src-tauri/Cargo.toml` says as
+      # much next to the macOS dependencies. Release builds for macOS now exist,
+      # and this keeps them from being the first thing to discover a break.
+      - name: Install macOS native dependencies
+        if: matrix.os == 'macos-latest'
+        run: |
+          set -euo pipefail
+          brew update
+          brew install libvpx ffmpeg pkg-config speexdsp
+          pkg-config --modversion vpx
+
+      - name: Desktop client check (macOS)
+        if: matrix.os == 'macos-latest'
+        run: cargo check --manifest-path client/src-tauri/Cargo.toml --all-targets
+
   docker-image:
     name: Docker Image
     runs-on: ubuntu-latest

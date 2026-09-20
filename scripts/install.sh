@@ -39,6 +39,9 @@ GITHUB_REPO="${PARACORD_GITHUB_REPO:-Scdouglas1999/Paracord}"
 RELEASE_BASE_URL="${PARACORD_RELEASE_BASE_URL:-https://github.com/${GITHUB_REPO}/releases/download}"
 API_URL="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
 SERVICE_NAME="paracord"
+# launchd labels are reverse-DNS by convention and must be unique per machine.
+LAUNCHD_LABEL="com.paracord.server"
+OS_FAMILY="linux"
 RUN_USER="paracord"
 
 say()  { printf '%s\n' "$*"; }
@@ -113,19 +116,20 @@ detect_platform() {
     os="$(uname -s)"
     arch="$(uname -m)"
     case "$os" in
-        Linux) ;;
-        Darwin)
-            die "no prebuilt Paracord server for macOS — build from source (cargo build --release --bin paracord-server) or use the Docker stack; see docs/getting-started.md" ;;
+        Linux) OS_FAMILY="linux" ;;
+        Darwin) OS_FAMILY="macos" ;;
         MINGW*|MSYS*|CYGWIN*)
             die "on Windows use scripts/install.ps1 instead:
   powershell -ExecutionPolicy Bypass -File install.ps1" ;;
-        *) die "unsupported OS '$os' — releases ship Linux x64 and Windows x64 servers only" ;;
+        *) die "unsupported OS '$os' — releases ship Linux, macOS and Windows servers" ;;
     esac
-    case "$arch" in
-        x86_64|amd64|AMD64) PLATFORM="linux-x64" ;;
-        aarch64|arm64)
-            die "no prebuilt Paracord server for ARM64 — build from source or run the Docker stack on this host" ;;
-        *) die "unsupported architecture '$arch' — releases ship linux-x64 only" ;;
+    case "$OS_FAMILY:$arch" in
+        linux:x86_64|linux:amd64|linux:AMD64) PLATFORM="linux-x64" ;;
+        linux:aarch64|linux:arm64)
+            die "no prebuilt Paracord server for Linux ARM64 — build from source or run the Docker stack on this host" ;;
+        macos:arm64|macos:aarch64) PLATFORM="macos-arm64" ;;
+        macos:x86_64|macos:amd64) PLATFORM="macos-x64" ;;
+        *) die "unsupported architecture '$arch' on $os" ;;
     esac
 }
 
@@ -313,6 +317,19 @@ install_files() {
 
 ensure_service_user() {
     [ "$(id -u)" = "0" ] || return 0
+    # macOS has no useradd/adduser, and creating a hidden service account with
+    # `dscl` means picking a free UID by hand — enough moving parts to be its
+    # own failure mode. The daemon instead runs as whoever invoked sudo, which
+    # keeps a network service off root without inventing an account.
+    if [ "$OS_FAMILY" = "macos" ]; then
+        RUN_USER="${SUDO_USER:-root}"
+        if [ "$RUN_USER" = "root" ]; then
+            warn "installing as root with no SUDO_USER — the daemon will run as root; prefer 'sudo sh install.sh' from your own account"
+        else
+            say "LaunchDaemon will run as '$RUN_USER'"
+        fi
+        return 0
+    fi
     if id "$RUN_USER" >/dev/null 2>&1; then
         say "System user '$RUN_USER' already exists"
         return 0
@@ -387,6 +404,81 @@ link_binary() {
         esac
     else
         warn "could not write $LINK_DIR — no PATH symlink created"
+    fi
+}
+
+# ── launchd (macOS) ──────────────────────────────────────────────────────────
+#
+# macOS has no systemd. The equivalent is a launchd job: a LaunchDaemon under
+# /Library/LaunchDaemons when installing as root (starts at boot, independent of
+# login) or a LaunchAgent under ~/Library/LaunchAgents for a user install
+# (starts at login). `KeepAlive` is launchd's `Restart=always`.
+
+launchd_available() {
+    [ "${PARACORD_NO_SERVICE:-0}" = "1" ] && return 1
+    [ "$OS_FAMILY" = "macos" ] || return 1
+    need_cmd launchctl
+}
+
+write_launchd_plist() {
+    # $1: plist path, $2: the user to run as (empty for a user agent)
+    plist="$1"
+    run_as="$2"
+    mkdir -p "$(dirname "$plist")"
+    cat > "$plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>$LAUNCHD_LABEL</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$INSTALL_DIR/paracord-server</string>
+        <string>-c</string>
+        <string>$INSTALL_DIR/config/paracord.toml</string>
+    </array>
+    <key>WorkingDirectory</key><string>$INSTALL_DIR</string>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>StandardOutPath</key><string>$INSTALL_DIR/logs/paracord.log</string>
+    <key>StandardErrorPath</key><string>$INSTALL_DIR/logs/paracord.err.log</string>
+EOF
+    if [ -n "$run_as" ]; then
+        printf '    <key>UserName</key><string>%s</string>\n' "$run_as" >> "$plist"
+    fi
+    cat >> "$plist" <<EOF
+</dict>
+</plist>
+EOF
+    mkdir -p "$INSTALL_DIR/logs"
+    chmod 644 "$plist"
+}
+
+install_launchd_service() {
+    if [ "$(id -u)" = "0" ]; then
+        plist="/Library/LaunchDaemons/${LAUNCHD_LABEL}.plist"
+        write_launchd_plist "$plist" "$RUN_USER"
+        chown root:wheel "$plist" 2>/dev/null || true
+        # `bootout` first so an upgrade reloads the new plist rather than
+        # leaving the old job definition resident.
+        launchctl bootout system "$plist" >/dev/null 2>&1 || true
+        if launchctl bootstrap system "$plist" 2>/dev/null; then
+            say "LaunchDaemon '$LAUNCHD_LABEL' installed and started (starts at boot)"
+        else
+            warn "could not bootstrap the LaunchDaemon — load it with: sudo launchctl bootstrap system $plist"
+            print_manual_run
+        fi
+    else
+        plist="$HOME/Library/LaunchAgents/${LAUNCHD_LABEL}.plist"
+        write_launchd_plist "$plist" ""
+        launchctl bootout "gui/$(id -u)" "$plist" >/dev/null 2>&1 || true
+        if launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null; then
+            say "LaunchAgent '$LAUNCHD_LABEL' installed and started (starts at login)"
+            say "It runs while you are logged in; for a boot-time service re-run this installer with sudo."
+        else
+            warn "could not bootstrap the LaunchAgent — load it with: launchctl bootstrap gui/$(id -u) $plist"
+            print_manual_run
+        fi
     fi
 }
 
@@ -482,9 +574,20 @@ EOF
 }
 
 setup_service() {
-    if [ "${PARACORD_NO_SYSTEMD:-0}" = "1" ]; then
-        say "PARACORD_NO_SYSTEMD=1 — skipping service setup"
+    if [ "${PARACORD_NO_SYSTEMD:-0}" = "1" ] || [ "${PARACORD_NO_SERVICE:-0}" = "1" ]; then
+        say "service setup skipped by request"
         print_manual_run
+        return 0
+    fi
+    # macOS reaches launchd here and returns; the systemd branches below are
+    # Linux-only and would otherwise all fall through to "run it by hand".
+    if [ "$OS_FAMILY" = "macos" ]; then
+        if launchd_available; then
+            install_launchd_service
+        else
+            warn "launchctl not available — no service installed"
+            print_manual_run
+        fi
         return 0
     fi
     if [ "$(id -u)" = "0" ]; then

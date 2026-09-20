@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Export the libvpx (VP9) build environment for the Paracord desktop client on Windows.
 

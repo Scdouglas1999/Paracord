@@ -804,6 +804,35 @@ thread_local! {
     static SURFACES: RefCell<HashMap<u64, MainSurface>> = RefCell::new(HashMap::new());
 }
 
+/// Whether this machine can actually give us a GL context for the underlay.
+///
+/// The underlay works by clearing the webview's background to full alpha so the
+/// DOM's transparent stream tiles become real holes down to a `gtk::GLArea`.
+/// That is a hole punched in the *entire* page: if the GLArea behind it cannot
+/// allocate, there is nothing to see through it and the window renders as the
+/// toplevel's bare background — a grey pane where the app should be, with the
+/// UI still running underneath it and clicks landing on nothing visible.
+///
+/// On the NVIDIA proprietary driver GBM allocation fails outright
+/// (`Failed to create GBM buffer of size …: Invalid argument`), so the probe is
+/// not theoretical. Ask GDK for a context up front and decline to install the
+/// host at all when it refuses: the app then keeps an opaque webview and renders
+/// normally, and native video falls back to the DOM path rather than taking the
+/// whole window down with it.
+fn gl_context_is_usable(window: &gtk::gdk::Window) -> Result<(), String> {
+    match window.create_gl_context() {
+        Ok(context) => {
+            // Creating a context is not the same as being able to use one:
+            // `realize` is where GBM allocation actually happens.
+            match context.realize() {
+                Ok(()) => Ok(()),
+                Err(err) => Err(format!("GL context could not be realized: {err}")),
+            }
+        }
+        Err(err) => Err(format!("GL context could not be created: {err}")),
+    }
+}
+
 /// Reparent the main webview into a `gtk::Overlay` and install the `Fixed` host
 /// that native GLAreas render inside (spec §3.3). Runs on the GTK main thread
 /// (the Tauri `setup` hook).
@@ -834,6 +863,19 @@ pub fn install_render_host(app: &tauri::AppHandle) -> Result<(), String> {
         .into_iter()
         .next()
         .ok_or("default vbox has no child to reparent")?;
+
+    // Probe before touching the widget tree. Everything below this point is
+    // irreversible for the life of the window, and the first thing it does is
+    // make the page transparent.
+    if let Some(toplevel_window) = vbox.toplevel().and_then(|t| t.window()) {
+        if let Err(reason) = gl_context_is_usable(&toplevel_window) {
+            return Err(format!(
+                "no usable GL context for the video underlay ({reason}) — \
+                 keeping an opaque webview; native video will use the DOM path"
+            ));
+        }
+    }
+
     let overlay = gtk::Overlay::new();
     overlay.set_hexpand(true);
     overlay.set_vexpand(true);

@@ -103,6 +103,12 @@ struct CaptureHandle {
 
 static CAPTURE: Mutex<Option<CaptureHandle>> = Mutex::new(None);
 static SYSTEM_AUDIO_CAPTURE_ENABLED: AtomicBool = AtomicBool::new(false);
+/// Raised only by `windows_grant::ensure` once it has read the persisted grant
+/// off disk (or just written it after the native prompt said yes), and lowered
+/// by a revoke. The renderer has no way to set it, which is the point: it is
+/// what `start_system_audio_capture_into` trusts instead of the flag above.
+#[cfg(target_os = "windows")]
+static WINDOWS_GRANT_VERIFIED: AtomicBool = AtomicBool::new(false);
 /// Backstop for a sound server that neither opens the capture source nor
 /// refuses it. A missing server or a refused source answers immediately.
 const SYSTEM_AUDIO_START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -225,6 +231,9 @@ mod windows_grant {
     }
 
     pub fn revoke(app: &tauri::AppHandle) -> Result<(), String> {
+        // Lowered first: whatever happens to the file, this process stops
+        // treating the machine as having said yes.
+        super::WINDOWS_GRANT_VERIFIED.store(false, std::sync::atomic::Ordering::SeqCst);
         let path = grant_file(app)?;
         match std::fs::remove_file(&path) {
             Ok(()) => Ok(()),
@@ -235,8 +244,10 @@ mod windows_grant {
 
     pub fn ensure(app: &tauri::AppHandle) -> Result<(), String> {
         if is_granted(app) {
+            super::WINDOWS_GRANT_VERIFIED.store(true, std::sync::atomic::Ordering::SeqCst);
             return Ok(());
         }
+        super::WINDOWS_GRANT_VERIFIED.store(false, std::sync::atomic::Ordering::SeqCst);
         if crate::NATIVE_PRIVILEGE_PROMPT_ACTIVE
             .compare_exchange(
                 false,
@@ -261,6 +272,7 @@ mod windows_grant {
                 let path = grant_file(app)?;
                 std::fs::write(&path, GRANTED)
                     .map_err(|e| format!("failed to record the system audio grant: {e}"))?;
+                super::WINDOWS_GRANT_VERIFIED.store(true, std::sync::atomic::Ordering::SeqCst);
                 Ok(())
             }
             Answer::Declined => Err("Desktop audio is off because this computer has not been \

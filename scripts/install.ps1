@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Paracord server installer for Windows — one-command install and upgrade.
 
@@ -320,6 +320,23 @@ try {
         # from Program Files, so no grant is needed there.
         & icacls (Split-Path $ConfigPath) /grant 'NT AUTHORITY\SYSTEM:(OI)(CI)(M)' /T | Out-Null
         & icacls $DataDir /grant 'NT AUTHORITY\SYSTEM:(OI)(CI)(M)' /T | Out-Null
+
+        # `init` writes the config owner-only (it holds the JWT secret), which
+        # also *disables inheritance* on that file. A directory grant carrying
+        # (OI)(CI) is an inheritance instruction and does not reach a file that
+        # has stopped inheriting, so the file above can still end up readable by
+        # the installing user alone. The task runs as SYSTEM, so that is the
+        # difference between a server that starts and one that exits 1 with
+        # nothing in any log. Grant the file directly, with no inheritance
+        # flags, and verify it rather than trusting the exit code.
+        & icacls $ConfigPath /grant 'NT AUTHORITY\SYSTEM:(M)' | Out-Null
+        # `-match` against an array filters it rather than answering true/false,
+        # so the lines that do not mention SYSTEM would make this fire on a
+        # grant that worked. Join first, then ask.
+        $configAcl = (& icacls $ConfigPath 2>&1) -join "`n"
+        if ($configAcl -notmatch 'NT AUTHORITY\\SYSTEM') {
+            Fail ("could not grant SYSTEM access to $ConfigPath - the scheduled task runs as SYSTEM and cannot start without it. Current ACL:`n" + $configAcl)
+        }
 
         Start-ScheduledTask -TaskName $TaskName
         $deadline = (Get-Date).AddSeconds(15)

@@ -1582,6 +1582,86 @@ fn linux_native_render_enabled() -> bool {
     )
 }
 
+/// Whether this machine's active EGL vendor is NVIDIA's proprietary driver.
+///
+/// libglvnd picks an EGL implementation from the JSON manifests in
+/// `/usr/share/glvnd/egl_vendor.d`, honouring `__EGL_VENDOR_LIBRARY_FILENAMES`
+/// when it is set. NVIDIA's entry sorts first by convention (`10_nvidia.json`),
+/// so on a machine with both it is the one WebKit ends up on.
+#[cfg(target_os = "linux")]
+fn nvidia_egl_is_active() -> bool {
+    if let Ok(explicit) = std::env::var("__EGL_VENDOR_LIBRARY_FILENAMES") {
+        return explicit.to_ascii_lowercase().contains("nvidia");
+    }
+    // The kernel module's presence is the cheap, reliable signal; the manifest
+    // directory confirms the userspace half is installed too.
+    let module_loaded = std::path::Path::new("/sys/module/nvidia/version").exists();
+    let manifest = std::fs::read_dir("/usr/share/glvnd/egl_vendor.d")
+        .map(|entries| {
+            entries.flatten().any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .to_ascii_lowercase()
+                    .contains("nvidia")
+            })
+        })
+        .unwrap_or(false);
+    module_loaded && manifest
+}
+
+/// Make WebKit hand its frames to the window over shared memory on NVIDIA.
+///
+/// WebKitGTK 2.5x always composites, and by default ships each composited frame
+/// to the UI process as a dmabuf. On the NVIDIA proprietary driver that path
+/// fails outright: GBM allocation is refused and the window dies with
+/// "Gdk-Message: Error 71 (Protocol error) dispatching to Wayland display"
+/// before it paints. `WEBKIT_DMABUF_RENDERER_FORCE_SHM` keeps the compositor
+/// running and only changes the transport, so the page renders and keeps
+/// rendering.
+///
+/// Do NOT reach for `hardware-acceleration-policy = Never` instead. wry gives no
+/// hook to set it before the page exists, and flipping it on a live page makes
+/// WebKit tear its compositor down the next time the layer tree changes (the
+/// first pressed-state transform is enough). The window then never paints
+/// again while both processes sit idle — it looks like a hang on first click.
+///
+/// WebKit reads the variable when its first web process starts, so this has to
+/// run before the Tauri builder does. A value already in the environment wins.
+#[cfg(target_os = "linux")]
+fn configure_linux_webkit_buffer_transport() {
+    const FORCE_SHM: &str = "WEBKIT_DMABUF_RENDERER_FORCE_SHM";
+    if std::env::var_os(FORCE_SHM).is_none() && nvidia_egl_is_active() {
+        std::env::set_var(FORCE_SHM, "1");
+        eprintln!("[webkit] NVIDIA EGL detected: frames go to the window over shared memory");
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn configure_linux_webkit_buffer_transport() {}
+
+/// Give the window back to the compositor's own titlebar.
+///
+/// On Wayland tao installs a GTK header bar of its own, wrapped in an event box
+/// that sits above its child — so the minimise/maximise/close buttons never see
+/// a click, and the bar is GTK's tall grey one rather than the desktop's. With
+/// no custom titlebar GTK negotiates server-side decorations where the
+/// compositor offers them (KWin does) and draws its own stock, working header
+/// where it does not (GNOME).
+#[cfg(target_os = "linux")]
+fn use_compositor_titlebar(app: &tauri::AppHandle) {
+    use gtk::prelude::GtkWindowExt;
+    use tauri::Manager;
+
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    match window.gtk_window() {
+        Ok(gtk_window) => gtk_window.set_titlebar(None::<&gtk::Widget>),
+        Err(err) => eprintln!("[window] could not reach the GTK window: {err}"),
+    }
+}
+
 #[cfg(not(target_os = "linux"))]
 fn linux_native_render_enabled() -> bool {
     false
@@ -1623,6 +1703,7 @@ fn init_tracing() {
 pub fn run() {
     init_tracing();
     configure_linux_gstreamer_audio_backend();
+    configure_linux_webkit_buffer_transport();
 
     let builder = tauri::Builder::default()
         // Register single-instance FIRST so a second launch (how Linux/Windows
@@ -1687,6 +1768,9 @@ pub fn run() {
             // install by default on Linux. Best-effort: startup should survive a
             // host installation failure, while native_render_attach fails loudly
             // per subscription (spec §3.7).
+            #[cfg(target_os = "linux")]
+            use_compositor_titlebar(app.handle());
+
             #[cfg(target_os = "linux")]
             if linux_native_render_enabled() {
                 if let Err(err) =
@@ -1840,6 +1924,30 @@ fn chrono_like_timestamp_utc() -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// An explicit vendor-library override is the strongest statement about
+    /// which EGL is in play, so detection reads it before anything else.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn nvidia_detection_honours_an_explicit_vendor_library() {
+        std::env::set_var(
+            "__EGL_VENDOR_LIBRARY_FILENAMES",
+            "/usr/share/glvnd/egl_vendor.d/50_mesa.json",
+        );
+        assert!(
+            !nvidia_egl_is_active(),
+            "an explicit Mesa vendor is not NVIDIA"
+        );
+        std::env::set_var(
+            "__EGL_VENDOR_LIBRARY_FILENAMES",
+            "/usr/share/glvnd/egl_vendor.d/10_nvidia.json",
+        );
+        assert!(
+            nvidia_egl_is_active(),
+            "an explicit NVIDIA vendor is NVIDIA"
+        );
+        std::env::remove_var("__EGL_VENDOR_LIBRARY_FILENAMES");
+    }
     use super::*;
     use std::sync::Mutex;
 

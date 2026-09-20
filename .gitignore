@@ -117,3 +117,6 @@ client/target/
 
 # Local verification evidence (screenshots, logs) referenced by docs/improvement-program.md; not versioned
 /output/
+
+# Throwaway instance data from scripts/live-env.mjs (database, uploads, logs).
+.live-env/
