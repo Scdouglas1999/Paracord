@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
 import type { MotionPreference } from '../lib/motion/reducedMotion';
-import type { ThemeId } from '../lib/themes';
+import { DEFAULT_THEME, type ThemeId } from '../lib/themes';
 
 /**
  * The theme, per device. The list of ids is `lib/themes.ts` — including the
@@ -125,7 +125,7 @@ interface UIState {
 export const useUIStore = create<UIState>()(
   persist(
     (set) => ({
-      theme: 'dark',
+      theme: DEFAULT_THEME,
       accentPreset: 'emerald',
       baseHue: BASE_HUE_DEFAULT,
       baseTint: BASE_TINT_DEFAULT,

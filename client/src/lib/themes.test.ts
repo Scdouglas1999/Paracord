@@ -25,7 +25,7 @@ describe('THEME_IDS', () => {
   });
 
   it('names Night as the default', () => {
-    expect(DEFAULT_THEME).toBe('dark');
+    expect(DEFAULT_THEME).toBe('voices');
     expect(THEME_IDS).toContain(DEFAULT_THEME);
   });
 });
@@ -49,9 +49,9 @@ describe('asThemeId', () => {
   });
 
   it('collapses an unknown value to Night', () => {
-    expect(asThemeId('sepia')).toBe('dark');
-    expect(asThemeId(undefined)).toBe('dark');
-    expect(asThemeId(null)).toBe('dark');
+    expect(asThemeId('sepia')).toBe('voices');
+    expect(asThemeId(undefined)).toBe('voices');
+    expect(asThemeId(null)).toBe('voices');
   });
 
   it('takes an explicit fallback', () => {

@@ -37,7 +37,7 @@ import { extractApiError } from '../../api/client';
 import { getApi } from '../../api/activeClient';
 import { authApi, type AuthSession } from '../../api/auth';
 import { cn } from '../../lib/utils';
-import { asThemeId, type ThemeId } from '../../lib/themes';
+import { asThemeId, DEFAULT_THEME, type ThemeId } from '../../lib/themes';
 import { confirm } from '../../stores/confirmStore';
 import { toast } from '../../stores/toastStore';
 import { ErrorBanner } from '../ui/Feedback';
@@ -155,7 +155,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
   const setLowBandwidthModeUI = useUIStore((s) => s.setLowBandwidthMode);
   const customCss = useUIStore((s) => s.customCss);
   const setCustomCss = useUIStore((s) => s.setCustomCss);
-  const [theme, setTheme] = useState<ThemeId>('dark');
+  const [theme, setTheme] = useState<ThemeId>(DEFAULT_THEME);
   const [displayName, setDisplayName] = useState('');
   const [bio, setBio] = useState('');
   const [pronouns, setPronouns] = useState('');

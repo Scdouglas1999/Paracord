@@ -29,6 +29,11 @@ const MAX_BIO_LEN: usize = 512;
 /// these bounds an over-long value is a clean insert on SQLite and a 500 on
 /// PostgreSQL.
 const MAX_SETTINGS_THEME_LEN: usize = 32;
+/// What an account that has never chosen a theme is shown. The client's own
+/// default (`DEFAULT_THEME` in `client/src/lib/themes.ts`) must say the same
+/// thing: the client adopts this value on first sign-in, so a disagreement
+/// would flip a fresh install's look the moment it signed in.
+const DEFAULT_THEME: &str = "voices";
 const MAX_SETTINGS_LOCALE_LEN: usize = 10;
 const MAX_CUSTOM_STATUS_LEN: usize = 128;
 const MAX_AVATAR_IMAGE_SIZE: usize = 2 * 1024 * 1024;
@@ -672,7 +677,7 @@ pub async fn get_settings(
     } else {
         Ok(Json(UserSettingsResponse {
             user_id: auth.user_id.to_string(),
-            theme: "dark".to_string(),
+            theme: DEFAULT_THEME.to_string(),
             locale: "en-US".to_string(),
             message_display_compact: false,
             custom_css: None,
@@ -709,7 +714,7 @@ pub async fn update_settings(
         .theme
         .as_deref()
         .or_else(|| existing.as_ref().map(|s| s.theme.as_str()))
-        .unwrap_or("dark");
+        .unwrap_or(DEFAULT_THEME);
     let locale = body
         .locale
         .as_deref()

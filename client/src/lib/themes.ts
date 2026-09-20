@@ -30,8 +30,12 @@ export const THEME_IDS = [
 
 export type ThemeId = (typeof THEME_IDS)[number];
 
-/** The theme anything unrecognised collapses to. */
-export const DEFAULT_THEME: ThemeId = 'dark';
+/**
+ * What a fresh install looks like, and what anything unrecognised collapses to.
+ * The server's `DEFAULT_THEME` (crates/paracord-api/src/routes/users.rs) must
+ * agree: the client adopts the server's value on first sign-in.
+ */
+export const DEFAULT_THEME: ThemeId = 'voices';
 
 /**
  * Is this one of ours? The server stores the theme as an opaque string and

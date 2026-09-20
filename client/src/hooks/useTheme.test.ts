@@ -8,6 +8,7 @@ vi.mock('../lib/nativeGround', () => ({
   reportGroundColor: vi.fn(() => Promise.resolve()),
 }));
 
+import { DEFAULT_THEME } from '../lib/themes';
 import { useTheme } from './useTheme';
 import { reportGroundColor } from '../lib/nativeGround';
 import { useAuthStore } from '../stores/authStore';
@@ -78,13 +79,13 @@ describe('useTheme', () => {
     expect(root().getAttribute('data-message-style')).toBe('rows');
   });
 
-  it('narrows a stored theme it does not recognise to Night', () => {
+  it('narrows a stored theme it does not recognise to the default', () => {
     // Persisted state outlives the build that wrote it.
     useUIStore.setState({ theme: 'sepia' as ThemeId });
     const { result } = renderHook(() => useTheme());
 
-    expect(result.current.theme).toBe('dark');
-    expect(root().getAttribute('data-theme')).toBe('dark');
+    expect(result.current.theme).toBe(DEFAULT_THEME);
+    expect(root().getAttribute('data-theme')).toBe(DEFAULT_THEME);
   });
 
   it('gives a light theme color-scheme light', () => {
