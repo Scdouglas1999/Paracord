@@ -7,8 +7,14 @@ import { clearCustomCss, renderCustomCss } from '../lib/customCss';
 import { toast } from '../stores/toastStore';
 import { logVoiceDiagnostic } from '../lib/desktopDiagnostics';
 import { reportGroundColor } from '../lib/nativeGround';
-
-type ThemeName = 'dark' | 'light' | 'amoled' | 'high-contrast';
+import {
+  LIGHT_THEMES,
+  LOOK_THEMES,
+  asThemeId,
+  isThemeId,
+  messageStyleFor,
+  type ThemeId,
+} from '../lib/themes';
 
 /**
  * Accent presets recolour `--accent-primary` and its derivatives ONLY
@@ -96,6 +102,24 @@ function hexToRgbString(hex: string): string {
  * the hue while holding the worst case above 4.5:1 against `--bg-well`, the
  * lightest ground a link or an accent label ever sits on (spec §9).
  */
+/**
+ * Every inline custom property the accent preset writes to <html>.
+ *
+ * One list, read twice: it is what a preset sets, and it is exactly what a look
+ * has to have REMOVED. An inline property beats any stylesheet, so a look whose
+ * accent is declared in `tokens.css` only wins once these are gone — and a
+ * second hand-written list here is how one of them would get left behind.
+ */
+const ACCENT_PROPERTIES = [
+  '--accent-primary',
+  '--accent-primary-hover',
+  '--accent-primary-active',
+  '--accent',
+  '--text-link',
+  '--accent-primary-rgb',
+  '--sidebar-active-indicator',
+] as const;
+
 const LIGHT_ACCENT_SCALE = 0.52;
 const LIGHT_ACCENT_HOVER_SCALE = 0.46;
 const LIGHT_ACCENT_ACTIVE_SCALE = 0.4;
@@ -108,7 +132,15 @@ const LIGHT_ACCENT_ACTIVE_SCALE = 0.4;
  * and ring for that theme is declared in `src/styles/tokens.css` under
  * `:root[data-theme=…]`, so there is exactly one place a colour is written down.
  * The only values this hook writes inline are the ones that cannot be static —
- * the chosen accent preset and its derivatives.
+ * the chosen accent preset and its derivatives, and the base colour's two
+ * numbers.
+ *
+ * Except under a **look** (`lib/themes.ts`), which is a complete palette: it
+ * declares its own accent and its own neutral ramp, so those inline properties
+ * are REMOVED for the duration rather than written. An inline property beats
+ * any stylesheet, so removing them is what lets the look's own block win — and
+ * writing them again is what gives the person their colours back when they
+ * leave it.
  */
 export function useTheme() {
   const theme = useUIStore((s) => s.theme);
@@ -130,7 +162,9 @@ export function useTheme() {
       return;
     }
     if (!initializedFromServer.current) {
-      if (settings.theme === 'dark' || settings.theme === 'light' || settings.theme === 'amoled' || settings.theme === 'high-contrast') {
+      // The server stores the theme as an opaque string; only ids this build
+      // knows are taken, and an unknown one leaves the local choice alone.
+      if (isThemeId(settings.theme)) {
         setTheme(settings.theme);
       }
       initializedFromServer.current = true;
@@ -138,10 +172,13 @@ export function useTheme() {
   }, [settings, setTheme]);
 
   const requestedTheme = theme;
-  const activeTheme: ThemeName =
-    requestedTheme === 'light' || requestedTheme === 'amoled' || requestedTheme === 'dark' || requestedTheme === 'high-contrast'
-      ? requestedTheme
-      : 'dark';
+  // Persisted state can outlive the build that wrote it: anything unrecognised
+  // is Night rather than a document with no theme at all.
+  const activeTheme: ThemeId = asThemeId(requestedTheme);
+  // A look is a whole palette (lib/themes.ts): it declares its own accent and
+  // its own neutral ramp, so the two controls that would otherwise write over
+  // them are not applied while one is active.
+  const isLook = LOOK_THEMES.has(activeTheme);
   // Message density has a single source of truth: the server-synced
   // message_display_compact setting (surfaced in Settings › Appearance › Display).
   const densityMode = settings?.message_display_compact ? 'compact' : 'default';
@@ -149,10 +186,25 @@ export function useTheme() {
   useEffect(() => {
     const root = document.documentElement;
     root.setAttribute('data-theme', activeTheme);
-    root.style.colorScheme = activeTheme === 'light' ? 'light' : 'dark';
+    root.style.colorScheme = LIGHT_THEMES.has(activeTheme) ? 'light' : 'dark';
+    // The shape of a message, for `tokens.css` to follow. Always written, so
+    // nothing has to treat "no attribute" as a third case.
+    root.setAttribute('data-message-style', messageStyleFor(activeTheme));
+
+    // A look brings its own accent. Writing the preset's here would beat the
+    // look's own block (an inline property beats any stylesheet), so the
+    // properties are REMOVED instead — that is what hands the cascade back to
+    // `tokens.css`. They are written again the moment a non-look theme is
+    // chosen, because this effect also depends on the theme.
+    if (isLook) {
+      for (const name of ACCENT_PROPERTIES) {
+        root.style.removeProperty(name);
+      }
+      return;
+    }
 
     const presetBase = ACCENT_PRESETS[accentPreset] || ACCENT_PRESETS.emerald;
-    const isLight = activeTheme === 'light';
+    const isLight = LIGHT_THEMES.has(activeTheme);
     const accentBase = isLight ? scaleHex(presetBase, LIGHT_ACCENT_SCALE) : presetBase;
     const accentHover = isLight
       ? scaleHex(presetBase, LIGHT_ACCENT_HOVER_SCALE)
@@ -164,27 +216,38 @@ export function useTheme() {
     // Only the plain token names are written: tokens.css maps every
     // `--color-*` (the Tailwind namespace) onto these, so one write reaches
     // both the raw `var(--accent-primary)` consumers and `bg-accent-primary`.
-    for (const [name, value] of [
-      ['--accent-primary', accentBase],
-      ['--accent-primary-hover', accentHover],
-      ['--accent-primary-active', accentActive],
-      ['--accent', accentBase],
-      ['--text-link', accentBase],
-      ['--accent-primary-rgb', hexToRgbString(accentBase)],
-      ['--sidebar-active-indicator', accentBase],
-    ] as const) {
-      root.style.setProperty(name, value);
+    // Keyed by the list above, so a name added there must be given a value.
+    const accentValues: Record<(typeof ACCENT_PROPERTIES)[number], string> = {
+      '--accent-primary': accentBase,
+      '--accent-primary-hover': accentHover,
+      '--accent-primary-active': accentActive,
+      '--accent': accentBase,
+      '--text-link': accentBase,
+      '--accent-primary-rgb': hexToRgbString(accentBase),
+      '--sidebar-active-indicator': accentBase,
+    };
+    for (const name of ACCENT_PROPERTIES) {
+      root.style.setProperty(name, accentValues[name]);
     }
-  }, [activeTheme, accentPreset]);
+  }, [activeTheme, accentPreset, isLook]);
 
   // The base colour. Two numbers on <html>, and every neutral in `tokens.css`
   // re-resolves against them — no relaunch, no reload, and no second place
   // where a colour is written down.
+  //
+  // A look declares its own pair in its own block, so for a look these are
+  // removed rather than written — and written again when a non-look theme comes
+  // back, which is why the theme is a dependency of a base-colour effect.
   useEffect(() => {
     const root = document.documentElement;
+    if (isLook) {
+      root.style.removeProperty('--ui-hue');
+      root.style.removeProperty('--ui-chroma');
+      return;
+    }
     root.style.setProperty('--ui-hue', String(baseHue));
     root.style.setProperty('--ui-chroma', String(baseTint));
-  }, [baseHue, baseTint]);
+  }, [baseHue, baseTint, activeTheme, isLook]);
 
 
   // §5.3's one switch. The stored preference is the only thing that reaches it;

@@ -35,6 +35,9 @@ export const NavRow = React.forwardRef<HTMLElement, NavRowProps>(function NavRow
       href={href}
       type={href ? undefined : 'button'}
       aria-current={active ? 'page' : undefined}
+      // The row that wears `--row-selected`. A look restyles it by this, not by
+      // `aria-selected`, which the Lobby plate carries too without being a row.
+      data-selected-row={active || undefined}
       className={cn(
         'pc-focusable pc-pressable flex w-full select-none items-center gap-2.5 text-left',
         'h-[var(--h-nav-row)] rounded-[var(--radius-control)] px-2.5',

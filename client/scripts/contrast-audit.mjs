@@ -239,11 +239,17 @@ function contrastRatio(foreground, background) {
 
 const themeBase = extractBlocks('@theme');
 const rootBase = extractBlocks(':root');
+const daylight = extractBlocks("[data-theme='light']");
 const themeBlocks = {
   night: {},
-  daylight: extractBlocks("[data-theme='light']"),
+  daylight,
   amoled: extractBlocks("[data-theme='amoled']"),
   'high-contrast': extractBlocks("[data-theme='high-contrast']"),
+  // The looks (§1.8). Dusk sky and Voices stand on Night's set, Paper & ink on
+  // Daylight's — the same inheritance the selectors in tokens.css give them.
+  'dusk sky': extractBlocks("[data-theme='dusk']"),
+  voices: extractBlocks("[data-theme='voices']"),
+  'paper & ink': { ...daylight, ...extractBlocks("[data-theme='paper']") },
 };
 
 // docs/lantern-stage-spec.md §9 (Accessibility, non-negotiable):
@@ -288,6 +294,66 @@ const checks = [
   { fg: '--text-primary', bg: '--bg-mod-strong', over: '--bg-plate', min: 7 },
 ];
 
+// Paper & ink's spine: the sidebar is a block of cobalt with an ink set of its
+// own. Only a theme that declares `--spine-bg` is asked these.
+const spineChecks = [
+  ...['--spine-bg', '--spine-well'].flatMap((bg) => [
+    { fg: '--spine-text-primary', bg, min: 7 },
+    { fg: '--spine-text-secondary', bg, min: 4.5 },
+    { fg: '--spine-text-muted', bg, min: 4.5 },
+    { fg: '--spine-text-faint', bg, min: 4.5 },
+    { fg: '--spine-light-amber', bg, min: 4.5 },
+  ]),
+  { fg: '--spine-selected-ink', bg: '--spine-selected', min: 4.5 },
+];
+
+/**
+ * Voices' bubbles. A bubble is `color-mix(in srgb, <author> M, <plate>)`, which
+ * is exactly an alpha blend, so it can be measured here. Eight authors: the
+ * body ink, the meta ink, a link and the author's own name all have to read on
+ * each. Your own bubble is the same recipe at a stronger mix, so it is measured
+ * the same way.
+ */
+function bubbleChecks(vars, setting) {
+  const out = [];
+  const mix = Number(resolveVar('--bubble-mix', vars));
+  const ownMix = Number(resolveVar('--bubble-own-mix', vars));
+  const plate = groundColor('--bg-plate', vars, setting);
+  for (let i = 1; i <= 8; i += 1) {
+    const who = parseColor(resolveVar(`--color-avatar-${i}`, vars), `${setting}: avatar ${i}`);
+    for (const [amount, name] of [[mix, `bubble ${i}`], [ownMix, `own bubble ${i}`]]) {
+      const bubble = blend({ ...who, a: amount }, plate);
+      out.push({ fg: '--text-body-ink', bgColor: bubble, bgName: name, min: 7 });
+      out.push({ fg: '--text-faint', bgColor: bubble, bgName: name, min: 4.5 });
+      out.push({ fg: `--identity-ink-${i}`, bgColor: bubble, bgName: name, min: 4.5 });
+      out.push({ fg: '--text-link', bgColor: bubble, bgName: name, min: 4.5 });
+    }
+  }
+  return out;
+}
+
+/**
+ * A ground, as it will actually be seen.
+ *
+ * Most grounds are opaque and this is just the colour. A look may make them
+ * translucent over a painted backdrop (Dusk sky): the plate and the street
+ * scrim then sit over `--audit-backdrop` — the BRIGHTEST point of that
+ * backdrop, the worst case for light ink — and everything inside a plate sits
+ * over that composite. A translucent ground with no declared backdrop cannot
+ * be measured, and says so rather than being waved through.
+ */
+function groundColor(name, vars, setting) {
+  const value = resolveVar(name, vars);
+  const color = value ? parseColor(value, `${setting}: ${name}`) : null;
+  if (!color) throw new Error(`unable to resolve ${name}`);
+  if (!(color.a < 1)) return color;
+  const backdropValue = resolveVar('--audit-backdrop', vars);
+  if (!backdropValue) throw new Error(`${name} is translucent and the theme declares no --audit-backdrop`);
+  const backdrop = parseColor(backdropValue, `${setting}: --audit-backdrop`);
+  if (name === '--bg-plate' || name === '--street-scrim') return blend(color, backdrop);
+  return blend(color, groundColor('--bg-plate', vars, setting));
+}
+
 // The whole circle, every 30 degrees, at full tint and at none. `--ui-chroma: 0`
 // is the "neutral charcoal" preset, where the hue stops meaning anything — it is
 // swept anyway, because a zero that only works at one hue is not a zero.
@@ -309,19 +375,39 @@ for (const [themeName, overrides] of Object.entries(themeBlocks)) {
         '--ui-chroma': String(tint),
       };
       const setting = `${themeName} hue ${hue} tint ${tint}`;
-      for (const check of checks) {
+      // Where the street is a painted sky, street-level ink sits on the scrim
+      // over it, not on `--bg-base` (which is then only what the desktop shell
+      // is told to paint behind a native video underlay).
+      const painted = vars['--audit-backdrop'] != null;
+      let themeChecks = painted
+        ? checks.map((check) => (check.bg === '--bg-base' ? { ...check, bg: '--street-scrim' } : check))
+        : checks;
+      if (vars['--spine-bg'] != null) themeChecks = [...themeChecks, ...spineChecks];
+      // Bubbles are audited where a look turns them on — the block that
+      // declares its own `--bubble-mix` — not in themes that only inherit it.
+      try {
+        if (overrides['--bubble-mix'] != null) themeChecks = [...themeChecks, ...bubbleChecks(vars, setting)];
+      } catch (error) {
+        console.error(`[contrast] ${setting}: bubbles: ${error.message}`);
+        failures += 1;
+      }
+      for (const check of themeChecks) {
         let fg;
         let bg;
         try {
           const fgValue = resolveVar(check.fg, vars);
-          const bgValue = resolveVar(check.bg, vars);
           fg = fgValue ? parseColor(fgValue, `${setting}: ${check.fg}`) : null;
-          bg = bgValue ? parseColor(bgValue, `${setting}: ${check.bg}`) : null;
-          if (bg && check.over) {
-            const overValue = resolveVar(check.over, vars);
-            const over = overValue ? parseColor(overValue, `${setting}: ${check.over}`) : null;
-            if (!over) throw new Error(`unable to resolve ${check.over}`);
-            bg = blend(bg, over);
+          if (check.bgColor) {
+            bg = check.bgColor;
+          } else if (check.over) {
+            const bgValue = resolveVar(check.bg, vars);
+            bg = bgValue ? parseColor(bgValue, `${setting}: ${check.bg}`) : null;
+            if (bg) bg = blend(bg, groundColor(check.over, vars, setting));
+          } else if (GROUNDS.includes(check.bg) || check.bg === '--street-scrim') {
+            bg = groundColor(check.bg, vars, setting);
+          } else {
+            const bgValue = resolveVar(check.bg, vars);
+            bg = bgValue ? parseColor(bgValue, `${setting}: ${check.bg}`) : null;
           }
         } catch (error) {
           console.error(`[contrast] ${setting}: ${error.message}`);
@@ -329,7 +415,7 @@ for (const [themeName, overrides] of Object.entries(themeBlocks)) {
           continue;
         }
         if (!fg || !bg) {
-          console.error(`[contrast] ${setting}: unable to resolve ${check.fg} on ${check.bg}`);
+          console.error(`[contrast] ${setting}: unable to resolve ${check.fg} on ${check.bgName ?? check.bg}`);
           failures += 1;
           continue;
         }
@@ -337,12 +423,12 @@ for (const [themeName, overrides] of Object.entries(themeBlocks)) {
         comparisons += 1;
         const headroom = ratio / check.min;
         if (headroom < worst.ratio / (worst.min ?? 1) || worst.ratio === Infinity) {
-          worst = { ratio, min: check.min, setting, fg: check.fg, bg: check.bg };
+          worst = { ratio, min: check.min, setting, fg: check.fg, bg: check.bgName ?? check.bg };
         }
         if (ratio < check.min) {
           failures += 1;
           console.error(
-            `[contrast] ${setting}: ${check.fg} on ${check.bg}`
+            `[contrast] ${setting}: ${check.fg} on ${check.bgName ?? check.bg}`
               + ` ratio ${ratio.toFixed(2)} < ${check.min.toFixed(2)}`,
           );
         }
@@ -357,8 +443,8 @@ if (failures > 0) {
 }
 
 console.log(
-  `[contrast] ${comparisons} comparisons passed — ${checks.length} pairs x `
-    + `${Object.keys(themeBlocks).length} themes x ${HUES.length} hues x ${TINTS.length} tints `
+  `[contrast] ${comparisons} comparisons passed — ${Object.keys(themeBlocks).length} themes and looks x `
+    + `${HUES.length} hues x ${TINTS.length} tints `
     + '(docs/lantern-stage-spec.md §9).',
 );
 console.log(

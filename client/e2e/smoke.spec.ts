@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { guildDetailFixture, guildSummaryFixture } from '../src/test/guildContractFixtures';
+import { THEME_IDS, type ThemeId } from '../src/lib/themes';
 import { isGuildDetail, isGuildSummaryList } from '../src/api/generated/validators';
 
 /**
@@ -22,7 +23,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   const historyEpoch = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
   const served = new Map<string, Record<string, unknown>>();
   const pageErrors: string[] = [];
-  let serverTheme: 'dark' | 'light' | 'amoled' | 'high-contrast' = 'dark';
+  let serverTheme: ThemeId = 'dark';
   let adminStatsRequests = 0;
   let compositionRevoked = false;
   let headerAttention: 'read' | 'unread' | 'mentions' = 'read';
@@ -475,7 +476,9 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   await page.goto(`/app/guilds/${guildId}/channels/${textChannelId}`);
   await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}/channels/${textChannelId}`));
 
-  const themes = ['dark', 'light', 'amoled', 'high-contrast'] as const;
+  // Every id the client knows, looks included — `src/lib/themes.ts` is the
+  // list, so a theme added there is exercised here without editing this array.
+  const themes = THEME_IDS;
   for (const theme of themes) {
     serverTheme = theme;
     await page.goto(`/app/guilds/${guildId}/channels/${textChannelId}`);

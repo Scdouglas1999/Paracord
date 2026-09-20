@@ -76,8 +76,18 @@ What does **not** follow the hue, and why:
 Where an accent sits *on* the ground — a selection wash, a hover wash — it **is**
 written in the base hue. That is what keeps the chrome of one piece.
 
-Default: `--ui-hue: 65`, `--ui-chroma: 1` ("Hearth", a warm charcoal). Stored
+Default: `--ui-hue: 65`, `--ui-chroma: 1` ("Hearth", lamp-warm). Stored
 per device like the theme, applied live by `useTheme`; no relaunch.
+
+**Two temperatures (2026-09-20).** The street is not the room. `--bg-base`, the
+scrim and an unlit window take `--ui-hue-street` (268, dusk blue) instead of
+`--ui-hue`: outside is the night sky, inside is lamp-warm, and the colour of the
+app is the difference between the two. The first ramp ran every ground at
+chroma .007–.012 in one hue, which measures as warm and reads as grey — on a
+quiet instance, where no window is lit, the whole app was monochrome. The
+reader still paints the walls (`--ui-hue`); the sky stays the sky. The street
+takes `--ui-chroma`, so Ash is still neutral end to end. Daylight does the same
+with a pale sky behind warm paper; AMOLED's street stays true black.
 
 ### 1.1 Surfaces (Night — the default)
 
@@ -86,14 +96,15 @@ brackets is the default setting, for reference only — never hard-code it.
 
 | Token | Value | Use |
 |---|---|---|
-| `--bg-base` | `oklch(16.5% .007 H)` (`#100E0B`) | App base behind everything; the "street". |
-| `--bg-plate` | `oklch(21.3% .009 H)` (`#1C1815`) | Plates: the Stage, the Lobby, a text channel, the chat ribbon, cards that hold content. |
-| `--bg-raised` | `oklch(25.2% .012 H)` (`#26211C`) | Raised inside a plate: chips, composer, hover cards, popovers. |
-| `--bg-well` | `oklch(17.1% .0065 H)` (`#120F0D`) | Recessed inside a plate: search, tiles' background, "here now" strip, event cards. |
-| `--bg-floating` | `oklch(21.3% .009 H / .97)` | Menus, tooltips over content. |
-| `--bg-mod-subtle` | `oklch(84% .07 H / .05)` | Hover wash on rows — warm, not grey. |
-| `--bg-mod-strong` | `oklch(84% .07 H / .12)` | Pressed wash. |
-| `--bg-selected` | `oklch(84% .07 H / .10)` | The row you are on. |
+| `--bg-base` | `oklch(17.5% .04 S)` | App base behind everything; the "street". `S` is `--ui-hue-street`. |
+| `--bg-plate` | `oklch(22% .022 H)` | Plates: the Stage, the Lobby, a text channel, the chat ribbon, cards that hold content. |
+| `--bg-raised` | `oklch(26.5% .028 H)` | Raised inside a plate: chips, composer, hover cards, popovers. |
+| `--bg-well` | `oklch(16.5% .016 H)` | Recessed inside a plate: search, tiles' background, "here now" strip, event cards. |
+| `--bg-floating` | `oklch(22% .022 H / .97)` | Menus, tooltips over content. |
+| `--bg-mod-subtle` | `oklch(76% .11 H / .07)` | Hover wash on rows — warm, not grey. |
+| `--bg-mod-strong` | `oklch(76% .11 H / .15)` | Pressed wash. |
+| `--bg-selected` | `oklch(76% .115 H / .17)` | The row you are on. |
+| `--window-dark` | `oklch(27% .05 S)` | An unlit window. Glass, so it reflects the street's sky rather than being a black hole. |
 | `--row-selected` | `var(--bg-selected)` | The same, but a server's group overrides it with `color-mix(in srgb, var(--identity) 16%, transparent)` so the selected row wears that server's colour. |
 
 Depth is delivered by a **1px warm top highlight** (`0 1px 0 rgba(243,234,216,.07) inset`)
@@ -105,12 +116,12 @@ shadow** (`0 1px 2px rgba(0,0,0,.6) inset`) on wells. Never a border-only depth.
 | Token | Value | Meaning | Where |
 |---|---|---|---|
 | `--light-white` | `#F3EAD8` | **Talking / live.** People in a voice channel. | Lit window, live channel thumbnail, speaking tile ring, lit avatar rim, "LIVE" dot, the primary Join button in a lit context. |
-| `--light-amber` | `#E2C98F` | **Reading.** People present in a text channel. | Amber window, text-channel dot, "reading" counts. |
+| `--light-amber` | `#F0B967` | **Reading.** People present in a text channel. | Amber window, text-channel dot, "reading" counts. |
 | `--accent-primary` | `#2BD39A` | **Action you can take.** | Primary buttons outside a lit context, links, @mentions, focus ring, live data lines. |
 
 Light effects are fixed recipes, not free values:
 
-- Lit window: `background: var(--light-white); box-shadow: 0 0 6px rgba(243,234,216,.55)`; amber uses `rgba(226,201,143,.5)`.
+- Lit window: `background: var(--light-white); box-shadow: 0 0 6px rgba(243,234,216,.55)`; amber uses `rgba(240,185,103,.5)`.
 - Lit avatar (`.lit`): `box-shadow: 0 0 0 1.5px rgba(243,234,216,.55), 0 0 12px rgba(243,234,216,.22)`.
 - Speaking tile: `0 0 0 1.5px rgba(243,234,216,.7), 0 0 18px rgba(243,234,216,.25)`.
 - Lit plate (a card whose channel is live): `0 0 0 1px rgba(243,234,216,.16), 0 0 34px rgba(243,234,216,.10)` on top of the plate shadow.
@@ -151,11 +162,14 @@ confirmation toasts; never reuse light tokens for semantics.
 
 | Token | Value | Use |
 |---|---|---|
-| `--text-primary` | `#F1EEE7` | Names, headings, selected labels. |
-| `--text-body` | `#D4D1CA` | Message bodies, prose. |
-| `--text-secondary` | `#B3B0A8` | Nav rows, secondary labels. |
-| `--text-muted` | `#8B8D8E` | Captions, previews. |
-| `--text-faint` | `#838587` | Meta (timestamps, counts, section labels). |
+| `--text-primary` | `oklch(95.5% .018 H)` | Names, headings, selected labels. |
+| `--text-body` | `oklch(87% .02 H)` | Message bodies, prose. |
+| `--text-secondary` | `oklch(78% .03 H)` | Nav rows, secondary labels. |
+| `--text-muted` | `oklch(68% .03 H)` | Captions, previews. |
+| `--text-faint` | `oklch(66% .028 H)` | Meta (timestamps, counts, section labels). |
+
+The ink carries the room's hue at roughly three times the first ramp's chroma,
+so grey text reads as warm taupe rather than neutral grey.
 
 > **Corrected in WP0.** This step read `#6C6E70` (the value in the reference
 > renders), which measures **3.51:1** on `--bg-plate` and so cannot satisfy §9's
@@ -171,8 +185,8 @@ rim. The old status-colour dots (`--color-status-*`) are removed from the UI.
 ### 1.6 Borders
 
 Hairlines only where a plate needs an internal divider, and they take the base
-hue with everything else: `--border-subtle oklch(94% .022 H / .07)`,
-`--border-strong oklch(94% .022 H / .14)`.
+hue with everything else: `--border-subtle oklch(90% .05 H / .09)`,
+`--border-strong oklch(90% .05 H / .17)`.
 
 ### 1.7 Themes & accent presets
 
@@ -204,6 +218,42 @@ Base-colour presets (`BASE_HUE_PRESETS`) move `--ui-hue` / `--ui-chroma` only.
 Neither ever touches the light tokens.
 
 ---
+
+### 1.8 Looks — Dusk sky, Paper & ink, Voices (2026-09-20)
+
+A theme remaps the ramp. A **look** is a whole palette with a point of view,
+picked in the same place (Settings › Appearance, under the four themes) and
+applied the same way (`data-theme` on `<html>`, synced like any theme, instant).
+Looks exist because tinting the ramp — however carefully — left the app reading
+as flat dark panels; these change its character, and the person chooses.
+
+| Look | `data-theme` | What it is |
+|---|---|---|
+| **Dusk sky** | `dusk` | One gradient sky behind the whole shell (indigo overhead, magenta and ember at the horizon); every panel is smoked glass over it. No backdrop blur — a blurred smooth gradient is the same gradient, and blur is what the Linux webview pays for. |
+| **Paper & ink** | `paper` | Light. Cream stock with a grain, near-black ink, flat spot colours, hard offset shadows, tightened radii. The sidebar is the spine: a solid block of cobalt with its own ink set (`--spine-*`). |
+| **Voices** | `voices` | A deep aubergine ground and a timeline of bubbles, each taking its author's identity colour (`--who`); yours sit on the right at a stronger mix. `data-message-style="bubbles"` on `<html>` is what turns the bubbles on, so the timeline treatment can be separated from the palette later. |
+
+Rules a look lives by:
+
+- **It brings its own colours.** A look defines its accent and its grounds, so
+  the accent presets and the base-colour control are inert (shown disabled, with
+  the reason) while one is on. `lib/themes.ts` `LOOK_THEMES` is the list.
+- **It may break §6, and only it may.** A painted backdrop, translucent plates,
+  a texture, colour taken from an author: allowed inside a look because it is a
+  single named choice, forbidden everywhere else exactly as before. Structure
+  lives in `styles/looks.css`, where every selector is scoped to a look, and no
+  colour is written there — a look's colours are tokens in `tokens.css`.
+- **It still answers to §9.** `npm run test:contrast` audits all seven.
+  Translucent grounds are composited over `--audit-backdrop`, the brightest
+  colour they can sit over, so a plate is only as transparent as the worst of
+  the sky allows; the spine's ink set and all eight bubbles (both mixes) are
+  measured too.
+- **Light still means people.** A look may recolour the two lights for its
+  ground (as Daylight does); it never spends them on anything else.
+- **A live native video underlay wins.** On the Linux desktop, while a stream
+  is up, Dusk sky's sky is cleared with the rest of the shell's grounds and its
+  glass goes solid (`[data-theme='dusk'][data-native-underlay]`), and Paper &
+  ink's grain is removed. Decided by the attribute that opens the hole.
 
 ## 2. Type
 
@@ -437,6 +487,8 @@ implements them is `client/src/lib/motion/` (WP9a, WP9b); every recipe in it is
 on `/design-tokens` › Motion with a Replay button and the tokens it spends.
 
 ## 6. Anti-slop kill-list (extends the Emerald Commons list; a reviewer rejects any instance)
+
+*The §1.8 looks are the one sanctioned exception to items 1 and 2, inside their own scoped stylesheet. Nothing here is relaxed for the four themes.*
 
 1. **No glow without a source** (§0). No radial "ambience" on plates, no glowing borders on idle cards, no halo behind headings.
 2. **No gradient wash across a surface or a button.** The lamp radial in a lit card is the only radial; the camera tile's subtle vignette is the only other gradient.

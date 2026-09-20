@@ -5,6 +5,7 @@ import {
   SIDEBAR_WIDTH_MAX,
   SIDEBAR_WIDTH_DEFAULT,
 } from './uiStore';
+import { THEME_IDS } from '../lib/themes';
 
 describe('uiStore', () => {
   beforeEach(() => {
@@ -34,8 +35,28 @@ describe('uiStore', () => {
     expect(useUIStore.getState().theme).toBe('light');
     useUIStore.getState().setTheme('amoled');
     expect(useUIStore.getState().theme).toBe('amoled');
+    useUIStore.getState().setTheme('high-contrast');
+    expect(useUIStore.getState().theme).toBe('high-contrast');
     useUIStore.getState().setTheme('dark');
     expect(useUIStore.getState().theme).toBe('dark');
+  });
+
+  // A look is a theme as far as this store is concerned: one string, stored and
+  // persisted exactly like the other four (lib/themes.ts).
+  it('sets a look like any other theme', () => {
+    for (const look of ['dusk', 'paper', 'voices'] as const) {
+      useUIStore.getState().setTheme(look);
+      expect(useUIStore.getState().theme).toBe(look);
+    }
+  });
+
+  it('accepts every id in THEME_IDS and persists it', () => {
+    for (const id of THEME_IDS) {
+      useUIStore.getState().setTheme(id);
+      expect(useUIStore.getState().theme).toBe(id);
+      const persisted = JSON.parse(localStorage.getItem('ui-storage') as string).state;
+      expect(persisted.theme).toBe(id);
+    }
   });
 
   it('sets custom CSS', () => {

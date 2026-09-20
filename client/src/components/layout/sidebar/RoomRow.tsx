@@ -169,6 +169,7 @@ export const LiveRoomRowView = memo(function LiveRoomRowView({
       type="button"
       {...rowProps({ navIndex, tabStop, active, room })}
       data-motion-shared={roomSharedName(room.channelId)}
+      data-selected-row={active || undefined}
       onClick={(event) => onOpen(room, event.currentTarget)}
       onContextMenu={onContextMenu ? (event) => onContextMenu(event, room) : undefined}
       className={cn(

@@ -932,3 +932,10 @@
     grid-column: 1 / -1;
   }
 }
+
+/* A timeline row's fill (hover, mention, jump highlight) arrives as `--row-bg`
+   from MessageList rather than as an inline background, so a look can restyle
+   the row (`looks.css`) without an `!important`. */
+.pc-message-row {
+  background-color: var(--row-bg, transparent);
+}

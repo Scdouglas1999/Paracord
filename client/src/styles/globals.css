@@ -45,6 +45,10 @@
 @import './tokens.css';
 @import './primitives.css' layer(components);
 @import './layout.css';
+/* The §1.8 looks' structure. After layout.css and unlayered: a look has to be
+   able to clear a `bg-bg-base` utility, and an unlayered rule outranks the
+   utility layer. Every rule in it is scoped to one look. */
+@import './looks.css';
 @import './components.css' layer(components);
 @import './utilities.css';
 /* Last, and in a layer of its own: the §9 focus ring outranks the utilities, so

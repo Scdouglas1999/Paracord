@@ -1,31 +1,54 @@
 import { useId } from 'react';
-import { Moon, Sun, Monitor, Eye, Check } from 'lucide-react';
+import { Moon, Sun, Monitor, Eye, Check, Sunset, Newspaper, MessagesSquare } from 'lucide-react';
 import { useUIStore, type AccentPreset } from '../../stores/uiStore';
 import { ACCENT_PRESETS, BASE_HUE_PRESETS, type BaseHuePreset } from '../../hooks/useTheme';
+import { LOOK_THEMES, type ThemeId } from '../../lib/themes';
 import { changeLights, useReducedMotion, type MotionPreference } from '../../lib/motion';
 import { cn } from '../../lib/utils';
-
-type ThemeId = 'dark' | 'light' | 'amoled' | 'high-contrast';
 
 interface ThemeSelectorProps {
   currentTheme?: ThemeId;
   onThemeChange?: (theme: ThemeId) => void;
 }
 
-/**
- * The four themes `useTheme` actually supports (docs/lantern-stage-spec.md §1.7).
- * There is no fifth: `useTheme` narrows anything else to Night.
- */
-const THEME_OPTIONS: Array<{
+interface ThemeOption {
   id: ThemeId;
   label: string;
   hint: string;
   icon: React.ReactNode;
-}> = [
+}
+
+/**
+ * The four themes (docs/lantern-stage-spec.md §1.7). Each is a ground plus an
+ * ink: the accent and the base colour below are still the person's own.
+ * `lib/themes.ts` is the list of ids; this is what they are called.
+ */
+const THEME_OPTIONS: ThemeOption[] = [
   { id: 'dark', label: 'Night', hint: 'The default — lit windows after dark', icon: <Moon size={16} /> },
   { id: 'light', label: 'Daylight', hint: 'Warm paper; lit channels read as ink', icon: <Sun size={16} /> },
   { id: 'amoled', label: 'AMOLED', hint: 'A true-black street for OLED panels', icon: <Monitor size={16} /> },
   { id: 'high-contrast', label: 'High contrast', hint: 'Thicker rims, two text steps', icon: <Eye size={16} /> },
+];
+
+/**
+ * The looks. A look is a whole palette rather than a ground to decorate: it
+ * brings its own accent and its own neutral ramp, which is why picking one
+ * disables the two controls below instead of silently ignoring them.
+ */
+const LOOK_OPTIONS: ThemeOption[] = [
+  { id: 'dusk', label: 'Dusk sky', hint: 'A sunset behind smoked glass', icon: <Sunset size={16} /> },
+  {
+    id: 'paper',
+    label: 'Paper & ink',
+    hint: 'Cream stock, ink, and three spot colours',
+    icon: <Newspaper size={16} />,
+  },
+  {
+    id: 'voices',
+    label: 'Voices',
+    hint: 'Every message wears its author’s colour',
+    icon: <MessagesSquare size={16} />,
+  },
 ];
 
 /**
@@ -113,6 +136,73 @@ function BasePreview({ theme, hue, tint }: { theme: ThemeId; hue: number; tint: 
   );
 }
 
+/**
+ * One choosable palette, as the card that advertises it.
+ *
+ * The same card serves the themes and the looks: what differs between the two
+ * groups is how much of the palette is fixed, not how you pick one.
+ */
+function ThemeCard({
+  option,
+  active,
+  onPick,
+}: {
+  option: ThemeOption;
+  active: boolean;
+  onPick: (theme: ThemeId) => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={() => {
+        // §5.1, WP9d: changing the theme is the lights changing. The whole
+        // shell crosses over `--duration-dim` and the light elements re-bloom
+        // behind it — and the theme itself is applied INSIDE the crossfade, by
+        // `useTheme`'s effect, which is why the engine is told how to recognise
+        // that it landed rather than guessing at a number of frames. Under
+        // reduced motion `changeLights` simply calls this and returns.
+        void changeLights(
+          () => {
+            onPick(option.id);
+          },
+          {
+            applied: () => document.documentElement.getAttribute('data-theme') === option.id,
+          },
+        );
+      }}
+      className={cn(
+        'pc-focusable flex flex-col rounded-[var(--radius-card)] p-2.5 text-left',
+        'transition-[background-color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+        active
+          ? // The chosen palette is raised, with the warm top highlight and an
+            // accent edge — plus the word "Selected" below, so the state is never
+            // carried by colour alone (spec §9).
+            'bg-bg-raised shadow-[var(--shadow-raised),0_0_0_1px_var(--accent-primary)]'
+          : 'bg-bg-mod-subtle hover:bg-bg-mod-strong',
+      )}
+    >
+      <ThemePreview id={option.id} />
+      <span className="mt-3 flex items-center gap-2">
+        <span
+          className={cn('shrink-0', active ? 'text-accent-primary' : 'text-text-muted')}
+          aria-hidden
+        >
+          {option.icon}
+        </span>
+        <span className="pc-display text-name text-text-primary">{option.label}</span>
+        {active && (
+          <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-meta font-semibold text-accent-primary">
+            <Check size={14} aria-hidden />
+            Selected
+          </span>
+        )}
+      </span>
+      <span className="mt-0.5 text-meta leading-relaxed text-text-faint">{option.hint}</span>
+    </button>
+  );
+}
+
 export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProps) {
   const storeTheme = useUIStore((state) => state.theme);
   const setTheme = useUIStore((state) => state.setTheme);
@@ -127,10 +217,27 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
   const reduced = useReducedMotion();
   const theme = currentTheme ?? storeTheme;
   const themeLabelId = useId();
+  const looksLabelId = useId();
   const baseLabelId = useId();
+  const baseLockId = useId();
   const hueSliderId = useId();
   const accentLabelId = useId();
+  const accentLockId = useId();
   const motionLabelId = useId();
+
+  const pickTheme = (next: ThemeId) => {
+    setTheme(next);
+    onThemeChange?.(next);
+  };
+
+  // A look owns its accent and its whole neutral ramp (lib/themes.ts), so the
+  // two controls below have nothing to act on while one is chosen: `useTheme`
+  // removes those inline properties rather than writing them. They stay on
+  // screen and say why — a control that vanishes reads as a bug.
+  const isLook = LOOK_THEMES.has(theme);
+  const activeLook = LOOK_OPTIONS.find((option) => option.id === theme);
+  const lockNote = `${activeLook?.label ?? 'This look'} brings its own colours. Pick Night, Daylight, AMOLED or High contrast to change these.`;
+
   // A preset with no tint is chosen by its tint alone: at chroma 0 the hue
   // stops meaning anything, so an Ash at 245 degrees is still Ash.
   const activePreset = (Object.keys(BASE_HUE_PRESETS) as BaseHuePreset[]).find((name) => {
@@ -145,65 +252,33 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
           Theme
         </h3>
         <div className="grid gap-3 sm:grid-cols-2">
-          {THEME_OPTIONS.map((option) => {
-            const active = theme === option.id;
-            return (
-              <button
+          {THEME_OPTIONS.map((option) => (
+            <ThemeCard
+              key={option.id}
+              option={option}
+              active={theme === option.id}
+              onPick={pickTheme}
+            />
+          ))}
+        </div>
+
+        <div role="group" aria-labelledby={looksLabelId} className="mt-6">
+          <h4 id={looksLabelId} className="text-section text-text-secondary">
+            Looks
+          </h4>
+          <p className="mb-3 mt-0.5 max-w-prose text-meta leading-relaxed text-text-faint">
+            A look is a whole palette. It brings its own accent and ground colours.
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {LOOK_OPTIONS.map((option) => (
+              <ThemeCard
                 key={option.id}
-                type="button"
-                aria-pressed={active}
-                onClick={() => {
-                  // §5.1, WP9d: changing the theme is the lights changing. The
-                  // whole shell crosses over `--duration-dim` and the light
-                  // elements re-bloom behind it — and the theme itself is
-                  // applied INSIDE the crossfade, by `useTheme`'s effect, which
-                  // is why the engine is told how to recognise that it landed
-                  // rather than guessing at a number of frames. Under reduced
-                  // motion `changeLights` simply calls this and returns.
-                  void changeLights(
-                    () => {
-                      setTheme(option.id);
-                      onThemeChange?.(option.id);
-                    },
-                    {
-                      applied: () =>
-                        document.documentElement.getAttribute('data-theme') === option.id,
-                    },
-                  );
-                }}
-                className={cn(
-                  'pc-focusable flex flex-col rounded-[var(--radius-card)] p-2.5 text-left',
-                  'transition-[background-color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
-                  active
-                    ? // The chosen theme is raised, with the warm top highlight
-                      // and an emerald edge — plus the word "Selected" below, so
-                      // the state is never carried by colour alone (spec §9).
-                      'bg-bg-raised shadow-[var(--shadow-raised),0_0_0_1px_var(--accent-primary)]'
-                    : 'bg-bg-mod-subtle hover:bg-bg-mod-strong',
-                )}
-              >
-                <ThemePreview id={option.id} />
-                <span className="mt-3 flex items-center gap-2">
-                  <span
-                    className={cn('shrink-0', active ? 'text-accent-primary' : 'text-text-muted')}
-                    aria-hidden
-                  >
-                    {option.icon}
-                  </span>
-                  <span className="pc-display text-name text-text-primary">{option.label}</span>
-                  {active && (
-                    <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-meta font-semibold text-accent-primary">
-                      <Check size={14} aria-hidden />
-                      Selected
-                    </span>
-                  )}
-                </span>
-                <span className="mt-0.5 text-meta leading-relaxed text-text-faint">
-                  {option.hint}
-                </span>
-              </button>
-            );
-          })}
+                option={option}
+                active={theme === option.id}
+                onPick={pickTheme}
+              />
+            ))}
+          </div>
         </div>
       </section>
 
@@ -211,69 +286,89 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
         <h3 id={baseLabelId} className="mb-3 text-section text-text-secondary">
           Base color
         </h3>
-        <div className="grid gap-2.5 sm:grid-cols-3">
-          {(Object.keys(BASE_HUE_PRESETS) as BaseHuePreset[]).map((name) => {
-            const preset = BASE_HUE_PRESETS[name];
-            const active = activePreset === name;
-            return (
-              <button
-                key={name}
-                type="button"
-                aria-pressed={active}
-                onClick={() => {
-                  setBaseHue(preset.hue);
-                  setBaseTint(preset.tint);
-                }}
-                className={cn(
-                  'pc-focusable flex flex-col rounded-[var(--radius-card)] p-2.5 text-left',
-                  'transition-[background-color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
-                  active
-                    ? 'bg-bg-raised shadow-[var(--shadow-raised),0_0_0_1px_var(--accent-primary)]'
-                    : 'bg-bg-mod-subtle hover:bg-bg-mod-strong',
-                )}
-              >
-                <BasePreview theme={theme} hue={preset.hue} tint={preset.tint} />
-                <span className="mt-2.5 flex items-center gap-2">
-                  <span className="pc-display text-name text-text-primary">{preset.label}</span>
-                  {active && (
-                    <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-meta font-semibold text-accent-primary">
-                      <Check size={14} aria-hidden />
-                      Selected
-                    </span>
+        {isLook && (
+          <p id={baseLockId} className="mb-3 max-w-prose text-meta leading-relaxed text-text-secondary">
+            {lockNote}
+          </p>
+        )}
+        <div
+          role="group"
+          aria-labelledby={baseLabelId}
+          aria-disabled={isLook || undefined}
+          aria-describedby={isLook ? baseLockId : undefined}
+        >
+          <div className="grid gap-2.5 sm:grid-cols-3">
+            {(Object.keys(BASE_HUE_PRESETS) as BaseHuePreset[]).map((name) => {
+              const preset = BASE_HUE_PRESETS[name];
+              const active = activePreset === name;
+              return (
+                <button
+                  key={name}
+                  type="button"
+                  aria-pressed={active}
+                  disabled={isLook}
+                  aria-disabled={isLook || undefined}
+                  onClick={() => {
+                    setBaseHue(preset.hue);
+                    setBaseTint(preset.tint);
+                  }}
+                  className={cn(
+                    'pc-focusable flex flex-col rounded-[var(--radius-card)] p-2.5 text-left',
+                    'transition-[background-color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+                    'disabled:pointer-events-none disabled:opacity-60',
+                    active
+                      ? 'bg-bg-raised shadow-[var(--shadow-raised),0_0_0_1px_var(--accent-primary)]'
+                      : 'bg-bg-mod-subtle hover:bg-bg-mod-strong',
                   )}
-                </span>
-                <span className="mt-0.5 text-meta leading-relaxed text-text-faint">
-                  {preset.hint}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-        <div className="mt-4 flex flex-wrap items-center gap-3">
-          <label htmlFor={hueSliderId} className="text-label text-text-secondary">
-            Any other color
-          </label>
-          <input
-            id={hueSliderId}
-            type="range"
-            min={0}
-            max={359}
-            step={1}
-            value={baseHue}
-            onChange={(event) => {
-              setBaseHue(Number(event.target.value));
-              // Moving the hue while the tint is off would do nothing at all
-              // and look broken. Reaching for this control means you want a
-              // colour, so it turns the tint back on.
-              if (baseTint === 0) setBaseTint(1);
-            }}
-            className="pc-focusable h-[var(--h-control)] w-48 accent-accent-primary"
-            aria-describedby={`${hueSliderId}-hint`}
-          />
-          <span className="pc-mono w-12 text-meta text-text-faint">{baseHue}&deg;</span>
-          <span aria-hidden className="ml-1 block w-28 shrink-0">
-            <BasePreview theme={theme} hue={baseHue} tint={baseTint} />
-          </span>
+                >
+                  <BasePreview theme={theme} hue={preset.hue} tint={preset.tint} />
+                  <span className="mt-2.5 flex items-center gap-2">
+                    <span className="pc-display text-name text-text-primary">{preset.label}</span>
+                    {active && (
+                      <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-meta font-semibold text-accent-primary">
+                        <Check size={14} aria-hidden />
+                        Selected
+                      </span>
+                    )}
+                  </span>
+                  <span className="mt-0.5 text-meta leading-relaxed text-text-faint">
+                    {preset.hint}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <label htmlFor={hueSliderId} className="text-label text-text-secondary">
+              Any other color
+            </label>
+            <input
+              id={hueSliderId}
+              type="range"
+              min={0}
+              max={359}
+              step={1}
+              value={baseHue}
+              disabled={isLook}
+              aria-disabled={isLook || undefined}
+              onChange={(event) => {
+                setBaseHue(Number(event.target.value));
+                // Moving the hue while the tint is off would do nothing at all
+                // and look broken. Reaching for this control means you want a
+                // colour, so it turns the tint back on.
+                if (baseTint === 0) setBaseTint(1);
+              }}
+              className={cn(
+                'pc-focusable h-[var(--h-control)] w-48 accent-accent-primary',
+                'disabled:cursor-not-allowed disabled:opacity-60',
+              )}
+              aria-describedby={isLook ? `${baseLockId} ${hueSliderId}-hint` : `${hueSliderId}-hint`}
+            />
+            <span className="pc-mono w-12 text-meta text-text-faint">{baseHue}&deg;</span>
+            <span aria-hidden className="ml-1 block w-28 shrink-0">
+              <BasePreview theme={theme} hue={baseHue} tint={baseTint} />
+            </span>
+          </div>
         </div>
         <p id={`${hueSliderId}-hint`} className="mt-3 max-w-prose text-meta leading-relaxed text-text-faint">
           The base color is every surface, hairline, wash and grey the app paints — nothing else
@@ -289,13 +384,26 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
         <h3 id={accentLabelId} className="mb-3 text-section text-text-secondary">
           Accent color
         </h3>
-        <div className="flex flex-wrap items-center gap-2.5">
+        {isLook && (
+          <p id={accentLockId} className="mb-3 max-w-prose text-meta leading-relaxed text-text-secondary">
+            {lockNote}
+          </p>
+        )}
+        <div
+          role="group"
+          aria-labelledby={accentLabelId}
+          aria-disabled={isLook || undefined}
+          aria-describedby={isLook ? accentLockId : undefined}
+          className="flex flex-wrap items-center gap-2.5"
+        >
           {(Object.keys(ACCENT_PRESETS) as AccentPreset[]).map((preset) => {
             const selected = accentPreset === preset;
             return (
               <button
                 key={preset}
                 type="button"
+                disabled={isLook}
+                aria-disabled={isLook || undefined}
                 onClick={() => setAccentPreset(preset)}
                 className={cn(
                   // A swatch is one of the three shapes allowed to be round, and
@@ -303,6 +411,7 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
                   // the preset's own value to be a swatch at all (spec §1.7).
                   'pc-focusable h-11 w-11 shrink-0 rounded-[var(--radius-full)] sm:h-8 sm:w-8',
                   'transition-transform duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:scale-110',
+                  'disabled:pointer-events-none disabled:opacity-60',
                   selected &&
                     'shadow-[0_0_0_2px_var(--bg-plate),0_0_0_4px_var(--text-primary)]',
                 )}

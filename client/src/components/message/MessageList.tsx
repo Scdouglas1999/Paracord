@@ -37,7 +37,7 @@ import { SkeletonMessage } from '../ui/Skeleton';
 import { fadeIn, flicker, motionToken, ms, onMotion, prefersReducedMotion, RollingNumber, settleIn, useFlipList, walkIntoRoom } from '../../lib/motion';
 import { parseMarkdown } from '../../lib/markdown';
 import { useDownloadTicket } from '../../hooks/useDownloadTicket';
-import { getHighestRoleColor, getIdentityInk } from '../../lib/colors';
+import { getHighestRoleColor, getIdentityColor, getIdentityInk } from '../../lib/colors';
 import { formatFileSize, formatTimestamp, relativeTime, wallClock } from '../../lib/formatters';
 import { createResolvedLightboxImage, useLightboxStore } from '../../stores/lightboxStore';
 import { confirm } from '../../stores/confirmStore';
@@ -2478,14 +2478,23 @@ function OwnedMessageList({
           TIMELINE_GUTTER,
           ribbon && 'gap-2.5 px-3.5 py-1',
           fromRoom && 'shadow-[var(--shadow-raised)]',
+          'pc-message-row',
         )}
+        // What a look needs to restyle a row without a second render path
+        // (`styles/looks.css`): whose it is, whether it continues the one
+        // above, and the author's colour. The row's own fill travels as a
+        // custom property for the same reason — an inline `background-color`
+        // could only be beaten with `!important`.
+        data-own={isOwnMessage || undefined}
+        data-grouped={isGrouped || undefined}
+        data-mentions-me={mentionsMe || undefined}
         style={{
           marginTop: isGrouped ? '2px' : replyDepth > 0 ? '0.5rem' : '10px',
           paddingLeft: replyIndent > 0 ? `${16 + replyIndent}px` : undefined,
           borderLeft: mentionsMe || jumpHighlightId === msg.id ? '2px solid var(--accent-primary)' : undefined,
-          backgroundColor:
-            rowBackground === 'transparent' && fromRoom ? 'var(--bg-raised)' : rowBackground,
-        }}
+          '--row-bg': rowBackground === 'transparent' && fromRoom ? 'var(--bg-raised)' : rowBackground,
+          '--who': getIdentityColor(msg.author.id),
+        } as CSSProperties}
         onMouseEnter={() => setHoveredMessageId(msg.id)}
         onMouseLeave={() => setHoveredMessageId(null)}
         onKeyDown={(e) => handleMessageRowKeyDown(e, msg.id)}

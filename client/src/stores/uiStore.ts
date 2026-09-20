@@ -2,8 +2,16 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
 import type { MotionPreference } from '../lib/motion/reducedMotion';
+import type { ThemeId } from '../lib/themes';
 
-type Theme = 'dark' | 'light' | 'amoled' | 'high-contrast';
+/**
+ * The theme, per device. The list of ids is `lib/themes.ts` — including the
+ * looks, which are themes as far as this store is concerned: one string, stored
+ * and synced exactly like the other four. Nothing is validated on the way in or
+ * out; `useTheme` is the one narrowing point, so a value an older or newer
+ * build wrote survives a round trip instead of being quietly rewritten here.
+ */
+type Theme = ThemeId;
 export type AccentPreset =
   | 'red'
   | 'blue'

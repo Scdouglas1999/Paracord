@@ -325,7 +325,7 @@ export function UnifiedSidebar() {
   return (
     <>
       {sidebarCollapsed ? (
-        <aside aria-label="Navigation" data-collapsed="true" className="h-full w-16 shrink-0 bg-bg-base py-1">
+        <aside aria-label="Navigation" data-shell-region="sidebar" data-collapsed="true" className="h-full w-16 shrink-0 bg-bg-base py-1">
           <CollapsedRail
             buildings={buildings}
             activeBuildingKey={activeBuildingKey ?? (activeRoomKey ? activeGuildKeyOf(buildings, activeRoomKey) : null)}
@@ -344,6 +344,7 @@ export function UnifiedSidebar() {
       ) : (
         <aside
           aria-label="Navigation"
+          data-shell-region="sidebar"
           data-collapsed="false"
           className="h-full w-[88vw] max-w-full shrink-0 bg-bg-base p-3 md:w-[calc(var(--w-buildings-column)+var(--gutter)+var(--gutter))]"
         >

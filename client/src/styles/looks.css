@@ -1,0 +1,150 @@
+/* =============================================================================
+   Looks — the structure that goes with the §1.8 tokens in `tokens.css`.
+
+   A look is one deliberate choice in Settings › Appearance, so it may do what
+   §6 forbids everywhere else. Two rules keep that from leaking:
+     1. Every selector here is scoped to a look (`[data-theme='…']`, or
+        `[data-message-style='bubbles']`, which only a look turns on). With no
+        look active this sheet matches nothing.
+     2. No colour is written here. A look's colours are tokens like any other,
+        and `npm run test:contrast` audits them.
+   Unlayered on purpose: a look has to clear `bg-bg-base`, and only an unlayered
+   rule outranks the utility layer (see `globals.css`).
+   ============================================================================= */
+
+/* ---- Dusk sky ---------------------------------------------------------------
+   The sky is painted once, on <html>, fixed to the viewport. Everything that
+   would have painted the street over it lets it through instead, and the
+   sidebar — whose ink sits at street level — gets the scrim that the contrast
+   audit measures that ink against. */
+html[data-theme='dusk'] {
+  background: var(--sky) fixed, var(--bg-base);
+}
+
+html[data-theme='dusk'] body,
+html[data-theme='dusk'] #root,
+html[data-theme='dusk'] .bg-bg-base {
+  background-color: transparent;
+}
+
+/* The phone's tab bar is street-level ink too, over the brightest of the sky. */
+html[data-theme='dusk'] [data-shell-region='sidebar'],
+html[data-theme='dusk'] .mobile-bottom-nav {
+  background-color: var(--street-scrim);
+}
+
+/* A page that lays its own street inside <main> (a channel, the Lobby, a DM)
+   brings its own plate; a page that does not (Home, Friends) is read on <main>
+   itself, which stays smoked. */
+html[data-theme='dusk'] main:has(> div > .bg-bg-base) {
+  background-color: transparent;
+}
+
+html[data-theme='dusk'] .pc-plate {
+  background: var(--plate-fill);
+}
+
+/* The hole down to a native video underlay outranks the sky (`layout.css`). */
+html[data-theme='dusk'][data-native-underlay] {
+  background: transparent;
+}
+
+/* A theme preview paints the sky in miniature rather than the flat ground. */
+[data-theme='dusk'].bg-bg-base:not(html) {
+  background: var(--sky);
+}
+
+/* ---- Paper & ink -------------------------------------------------------------
+   The grain lies over everything like the tooth of the stock. It is a plain
+   translucent layer, not a blend mode — a full-window blend is recomposited on
+   every scroll frame, and the texture is dark enough to read the same without. */
+html[data-theme='paper'] body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  pointer-events: none;
+  background-image: var(--grain);
+  opacity: 0.3;
+}
+
+/* Never over a live video. */
+html[data-theme='paper'][data-native-underlay] body::after {
+  display: none;
+}
+
+/* The row you are on, in the spine: a cream tab carrying the spine's own blue.
+   `BuildingSection` writes `--row-selected` inline per server, so clearing it
+   takes an `!important` — the one in this sheet. */
+[data-theme='paper'] [data-shell-region='sidebar'] [role='group'] {
+  --row-selected: var(--spine-selected) !important;
+}
+
+[data-theme='paper'] [data-shell-region='sidebar'] [data-selected-row] {
+  --text-primary: var(--spine-selected-ink);
+  --text-secondary: var(--spine-selected-ink);
+  --text-muted: var(--spine-selected-ink);
+  --text-faint: var(--spine-selected-ink);
+  --channel-icon: var(--spine-selected-ink);
+  --interactive-normal: var(--spine-selected-ink);
+  --light-amber: var(--spine-selected-ink);
+  color: var(--spine-selected-ink);
+}
+
+/* A server's mark is a printed square, not a bead. */
+[data-theme='paper'] .pc-identity-mark {
+  border-radius: 0;
+}
+
+/* ---- Bubbles (Voices) --------------------------------------------------------
+   Every message sits in a bubble that takes its author's colour; yours sit on
+   the right at a stronger mix. `MessageList` supplies `--who`, `data-own` and
+   `data-grouped`; this is the whole of the difference, so flipping the look
+   never re-renders the timeline. The mix is `in srgb` because that is exactly
+   an alpha blend, which is what lets the contrast audit measure it. */
+[data-message-style='bubbles'] .pc-message-row {
+  width: fit-content;
+  min-width: min(100%, 12rem);
+  max-width: min(80%, 54rem);
+  margin-inline: var(--space-5) auto;
+  padding: 10px 18px 11px 12px;
+  border-radius: 20px 20px 20px 6px;
+  background-color: color-mix(in srgb, var(--who) calc(var(--bubble-mix) * 100%), var(--bg-plate));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--who) 34%, transparent);
+}
+
+[data-message-style='bubbles'] .pc-message-row[data-grouped] {
+  border-radius: 6px 20px 20px 6px;
+}
+
+[data-message-style='bubbles'] .pc-message-row[data-own] {
+  margin-inline: auto var(--space-5);
+  border-radius: 20px 20px 6px 20px;
+  background-color: color-mix(in srgb, var(--who) calc(var(--bubble-own-mix) * 100%), var(--bg-plate));
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--who) 70%, transparent);
+}
+
+[data-message-style='bubbles'] .pc-message-row[data-own][data-grouped] {
+  border-radius: 20px 6px 6px 20px;
+}
+
+[data-message-style='bubbles'] .pc-message-row[data-mentions-me] {
+  box-shadow: inset 0 0 0 1.5px var(--accent-primary);
+}
+
+@media (hover: hover) {
+  [data-message-style='bubbles'] .pc-message-row:hover {
+    filter: brightness(1.08);
+  }
+}
+
+@media (max-width: 640px) {
+  [data-message-style='bubbles'] .pc-message-row {
+    max-width: 92%;
+    margin-inline: var(--space-3) auto;
+  }
+
+  [data-message-style='bubbles'] .pc-message-row[data-own] {
+    margin-inline: auto var(--space-3);
+  }
+}

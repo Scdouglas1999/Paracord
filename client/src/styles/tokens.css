@@ -341,6 +341,13 @@
      Appearance write this; `ThemeSelector` names them for people, not degrees. */
   --ui-hue: 65;
   --ui-chroma: 1;
+  /* The street is not the room. Outside is the night sky — dusk blue — and the
+     rooms are lamp-warm; the colour of the app is the difference between the
+     two. One hue at near-zero chroma read as grey on every monitor it was
+     tried on, whatever the hue was. The reader paints the walls (`--ui-hue`);
+     the sky stays the sky. It takes `--ui-chroma` like everything else, so Ash
+     is still a true neutral end to end. */
+  --ui-hue-street: 268;
 }
 
 /* =============================================================================
@@ -358,35 +365,59 @@
 [data-theme='dark'],
 [data-theme='amoled'],
 [data-theme='high-contrast'],
+[data-theme='dusk'],
+[data-theme='voices'],
 :root {
   color-scheme: dark;
 
+  /* ---- What a LOOK may spend (§1.8) ----------------------------------------
+     Declared here at their "nothing" values so every theme carries the same
+     names: a look turns them on, the four themes leave them off.
+       --sky            a painted backdrop behind the whole shell (Dusk sky)
+       --street-scrim   the smoke between street-level ink and that backdrop
+       --plate-fill     what a plate is filled with, when it is not one colour
+       --grain          a paper texture over everything (Paper & ink)
+       --bubble-mix     how much of its author's colour a bubble takes (Voices);
+                        --bubble-own-mix is the same for your own
+     `--audit-backdrop` is never painted: it is the brightest colour a
+     translucent ground can find itself over, written down so
+     `scripts/contrast-audit.mjs` can composite against the worst case. */
+  --sky: none;
+  --street-scrim: transparent;
+  --plate-fill: var(--bg-plate);
+  --grain: none;
+  --bubble-mix: 0.2;
+  --bubble-own-mix: 0.3;
+
   /* ---- §1.1 Surfaces — Night's ramp, in the base hue ----------------------- */
   /* The street: app base behind everything. */
-  --bg-base: oklch(16.5% calc(0.007 * var(--ui-chroma)) var(--ui-hue));
+  --bg-base: oklch(17.5% calc(0.04 * var(--ui-chroma)) var(--ui-hue-street));
   /* Plates: the Stage, the Lobby, a text channel, the chat ribbon, content cards. */
-  --bg-plate: oklch(21.3% calc(0.009 * var(--ui-chroma)) var(--ui-hue));
+  --bg-plate: oklch(22% calc(0.022 * var(--ui-chroma)) var(--ui-hue));
   /* Raised inside a plate: chips, composer, hover cards, popovers. */
-  --bg-raised: oklch(25.2% calc(0.012 * var(--ui-chroma)) var(--ui-hue));
+  --bg-raised: oklch(26.5% calc(0.028 * var(--ui-chroma)) var(--ui-hue));
   /* Recessed inside a plate: search, tile grounds, "here now" strip, event cards. */
-  --bg-well: oklch(17.1% calc(0.0065 * var(--ui-chroma)) var(--ui-hue));
+  --bg-well: oklch(16.5% calc(0.016 * var(--ui-chroma)) var(--ui-hue));
   /* Menus and tooltips over content. */
-  --bg-floating: oklch(21.3% calc(0.009 * var(--ui-chroma)) var(--ui-hue) / 0.97);
+  --bg-floating: oklch(22% calc(0.022 * var(--ui-chroma)) var(--ui-hue) / 0.97);
   /* Hover and press washes. Warm rather than grey: the same hue as the ground,
      carried at a light L so it lifts the surface instead of greying it. */
-  --bg-mod-subtle: oklch(84% calc(0.07 * var(--ui-chroma)) var(--ui-hue) / 0.05);
-  --bg-mod-strong: oklch(84% calc(0.07 * var(--ui-chroma)) var(--ui-hue) / 0.12);
+  --bg-mod-subtle: oklch(76% calc(0.11 * var(--ui-chroma)) var(--ui-hue) / 0.07);
+  --bg-mod-strong: oklch(76% calc(0.11 * var(--ui-chroma)) var(--ui-hue) / 0.15);
   /* The row you are on. A wash in the base hue, not a grey step — and a row
      inside a server's group takes that server's colour instead, which is what
      `--row-selected` is for (BuildingSection writes it per group). */
-  --bg-selected: oklch(84% calc(0.07 * var(--ui-chroma)) var(--ui-hue) / 0.1);
+  --bg-selected: oklch(76% calc(0.115 * var(--ui-chroma)) var(--ui-hue) / 0.17);
   --row-selected: var(--bg-selected);
-  /* An unlit window: a hole in the wall, DARKER than the plate it sits in.
-     It read lighter than the plate until WP-QA, which made a two-channel
-     server's window map look like two grey avatar skeletons that never
-     resolved rather than two dark windows. */
-  --window-dark: oklch(16% calc(0.007 * var(--ui-chroma)) var(--ui-hue));
-  --overlay-backdrop: oklch(16.5% calc(0.007 * var(--ui-chroma)) var(--ui-hue) / 0.72);
+  /* An unlit window. As a grey step lighter than the plate it read as two
+     avatar skeletons that never resolved; as a step darker it read as a black
+     hole, and a quiet server as a dead one.
+     It is glass, so it reflects what is outside: the dusk of the street, not a
+     black hole. A dark server is still a building under a sky — the colour of
+     an unlit pane is what keeps "nobody in" from reading as "nothing here".
+     The hue is what separates it from a skeleton now, not the lightness. */
+  --window-dark: oklch(27% calc(0.05 * var(--ui-chroma)) var(--ui-hue-street));
+  --overlay-backdrop: oklch(14% calc(0.035 * var(--ui-chroma)) var(--ui-hue-street) / 0.74);
   /* A spoiler is a well you have not opened yet; revealed, it is a hover wash. */
   --spoiler-bg: var(--bg-well);
   --spoiler-bg-revealed: var(--bg-mod-strong);
@@ -397,20 +428,20 @@
   /* Talking / live: people in a voice or video room. */
   --light-white: #f3ead8;
   /* Reading: people present in a text room. */
-  --light-amber: #e2c98f;
+  --light-amber: #f0b967;
 
   /* ---- §1.4 Text ramp ------------------------------------------------------ */
-  --text-primary: oklch(95% calc(0.01 * var(--ui-chroma)) var(--ui-hue));
+  --text-primary: oklch(95.5% calc(0.018 * var(--ui-chroma)) var(--ui-hue));
   /* NOTE: `--text-body` is Tailwind's *body type step* (a font-size), so the
      body ink cannot share that name. Consume it as the `text-text-body`
      utility, or as `var(--text-body-ink)` in a raw style. */
-  --text-body-ink: oklch(86.1% calc(0.01 * var(--ui-chroma)) var(--ui-hue));
-  --text-secondary: oklch(75.7% calc(0.012 * var(--ui-chroma)) var(--ui-hue));
-  --text-muted: oklch(65.2% calc(0.012 * var(--ui-chroma)) var(--ui-hue));
+  --text-body-ink: oklch(87% calc(0.02 * var(--ui-chroma)) var(--ui-hue));
+  --text-secondary: oklch(78% calc(0.03 * var(--ui-chroma)) var(--ui-hue));
+  --text-muted: oklch(68% calc(0.03 * var(--ui-chroma)) var(--ui-hue));
   /* §9 floor: meta must clear 4.5:1. The reference render's #6C6E70 measures
      3.51:1 on --bg-plate, so the faint step sits at the L that clears 4.5:1 on
      all four Night grounds — at every hue. See docs/design/wp0-checkpoint.md. */
-  --text-faint: oklch(64.6% calc(0.01 * var(--ui-chroma)) var(--ui-hue));
+  --text-faint: oklch(66% calc(0.028 * var(--ui-chroma)) var(--ui-hue));
   /* Ink on white light, and on emerald. */
   --text-on-light: oklch(16.5% calc(0.007 * var(--ui-chroma)) var(--ui-hue));
   --text-on-accent: #06241a;
@@ -446,8 +477,8 @@
   --info-tint: rgba(143, 169, 217, 0.14);
 
   /* ---- §1.6 Borders + interactive ------------------------------------------ */
-  --border-subtle: oklch(94% calc(0.022 * var(--ui-chroma)) var(--ui-hue) / 0.07);
-  --border-strong: oklch(94% calc(0.022 * var(--ui-chroma)) var(--ui-hue) / 0.14);
+  --border-subtle: oklch(90% calc(0.05 * var(--ui-chroma)) var(--ui-hue) / 0.09);
+  --border-strong: oklch(90% calc(0.05 * var(--ui-chroma)) var(--ui-hue) / 0.17);
   --channel-icon: var(--text-muted);
   --interactive-normal: var(--text-secondary);
   --interactive-hover: var(--text-primary);
@@ -470,13 +501,13 @@
 
   /* ---- §1.2 Light effects: fixed recipes, never free values ---------------- */
   --glow-window-white: 0 0 6px rgba(243, 234, 216, 0.55);
-  --glow-window-amber: 0 0 6px rgba(226, 201, 143, 0.5);
+  --glow-window-amber: 0 0 6px rgba(240, 185, 103, 0.5);
   /* The amber window's writing pulse peaks here — the speaking ring's breath
      at half its amplitude (§5.1), so typing is a murmur, not a shout. */
-  --glow-window-amber-breathe: 0 0 9px rgba(226, 201, 143, 0.63);
+  --glow-window-amber-breathe: 0 0 9px rgba(240, 185, 103, 0.63);
   /* The larger 12×16 windows on Home carry a proportionally larger glow. */
   --glow-window-white-lg: 0 0 8px rgba(243, 234, 216, 0.55);
-  --glow-window-amber-lg: 0 0 8px rgba(226, 201, 143, 0.5);
+  --glow-window-amber-lg: 0 0 8px rgba(240, 185, 103, 0.5);
   --glow-live-dot: 0 0 6px rgba(243, 234, 216, 0.8);
   /* A white-light fill (the Join button, the mic-on control). */
   --glow-light-fill: 0 0 16px rgba(243, 234, 216, 0.25);
@@ -520,7 +551,7 @@
   /* A lit room thumbnail. NOT the lamp: the reference renders paint the glow
      INTO the frame (`radial-gradient(70% 120% at 20% 0%)` over a tinted ground),
      so it hugs the top-left corner of the window instead of fogging it. */
-  --thumb-frame-lit: oklch(21.7% calc(0.014 * var(--ui-chroma)) var(--ui-hue));
+  --thumb-frame-lit: oklch(22.5% calc(0.03 * var(--ui-chroma)) var(--ui-hue));
   --thumb-glow: radial-gradient(70% 120% at 20% 0%, rgba(243, 234, 216, 0.16), rgba(243, 234, 216, 0));
   /* Away / offline. No rim. */
   --dim-filter: saturate(0.35) brightness(0.72);
@@ -593,7 +624,10 @@
    `/design-tokens` paint all four themes side by side, and what makes a theme
    preview anywhere in the app show the real thing.
    ============================================================================= */
-[data-theme] {
+[data-theme],
+.modal-backdrop,
+[data-shell-region='sidebar'],
+[data-shell-region='sidebar'] [data-selected-row] {
   --color-bg-base: var(--bg-base);
   --color-bg-plate: var(--bg-plate);
   --color-bg-raised: var(--bg-raised);
@@ -644,20 +678,25 @@
    §1.7 Daylight — warm paper. The light tokens become INK: a lit rim still
    reads as presence on a light ground, at half the alpha of Night.
    ============================================================================= */
+[data-theme='paper'],
 [data-theme='light'] {
   color-scheme: light;
+  --sky: none;
+  --street-scrim: transparent;
+  --plate-fill: var(--bg-plate);
+  --grain: none;
 
-  --bg-base: oklch(95.9% calc(0.01 * var(--ui-chroma)) var(--ui-hue));
-  --bg-plate: oklch(98.2% calc(0.007 * var(--ui-chroma)) var(--ui-hue));
-  --bg-raised: oklch(95.3% calc(0.014 * var(--ui-chroma)) var(--ui-hue));
-  --bg-well: oklch(92.6% calc(0.014 * var(--ui-chroma)) var(--ui-hue));
-  --bg-floating: oklch(98.2% calc(0.007 * var(--ui-chroma)) var(--ui-hue) / 0.97);
+  --bg-base: oklch(93.5% calc(0.028 * var(--ui-chroma)) var(--ui-hue-street));
+  --bg-plate: oklch(97.4% calc(0.011 * var(--ui-chroma)) var(--ui-hue));
+  --bg-raised: oklch(95% calc(0.02 * var(--ui-chroma)) var(--ui-hue));
+  --bg-well: oklch(92.6% calc(0.026 * var(--ui-chroma)) var(--ui-hue));
+  --bg-floating: oklch(97.4% calc(0.011 * var(--ui-chroma)) var(--ui-hue) / 0.97);
   --bg-mod-subtle: oklch(20.2% calc(0.015 * var(--ui-chroma)) var(--ui-hue) / 0.05);
   --bg-mod-strong: oklch(20.2% calc(0.015 * var(--ui-chroma)) var(--ui-hue) / 0.1);
   /* On paper the selection wash is ink-side of the ground, not light-side. */
   --bg-selected: oklch(55% calc(0.09 * var(--ui-chroma)) var(--ui-hue) / 0.14);
   --row-selected: var(--bg-selected);
-  --window-dark: oklch(88.3% calc(0.019 * var(--ui-chroma)) var(--ui-hue));
+  --window-dark: oklch(85% calc(0.045 * var(--ui-chroma)) var(--ui-hue-street));
   --overlay-backdrop: oklch(20.2% calc(0.015 * var(--ui-chroma)) var(--ui-hue) / 0.4);
   --bg-code: var(--bg-well);
   --border-code: var(--border-subtle);
@@ -786,10 +825,10 @@
 [data-theme='amoled'] {
   /* True black is hueless by definition; everything above it takes the hue. */
   --bg-base: #000000;
-  --bg-plate: oklch(15.5% calc(0.0066 * var(--ui-chroma)) var(--ui-hue));
-  --bg-raised: oklch(20.9% calc(0.0104 * var(--ui-chroma)) var(--ui-hue));
-  --bg-well: oklch(12.2% calc(0.0062 * var(--ui-chroma)) var(--ui-hue));
-  --bg-floating: oklch(15.5% calc(0.0066 * var(--ui-chroma)) var(--ui-hue) / 0.98);
+  --bg-plate: oklch(15.5% calc(0.018 * var(--ui-chroma)) var(--ui-hue));
+  --bg-raised: oklch(20.9% calc(0.025 * var(--ui-chroma)) var(--ui-hue));
+  --bg-well: oklch(12.2% calc(0.014 * var(--ui-chroma)) var(--ui-hue));
+  --bg-floating: oklch(15.5% calc(0.018 * var(--ui-chroma)) var(--ui-hue) / 0.98);
   --bg-mod-subtle: oklch(84% calc(0.07 * var(--ui-chroma)) var(--ui-hue) / 0.06);
   --bg-mod-strong: oklch(84% calc(0.07 * var(--ui-chroma)) var(--ui-hue) / 0.14);
   --bg-selected: oklch(84% calc(0.07 * var(--ui-chroma)) var(--ui-hue) / 0.12);
@@ -883,10 +922,10 @@
 
   /* Rims 2px, alpha ×1.5 (clamped at 1). */
   --glow-window-white: 0 0 6px rgba(243, 234, 216, 0.82);
-  --glow-window-amber: 0 0 6px rgba(226, 201, 143, 0.75);
-  --glow-window-amber-breathe: 0 0 9px rgba(226, 201, 143, 0.85);
+  --glow-window-amber: 0 0 6px rgba(240, 185, 103, 0.75);
+  --glow-window-amber-breathe: 0 0 9px rgba(240, 185, 103, 0.85);
   --glow-window-white-lg: 0 0 8px rgba(243, 234, 216, 0.82);
-  --glow-window-amber-lg: 0 0 8px rgba(226, 201, 143, 0.75);
+  --glow-window-amber-lg: 0 0 8px rgba(240, 185, 103, 0.75);
   --glow-live-dot: 0 0 6px rgba(243, 234, 216, 1);
   --glow-light-fill: 0 0 16px rgba(243, 234, 216, 0.37);
   --glow-control-on: 0 0 18px rgba(243, 234, 216, 0.52);
@@ -913,6 +952,302 @@
 
   --sidebar-bg: var(--bg-base);
   --sidebar-border: var(--border-strong);
+}
+
+
+/* =============================================================================
+   §1.8 LOOKS — Dusk sky, Paper & ink, Voices.
+
+   A theme remaps the ramp; a look is a whole palette with a point of view, and
+   it is allowed the things §6 forbids everywhere else (a painted backdrop,
+   translucent plates, a texture, colour taken from an author) because it is
+   one deliberate, named choice in Settings rather than decoration creeping in.
+   A look brings its own accent and its own grounds: the base-colour and accent
+   controls are inert while one is on (`lib/themes.ts` `LOOK_THEMES`).
+
+   Every look still answers to §9. `npm run test:contrast` audits each one,
+   compositing translucent grounds over `--audit-backdrop` — the worst case —
+   so a plate is only as transparent as the brightest sky behind it allows.
+   The structure that goes with these tokens is in `looks.css`.
+   ============================================================================= */
+
+/* ---- Dusk sky: the app sits in front of an actual sky ------------------------
+   One continuous gradient behind the whole shell — indigo overhead, magenta and
+   ember at the horizon — and every panel is smoked glass over it. No blur: the
+   sky is a smooth gradient, a blurred smooth gradient is the same gradient, and
+   a backdrop-filter is the one thing here the Linux webview pays dearly for. */
+[data-theme='dusk'] {
+  --sky:
+    radial-gradient(120% 85% at 88% 112%, #d9503a 0%, #b03468 24%, #6b3596 48%, rgba(107, 53, 150, 0) 72%),
+    radial-gradient(85% 65% at -5% 108%, #b9502f 0%, #8e3563 32%, rgba(142, 53, 99, 0) 64%),
+    linear-gradient(180deg, #0b1238 0%, #1d1f6e 36%, #46278a 64%, #6e2a74 100%);
+  --audit-backdrop: #d9503a;
+  /* The ground the desktop shell is told about, and what shows wherever the
+     sky is not painted (a live native video underlay clears it). Solid. */
+  --bg-base: #141447;
+  --street-scrim: rgba(12, 10, 40, 0.62);
+  --bg-plate: rgba(12, 10, 40, 0.68);
+  --plate-fill: linear-gradient(180deg, rgba(12, 10, 40, 0.5) 0%, rgba(12, 10, 40, 0.68) 100%);
+  --bg-raised: rgba(44, 36, 96, 0.72);
+  --bg-well: rgba(6, 5, 24, 0.74);
+  --bg-floating: rgba(22, 18, 58, 0.97);
+  --bg-mod-subtle: rgba(255, 255, 255, 0.07);
+  --bg-mod-strong: rgba(255, 255, 255, 0.13);
+  --bg-selected: rgba(255, 255, 255, 0.13);
+  --row-selected: var(--bg-selected);
+  --window-dark: rgba(8, 6, 30, 0.8);
+  --overlay-backdrop: rgba(8, 6, 30, 0.72);
+
+  --light-white: #fff3dc;
+  --light-amber: #ffc46b;
+  --glow-window-white: 0 0 10px 1px rgba(255, 240, 215, 0.8);
+  --glow-window-amber: 0 0 10px 1px rgba(255, 190, 90, 0.8);
+  --glow-window-amber-breathe: 0 0 14px 2px rgba(255, 190, 90, 0.9);
+  --glow-window-white-lg: 0 0 12px 1px rgba(255, 240, 215, 0.8);
+  --glow-window-amber-lg: 0 0 12px 1px rgba(255, 190, 90, 0.8);
+
+  --text-primary: #fffaf3;
+  --text-body-ink: #f4ecf6;
+  --text-secondary: #e6dcef;
+  --text-muted: #d5c9e4;
+  --text-faint: #cfc2e0;
+  --text-on-light: #1a1038;
+  --text-on-accent: #2b0d02;
+  --text-link: #ffb38f;
+
+  --accent-primary: #ff8a5c;
+  --accent-primary-hover: #ffa27d;
+  --accent-primary-active: #f0703f;
+  --accent: var(--accent-primary);
+  --accent-success: var(--accent-primary);
+  --accent-primary-rgb: 255, 138, 92;
+  --accent-tint: rgba(255, 138, 92, 0.16);
+  --accent-tint-strong: rgba(255, 138, 92, 0.26);
+  --success-tint: rgba(255, 138, 92, 0.16);
+  --focus-ring-color: var(--accent-primary);
+  --sidebar-active-indicator: var(--accent-primary);
+
+  --border-subtle: rgba(255, 255, 255, 0.12);
+  --border-strong: rgba(255, 255, 255, 0.24);
+  --scrollbar-auto-thumb: rgba(255, 255, 255, 0.2);
+  --scrollbar-auto-thumb-hover: rgba(255, 255, 255, 0.34);
+
+  --shadow-plate: 0 1px 0 rgba(255, 255, 255, 0.16) inset, 0 0 0 1px rgba(255, 255, 255, 0.07), 0 30px 70px rgba(5, 3, 25, 0.5);
+  --shadow-plate-phone: 0 1px 0 rgba(255, 255, 255, 0.16) inset, 0 0 0 1px rgba(255, 255, 255, 0.07), 0 18px 40px rgba(5, 3, 25, 0.5);
+  --shadow-raised: 0 1px 0 rgba(255, 255, 255, 0.12) inset;
+  --shadow-lifted: 0 1px 0 rgba(255, 255, 255, 0.12) inset, 0 8px 22px rgba(5, 3, 25, 0.45);
+  --shadow-composer: 0 1px 0 rgba(255, 255, 255, 0.16) inset, 0 10px 26px rgba(5, 3, 25, 0.45);
+  --thumb-frame-lit: #2a2060;
+  --tag-fill: rgba(12, 10, 40, 0.82);
+}
+
+/* A live stream on the Linux desktop renders on a native surface BELOW the
+   webview and the DOM is cleared down to it (`layout.css`, "Native video
+   underlay hole"). Translucent panels over that hole would merge into the
+   video, and the sky is cleared with the rest of the shell's grounds — so while
+   a stream is up, Dusk sky's glass is solid. Decided by the same attribute that
+   opens the hole, not by a fallback at runtime.
+
+   The same solid set applies to anything that floats OVER content — Settings, a
+   dialog, the phone's drawers — all of which live in `.modal-backdrop`. Glass
+   over the sky is the look; glass over a page of text is two pages of text. */
+[data-theme='dusk'][data-native-underlay],
+[data-theme='dusk'] .modal-backdrop {
+  --street-scrim: #12103a;
+  --bg-plate: #15133f;
+  --plate-fill: var(--bg-plate);
+  --bg-raised: #2a2462;
+  --bg-well: #0b0a24;
+  --window-dark: #0a0822;
+}
+
+/* ---- Voices: the colour comes from the people --------------------------------
+   A deep aubergine ground, chosen because all eight identity colours read
+   against it, and a timeline of bubbles that each take their author's colour
+   (`looks.css`, keyed off `data-message-style='bubbles'`). */
+[data-theme='voices'] {
+  --bg-base: oklch(15% 0.035 320);
+  --bg-plate: oklch(19.5% 0.045 318);
+  --bg-raised: oklch(26% 0.055 318);
+  --bg-well: oklch(14.5% 0.035 320);
+  --bg-floating: oklch(22% 0.05 318 / 0.98);
+  --bg-mod-subtle: oklch(90% 0.06 320 / 0.06);
+  --bg-mod-strong: oklch(90% 0.06 320 / 0.13);
+  --bg-selected: oklch(90% 0.06 320 / 0.14);
+  --row-selected: var(--bg-selected);
+  --window-dark: oklch(28% 0.06 318);
+  --overlay-backdrop: oklch(12% 0.03 320 / 0.76);
+
+  --light-amber: #ffd166;
+  --glow-window-amber: 0 0 7px rgba(255, 209, 102, 0.6);
+  --glow-window-amber-breathe: 0 0 10px rgba(255, 209, 102, 0.72);
+  --glow-window-amber-lg: 0 0 9px rgba(255, 209, 102, 0.6);
+
+  --text-primary: oklch(97% 0.012 320);
+  --text-body-ink: oklch(92% 0.02 320);
+  --text-secondary: oklch(83% 0.04 320);
+  --text-muted: oklch(80% 0.045 320);
+  --text-faint: oklch(79% 0.045 320);
+  --text-on-light: oklch(15% 0.035 320);
+  --text-on-accent: #2a1d00;
+  --text-link: #ffdc8a;
+
+  --accent-primary: #ffd166;
+  --accent-primary-hover: #ffdc8a;
+  --accent-primary-active: #f2bd3f;
+  --accent: var(--accent-primary);
+  --accent-success: var(--accent-primary);
+  --accent-primary-rgb: 255, 209, 102;
+  --accent-tint: rgba(255, 209, 102, 0.14);
+  --accent-tint-strong: rgba(255, 209, 102, 0.24);
+  --success-tint: rgba(255, 209, 102, 0.14);
+  --focus-ring-color: var(--accent-primary);
+  --sidebar-active-indicator: var(--accent-primary);
+
+  --border-subtle: oklch(90% 0.06 320 / 0.1);
+  --border-strong: oklch(90% 0.06 320 / 0.2);
+  --scrollbar-auto-thumb: oklch(90% 0.06 320 / 0.18);
+  --scrollbar-auto-thumb-hover: oklch(90% 0.06 320 / 0.32);
+  --thumb-frame-lit: oklch(22% 0.055 318);
+  --tag-fill: oklch(15% 0.035 320 / 0.8);
+
+  --bubble-mix: 0.22;
+  --bubble-own-mix: 0.3;
+}
+
+/* ---- Paper & ink: a printed object -------------------------------------------
+   Cream stock with a grain, near-black ink, three spot colours used flat and at
+   full strength, and hard offset shadows where the other themes have soft ones.
+   The sidebar is the spine: one solid block of cobalt carrying cream type, with
+   a complete ink set of its own (`--spine-*`), remapped onto the ordinary token
+   names inside `[data-shell-region='sidebar']` so nothing in the sidebar has to
+   know which look it is in. */
+[data-theme='paper'] {
+  --bg-base: #efe6d2;
+  --bg-plate: #fbf6ea;
+  --bg-raised: #f3ead6;
+  --bg-well: #eadfc6;
+  --bg-floating: #fffaf0;
+  --bg-mod-subtle: rgba(22, 22, 58, 0.06);
+  --bg-mod-strong: rgba(22, 22, 58, 0.12);
+  --bg-selected: rgba(22, 22, 58, 0.1);
+  --row-selected: var(--bg-selected);
+  --window-dark: #d9cdb0;
+  --overlay-backdrop: rgba(22, 22, 58, 0.45);
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .35 0 0 0 0 .3 0 0 0 0 .2 0 0 0 .5 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+
+  --light-white: #16163a;
+  --light-amber: #8a5600;
+
+  --text-primary: #16163a;
+  --text-body-ink: #23234a;
+  --text-secondary: #3a3a62;
+  --text-muted: #50507a;
+  --text-faint: #565680;
+  --text-on-light: #fbf6ea;
+  --text-on-accent: #fff6e8;
+  --text-link: #1f3fd0;
+
+  --accent-primary: #ad2d17;
+  --accent-primary-hover: #992713;
+  --accent-primary-active: #85210f;
+  --accent: var(--accent-primary);
+  --accent-success: #0f6b4b;
+  --accent-warning: #7a5200;
+  --accent-danger: #a82a2a;
+  --accent-info: #1f3fd0;
+  --accent-primary-rgb: 173, 45, 23;
+  --accent-tint: rgba(173, 45, 23, 0.12);
+  --accent-tint-strong: rgba(173, 45, 23, 0.2);
+  --success-tint: rgba(15, 107, 75, 0.12);
+  --focus-ring-color: #1f3fd0;
+  --sidebar-active-indicator: var(--accent-primary);
+
+  --border-subtle: rgba(22, 22, 58, 0.16);
+  --border-strong: rgba(22, 22, 58, 0.36);
+  --scrollbar-auto-thumb: rgba(22, 22, 58, 0.22);
+  --scrollbar-auto-thumb-hover: rgba(22, 22, 58, 0.4);
+
+  /* Print has no soft shadows: a keyline and a hard offset. */
+  --shadow-plate: 0 0 0 1.5px #16163a, 6px 6px 0 #16163a;
+  --shadow-plate-phone: 0 0 0 1.5px #16163a, 4px 4px 0 #16163a;
+  --shadow-well: inset 0 0 0 1px rgba(22, 22, 58, 0.2);
+  --shadow-raised: 0 0 0 1px rgba(22, 22, 58, 0.22);
+  --shadow-lifted: 0 0 0 1.5px #16163a, 4px 4px 0 #16163a;
+  --shadow-composer: 0 0 0 1.5px #16163a, 3px 3px 0 #16163a;
+  --shadow-chip: 0 0 0 1px rgba(22, 22, 58, 0.26);
+  --shadow-tile: 0 0 0 1px rgba(22, 22, 58, 0.2);
+  --shadow-floating: 0 0 0 1.5px #16163a, 6px 6px 0 rgba(22, 22, 58, 0.9);
+  --ring-lit-plate: 0 0 0 1.5px #16163a, 6px 6px 0 #ad2d17;
+  --thumb-frame-lit: #eadfc6;
+  --tag-fill: rgba(251, 246, 234, 0.9);
+
+  --identity-ink-1: #9a4f00;
+  --identity-ink-2: #1f3fd0;
+  --identity-ink-3: #0f6b4b;
+  --identity-ink-4: #b8301b;
+  --identity-ink-5: #6d2db3;
+  --identity-ink-6: #6f5800;
+  --identity-ink-7: #006778;
+  --identity-ink-8: #a81f68;
+
+  /* Print is cut, not moulded: the radii tighten. */
+  --radius-plate: 6px;
+  --radius-card: 5px;
+  --radius-well: 4px;
+  --radius-control: 4px;
+  --radius-chip: 3px;
+  --radius-thumb: 3px;
+  --radius-stage-control: 6px;
+  --radius-plate-phone: 8px;
+  --radius-control-phone: 8px;
+
+  /* The spine's own ink. */
+  --spine-bg: #1f3fd0;
+  --spine-well: #1833b0;
+  --spine-raised: #2a4be0;
+  --spine-window-dark: #122a96;
+  --spine-text-primary: #fff6e4;
+  --spine-text-secondary: #eceaff;
+  --spine-text-muted: #d4d8ff;
+  --spine-text-faint: #cdd2ff;
+  --spine-light-amber: #ffc53d;
+  --spine-selected: #fff6e4;
+  --spine-selected-ink: #1f3fd0;
+  --spine-border: rgba(255, 246, 228, 0.26);
+}
+
+[data-theme='paper'] [data-shell-region='sidebar'] {
+  --bg-base: var(--spine-bg);
+  --bg-plate: var(--spine-well);
+  --bg-well: var(--spine-well);
+  --bg-raised: var(--spine-raised);
+  --window-dark: var(--spine-window-dark);
+  --bg-mod-subtle: rgba(255, 246, 228, 0.1);
+  --bg-mod-strong: rgba(255, 246, 228, 0.18);
+  --bg-selected: var(--spine-selected);
+  /* Re-declared, not inherited: a custom property is substituted where it is
+     declared, so the root's `--row-selected` already holds the paper wash. */
+  --row-selected: var(--bg-selected);
+  --text-primary: var(--spine-text-primary);
+  --text-body-ink: var(--spine-text-primary);
+  --text-secondary: var(--spine-text-secondary);
+  --text-muted: var(--spine-text-muted);
+  --text-faint: var(--spine-text-faint);
+  --channel-icon: var(--spine-text-muted);
+  --interactive-normal: var(--spine-text-secondary);
+  --interactive-hover: var(--spine-text-primary);
+  --interactive-muted: var(--spine-text-faint);
+  --light-white: var(--spine-text-primary);
+  --light-amber: var(--spine-light-amber);
+  --glow-window-white: 0 0 0 1px var(--spine-text-primary);
+  --glow-window-amber: 0 0 0 1px var(--spine-light-amber);
+  --border-subtle: var(--spine-border);
+  --border-strong: var(--spine-border);
+  --shadow-plate: 0 0 0 1.5px var(--spine-border);
+  --shadow-well: 0 0 0 1.5px var(--spine-border);
+  --focus-ring-color: var(--spine-text-primary);
+  --focus-ring: 0 0 0 2px var(--spine-bg), 0 0 0 4px var(--spine-text-primary);
 }
 
 /* =============================================================================

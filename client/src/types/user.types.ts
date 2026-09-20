@@ -19,7 +19,11 @@ export interface User {
 
 export interface UserSettings {
   user_id: string;
-  /** Opaque server-stored string; known values are dark/light/amoled/high-contrast. */
+  /**
+   * Opaque server-stored string. The known values are the ids in
+   * `src/lib/themes.ts`: dark/light/amoled/high-contrast, plus the looks
+   * dusk/paper/voices. Anything else collapses to dark on the way in.
+   */
   theme: string;
   locale: string;
   message_display_compact: boolean;

@@ -37,6 +37,7 @@ import { extractApiError } from '../../api/client';
 import { getApi } from '../../api/activeClient';
 import { authApi, type AuthSession } from '../../api/auth';
 import { cn } from '../../lib/utils';
+import { asThemeId, type ThemeId } from '../../lib/themes';
 import { confirm } from '../../stores/confirmStore';
 import { toast } from '../../stores/toastStore';
 import { ErrorBanner } from '../ui/Feedback';
@@ -154,7 +155,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
   const setLowBandwidthModeUI = useUIStore((s) => s.setLowBandwidthMode);
   const customCss = useUIStore((s) => s.customCss);
   const setCustomCss = useUIStore((s) => s.setCustomCss);
-  const [theme, setTheme] = useState<'dark' | 'light' | 'amoled' | 'high-contrast'>('dark');
+  const [theme, setTheme] = useState<ThemeId>('dark');
   const [displayName, setDisplayName] = useState('');
   const [bio, setBio] = useState('');
   const [pronouns, setPronouns] = useState('');
@@ -326,13 +327,9 @@ export function UserSettings({ onClose }: UserSettingsProps) {
         normalizeDetectedAppId
       );
 
-      // The server stores theme as an opaque string; collapse unknown values.
-      const serverTheme = settings.theme;
-      setTheme(
-        serverTheme === 'light' || serverTheme === 'amoled' || serverTheme === 'high-contrast'
-          ? serverTheme
-          : 'dark',
-      );
+      // The server stores theme as an opaque string; collapse unknown values
+      // (lib/themes.ts owns the list, looks included).
+      setTheme(asThemeId(settings.theme));
       setLocale(settings.locale || 'en-US');
       setMessageCompact(settings.message_display_compact || false);
       setKnownActivityApps(known);
@@ -439,7 +436,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
     onClose();
   };
 
-  const handleThemeChange = (newTheme: 'dark' | 'light' | 'amoled' | 'high-contrast') => {
+  const handleThemeChange = (newTheme: ThemeId) => {
     const previous = theme;
     setTheme(newTheme);
     setThemeUI(newTheme);

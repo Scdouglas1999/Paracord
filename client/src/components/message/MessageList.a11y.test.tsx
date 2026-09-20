@@ -292,7 +292,7 @@ describe('MessageList keyboard accessibility and error state', () => {
     const row = await screen.findByRole('article', { name: /Alice/ });
     await waitFor(() => expect(mocks.scrollToIndex).toHaveBeenCalled());
     await waitFor(() => {
-      expect(row.getAttribute('style')).toContain('background-color: var(--accent-tint-strong)');
+      expect(row.getAttribute('style')).toContain('--row-bg: var(--accent-tint-strong)');
       expect(row.getAttribute('style')).toContain('border-left: 2px solid var(--accent-primary)');
     });
   });
