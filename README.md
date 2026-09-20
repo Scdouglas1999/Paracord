@@ -23,7 +23,7 @@
 </p>
 
 <p align="center">
-  Release candidate: <strong>v3.0.1</strong> — see the <a href="RELEASE_NOTES.md">release notes</a>
+  Current release: <strong>v3.1.0</strong> — see the <a href="RELEASE_NOTES.md">release notes</a>
 </p>
 
 ---
@@ -225,13 +225,15 @@ Download a desktop build from [Releases](../../releases/latest), or just open th
 | Client | Download | Notes |
 |---|---|---|
 | Windows desktop | `Paracord-Setup-<ver>.exe` — guided installer (recommended) | Also `Paracord_<ver>_x64_en-US.msi` |
-| Linux desktop | `Paracord_<ver>_amd64.AppImage` — portable, no install | Or install `Paracord_<ver>_amd64.deb` |
+| Linux desktop | `Paracord_<ver>_amd64.AppImage` — portable, no install | Or `Paracord_<ver>_amd64.deb` / `.rpm` |
+| macOS desktop | `Paracord_<ver>_aarch64.dmg` (Apple Silicon) or `_x64.dmg` (Intel) | Unsigned unless a Developer ID is configured: right-click → Open the first time |
 | Browser | `https://<your-server>:8443` — served by the Paracord server itself | Accept the self-signed cert warning once |
-| macOS desktop | — | Not currently a supported release target |
 
 On first launch the desktop client asks for a **server URL** — paste the `https://<server>:8443` address the installer printed (or your server's public URL), then register an account. The desktop client speaks raw QUIC and auto-trusts the server's certificate.
 
 Windows is the primary native screen and system-audio capture path. Linux screen sharing depends on the distribution's PipeWire and portal setup, and is worth testing before you publish a build. macOS system-audio capture is not implemented.
+
+On Linux with NVIDIA's proprietary driver the client turns off WebKit's GPU compositing at startup, because WebKitGTK crashes against that driver and the window never paints. This costs GPU compositing of the interface only — video still decodes and renders on the GPU. Override with `PARACORD_WEBKIT_ACCELERATION=ondemand` if your driver handles it.
 
 ## Architecture
 

@@ -1,6 +1,6 @@
 # Known Limitations
 
-This page documents support boundaries for the v2.0.0 release. Items here are not security exceptions; they are product or platform limitations that should be visible before publishing public artifacts.
+This page documents support boundaries for the v3.1.0 release. Items here are not security exceptions; they are product or platform limitations that should be visible before publishing public artifacts.
 
 ## AutoMod
 
@@ -40,15 +40,20 @@ This page documents support boundaries for the v2.0.0 release. Items here are no
   - **The header is authenticated.** `sender_id`, the epoch and the membership fingerprint are
     the AEAD's additional data, and a header carrying any field outside that set is refused
     rather than passed along unauthenticated.
-  - **Keys rotate with membership.** The epoch turns over whenever the membership fingerprint
-    changes — somebody joining or leaving, or *any* member's identity key rotating — so the key
-    a departed member holds is never the key the next message uses. A recipient also refuses to
-    adopt a key minted for a roster naming somebody it can no longer see, and says so.
-- **What group encryption still trusts the server for**: the roster. There is no
-  server-authenticated membership epoch, so the member list is the one the account's own channel
-  view reports. A sender whose view has not yet caught up with a departure can mint one key
-  against the stale roster; the recipient-side check above is what catches it, and it is a check
-  on the recipient's view rather than on a signed fact.
+  - **Keys rotate with membership, and the server enforces it.** The epoch turns over whenever
+    the membership fingerprint changes — somebody joining or leaving, or *any* member's identity
+    key rotating — so the key a departed member holds is never the key the next message uses.
+    Publishing a key names the membership version it was minted against, and the server, which
+    owns the recipient list, refuses a publish whose version has moved: a client whose roster is
+    behind cannot hand the group key to somebody who has already left, even by accident. The
+    refusal names the current version, and the client refetches the roster and mints again.
+    Recipients additionally decline a key minted for a roster naming anybody they can no longer
+    see.
+- **What group encryption trusts the server for**: who is in the channel. The server decides
+  membership, as it does for every other channel, so it can add an account to a group and that
+  account will receive keys for messages sent afterwards. It cannot read anything sent before,
+  and it cannot forge a message from an existing member: that takes an identity private key,
+  which never leaves the device. Members see roster changes in the conversation.
 - A group conversation refuses to send while **any** member has not published an identity key,
   and names who it is waiting on. There is no plaintext fallback.
 - A direct message that carries attachments **cannot be edited**. An edit replaces the whole
@@ -67,6 +72,29 @@ This page documents support boundaries for the v2.0.0 release. Items here are no
 - Queued attachments live in the account's encrypted vault until delivery, so they survive a
   reload and are removed when the queued message is discarded. They are **not** synchronised
   between devices: a message queued on one device can only be sent from that device.
+
+## Linux desktop app
+
+- **WebKit's GPU compositing is turned off on NVIDIA's proprietary driver.** On
+  those machines WebKitGTK either aborts the Wayland connection
+  (`Gdk-Message: Error 71 (Protocol error)`) or segfaults inside
+  `libnvidia-eglcore` as soon as it composites, and the window never paints a
+  pixel. A twenty-line GTK + WebKit program reproduces it with none of Paracord
+  involved, so the app detects the NVIDIA EGL vendor at startup and sets
+  WebKit's `hardware-acceleration-policy` to `Never`. Note that the older
+  `WEBKIT_DISABLE_COMPOSITING_MODE` and `WEBKIT_DISABLE_DMABUF_RENDERER`
+  environment variables do **not** control this in WebKitGTK 2.4x — only the
+  settings property does.
+- This costs GPU compositing of the **interface** only. Video still decodes and
+  renders on the GPU: it goes through the `gtk::GLArea` underlay, which owns its
+  own GL context and is unaffected.
+- `PARACORD_WEBKIT_ACCELERATION=never|ondemand|always` overrides the choice, for
+  a machine whose driver has since been fixed or one that misbehaves without
+  NVIDIA. Everything else on Linux keeps WebKit's own default (`ondemand`).
+- The published **AppImage** is a separate problem and is still affected: it
+  bundles its own WebKit, which aborts with `EGL_BAD_ALLOC` before any of the
+  above applies. Build from source on such a machine, or install the `.deb`,
+  which links the host `webkit2gtk-4.1`.
 
 ## Server Health
 
@@ -163,3 +191,11 @@ This page documents support boundaries for the v2.0.0 release. Items here are no
 - Archive recovery uses the offline `restore-backup` CLI and a new recovery directory; PostgreSQL additionally requires a separate empty, isolated database. The admin restore endpoint provides instructions and does not replace the live database.
 - Original config/environment, at-rest master key and separate TLS/federation key files must be retained. S3 and database-only archives require an explicit matching local media export. Unsupported encryption, missing media or failed verification prevents publication of an activation config.
 - Verification authenticates encrypted server attachments/secrets and checks attachment sizes/hashes, with a 1 GiB per-attachment verification limit. It does not reconstruct client vault/session keys for end-to-end encrypted history. See [backup recovery](backup-recovery.md) for evidence, supported inputs and cutover requirements.
+
+## Sessions and sign-in (3.1.0)
+
+- When the instance refuses the session a desktop client saved, the client discards the credential but can stay in the app shell showing "Unknown user" and no servers, rather than reaching the sign-in screen. Logging out from Settings and signing in again recovers it. Seen once on Linux against a local instance on 2026-09-20; the cause of the refusal was not established.
+
+## Looks (3.1.0)
+
+- Dusk sky and Paper & ink switch to solid panels and drop the paper grain while a native video underlay is active on the Linux desktop client. The rules are keyed off the same attribute that opens the underlay, but have not been exercised against a live native stream.

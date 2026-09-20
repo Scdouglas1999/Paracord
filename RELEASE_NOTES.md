@@ -1,12 +1,100 @@
-# Paracord v3.0.1 release candidate
+# Paracord 3.1.0
 
-Security and release hardening is in progress. This candidate preserves native video,
-federation and encryption while repairing authorization, concurrency, recovery,
-attachment transfer, bot gateway and client failures found during real multiuser tests.
+3.0.0 was built and tested but never made public, so for most people this is the first release since 2.0. Everything in the 3.0.0 notes further down is new to you too. This section covers what changed after 3.0.0.
 
-See [release validation](docs/release-validation-2026-09-19.md) for executed coverage,
-remaining gates and build identities, and the [security audit](docs/security-audit-2026-09-19.md)
-for the original findings. Final publication notes will be completed after validation.
+Compare: [v2.0.0...v3.1.0](https://github.com/Scdouglas1999/Paracord/compare/v2.0.0...v3.1.0)
+
+## Three new looks
+
+The dark theme was too grey. Most of the screen was the same near-black with small grey text, and the only colour came from people being online, so a quiet server looked dead.
+
+- The default dark theme now has real colour: the sidebar side is a deep blue, the panels you read in are warm, and empty channels no longer show up as black holes.
+- Settings → Appearance has three new options under the existing themes. They switch instantly.
+  - **Dusk sky** puts a sunset behind the whole app, with dark glass panels over it.
+  - **Paper & ink** is a light look: cream paper, dark ink, a solid blue sidebar and hard printed-style shadows.
+  - **Voices** puts every message in a bubble tinted with its author's colour. Yours sit on the right.
+- Each of the three brings its own colours, so the accent and base colour pickers are switched off while one is on. Pick Night, Daylight, AMOLED or High contrast to get them back.
+- You can pick the base colour of the four regular themes (a few presets or any hue), and it changes as you drag. Text stays readable whatever you pick.
+- Names in chat are written in each person's own colour, and the Friends list uses the same colours instead of green for everyone.
+
+## Home
+
+Home now leads with people and conversations: who's around, your servers, and the conversation you were last in, instead of a list of things the app wanted from you.
+
+## Signing in and staying signed in
+
+- Signing in showed one or two "Failed to load relationships" errors even though your friends list loaded fine a moment later. Fixed.
+- The desktop app forgot your session between launches. Fixed.
+- A session that was revoked now takes you to the sign-in screen instead of bouncing around.
+- If the instance is down, you're told it's down, not that your password is wrong.
+- Sign-in errors are shown in full instead of being cut off, and the recovery phrase step is no longer a dead end.
+- Setting up a second device gets a proper screen, and relaunching only asks you to unlock.
+- The first-run, sign-up and recovery screens fit the window instead of scrolling, and the longer forms are split into steps.
+
+## Desktop app
+
+- An encrypted DM couldn't be sent from the desktop app at all. Fixed.
+- File uploads from the desktop app were sent in a form the server rejected. Fixed.
+- Avatars, emoji and stickers didn't load in the desktop app. Fixed.
+- The microphone you pick is the one that gets opened, it's listed by its real name, and the level meter shows what it hears. A microphone that's silent or missing says so straight away.
+- If you already answered the system's screen-share picker, the app doesn't ask you for permission again.
+- **Linux with NVIDIA's driver:** the app opened a black window and crashed when you clicked anything. It now turns off WebKit's GPU compositing on those machines and renders normally. Video never went through that path, so it's unaffected. Set `PARACORD_WEBKIT_ACCELERATION=ondemand` to get the old behaviour back if your driver copes.
+
+## Other fixes
+
+- A server you create while the app is open shows up right away, without a restart.
+- One conversation the server refuses no longer breaks the whole account's messages.
+- A message that can't be saved on your device no longer drops your connection.
+- The typing indicator is visible without scrolling for it.
+- The "Create an event" button does something now.
+- Server settings prompts appear, and an invite tells you when it expires.
+- Custom CSS actually applies, or tells you that it didn't.
+- Legal documents scroll instead of being cut off, and tooltips let go of a button after you press it.
+- The app stopped checking the instance's health on every single request, and About shows the real version.
+
+## Security
+
+We went through the server and clients looking for ways to get around permissions, log in as someone else, read things you shouldn't, or crash the app with bad input. What we found is fixed. The details are in [docs/security-audit-2026-09-19.md](docs/security-audit-2026-09-19.md); the short version:
+
+- **Permissions.** A few combinations of role and channel settings could give someone access a role had denied, and a removed or demoted member could keep access for a few minutes. Bots could end up with more permission than they were installed with. All fixed, and removing someone now takes effect immediately everywhere, including for messages that were queued for them.
+- **Logging in.** A two-factor code could be reused after a server restart. A half-finished login could survive a password change. Old password-reset and email links kept working after you changed your email or password. All fixed.
+- **Invites.** One person hammering an invite could use up all its uses or trip the anti-raid lockdown. Fixed.
+- **Webhooks** could post to locked threads and skip AutoMod on edits. Fixed.
+- **Federation.** Several ways for another instance to replay requests, forge a signature with a bad key, write into servers it has nothing to do with, or keep reading history after a channel went private. Fixed. Files fetched from other instances are now encrypted on disk if your instance encrypts attachments.
+- **Calls.** Encrypted audio and video packets could be replayed. Fixed.
+- **Video decoding** could be made to read or allocate memory it shouldn't by a malicious stream. Fixed.
+- **Desktop app.** File transfers could reach the app's own key files. They're now limited to the transfer folder and Downloads.
+- **HTTPS.** If the certificate failed to load, the server quietly started on plain HTTP instead. It now refuses to start and tells you why.
+
+## Packages
+
+- **macOS builds exist now.** `.dmg` for Apple Silicon and Intel, plus a macOS server tarball. They're unsigned unless a Developer ID is configured, so the first launch needs right-click → Open.
+- **Fedora/RHEL get an `.rpm`**, alongside the `.deb` and AppImage.
+- `install.sh` works on macOS: it sets up a launchd job (system-wide with sudo, per-user without).
+- `install.ps1` couldn't run on the PowerShell that ships with Windows; it failed before doing anything. Fixed.
+- Installing on Windows as a service left the server unable to read its own config, so it exited immediately with nothing in any log. Fixed, and the installer now checks.
+
+## Known problems
+
+- If the instance rejects the session the desktop app saved (after a long time away, or if the session was revoked), the app can open with "Unknown user" and no servers instead of taking you to the sign-in screen. Open Settings, log out, and sign in again.
+- Dusk sky and Paper & ink have rules for when a native video stream is on screen in the Linux desktop app (the glass goes solid, the paper texture is removed). Those rules haven't been tried against a real stream yet.
+- Home and a server's front page still have a lot of empty space when a server is quiet. That's a layout job for a later release.
+- The rest of the list is in [docs/known-limitations.md](docs/known-limitations.md).
+
+## Upgrading from 3.0.0 or 2.0
+
+- Instances upgrade in place on SQLite and PostgreSQL. Database changes apply themselves on first start.
+- If you federate with other instances, update both ends. An instance still on an older version can't download files from an updated one, and manually added peers need to be saved again once so their keys are registered.
+- If you've configured HTTPS and the certificate is missing or broken, the server won't start. Before, it fell back to HTTP without telling you.
+- If you've set attachments to be encrypted with no plain-text reads allowed, old unencrypted files are now refused rather than served. Turn on the migration option first if you still have some.
+- Upgrade desktop and browser clients together, as with 3.0.
+
+## How this was tested
+
+- The server's own tests (1,700 of them) and the client's (2,827) pass. So do the colour-contrast check across all seven themes, the accessibility check, and 92 browser tests against a mocked server.
+- 16 browser tests ran against the real server binary, including two people in a call who hear and see each other, a backup being restored under connected clients, and claiming a brand-new instance.
+- Three real accounts were driven through one live instance of this build: making a server, joining by invite, chatting live, an encrypted DM, an encrypted group DM, removing someone from the group and checking they can no longer read it, edits, reactions and deletes. All 25 steps passed.
+- Windows and macOS builds are compiled and packaged by the release pipeline. They weren't run by hand on those systems before this was written; the macOS builds in particular are new.
 
 ---
 
@@ -84,15 +172,9 @@ Server binaries and client installers are attached. An instance upgrades in plac
 - The desktop app's auto-update only works if a signed update manifest is published with the release.
 - LiveKit is still in the codebase as an unsupported option. The native QUIC engine is the one to use.
 
-## Verification
+## How 3.0.0 was tested
 
-Run on the release commit before tagging:
-
-- Rust: `cargo fmt --check` and `cargo clippy --workspace --all-targets -D warnings` (Rust 1.91) clean; 1,553 tests across 92 suites on SQLite, and the 569-test API suite again on a real PostgreSQL 16, all passing.
-- Client: `tsc` clean; 2,560 unit tests in 268 files; the colour-token, contrast, static accessibility and vocabulary audits all pass.
-- End to end (Chromium against the real release binary): 87 mocked cases, 22 motion timing cases, 15 real-server cases (voice join with audible audio and visible video both ways, restore, first-owner claim), 6 messaging and 1 attachment-confidentiality cases.
-- Release smokes: all 22 `scripts/release_*_smoke.py` pass, plus the install smoke, restore on SQLite and PostgreSQL, upgrade-from-v2.0.0 on both, security DAST, and the three-node federation validation.
-- Eight QA passes drove the app live across voice, messaging, DMs and encryption, guild administration, install and operations, desktop and phone interfaces, and an adversarial pass; the three domains that came back red were fixed and re-verified end to end.
+The automated tests pass on both SQLite and PostgreSQL, the browser tests run against the real server binary (including two people in a call who can hear and see each other), and installs, upgrades from 2.0 and backups were each done for real. Several rounds of people using the app live found the problems listed above, which were fixed and checked again.
 
 ## Previous releases
 
