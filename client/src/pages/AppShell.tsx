@@ -1,3 +1,4 @@
+import { useFreshRelationships } from '../hooks/useFreshRelationships';
 import { useCurrentChannelStore } from '../hooks/useChannels';
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { Outlet, useLocation, useParams } from 'react-router';
@@ -23,7 +24,6 @@ import { SettingsPage } from './SettingsPage';
 import { GuildSettingsPage } from './GuildSettingsPage';
 import { LayoutTour } from '../components/onboarding/LayoutTour';
 import { useFocusTrap } from '../hooks/useFocusTrap';
-import { useRelationshipStore } from '../stores/relationshipStore';
 import { InteractionModal } from '../components/message/InteractionModal';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 
@@ -119,9 +119,7 @@ export function AppShell() {
   // Prime relationships once per shell mount so the sidebar's Friends badge and
   // Needs-you request rows are fresh without requiring a Home/Friends visit
   // (gateway RELATIONSHIP_* events keep them live afterwards).
-  useEffect(() => {
-    void useRelationshipStore.getState().fetchRelationships();
-  }, []);
+  useFreshRelationships();
 
   // Mobile swipe gesture (§6): right from the left edge opens the Buildings
   // column. The mirrored left-edge swipe used to open a docked member list;

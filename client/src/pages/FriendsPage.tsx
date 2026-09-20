@@ -1,5 +1,6 @@
+import { useFreshRelationships } from '../hooks/useFreshRelationships';
 import { useCurrentAccountScope } from '../hooks/useCurrentUser';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Users, MessageSquare, X, Search, Check, UserPlus, UserRoundPlus, Inbox, Ban, ArrowUpRight } from 'lucide-react';
 import { useNavigate } from 'react-router';
@@ -15,6 +16,7 @@ import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { cn } from '../lib/utils';
 import { displayName } from '../lib/displayName';
+import { getIdentityColor } from '../lib/colors';
 import { presenceLabel, presenceLight } from '../lib/presence';
 import { UserProfilePopup } from '../components/user/UserProfile';
 
@@ -67,6 +69,7 @@ function ActionButton({
 // A single person row (lantern-stage-spec §8): avatar + optional presence dot,
 // name + subtitle, then row actions supplied by the caller.
 function PersonRow({
+  userId,
   name,
   subtitle,
   status,
@@ -74,6 +77,7 @@ function PersonRow({
   onOpenProfile,
   actions,
 }: {
+  userId: string;
   name: string;
   subtitle: string;
   status?: string;
@@ -95,10 +99,13 @@ function PersonRow({
               dot. The status word itself is already in the row subtitle. */}
           <div
             className={cn(
-              'flex h-10 w-10 items-center justify-center rounded-full bg-accent-tint text-label font-semibold text-accent-primary',
+              'flex h-10 w-10 items-center justify-center rounded-full text-label font-semibold text-text-on-light',
               showPresence && presenceLight(status).avatarClass,
               showPresence && presenceLight(status).dnd && 'pc-dnd',
             )}
+            // A person wears their own colour, the same one the timeline and
+            // the header strip give them. The emerald is an action, not a person.
+            style={{ background: getIdentityColor(userId) }}
           >
             {name.charAt(0).toUpperCase()}
           </div>
@@ -126,15 +133,12 @@ export function FriendsPage() {
   const [profile, setProfile] = useState<{ user: Relationship['user']; position: { x: number; y: number } } | null>(null);
   const addInputRef = useRef<HTMLInputElement>(null);
   const relationships = useRelationshipStore((s) => s.relationships);
-  const fetchRelationships = useRelationshipStore((s) => s.fetchRelationships);
   const presences = usePresenceStore((s) => s.presences);
   const getPresence = usePresenceStore((s) => s.getPresence);
   const activeServerId = useServerListStore((s) => s.activeServerId);
   const scope = activeServerId ?? undefined;
 
-  useEffect(() => {
-    void fetchRelationships();
-  }, [fetchRelationships]);
+  useFreshRelationships();
 
   const friends = useMemo(() => relationships.filter((r) => r.type === 1), [relationships]);
   const blocked = useMemo(() => relationships.filter((r) => r.type === 2), [relationships]);
@@ -458,6 +462,7 @@ export function FriendsPage() {
                       return (
                         <PersonRow
                           key={rel.id}
+                          userId={rel.user.id}
                           name={displayName(rel.user)}
                           subtitle={subtitle}
                           status={status}
@@ -550,6 +555,7 @@ function RequestsView({
             {incoming.map((rel) => (
               <PersonRow
                 key={rel.id}
+                userId={rel.user.id}
                 name={displayName(rel.user)}
                 subtitle="Wants to be your friend"
                 onOpenProfile={(anchor) => onOpenProfile(rel.user, anchor)}
@@ -586,6 +592,7 @@ function RequestsView({
             {outgoing.map((rel) => (
               <PersonRow
                 key={rel.id}
+                userId={rel.user.id}
                 name={displayName(rel.user)}
                 subtitle="Request sent — waiting to hear back"
                 onOpenProfile={(anchor) => onOpenProfile(rel.user, anchor)}

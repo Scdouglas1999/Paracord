@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useFreshRelationships } from '../hooks/useFreshRelationships';
+import { useCallback, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 
 import { SectionLabel } from '../components/ui';
@@ -63,14 +64,11 @@ export function HomePage() {
   const guilds = useAvailableGuilds();
   const availableScopes = useAvailableAccountScopes();
   const fetchChannels = useChannelStore((state) => state.fetchChannels);
-  const fetchRelationships = useRelationshipStore((state) => state.fetchRelationships);
   const acceptFriend = useRelationshipStore((state) => state.acceptFriend);
 
   const [showCreateModal, setShowCreateModal] = useState(false);
 
-  useEffect(() => {
-    void fetchRelationships();
-  }, [fetchRelationships]);
+  useFreshRelationships();
 
   // The light on Home is only honest once every building's rooms AND the people
   // behind them are loaded. The sidebar needs exactly the same thing, so the

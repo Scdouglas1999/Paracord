@@ -8,6 +8,7 @@ import { gateway } from '../gateway/manager';
 import { useUIStore } from '../stores/uiStore';
 import { useServerListStore } from '../stores/serverListStore';
 import { useVoiceStore } from '../stores/voiceStore';
+import { useCurrentUser } from '../hooks/useCurrentUser';
 import { cn } from '../lib/utils';
 
 type BannerTone = 'warning' | 'danger' | 'success';
@@ -49,13 +50,25 @@ export function ConnectionStatusBar() {
     s.activeServerId ? s.servers.find((server) => server.id === s.activeServerId) : undefined
   );
   const voiceConnected = useVoiceStore((s) => s.connected);
+  const signedIn = useCurrentUser() != null;
 
   const hasConnected = useRef(false);
   const [showBanner, setShowBanner] = useState(false);
   const [showConnected, setShowConnected] = useState(false);
   const [prevStatus, setPrevStatus] = useState(status);
 
+  // Signing out drops the connection on purpose. Without this the sign-in
+  // screen announced "Connection lost — retrying automatically" four seconds
+  // after every sign-out, about a session that no longer exists.
   useEffect(() => {
+    if (signedIn) return;
+    hasConnected.current = false;
+    setShowBanner(false);
+    setShowConnected(false);
+  }, [signedIn]);
+
+  useEffect(() => {
+    if (!signedIn) return;
     if (status === 'connected') {
       if (hasConnected.current && (prevStatus === 'reconnecting' || prevStatus === 'disconnected')) {
         setShowConnected(true);
@@ -73,7 +86,7 @@ export function ConnectionStatusBar() {
     if (!hasConnected.current) return;
     const timer = setTimeout(() => setShowBanner(true), 4000);
     return () => clearTimeout(timer);
-  }, [status, prevStatus]);
+  }, [status, prevStatus, signedIn]);
 
   useEffect(() => {
     if (voiceConnected && status === 'disconnected') {
