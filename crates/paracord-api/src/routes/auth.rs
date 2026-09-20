@@ -15,11 +15,10 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
 use std::env;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::Duration as StdDuration;
 use totp_rs;
 use uuid::Uuid;
@@ -199,7 +198,7 @@ fn verify_pubkey_challenge_proof(
 
     let now = Utc::now().timestamp();
     if now - issued_at > CHALLENGE_MAX_AGE_SECONDS
-        || (timestamp - issued_at).abs() > CHALLENGE_SKEW_SECONDS
+        || timestamp.abs_diff(issued_at) > CHALLENGE_SKEW_SECONDS as u64
     {
         return Err(ApiError::Unauthorized);
     }
@@ -1166,21 +1165,22 @@ pub(crate) async fn dispatch_email_verification(
     let verify_token = random_token_hex(32);
     let verify_token_hash = sha256_hex(&verify_token);
     let verify_expires = Utc::now() + Duration::hours(EMAIL_VERIFY_TOKEN_TTL_HOURS);
-    if let Err(err) = paracord_db::users::create_email_verification_token(
+    match paracord_db::users::create_email_verification_token_for_address(
         &state.db,
         user_id,
+        recipient_email,
         &verify_token_hash,
         verify_expires,
     )
     .await
     {
-        tracing::error!(
-            target: "paracord::email_verification",
-            user_id,
-            error = %err,
-            "Failed to persist email verification token"
-        );
-        return;
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(err) => {
+            tracing::error!(target: "paracord::email_verification", user_id, error = %err,
+                "Failed to persist email verification token");
+            return;
+        }
     }
 
     let Some(server_origin) =
@@ -1362,6 +1362,57 @@ pub(crate) async fn issue_auth_session(
     Ok(prepared.response)
 }
 
+/// Keep credential verification current until session creation commits. Every
+/// primary-login path shares the account lock used by credential changes and
+/// MFA enrollment, preventing a completed revocation from being followed by a
+/// session authorized against an earlier password, key, or MFA configuration.
+struct PrimaryLoginSnapshot<'a> {
+    user_id: i64,
+    email: &'a str,
+    public_key: Option<&'a str>,
+    primary_credential: &'a str,
+    public_key_login: bool,
+    require_verified_email: bool,
+}
+
+async fn issue_credential_auth_session(
+    state: &AppState,
+    snapshot: PrimaryLoginSnapshot<'_>,
+    headers: &HeaderMap,
+    peer_ip: Option<&str>,
+) -> Result<AuthSessionResponse, ApiError> {
+    let mut tx = state
+        .db
+        .begin()
+        .await
+        .map_err(|e| ApiError::Internal(e.into()))?;
+    if !paracord_db::mfa::lock_login_credentials(
+        &mut tx,
+        snapshot.user_id,
+        snapshot.email,
+        snapshot.primary_credential,
+        snapshot.public_key_login,
+        None,
+        snapshot.require_verified_email,
+    )
+    .await?
+    {
+        return Err(ApiError::Unauthorized);
+    }
+    let prepared = prepare_auth_session(
+        state,
+        snapshot.user_id,
+        snapshot.public_key,
+        headers,
+        peer_ip,
+    )?;
+    prepared.persist(&mut tx).await?;
+    tx.commit()
+        .await
+        .map_err(|e| ApiError::Internal(e.into()))?;
+    Ok(prepared.response)
+}
+
 /// What a login path must do once the primary credential has checked out but
 /// before a session is minted.
 enum LoginGate {
@@ -1387,6 +1438,9 @@ async fn apply_login_gates(
     state: &AppState,
     user_id: i64,
     email_verified: bool,
+    email: &str,
+    primary_credential: &str,
+    public_key_login: bool,
 ) -> Result<LoginGate, ApiError> {
     if state.config.require_email_verification && !email_verified {
         return Err(ApiError::BadRequest(
@@ -1397,9 +1451,21 @@ async fn apply_login_gates(
     let mfa_config = paracord_db::mfa::get_mfa_config(&state.db, user_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    if mfa_config.is_some_and(|config| config.enabled) {
+    if let Some(config) = mfa_config.filter(|config| config.enabled) {
         let ticket = Uuid::new_v4().to_string();
-        state.mfa_tickets.insert(ticket.clone(), user_id).await;
+        state
+            .mfa_tickets
+            .insert(
+                ticket.clone(),
+                paracord_core::auth::MfaLoginTicket {
+                    user_id,
+                    primary_credential_hash: sha256_hex(primary_credential),
+                    public_key_login,
+                    email: email.to_owned(),
+                    totp_secret_hash: sha256_hex(&config.totp_secret),
+                },
+            )
+            .await;
         return Ok(LoginGate::MfaRequired(ticket));
     }
 
@@ -1489,8 +1555,7 @@ async fn reauthenticate_for_credential_change(
         ));
     }
 
-    let totp_secret = decrypt_totp_secret(state, &mfa_config.totp_secret)?;
-    if verify_totp_code(user_id, &totp_secret, code, &user.email)? {
+    if verify_totp_code(state, &mfa_config, code, &user.email).await? {
         return Ok(user.password_hash);
     }
 
@@ -1703,8 +1768,15 @@ pub(crate) async fn auto_join_public_spaces(
         })
         .take(MAX_AUTO_JOIN_SPACES)
     {
-        let _ = paracord_db::members::add_member(&state.db, user_id, space.id).await;
-        let _ = paracord_db::roles::add_member_role(&state.db, user_id, space.id, space.id).await;
+        if paracord_db::members::add_member(&state.db, user_id, space.id)
+            .await
+            .is_ok()
+        {
+            let _ =
+                paracord_db::roles::add_member_role(&state.db, user_id, space.id, space.id).await;
+            state.member_index.add_member(space.id, user_id);
+            crate::routes::members::federation_announce_local_join(state, space.id, user_id);
+        }
     }
     Ok(())
 }
@@ -2038,10 +2110,16 @@ pub async fn register(
     }
 
     let (token, access_cookie, refresh_cookie, csrf_cookie, session_id, raw_refresh) =
-        issue_auth_session(
+        issue_credential_auth_session(
             &state,
-            user.id,
-            user.public_key.as_deref(),
+            PrimaryLoginSnapshot {
+                user_id: user.id,
+                email: &user.email,
+                public_key: user.public_key.as_deref(),
+                primary_credential: &password_hash,
+                public_key_login: false,
+                require_verified_email: false,
+            },
             &headers,
             Some(peer_ip.as_str()),
         )
@@ -2058,72 +2136,16 @@ pub async fn register(
     )
     .await;
 
-    // Generate email verification token if required
     if state.config.require_email_verification && !normalized_email.is_empty() {
-        let verify_token = random_token_hex(32);
-        let verify_token_hash = sha256_hex(&verify_token);
-        let verify_expires = Utc::now() + Duration::hours(EMAIL_VERIFY_TOKEN_TTL_HOURS);
-        let _ = paracord_db::users::create_email_verification_token(
-            &state.db,
+        dispatch_email_verification(
+            &state,
             user.id,
-            &verify_token_hash,
-            verify_expires,
-        )
-        .await;
-        let verify_url = resolve_outbound_link_origin(
-            state.config.public_url.as_deref(),
+            &user.username,
+            &resolved_email,
             &headers,
             Some(peer_ip.as_str()),
         )
-        .map(|origin| format!("{}/login?verify_token={}", origin, verify_token));
-        match verify_url {
-            None => {
-                tracing::warn!(
-                    target: "paracord::email_verification",
-                    user_id = user.id,
-                    username = %user.username,
-                    email = %resolved_email,
-                    "Email verification link skipped: no trusted public origin (set public_url or trust a proxy)"
-                );
-            }
-            Some(verify_url) => {
-                let subject = "Verify your Paracord email";
-                let body = format!(
-                    "Hi {},\n\nWelcome to Paracord. Verify your email by opening this link:\n{}\n\nThis link expires in {} hours.\n\nIf you did not create this account, ignore this message.",
-                    user.username, verify_url, EMAIL_VERIFY_TOKEN_TTL_HOURS
-                );
-                match send_transactional_email(&resolved_email, subject, &body).await {
-                    Ok(true) => {
-                        tracing::info!(
-                            target: "paracord::email_verification",
-                            user_id = user.id,
-                            username = %user.username,
-                            email = %resolved_email,
-                            "Sent email verification message"
-                        );
-                    }
-                    Ok(false) => {
-                        tracing::warn!(
-                            target: "paracord::email_verification",
-                            user_id = user.id,
-                            username = %user.username,
-                            email = %resolved_email,
-                            "Email verification SMTP delivery skipped (recipient or SMTP config unavailable)"
-                        );
-                    }
-                    Err(err) => {
-                        tracing::error!(
-                            target: "paracord::email_verification",
-                            user_id = user.id,
-                            username = %user.username,
-                            email = %resolved_email,
-                            error = %err,
-                            "Failed to send email verification message"
-                        );
-                    }
-                }
-            }
-        }
+        .await;
     }
 
     auth_guard_record_success(
@@ -2289,7 +2311,16 @@ pub async fn login(
     // Email verification and MFA are applied by the shared gate so this path and
     // the public-key path (`verify`) enforce exactly the same rules. The gate
     // fails closed on a database error rather than treating it as "no MFA".
-    match apply_login_gates(&state, user.id, user.email_verified).await {
+    match apply_login_gates(
+        &state,
+        user.id,
+        user.email_verified,
+        &user.email,
+        &user.password_hash,
+        false,
+    )
+    .await
+    {
         Ok(LoginGate::Proceed) => {}
         Ok(LoginGate::MfaRequired(ticket)) => {
             // Correct credentials should clear auth-guard counters even though
@@ -2318,10 +2349,16 @@ pub async fn login(
     }
 
     let (token, access_cookie, refresh_cookie, csrf_cookie, session_id, raw_refresh) =
-        issue_auth_session(
+        issue_credential_auth_session(
             &state,
-            user.id,
-            user.public_key.as_deref(),
+            PrimaryLoginSnapshot {
+                user_id: user.id,
+                email: &user.email,
+                public_key: user.public_key.as_deref(),
+                primary_credential: &user.password_hash,
+                public_key_login: false,
+                require_verified_email: state.config.require_email_verification,
+            },
             &headers,
             Some(peer_ip.as_str()),
         )
@@ -2861,30 +2898,27 @@ pub async fn forgot_password(
         let state = task_state;
         let headers = task_headers;
 
-        // Invalidate any existing tokens for this user, then create a new one.
-        let _ = paracord_db::password_reset::invalidate_user_reset_tokens(&state.db, user.id).await;
-
         let raw_token = random_token_hex(32);
         let token_hash = sha256_hex(&raw_token);
         let now = Utc::now();
         let expires_at = now + Duration::minutes(RESET_TOKEN_TTL_MINUTES);
 
-        if let Err(err) = paracord_db::password_reset::create_reset_token(
+        match paracord_db::password_reset::create_reset_token_for_address(
             &state.db,
             &token_hash,
             user.id,
+            &user.email,
             expires_at,
         )
         .await
         {
-            tracing::error!(
-                target: "paracord::password_reset",
-                user_id = user.id,
-                username = %user.username,
-                error = %err,
-                "Failed to create password reset token"
-            );
-            return;
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(err) => {
+                tracing::error!(target: "paracord::password_reset", user_id = user.id,
+                    error = %err, "Failed to create password reset token");
+                return;
+            }
         }
 
         // Only embed a clickable reset link when we can resolve a trusted origin;
@@ -3077,15 +3111,19 @@ pub async fn verify_email(
         ));
     };
 
-    // Set user as email-verified
-    paracord_db::users::set_email_verified(&state.db, token_row.user_id, true)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-
-    // Clean up all verification tokens for this user
-    let _ =
-        paracord_db::users::delete_email_verification_tokens_for_user(&state.db, token_row.user_id)
-            .await;
+    if !paracord_db::users::consume_email_verification_token(
+        &state.db,
+        token_row.user_id,
+        &token_hash,
+        now,
+    )
+    .await
+    .map_err(|e| ApiError::Internal(e.into()))?
+    {
+        return Err(ApiError::BadRequest(
+            "Invalid or expired verification token".into(),
+        ));
+    }
 
     security::log_security_event(
         &state,
@@ -3115,11 +3153,6 @@ const TOTP_STEP_SECONDS: u64 = 30;
 /// Accepted clock drift, in steps, in either direction. Must match the skew
 /// handed to `totp_rs::TOTP`.
 const TOTP_SKEW_STEPS: u64 = 1;
-/// How long a consumed TOTP step is remembered. Comfortably longer than the
-/// ±1-step acceptance window so a replay can never outlive the record.
-const TOTP_REPLAY_RETENTION_SECONDS: i64 = 300;
-const TOTP_REPLAY_PRUNE_INTERVAL: u64 = 256;
-
 /// Encrypt a TOTP secret before storing in the database. In production
 /// (public_url configured) at-rest encryption is required; dev may store plaintext.
 fn encrypt_totp_secret(state: &AppState, plaintext_base32: &str) -> Result<String, ApiError> {
@@ -3213,82 +3246,28 @@ fn matching_totp_step(totp: &totp_rs::TOTP, code: &str, now_secs: u64) -> Option
     })
 }
 
-/// Per-user high-water mark of accepted TOTP steps: `user_id -> (step, seen_at)`.
-///
-/// RFC 6238 §5.2 requires a one-time-password to be accepted at most once.
-/// Without this, a code observed by an attacker (phishing relay, shoulder-surf,
-/// clipboard or keylogger capture) stays valid for the whole ±1-step window —
-/// roughly 90 seconds — and replaying it completes a login.
-///
-/// Steps advance monotonically with wall-clock time, so a single high-water mark
-/// per user is enough: anything at or below it has already been spent. Entries
-/// are pruned once they age past the acceptance window.
-static TOTP_LAST_ACCEPTED_STEP: OnceLock<Mutex<HashMap<i64, (u64, i64)>>> = OnceLock::new();
-static TOTP_REPLAY_OP_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-fn totp_last_accepted_steps() -> &'static Mutex<HashMap<i64, (u64, i64)>> {
-    TOTP_LAST_ACCEPTED_STEP.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-/// Consume `step` for `user_id`, returning false when it has already been used.
-///
-/// This is process-local state: it enforces single-use within the running
-/// server, which covers the whole acceptance window for a single-instance
-/// deployment and degrades safely (a restart mid-window loses at most one
-/// user's high-water mark).
-///
-/// Making it durable — across restarts and across a horizontally scaled
-/// deployment — needs one DB-side addition, deliberately left to the crate that
-/// owns the schema:
-///   * `mfa_configs.last_used_step BIGINT NOT NULL DEFAULT 0`
-///   * `paracord_db::mfa::claim_totp_step(pool, user_id, step) -> Result<bool>`
-///     implemented as a compare-and-set —
-///     `UPDATE mfa_configs SET last_used_step = $2
-///      WHERE user_id = $1 AND last_used_step < $2` — returning
-///     `rows_affected() == 1`.
-///
-/// This function then becomes the fallback used when that call is unavailable.
-fn claim_totp_step(user_id: i64, step: u64, now: i64) -> bool {
-    let mut steps = totp_last_accepted_steps()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-
-    let op = TOTP_REPLAY_OP_COUNTER
-        .fetch_add(1, Ordering::Relaxed)
-        .saturating_add(1);
-    if op % TOTP_REPLAY_PRUNE_INTERVAL == 0 {
-        steps.retain(|_, (_, seen_at)| {
-            now.saturating_sub(*seen_at) <= TOTP_REPLAY_RETENTION_SECONDS
-        });
-    }
-
-    match steps.get(&user_id) {
-        Some((last_step, _)) if *last_step >= step => false,
-        _ => {
-            steps.insert(user_id, (step, now));
-            true
-        }
-    }
-}
-
-/// Verify a TOTP code for `user_id` and consume its step so the same code cannot
-/// be presented twice inside the acceptance window.
-fn verify_totp_code(
-    user_id: i64,
-    secret_base32: &str,
+/// Verify a code and atomically consume its step in the shared database. Bind
+/// consumption to the stored secret so replacing a pending setup cannot cause
+/// a code verified against the old secret to authorize the new one.
+async fn verify_totp_code(
+    state: &AppState,
+    config: &paracord_db::mfa::MfaConfigRow,
     code: &str,
     account_name: &str,
 ) -> Result<bool, ApiError> {
-    let totp = totp_for_secret(secret_base32, account_name)?;
+    let secret = decrypt_totp_secret(state, &config.totp_secret)?;
+    let totp = totp_for_secret(&secret, account_name)?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    // Allow 1 step (30s) of drift in either direction
     let Some(step) = matching_totp_step(&totp, code, now) else {
         return Ok(false);
     };
-    Ok(claim_totp_step(user_id, step, now as i64))
+    let step = i64::try_from(step).map_err(|_| ApiError::Unauthorized)?;
+    paracord_db::mfa::claim_totp_step(&state.db, config.user_id, &config.totp_secret, step)
+        .await
+        .map_err(|e| ApiError::Internal(e.into()))
 }
 
 fn generate_backup_codes() -> Vec<String> {
@@ -3401,16 +3380,10 @@ pub async fn mfa_verify(
         return Err(ApiError::BadRequest("MFA is already enabled".into()));
     }
 
-    let totp_secret = decrypt_totp_secret(&state, &mfa_config.totp_secret)?;
-    let valid = verify_totp_code(user.id, &totp_secret, &body.code, &user.email)?;
+    let valid = verify_totp_code(&state, &mfa_config, &body.code, &user.email).await?;
     if !valid {
         return Err(ApiError::BadRequest("Invalid TOTP code".into()));
     }
-
-    // Enable MFA
-    paracord_db::mfa::enable_mfa(&state.db, user.id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
     // Generate and store backup codes
     let backup_codes = generate_backup_codes();
@@ -3419,9 +3392,19 @@ pub async fn mfa_verify(
         .map(|code| sha256_hex(&normalize_backup_code(code)))
         .collect();
 
-    paracord_db::mfa::store_backup_codes(&state.db, user.id, &code_hashes)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    if !paracord_db::mfa::enable_mfa_with_backup_codes(
+        &state.db,
+        user.id,
+        &mfa_config.totp_secret,
+        &code_hashes,
+    )
+    .await
+    .map_err(|e| ApiError::Internal(e.into()))?
+    {
+        return Err(ApiError::Conflict(
+            "MFA setup changed; verify the current setup".into(),
+        ));
+    }
 
     security::log_security_event(
         &state,
@@ -3468,8 +3451,7 @@ pub async fn mfa_disable(
     let normalized_code = normalize_backup_code(&body.code);
     let code_hash = sha256_hex(&normalized_code);
 
-    let totp_secret = decrypt_totp_secret(&state, &mfa_config.totp_secret)?;
-    let valid_totp = verify_totp_code(user.id, &totp_secret, &body.code, &user.email)?;
+    let valid_totp = verify_totp_code(&state, &mfa_config, &body.code, &user.email).await?;
     let valid_backup = if !valid_totp {
         paracord_db::mfa::consume_backup_code(&state.db, user.id, &code_hash, now)
             .await
@@ -3482,9 +3464,14 @@ pub async fn mfa_disable(
         return Err(ApiError::BadRequest("Invalid code".into()));
     }
 
-    paracord_db::mfa::disable_mfa(&state.db, user.id)
+    if !paracord_db::mfa::disable_mfa_for_secret(&state.db, user.id, &mfa_config.totp_secret)
         .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        .map_err(|e| ApiError::Internal(e.into()))?
+    {
+        return Err(ApiError::Conflict(
+            "MFA configuration changed; verify the current setup".into(),
+        ));
+    }
 
     security::log_security_event(
         &state,
@@ -3549,11 +3536,12 @@ pub async fn mfa_login(
     // resolved account, never on the attacker-supplied ticket. Keying on the
     // ticket would let an attacker who knows a victim's ticket drive the failure
     // counter and trip the lockout that invalidates that ticket.
-    let user_id = state
+    let ticket = state
         .mfa_tickets
         .get(&body.ticket)
         .await
         .ok_or(ApiError::BadRequest("Invalid or expired MFA ticket".into()))?;
+    let user_id = ticket.user_id;
 
     let account_hint = user_id.to_string();
 
@@ -3576,12 +3564,34 @@ pub async fn mfa_login(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::BadRequest("MFA not configured".into()))?;
 
-    // Decrypt the TOTP secret (handles both encrypted and legacy plaintext)
-    let totp_secret = decrypt_totp_secret(&state, &mfa_config.totp_secret)?;
+    let current_auth = paracord_db::users::get_user_auth_by_id(&state.db, user_id)
+        .await
+        .map_err(|e| ApiError::Internal(e.into()))?
+        .ok_or(ApiError::Unauthorized)?;
+    let primary_credential = if ticket.public_key_login {
+        current_auth.public_key.as_deref().unwrap_or_default()
+    } else {
+        &current_auth.password_hash
+    };
+    if !mfa_config.enabled
+        || sha256_hex(primary_credential) != ticket.primary_credential_hash
+        || current_auth.email != ticket.email
+        || sha256_hex(&mfa_config.totp_secret) != ticket.totp_secret_hash
+    {
+        state.mfa_tickets.remove(&body.ticket).await;
+        return Err(ApiError::BadRequest(
+            "MFA configuration changed; log in again".into(),
+        ));
+    }
+    if state.config.require_email_verification && !user.email_verified {
+        return Err(ApiError::BadRequest(
+            "Email verification required before logging in".into(),
+        ));
+    }
 
     // Try TOTP code first
     let code = body.code.trim();
-    let valid_totp = verify_totp_code(user_id, &totp_secret, code, &user.email)?;
+    let valid_totp = verify_totp_code(&state, &mfa_config, code, &user.email).await?;
 
     if !valid_totp {
         // Try as backup code
@@ -3622,7 +3632,9 @@ pub async fn mfa_login(
     }
 
     // Success: remove the ticket (single-use on success) and clear rate-limit state
-    state.mfa_tickets.remove(&body.ticket).await;
+    if state.mfa_tickets.remove(&body.ticket).await.is_none() {
+        return Err(ApiError::BadRequest("Invalid or expired MFA ticket".into()));
+    }
     auth_guard_record_success(
         &state,
         &headers,
@@ -3631,15 +3643,41 @@ pub async fn mfa_login(
     )
     .await;
 
+    let prepared = prepare_auth_session(
+        &state,
+        user.id,
+        user.public_key.as_deref(),
+        &headers,
+        Some(peer_ip.as_str()),
+    )?;
+    let mut transaction = state
+        .db
+        .begin()
+        .await
+        .map_err(|e| ApiError::Internal(e.into()))?;
+    // Recheck the primary credential while holding the account lock until the
+    // session commits. A password reset racing second-factor verification then
+    // either rejects this login or revokes its session in the reset transaction.
+    if !paracord_db::mfa::lock_login_credentials(
+        &mut transaction,
+        user_id,
+        &ticket.email,
+        primary_credential,
+        ticket.public_key_login,
+        Some(&mfa_config.totp_secret),
+        state.config.require_email_verification,
+    )
+    .await?
+    {
+        return Err(ApiError::Unauthorized);
+    }
+    prepared.persist(&mut transaction).await?;
+    transaction
+        .commit()
+        .await
+        .map_err(|e| ApiError::Internal(e.into()))?;
     let (token, access_cookie, refresh_cookie, csrf_cookie, session_id, raw_refresh) =
-        issue_auth_session(
-            &state,
-            user.id,
-            user.public_key.as_deref(),
-            &headers,
-            Some(peer_ip.as_str()),
-        )
-        .await?;
+        prepared.response;
 
     security::log_security_event(
         &state,
@@ -3813,7 +3851,7 @@ pub async fn verify(
     // even if it is still present in the cache.
     let now = Utc::now().timestamp();
     if now - issued_at > CHALLENGE_MAX_AGE_SECONDS
-        || (body.timestamp - issued_at).abs() > CHALLENGE_SKEW_SECONDS
+        || body.timestamp.abs_diff(issued_at) > CHALLENGE_SKEW_SECONDS as u64
     {
         auth_guard_record_failure(
             &state,
@@ -3853,10 +3891,11 @@ pub async fn verify(
     }
 
     // Look up or create user by public key.
-    let user = match paracord_db::users::get_user_by_public_key(&state.db, &body.public_key)
+    let existing_user = paracord_db::users::get_user_by_public_key(&state.db, &body.public_key)
         .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
-    {
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let require_verified_email = existing_user.is_some() && state.config.require_email_verification;
+    let user = match existing_user {
         Some(user) => {
             // A key is a login credential, not a bypass. An existing account
             // reached through one must clear exactly the gates the password path
@@ -3869,7 +3908,16 @@ pub async fn verify(
             // placeholder address that can never be verified, so gating it would
             // lock every key-registered account out permanently. That matches
             // `register`, which also issues a session before verification.
-            match apply_login_gates(&state, user.id, user.email_verified).await {
+            match apply_login_gates(
+                &state,
+                user.id,
+                user.email_verified,
+                &user.email,
+                user.public_key.as_deref().unwrap_or_default(),
+                true,
+            )
+            .await
+            {
                 Ok(LoginGate::Proceed) => {}
                 Ok(LoginGate::MfaRequired(ticket)) => {
                     // A valid signature is a correct credential, so clear the
@@ -3928,10 +3976,16 @@ pub async fn verify(
     };
 
     let (token, access_cookie, refresh_cookie, csrf_cookie, session_id, raw_refresh) =
-        issue_auth_session(
+        issue_credential_auth_session(
             &state,
-            user.id,
-            user.public_key.as_deref(),
+            PrimaryLoginSnapshot {
+                user_id: user.id,
+                email: &user.email,
+                public_key: user.public_key.as_deref(),
+                primary_credential: user.public_key.as_deref().ok_or(ApiError::Unauthorized)?,
+                public_key_login: true,
+                require_verified_email,
+            },
             &headers,
             Some(peer_ip.as_str()),
         )
@@ -3978,13 +4032,13 @@ pub async fn verify(
 mod tests {
     use super::{
         auth_guard_hard_blocked, auth_guard_keys, build_csrf_cookie, build_refresh_cookie,
-        claim_totp_step, decayable_shared_guard_keys, decrypt_totp_secret_with_cryptor,
-        get_cookie_value, matching_totp_step, normalize_email_for_auth, parse_login_form_value,
+        decayable_shared_guard_keys, decrypt_totp_secret_with_cryptor, get_cookie_value,
+        matching_totp_step, normalize_email_for_auth, parse_login_form_value,
         parse_login_json_value, parse_login_request, parse_username_with_discriminator,
         request_can_use_refresh_cookie, resolve_outbound_link_origin, resolve_server_origin,
         should_use_secure_cookie_with_public_url, synthesized_local_email, totp_for_secret,
-        username_login_effective, verify_totp_code, HeaderMap, LoginRequest,
-        AUTH_GUARD_SHARED_DECAY_IDLE_SECONDS, TOTP_STEP_SECONDS,
+        username_login_effective, HeaderMap, LoginRequest, AUTH_GUARD_SHARED_DECAY_IDLE_SECONDS,
+        TOTP_STEP_SECONDS,
     };
     use axum::http::{header, HeaderValue};
     use paracord_db::rate_limits::AuthGuardStateRow;
@@ -4109,42 +4163,6 @@ mod tests {
         };
         let decayed = decayable_shared_guard_keys(&[idle, locked], now);
         assert_eq!(decayed, vec!["ip:203.0.113.4".to_string()]);
-    }
-
-    #[test]
-    fn totp_step_is_single_use_within_the_acceptance_window() {
-        // RFC 6238 §5.2: a code may be accepted at most once. An attacker who
-        // observes one has ~90s of ±1-step window to replay it.
-        let user = -9_001;
-        let step = 57_000_000_u64;
-        assert!(claim_totp_step(user, step, 1_710_000_000));
-        assert!(!claim_totp_step(user, step, 1_710_000_010));
-        // An earlier step inside the same window is spent too.
-        assert!(!claim_totp_step(user, step - 1, 1_710_000_010));
-        // The next step still works, and a different user is unaffected.
-        assert!(claim_totp_step(user, step + 1, 1_710_000_030));
-        assert!(claim_totp_step(-9_011, step, 1_710_000_030));
-    }
-
-    #[test]
-    fn totp_code_is_rejected_on_replay() {
-        let secret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
-        let account = "replay@example.com";
-        let totp = totp_for_secret(secret, account).expect("totp");
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock")
-            .as_secs();
-        let code = totp.generate(now);
-        let user = -9_002;
-
-        assert!(verify_totp_code(user, secret, &code, account).expect("first verify"));
-        assert!(
-            !verify_totp_code(user, secret, &code, account).expect("replay verify"),
-            "a TOTP code must not be accepted twice inside its acceptance window"
-        );
-        // Same code, different account: still valid (the guard is per user).
-        assert!(verify_totp_code(-9_003, secret, &code, account).expect("other user"));
     }
 
     #[test]

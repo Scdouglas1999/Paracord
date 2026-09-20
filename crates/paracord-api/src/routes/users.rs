@@ -1274,20 +1274,25 @@ pub async fn change_email(
         }
     }
 
-    // Changing the email invalidates any prior verification: the new address has
-    // not been proven to belong to this account, so email_verified is reset.
-    let updated = paracord_db::users::update_user_email_unverified(
-        &state.db,
+    let session_id = auth.session_id.as_deref().ok_or(ApiError::Unauthorized)?;
+    let mut transaction = state
+        .db
+        .begin()
+        .await
+        .map_err(|e| ApiError::Internal(e.into()))?;
+    let updated = paracord_db::users::change_email_credential_in_transaction(
+        &mut transaction,
         auth.user_id,
+        session_id,
+        &user.password_hash,
         &normalized_email,
     )
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    .await?;
+    transaction
+        .commit()
+        .await
+        .map_err(|e| ApiError::Internal(e.into()))?;
 
-    // Invalidate any outstanding verification tokens issued for the old address,
-    // then kick off a fresh verification email when the server requires it.
-    let _ = paracord_db::users::delete_email_verification_tokens_for_user(&state.db, auth.user_id)
-        .await;
     if state.config.require_email_verification {
         crate::routes::auth::dispatch_email_verification(
             &state,
@@ -1299,16 +1304,6 @@ pub async fn change_email(
         )
         .await;
     }
-
-    let now = chrono::Utc::now();
-    let _ = paracord_db::sessions::revoke_all_user_sessions_except(
-        &state.db,
-        auth.user_id,
-        auth.session_id.as_deref(),
-        "email_changed",
-        now,
-    )
-    .await;
 
     security::log_security_event(
         &state,

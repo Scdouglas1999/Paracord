@@ -25,7 +25,11 @@ struct TestContext {
 
 impl TestContext {
     async fn new() -> anyhow::Result<Self> {
-        let test_app = build_test_app(TestAppOptions::default()).await?;
+        Self::with_options(TestAppOptions::default()).await
+    }
+
+    async fn with_options(options: TestAppOptions) -> anyhow::Result<Self> {
+        let test_app = build_test_app(options).await?;
         let owner_token = create_authenticated_user_token(
             &test_app.db,
             &test_app.jwt_secret,
@@ -120,6 +124,8 @@ impl TestContext {
 
 struct BotApp {
     app_id: String,
+    token: String,
+    user_id: i64,
 }
 
 async fn create_bot_app(
@@ -145,11 +151,331 @@ async fn create_bot_app(
         "create bot app failed: {payload}"
     );
     Ok(BotApp {
+        token: payload["token"].as_str().context("bot token")?.to_owned(),
+        user_id: payload["bot_user_id"]
+            .as_str()
+            .context("bot user id")?
+            .parse()?,
         app_id: payload["id"]
             .as_str()
             .context("app id should be string")?
             .to_string(),
     })
+}
+
+#[tokio::test]
+async fn reducing_bot_install_permissions_revokes_cached_channel_access() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let guild = ctx.create_guild("bot reauthorization").await?;
+    let channel = ctx.create_text_channel(guild, "private").await?;
+    let grant = Permissions::VIEW_CHANNEL | Permissions::READ_MESSAGE_HISTORY;
+    let bot = create_bot_app(&ctx, "ReauthorizeBot", &grant.bits().to_string()).await?;
+    let (status, body) = ctx
+        .request(
+            Method::POST,
+            "/api/v1/oauth2/authorize",
+            Some(json!({
+                "application_id": bot.app_id, "guild_id": guild.to_string(),
+            })),
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "initial install: {body}");
+    paracord_db::roles::add_member_role(&ctx.db, bot.user_id, guild, guild).await?;
+    let request = || {
+        Request::builder()
+            .method("GET")
+            .uri(format!("/api/v1/channels/{channel}/messages"))
+            .header("authorization", format!("Bot {}", bot.token))
+            .body(Body::empty())
+            .unwrap()
+    };
+    assert_eq!(dispatch_json(&ctx.app, request()).await?.0, StatusCode::OK);
+
+    let (status, body) = ctx
+        .request(
+            Method::POST,
+            "/api/v1/oauth2/authorize",
+            Some(json!({
+                "application_id": bot.app_id, "guild_id": guild.to_string(), "permissions": "0",
+            })),
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "reauthorization: {body}");
+    let (status, body) = dispatch_json(&ctx.app, request()).await?;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "old grant must not remain cached: {body}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn existing_members_cannot_trigger_raid_lockdown_by_replaying_an_invite() -> anyhow::Result<()>
+{
+    let ctx = TestContext::new().await?;
+    let guild = ctx.create_guild("raid counter").await?;
+    let channel: i64 = ctx.create_text_channel(guild, "entry").await?.parse()?;
+    let owner = ctx.user_id(&ctx.owner_token).await?;
+    let (member_token, member) = ctx.add_user("existinginvite").await?;
+    paracord_db::members::add_member(&ctx.db, member, guild).await?;
+    paracord_db::invites::create_invite(&ctx.db, "raid-replay", guild, channel, owner, None, None)
+        .await?;
+    let settings = json!({"auto_mod": {"anti_raid": {
+        "enabled": true, "join_threshold": 2, "join_window_seconds": 600,
+        "lockdown_minutes": 240,
+    }}})
+    .to_string();
+    paracord_db::guilds::update_guild(&ctx.db, guild, None, None, None, None, Some(&settings))
+        .await?;
+    for _ in 0..4 {
+        let (status, body) = ctx
+            .request(
+                Method::POST,
+                "/api/v1/invites/raid-replay",
+                Some(json!({})),
+                &member_token,
+            )
+            .await?;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "replaying an existing membership must be idempotent: {body}"
+        );
+    }
+    let updated = paracord_db::guilds::get_guild(&ctx.db, guild)
+        .await?
+        .unwrap();
+    let settings: Value = serde_json::from_str(updated.bot_settings.as_deref().unwrap())?;
+    assert!(settings["auto_mod"]["anti_raid"]["lockdown_until_ms"].is_null());
+
+    let (outsider_token, outsider) = ctx.add_user("inviteoutsider").await?;
+    let settings = json!({"auto_mod": {
+        "anti_raid": {"enabled": true, "join_threshold": 2, "join_window_seconds": 600, "lockdown_minutes": 240},
+        "verification_gate": {"enabled": true, "require_ack": true},
+    }}).to_string();
+    paracord_db::guilds::update_guild(&ctx.db, guild, None, None, None, None, Some(&settings))
+        .await?;
+    for _ in 0..4 {
+        let (status, body) = ctx
+            .request(
+                Method::POST,
+                "/api/v1/invites/raid-replay",
+                Some(json!({})),
+                &outsider_token,
+            )
+            .await?;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(
+            body.to_string().contains("Verification acknowledgement"),
+            "{body}"
+        );
+    }
+    // A real join still succeeds after rejected attempts, and repeated actual
+    // joins by the same account count once rather than triggering a fake raid.
+    for _ in 0..3 {
+        let (status, body) = ctx
+            .request(
+                Method::POST,
+                "/api/v1/invites/raid-replay",
+                Some(json!({"verification_ack": true})),
+                &outsider_token,
+            )
+            .await?;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "a single account is not a raid: {body}"
+        );
+        paracord_db::members::remove_member(&ctx.db, outsider, guild).await?;
+    }
+    // A second distinct joining account reaches the configured threshold.
+    let (other_token, _) = ctx.add_user("otherinviteoutsider").await?;
+    let (status, body) = ctx
+        .request(
+            Method::POST,
+            "/api/v1/invites/raid-replay",
+            Some(json!({"verification_ack": true})),
+            &other_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body.to_string().contains("Raid protection triggered"),
+        "legitimate raid detection must remain active: {body}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn concurrent_distinct_raid_claims_preserve_the_threshold_for_duplicates(
+) -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    use paracord_db::rate_limits::increment_distinct_window_counter as count;
+    assert_eq!(count(&ctx.db, "raid:distinct-test", 1, 100, 30).await?, 1);
+    let (first, duplicate) = tokio::join!(
+        count(&ctx.db, "raid:distinct-test", 2, 100, 30),
+        count(&ctx.db, "raid:distinct-test", 2, 100, 30),
+    );
+    assert_eq!(first?, 2);
+    assert_eq!(
+        duplicate?, 2,
+        "a duplicate must observe the reached lockdown threshold"
+    );
+    assert_eq!(count(&ctx.db, "raid:distinct-test", 1, 100, 30).await?, 2);
+    assert_eq!(count(&ctx.db, "raid:distinct-test", 1, 101, 30).await?, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn concurrent_first_invite_accepts_consume_one_use_and_emit_one_join() -> anyhow::Result<()> {
+    let ctx = TestContext::with_options(TestAppOptions {
+        database_connections: 8,
+        ..Default::default()
+    })
+    .await?;
+    let guild = ctx.create_guild("atomic invite").await?;
+    let channel: i64 = ctx.create_text_channel(guild, "entry").await?.parse()?;
+    let owner = ctx.user_id(&ctx.owner_token).await?;
+    let (token, member) = ctx.add_user("paralleljoin").await?;
+    paracord_db::invites::create_invite(
+        &ctx.db,
+        "parallel-accept",
+        guild,
+        channel,
+        owner,
+        Some(4),
+        None,
+    )
+    .await?;
+    let mut observer = ctx
+        ._test_app
+        .event_bus
+        .register_session(format!("invite-observer-{guild}"), owner, &[guild])
+        .expect("observer registration");
+
+    // All requests start together while the account is not a member. The old
+    // read/use/insert sequence let them each consume a use before the first
+    // membership insert reached the pool, exhausting this four-use invite.
+    let responses = futures_util::future::join_all((0..16).map(|_| {
+        ctx.request(
+            Method::POST,
+            "/api/v1/invites/parallel-accept",
+            Some(json!({})),
+            &token,
+        )
+    }))
+    .await;
+    let (uses,): (i32,) = sqlx::query_as("SELECT uses FROM invites WHERE code = 'parallel-accept'")
+        .fetch_one(&ctx.db)
+        .await?;
+    assert_eq!(
+        uses, 1,
+        "concurrent accepts by one account must consume one use"
+    );
+    for response in responses {
+        let (status, body) = response?;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "duplicate accept must remain usable: {body}"
+        );
+    }
+    let mut joins = 0;
+    while let Ok(event) = observer.try_recv() {
+        if event.event_type == "GUILD_MEMBER_ADD" && event.payload["user_id"] == member.to_string()
+        {
+            joins += 1;
+        }
+    }
+    assert_eq!(
+        joins, 1,
+        "only the committed membership insertion emits a join"
+    );
+
+    // A distinct member and a legitimate rejoin still consume another use.
+    let (other_token, _) = ctx.add_user("secondjoin").await?;
+    assert_eq!(
+        ctx.request(
+            Method::POST,
+            "/api/v1/invites/parallel-accept",
+            Some(json!({})),
+            &other_token
+        )
+        .await?
+        .0,
+        StatusCode::OK
+    );
+    paracord_db::members::remove_member(&ctx.db, member, guild).await?;
+    assert_eq!(
+        ctx.request(
+            Method::POST,
+            "/api/v1/invites/parallel-accept",
+            Some(json!({})),
+            &token
+        )
+        .await?
+        .0,
+        StatusCode::OK
+    );
+    let (uses,): (i32,) = sqlx::query_as("SELECT uses FROM invites WHERE code = 'parallel-accept'")
+        .fetch_one(&ctx.db)
+        .await?;
+    assert_eq!(uses, 3);
+    Ok(())
+}
+
+#[tokio::test]
+async fn unavailable_invite_redemption_rolls_back_reserved_membership() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let guild = ctx.create_guild("rollback invite").await?;
+    let channel: i64 = ctx.create_text_channel(guild, "entry").await?.parse()?;
+    let owner = ctx.user_id(&ctx.owner_token).await?;
+    let (_, member) = ctx.add_user("failedjoin").await?;
+    for (code, exhausted) in [("exhausted-rsv", true), ("expired-rsv", false)] {
+        paracord_db::invites::create_invite(
+            &ctx.db,
+            code,
+            guild,
+            channel,
+            owner,
+            Some(1),
+            Some(60),
+        )
+        .await?;
+        if exhausted {
+            paracord_db::invites::use_invite(&ctx.db, code).await?;
+        } else {
+            sqlx::query("UPDATE invites SET created_at = '2000-01-01 00:00:00' WHERE code = $1")
+                .bind(code)
+                .execute(&ctx.db)
+                .await?;
+        }
+        // Model expiry/exhaustion after a route's initial valid preview.
+        assert!(paracord_db::invites::redeem_invite_membership(
+            &ctx.db, code, member, guild, channel
+        )
+        .await?
+        .is_none());
+        assert!(
+            paracord_db::members::get_member(&ctx.db, member, guild)
+                .await?
+                .is_none(),
+            "failed redemption left a membership for {code}"
+        );
+        let (uses,): (i32,) = sqlx::query_as("SELECT uses FROM invites WHERE code = $1")
+            .bind(code)
+            .fetch_one(&ctx.db)
+            .await?;
+        assert_eq!(
+            uses,
+            i32::from(exhausted),
+            "failed redemption changed invite accounting"
+        );
+    }
+    Ok(())
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

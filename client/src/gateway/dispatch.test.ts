@@ -23,6 +23,7 @@ import { getTestMessagingRuntime } from '../test/messagingRuntimeMock';
 import { dispatchGatewayEvent, resolveEmojiKey } from './dispatch';
 import { useReadStateStore } from '../stores/readStateStore';
 import { GatewayEvents } from './events';
+import { useMemberStore } from '../stores/memberStore';
 import { useGuildStore } from '../stores/guildStore';
 import { refreshGuildChannelVisibility, useChannelStore } from '../stores/channelStore';
 import { getMessageStore, type MessageState } from '../stores/messageStore';
@@ -696,5 +697,33 @@ describe('CHANNEL_UPDATE and what you can still see', () => {
     // only notice somebody who just lost VIEW_CHANNEL gets.
     await dispatchGatewayEvent(SERVER, GatewayEvents.CHANNEL_UPDATE, { id: 'c1' });
     expect(refreshGuildChannelVisibility).toHaveBeenCalledWith('g1', scope);
+  });
+});
+
+
+describe('membership event completeness', () => {
+  it('refetches a discovered member with a user but no roles instead of caching a partial record', () => {
+    useAuthStore.setState({ user: { id: 'viewer' } as User });
+    const add = vi.spyOn(useMemberStore.getState(), 'addMember');
+    const fetch = vi.spyOn(useMemberStore.getState(), 'fetchMembers').mockResolvedValue(undefined);
+    try {
+      dispatchGatewayEvent(SERVER, GatewayEvents.GUILD_MEMBER_ADD, {
+        guild_id: 'g1', user: { id: 'joined', username: 'Joined' } as User,
+      });
+      expect(add).not.toHaveBeenCalled();
+      expect(fetch).toHaveBeenCalledWith('g1', { serverId: SERVER, userId: 'viewer' });
+    } finally { add.mockRestore(); fetch.mockRestore(); }
+  });
+
+  it('immediately applies a complete membership record', () => {
+    useAuthStore.setState({ user: { id: 'viewer' } as User });
+    const add = vi.spyOn(useMemberStore.getState(), 'addMember').mockImplementation(() => {});
+    const fetch = vi.spyOn(useMemberStore.getState(), 'fetchMembers').mockResolvedValue(undefined);
+    const data = { guild_id: 'g1', user: { id: 'joined', username: 'Joined' } as User, roles: ['g1'], joined_at: '2026-09-19T00:00:00Z', deaf: false, mute: false };
+    try {
+      dispatchGatewayEvent(SERVER, GatewayEvents.GUILD_MEMBER_ADD, data);
+      expect(add).toHaveBeenCalledWith('g1', data, { serverId: SERVER, userId: 'viewer' });
+      expect(fetch).not.toHaveBeenCalled();
+    } finally { add.mockRestore(); fetch.mockRestore(); }
   });
 });

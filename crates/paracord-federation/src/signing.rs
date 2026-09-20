@@ -1,4 +1,4 @@
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use rand::RngCore;
 
 use crate::{hex_decode, hex_encode, FederationError};
@@ -48,7 +48,7 @@ pub fn verify(
     let verifying_key =
         VerifyingKey::from_bytes(&pk_arr).map_err(|_| FederationError::InvalidSignature)?;
     verifying_key
-        .verify(payload, &signature)
+        .verify_strict(payload, &signature)
         .map_err(|_| FederationError::InvalidSignature)
 }
 
@@ -128,5 +128,18 @@ mod tests {
         // Valid hex but only 2 bytes, not 32.
         let result = verify(b"payload", &sig, "abcd");
         assert!(matches!(result, Err(FederationError::InvalidSignature)));
+    }
+
+    #[test]
+    fn verify_rejects_identity_key_universal_forgery() {
+        // A = identity, R = identity and S = 0 satisfies ordinary Ed25519
+        // verification for every payload, without knowledge of a private key.
+        let mut identity = [0u8; 32];
+        identity[0] = 1;
+        let mut signature = [0u8; 64];
+        signature[0] = 1;
+        for payload in [b"original".as_slice(), b"attacker-chosen"] {
+            assert!(verify(payload, &hex_encode(&signature), &hex_encode(&identity)).is_err());
+        }
     }
 }

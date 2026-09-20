@@ -454,7 +454,7 @@ test('Home follows live mention creation, edits and deletion and opens the survi
     const message = await sent.json();
     const tail = await ownerApi.post(`${BASE}/api/v1/channels/${channel.id}/messages`, { data: { content: 'Later unrelated chatter', nonce: 'real-home-tail' } });
     expect(tail.status()).toBe(201);
-    const attention = home.getByRole('region', { name: 'Needs you' });
+    const attention = home.getByRole('region', { name: 'For you' });
     await page.waitForFunction(id => (window as unknown as { attentionWire: { mentions: string[] } }).attentionWire.mentions.includes(id), message.id);
     // §7.5 names WHO, not how many: "<author> mentioned you", with the count
     // kept only when the author cannot be named (`needsYouReason`).
@@ -499,21 +499,21 @@ test('Home follows live mention creation, edits and deletion and opens the survi
     await page.goto('/app');
     await page.waitForFunction(id => (window as unknown as { attentionWire: { readyUser: string } }).attentionWire.readyUser === id, member.user.id);
     // §7.5 keeps the Needs-you section on the surface and lets it say so:
-    // "Nothing is waiting on you right now." It is no longer removed when
+    // "Nothing new for you right now." It is no longer removed when
     // empty, because an absent section cannot tell you it checked.
-    await expect(page.getByRole('main').getByRole('region', { name: 'Needs you' }).getByRole('listitem')).toHaveCount(0);
-    await expect(page.getByRole('main').getByText('Nothing is waiting on you right now.')).toBeVisible();
+    await expect(page.getByRole('main').getByRole('region', { name: 'For you' }).getByRole('listitem')).toHaveCount(0);
+    await expect(page.getByRole('main').getByText('Nothing new for you right now.')).toBeVisible();
     const finalSend = await ownerApi.post(`${BASE}/api/v1/channels/${channel.id}/messages`, { data: { content: `<@${member.user.id}> Only unread tail`, nonce: 'real-home-only-tail' } });
     expect(finalSend.status()).toBe(201);
     const finalMessage = await finalSend.json();
-    await expect(page.getByRole('main').getByRole('region', { name: 'Needs you' }).getByText(/Only unread tail/)).toBeVisible();
+    await expect(page.getByRole('main').getByRole('region', { name: 'For you' }).getByText(/Only unread tail/)).toBeVisible();
     const finalDelete = await ownerApi.delete(`${BASE}/api/v1/channels/${channel.id}/messages/${finalMessage.id}`);
     expect(finalDelete.ok(), await finalDelete.text()).toBe(true);
     // §7.5 keeps the Needs-you section on the surface and lets it say so:
-    // "Nothing is waiting on you right now." It is no longer removed when
+    // "Nothing new for you right now." It is no longer removed when
     // empty, because an absent section cannot tell you it checked.
-    await expect(page.getByRole('main').getByRole('region', { name: 'Needs you' }).getByRole('listitem')).toHaveCount(0);
-    await expect(page.getByRole('main').getByText('Nothing is waiting on you right now.')).toBeVisible();
+    await expect(page.getByRole('main').getByRole('region', { name: 'For you' }).getByRole('listitem')).toHaveCount(0);
+    await expect(page.getByRole('main').getByText('Nothing new for you right now.')).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath('home-deleted-tail-cleared.png'), fullPage: true });
 
   } finally {

@@ -8,6 +8,7 @@ use paracord_core::AppState;
 use paracord_models::permissions::Permissions;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 use crate::error::ApiError;
 use crate::middleware::AuthUser;
@@ -536,6 +537,16 @@ const MAX_SENDER_KEY_ENVELOPES: usize = 32;
 pub struct GroupSenderKeysPostRequest {
     pub epoch: i32,
     pub envelopes: Vec<GroupSenderKeyEnvelope>,
+    /// The membership the publisher minted this epoch against.
+    ///
+    /// A sender key is readable by everybody it was wrapped to, so publishing
+    /// one against a roster that has since lost a member hands the group key to
+    /// somebody who has left. The client cannot settle that on its own — its
+    /// roster is whatever it was last told — so the server, which owns
+    /// `dm_recipients`, refuses the publish outright. Optional only so an older
+    /// client fails on its own terms rather than on a deserialisation error;
+    /// see `require_current_membership`.
+    pub members_version: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -554,6 +565,45 @@ pub struct GroupSenderKeysQuery {
 pub struct GroupSenderKeyAckRequest {
     pub sender_id: Option<String>,
     pub up_to_epoch: Option<i32>,
+}
+
+/// A stable name for one group's exact membership.
+///
+/// Ids only. The server owns who is in the channel; it deliberately does *not*
+/// fold in identity keys, which are the client's to pin and rotate — coupling
+/// the two would make a key rotation look like a membership change to a layer
+/// that cannot tell the difference, and would tie this digest to the client's
+/// own fingerprint serialisation.
+pub fn membership_version(recipient_ids: &[i64]) -> String {
+    let mut sorted = recipient_ids.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+    let mut hasher = Sha256::new();
+    for id in sorted {
+        hasher.update(id.to_string().as_bytes());
+        hasher.update(b",");
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+/// Refuse a publish that was minted against a membership that has since moved.
+fn require_current_membership(
+    declared: Option<&str>,
+    recipients: &[i64],
+) -> Result<(), ApiError> {
+    let current = membership_version(recipients);
+    match declared {
+        Some(value) if value == current => Ok(()),
+        Some(_) => Err(ApiError::Conflict(format!(
+            "The group's membership changed while this key was being published. Current membership version: {current}."
+        ))),
+        // A client that names no membership cannot promise it wrapped the key
+        // to the right people, and this is the one endpoint where being wrong
+        // means handing a departed member the group key.
+        None => Err(ApiError::BadRequest(
+            "A group sender key must declare the membership version it was minted against.".into(),
+        )),
+    }
 }
 
 pub async fn post_group_sender_keys(
@@ -593,6 +643,7 @@ pub async fn post_group_sender_keys(
     if !recipients.contains(&auth.user_id) {
         return Err(ApiError::Forbidden);
     }
+    require_current_membership(body.members_version.as_deref(), &recipients)?;
 
     // Deduplicate by recipient. `upsert_sender_key` conflicts on
     // (channel, sender, recipient, epoch), so a repeated recipient only ever
@@ -667,7 +718,12 @@ pub async fn get_group_sender_keys(
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
+    let recipients = paracord_db::dms::get_dm_recipient_ids(&state.db, channel_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
     Ok(Json(json!({
+        "members_version": membership_version(&recipients),
         "sender_keys": rows.into_iter().map(|row| json!({
             "id": row.id.to_string(),
             "channel_id": row.channel_id.to_string(),

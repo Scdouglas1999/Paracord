@@ -880,8 +880,38 @@ async fn reauthorize_webhook_creator(
         author_id,
     )
     .await?;
+    paracord_core::permissions::require_permission(perms, Permissions::VIEW_CHANNEL)?;
     paracord_core::permissions::require_permission(perms, Permissions::SEND_MESSAGES)?;
     Ok(perms)
+}
+
+async fn enforce_webhook_automod(
+    state: &AppState,
+    webhook: &paracord_db::webhooks::WebhookRow,
+    content: &str,
+    creator_perms: Permissions,
+) -> Result<(), ApiError> {
+    if content.trim().is_empty() {
+        return Ok(());
+    }
+    let verdict = paracord_core::automod_enforce::evaluate_message(
+        &state.db,
+        webhook.space_id,
+        webhook.channel_id,
+        webhook.creator_id.ok_or(ApiError::Forbidden)?,
+        content,
+        creator_perms,
+    )
+    .await?;
+    paracord_core::automod_enforce::apply_timeouts(&state.db, &verdict.timeouts).await;
+    if !verdict.alerts.is_empty() {
+        crate::routes::channels::dispatch_automod_alerts(state, webhook.space_id, verdict.alerts)
+            .await;
+    }
+    if let Some(reason) = verdict.blocked_reason {
+        return Err(ApiError::AutomodBlocked(reason));
+    }
+    Ok(())
 }
 
 /// Execute a webhook - no auth required, uses token in path.
@@ -990,62 +1020,30 @@ pub async fn execute_webhook(
         Some(validate_webhook_embeds(&embeds)?)
     };
 
-    // Re-authorize the webhook creator at execution time. A webhook must never
-    // be able to post as a creator who has since left the guild or lost access
-    // to the target channel, so we re-check membership and SEND_MESSAGES here
-    // (using the shared permission cache) rather than trusting the stored
-    // creator id. Reject entirely if the webhook has no recorded creator.
-    let Some(author_id) = webhook.creator_id else {
-        return Err(ApiError::Forbidden);
-    };
-    let guild = paracord_db::guilds::get_guild(&state.db, webhook.space_id)
+    let creator_perms = reauthorize_webhook_creator(&state, &webhook).await?;
+    let author_id = webhook.creator_id.ok_or(ApiError::Forbidden)?;
+    paracord_core::permissions::ensure_not_timed_out(&state.db, webhook.space_id, author_id)
+        .await?;
+    let channel = paracord_db::channels::get_channel(&state.db, webhook.channel_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
-    paracord_core::permissions::ensure_guild_member(&state.db, webhook.space_id, author_id).await?;
-    let creator_perms = paracord_core::permissions::compute_channel_permissions_cached(
-        &state.permission_cache,
-        &state.db,
-        webhook.space_id,
-        webhook.channel_id,
-        guild.owner_id,
-        author_id,
-    )
-    .await?;
-    paracord_core::permissions::require_permission(creator_perms, Permissions::SEND_MESSAGES)?;
-
-    // Run automod. This path calls `paracord_db::messages::create_message`
-    // directly, so without this a webhook token was an unfiltered write channel
-    // into a guild that enforces automod on every human send.
-    if !content.trim().is_empty() {
-        let verdict = paracord_core::automod_enforce::evaluate_message(
-            &state.db,
-            webhook.space_id,
-            webhook.channel_id,
-            author_id,
-            &content,
-            creator_perms,
-        )
-        .await?;
-        // Apply the whole verdict, not just the block. Recording
-        // `alert_channel`/`timeout_member` in the hit row while silently
-        // dropping them made the audit trail claim actions that never happened —
-        // the same defect the send path was fixed for.
-        paracord_core::automod_enforce::apply_timeouts(&state.db, &verdict.timeouts).await;
-        if !verdict.alerts.is_empty() {
-            crate::routes::channels::dispatch_automod_alerts(
-                &state,
-                webhook.space_id,
-                verdict.alerts,
-            )
-            .await;
+    if channel.channel_type == paracord_core::permissions::CHANNEL_TYPE_THREAD {
+        let (archived, locked) = channel.thread_state();
+        let can_manage =
+            creator_perms.intersects(Permissions::MANAGE_MESSAGES | Permissions::MANAGE_CHANNELS);
+        if locked && !can_manage {
+            return Err(ApiError::BadRequest(
+                "This thread is locked and cannot receive new messages".into(),
+            ));
         }
-        if let Some(reason) = verdict.blocked_reason {
-            // Match the send path: AUTOMOD_BLOCKED / 403, not a generic 400, and
-            // surface the operator's reason verbatim.
-            return Err(ApiError::AutomodBlocked(reason));
+        if archived {
+            paracord_db::channels::update_thread(&state.db, channel.id, None, Some(false), None)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
         }
     }
+    enforce_webhook_automod(&state, &webhook, &content, creator_perms).await?;
 
     // Create the message using the webhook creator as the author
     let msg_id = paracord_util::snowflake::generate(1);
@@ -1116,7 +1114,13 @@ pub async fn edit_webhook_message(
     // token holder could drive guild-wide MESSAGE_UPDATE at the global rate and
     // keep editing after the creator left the guild.
     check_webhook_rate_limit(webhook_id)?;
-    reauthorize_webhook_creator(&state, &webhook).await?;
+    let creator_perms = reauthorize_webhook_creator(&state, &webhook).await?;
+    paracord_core::permissions::ensure_not_timed_out(
+        &state.db,
+        webhook.space_id,
+        webhook.creator_id.ok_or(ApiError::Forbidden)?,
+    )
+    .await?;
 
     let owns_message =
         paracord_db::webhooks::webhook_owns_message(&state.db, webhook.id, message_id)
@@ -1150,6 +1154,17 @@ pub async fn edit_webhook_message(
         }
     }
 
+    // Validate the complete request before the first mutation. A rejected embed
+    // must never leave a content edit behind without a corresponding event.
+    let embeds_json = body
+        .embeds
+        .as_deref()
+        .map(validate_webhook_embeds)
+        .transpose()?;
+    if let Some(content) = body.content.as_deref() {
+        enforce_webhook_automod(&state, &webhook, content.trim(), creator_perms).await?;
+    }
+
     if has_content_update {
         let updated_content = body
             .content
@@ -1162,8 +1177,7 @@ pub async fn edit_webhook_message(
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     }
 
-    if let Some(embeds) = body.embeds.as_ref() {
-        let embeds_json = validate_webhook_embeds(embeds)?;
+    if let Some(embeds_json) = embeds_json {
         paracord_db::messages::update_message_embeds(&state.db, message_id, &embeds_json)
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;

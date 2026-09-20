@@ -199,15 +199,18 @@ async function quicUpload(
     ? (bytes, total) => onProgress(Math.round((bytes * 100) / total))
     : undefined;
 
-  const result = await uploader.upload(transport, token, file, progressCb);
-
-  return {
-    id: result.id,
-    filename: result.filename,
-    size: result.size,
-    content_type: result.content_type,
-    url: result.url,
-  } as Attachment;
+  try {
+    const result = await uploader.upload(transport, token, file, progressCb);
+    return {
+      id: result.id,
+      filename: result.filename,
+      size: result.size,
+      content_type: result.content_type,
+      url: result.url,
+    } as Attachment;
+  } finally {
+    manager.release(transport);
+  }
 }
 
 /**

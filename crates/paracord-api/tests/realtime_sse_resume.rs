@@ -790,3 +790,213 @@ async fn sse_snapshot_query_failure_returns_error_without_authoritative_empty_da
     .await;
     assert_eq!(ready[0]["d"]["guilds"][0]["member_count"], 1);
 }
+
+#[tokio::test]
+async fn sse_replay_rechecks_revoked_membership_and_channel_visibility() {
+    use paracord_models::permissions::Permissions;
+    for revoke_membership in [true, false] {
+        let app = build_test_app(TestAppOptions::default()).await.unwrap();
+        let owner_token = create_authenticated_user_token(
+            &app.db,
+            &app.jwt_secret,
+            "replayowner",
+            "ReplayOwner123!",
+        )
+        .await
+        .unwrap();
+        let token = create_authenticated_user_token(
+            &app.db,
+            &app.jwt_secret,
+            "replaymember",
+            "ReplayMember123!",
+        )
+        .await
+        .unwrap();
+        let owner = paracord_core::auth::validate_token(&owner_token, &app.jwt_secret)
+            .unwrap()
+            .sub;
+        let member = paracord_core::auth::validate_token(&token, &app.jwt_secret)
+            .unwrap()
+            .sub;
+        let guild = paracord_util::snowflake::generate(1);
+        let channel = paracord_util::snowflake::generate(1);
+        paracord_db::guilds::create_guild(&app.db, guild, "Replay", owner, None)
+            .await
+            .unwrap();
+        paracord_db::members::add_member(&app.db, owner, guild)
+            .await
+            .unwrap();
+        paracord_db::members::add_member(&app.db, member, guild)
+            .await
+            .unwrap();
+        paracord_db::roles::create_role(
+            &app.db,
+            guild,
+            guild,
+            "@everyone",
+            Permissions::VIEW_CHANNEL.bits(),
+        )
+        .await
+        .unwrap();
+        paracord_db::channels::create_channel(
+            &app.db,
+            channel,
+            guild,
+            "private-after-revoke",
+            0,
+            0,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let session = create_session_body(&app.app, &token).await;
+        let session_id = session["session_id"].as_str().unwrap();
+        let cursor = session["cursor"].as_u64().unwrap();
+        // In the membership case the scope exists only on the bus, not in JSON.
+        let (name, payload) = if revoke_membership {
+            ("GUILD_UPDATE", json!({"name":"private guild metadata"}))
+        } else {
+            (
+                "MESSAGE_CREATE",
+                json!({"channel_id":channel.to_string(), "content":"secret"}),
+            )
+        };
+        app.event_bus.dispatch(name, payload, Some(guild));
+        let initial = collect_gateway_frames(&app.app, &token, session_id, cursor, 2).await;
+        assert!(
+            initial
+                .iter()
+                .any(|frame| frame_event_name(frame) == Some(name)),
+            "{initial:?}"
+        );
+        if revoke_membership {
+            paracord_db::members::remove_member(&app.db, member, guild)
+                .await
+                .unwrap();
+        } else {
+            // Do not clear the cache: replay must use the new persisted policy.
+            paracord_db::channel_overwrites::upsert_channel_overwrite(
+                &app.db,
+                channel,
+                member,
+                1,
+                0,
+                Permissions::VIEW_CHANNEL.bits(),
+            )
+            .await
+            .unwrap();
+        }
+        let resumed = collect_gateway_frames(&app.app, &token, session_id, cursor, 2).await;
+        assert_eq!(frame_event_name(&resumed[0]), Some("READY"));
+        assert_eq!(resumed[0]["d"]["replay_gap"], true, "{resumed:?}");
+        assert!(
+            !resumed
+                .iter()
+                .any(|frame| frame_event_name(frame) == Some(name)),
+            "revoked data replayed: {resumed:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn sse_targeted_reports_recheck_moderator_authority_on_delivery_and_replay() {
+    use paracord_models::permissions::Permissions;
+    for event_type in ["GUILD_REPORT_CREATE", "GUILD_REPORT_UPDATE"] {
+        let app = build_test_app(TestAppOptions::default()).await.unwrap();
+        let owner_token =
+            create_authenticated_user_token(&app.db, &app.jwt_secret, "reportowner", "Owner123!")
+                .await
+                .unwrap();
+        let token =
+            create_authenticated_user_token(&app.db, &app.jwt_secret, "reportmod", "Moderator123!")
+                .await
+                .unwrap();
+        let owner = paracord_core::auth::validate_token(&owner_token, &app.jwt_secret)
+            .unwrap()
+            .sub;
+        let moderator = paracord_core::auth::validate_token(&token, &app.jwt_secret)
+            .unwrap()
+            .sub;
+        let guild = paracord_util::snowflake::generate(1);
+        let role = paracord_util::snowflake::generate(1);
+        paracord_db::guilds::create_guild(&app.db, guild, "Reports", owner, None)
+            .await
+            .unwrap();
+        paracord_db::members::add_member(&app.db, owner, guild)
+            .await
+            .unwrap();
+        paracord_db::members::add_member(&app.db, moderator, guild)
+            .await
+            .unwrap();
+        paracord_db::roles::create_role(
+            &app.db,
+            guild,
+            guild,
+            "@everyone",
+            Permissions::VIEW_CHANNEL.bits(),
+        )
+        .await
+        .unwrap();
+        paracord_db::roles::create_role(
+            &app.db,
+            role,
+            guild,
+            "moderator",
+            Permissions::MANAGE_MESSAGES.bits(),
+        )
+        .await
+        .unwrap();
+        paracord_db::roles::add_member_role(&app.db, moderator, guild, role)
+            .await
+            .unwrap();
+        let session = create_session_body(&app.app, &token).await;
+        let session_id = session["session_id"].as_str().unwrap();
+        let cursor = session["cursor"].as_u64().unwrap();
+        let payload = json!({"guild_id":guild.to_string(), "reason":"confidential report"});
+        app.event_bus
+            .dispatch_to_users(event_type, payload.clone(), vec![moderator]);
+        let initial = collect_gateway_frames(&app.app, &token, session_id, cursor, 2).await;
+        assert!(
+            initial
+                .iter()
+                .any(|frame| frame_event_name(frame) == Some(event_type)),
+            "{initial:?}"
+        );
+        let replay = collect_gateway_frames(&app.app, &token, session_id, cursor, 2).await;
+        assert!(
+            replay
+                .iter()
+                .any(|frame| frame_event_name(frame) == Some(event_type)),
+            "authorized replay failed: {replay:?}"
+        );
+
+        paracord_db::roles::remove_member_role(&app.db, moderator, guild, role)
+            .await
+            .unwrap();
+        let resumed = collect_gateway_frames(&app.app, &token, session_id, cursor, 1).await;
+        assert_eq!(resumed[0]["d"]["replay_gap"], true, "{resumed:?}");
+        let new_cursor = resumed[0]["s"].as_u64().unwrap();
+        // Even an outdated dispatcher audience cannot leak newly queued data.
+        app.event_bus
+            .dispatch_to_users(event_type, payload, vec![moderator]);
+        app.event_bus.dispatch_to_users(
+            "MOD_ACTION_NOTICE",
+            json!({"guild_id":guild.to_string()}),
+            vec![moderator],
+        );
+        let fresh = collect_gateway_frames(&app.app, &token, session_id, new_cursor, 2).await;
+        assert!(
+            fresh
+                .iter()
+                .all(|frame| frame_event_name(frame) != Some(event_type)),
+            "{fresh:?}"
+        );
+        assert!(
+            fresh
+                .iter()
+                .any(|frame| frame_event_name(frame) == Some("MOD_ACTION_NOTICE")),
+            "personal notice lost: {fresh:?}"
+        );
+    }
+}

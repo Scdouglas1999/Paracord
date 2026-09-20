@@ -2,7 +2,7 @@ import { Link } from 'react-router';
 import { useStore } from 'zustand';
 import { useChannelStore } from '../../stores/channelStore';
 import { getAccountChannelView } from '../../lib/channelView';
-import { isUnusableGroupDm, runtimeAttachDecision, runtimeSendDecision } from '../../lib/messages/messagingReadiness';
+import { isGroupDm, pendingGroupMembers, runtimeAttachDecision, runtimeSendDecision } from '../../lib/messages/messagingReadiness';
 import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
 import { entityScopeKey as memberScopeKey, type AccountScope } from '../../lib/serverScope';
 import { useState, useRef, useEffect, useMemo, useCallback, lazy, Suspense } from 'react';
@@ -400,19 +400,25 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
   const reduceMotion = useReducedMotion();
   const { actions: serverActions, encrypted, encryption, error: capabilityError, refresh: refreshActions } = useConversationActions(channelId);
   const runtimeState = useStore(messagingRuntime.store);
-  const channelType = useChannelStore(state => {
-    const channel = getAccountChannelView(scope, state).channelsById[channelId];
-    return channel?.channel_type ?? channel?.type;
-  });
-  // A group conversation refuses for one reason and it is not an encryption
-  // rung: nothing on this row may offer a route out, because none exists yet.
-  const groupDmRefusal = isUnusableGroupDm(channelType);
+  const channel = useChannelStore(state => getAccountChannelView(scope, state).channelsById[channelId]);
+  const channelType = channel?.channel_type ?? channel?.type;
+  // A group conversation's own refusal is about who is in it, not about an
+  // encryption rung this person could climb, so the rows below that offer a
+  // route out stay hidden for it.
+  const groupRoster = isGroupDm(channelType) ? channel?.recipients : undefined;
   const actions = { ...serverActions,
-    send: runtimeSendDecision(serverActions.send, runtimeState, encrypted, channelId, channelType),
+    send: runtimeSendDecision(serverActions.send, runtimeState, encrypted, channelId, channelType, groupRoster),
     // Encrypted attachment seam: attaching needs the same unlocked encrypted
-    // storage and ready peer that sending does, and group DMs stay refused
-    // until their message encryption is migrated.
-    attach: runtimeAttachDecision(serverActions.attach, runtimeState, encrypted, channelId, channelType) };
+    // storage and ready identities that sending does. A group seals attachments
+    // under the same sender key as its text, so it takes the same answer.
+    attach: runtimeAttachDecision(serverActions.attach, runtimeState, encrypted, channelId, channelType, groupRoster) };
+  // The group's own blocker is about *other people* — somebody who has not
+  // published an identity key, or a roster that has not loaded. No page this
+  // person can open resolves it, so the encryption routes below stay hidden for
+  // it. A group blocked on the viewer's *own* setup is an ordinary encryption
+  // rung and keeps its link.
+  const groupDmRefusal = isGroupDm(channelType)
+    && (!channel?.recipients?.length || pendingGroupMembers(channel.recipients).length > 0);
   // A message that has gone out, or a composer its author emptied, ends the
   // typing indicator at once. Every send path clears the draft, so this one
   // place covers all of them as well as a manual clear.
@@ -1215,8 +1221,9 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
           {/* A blocker can be resolved by someone else (a recipient finishing
               encryption setup, a restored permission), so the check is always
               repeatable from here instead of only after a request failure. */}
-          {/* Nothing to check again: the group form of message encryption has
-              not shipped, so re-asking the server returns the same refusal. */}
+          {/* A group waiting on somebody's enrolment is not a server answer to
+              re-ask: the capability call already said the group is encrypted,
+              and the missing key is the other person's to publish. */}
           {!groupDmRefusal && <button type="button" className="ml-2 underline" onClick={refreshActions}>{capabilityError ? 'Retry' : 'Check again'}</button>}
         </div>
       )}

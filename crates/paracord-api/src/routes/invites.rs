@@ -45,7 +45,7 @@ fn guild_invite(invite: &paracord_db::invites::InviteRow, guild_id: i64) -> Guil
     }
 }
 
-async fn federation_send_join_rpc_for_mirrored_guild(
+pub(crate) async fn federation_send_join_rpc_for_mirrored_guild(
     state: &AppState,
     guild_id: i64,
     channel_id: i64,
@@ -311,6 +311,11 @@ pub async fn accept_invite(
         return Err(ApiError::Forbidden);
     }
 
+    let already_member = paracord_db::members::get_member(&state.db, auth.user_id, space_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .is_some();
+
     let accept_body = body.map(|value| value.0).unwrap_or_default();
     let now_ms = Utc::now().timestamp_millis();
     let mut bot_settings_json: Value = guild
@@ -319,125 +324,25 @@ pub async fn accept_invite(
         .and_then(|raw| serde_json::from_str(raw).ok())
         .unwrap_or_else(|| json!({}));
 
-    let anti_raid_config = bot_settings_json
-        .get("auto_mod")
-        .and_then(|value| value.get("anti_raid"))
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    let anti_raid_enabled = parse_bool(anti_raid_config.get("enabled"), false);
-    if anti_raid_enabled {
-        let locked_until_ms = parse_i64(anti_raid_config.get("lockdown_until_ms"), 0);
-        if locked_until_ms > now_ms {
-            return Err(ApiError::BadRequest(
-                "Server is temporarily in raid lockdown".into(),
-            ));
-        }
-
-        let join_window_seconds =
-            parse_i64(anti_raid_config.get("join_window_seconds"), 30).clamp(5, 600);
-        let join_threshold =
-            parse_i64(anti_raid_config.get("join_threshold"), 10).clamp(2, 500) as usize;
-        let lockdown_minutes =
-            parse_i64(anti_raid_config.get("lockdown_minutes"), 10).clamp(1, 240);
-        let min_account_age_minutes =
-            parse_i64(anti_raid_config.get("min_account_age_minutes"), 0).max(0);
-        let auto_action = anti_raid_config
-            .get("auto_action")
-            .and_then(|v| v.as_str())
-            .unwrap_or("none")
-            .to_ascii_lowercase();
-
-        let user = paracord_db::users::get_user_by_id(&state.db, auth.user_id)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
-            .ok_or(ApiError::Unauthorized)?;
-        let account_age_minutes = (Utc::now() - user.created_at).num_minutes().max(0);
-        if min_account_age_minutes > 0 && account_age_minutes < min_account_age_minutes {
-            if auto_action == "ban" {
-                let _ = paracord_db::bans::create_ban(
-                    &state.db,
-                    auth.user_id,
-                    space_id,
-                    Some("auto-raid age gate"),
-                    -2,
-                )
-                .await;
-                return Err(ApiError::Forbidden);
-            }
-            if auto_action == "kick" {
-                return Err(ApiError::Forbidden);
-            }
-        }
-
-        // Join-rate counter is persisted in `rate_limit_counters` so raid
-        // detection survives restarts and is shared across replicas (a tumbling
-        // window keyed on the space). Fail-open on a counter error rather than
-        // blocking legitimate joins on a transient DB hiccup.
-        let now_secs = now_ms / 1_000;
-        let window_start = now_secs / join_window_seconds;
-        let bucket_key = format!("raid:join:{space_id}");
-        let join_count = paracord_db::rate_limits::increment_window_counter(
-            &state.db,
-            &bucket_key,
-            window_start,
-            join_window_seconds,
-        )
-        .await
-        .unwrap_or(0);
-
-        if join_count as usize >= join_threshold {
-            let locked_until = now_ms + lockdown_minutes * 60 * 1_000;
-            if !bot_settings_json.is_object() {
-                bot_settings_json = json!({});
-            }
-            let root = bot_settings_json
-                .as_object_mut()
-                .expect("object checked above");
-            let auto_mod = root
-                .entry("auto_mod".to_string())
-                .or_insert_with(|| json!({}));
-            if !auto_mod.is_object() {
-                *auto_mod = json!({});
-            }
-            let auto_mod_obj = auto_mod.as_object_mut().expect("object enforced above");
-            let anti_raid = auto_mod_obj
-                .entry("anti_raid".to_string())
-                .or_insert_with(|| json!({}));
-            if !anti_raid.is_object() {
-                *anti_raid = json!({});
-            }
-            anti_raid
-                .as_object_mut()
-                .expect("object enforced above")
-                .insert("lockdown_until_ms".to_string(), json!(locked_until));
-
-            let serialized =
-                serde_json::to_string(&bot_settings_json).unwrap_or_else(|_| "{}".to_string());
-            let _ = paracord_db::guilds::update_guild(
-                &state.db,
-                space_id,
-                None,
-                None,
-                None,
-                None,
-                Some(&serialized),
-            )
-            .await;
-            return Err(ApiError::BadRequest(
-                "Raid protection triggered temporary lockdown".into(),
-            ));
-        }
+    // Invalid invites and rejected verification answers cannot count as joins.
+    // Atomic consumption below still resolves expiry/exhaustion races.
+    if !already_member
+        && (preview
+            .max_uses
+            .is_some_and(|max| max > 0 && preview.uses >= max)
+            || preview.max_age.is_some_and(|age| {
+                age > 0 && (Utc::now() - preview.created_at).num_seconds() >= i64::from(age)
+            }))
+    {
+        return Err(ApiError::BadRequest(
+            "Invite is expired or has reached max uses".into(),
+        ));
     }
 
     let verification_gate = bot_settings_json
         .get("auto_mod")
         .and_then(|value| value.get("verification_gate"))
         .or_else(|| bot_settings_json.get("verification_gate"));
-
-    let already_member = paracord_db::members::get_member(&state.db, auth.user_id, space_id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
-        .is_some();
 
     if !already_member {
         if let Some(config) = verification_gate {
@@ -502,33 +407,146 @@ pub async fn accept_invite(
         }
     }
 
-    let invite_state = if already_member {
-        Some(preview.clone())
-    } else {
-        paracord_db::invites::use_invite(&state.db, &code)
+    let anti_raid_config = bot_settings_json
+        .get("auto_mod")
+        .and_then(|value| value.get("anti_raid"))
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let anti_raid_enabled = parse_bool(anti_raid_config.get("enabled"), false);
+    if anti_raid_enabled && !already_member {
+        let locked_until_ms = parse_i64(anti_raid_config.get("lockdown_until_ms"), 0);
+        if locked_until_ms > now_ms {
+            return Err(ApiError::BadRequest(
+                "Server is temporarily in raid lockdown".into(),
+            ));
+        }
+
+        let join_window_seconds =
+            parse_i64(anti_raid_config.get("join_window_seconds"), 30).clamp(5, 600);
+        let join_threshold =
+            parse_i64(anti_raid_config.get("join_threshold"), 10).clamp(2, 500) as usize;
+        let lockdown_minutes =
+            parse_i64(anti_raid_config.get("lockdown_minutes"), 10).clamp(1, 240);
+        let min_account_age_minutes =
+            parse_i64(anti_raid_config.get("min_account_age_minutes"), 0).max(0);
+        let auto_action = anti_raid_config
+            .get("auto_action")
+            .and_then(|v| v.as_str())
+            .unwrap_or("none")
+            .to_ascii_lowercase();
+
+        let user = paracord_db::users::get_user_by_id(&state.db, auth.user_id)
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
-    };
-    let _invite = if let Some(invite) = invite_state {
-        invite
-    } else {
-        let existing = paracord_db::invites::get_invite(&state.db, &code)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-        if existing.is_none() {
-            return Err(ApiError::NotFound);
+            .ok_or(ApiError::Unauthorized)?;
+        let account_age_minutes = (Utc::now() - user.created_at).num_minutes().max(0);
+        if min_account_age_minutes > 0 && account_age_minutes < min_account_age_minutes {
+            if auto_action == "ban" {
+                let _ = paracord_db::bans::create_ban(
+                    &state.db,
+                    auth.user_id,
+                    space_id,
+                    Some("auto-raid age gate"),
+                    -2,
+                )
+                .await;
+                return Err(ApiError::Forbidden);
+            }
+            if auto_action == "kick" {
+                return Err(ApiError::Forbidden);
+            }
         }
-        return Err(ApiError::BadRequest(
-            "Invite is expired or has reached max uses".into(),
-        ));
-    };
 
-    if !already_member {
-        // Add user membership only for the invited space.
-        paracord_db::members::add_member(&state.db, auth.user_id, space_id)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        // Join-rate counter is persisted in `rate_limit_counters` so raid
+        // detection survives restarts and is shared across replicas (a tumbling
+        // window keyed on the space). Fail-open on a counter error rather than
+        // blocking legitimate joins on a transient DB hiccup.
+        let now_secs = now_ms / 1_000;
+        let window_start = now_secs / join_window_seconds;
+        let bucket_key = format!("raid:join:{space_id}");
+        // Count distinct accounts, atomically across concurrent requests and
+        // replicas. One outsider retrying an invite (or leaving/rejoining)
+        // cannot impersonate an entire raid and lock down the guild.
+        let join_count = paracord_db::rate_limits::increment_distinct_window_counter(
+            &state.db,
+            &bucket_key,
+            auth.user_id,
+            window_start,
+            join_window_seconds,
+        )
+        .await
+        .unwrap_or(0);
+
+        if join_count as usize >= join_threshold {
+            let locked_until = now_ms + lockdown_minutes * 60 * 1_000;
+            if !bot_settings_json.is_object() {
+                bot_settings_json = json!({});
+            }
+            let root = bot_settings_json
+                .as_object_mut()
+                .expect("object checked above");
+            let auto_mod = root
+                .entry("auto_mod".to_string())
+                .or_insert_with(|| json!({}));
+            if !auto_mod.is_object() {
+                *auto_mod = json!({});
+            }
+            let auto_mod_obj = auto_mod.as_object_mut().expect("object enforced above");
+            let anti_raid = auto_mod_obj
+                .entry("anti_raid".to_string())
+                .or_insert_with(|| json!({}));
+            if !anti_raid.is_object() {
+                *anti_raid = json!({});
+            }
+            anti_raid
+                .as_object_mut()
+                .expect("object enforced above")
+                .insert("lockdown_until_ms".to_string(), json!(locked_until));
+
+            let serialized =
+                serde_json::to_string(&bot_settings_json).unwrap_or_else(|_| "{}".to_string());
+            let _ = paracord_db::guilds::update_guild(
+                &state.db,
+                space_id,
+                None,
+                None,
+                None,
+                None,
+                Some(&serialized),
+            )
+            .await;
+            return Err(ApiError::BadRequest(
+                "Raid protection triggered temporary lockdown".into(),
+            ));
+        }
     }
+
+    let joined = if already_member {
+        false
+    } else {
+        let redemption = paracord_db::invites::redeem_invite_membership(
+            &state.db,
+            &code,
+            auth.user_id,
+            space_id,
+            preview.channel_id,
+        )
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        if let Some(redemption) = redemption {
+            redemption == paracord_db::invites::InviteRedemption::Joined
+        } else {
+            let existing = paracord_db::invites::get_invite(&state.db, &code)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+            if existing.is_none() {
+                return Err(ApiError::NotFound);
+            }
+            return Err(ApiError::BadRequest(
+                "Invite is expired or has reached max uses".into(),
+            ));
+        }
+    };
 
     // Ensure default Member role assignment for this space.
     if let Err(e) =
@@ -564,7 +582,7 @@ pub async fn accept_invite(
     };
 
     // Only dispatch GUILD_MEMBER_ADD for genuinely new members
-    if !already_member {
+    if joined {
         state.member_index.add_member(guild.id, auth.user_id);
         state.event_bus.dispatch(
             "GUILD_MEMBER_ADD",
@@ -599,7 +617,7 @@ pub async fn accept_invite(
             let fed_state = state.clone();
             let joined_user_id = auth.user_id;
             let joined_channel_id = preview.channel_id;
-            let invite_max_age = _invite.max_age.map(i64::from);
+            let invite_max_age = preview.max_age.map(i64::from);
             tokio::spawn(async move {
                 federation_send_join_rpc_for_mirrored_guild(
                     &fed_state,

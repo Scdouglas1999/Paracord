@@ -595,6 +595,18 @@ function deferred<T>() {
 describe('asynchronous encrypted message hydration', () => {
   const encrypted = (ciphertext: string) => ({ ...makeMessage(), e2ee: { version: 2, nonce: 'nonce', ciphertext } });
 
+  it('hydrates the retained ciphertext when an acknowledged send is replayed after recovery', async () => {
+    const runtime = getTestMessagingRuntime({ serverId: '__local__', userId: 'u1' });
+    runtime.decrypt.mockRejectedValueOnce(new Error('The authenticated message connection changed.'));
+    useMessageStore.getState().addMessage('ch1', encrypted('same-ciphertext'));
+    await vi.waitFor(() => expect(useMessageStore.getState().messages.ch1[0].content).toBe('[Encrypted message]'));
+    runtime.decrypt.mockResolvedValueOnce('Recovered sent message');
+    // A new HTTP response deserializes the same envelope into a new object.
+    useMessageStore.getState().addMessage('ch1', encrypted('same-ciphertext'));
+    await vi.waitFor(() => expect(useMessageStore.getState().messages.ch1[0].content).toBe('Recovered sent message'));
+    expect(useMessageStore.getState().messages.ch1).toHaveLength(1);
+  });
+
   beforeEach(() => {
     useMessageStore.getState().reset();
     vi.clearAllMocks();

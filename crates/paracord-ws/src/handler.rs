@@ -139,10 +139,13 @@ static IP_CONNECTIONS: OnceLock<dashmap::DashMap<String, usize>> = OnceLock::new
 /// Gateway upgrade attempts per client IP, used to bound connect/disconnect churn.
 static IP_HANDSHAKE_LIMITER: OnceLock<DefaultKeyedRateLimiter<String>> = OnceLock::new();
 
+#[derive(Clone)]
 struct BufferedEvent {
     sequence: u64,
     event_type: String,
     payload: Arc<Value>,
+    guild_id: Option<i64>,
+    target_user_ids: Option<Vec<i64>>,
     timestamp: Instant,
 }
 
@@ -1189,6 +1192,87 @@ async fn can_receive_channel_event(
     perms.contains(Permissions::VIEW_CHANNEL)
 }
 
+/// Bot subscriptions use persisted installations and channel permissions, including
+/// user-targeted interaction events whose guild exists only in their payload.
+/// Recheck on live delivery as well as RESUME: queued interaction bearer tokens
+/// must not outlive uninstall or a reduction of the bot's channel access.
+async fn can_receive_bot_event(
+    state: &AppState,
+    user_id: i64,
+    event_type: &str,
+    payload: &Value,
+    event_guild_id: Option<i64>,
+    targets: Option<&[i64]>,
+) -> bool {
+    let channel_id = extract_channel_id_from_event(event_type, payload);
+    let mut guild_id = event_guild_id.or_else(|| payload.get("guild_id")?.as_str()?.parse().ok());
+    if guild_id.is_none() && matches!(event_type, "GUILD_CREATE" | "GUILD_UPDATE" | "GUILD_DELETE")
+    {
+        guild_id = payload
+            .get("id")
+            .and_then(Value::as_str)
+            .and_then(|id| id.parse().ok());
+    }
+    if guild_id.is_none() {
+        if let Some(channel_id) = channel_id {
+            guild_id = match paracord_db::channels::get_channel(&state.db, channel_id).await {
+                Ok(Some(channel)) => channel.guild_id(),
+                _ => return false,
+            };
+        }
+    }
+    if let Some(guild_id) = guild_id {
+        if !paracord_db::bot_applications::get_bot_install_permissions_by_user(
+            &state.db, user_id, guild_id,
+        )
+        .await
+        .is_ok_and(|grant| grant.is_some())
+        {
+            return false;
+        }
+    }
+    paracord_core::events::can_receive_replayed_event(
+        &state.db, user_id, event_type, guild_id, channel_id, targets,
+    )
+    .await
+}
+
+/// Replay is a new disclosure: the permissions at original delivery time may
+/// have been revoked while the client was disconnected. Keep the bus scope with
+/// each record (payloads need not contain it), and consult current database state
+/// rather than the old session or permission cache. If any record is no longer
+/// visible, RESUME falls back to READY and normal recovery, avoiding sequence
+/// gaps without disclosing the old record.
+async fn can_replay_event(
+    state: &AppState,
+    user_id: i64,
+    is_bot: bool,
+    event: &BufferedEvent,
+) -> bool {
+    if is_bot
+        && !can_receive_bot_event(
+            state,
+            user_id,
+            &event.event_type,
+            &event.payload,
+            event.guild_id,
+            event.target_user_ids.as_deref(),
+        )
+        .await
+    {
+        return false;
+    }
+    paracord_core::events::can_receive_replayed_event(
+        &state.db,
+        user_id,
+        &event.event_type,
+        paracord_core::events::replay_guild_id(&event.event_type, &event.payload, event.guild_id),
+        extract_channel_id_from_event(&event.event_type, &event.payload),
+        event.target_user_ids.as_deref(),
+    )
+    .await
+}
+
 pub async fn handle_connection(
     socket: WebSocket,
     state: AppState,
@@ -1404,20 +1488,67 @@ pub async fn handle_connection(
         }
 
         // Replay missed events (collect into Vec first to avoid holding DashMap lock across .await)
-        let events_to_replay: Vec<(u64, String, Arc<Value>)> = event_buffers()
+        let events_to_replay: Vec<BufferedEvent> = event_buffers()
             .get(&session.session_id)
             .map(|buffer| {
                 buffer
                     .events
                     .iter()
                     .filter(|e| e.sequence > requested_seq)
-                    .map(|e| (e.sequence, e.event_type.clone(), e.payload.clone()))
+                    .cloned()
                     .collect()
             })
             .unwrap_or_default();
 
         let mut replay_count: u64 = 0;
-        for (seq, event_type, payload) in &events_to_replay {
+        for event in &events_to_replay {
+            if session.bot_token_hash.is_some()
+                && !matches!(
+                    revalidate_session_credential(&state, &session).await,
+                    CredentialCheck::Active
+                )
+            {
+                let _ = send_ws_close_logged(
+                    &mut sender,
+                    WS_CLOSE_AUTH_REVOKED,
+                    "Bot credential is no longer authenticated",
+                    Some(session.user_id),
+                    Some(session.session_id.as_str()),
+                    "bot_credential_revoked_close",
+                )
+                .await;
+                return;
+            }
+            // The buffer or permissions may change after handshake validation,
+            // and a slow replay can span a revocation. Recheck the actual frame.
+            if !can_replay_event(
+                &state,
+                session.user_id,
+                session.bot_token_hash.is_some(),
+                event,
+            )
+            .await
+            {
+                let _ = send_ws_text_logged(
+                    &mut sender,
+                    json!({"op": OP_INVALID_SESSION, "d": false}).to_string(),
+                    &compressor,
+                    Some(session.user_id),
+                    Some(session.session_id.as_str()),
+                    "replay_authorization_changed",
+                    Some(OP_INVALID_SESSION),
+                    None,
+                    None,
+                )
+                .await;
+                return;
+            }
+            let BufferedEvent {
+                sequence: seq,
+                event_type,
+                payload,
+                ..
+            } = event;
             let gateway_msg = json!({
                 "op": OP_DISPATCH,
                 "t": event_type,
@@ -1916,6 +2047,130 @@ fn ready_guilds_from_rows(
         .collect()
 }
 
+struct GatewayCredential {
+    user_id: i64,
+    auth_session_id: String,
+    token_expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    bot_token_hash: Option<String>,
+}
+
+impl GatewayCredential {
+    fn apply(&self, session: &mut Session) {
+        session.auth_session_id.clone_from(&self.auth_session_id);
+        session.token_expires_at = self.token_expires_at;
+        session.bot_token_hash.clone_from(&self.bot_token_hash);
+    }
+}
+
+async fn authenticate_gateway_token(state: &AppState, token: &str) -> Option<GatewayCredential> {
+    // SDKs may send the opaque token directly or use the same Bot prefix as REST.
+    // JWTs retain their existing session and expiration validation.
+    if let Some(bot_token) = token
+        .strip_prefix("Bot ")
+        .or_else(|| (!token.contains('.')).then_some(token))
+    {
+        let token_hash = paracord_db::bot_applications::hash_token(bot_token);
+        let guard_key = format!("bot:{token_hash}");
+        let now = chrono::Utc::now();
+        let guards = paracord_db::rate_limits::get_auth_guard_states(
+            &state.db,
+            std::slice::from_ref(&guard_key),
+        )
+        .await
+        .ok()?;
+        if guards
+            .iter()
+            .any(|guard| guard.locked_until > now.timestamp())
+        {
+            return None;
+        }
+        let application = paracord_db::bot_applications::get_bot_application_by_token_hash(
+            &state.db,
+            &token_hash,
+        )
+        .await
+        .ok()?;
+        let application = match application {
+            Some(application) if !application.revoked => application,
+            _ => {
+                let _ = paracord_db::rate_limits::record_auth_guard_failure(
+                    &state.db,
+                    &guard_key,
+                    now.timestamp(),
+                )
+                .await;
+                return None;
+            }
+        };
+        let user = paracord_db::users::get_user_by_id(&state.db, application.bot_user_id)
+            .await
+            .ok()??;
+        if !paracord_core::is_bot(user.flags) {
+            return None;
+        }
+        if !guards.is_empty() {
+            let _ = paracord_db::rate_limits::clear_auth_guard_keys(
+                &state.db,
+                std::slice::from_ref(&guard_key),
+            )
+            .await;
+        }
+        let _ = paracord_db::bot_applications::touch_bot_last_used(&state.db, application.id, now)
+            .await;
+        return Some(GatewayCredential {
+            user_id: application.bot_user_id,
+            auth_session_id: String::new(),
+            token_expires_at: None,
+            bot_token_hash: Some(token_hash),
+        });
+    }
+    let claims = paracord_core::auth::validate_token(token, &state.config.jwt_secret).ok()?;
+    let (Some(session_id), Some(jti)) = (claims.sid, claims.jti) else {
+        return None;
+    };
+    if !paracord_db::sessions::is_access_token_active(
+        &state.db,
+        claims.sub,
+        &session_id,
+        &jti,
+        chrono::Utc::now(),
+    )
+    .await
+    .ok()?
+    {
+        return None;
+    }
+    Some(GatewayCredential {
+        user_id: claims.sub,
+        auth_session_id: session_id,
+        token_expires_at: chrono::DateTime::from_timestamp(claims.exp as i64, 0),
+        bot_token_hash: None,
+    })
+}
+
+async fn gateway_guilds(
+    state: &AppState,
+    credential: &GatewayCredential,
+) -> Result<Vec<paracord_db::guilds::SpaceRow>, paracord_db::DbError> {
+    let mut guilds =
+        paracord_db::guilds::get_user_guilds(&state.db, credential.user_id.into()).await?;
+    if credential.bot_token_hash.is_some() {
+        let application = paracord_db::bot_applications::get_bot_application_by_user_id(
+            &state.db,
+            credential.user_id,
+        )
+        .await?;
+        let Some(application) = application else {
+            return Ok(Vec::new());
+        };
+        let installs =
+            paracord_db::bot_applications::list_bot_guild_installs(&state.db, application.id)
+                .await?;
+        guilds.retain(|guild| installs.iter().any(|install| install.guild_id == guild.id));
+    }
+    Ok(guilds)
+}
+
 #[doc(hidden)] // internal seam exposed for the crate's integration tests
 pub async fn wait_for_identify_or_resume(
     receiver: &mut (impl StreamExt<Item = Result<Message, axum::Error>> + Unpin),
@@ -1958,43 +2213,16 @@ pub async fn wait_for_identify_or_resume(
             if let Some(payload) = parsed {
                 if let Some(d) = payload.get("d") {
                     if let Some(token) = d.get("token").and_then(|v| v.as_str()) {
-                        let claims =
-                            paracord_core::auth::validate_token(token, &state.config.jwt_secret)
-                                .ok()?;
-                        let (session_id, jti) = match (claims.sid.as_deref(), claims.jti.as_deref())
-                        {
-                            (Some(session_id), Some(jti)) => (session_id, jti),
-                            _ => return None,
-                        };
-                        let active = paracord_db::sessions::is_access_token_active(
-                            &state.db,
-                            claims.sub,
-                            session_id,
-                            jti,
-                            chrono::Utc::now(),
-                        )
-                        .await
-                        .ok()?;
-                        if !active {
-                            return None;
-                        }
-                        // Carried onto the session so the live loop can enforce
-                        // the token's own lifetime; a socket must never outlive
-                        // the credential that opened it.
-                        let token_expires_at =
-                            chrono::DateTime::<chrono::Utc>::from_timestamp(claims.exp as i64, 0);
+                        let credential = authenticate_gateway_token(state, token).await?;
+                        let user_id = credential.user_id;
                         let op = payload.get("op").and_then(|v| v.as_u64())?;
                         if op == OP_IDENTIFY as u64 {
-                            let guilds =
-                                paracord_db::guilds::get_user_guilds(&state.db, claims.sub.into())
-                                    .await
-                                    .ok()?;
+                            let guilds = gateway_guilds(state, &credential).await.ok()?;
                             let guild_ids = guilds.iter().map(|g| g.id).collect();
                             let guild_owner_ids =
                                 guilds.iter().map(|g| (g.id, g.owner_id)).collect();
-                            let mut session = Session::new(claims.sub, guild_ids, guild_owner_ids);
-                            session.auth_session_id = session_id.to_string();
-                            session.token_expires_at = token_expires_at;
+                            let mut session = Session::new(user_id, guild_ids, guild_owner_ids);
+                            credential.apply(&mut session);
                             // Keep the rows we already paid for; READY reads
                             // them instead of re-fetching each guild.
                             session.ready_guilds = ready_guilds_from_rows(&guilds);
@@ -2005,7 +2233,7 @@ pub async fn wait_for_identify_or_resume(
                                 d.get("session_id").and_then(|v| v.as_str())?.to_string();
                             let requested_seq = d.get("seq").and_then(|v| v.as_u64()).unwrap_or(0);
                             if let Some(cached) = session_cache().get(&requested_session_id).await {
-                                if cached.user_id == claims.sub {
+                                if cached.user_id == user_id {
                                     let mut can_replay = requested_seq <= cached.sequence;
                                     if cached.sequence > requested_seq {
                                         if let Some(buffer) =
@@ -2025,6 +2253,34 @@ pub async fn wait_for_identify_or_resume(
                                     }
 
                                     if can_replay {
+                                        // Never hold a DashMap guard across database awaits.
+                                        let pending: Vec<BufferedEvent> = event_buffers()
+                                            .get(&requested_session_id)
+                                            .map(|buffer| {
+                                                buffer
+                                                    .events
+                                                    .iter()
+                                                    .filter(|event| event.sequence > requested_seq)
+                                                    .cloned()
+                                                    .collect()
+                                            })
+                                            .unwrap_or_default();
+                                        for event in &pending {
+                                            if !can_replay_event(
+                                                state,
+                                                user_id,
+                                                credential.bot_token_hash.is_some(),
+                                                event,
+                                            )
+                                            .await
+                                            {
+                                                can_replay = false;
+                                                break;
+                                            }
+                                        }
+                                    }
+
+                                    if can_replay {
                                         // Re-derive guild membership from current DB state rather
                                         // than trusting the cached snapshot: a user kicked/banned
                                         // while disconnected never processed remove_guild(), so the
@@ -2032,12 +2288,8 @@ pub async fn wait_for_identify_or_resume(
                                         // stream for the remainder of the session TTL. Only
                                         // session_id/sequence are kept from the cache (for replay
                                         // continuity).
-                                        let guilds = paracord_db::guilds::get_user_guilds(
-                                            &state.db,
-                                            claims.sub.into(),
-                                        )
-                                        .await
-                                        .ok()?;
+                                        let guilds =
+                                            gateway_guilds(state, &credential).await.ok()?;
                                         let guild_ids = guilds.iter().map(|g| g.id).collect();
                                         let guild_owner_ids =
                                             guilds.iter().map(|g| (g.id, g.owner_id)).collect();
@@ -2048,8 +2300,7 @@ pub async fn wait_for_identify_or_resume(
                                         );
                                         reattach_event_buffer(&requested_session_id);
                                         resumed.session_id = requested_session_id;
-                                        resumed.auth_session_id = session_id.to_string();
-                                        resumed.token_expires_at = token_expires_at;
+                                        credential.apply(&mut resumed);
                                         resumed.sequence = cached.sequence;
                                         return Some((resumed, true, requested_seq));
                                     } else {
@@ -2068,16 +2319,12 @@ pub async fn wait_for_identify_or_resume(
                             // If resume can't be honored (cache miss/mismatch), fall back to a
                             // fresh session immediately so clients recover without an extra
                             // invalid-session reconnect cycle.
-                            let guilds =
-                                paracord_db::guilds::get_user_guilds(&state.db, claims.sub.into())
-                                    .await
-                                    .ok()?;
+                            let guilds = gateway_guilds(state, &credential).await.ok()?;
                             let guild_ids = guilds.iter().map(|g| g.id).collect();
                             let guild_owner_ids =
                                 guilds.iter().map(|g| (g.id, g.owner_id)).collect();
-                            let mut session = Session::new(claims.sub, guild_ids, guild_owner_ids);
-                            session.auth_session_id = session_id.to_string();
-                            session.token_expires_at = token_expires_at;
+                            let mut session = Session::new(user_id, guild_ids, guild_owner_ids);
+                            credential.apply(&mut session);
                             session.ready_guilds = ready_guilds_from_rows(&guilds);
                             return Some((session, false, 0));
                         }
@@ -2108,6 +2355,21 @@ enum CredentialCheck {
 /// compared — a token refresh rotates it, and a client refreshing its access
 /// token must not have its gateway connection torn down for it.
 async fn revalidate_session_credential(state: &AppState, session: &Session) -> CredentialCheck {
+    if let Some(token_hash) = &session.bot_token_hash {
+        return match paracord_db::bot_applications::get_bot_application_by_token_hash(
+            &state.db, token_hash,
+        )
+        .await
+        {
+            Ok(Some(application))
+                if !application.revoked && application.bot_user_id == session.user_id =>
+            {
+                CredentialCheck::Active
+            }
+            Ok(_) => CredentialCheck::Terminate("bot credential revoked or rotated"),
+            Err(_) => CredentialCheck::Failed,
+        };
+    }
     let now = chrono::Utc::now();
     if let Some(expires_at) = session.token_expires_at {
         if now >= expires_at {
@@ -2306,6 +2568,13 @@ async fn run_session_with_events(
                                 }
                             }
                         }
+                        if session.bot_token_hash.is_some() && !matches!(revalidate_session_credential(&state, &session).await, CredentialCheck::Active) {
+                            credential_terminated = true;
+                            let _ = send_ws_close_logged(&mut sender, WS_CLOSE_AUTH_REVOKED,
+                                "Bot credential is no longer authenticated", Some(session.user_id),
+                                Some(session.session_id.as_str()), "bot_credential_revoked_close").await;
+                            break ("bot credential no longer valid".to_string(), false);
+                        }
                         if let Ok(payload) = parsed_payload {
                             handle_client_message(&payload, &mut sender, &mut session, &state, compressor).await;
                             if opcode == OP_HEARTBEAT {
@@ -2370,6 +2639,19 @@ async fn run_session_with_events(
             event = event_rx.recv() => {
                 match event {
                     Ok(mut event) => {
+                        if session.bot_token_hash.is_some() {
+                            if !matches!(revalidate_session_credential(&state, &session).await, CredentialCheck::Active) {
+                                credential_terminated = true;
+                                let _ = send_ws_close_logged(&mut sender, WS_CLOSE_AUTH_REVOKED,
+                                    "Bot credential is no longer authenticated", Some(session.user_id),
+                                    Some(session.session_id.as_str()), "bot_credential_revoked_close").await;
+                                break ("bot credential no longer valid".to_string(), false);
+                            }
+                            if !can_receive_bot_event(&state, session.user_id, &event.event_type,
+                                &event.payload, event.guild_id, event.target_user_ids.as_deref()).await {
+                                continue;
+                            }
+                        }
                         // The session's own guild set is a connect-time
                         // snapshot; the member index is the live answer. A
                         // guild created or joined since this socket opened is
@@ -2383,6 +2665,23 @@ async fn run_session_with_events(
                             event.guild_id,
                             event.target_user_ids.as_deref(),
                         ) {
+                            continue;
+                        }
+
+                        // A report may have been queued while its target was a
+                        // moderator. Recheck privileged audiences at delivery.
+                        if paracord_core::events::requires_report_moderator(&event.event_type)
+                            && !paracord_core::events::can_receive_replayed_event(
+                                &state.db,
+                                session.user_id,
+                                &event.event_type,
+                                paracord_core::events::replay_guild_id(
+                                    &event.event_type, &event.payload, event.guild_id,
+                                ),
+                                None,
+                                event.target_user_ids.as_deref(),
+                            ).await
+                        {
                             continue;
                         }
 
@@ -2518,6 +2817,8 @@ async fn run_session_with_events(
                             sequence: seq,
                             event_type: event.event_type.clone(),
                             payload: event.payload.clone(),
+                            guild_id: event.guild_id,
+                            target_user_ids: event.target_user_ids.clone(),
                             timestamp: Instant::now(),
                         });
                         drop(buffer_entry);
@@ -3521,8 +3822,26 @@ async fn handle_client_message(
                     return;
                 };
 
-                // Ensure the requesting user is a member of the guild
-                if !session.guild_ids.contains(&guild_id) {
+                // The connect-time scope can lag a kick/uninstall event. A member
+                // chunk is a new disclosure, so verify current membership and,
+                // for bots, the installation before reading the roster.
+                if !session.guild_ids.contains(&guild_id)
+                    || paracord_core::permissions::ensure_guild_member(
+                        &state.db,
+                        guild_id,
+                        session.user_id,
+                    )
+                    .await
+                    .is_err()
+                    || (session.bot_token_hash.is_some()
+                        && !paracord_db::bot_applications::get_bot_install_permissions_by_user(
+                            &state.db,
+                            session.user_id,
+                            guild_id,
+                        )
+                        .await
+                        .is_ok_and(|grant| grant.is_some()))
+                {
                     return;
                 }
 
@@ -3636,6 +3955,11 @@ pub fn test_push_buffered_event(session_id: &str, sequence: u64, event_type: &st
         .push_back(BufferedEvent {
             sequence,
             event_type: event_type.to_string(),
+            guild_id: payload
+                .get("guild_id")
+                .and_then(Value::as_str)
+                .and_then(|id| id.parse().ok()),
+            target_user_ids: None,
             payload: Arc::new(payload),
             timestamp: Instant::now(),
         });

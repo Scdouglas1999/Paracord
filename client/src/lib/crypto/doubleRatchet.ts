@@ -3,7 +3,7 @@ import { kdfRK, kdfCK } from './hkdf';
 import { generateX25519KeyPair } from './x3dh';
 import { toBase64, fromBase64, toArrayBuffer, bytesToHex } from './util';
 import type { RatchetState, MessageHeader, X25519KeyPair } from './types';
-import { MAX_SKIP } from './types';
+import { MAX_SKIP, MAX_RETAINED_SKIPPED_KEYS } from './types';
 
 const AES_GCM_NONCE_BYTES = 12;
 
@@ -128,7 +128,14 @@ export async function ratchetDecrypt(
   nonce: string,
   ciphertext: string,
 ): Promise<DecryptResult> {
+  if (!header || typeof header.dh !== 'string'
+    || !Number.isSafeInteger(header.n) || header.n < 0 || header.n >= Number.MAX_SAFE_INTEGER
+    || !Number.isSafeInteger(header.pn) || header.pn < 0) {
+    throw new Error('Invalid ratchet message counters or public key');
+  }
   const headerDhPub = fromBase64(header.dh);
+  if (headerDhPub.byteLength !== 32) throw new Error('Invalid ratchet public key length');
+  if (fromBase64(nonce).byteLength !== AES_GCM_NONCE_BYTES) throw new Error('Invalid ratchet nonce length');
   const headerDhHex = bytesToHex(headerDhPub);
 
   // 1. Try skipped message keys first
@@ -205,6 +212,15 @@ function skipMessageKeys(state: RatchetState, until: number): RatchetState {
   while (nr < until) {
     const { chainKey, messageKey } = kdfCK(ckr);
     newSkipped.set(`${dhHex}:${nr}`, messageKey);
+    // A peer can repeatedly skip MAX_SKIP messages without ever exceeding the
+    // per-gap limit. Keep the newest delayed-message keys rather than growing
+    // the encrypted session record without bound (or permanently blocking new
+    // messages when older skipped messages will never arrive).
+    while (newSkipped.size > MAX_RETAINED_SKIPPED_KEYS) {
+      const oldest = newSkipped.keys().next().value;
+      if (oldest === undefined) break;
+      newSkipped.delete(oldest);
+    }
     ckr = chainKey;
     nr++;
   }

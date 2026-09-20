@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { Search, User, UserPlus, Users } from 'lucide-react';
+import { Check, Search, User, UserPlus, Users } from 'lucide-react';
 import { useChannelStore } from '../../stores/channelStore';
 import { useRelationshipStore } from '../../stores/relationshipStore';
 import { activateChannel } from '../../lib/channelNavigation';
@@ -14,7 +14,6 @@ import { Modal, ModalTitle } from '../ui/Modal';
 import { Input } from '../ui/Input';
 import type { Channel } from '../../types/index';
 import { displayName } from '../../lib/displayName';
-import { GROUP_DM_LIMITATION } from '../../lib/messages/messagingReadiness';
 
 
 export interface DmPickerModalProps {
@@ -41,6 +40,8 @@ export function DmPickerModal({ open, onClose, onCreated }: DmPickerModalProps) 
   const fetchRelationships = useRelationshipStore((s) => s.fetchRelationships);
 
   const [groupMode, setGroupMode] = useState(false);
+  const [groupSelected, setGroupSelected] = useState<string[]>([]);
+  const [groupName, setGroupName] = useState('');
   const [query, setQuery] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -49,6 +50,8 @@ export function DmPickerModal({ open, onClose, onCreated }: DmPickerModalProps) 
   useEffect(() => {
     if (!open) return;
     setGroupMode(false);
+    setGroupSelected([]);
+    setGroupName('');
     setQuery('');
     setError(null);
     setSubmitting(false);
@@ -85,10 +88,26 @@ export function DmPickerModal({ open, onClose, onCreated }: DmPickerModalProps) 
     }
   };
 
-  // Group creation used to live here. It is gone rather than disabled: a group
-  // this release can create but never send in is a dead end, and the tab now
-  // says so before anything exists. `channelStore.createGroupDm` stays for the
-  // day the group encryption migration ships.
+  const createGroup = async () => {
+    if (submitting || groupSelected.length === 0) return;
+    setError(null);
+    setSubmitting(true);
+    try {
+      if (!scope) throw new Error('Sign in to this instance before messaging.');
+      const data = await useChannelStore.getState().createGroupDm(groupSelected, groupName || undefined, scope);
+      commitChannel(data);
+    } catch (err) {
+      setError(extractApiError(err) || 'Failed to create this group conversation.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const toggleGroupMember = (userId: string) => {
+    setGroupSelected((prev) =>
+      prev.includes(userId) ? prev.filter((id) => id !== userId) : [...prev, userId],
+    );
+  };
 
   return (
     <Modal
@@ -102,7 +121,7 @@ export function DmPickerModal({ open, onClose, onCreated }: DmPickerModalProps) 
       <div className="panel-divider border-b px-5 py-4">
         <ModalTitle id="dm-picker-title">New message</ModalTitle>
         <p className="mt-1 text-meta text-text-secondary">
-          {groupMode ? 'Not in this release — here is why.' : 'Choose a friend to start or reopen a conversation.'}
+          {groupMode ? 'Choose the friends this conversation is for.' : 'Choose a friend to start or reopen a conversation.'}
         </p>
         <div role="tablist" aria-label="Message type" className="pc-well mt-3 grid grid-cols-2 gap-1 p-1">
           <button
@@ -142,19 +161,6 @@ export function DmPickerModal({ open, onClose, onCreated }: DmPickerModalProps) 
         </div>
       </div>
 
-      {/* The limitation belongs BEFORE the group exists, not in the composer of
-          the dead conversation it would have created. */}
-      {groupMode ? (
-        <div className="p-5">
-          <div className="rounded-[var(--radius-well)] bg-bg-well px-3.5 py-3 shadow-[var(--shadow-well)]">
-            <p className="pc-display text-name text-text-primary">Group conversations aren’t ready yet</p>
-            <p className="mt-1 break-words text-body text-text-body">{GROUP_DM_LIMITATION}</p>
-            <p className="mt-2 break-words text-meta text-text-faint">
-              Start a direct message instead, or open a channel in a server for more than two people.
-            </p>
-          </div>
-        </div>
-      ) : (<>
       <div className="border-b border-border-subtle px-5 py-3">
         <div className="relative">
           <Search size={15} aria-hidden className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
@@ -167,6 +173,16 @@ export function DmPickerModal({ open, onClose, onCreated }: DmPickerModalProps) 
             onChange={(event) => setQuery(event.target.value)}
           />
         </div>
+        {groupMode && (
+          <input
+            type="text"
+            placeholder="Group name (optional)"
+            aria-label="Group name"
+            className="pc-well mt-2.5 h-[var(--h-control-phone)] w-full px-3 text-label text-text-primary outline-none transition-[box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)] placeholder:text-text-faint focus-visible:shadow-[var(--shadow-well),var(--focus-ring)]"
+            value={groupName}
+            onChange={(e) => setGroupName(e.target.value)}
+          />
+        )}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3 scrollbar-thin">
@@ -185,28 +201,47 @@ export function DmPickerModal({ open, onClose, onCreated }: DmPickerModalProps) 
             description={`No friends match “${query.trim()}”.`}
           />
         ) : (
-          filteredFriends.map((rel) => (
-            <button
-              key={rel.id}
-              type="button"
-              className="pc-focusable group w-full rounded-[var(--radius-control)] px-3 py-2 text-left text-label font-medium transition-[background-color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle"
-              onClick={() => void startDm(rel.user.id)}
-            >
-              <div className="flex items-center gap-2.5">
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-bg-mod-strong text-meta font-semibold text-text-secondary">
-                  {displayName(rel.user).charAt(0).toUpperCase()}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-label text-text-primary">{displayName(rel.user)}</span>
-                  <span className="block truncate text-meta font-normal text-text-muted">@{rel.user.username}</span>
-                </span>
-                <span className="text-meta font-medium text-accent-primary opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">Message</span>
-              </div>
-            </button>
-          ))
+          filteredFriends.map((rel) => {
+            const selected = groupSelected.includes(rel.user.id);
+            return (
+              <button
+                key={rel.id}
+                type="button"
+                aria-pressed={groupMode ? selected : undefined}
+                className={cn(
+                  'pc-focusable group w-full rounded-[var(--radius-control)] px-3 py-2 text-left text-label font-medium transition-[background-color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-mod-subtle',
+                  groupMode && selected && 'bg-bg-raised shadow-[var(--shadow-raised)]',
+                )}
+                onClick={() => {
+                  if (groupMode) toggleGroupMember(rel.user.id);
+                  else void startDm(rel.user.id);
+                }}
+              >
+                <div className="flex items-center gap-2.5">
+                  {groupMode && (
+                    <div
+                      className={cn(
+                        'flex h-4 w-4 shrink-0 items-center justify-center rounded-window border',
+                        selected ? 'border-accent-primary bg-accent-primary text-text-on-accent' : 'border-border-subtle',
+                      )}
+                    >
+                      {selected && <Check size={12} strokeWidth={3} aria-hidden />}
+                    </div>
+                  )}
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-bg-mod-strong text-meta font-semibold text-text-secondary">
+                    {displayName(rel.user).charAt(0).toUpperCase()}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-label text-text-primary">{displayName(rel.user)}</span>
+                    <span className="block truncate text-meta font-normal text-text-muted">@{rel.user.username}</span>
+                  </span>
+                  {!groupMode && <span className="text-meta font-medium text-accent-primary opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">Message</span>}
+                </div>
+              </button>
+            );
+          })
         )}
       </div>
-      </>)}
 
       {error && (
         <div
@@ -219,8 +254,12 @@ export function DmPickerModal({ open, onClose, onCreated }: DmPickerModalProps) 
 
       {groupMode && (
         <div className="border-t border-border-subtle p-3">
-          <Button className="w-full" variant="ghost" onClick={() => { setGroupMode(false); setError(null); }}>
-            Start a direct message instead
+          <div className="mb-2 flex items-center justify-between px-1 text-meta text-text-muted">
+            <span>{groupSelected.length === 0 ? 'Select at least one friend' : `${groupSelected.length} friend${groupSelected.length === 1 ? '' : 's'} selected`}</span>
+            <span>{groupSelected.length + 1} total</span>
+          </div>
+          <Button className="w-full" disabled={groupSelected.length === 0} loading={submitting} onClick={() => void createGroup()}>
+            Create group conversation
           </Button>
         </div>
       )}

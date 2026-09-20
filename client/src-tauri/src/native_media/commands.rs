@@ -1448,9 +1448,11 @@ fn validate_file_path(
     let mut allowed_bases: Vec<std::path::PathBuf> = Vec::new();
 
     if let Ok(app_data) = app.path().app_data_dir() {
-        // Ensure the app data dir exists for canonicalization
-        let _ = std::fs::create_dir_all(&app_data);
-        if let Ok(canonical) = app_data.canonicalize() {
+        // Transfer IPC must never read or overwrite the native trust records,
+        // secure-store fallback key, or webview databases in app_data itself.
+        let staging = app_data.join("transfers");
+        let _ = std::fs::create_dir_all(&staging);
+        if let Ok(canonical) = staging.canonicalize() {
             allowed_bases.push(canonical);
         }
     }
@@ -1530,7 +1532,7 @@ fn validate_file_path_within_bases(
     let is_allowed = allowed_bases.iter().any(|base| canonical.starts_with(base));
     if !is_allowed {
         return Err(format!(
-            "file path is outside the allowed directories (app data, downloads): {}",
+            "file path is outside the allowed directories (transfer staging, downloads): {}",
             canonical.display()
         ));
     }
@@ -1624,6 +1626,28 @@ mod tests {
         assert!(result.starts_with(&base));
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn transfer_staging_does_not_authorize_native_security_files() {
+        let app_data = unique_dir("staging-boundary");
+        let staging = app_data.join("transfers");
+        let security = app_data.join("security");
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::create_dir_all(&security).unwrap();
+        let secret = security.join("secure-store-fallback.key");
+        std::fs::write(&secret, b"native secret").unwrap();
+        assert!(validate_file_path_within_bases(
+            secret.to_str().unwrap(),
+            std::slice::from_ref(&staging)
+        )
+        .is_err());
+        assert!(validate_file_path_within_bases(
+            staging.join("download.bin").to_str().unwrap(),
+            std::slice::from_ref(&staging)
+        )
+        .is_ok());
+        let _ = std::fs::remove_dir_all(app_data);
     }
 
     #[test]

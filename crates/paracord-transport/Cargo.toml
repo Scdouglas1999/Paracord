@@ -48,6 +48,7 @@ dashmap = { workspace = true }
 bytes = { workspace = true }
 
 [dev-dependencies]
+tempfile = { workspace = true }
 # Independently parses generated certificates so the validity-window test
 # asserts against the DER that actually goes on the wire, not against the
 # parameters we asked rcgen for. Test-only: it is not linked into the server.

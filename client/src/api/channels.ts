@@ -157,10 +157,10 @@ export function createChannelApi(getApi: () => RestClient) {
         alias: string;
         user?: { id: string; username: string; discriminator: string | number; avatar_hash?: string | null };
       }>(`/channels/${id}/anonymous/deanonymize/${messageId}`),
-    postGroupSenderKeys: async (id: string, epoch: number, envelopes: GroupSenderKeyEnvelope[]) =>
-      getApi().post(`/channels/${id}/e2ee/sender-keys`, { epoch, envelopes }),
+    postGroupSenderKeys: async (id: string, epoch: number, envelopes: GroupSenderKeyEnvelope[], membersVersion?: string) =>
+      getApi().post(`/channels/${id}/e2ee/sender-keys`, { epoch, envelopes, members_version: membersVersion }),
     getGroupSenderKeys: async (id: string, sinceEpoch?: number) =>
-      getApi().get<{ sender_keys: GroupSenderKeyRecord[] }>(`/channels/${id}/e2ee/sender-keys`, {
+      getApi().get<{ sender_keys: GroupSenderKeyRecord[]; members_version?: string }>(`/channels/${id}/e2ee/sender-keys`, {
         params: sinceEpoch == null ? undefined : { since_epoch: sinceEpoch },
       }),
     ackGroupSenderKeys: async (

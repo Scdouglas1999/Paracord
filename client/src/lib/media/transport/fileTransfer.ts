@@ -12,6 +12,10 @@ const FRAME_TYPE_DATA = 0x01;
 const FRAME_TYPE_END = 0x02;
 
 const DEFAULT_CHUNK_SIZE = 256 * 1024; // 256 KiB
+// Match the Rust StreamFrame codec; reject advertised lengths before buffering.
+const MAX_CONTROL_SIZE = 256 * 1024;
+const MAX_DATA_CHUNK_SIZE = 512 * 1024;
+const MAX_BUFFERED_BYTES = 1024 * 1024;
 
 interface ControlMessage {
   type: string;
@@ -55,15 +59,20 @@ function decodeFrame(buf: Uint8Array): DecodedFrame | null {
     case FRAME_TYPE_CONTROL: {
       if (buf.length < 5) return null;
       const len = new DataView(buf.buffer, buf.byteOffset).getUint32(1, false);
+      if (len > MAX_CONTROL_SIZE) throw new Error('File transfer control frame is too large');
       const total = 1 + 4 + len;
       if (buf.length < total) return null;
       const json = new TextDecoder().decode(buf.slice(5, total));
       const msg = JSON.parse(json) as ControlMessage;
+      if (!msg || typeof msg !== 'object' || typeof msg.type !== 'string') {
+        throw new Error('Invalid file transfer control message');
+      }
       return { type: 'control', control: msg, consumed: total };
     }
     case FRAME_TYPE_DATA: {
       if (buf.length < 5) return null;
       const len = new DataView(buf.buffer, buf.byteOffset).getUint32(1, false);
+      if (len > MAX_DATA_CHUNK_SIZE) throw new Error('File transfer data frame is too large');
       const total = 1 + 4 + len;
       if (buf.length < total) return null;
       return { type: 'data', data: buf.slice(5, total), consumed: total };
@@ -80,6 +89,9 @@ class FrameDecoder {
   private buffer = new Uint8Array(0);
 
   feed(data: Uint8Array): void {
+    if (this.buffer.length + data.length > MAX_BUFFERED_BYTES) {
+      throw new Error('File transfer receive buffer is too large');
+    }
     const combined = new Uint8Array(this.buffer.length + data.length);
     combined.set(this.buffer);
     combined.set(data, this.buffer.length);
@@ -139,6 +151,7 @@ export class QUICFileUploader {
     const writer = stream.writable.getWriter();
     const reader = stream.readable.getReader();
     const decoder = new FrameDecoder();
+    let completed = false;
 
     try {
       // 1. Send FileTransferInit
@@ -157,9 +170,18 @@ export class QUICFileUploader {
       if (acceptMsg.type !== 'file_transfer_accept') {
         throw new Error(`Unexpected message: ${acceptMsg.type}`);
       }
+      if (acceptMsg.transfer_id !== token.transfer_id) {
+        throw new Error('Upload transfer ID mismatch');
+      }
 
-      const chunkSize = (acceptMsg.chunk_size as number) || DEFAULT_CHUNK_SIZE;
-      const offset = (acceptMsg.offset as number) || 0;
+      const chunkSize = acceptMsg.chunk_size === undefined ? DEFAULT_CHUNK_SIZE : acceptMsg.chunk_size as number;
+      const offset = acceptMsg.offset === undefined ? 0 : acceptMsg.offset as number;
+      if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0 || chunkSize > MAX_DATA_CHUNK_SIZE) {
+        throw new Error('Invalid upload chunk size');
+      }
+      if (!Number.isSafeInteger(offset) || offset < 0 || offset > file.size) {
+        throw new Error('Invalid upload resume offset');
+      }
 
       // 3. Send file data in chunks
       const totalSize = file.size;
@@ -169,6 +191,7 @@ export class QUICFileUploader {
         const end = Math.min(bytesSent + chunkSize, totalSize);
         const slice = file.slice(bytesSent, end);
         const chunk = new Uint8Array(await slice.arrayBuffer());
+        if (chunk.length === 0) throw new Error('Upload file ended before its declared size');
         await writer.write(encodeDataFrame(chunk));
         bytesSent += chunk.length;
         onProgress?.(bytesSent, totalSize);
@@ -187,21 +210,35 @@ export class QUICFileUploader {
       await writer.write(encodeEndFrame());
 
       // 5. Wait for FileTransferDone
-      const doneMsg = await this.readNextControl(reader, decoder);
+      let doneMsg = await this.readNextControl(reader, decoder);
+      while (doneMsg.type === 'file_transfer_progress') {
+        if (doneMsg.transfer_id !== token.transfer_id) throw new Error('Upload transfer ID mismatch');
+        doneMsg = await this.readNextControl(reader, decoder);
+      }
       if (doneMsg.type === 'file_transfer_error') {
         throw new Error(`Upload error: ${doneMsg.message}`);
       }
       if (doneMsg.type !== 'file_transfer_done') {
         throw new Error(`Unexpected message: ${doneMsg.type}`);
       }
+      if (doneMsg.transfer_id !== token.transfer_id) throw new Error('Upload transfer ID mismatch');
+      await writer.close();
+      completed = true;
 
+      const stored = doneMsg.attachment && typeof doneMsg.attachment === 'object'
+        ? doneMsg.attachment as Record<string, unknown>
+        : undefined;
       return {
         id: (doneMsg.attachment_id as string) || token.transfer_id,
-        filename: file.name,
+        filename: typeof stored?.filename === 'string' ? stored.filename : file.name,
         size: file.size,
+        content_type: typeof stored?.content_type === 'string' ? stored.content_type : undefined,
         url: (doneMsg.url as string) || '',
       };
     } finally {
+      if (!completed) {
+        await Promise.allSettled([reader.cancel(), writer.abort()]);
+      }
       try { writer.releaseLock(); } catch { /* ignore */ }
       try { reader.releaseLock(); } catch { /* ignore */ }
     }
@@ -221,6 +258,7 @@ export class QUICFileUploader {
       if (frame?.type === 'control' && frame.control) {
         return frame.control;
       }
+      if (frame) throw new Error('Unexpected data on the upload control stream');
 
       const { value, done } = await reader.read();
       if (done) throw new Error('Stream closed unexpectedly');

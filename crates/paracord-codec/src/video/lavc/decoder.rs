@@ -39,6 +39,35 @@ const SWS_BILINEAR: c_int = 2;
 /// such a tail write can never land outside the allocation.
 const SWS_DST_TAIL_PADDING: usize = 64;
 
+/// Give libavcodec an owned, reference-counted packet with the zero padding
+/// required by avcodec_send_packet. Bitstream readers may read
+/// AV_INPUT_BUFFER_PADDING_SIZE bytes past the logical payload; a borrowed
+/// Rust Vec has no such allocation or zero-padding guarantee.
+///
+/// Safety: `packet` must point to a live, exclusively owned AVPacket.
+unsafe fn prepare_decode_packet(
+    packet: *mut ff::AVPacket,
+    data: &[u8],
+    is_keyframe: bool,
+) -> Result<(), VideoError> {
+    let size = c_int::try_from(data.len())
+        .map_err(|_| VideoError::DecodeFailed("encoded frame is too large".into()))?;
+    if size == 0 {
+        return Err(VideoError::DecodeFailed("encoded frame is empty".into()));
+    }
+    ff::av_packet_unref(packet);
+    let ret = ff::av_new_packet(packet, size);
+    if ret < 0 {
+        return Err(VideoError::DecodeFailed(format!(
+            "av_new_packet failed: {}",
+            av_error_text(ret)
+        )));
+    }
+    ptr::copy_nonoverlapping(data.as_ptr(), (*packet).data, data.len());
+    (*packet).flags = if is_keyframe { ff::AV_PKT_FLAG_KEY } else { 0 };
+    Ok(())
+}
+
 /// Which decode path was selected at construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DecodeBackend {
@@ -182,6 +211,14 @@ impl LavcDecoder {
             }
 
             let hw_pix_fmt = Box::new(hw_pix);
+            // Enforce the budget inside libavcodec before its reference-frame
+            // allocations. Checking decoded output alone is too late.
+            let (_, _, max_pixels) = crate::video::negotiated_decode_ceiling(
+                config.max_dimensions,
+                MAX_DECODE_DIMENSION,
+                MAX_DECODE_PIXELS,
+            );
+            (*dec_ctx).max_pixels = i64::from(max_pixels);
             if backend != DecodeBackend::Software {
                 (*dec_ctx).hw_device_ctx = ff::av_buffer_ref(hw_device);
                 // Point the get_format callback at our chosen hw format. The
@@ -399,17 +436,10 @@ impl LavcDecoder {
 
         unsafe {
             let pkt = self.packet;
-            (*pkt).data = frame.data.as_ptr() as *mut u8;
-            (*pkt).size = frame.data.len() as c_int;
-            (*pkt).flags = if frame.is_keyframe {
-                ff::AV_PKT_FLAG_KEY
-            } else {
-                0
-            };
+            prepare_decode_packet(pkt, &frame.data, frame.is_keyframe)?;
 
             let ret = ff::avcodec_send_packet(self.dec_ctx, pkt);
-            (*pkt).data = ptr::null_mut();
-            (*pkt).size = 0;
+            ff::av_packet_unref(pkt);
             if ret < 0 && ret != AVERROR_EAGAIN {
                 self.needs_keyframe = true;
                 return Err(VideoError::DecodeFailed(format!(
@@ -530,18 +560,10 @@ impl LavcDecoder {
 
         unsafe {
             let pkt = self.packet;
-            (*pkt).data = frame.data.as_ptr() as *mut u8;
-            (*pkt).size = frame.data.len() as c_int;
-            (*pkt).flags = if frame.is_keyframe {
-                ff::AV_PKT_FLAG_KEY
-            } else {
-                0
-            };
+            prepare_decode_packet(pkt, &frame.data, frame.is_keyframe)?;
 
             let ret = ff::avcodec_send_packet(self.dec_ctx, pkt);
-            // Reset the borrowed view so the reusable packet never dangles.
-            (*pkt).data = ptr::null_mut();
-            (*pkt).size = 0;
+            ff::av_packet_unref(pkt);
             if ret < 0 && ret != AVERROR_EAGAIN {
                 self.needs_keyframe = true;
                 return Err(VideoError::DecodeFailed(format!(
@@ -823,6 +845,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn decoder_packets_own_payload_and_zeroed_bitstream_padding() {
+        unsafe {
+            let mut packet = ff::av_packet_alloc();
+            assert!(!packet.is_null());
+            for len in [1, 3, 64, 4097] {
+                let data = vec![0xa5; len];
+                prepare_decode_packet(packet, &data, true).unwrap();
+                assert!(!(*packet).buf.is_null());
+                assert_ne!((*packet).data as *const u8, data.as_ptr());
+                assert_eq!((*packet).size as usize, data.len());
+                assert_eq!(std::slice::from_raw_parts((*packet).data, len), data);
+                let padding = std::slice::from_raw_parts(
+                    (*packet).data.add(len),
+                    ff::AV_INPUT_BUFFER_PADDING_SIZE as usize,
+                );
+                assert!(padding.iter().all(|byte| *byte == 0));
+            }
+            assert!(prepare_decode_packet(packet, &[], false).is_err());
+            ff::av_packet_free(&mut packet);
+        }
+    }
+
+    #[test]
     fn resolution_bounds() {
         assert!(bound_decode_resolution_against(1920, 1080, None).is_ok());
         assert!(bound_decode_resolution_against(7680, 4320, None).is_ok());
@@ -905,6 +950,9 @@ mod tests {
         // Force the state a dead hardware backend leaves behind, then take the
         // recovery path the first failed packet takes.
         decoder.fall_back_to_software().expect("reopen on software");
+        // Recovery must carry the same allocation budget into the new native
+        // context; otherwise a peer can bypass it by triggering GPU fallback.
+        assert_eq!(unsafe { (*decoder.dec_ctx).max_pixels }, 640 * 480);
 
         assert_eq!(
             decoder.backend,

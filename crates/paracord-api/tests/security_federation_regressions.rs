@@ -2221,6 +2221,7 @@ async fn federation_room_namespace_mapping_is_used_even_when_sender_differs() ->
 {
     let _guard = env_lock().lock().await;
     std::env::set_var("PARACORD_FEDERATION_ENABLED", "true");
+    std::env::set_var("PARACORD_FEDERATION_ALLOWED_GUILD_IDS", "88001");
 
     let harness = TestHarness::new(true).await?;
 
@@ -2243,6 +2244,14 @@ async fn federation_room_namespace_mapping_is_used_even_when_sender_differs() ->
         "Mirrored Remote",
         owner_id,
         None,
+    )
+    .await?;
+    paracord_db::roles::create_role(
+        &harness.db,
+        local_guild_id,
+        local_guild_id,
+        "@everyone",
+        paracord_models::permissions::Permissions::default().bits(),
     )
     .await?;
     paracord_db::channels::create_channel(
@@ -2393,6 +2402,7 @@ async fn federation_room_namespace_mapping_is_used_even_when_sender_differs() ->
     );
 
     std::env::remove_var("PARACORD_FEDERATION_ENABLED");
+    std::env::remove_var("PARACORD_FEDERATION_ALLOWED_GUILD_IDS");
     Ok(())
 }
 

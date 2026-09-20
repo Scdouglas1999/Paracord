@@ -696,7 +696,8 @@ async fn verify_transport_request(
     }
 
     let now_ms = chrono::Utc::now().timestamp_millis();
-    if (now_ms - transport.timestamp_ms).abs() > paracord_federation::transport::DEFAULT_MAX_SKEW_MS
+    if now_ms.abs_diff(transport.timestamp_ms)
+        > paracord_federation::transport::DEFAULT_MAX_SKEW_MS as u64
     {
         return Err(ApiError::Unauthorized);
     }
@@ -837,10 +838,10 @@ async fn verify_transport_request(
         let replay_material = format!(
             "{}\n{}\n{}\n{}\n{}",
             canonical_origin,
-            transport.key_id,
+            method.to_ascii_uppercase(),
             transport.timestamp_ms,
             path,
-            transport.signature_hex
+            transport.signature_hex.to_ascii_lowercase()
         );
         let replay_key = paracord_federation::transport::sha256_hex(replay_material.as_bytes());
         let inserted_replay = paracord_db::federation::insert_transport_replay_key(
@@ -916,7 +917,8 @@ async fn ensure_remote_user_mapping(
         if limit > 0 {
             let now = chrono::Utc::now().timestamp();
             let hour = now / 3600;
-            let bucket_key = format!("fed:user_create:{}", identity.server);
+            let canonical_origin = canonical_peer_name(state, &identity.server).await?;
+            let bucket_key = format!("fed:user_create:{canonical_origin}");
             // Fail CLOSED: a DB error used to yield `0`, silently disabling the
             // per-peer creation limit exactly when the database is unhealthy.
             let count = match paracord_db::rate_limits::increment_window_counter(
@@ -944,12 +946,18 @@ async fn ensure_remote_user_mapping(
     }
 
     let digest = paracord_federation::transport::sha256_hex(remote_id.as_bytes());
-    let username = format!(
-        "{}_{}",
-        sanitize_remote_username(&identity.localpart, "remote"),
-        &digest[..6]
+    // Keep synthetic identities outside the local registration namespace.
+    // Otherwise a local user can reserve these predictable credentials before
+    // the peer's first message, preventing the remote account from being mapped.
+    let localpart = sanitize_remote_username(&identity.localpart, "remote");
+    // 128 digest bits fit in 22 base64url characters, leaving nine readable
+    // localpart bytes and one reserved delimiter within VARCHAR(32).
+    let suffix = base64::Engine::encode(
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+        paracord_federation::hex_decode(&digest[..32]).expect("SHA-256 produces hex"),
     );
-    let email = format!("fed+{}@remote.invalid", &digest[..24]);
+    let username = format!("{}!{suffix}", &localpart[..localpart.len().min(9)]);
+    let email = format!("fed+{digest}@federation");
     let user_id = paracord_util::snowflake::generate(1);
 
     let created =
@@ -975,54 +983,17 @@ async fn ensure_remote_user_mapping(
     Ok(user_id)
 }
 
-fn canonical_event_payload_bytes(envelope: &FederationEventEnvelope) -> Vec<u8> {
-    serde_json::to_vec(&json!({
-        "event_id": envelope.event_id,
-        "room_id": envelope.room_id,
-        "event_type": envelope.event_type,
-        "sender": envelope.sender,
-        "origin_server": envelope.origin_server,
-        "origin_ts": envelope.origin_ts,
-        "content": envelope.content,
-        "depth": envelope.depth,
-        "state_key": envelope.state_key,
-    }))
-    .unwrap_or_default()
-}
-
-fn extract_signature_for_origin(
-    signatures: &Value,
-    origin_server: &str,
-) -> Option<(String, String)> {
-    // Preferred format: { "<origin_server>": { "<key_id>": "<signature_hex>" } }
-    if let Some(by_origin) = signatures.get(origin_server).and_then(|v| v.as_object()) {
-        for (key_id, signature) in by_origin {
-            if let Some(sig) = signature.as_str() {
-                return Some((key_id.clone(), sig.to_string()));
-            }
-        }
-    }
-
-    // Fallback format: { "<key_id>": "<signature_hex>" }
-    if let Some(flat) = signatures.as_object() {
-        for (key_id, signature) in flat {
-            if let Some(sig) = signature.as_str() {
-                return Some((key_id.clone(), sig.to_string()));
-            }
-        }
-    }
-
-    None
-}
-
 async fn verify_envelope_origin_signature(
     state: &AppState,
     service: &FederationService,
     payload: &FederationEventEnvelope,
 ) -> Result<(), ApiError> {
-    let (payload_key_id, signature_hex) =
-        extract_signature_for_origin(&payload.signatures, &payload.origin_server)
-            .ok_or(ApiError::Unauthorized)?;
+    let signatures = payload
+        .signatures
+        .get(&payload.origin_server)
+        .and_then(Value::as_object)
+        .or_else(|| payload.signatures.as_object())
+        .ok_or(ApiError::Unauthorized)?;
     let now_ms = chrono::Utc::now().timestamp_millis();
     let canonical_origin = canonical_peer_name(state, &payload.origin_server).await?;
     let payload_origin_trusted =
@@ -1036,22 +1007,33 @@ async fn verify_envelope_origin_signature(
         .list_server_keys(&state.db, &canonical_origin)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    let trusted_key = keys
+    let payload_bytes = paracord_federation::canonical_envelope_bytes(payload);
+    // An expired/unknown key sorted before the active key must not break key
+    // rotation, or let an unsigned extra signature suppress a valid envelope.
+    if keys
         .iter()
-        .find(|k| k.key_id == payload_key_id && k.valid_until >= now_ms)
-        .ok_or(ApiError::Forbidden)?;
-
-    let payload_bytes = canonical_event_payload_bytes(payload);
-    service
-        .verify_payload(&payload_bytes, &signature_hex, &trusted_key.public_key)
-        .map_err(|_| ApiError::Forbidden)?;
-    Ok(())
+        .filter(|key| key.valid_until >= now_ms)
+        .any(|key| {
+            signatures
+                .get(&key.key_id)
+                .and_then(Value::as_str)
+                .is_some_and(|signature| {
+                    service
+                        .verify_payload(&payload_bytes, signature, &key.public_key)
+                        .is_ok()
+                })
+        })
+    {
+        Ok(())
+    } else {
+        Err(ApiError::Forbidden)
+    }
 }
 
 async fn ingest_verified_payload(
     state: &AppState,
     service: &FederationService,
-    mut payload: FederationEventEnvelope,
+    payload: FederationEventEnvelope,
     transport_origin: Option<&str>,
 ) -> Result<bool, ApiError> {
     validate_envelope_identifier_lengths(&payload)?;
@@ -1063,6 +1045,25 @@ async fn ingest_verified_payload(
     // catch-up fetch with oversized `content` and have it persisted and fanned
     // out. Every ingest path funnels through this function.
     validate_federation_content(&payload.content)?;
+
+    // event_id is globally unique in storage, so an origin must stay in its
+    // own suffix namespace before it can reserve a dedup entry.
+    let canonical_origin = canonical_peer_name(state, &payload.origin_server).await?;
+    let origin_peer = paracord_db::federation::get_federated_server(&state.db, &canonical_origin)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::Forbidden)?;
+    let event_id_lower = payload.event_id.to_ascii_lowercase();
+    if ![origin_peer.server_name, origin_peer.domain]
+        .iter()
+        .any(|name| event_id_lower.ends_with(&format!(":{}", name.to_ascii_lowercase())))
+    {
+        return Err(ApiError::Forbidden);
+    }
+
+    // The signed room is the authorization boundary. Content IDs must never
+    // redirect an event into a different room after that boundary is checked.
+    validate_event_target_scope(state, service, &payload).await?;
 
     let now_ms = chrono::Utc::now().timestamp_millis();
 
@@ -1102,9 +1103,10 @@ async fn ingest_verified_payload(
             "federation event depth is out of range".to_string(),
         ));
     }
-    if payload.depth == 0 {
-        payload.depth = payload.origin_ts.max(1);
-    }
+    // Keep signed bytes intact, including legacy depth=0 envelopes. Rewriting
+    // their depth invalidates the origin signature when another peer pulls or
+    // receives the stored envelope; history queries use origin_ts as the cursor
+    // for these legacy envelopes instead.
 
     // Enforce that the immediate transport sender is authorized to deliver this
     // envelope: either it IS the envelope origin, or it is an allowed relay
@@ -1144,6 +1146,15 @@ async fn ingest_verified_payload(
             payload.origin_server,
             payload.room_id
         );
+        return Err(ApiError::Forbidden);
+    }
+
+    if matches!(
+        payload.event_type.as_str(),
+        "m.member.join" | "m.member.leave"
+    ) && payload.content.get("membership_user_id").is_some()
+        && membership_event_identity(state, &payload).await.is_none()
+    {
         return Err(ApiError::Forbidden);
     }
 
@@ -1613,12 +1624,6 @@ async fn dispatch_federated_message(state: &AppState, payload: &FederationEventE
         return;
     }
 
-    let federated_msg_id_str = payload
-        .content
-        .get("message_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-
     let Some(remote_ch_id) = remote_channel_id else {
         tracing::warn!(
             "federation: m.message event {} missing channel_id, dispatching generic event",
@@ -1746,51 +1751,6 @@ async fn dispatch_federated_message(state: &AppState, payload: &FederationEventE
     .await
     {
         Ok(msg) => {
-            let author_username = paracord_db::users::get_user_by_id(&state.db, author_id)
-                .await
-                .ok()
-                .flatten()
-                .map(|u| u.username)
-                .unwrap_or_else(|| payload.sender.clone());
-
-            // Build a MESSAGE_CREATE payload that includes federation metadata
-            let msg_json = json!({
-                "id": msg.id.to_string(),
-                "channel_id": msg.channel_id.to_string(),
-                "author": {
-                    "id": author_id.to_string(),
-                    "username": author_username,
-                    "discriminator": 0,
-                    "avatar_hash": null,
-                    "public_key": null,
-                    "flags": 0,
-                    "bot": false,
-                },
-                "content": body_text,
-                "pinned": false,
-                "type": 0,
-                "message_type": 0,
-                "timestamp": msg.created_at.to_rfc3339(),
-                "created_at": msg.created_at.to_rfc3339(),
-                "edited_timestamp": null,
-                "edited_at": null,
-                "reference_id": null,
-                "attachments": [],
-                "reactions": [],
-                "poll": null,
-                "federation": {
-                    "event_id": payload.event_id,
-                    "origin_server": payload.origin_server,
-                    "sender": payload.sender,
-                    "remote_message_id": federated_msg_id_str,
-                },
-            });
-
-            state
-                .event_bus
-                .dispatch_message(&state.db, "MESSAGE_CREATE", msg_json, channel.guild_id())
-                .await;
-
             let remote_mid = payload
                 .content
                 .get("message_id")
@@ -1814,6 +1774,13 @@ async fn dispatch_federated_message(state: &AppState, payload: &FederationEventE
                     e
                 );
             }
+            // Commit the mapping before announcing the message: a client may
+            // immediately reload history in response to MESSAGE_CREATE.
+            let msg_json = crate::routes::channels::message_to_json(state, &msg, author_id).await;
+            state
+                .event_bus
+                .dispatch_message(&state.db, "MESSAGE_CREATE", msg_json, channel.guild_id())
+                .await;
         }
         Err(e) => {
             tracing::error!(
@@ -1826,6 +1793,63 @@ async fn dispatch_federated_message(state: &AppState, payload: &FederationEventE
             dispatch_federated_message_fallback(state, payload, channel.guild_id());
         }
     }
+}
+
+/// Project remote metadata into the normal message contract. Attachment URLs
+/// are always local authenticated proxies; a peer cannot supply navigation URLs
+/// or override the attachment's authoritative origin.
+pub(crate) fn message_attachment_metadata(
+    origin: &str,
+    channel_id: i64,
+    content: &Value,
+) -> Vec<Value> {
+    let Some(attachments) = content.get("attachments").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    attachments
+        .iter()
+        .take(10)
+        .filter_map(|attachment| {
+            let id = attachment.get("id")?.as_str()?.parse::<i64>().ok()?;
+            if id <= 0 {
+                return None;
+            }
+            let filename = attachment.get("filename")?.as_str()?;
+            if filename.is_empty() || filename.len() > 255 || filename.chars().any(char::is_control)
+            {
+                return None;
+            }
+            let size = attachment.get("size")?.as_u64()?;
+            if size > i64::MAX as u64 {
+                return None;
+            }
+            let mut url = reqwest::Url::parse("http://localhost").ok()?;
+            url.path_segments_mut().ok()?.extend([
+                "api",
+                "v1",
+                "federated-files",
+                origin,
+                &id.to_string(),
+            ]);
+            let proxy = format!("{}?channel_id={channel_id}", url.path());
+            let content_type = attachment
+                .get("content_type")
+                .and_then(Value::as_str)
+                .filter(|value| {
+                    value.len() <= 127
+                        && value.bytes().all(|b| b.is_ascii() && !b.is_ascii_control())
+                });
+            let content_hash = attachment
+                .get("content_hash")
+                .and_then(Value::as_str)
+                .filter(|value| value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit()));
+            Some(json!({
+                "id": id.to_string(), "filename": filename, "size": size,
+                "content_type": content_type, "url": proxy, "origin_server": origin,
+                "content_hash": content_hash,
+            }))
+        })
+        .collect()
 }
 
 fn content_str<'a>(content: &'a Value, key: &str) -> Option<&'a str> {
@@ -1849,6 +1873,16 @@ async fn resolve_local_guild_id(
     namespace_server: &str,
     remote_guild_id: i64,
 ) -> Option<i64> {
+    let service = federation_service_from_state(state);
+    if namespace_server.eq_ignore_ascii_case(service.domain())
+        || namespace_server.eq_ignore_ascii_case(service.server_name())
+    {
+        return paracord_db::guilds::get_guild(&state.db, remote_guild_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|guild| guild.id);
+    }
     let remote_space_id = remote_guild_id.to_string();
     if let Ok(Some(mapping)) = paracord_db::federation::get_space_mapping_by_remote(
         &state.db,
@@ -1860,20 +1894,23 @@ async fn resolve_local_guild_id(
         return Some(mapping.local_guild_id);
     }
 
-    // Legacy backfill only for system-owned mirrored spaces.
-    if let Ok(Some(existing)) = paracord_db::guilds::get_guild(&state.db, remote_guild_id).await {
-        if existing.owner_id == 0 {
-            let _ = paracord_db::federation::upsert_space_mapping(
-                &state.db,
-                namespace_server,
-                &remote_space_id,
-                remote_guild_id,
-            )
-            .await;
-            return Some(remote_guild_id);
-        }
+    // Legacy mirrors remain usable when their persisted room membership or
+    // message history proves the namespace. Numeric equality alone is not proof.
+    let room_id = remote_room_id(&remote_space_id, namespace_server);
+    if matches!(
+        paracord_db::federation::legacy_room_owns_guild(&state.db, &room_id, remote_guild_id).await,
+        Ok(true)
+    ) {
+        paracord_db::federation::upsert_space_mapping(
+            &state.db,
+            namespace_server,
+            &remote_space_id,
+            remote_guild_id,
+        )
+        .await
+        .ok()?;
+        return Some(remote_guild_id);
     }
-
     None
 }
 
@@ -1882,6 +1919,17 @@ async fn resolve_local_channel_id(
     namespace_server: &str,
     remote_channel_id: i64,
 ) -> Option<i64> {
+    let service = federation_service_from_state(state);
+    if namespace_server.eq_ignore_ascii_case(service.domain())
+        || namespace_server.eq_ignore_ascii_case(service.server_name())
+    {
+        return paracord_db::channels::get_channel(&state.db, remote_channel_id)
+            .await
+            .ok()
+            .flatten()
+            .filter(|channel| channel.guild_id().is_some())
+            .map(|channel| channel.id);
+    }
     let remote_channel = remote_channel_id.to_string();
     if let Ok(Some(mapping)) = paracord_db::federation::get_channel_mapping_by_remote(
         &state.db,
@@ -1893,32 +1941,186 @@ async fn resolve_local_channel_id(
         return Some(mapping.local_channel_id);
     }
 
-    if let Ok(Some(existing)) =
+    if let Ok(Some(channel)) =
         paracord_db::channels::get_channel(&state.db, remote_channel_id).await
     {
-        let local_guild_id = existing.guild_id().unwrap_or_default();
-        if local_guild_id > 0 {
-            let system_owned_guild = paracord_db::guilds::get_guild(&state.db, local_guild_id)
-                .await
-                .ok()
-                .flatten()
-                .map(|guild| guild.owner_id == 0)
-                .unwrap_or(false);
-            if system_owned_guild {
-                let _ = paracord_db::federation::upsert_channel_mapping(
-                    &state.db,
-                    namespace_server,
-                    &remote_channel,
-                    remote_channel_id,
-                    local_guild_id,
+        let guild_id = channel.guild_id()?;
+        let room_id = remote_room_id(&guild_id.to_string(), namespace_server);
+        if matches!(
+            paracord_db::federation::legacy_room_owns_guild(&state.db, &room_id, guild_id).await,
+            Ok(true)
+        ) {
+            paracord_db::federation::upsert_channel_mapping(
+                &state.db,
+                namespace_server,
+                &remote_channel,
+                remote_channel_id,
+                guild_id,
+            )
+            .await
+            .ok()?;
+            return Some(remote_channel_id);
+        }
+    }
+    None
+}
+
+/// Check every independently supplied target before persistence, mutation or
+/// relay. This covers both push ingestion and catch-up, including edits and
+/// reactions that identify their target only by a message/event ID.
+async fn validate_event_target_scope(
+    state: &AppState,
+    service: &FederationService,
+    payload: &FederationEventEnvelope,
+) -> Result<(), ApiError> {
+    let room_guild = parse_room_parts(&payload.room_id).map(|(id, _)| id);
+    let content_guild = content_i64(&payload.content, "guild_id");
+    if room_guild
+        .zip(content_guild)
+        .is_some_and(|(room, content)| room != content)
+    {
+        return Err(ApiError::Forbidden);
+    }
+    let namespace = mapping_namespace_from_room(&payload.room_id, &payload.origin_server);
+    let expected_guild = if let Some(local) = parse_local_room_guild_id(service, &payload.room_id) {
+        Some(local)
+    } else if let Some(remote) = room_guild.or(content_guild) {
+        resolve_local_guild_id(state, &namespace, remote).await
+    } else {
+        None
+    };
+
+    let mut target_channel = None;
+    if let Some(remote_channel) = content_i64(&payload.content, "channel_id") {
+        if let Some(local_channel) =
+            resolve_local_channel_id(state, &namespace, remote_channel).await
+        {
+            target_channel = Some(local_channel);
+        } else if parse_local_room_guild_id(service, &payload.room_id).is_some() {
+            return Err(ApiError::Forbidden);
+        }
+    }
+    if let Some(guild_id) = expected_guild {
+        ensure_federation_guild_allowed(guild_id)?;
+        if matches!(
+            payload.event_type.as_str(),
+            "m.message" | "m.message.edit" | "m.reaction.add" | "m.member.join"
+        ) {
+            if let Some(identity) = FederatedIdentity::parse(&payload.sender) {
+                // Peer participation alone cannot keep a departed or banned
+                // user posting while another user on that server remains. Only
+                // the room authority can admit a new identity into its room.
+                if !origin_authoritative_for_room_namespace(
+                    state,
+                    &payload.origin_server,
+                    &payload.room_id,
                 )
-                .await;
-                return Some(remote_channel_id);
+                .await?
+                    && !paracord_db::federation::has_room_membership(
+                        &state.db,
+                        &payload.room_id,
+                        &identity.to_canonical(),
+                        guild_id,
+                    )
+                    .await
+                    .map_err(|error| ApiError::Internal(error.into()))?
+                {
+                    return Err(ApiError::Forbidden);
+                }
+
+                if let Some(mapping) = paracord_db::federation::get_remote_user_mapping(
+                    &state.db,
+                    &identity.to_canonical(),
+                )
+                .await
+                .map_err(|error| ApiError::Internal(error.into()))?
+                {
+                    if paracord_db::bans::get_ban(&state.db, mapping.local_user_id, guild_id)
+                        .await?
+                        .is_some()
+                    {
+                        return Err(ApiError::Forbidden);
+                    }
+                }
             }
         }
     }
+    if matches!(
+        payload.event_type.as_str(),
+        "m.message.edit" | "m.message.delete" | "m.reaction.add" | "m.reaction.remove"
+    ) {
+        if let Some(message_id) = resolve_local_message_id_from_payload(state, payload).await {
+            let message = paracord_db::messages::get_message(&state.db, message_id)
+                .await?
+                .ok_or(ApiError::NotFound)?;
+            if target_channel.is_some_and(|channel_id| channel_id != message.channel_id) {
+                return Err(ApiError::Forbidden);
+            }
+            target_channel = Some(message.channel_id);
+        }
+    }
+    if let Some(channel_id) = target_channel {
+        let channel = paracord_db::channels::get_channel(&state.db, channel_id)
+            .await?
+            .ok_or(ApiError::NotFound)?;
+        let guild_id = channel.guild_id().ok_or(ApiError::Forbidden)?;
+        if expected_guild != Some(guild_id) {
+            return Err(ApiError::Forbidden);
+        }
+        ensure_federation_guild_allowed(guild_id)?;
+        if !federation_channel_is_public(state, &channel, guild_id).await {
+            return Err(ApiError::Forbidden);
+        }
+    }
+    Ok(())
+}
 
-    None
+/// Stored envelopes outlive both guild federation opt-in and channel visibility.
+/// Re-check those controls when serving history, not only when first relaying it.
+async fn federation_history_event_is_visible(
+    state: &AppState,
+    service: &FederationService,
+    payload: &FederationEventEnvelope,
+) -> Result<bool, ApiError> {
+    let local_room = parse_local_room_guild_id(service, &payload.room_id);
+    let namespace = mapping_namespace_from_room(&payload.room_id, &payload.origin_server);
+    let guild_id = if local_room.is_some() {
+        local_room
+    } else if let Some((remote, _)) = parse_room_parts(&payload.room_id) {
+        resolve_local_guild_id(state, &namespace, remote).await
+    } else {
+        None
+    };
+    if guild_id.is_some_and(|guild| ensure_federation_guild_allowed(guild).is_err()) {
+        return Ok(false);
+    }
+    let channel_id = if let Some(remote_channel) = content_i64(&payload.content, "channel_id") {
+        if local_room.is_some() {
+            Some(remote_channel)
+        } else {
+            resolve_local_channel_id(state, &namespace, remote_channel).await
+        }
+    } else if let Some(message_id) = resolve_local_message_id_from_payload(state, payload).await {
+        paracord_db::messages::get_message(&state.db, message_id)
+            .await?
+            .map(|message| message.channel_id)
+    } else {
+        // Membership metadata has no channel. Message content in a known room
+        // needs a verifiable channel even when an edit omits channel_id.
+        return Ok(guild_id.is_none()
+            || matches!(
+                payload.event_type.as_str(),
+                "m.member.join" | "m.member.leave"
+            ));
+    };
+    let Some(channel_id) = channel_id else {
+        return Ok(false);
+    };
+    let Some(channel) = paracord_db::channels::get_channel(&state.db, channel_id).await? else {
+        return Ok(false);
+    };
+    Ok(channel.guild_id().is_some_and(|id| Some(id) == guild_id)
+        && federation_channel_is_public(state, &channel, guild_id.unwrap_or_default()).await)
 }
 
 async fn ensure_federated_space_exists(
@@ -1928,6 +2130,10 @@ async fn ensure_federated_space_exists(
 ) -> Option<i64> {
     let remote_space_id = remote_guild_id.to_string();
     let mapping_namespace = mapping_namespace_from_room(&payload.room_id, &payload.origin_server);
+    if parse_local_room_guild_id(&federation_service_from_state(state), &payload.room_id).is_some()
+    {
+        return resolve_local_guild_id(state, &mapping_namespace, remote_guild_id).await;
+    }
     let local_guild_id = if let Some(mapped) =
         resolve_local_guild_id(state, &mapping_namespace, remote_guild_id).await
     {
@@ -2066,6 +2272,14 @@ async fn ensure_federated_channel_exists(
 ) -> Option<paracord_db::channels::ChannelRow> {
     let remote_channel = remote_channel_id.to_string();
     let mapping_namespace = mapping_namespace_from_room(&payload.room_id, &payload.origin_server);
+    if parse_local_room_guild_id(&federation_service_from_state(state), &payload.room_id).is_some()
+    {
+        return paracord_db::channels::get_channel(&state.db, remote_channel_id)
+            .await
+            .ok()
+            .flatten()
+            .filter(|channel| channel.guild_id() == Some(local_guild_id));
+    }
     let local_channel_id = if let Some(mapped) =
         resolve_local_channel_id(state, &mapping_namespace, remote_channel_id).await
     {
@@ -2156,6 +2370,40 @@ async fn resolve_local_message_id_from_payload(
     state: &AppState,
     payload: &FederationEventEnvelope,
 ) -> Option<i64> {
+    // Reactions may target another origin's message. Resolve the event from
+    // committed local history, and require the exact signed room; an arbitrary
+    // peer-supplied numeric message ID never gains this cross-origin authority.
+    if matches!(
+        payload.event_type.as_str(),
+        "m.reaction.add" | "m.reaction.remove"
+    ) {
+        if let Some(target_event_id) = content_str(&payload.content, "target_event_id") {
+            let service = federation_service_from_state(state);
+            let target = service
+                .fetch_event(&state.db, target_event_id)
+                .await
+                .ok()
+                .flatten()?;
+            if target.event_type != "m.message" || target.room_id != payload.room_id {
+                return None;
+            }
+            if target
+                .origin_server
+                .eq_ignore_ascii_case(service.server_name())
+                || target.origin_server.eq_ignore_ascii_case(service.domain())
+            {
+                return content_i64(&target.content, "message_id");
+            }
+            return paracord_db::federation::get_local_message_id_by_event(
+                &state.db,
+                &target.origin_server,
+                target_event_id,
+            )
+            .await
+            .ok()
+            .flatten();
+        }
+    }
     if let Some(remote_mid) = content_str(&payload.content, "message_id") {
         if let Ok(id) = paracord_db::federation::get_local_message_id_by_remote(
             &state.db,
@@ -2219,6 +2467,20 @@ async fn dispatch_federated_message_edit(state: &AppState, payload: &FederationE
         return;
     };
 
+    let Ok(Some(author_mapping)) =
+        paracord_db::federation::get_remote_user_mapping(&state.db, &identity.to_canonical()).await
+    else {
+        return;
+    };
+    let Ok(Some(target_message)) =
+        paracord_db::messages::get_message(&state.db, local_message_id).await
+    else {
+        return;
+    };
+    if target_message.author_id != author_mapping.local_user_id {
+        return;
+    }
+
     let mapping_namespace = mapping_namespace_from_room(&payload.room_id, &payload.origin_server);
     let fallback_channel_id =
         match paracord_db::messages::get_message(&state.db, local_message_id).await {
@@ -2238,6 +2500,9 @@ async fn dispatch_federated_message_edit(state: &AppState, payload: &FederationE
         .and_then(|v| v.as_str())
         .unwrap_or_default()
         .to_string();
+    if paracord_util::validation::validate_message_content(&new_content).is_err() {
+        return;
+    }
     let updated = match paracord_db::messages::update_message(
         &state.db,
         local_message_id,
@@ -2312,6 +2577,20 @@ async fn dispatch_federated_message_delete(state: &AppState, payload: &Federatio
         );
         return;
     };
+
+    let Ok(Some(author_mapping)) =
+        paracord_db::federation::get_remote_user_mapping(&state.db, &identity.to_canonical()).await
+    else {
+        return;
+    };
+    let Ok(Some(target_message)) =
+        paracord_db::messages::get_message(&state.db, local_message_id).await
+    else {
+        return;
+    };
+    if target_message.author_id != author_mapping.local_user_id {
+        return;
+    }
 
     let channel_id = match paracord_db::messages::get_message(&state.db, local_message_id).await {
         Ok(Some(msg)) => msg.channel_id,
@@ -2464,17 +2743,68 @@ async fn dispatch_federated_reaction_remove(state: &AppState, payload: &Federati
     .await;
 }
 
+/// A room's authoritative server can attest to a remote user's admitted
+/// membership. This bootstraps other peers without letting that remote user
+/// self-authorize a foreign namespace. It always maps to a remote pseudo-user,
+/// never to an actual local account with the same username.
+async fn membership_event_identity(
+    state: &AppState,
+    payload: &FederationEventEnvelope,
+) -> Option<FederatedIdentity> {
+    if let Some(user_id) = content_str(&payload.content, "membership_user_id") {
+        if !origin_authoritative_for_room_namespace(state, &payload.origin_server, &payload.room_id)
+            .await
+            .ok()?
+        {
+            return None;
+        }
+        return FederatedIdentity::parse(user_id);
+    }
+    let identity = FederatedIdentity::parse(&payload.sender)?;
+    ensure_identity_matches_origin_or_alias(state, &identity, &payload.origin_server)
+        .await
+        .ok()?;
+    Some(identity)
+}
+
+pub(crate) async fn publish_membership_endorsement(
+    state: &AppState,
+    service: &FederationService,
+    guild_id: i64,
+    identity: &FederatedIdentity,
+    event_type: &str,
+) {
+    let Ok(envelope) = service.build_custom_envelope(
+        event_type,
+        canonical_local_room_id(service, guild_id),
+        "server",
+        &json!({"guild_id": guild_id.to_string(), "membership_user_id": identity.to_canonical()}),
+        chrono::Utc::now().timestamp_millis(),
+        None,
+        None,
+    ) else {
+        return;
+    };
+    if service.persist_event(&state.db, &envelope).await.is_err() {
+        return;
+    }
+    let state = state.clone();
+    let service = service.clone();
+    tokio::spawn(async move {
+        service
+            .forward_envelope_to_peers(&state.db, &envelope)
+            .await;
+    });
+}
+
 async fn dispatch_federated_member_join(state: &AppState, payload: &FederationEventEnvelope) {
     let service = federation_service_from_state(state);
     if !service.is_enabled() {
         return;
     }
-    let Some(identity) = FederatedIdentity::parse(&payload.sender) else {
+    let Some(identity) = membership_event_identity(state, payload).await else {
         return;
     };
-    if !identity.server.eq_ignore_ascii_case(&payload.origin_server) {
-        return;
-    }
     let Some(remote_guild_id) = content_i64(&payload.content, "guild_id")
         .or_else(|| parse_room_parts(&payload.room_id).map(|(id, _)| id))
     else {
@@ -2490,9 +2820,32 @@ async fn dispatch_federated_member_join(state: &AppState, payload: &FederationEv
     let Ok(Some(guild)) = paracord_db::guilds::get_guild(&state.db, guild_id).await else {
         return;
     };
+    if identity.server.eq_ignore_ascii_case(service.server_name())
+        || identity.server.eq_ignore_ascii_case(service.domain())
+    {
+        // The origin may attest to this server participating, but cannot enroll
+        // a local account. The actual user must take the local join/invite path.
+        if ensure_federated_system_user(state).await {
+            let _ = paracord_db::federation::upsert_room_membership(
+                &state.db,
+                &payload.room_id,
+                &identity.to_canonical(),
+                0,
+                guild_id,
+            )
+            .await;
+        }
+        return;
+    }
     let Ok(local_user_id) = ensure_remote_user_mapping(state, &identity).await else {
         return;
     };
+    if !matches!(
+        paracord_db::bans::get_ban(&state.db, local_user_id, guild_id).await,
+        Ok(None)
+    ) {
+        return;
+    }
     let room_id = if payload.room_id.trim().is_empty() {
         canonical_local_room_id(&service, guild_id)
     } else {
@@ -2537,12 +2890,9 @@ async fn dispatch_federated_member_leave(state: &AppState, payload: &FederationE
     if !service.is_enabled() {
         return;
     }
-    let Some(identity) = FederatedIdentity::parse(&payload.sender) else {
+    let Some(identity) = membership_event_identity(state, payload).await else {
         return;
     };
-    if !identity.server.eq_ignore_ascii_case(&payload.origin_server) {
-        return;
-    }
     let mapping_namespace = mapping_namespace_from_room(&payload.room_id, &payload.origin_server);
     let Some(remote_guild_id) = content_i64(&payload.content, "guild_id")
         .or_else(|| parse_room_parts(&payload.room_id).map(|(id, _)| id))
@@ -2556,6 +2906,17 @@ async fn dispatch_federated_member_leave(state: &AppState, payload: &FederationE
     if ensure_federation_guild_allowed(guild_id).is_err() {
         return;
     };
+    if identity.server.eq_ignore_ascii_case(service.server_name())
+        || identity.server.eq_ignore_ascii_case(service.domain())
+    {
+        let _ = paracord_db::federation::delete_room_membership(
+            &state.db,
+            &payload.room_id,
+            &identity.to_canonical(),
+        )
+        .await;
+        return;
+    }
     let Ok(Some(mapping)) =
         paracord_db::federation::get_remote_user_mapping(&state.db, &identity.to_canonical()).await
     else {
@@ -2599,9 +2960,9 @@ async fn ensure_federated_system_user(state: &AppState) -> bool {
     match paracord_db::users::create_user(
         &state.db,
         0,
-        "federated",
+        "!federated!",
         0,
-        "federated@local.invalid",
+        "!federated!@invalid",
         "!federated!",
     )
     .await
@@ -2645,6 +3006,9 @@ pub async fn get_event(
                 if !server_participates_in_room(&state, origin, &envelope.room_id).await? {
                     return Err(ApiError::NotFound);
                 }
+                if !federation_history_event_is_visible(&state, &service, &envelope).await? {
+                    return Err(ApiError::NotFound);
+                }
             }
             Ok(Json(json!(envelope)))
         }
@@ -2656,6 +3020,7 @@ pub async fn get_event(
 pub struct ListEventsQuery {
     pub room_id: String,
     pub since_depth: Option<i64>,
+    pub since_event_id: Option<String>,
     pub limit: Option<i64>,
 }
 
@@ -2685,13 +3050,73 @@ pub async fn list_events(
         }
     }
 
-    let since_depth = query.since_depth.unwrap_or(0).max(0);
-    let limit = query.limit.unwrap_or(100).clamp(1, 1000);
-    let events = service
-        .list_room_events(&state.db, &query.room_id, since_depth, limit)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    Ok(Json(json!({ "events": events })))
+    let mut depth = query.since_depth.unwrap_or(0).max(0);
+    let mut event_id = query.since_event_id;
+    if event_id
+        .as_ref()
+        .is_some_and(|id| id.chars().count() > MAX_FEDERATION_IDENTIFIER_LEN)
+    {
+        return Err(ApiError::BadRequest(
+            "Invalid federation history cursor".into(),
+        ));
+    }
+    let limit = query.limit.unwrap_or(100).clamp(1, 1000) as usize;
+    // Filtering a LIMITed page once can hide all later public events forever.
+    // Scan in stable batches, but cap per-request database and visibility work.
+    // The continuation carries only a position; hidden envelopes are never sent.
+    const MAX_HISTORY_SCAN: usize = 2048;
+    const MAX_HISTORY_RESPONSE_BYTES: usize = 7 * 1024 * 1024;
+    let mut response_bytes = 0;
+    let mut scanned = 0;
+    let mut visible = Vec::new();
+    'scan: while scanned < MAX_HISTORY_SCAN && visible.len() < limit {
+        let batch_limit = (MAX_HISTORY_SCAN - scanned).min(16) as i64;
+        let batch = service
+            .list_room_events_after(
+                &state.db,
+                &query.room_id,
+                depth,
+                event_id.as_deref(),
+                batch_limit,
+            )
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        if batch.is_empty() {
+            break;
+        }
+        for event in batch {
+            let is_visible = !matches!(auth, FederationReadAuth::Peer { .. })
+                || federation_history_event_is_visible(&state, &service, &event).await?;
+            if is_visible {
+                let event_bytes = serde_json::to_vec(&event)
+                    .map_err(|e| ApiError::Internal(e.into()))?
+                    .len();
+                if !visible.is_empty() && response_bytes + event_bytes > MAX_HISTORY_RESPONSE_BYTES
+                {
+                    // Leave the next visible event beyond the continuation so
+                    // a response-size limit cannot silently discard it.
+                    break 'scan;
+                }
+                response_bytes += event_bytes;
+            }
+            depth = if event.depth == 0 {
+                event.origin_ts
+            } else {
+                event.depth
+            };
+            event_id = Some(event.event_id.clone());
+            scanned += 1;
+            if is_visible {
+                visible.push(event);
+                if visible.len() == limit {
+                    break;
+                }
+            }
+        }
+    }
+    Ok(Json(
+        json!({ "events": visible, "next_depth": depth, "next_event_id": event_id }),
+    ))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2846,6 +3271,17 @@ pub async fn run_federation_catchup_once(
         if peer.server_name.eq_ignore_ascii_case(service.server_name()) {
             continue;
         }
+        if !matches!(
+            is_peer_trusted(
+                state,
+                &peer.server_name,
+                chrono::Utc::now().timestamp_millis()
+            )
+            .await,
+            Ok(true)
+        ) {
+            continue;
+        }
         let mut mappings = match paracord_db::federation::list_space_mappings_by_origin(
             &state.db,
             &peer.server_name,
@@ -2892,33 +3328,35 @@ pub async fn run_federation_catchup_once(
 
             for domain in candidate_domains {
                 let room_id = remote_room_id(&mapping.remote_space_id, &domain);
-                let since_depth = match paracord_db::federation::get_room_sync_cursor(
-                    &state.db,
-                    &peer.server_name,
-                    &room_id,
-                )
-                .await
-                {
-                    Ok(depth) => depth.max(0),
-                    Err(err) => {
-                        tracing::warn!(
-                            "federation: catch-up failed loading cursor for {} {}: {}",
-                            peer.server_name,
-                            room_id,
-                            err
-                        );
-                        continue;
-                    }
-                };
+                let (since_depth, since_event_id) =
+                    match paracord_db::federation::get_room_sync_position(
+                        &state.db,
+                        &peer.server_name,
+                        &room_id,
+                    )
+                    .await
+                    {
+                        Ok((depth, event_id)) => (depth.max(0), event_id),
+                        Err(err) => {
+                            tracing::warn!(
+                                "federation: catch-up failed loading cursor for {} {}: {}",
+                                peer.server_name,
+                                room_id,
+                                err
+                            );
+                            continue;
+                        }
+                    };
 
-                let events = match client
-                    .fetch_messages(
+                let page = match client
+                    .fetch_messages_page(
                         paracord_federation::client::FederationTarget::new(
                             &peer.federation_endpoint,
                             &peer.server_name,
                         ),
                         &room_id,
                         since_depth,
+                        since_event_id.as_deref(),
                         per_room_limit.clamp(1, 500),
                     )
                     .await
@@ -2935,16 +3373,47 @@ pub async fn run_federation_catchup_once(
                     }
                 };
 
-                if events.is_empty() {
-                    continue;
-                }
-
                 let mut newest_depth = since_depth;
-                for event in events {
+                let mut newest_event_id = since_event_id.clone();
+                let mut page_valid = true;
+                let explicit_cursor = page.next_depth.zip(page.next_event_id);
+                for event in page.events {
+                    if event.room_id != room_id {
+                        page_valid = false;
+                        continue;
+                    }
+                    let already_committed = service
+                        .fetch_event(&state.db, &event.event_id)
+                        .await
+                        .ok()
+                        .flatten()
+                        .is_some_and(|stored| {
+                            paracord_federation::canonical_envelope_bytes(&stored)
+                                == paracord_federation::canonical_envelope_bytes(&event)
+                        });
+                    if already_committed {
+                        let depth = if event.depth == 0 {
+                            event.origin_ts
+                        } else {
+                            event.depth
+                        };
+                        if depth > newest_depth
+                            || (depth == newest_depth
+                                && newest_event_id
+                                    .as_ref()
+                                    .is_some_and(|id| event.event_id > *id))
+                        {
+                            newest_depth = depth;
+                            newest_event_id =
+                                explicit_cursor.as_ref().map(|_| event.event_id.clone());
+                        }
+                        continue;
+                    }
                     if verify_envelope_origin_signature(state, &service, &event)
                         .await
                         .is_err()
                     {
+                        page_valid = false;
                         tracing::warn!(
                             "federation: catch-up rejected invalid event {} for peer {}",
                             event.event_id,
@@ -2961,10 +3430,26 @@ pub async fn run_federation_catchup_once(
                     .await
                     {
                         Ok(_) => {
-                            newest_depth =
-                                newest_depth.max(event.depth.max(event.origin_ts.max(1)));
+                            let depth = if event.depth == 0 {
+                                event.origin_ts
+                            } else {
+                                event.depth
+                            };
+                            if depth > newest_depth
+                                || (depth == newest_depth
+                                    && newest_event_id
+                                        .as_ref()
+                                        .is_some_and(|id| event.event_id > *id))
+                            {
+                                newest_depth = depth;
+                                // Legacy endpoints ignore event-id cursors; preserve their
+                                // depth-only semantics until an explicit cursor is returned.
+                                newest_event_id =
+                                    explicit_cursor.as_ref().map(|_| event.event_id.clone());
+                            }
                         }
                         Err(err) => {
+                            page_valid = false;
                             tracing::warn!(
                                 "federation: catch-up ingest failed for {} event {}: {}",
                                 peer.server_name,
@@ -2975,12 +3460,32 @@ pub async fn run_federation_catchup_once(
                     }
                 }
 
-                if newest_depth > since_depth {
-                    let _ = paracord_db::federation::upsert_room_sync_cursor(
+                if page_valid {
+                    if let Some((depth, event_id)) = explicit_cursor {
+                        // An authenticated peer chooses what history to disclose, but
+                        // cannot force a cursor outside the accepted event time window.
+                        if depth
+                            <= chrono::Utc::now().timestamp_millis().saturating_add(
+                                paracord_federation::MAX_INBOUND_EVENT_FUTURE_SKEW_MS,
+                            )
+                            && !event_id.is_empty()
+                            && event_id.chars().count() <= MAX_FEDERATION_IDENTIFIER_LEN
+                            && (depth > newest_depth
+                                || (depth == newest_depth
+                                    && newest_event_id.as_ref().is_some_and(|id| event_id >= *id)))
+                        {
+                            newest_depth = depth;
+                            newest_event_id = Some(event_id);
+                        }
+                    }
+                }
+                if newest_depth > since_depth || newest_event_id != since_event_id {
+                    let _ = paracord_db::federation::upsert_room_sync_position(
                         &state.db,
                         &peer.server_name,
                         &room_id,
                         newest_depth,
+                        newest_event_id.as_deref(),
                         chrono::Utc::now().timestamp_millis(),
                     )
                     .await;
@@ -3195,6 +3700,12 @@ pub async fn join(
     let canonical_room_id = canonical_local_room_id(&service, guild_id);
 
     let local_user_id = ensure_remote_user_mapping(&state, &identity).await?;
+    if paracord_db::bans::get_ban(&state.db, local_user_id, guild_id)
+        .await?
+        .is_some()
+    {
+        return Err(ApiError::Forbidden);
+    }
     paracord_db::members::add_member(&state.db, local_user_id, guild_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
@@ -3231,6 +3742,8 @@ pub async fn join(
         }),
         Some(guild_id),
     );
+
+    publish_membership_endorsement(&state, &service, guild_id, &identity, "m.member.join").await;
 
     Ok(Json(json!({
         "joined": true,
@@ -3300,6 +3813,8 @@ pub async fn leave(
         &identity.to_canonical(),
     )
     .await;
+
+    publish_membership_endorsement(&state, &service, guild_id, &identity, "m.member.leave").await;
 
     Ok(Json(json!({
         "left": removed,
@@ -3578,6 +4093,18 @@ pub async fn list_servers(
     Ok(Json(json!({ "servers": servers })))
 }
 
+fn validate_peer_public_key(public_key: &str) -> Result<(), ApiError> {
+    let bytes: [u8; 32] = paracord_federation::hex_decode(public_key)
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or_else(|| ApiError::BadRequest("Invalid Ed25519 public key".into()))?;
+    let key = ed25519_dalek::VerifyingKey::from_bytes(&bytes)
+        .map_err(|_| ApiError::BadRequest("Invalid Ed25519 public key".into()))?;
+    if key.is_weak() {
+        return Err(ApiError::BadRequest("Weak Ed25519 public key".into()));
+    }
+    Ok(())
+}
+
 pub async fn add_server(
     admin: AdminUser,
     State(state): State<AppState>,
@@ -3609,6 +4136,19 @@ pub async fn add_server(
 
     let mut public_key = body.public_key_hex.clone();
     let mut key_id = body.key_id.clone();
+    if let Some(pin) = public_key.as_deref() {
+        validate_peer_public_key(pin)?;
+    }
+    if key_id.as_ref().is_some_and(|id| {
+        id.trim().is_empty() || id.chars().count() > MAX_FEDERATION_IDENTIFIER_LEN
+    }) {
+        return Err(ApiError::BadRequest("Invalid federation key_id".into()));
+    }
+    if !body.discover && public_key.is_some() && key_id.is_none() {
+        return Err(ApiError::BadRequest(
+            "key_id is required with a manual public key".into(),
+        ));
+    }
 
     // If discover is set, fetch keys from the remote server over plain HTTPS.
     // Everything in that response is remote self-assertion, so it is pinned and
@@ -3680,6 +4220,14 @@ pub async fn add_server(
                 .valid_until
                 .min(now_ms.saturating_add(MAX_DISCOVERED_KEY_VALIDITY_MS)),
         };
+        validate_peer_public_key(&bounded.public_key)?;
+        if bounded.key_id.trim().is_empty()
+            || bounded.key_id.chars().count() > MAX_FEDERATION_IDENTIFIER_LEN
+        {
+            return Err(ApiError::BadRequest(
+                "Invalid discovered federation key_id".into(),
+            ));
+        }
         public_key = Some(bounded.public_key.clone());
         key_id = Some(bounded.key_id.clone());
         service
@@ -3701,6 +4249,26 @@ pub async fn add_server(
     )
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    if !body.discover {
+        if let (Some(public_key), Some(key_id)) = (public_key, key_id) {
+            // Explicit operator pins persist until changed. Remote discovered
+            // keys retain the separately bounded expiry above.
+            if !paracord_db::federation::register_manual_server_key(
+                &state.db,
+                &server_name,
+                &key_id,
+                &public_key,
+            )
+            .await
+            .map_err(|e| ApiError::Internal(e.into()))?
+            {
+                return Err(ApiError::Conflict(
+                    "Peer configuration changed; retry registration".into(),
+                ));
+            }
+        }
+    }
 
     let peer_ip = addr.ip().to_string();
     security::log_security_event(
@@ -3889,16 +4457,28 @@ async fn apply_moderation_entries(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(|value| format!("[{source}] {value}"));
-        paracord_db::federation::upsert_peer_trust_state(
-            &state.db,
-            &server,
-            mode,
-            reason.as_deref(),
-            quarantined_until_ms,
-            now_ms,
-        )
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        let result = if allow_unblock {
+            paracord_db::federation::upsert_peer_trust_state(
+                &state.db,
+                &server,
+                mode,
+                reason.as_deref(),
+                quarantined_until_ms,
+                now_ms,
+            )
+            .await
+        } else {
+            paracord_db::federation::restrict_peer_trust_state(
+                &state.db,
+                &server,
+                mode,
+                reason.as_deref(),
+                quarantined_until_ms,
+                now_ms,
+            )
+            .await
+        };
+        result.map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
         applied += 1;
     }
     Ok(applied)
@@ -4209,18 +4789,8 @@ fn federation_file_hmac(key: &str, message: &str) -> Result<Vec<u8>, ApiError> {
 /// The token records the peer it was minted for as an `audience` component, and
 /// the HMAC covers it, so the audience cannot be *rewritten* by a token holder.
 ///
-/// It does NOT, however, make the token non-transferable. [`file_download`] is a
-/// plain unsigned `GET`; it matches the audience against the
-/// `x-paracord-origin` request header, which anyone can set — and the audience
-/// is right there in cleartext inside the token. Anyone who observes the URL
-/// (proxy log, referrer, a peer the URL was forwarded to) can therefore replay
-/// it by echoing that value back, so long as the named peer is still trusted.
-///
-/// Treat this as an **unbound bearer capability**: the real mitigations are the
-/// 300s lifetime, the trusted-peer check at download time, and keeping the URL
-/// secret — never log, cache, or otherwise expose it. Making the binding real
-/// requires a verifiable caller identity on the download request (a signed
-/// transport, as every other federation endpoint uses).
+/// The download also requires a transport signature from that peer. Possession
+/// of a URL and an attacker-supplied origin header cannot establish its caller.
 fn mint_federation_file_token(
     jwt_secret: &str,
     attachment_id: i64,
@@ -4334,10 +4904,13 @@ pub async fn file_token(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
-    // Attachment must be linked to a message
-    let _message_id = attachment.message_id.ok_or(ApiError::NotFound)?;
-
-    let channel_id = attachment.upload_channel_id.ok_or(ApiError::NotFound)?;
+    // Authorize the attachment's committed message channel, rather than stale
+    // upload metadata, and bind it to the room the caller actually requested.
+    let message_id = attachment.message_id.ok_or(ApiError::NotFound)?;
+    let message = paracord_db::messages::get_message(&state.db, message_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    let channel_id = message.channel_id;
     let channel = paracord_db::channels::get_channel(&state.db, channel_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
@@ -4347,7 +4920,44 @@ pub async fn file_token(
     ))?;
     ensure_federation_guild_allowed(guild_id)?;
 
-    let room_id = canonical_local_room_id(&service, guild_id);
+    let outbound = resolve_outbound_context(&state, &service, guild_id, Some(channel_id)).await;
+    let room_id = outbound.room_id;
+    let room_matches = if outbound.uses_remote_mapping {
+        body.room_id == room_id
+    } else {
+        parse_local_room_guild_id(&service, &body.room_id) == Some(guild_id)
+    };
+    if !room_matches {
+        return Err(ApiError::Forbidden);
+    }
+    if paracord_db::bans::get_ban(&state.db, local_user_id, guild_id)
+        .await
+        .map_err(|error| ApiError::Internal(error.into()))?
+        .is_some()
+    {
+        return Err(ApiError::Forbidden);
+    }
+    // A room authority's signed request attests to its own user's membership,
+    // just as its m.member.join endorsement does. This covers members who were
+    // already present before the mirror existed. Other participating servers
+    // still need the authority's persisted admission; local accounts can never
+    // be enrolled by this remote identity mapping.
+    if outbound.uses_remote_mapping
+        && origin_authoritative_for_room_namespace(&state, &transport.origin, &room_id).await?
+    {
+        paracord_db::members::add_member(&state.db, local_user_id, guild_id).await?;
+        paracord_db::roles::add_member_role(&state.db, local_user_id, guild_id, guild_id).await?;
+        paracord_db::federation::upsert_room_membership(
+            &state.db,
+            &room_id,
+            &identity.to_canonical(),
+            local_user_id,
+            guild_id,
+        )
+        .await
+        .map_err(|error| ApiError::Internal(error.into()))?;
+        state.member_index.add_member(guild_id, local_user_id);
+    }
     let has_membership = paracord_db::federation::has_room_membership(
         &state.db,
         &room_id,
@@ -4379,7 +4989,7 @@ pub async fn file_token(
     paracord_core::permissions::require_permission(perms, Permissions::READ_MESSAGE_HISTORY)?;
 
     let (token, _exp) =
-        mint_federation_file_token(&state.config.jwt_secret, attachment_id, &body.origin_server);
+        mint_federation_file_token(&state.config.jwt_secret, attachment_id, &transport.origin);
     let download_url = format!(
         "/_paracord/federation/v1/file/{}?token={}",
         attachment_id, token
@@ -4401,38 +5011,26 @@ pub async fn file_download(
     State(state): State<AppState>,
     Path(attachment_id): Path<i64>,
     Query(query): Query<FileDownloadQuery>,
+    uri: Uri,
     headers: HeaderMap,
 ) -> Result<impl axum::response::IntoResponse, ApiError> {
-    // This endpoint used to serve any holder of the query-string token with
-    // federation switched off entirely. Gate it on the service being enabled and
-    // on the presented origin matching the audience the token was minted for.
-    // NOTE: the origin header is unsigned and the audience is cleartext inside
-    // the token, so this narrows *who the token was issued to*, not *who is
-    // presenting it* — see [`mint_federation_file_token`].
     let service = federation_service_from_state(&state);
     if !service.is_enabled() {
         return Err(ApiError::NotFound);
     }
 
-    let presented_origin = headers
-        .get("x-paracord-origin")
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or(ApiError::Unauthorized)?;
+    let path = uri
+        .path_and_query()
+        .map(|value| value.as_str())
+        .unwrap_or(uri.path());
+    let transport =
+        verify_transport_request(&state, &service, &headers, "GET", path, &[], true).await?;
     validate_federation_file_token(
         &state.config.jwt_secret,
         &query.token,
         attachment_id,
-        presented_origin,
+        &transport.origin,
     )?;
-    // The audience match above proves the token was minted for the named peer;
-    // this additionally refuses a peer that has since been blocked/quarantined or
-    // untrusted, so a live 5-minute token cannot outlive a block.
-    let now_ms = chrono::Utc::now().timestamp_millis();
-    if !is_peer_trusted(&state, presented_origin, now_ms).await? {
-        return Err(ApiError::Forbidden);
-    }
 
     let attachment = paracord_db::attachments::get_attachment(&state.db, attachment_id)
         .await

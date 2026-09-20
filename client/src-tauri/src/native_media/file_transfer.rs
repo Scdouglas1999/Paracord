@@ -10,6 +10,19 @@ use super::session::NativeMediaSession;
 
 const CHUNK_SIZE: usize = 256 * 1024; // 256 KiB
 
+fn checked_download_size(total: u64, received: u64, incoming: usize) -> Result<u64, String> {
+    if total > paracord_transport::file_transfer::MAX_FILE_SIZE {
+        return Err("download exceeds the maximum file size".into());
+    }
+    let next = received
+        .checked_add(incoming as u64)
+        .ok_or("download size overflow")?;
+    if next > total {
+        return Err("download exceeds its declared size".into());
+    }
+    Ok(next)
+}
+
 /// Upload a file over a QUIC bidi stream.
 pub async fn upload_file(
     endpoint_addr: &str,
@@ -153,6 +166,7 @@ pub async fn upload_file(
                     transfer_id: tid,
                     attachment_id,
                     url,
+                    ..
                 }) => {
                     connection.close("upload complete");
                     return Ok(FileTransferResult {
@@ -234,7 +248,16 @@ pub async fn download_file(
         codec.feed(&read_buf[..n]);
         if let Some(frame) = codec.decode_next().map_err(|e| format!("decode: {e}"))? {
             match frame {
-                StreamFrame::Control(ControlMessage::FileDownloadAccept { size, .. }) => {
+                StreamFrame::Control(ControlMessage::FileDownloadAccept {
+                    attachment_id: accepted_id,
+                    size,
+                    offset,
+                    ..
+                }) => {
+                    if accepted_id != attachment_id || offset != 0 {
+                        return Err("download acceptance does not match the request".into());
+                    }
+                    checked_download_size(size, 0, 0)?;
                     total_size = size;
                     break;
                 }
@@ -257,10 +280,11 @@ pub async fn download_file(
         // Try to decode from existing buffer first
         match codec.decode_next().map_err(|e| format!("decode: {e}"))? {
             Some(StreamFrame::Data(chunk)) => {
+                let next_size = checked_download_size(total_size, bytes_received, chunk.len())?;
                 file.write_all(&chunk)
                     .await
                     .map_err(|e| format!("write file: {e}"))?;
-                bytes_received += chunk.len() as u64;
+                bytes_received = next_size;
 
                 let _ = app.emit(
                     "file_transfer_progress",
@@ -272,7 +296,12 @@ pub async fn download_file(
                 );
                 continue;
             }
-            Some(StreamFrame::EndOfData) => break,
+            Some(StreamFrame::EndOfData) => {
+                if bytes_received != total_size {
+                    return Err("download ended before its declared size".into());
+                }
+                break;
+            }
             Some(StreamFrame::Control(ControlMessage::FileTransferError { message, .. })) => {
                 return Err(format!("download error: {message}"));
             }
@@ -299,4 +328,18 @@ pub async fn download_file(
         url: None,
         success: true,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn download_size_is_bounded_before_any_write() {
+        assert_eq!(checked_download_size(10, 4, 6).unwrap(), 10);
+        assert!(checked_download_size(10, 4, 7).is_err());
+        assert!(checked_download_size(u64::MAX, 0, 0).is_err());
+        assert!(checked_download_size(10, u64::MAX, 1).is_err());
+        assert_eq!(checked_download_size(0, 0, 0).unwrap(), 0);
+    }
 }

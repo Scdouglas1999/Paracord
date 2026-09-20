@@ -1064,14 +1064,9 @@ def run_smoke(args: argparse.Namespace) -> None:
                     f"forged interaction token was not refused: {forged.status_code} {forged.text[:200]}"
                 )
 
-            # The callback, followup and component-interaction routes are the
-            # bot's half of this exchange and take the interaction token as their
-            # sole credential. An out-of-process bot cannot hold one today: the
-            # gateway's IDENTIFY validates a session JWT (paracord-ws
-            # handler.rs) while a bot's own credential is an opaque token the
-            # REST middleware accepts as `Authorization: Bot <token>`, so there
-            # is no way for this smoke to receive INTERACTION_CREATE. Those
-            # routes are covered by crates/paracord-api/tests, not from here.
+            # The external bot half (gateway authentication and private token
+            # receipt, callbacks, components, followups, edit/delete and token
+            # rotation) runs in release_bot_gateway_smoke.py on both engines.
 
             request_json(
                 "DELETE",

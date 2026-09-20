@@ -90,6 +90,11 @@ pub async fn list_dms(
             "owner_id": g.owner_id.map(|id| id.to_string()),
             "last_message_id": g.last_message_id.map(|id| id.to_string()),
             "message_revision": g.message_revision.to_string(),
+            // The exact membership this roster is, so a client can mint a group
+            // sender key against it and have the publish refused if it moved.
+            "members_version": crate::routes::message_features::membership_version(
+                &recipients.map(|list| list.iter().map(|r| r.user_id).collect::<Vec<_>>()).unwrap_or_default(),
+            ),
             "recipients": recipients_json,
         }));
     }
@@ -283,6 +288,9 @@ pub async fn create_group_dm(
             "owner_id": channel.owner_id.map(|id| id.to_string()),
             "last_message_id": channel.last_message_id.map(|id| id.to_string()),
             "message_revision": channel.message_revision.to_string(),
+            "members_version": crate::routes::message_features::membership_version(
+                &recipients.iter().map(|r| r.user_id).collect::<Vec<_>>(),
+            ),
             "recipients": recipients_json,
         })),
     ))

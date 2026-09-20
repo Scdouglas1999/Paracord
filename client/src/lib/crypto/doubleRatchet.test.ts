@@ -8,6 +8,7 @@ import {
 } from './doubleRatchet';
 import { x3dhInitiate, x3dhRespond, generateX25519KeyPair } from './x3dh';
 import type { PrekeyBundle, RatchetState } from './types';
+import { MAX_SKIP, MAX_RETAINED_SKIPPED_KEYS } from './types';
 
 /**
  * Helper: set up a full X3DH key exchange and return initialized sessions for
@@ -64,6 +65,37 @@ function setupAliceBobSessions(): {
 }
 
 describe('crypto/doubleRatchet', () => {
+  it.each([-1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER])('rejects malformed message counter %s', async (n) => {
+    const { aliceState, bobState } = setupAliceBobSessions();
+    const encrypted = await ratchetEncrypt(aliceState, 'message');
+    await expect(ratchetDecrypt(bobState, { ...encrypted.header, n }, encrypted.nonce, encrypted.ciphertext))
+      .rejects.toThrow('Invalid ratchet');
+    expect(bobState.Nr).toBe(0);
+    expect(bobState.MKSKIPPED.size).toBe(0);
+  });
+
+  it('bounds accumulated skipped keys while preserving recent out-of-order messages', async () => {
+    let { aliceState, bobState } = setupAliceBobSessions();
+    let recent: Awaited<ReturnType<typeof ratchetEncrypt>> | undefined;
+    for (let round = 0; round < MAX_RETAINED_SKIPPED_KEYS / MAX_SKIP + 1; round++) {
+      for (let i = 0; i <= MAX_SKIP; i++) {
+        const encrypted = await ratchetEncrypt(aliceState, `message ${round}:${i}`);
+        aliceState = encrypted.state;
+        if (i === MAX_SKIP - 1) recent = encrypted;
+        if (i === MAX_SKIP) {
+          const decrypted = await ratchetDecrypt(bobState, encrypted.header, encrypted.nonce, encrypted.ciphertext);
+          bobState = decrypted.state;
+          expect(decrypted.plaintext).toBe(`message ${round}:${i}`);
+          expect(bobState.MKSKIPPED.size).toBeLessThanOrEqual(MAX_RETAINED_SKIPPED_KEYS);
+        }
+      }
+    }
+    const delayed = recent!;
+    const decrypted = await ratchetDecrypt(bobState, delayed.header, delayed.nonce, delayed.ciphertext);
+    expect(decrypted.plaintext).toBe('message 4:255');
+    expect(decrypted.state.MKSKIPPED.size).toBe(MAX_RETAINED_SKIPPED_KEYS - 1);
+  });
+
   describe('initializeInitiator', () => {
     it('creates a state with CKs set (can send immediately)', () => {
       const { aliceState } = setupAliceBobSessions();

@@ -618,12 +618,38 @@ pub async fn join_public_guild(
         // Same as the invite path: the join is what lets the joiner and the
         // people already inside see each other's light.
         crate::routes::realtime::announce_guild_join(&state, guild_id, auth.user_id).await;
+
+        federation_announce_local_join(&state, guild_id, auth.user_id);
     }
 
     Ok(Json(crate::routes::guilds::guild_detail(
         &guild,
         joined.member_count,
     )?))
+}
+
+/// Registration auto-admission, public joins, and invites must establish the
+/// same origin membership before forwarding the local user's announcement.
+pub(crate) fn federation_announce_local_join(state: &AppState, guild_id: i64, user_id: i64) {
+    if !paracord_federation::is_enabled() {
+        return;
+    }
+    let state = state.clone();
+    tokio::spawn(async move {
+        if let Ok(channels) = paracord_db::channels::get_guild_channels(&state.db, guild_id).await {
+            if let Some(channel) = channels
+                .iter()
+                .find(|channel| channel.channel_type == 0)
+                .or_else(|| channels.first())
+            {
+                crate::routes::invites::federation_send_join_rpc_for_mirrored_guild(
+                    &state, guild_id, channel.id, user_id, None,
+                )
+                .await;
+            }
+        }
+        federation_forward_member_event(&state, "m.member.join", guild_id, user_id).await;
+    });
 }
 
 pub(crate) async fn federation_forward_member_event(
@@ -644,6 +670,31 @@ pub(crate) async fn federation_forward_member_event(
 
     let outbound =
         crate::routes::federation::resolve_outbound_context(state, &service, guild_id, None).await;
+    if let Ok(Some(mapping)) =
+        paracord_db::federation::get_remote_user_mapping_by_local(&state.db, user_id).await
+    {
+        // A kick/ban of a remote pseudo-user is the room authority's decision,
+        // not an event authored under that pseudo-user's local placeholder.
+        if !outbound.uses_remote_mapping {
+            if let Some(identity) =
+                paracord_federation::protocol::FederatedIdentity::parse(&mapping.remote_user_id)
+            {
+                if event_type == "m.member.leave" {
+                    let _ = paracord_db::federation::delete_room_membership(
+                        &state.db,
+                        &outbound.room_id,
+                        &mapping.remote_user_id,
+                    )
+                    .await;
+                }
+                crate::routes::federation::publish_membership_endorsement(
+                    state, &service, guild_id, &identity, event_type,
+                )
+                .await;
+            }
+        }
+        return;
+    }
     let content = json!({
         "guild_id": outbound.payload_guild_id.clone(),
         "user_id": user_id.to_string(),

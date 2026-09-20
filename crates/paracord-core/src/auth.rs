@@ -36,6 +36,17 @@ pub struct Claims {
     pub pub_key: Option<String>,
 }
 
+/// A pending second factor remains valid only while the verified primary
+/// credential, recovery email and second-factor configuration are unchanged.
+#[derive(Clone)]
+pub struct MfaLoginTicket {
+    pub user_id: i64,
+    pub primary_credential_hash: String,
+    pub public_key_login: bool,
+    pub email: String,
+    pub totp_secret_hash: String,
+}
+
 fn create_token_internal(
     user_id: i64,
     public_key: Option<&str>,
@@ -139,7 +150,7 @@ pub fn verify_challenge(
 ) -> Result<bool, AuthError> {
     // Check timestamp freshness (within 60 seconds)
     let now = chrono::Utc::now().timestamp();
-    if (now - timestamp).abs() > 60 {
+    if now.abs_diff(timestamp) > 60 {
         return Ok(false);
     }
 
@@ -287,5 +298,12 @@ mod tests {
         let (nonce1, _) = generate_challenge();
         let (nonce2, _) = generate_challenge();
         assert_ne!(nonce1, nonce2);
+    }
+
+    #[test]
+    fn challenge_rejects_extreme_timestamps_without_overflow() {
+        for timestamp in [i64::MIN, i64::MAX] {
+            assert!(!verify_challenge("", "", timestamp, "", "").unwrap());
+        }
     }
 }

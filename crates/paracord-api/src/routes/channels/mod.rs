@@ -437,6 +437,7 @@ fn poll_to_json(poll: &paracord_db::polls::PollWithOptions) -> Value {
 struct MessageJsonBatch {
     /// Author user rows keyed by author id (missing => "Unknown" fallback).
     authors: HashMap<i64, paracord_db::users::UserRow>,
+    federation: HashMap<i64, paracord_db::federation::FederatedMessageMetadata>,
     /// Channel rows keyed by channel id, loaded once per distinct channel.
     channels: HashMap<i64, paracord_db::channels::ChannelRow>,
     /// Channel feature rows keyed by channel id, loaded once per distinct channel.
@@ -474,6 +475,14 @@ async fn load_message_json_batch(
     }
 
     let message_ids: Vec<i64> = messages.iter().map(|m| m.id).collect();
+
+    if let Ok(metadata) =
+        paracord_db::federation::get_message_metadata_batch(&state.db, &message_ids).await
+    {
+        for row in metadata {
+            batch.federation.insert(row.local_message_id, row);
+        }
+    }
 
     // Authors: one query for the distinct set of author ids.
     let mut author_ids: Vec<i64> = messages.iter().map(|m| m.author_id).collect();
@@ -693,7 +702,7 @@ fn build_message_json(
         }));
     }
 
-    let attachment_json: Vec<Value> = batch
+    let mut attachment_json: Vec<Value> = batch
         .attachments
         .get(&msg.id)
         .map(|attachments| {
@@ -713,6 +722,19 @@ fn build_message_json(
                 .collect()
         })
         .unwrap_or_default();
+    let federation_json = batch.federation.get(&msg.id).map(|metadata| {
+        if let Ok(content) = serde_json::from_str::<Value>(&metadata.content) {
+            attachment_json.extend(crate::routes::federation::message_attachment_metadata(
+                &metadata.origin_server,
+                msg.channel_id,
+                &content,
+            ));
+        }
+        json!({
+            "event_id": metadata.event_id, "origin_server": metadata.origin_server,
+            "sender": metadata.sender, "remote_message_id": metadata.remote_message_id,
+        })
+    });
     let sticker_json: Vec<Value> = batch
         .stickers
         .get(&msg.id)
@@ -799,6 +821,7 @@ fn build_message_json(
         "edited_at": msg.edited_at.map(|t| t.to_rfc3339()),
         "reference_id": msg.reference_id.map(|id| id.to_string()),
         "attachments": attachment_json,
+        "federation": federation_json,
         "stickers": sticker_json,
         "reactions": reaction_json,
         "poll": poll_json,
@@ -866,6 +889,7 @@ pub async fn get_visible_channels(
     auth: AuthUser,
     Path(guild_id): Path<i64>,
 ) -> Result<Json<Value>, ApiError> {
+    let permission_generation = state.permission_cache.generation();
     paracord_core::permissions::ensure_guild_member(&state.db, guild_id, auth.user_id).await?;
 
     let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
@@ -889,6 +913,7 @@ pub async fn get_visible_channels(
         &state.permission_cache,
         auth.user_id,
         &channel_permissions,
+        permission_generation,
     )
     .await;
 
@@ -1663,24 +1688,29 @@ async fn federation_forward_generic(
 
     let room_id = outbound.room_id.clone();
     let mut content_json = content.clone();
-    if content_json
-        .get("guild_id")
-        .and_then(|v| v.as_str())
-        .is_none()
-    {
-        content_json["guild_id"] = Value::String(outbound.payload_guild_id.clone());
-    }
-    if content_json
-        .get("channel_id")
-        .and_then(|v| v.as_str())
-        .is_none()
-    {
-        content_json["channel_id"] = Value::String(
-            outbound
-                .payload_channel_id
-                .clone()
-                .unwrap_or_else(|| channel_id.to_string()),
-        );
+    // The route's IDs are local. A mirror must always translate them, including
+    // the usual case where the caller already populated these fields.
+    content_json["guild_id"] = Value::String(outbound.payload_guild_id.clone());
+    content_json["channel_id"] = Value::String(
+        outbound
+            .payload_channel_id
+            .clone()
+            .unwrap_or_else(|| channel_id.to_string()),
+    );
+    if matches!(event_type, "m.reaction.add" | "m.reaction.remove") {
+        if let Some(message_id) = content
+            .get("message_id")
+            .and_then(Value::as_str)
+            .and_then(|id| id.parse::<i64>().ok())
+        {
+            if let Ok(metadata) =
+                paracord_db::federation::get_message_metadata_batch(&state.db, &[message_id]).await
+            {
+                if let Some(target) = metadata.first() {
+                    content_json["target_event_id"] = Value::String(target.event_id.clone());
+                }
+            }
+        }
     }
 
     let envelope = match service.build_custom_envelope(

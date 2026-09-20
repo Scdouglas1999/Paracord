@@ -137,13 +137,14 @@ export const adminApi = {
         description: string | null;
         icon_hash: string | null;
         owner_id: string;
+        visibility?: 'private' | 'public' | 'roles';
         created_at: string;
       }>;
     }>('/admin/guilds'),
 
   updateGuild: async (
     guildId: string,
-    data: { name?: string; description?: string; icon?: string }
+    data: { name?: string; description?: string; icon?: string; visibility?: 'private' | 'public' }
   ) =>
     getApi().patch<{
       id: string;
@@ -151,6 +152,7 @@ export const adminApi = {
       description: string | null;
       icon_hash: string | null;
       owner_id: string;
+        visibility?: 'private' | 'public' | 'roles';
       created_at: string;
     }>(`/admin/guilds/${guildId}`, data),
 

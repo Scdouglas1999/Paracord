@@ -15,7 +15,10 @@ export interface DeliveredMessageTarget {
   channelId: string;
   messageId: string;
   authorId: string;
-  encryption: { kind: 'plain' } | { kind: 'dm'; peer: { id: string; publicKey: string } };
+  encryption:
+    | { kind: 'plain' }
+    | { kind: 'dm'; peer: { id: string; publicKey: string } }
+    | { kind: 'group'; members: Array<{ id: string; publicKey: string }> };
 }
 export interface DeliveredMutation {
   id: string;
@@ -90,10 +93,12 @@ export class DeliveredMutations {
     if (!target.channelId || target.authorId !== this.options.vault.scope.userId) {
       throw new Error('Delivered-message mutations require this account’s own message.');
     }
-    if (target.encryption.kind !== 'plain' && (target.encryption.kind !== 'dm'
-      || !target.encryption.peer.id || !/^[0-9a-f]{64}$/i.test(target.encryption.peer.publicKey))) {
-      throw new Error('The original conversation encryption metadata is invalid.');
-    }
+    const encryption = target.encryption;
+    const validIdentity = (entry: { id: string; publicKey: string }) => Boolean(entry.id) && /^[0-9a-f]{64}$/i.test(entry.publicKey);
+    const valid = encryption.kind === 'plain'
+      || (encryption.kind === 'dm' && validIdentity(encryption.peer))
+      || (encryption.kind === 'group' && encryption.members.length > 0 && encryption.members.every(validIdentity));
+    if (!valid) throw new Error('The original conversation encryption metadata is invalid.');
   }
 
   async snapshot() {
@@ -224,7 +229,7 @@ export class DeliveredMutations {
               const prepared = await this.options.vault.transact(async tx => {
                 const latest = await tx.get<DeliveredMutation>(DELIVERED_MUTATIONS_NAMESPACE, attempt.id);
                 if (!latest || latest.revision !== attempt.revision || latest.targetDeleted) return false;
-                if (latest.target.encryption.kind === 'dm' && !this.options.prepareDelete) throw new Error('The deleted message’s encryption dependencies must be retired before deletion.');
+                if (latest.target.encryption.kind !== 'plain' && !this.options.prepareDelete) throw new Error('The deleted message’s encryption dependencies must be retired before deletion.');
                 await this.options.prepareDelete?.(tx, latest.target);
                 this.assertCurrent();
                 tx.put(DELIVERED_MUTATIONS_NAMESPACE, latest.id, { ...latest, deletionPrepared: true });

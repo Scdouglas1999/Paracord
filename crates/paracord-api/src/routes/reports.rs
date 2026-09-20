@@ -573,6 +573,7 @@ pub async fn resolve_report(
             )
             .await?;
             changes["status"] = Value::String("banned".to_string());
+            state.permission_cache.invalidate_user(user_id).await;
             state.member_index.remove_member(guild_id, user_id);
             state.event_bus.dispatch(
                 "GUILD_BAN_ADD",

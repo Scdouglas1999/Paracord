@@ -77,9 +77,11 @@ pub async fn create_poll(
     // transaction, a failure between them leaves a poll with no options (or a
     // partial ballot) permanently attached to a posted message.
     let mut tx = pool.begin().await?;
+    // This legacy flag is INTEGER on both engines. Convert the bound Boolean
+    // inside SQL so PostgreSQL does not reject a Boolean-to-integer assignment.
     let row = sqlx::query_as::<_, PollRow>(
         "INSERT INTO polls (id, message_id, channel_id, question, allow_multiselect, expires_at)
-         VALUES ($1, $2, $3, $4, $5, $6)
+         VALUES ($1, $2, $3, $4, CASE WHEN $5 THEN 1 ELSE 0 END, $6)
          RETURNING id, message_id, channel_id, question, allow_multiselect, expires_at, created_at",
     )
     .bind(poll_id)
@@ -221,10 +223,13 @@ pub async fn add_vote(
     // zero votes recorded, or with two after a mid-sequence failure.
     let mut tx = pool.begin().await?;
 
-    // Check if poll allows multiselect
+    // Lock the ballot before reading its rules or changing a choice. On SQLite,
+    // a deferred read followed by a write can fail immediately with SQLITE_BUSY
+    // when another voter commits in between. On PostgreSQL, the row lock also
+    // serializes concurrent replacements by one single-select voter.
     let poll = sqlx::query_as::<_, PollRow>(
-        "SELECT id, message_id, channel_id, question, allow_multiselect, expires_at, created_at
-         FROM polls WHERE id = $1",
+        "UPDATE polls SET id = id WHERE id = $1
+         RETURNING id, message_id, channel_id, question, allow_multiselect, expires_at, created_at",
     )
     .bind(poll_id)
     .fetch_optional(&mut *tx)

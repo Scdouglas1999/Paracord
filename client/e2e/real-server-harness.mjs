@@ -15,38 +15,16 @@
 //
 // On teardown Playwright sends SIGTERM (webServer.gracefulShutdown in
 // playwright.config.ts); we forward it to the server child and remove the temp
-// data dir so nothing leaks between runs. A startup sweep additionally removes
-// stale data dirs from prior runs that were torn down with SIGKILL.
+// data dir so nothing leaks between runs. Never sweep another harness's data:
+// release validation can keep several live server instances open for hours.
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const TMP_PREFIX = 'paracord-e2e-real-';
-
-// Anything older than an hour cannot belong to a live run.
-function sweepStaleDataDirs() {
-  let entries;
-  try {
-    entries = readdirSync(tmpdir());
-  } catch {
-    return;
-  }
-  const cutoff = Date.now() - 60 * 60 * 1000;
-  for (const entry of entries) {
-    if (!entry.startsWith(TMP_PREFIX)) continue;
-    const full = join(tmpdir(), entry);
-    try {
-      if (statSync(full).mtimeMs < cutoff) {
-        rmSync(full, { recursive: true, force: true });
-      }
-    } catch {
-      // best effort
-    }
-  }
-}
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..', '..');
@@ -65,8 +43,6 @@ if (!existsSync(serverBin)) {
   );
   process.exit(1);
 }
-
-sweepStaleDataDirs();
 
 const dataDir = mkdtempSync(join(tmpdir(), TMP_PREFIX));
 const dbPath = join(dataDir, 'paracord.db');

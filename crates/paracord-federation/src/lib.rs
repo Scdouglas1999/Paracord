@@ -562,7 +562,7 @@ impl FederationService {
             return;
         }
 
-        let scoped_targets = match paracord_db::federation::list_room_member_servers(
+        let mut scoped_targets = match paracord_db::federation::list_room_member_servers(
             pool,
             &envelope.room_id,
         )
@@ -581,6 +581,28 @@ impl FederationService {
                 std::collections::HashSet::new()
             }
         };
+        // An explicitly mapped mirror always sends back to its authoritative
+        // room host. That host need not keep a remote-user membership for itself
+        // on this mirror; numeric equality or an unproven room string is never
+        // enough to grant an unrelated peer this access.
+        if let Some((remote_id, namespace)) = envelope
+            .room_id
+            .strip_prefix('!')
+            .and_then(|room| room.split_once(':'))
+        {
+            if !namespace.eq_ignore_ascii_case(&self.config.server_name)
+                && !namespace.eq_ignore_ascii_case(&self.config.domain)
+                && matches!(
+                    paracord_db::federation::get_space_mapping_by_remote(
+                        pool, namespace, remote_id
+                    )
+                    .await,
+                    Ok(Some(_))
+                )
+            {
+                scoped_targets.insert(namespace.to_ascii_lowercase());
+            }
+        }
         // Membership events are how a room's participant set is announced in the
         // first place, so they are the one category that legitimately goes to
         // every trusted peer. Everything else — message bodies, edits, reactions
@@ -609,6 +631,20 @@ impl FederationService {
         };
 
         for peer in &peers {
+            // The list contains the static trust flag only. A moderation block
+            // or quarantine must revoke delivery immediately, including this
+            // first-send path, not just subsequent outbound-queue retries.
+            if !matches!(
+                paracord_db::federation::is_federated_server_trusted(
+                    pool,
+                    &peer.server_name,
+                    now_ms
+                )
+                .await,
+                Ok(true)
+            ) {
+                continue;
+            }
             // Don't forward back to ourselves
             if peer.server_name == self.config.server_name {
                 continue;
@@ -904,22 +940,45 @@ impl FederationService {
         since_depth: i64,
         limit: i64,
     ) -> Result<Vec<FederationEventEnvelope>, FederationError> {
+        self.list_room_events_after(pool, room_id, since_depth, None, limit)
+            .await
+    }
+
+    /// Fetch a bounded batch with a stable tie-breaker for events at equal depth.
+    pub async fn list_room_events_after(
+        &self,
+        pool: &DbPool,
+        room_id: &str,
+        since_depth: i64,
+        since_event_id: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<FederationEventEnvelope>, FederationError> {
         if !self.config.enabled {
             return Err(FederationError::Disabled);
         }
-        let rows = sqlx::query_as::<_, FederationEventEnvelopeRow>(
+        // Match Rust's UTF-8 byte ordering regardless of the PostgreSQL locale.
+        let collation = if pool.connect_options().database_url.scheme() == "sqlite" {
+            "BINARY"
+        } else {
+            "\"C\""
+        };
+        let query = format!(
             "SELECT event_id, room_id, event_type, sender, origin_server, origin_ts, content, depth, state_key, signatures
              FROM federation_events
              WHERE room_id = $1
-               AND depth > $2
-             ORDER BY depth ASC
-             LIMIT $3",
-        )
-        .bind(room_id)
-        .bind(since_depth)
-        .bind(limit.max(1))
-        .fetch_all(pool)
-        .await?;
+               AND (CASE WHEN depth = 0 THEN origin_ts ELSE depth END > $2
+                    OR (CASE WHEN depth = 0 THEN origin_ts ELSE depth END = $2
+                        AND CAST($3 AS TEXT) IS NOT NULL AND event_id COLLATE {collation} > $3))
+             ORDER BY CASE WHEN depth = 0 THEN origin_ts ELSE depth END ASC, event_id COLLATE {collation} ASC
+             LIMIT $4",
+        );
+        let rows = sqlx::query_as::<_, FederationEventEnvelopeRow>(&query)
+            .bind(room_id)
+            .bind(since_depth)
+            .bind(since_event_id)
+            .bind(limit.max(1))
+            .fetch_all(pool)
+            .await?;
         Ok(rows.into_iter().map(Into::into).collect())
     }
 }

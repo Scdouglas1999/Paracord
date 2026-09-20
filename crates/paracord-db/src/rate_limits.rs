@@ -39,6 +39,49 @@ pub async fn increment_window_counter(
     Ok(row.0)
 }
 
+/// Count a subject once per window and return the current shared count even
+/// for duplicates. Locking the shared row first serializes concurrent claims;
+/// cancellation or failure rolls the claim and its increment back together.
+pub async fn increment_distinct_window_counter(
+    pool: &DbPool,
+    bucket_key: &str,
+    subject_id: i64,
+    window_start: i64,
+    window_seconds: i64,
+) -> Result<i64, DbError> {
+    let mut tx = pool.begin().await?;
+    let now = datetime_to_db_text(Utc::now());
+    let (mut count,): (i64,) = sqlx::query_as(
+        "INSERT INTO rate_limit_counters (bucket_key, window_start, window_seconds, count, updated_at)
+         VALUES ($1, $2, $3, 0, $4)
+         ON CONFLICT(bucket_key, window_start) DO UPDATE SET count = rate_limit_counters.count
+         RETURNING count",
+    )
+    .bind(bucket_key).bind(window_start).bind(window_seconds).bind(&now)
+    .fetch_one(&mut *tx).await?;
+    let subject_key = format!("{bucket_key}:subject:{subject_id}");
+    let claim = sqlx::query(
+        "INSERT INTO rate_limit_counters (bucket_key, window_start, window_seconds, count, updated_at)
+         VALUES ($1, $2, $3, 1, $4)
+         ON CONFLICT(bucket_key, window_start) DO NOTHING",
+    )
+    .bind(subject_key).bind(window_start).bind(window_seconds).bind(&now)
+    .execute(&mut *tx).await?;
+    if claim.rows_affected() == 1 {
+        (count,) = sqlx::query_as(
+            "UPDATE rate_limit_counters SET count = count + 1, updated_at = $3
+             WHERE bucket_key = $1 AND window_start = $2 RETURNING count",
+        )
+        .bind(bucket_key)
+        .bind(window_start)
+        .bind(&now)
+        .fetch_one(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(count)
+}
+
 pub async fn purge_window_counters_older_than(
     pool: &DbPool,
     oldest_window_start: i64,
@@ -204,8 +247,8 @@ fn auth_guard_backoff_seconds(failures: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        clear_auth_guard_keys, get_auth_guard_states, increment_window_counter,
-        purge_window_counters_older_than, record_auth_guard_failure,
+        clear_auth_guard_keys, get_auth_guard_states, increment_distinct_window_counter,
+        increment_window_counter, purge_window_counters_older_than, record_auth_guard_failure,
     };
     use crate::DbPool;
 
@@ -242,6 +285,38 @@ mod tests {
         assert_eq!(first, 1);
         assert_eq!(second, 2);
         assert_eq!(next_window, 1);
+    }
+
+    #[tokio::test]
+    async fn distinct_counter_failure_rolls_back_both_claim_and_increment() {
+        let db = setup_db().await;
+        sqlx::query("CREATE TRIGGER reject_distinct_increment BEFORE UPDATE OF count ON rate_limit_counters WHEN NEW.count > OLD.count BEGIN SELECT RAISE(ABORT, 'injected counter failure'); END")
+            .execute(&db).await.unwrap();
+        assert!(
+            increment_distinct_window_counter(&db, "raid:atomic", 1, 100, 30)
+                .await
+                .is_err()
+        );
+        let (remaining,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM rate_limit_counters WHERE bucket_key LIKE 'raid:atomic%'",
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert_eq!(
+            remaining, 0,
+            "a failed increment must not leave a consumed subject claim"
+        );
+        sqlx::query("DROP TRIGGER reject_distinct_increment")
+            .execute(&db)
+            .await
+            .unwrap();
+        assert_eq!(
+            increment_distinct_window_counter(&db, "raid:atomic", 1, 100, 30)
+                .await
+                .unwrap(),
+            1
+        );
     }
 
     #[tokio::test]

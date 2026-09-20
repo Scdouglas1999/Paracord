@@ -442,6 +442,8 @@ pub struct UpdateGuildRequest {
     pub name: Option<String>,
     pub description: Option<String>,
     pub icon: Option<String>,
+    /// Explicit local-operator admission policy, including ownerless federation mirrors.
+    pub visibility: Option<String>,
 }
 
 pub async fn list_guilds(
@@ -461,6 +463,7 @@ pub async fn list_guilds(
                 "description": g.description,
                 "icon_hash": g.icon_hash,
                 "owner_id": g.owner_id.to_string(),
+                "visibility": g.visibility,
                 "created_at": g.created_at.to_rfc3339(),
             })
         })
@@ -478,7 +481,20 @@ pub async fn update_guild(
     Json(body): Json<UpdateGuildRequest>,
 ) -> Result<Json<Value>, ApiError> {
     let peer_ip = addr.ip().to_string();
-    let updated = paracord_core::admin::admin_update_guild(
+    let visibility = body
+        .visibility
+        .as_deref()
+        .map(str::trim)
+        .map(str::to_ascii_lowercase);
+    if visibility
+        .as_deref()
+        .is_some_and(|v| !matches!(v, "private" | "public"))
+    {
+        return Err(ApiError::BadRequest(
+            "Admin visibility must be private or public".into(),
+        ));
+    }
+    let mut updated = paracord_core::admin::admin_update_guild(
         &state.db,
         guild_id,
         body.name.as_deref(),
@@ -487,12 +503,24 @@ pub async fn update_guild(
     )
     .await?;
 
+    if let Some(visibility) = visibility.as_deref() {
+        updated = paracord_db::guilds::update_space_visibility(
+            &state.db,
+            guild_id.into(),
+            visibility,
+            &updated.discovery_tags,
+            Some("[]"),
+        )
+        .await?;
+    }
+
     let guild_json = json!({
         "id": updated.id.to_string(),
         "name": updated.name,
         "description": updated.description,
         "icon_hash": updated.icon_hash,
         "owner_id": updated.owner_id.to_string(),
+        "visibility": updated.visibility,
         "created_at": updated.created_at.to_rfc3339(),
     });
 

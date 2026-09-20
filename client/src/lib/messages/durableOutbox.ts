@@ -72,7 +72,10 @@ export async function listDurableSends(vault: AccountVault): Promise<DurableSend
 export interface DurableIntent extends Omit<DurableSend, 'serializedRequest'> {
   readonly revision: string;
   readonly intent: {
-    encryption: { kind: 'dm'; peer: { id: string; publicKey: string } } | { kind: 'plain' };
+    encryption:
+      | { kind: 'dm'; peer: { id: string; publicKey: string } }
+      | { kind: 'group'; members: Array<{ id: string; publicKey: string }> }
+      | { kind: 'plain' };
     referencedMessageId?: string;
     attachmentIds?: string[];
     stickerIds?: string[];

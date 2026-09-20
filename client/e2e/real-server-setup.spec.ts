@@ -235,13 +235,13 @@ test.describe('first-owner claim on a real unclaimed server', () => {
       // 1. Landing on sign-in must not leave the operator staring at "Welcome
       //    back" on a server with no accounts.
       await page.goto('/login');
-      await expect(page.getByText('Set up your Paracord server')).toBeVisible();
+      await expect(page.getByText('Set up your Paracord instance')).toBeVisible();
       await expect(page).toHaveURL(/\/setup-server$/);
 
       // 2. Step one says who this is for, and where the token comes from.
       await expect(page.getByText('Step 1 of 4')).toBeVisible();
       await expect(
-        page.getByText(/You’re setting up the server itself, not joining one/),
+        page.getByText(/You’re setting up the instance itself, not joining one/),
       ).toBeVisible();
       await expect(page.getByText(/first-owner-claim\.txt/)).toBeVisible();
 
@@ -251,7 +251,7 @@ test.describe('first-owner claim on a real unclaimed server', () => {
       // asserted for every route in e2e/auth-fit.spec.ts; here the concern is
       // that the stepped flow still claims a real server.
       const continueButton = page.getByRole('button', { name: 'Continue' });
-      const claimButton = page.getByRole('button', { name: 'Claim this server' });
+      const claimButton = page.getByRole('button', { name: 'Claim this instance' });
       const backButton = page.getByRole('button', { name: 'Back' });
 
       // 3. A wrong token is refused, and says so, without creating anything.
@@ -276,7 +276,7 @@ test.describe('first-owner claim on a real unclaimed server', () => {
       await page.getByLabel(/Instance name/).fill('Riverside Studio');
       await page.getByLabel(/First server name/).fill('The Lounge');
       await claimButton.click();
-      await expect(page.getByText(/not the one this server printed/)).toBeVisible();
+      await expect(page.getByText(/not the one this instance printed/)).toBeVisible();
       await expect(claimButton).toBeEnabled();
       await expect(page).toHaveURL(/\/setup-server$/);
 
@@ -368,7 +368,7 @@ test.describe('first-owner claim on a real unclaimed server', () => {
         await anonymousPage.goto('/login');
         await expect(anonymousPage.getByLabel(/Email|Username/i).first()).toBeVisible();
         await expect(anonymousPage).toHaveURL(/\/login$/);
-        await expect(anonymousPage.getByText('Set up your Paracord server')).toHaveCount(0);
+        await expect(anonymousPage.getByText('Set up your Paracord instance')).toHaveCount(0);
       } finally {
         await anonymous.close();
       }

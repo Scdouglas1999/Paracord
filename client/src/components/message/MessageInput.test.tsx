@@ -10,7 +10,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event';
 import { channelApi } from '../../api/channels';
 import { MessageInput } from './MessageInput';
-import { GROUP_DM_COMPOSER_REASON } from '../../lib/messages/messagingReadiness';
+import { groupEnrollmentReason } from '../../lib/messages/messagingReadiness';
 
 const mockEncryption = vi.hoisted(() => ({ encrypted: false, encryption: 'ready' }));
 const mockActionOverrides = vi.hoisted(() => ({} as Record<string, { supported: boolean; allowed: boolean; reason: string | null }>));
@@ -55,7 +55,13 @@ vi.mock('../../stores/channelStore', () => ({
         channelsByGuild: { g1: [{ id: 'ch1', type: 0, channel_type: 0, guild_id: 'g1', name: 'general', position: 0 }] },
         channelsById: {
           ch1: { id: 'ch1', type: 0, channel_type: 0, guild_id: 'g1', name: 'general', position: 0 },
-          gd1: { id: 'gd1', type: 3, channel_type: 3, name: 'Three of us', position: 0 },
+          gd1: { id: 'gd1', type: 3, channel_type: 3, name: 'Three of us', position: 0,
+            recipients: [{ id: 'u1', username: 'me', public_key: 'a'.repeat(64) },
+              { id: 'u2', username: 'ada', public_key: null },
+              { id: 'u3', username: 'bo', public_key: 'c'.repeat(64) }] },
+          gd2: { id: 'gd2', type: 3, channel_type: 3, name: 'All set', position: 0,
+            recipients: [{ id: 'u1', username: 'me', public_key: 'a'.repeat(64) },
+              { id: 'u3', username: 'bo', public_key: 'c'.repeat(64) }] },
         },
       }),
     {
@@ -63,7 +69,13 @@ vi.mock('../../stores/channelStore', () => ({
         channelsByGuild: { g1: [{ id: 'ch1', type: 0, channel_type: 0, guild_id: 'g1', name: 'general', position: 0 }] },
         channelsById: {
           ch1: { id: 'ch1', type: 0, channel_type: 0, guild_id: 'g1', name: 'general', position: 0 },
-          gd1: { id: 'gd1', type: 3, channel_type: 3, name: 'Three of us', position: 0 },
+          gd1: { id: 'gd1', type: 3, channel_type: 3, name: 'Three of us', position: 0,
+            recipients: [{ id: 'u1', username: 'me', public_key: 'a'.repeat(64) },
+              { id: 'u2', username: 'ada', public_key: null },
+              { id: 'u3', username: 'bo', public_key: 'c'.repeat(64) }] },
+          gd2: { id: 'gd2', type: 3, channel_type: 3, name: 'All set', position: 0,
+            recipients: [{ id: 'u1', username: 'me', public_key: 'a'.repeat(64) },
+              { id: 'u3', username: 'bo', public_key: 'c'.repeat(64) }] },
         },
       }),
     },
@@ -186,18 +198,36 @@ describe('MessageInput', () => {
     expect(mockSendMessage).not.toHaveBeenCalled();
   });
 
-  it('gives a group conversation one honest reason and no encryption route out', async () => {
+  it('names the member a group is waiting on, and offers no encryption route out', async () => {
     // The server marks a group channel `encrypted`, so the composer used to
     // reach the 1:1 rung and offer "Set up encryption" — an action that cannot
-    // make a group sendable, beside a timeline saying something else.
+    // enrol somebody else, beside a timeline saying something different.
     mockEncryption.encrypted = true; mockEncryption.encryption = 'setup';
     mockActionOverrides.send = { supported: true, allowed: false, reason: 'Set up encryption before sending this direct message.' };
     render(<MemoryRouter><MessageInput channelId="gd1" channelName="Three of us" /></MemoryRouter>);
-    const blocker = await screen.findByText(GROUP_DM_COMPOSER_REASON);
+    const blocker = await screen.findByText(groupEnrollmentReason(['ada']));
     expect(blocker).toBeInTheDocument();
     expect(screen.queryByText(/Set up encryption before sending this direct message/)).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Set up encryption' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Check again' })).not.toBeInTheDocument();
+  });
+
+  it('keeps the encryption route out when a ready group is blocked on the viewer’s own setup', async () => {
+    // The group's roster is complete, so the blocker is this person's identity,
+    // not somebody else's — and /setup is exactly the page that resolves it.
+    mockEncryption.encrypted = true; mockEncryption.encryption = 'setup';
+    mockActionOverrides.send = { supported: true, allowed: false, reason: 'Set up encryption before sending this direct message.' };
+    render(<MemoryRouter><MessageInput channelId="gd2" channelName="All set" /></MemoryRouter>);
+    expect(await screen.findByRole('link', { name: 'Set up encryption' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Check again' })).toBeInTheDocument();
+  });
+
+  it('lets a fully enrolled group compose', async () => {
+    mockEncryption.encrypted = true; mockEncryption.encryption = 'ready';
+    render(<MemoryRouter><MessageInput channelId="gd2" channelName="All set" /></MemoryRouter>);
+    const textarea = await screen.findByPlaceholderText('Say something in All set');
+    expect(textarea).not.toBeDisabled();
+    expect(screen.queryByText(/Waiting on:/)).not.toBeInTheDocument();
   });
 
   it('invites the reader by name rather than labelling the channel', () => {

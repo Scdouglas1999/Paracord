@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use quinn::Connection;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
@@ -31,7 +31,7 @@ pub struct FederationHello {
     pub public_key: String,
     /// Timestamp (unix seconds) for freshness.
     pub timestamp: u64,
-    /// Signature of `origin || timestamp` proving ownership of the private key.
+    /// Signature of the role-separated identity payload bound to this TLS channel.
     pub signature: String,
 }
 
@@ -44,7 +44,7 @@ pub struct FederationAccept {
     pub public_key: String,
     /// Timestamp.
     pub timestamp: u64,
-    /// Signature of `origin || timestamp || initiator_origin`.
+    /// Signature of the accepting identity and initiator bound to this TLS channel.
     pub signature: String,
 }
 
@@ -106,6 +106,34 @@ pub enum FederationError {
 /// exists because the length prefix is read *before* the peer has been
 /// authenticated, so it must never size an allocation on its own authority.
 pub const MAX_HANDSHAKE_MESSAGE_SIZE: u32 = 8 * 1024;
+
+fn channel_binding(conn: &Connection) -> Result<[u8; 32], FederationError> {
+    let mut binding = [0; 32];
+    conn.export_keying_material(&mut binding, b"EXPORTER-Paracord-Federation-v1", b"")
+        .map_err(|_| FederationError::InvalidHandshake("TLS exporter unavailable".into()))?;
+    Ok(binding)
+}
+
+// Length-delimited JSON fields prevent ambiguous concatenations, the role
+// prevents reflection, and the TLS exporter prevents moving an honest peer's
+// signed hello from one connection (or destination server) to another.
+fn handshake_payload(
+    role: &str,
+    origin: &str,
+    timestamp: u64,
+    initiator_origin: &str,
+    binding: &[u8; 32],
+) -> String {
+    serde_json::json!([
+        "paracord:federation:quic:v1",
+        role,
+        origin,
+        timestamp,
+        initiator_origin,
+        hex_encode(binding)
+    ])
+    .to_string()
+}
 
 impl FederationConnection {
     /// Send a datagram to the federated server.
@@ -175,7 +203,8 @@ pub async fn initiate_federation(
 
     // Build and send FederationHello
     let timestamp = now_secs();
-    let payload_to_sign = format!("{}{}", local_origin, timestamp);
+    let binding = channel_binding(&conn)?;
+    let payload_to_sign = handshake_payload("hello", local_origin, timestamp, "", &binding);
     let signature = hex_encode(&signing_key.sign(payload_to_sign.as_bytes()).to_bytes());
 
     let hello = FederationHello {
@@ -210,7 +239,7 @@ pub async fn initiate_federation(
     let accept: FederationAccept = serde_json::from_slice(&msg_buf)?;
 
     // Verify the accept message
-    verify_accept(&accept, local_origin, expected_remote_key)?;
+    verify_accept(&accept, local_origin, expected_remote_key, &binding)?;
 
     info!(
         remote_origin = %accept.origin,
@@ -275,11 +304,13 @@ pub async fn accept_federation(
         .get(&hello.origin)
         .ok_or_else(|| FederationError::UnknownServer(hello.origin.clone()))?;
 
-    verify_hello(&hello, expected_key)?;
+    let binding = channel_binding(&conn)?;
+    verify_hello(&hello, expected_key, &binding)?;
 
     // Send FederationAccept
     let timestamp = now_secs();
-    let payload_to_sign = format!("{}{}{}", local_origin, timestamp, hello.origin);
+    let payload_to_sign =
+        handshake_payload("accept", local_origin, timestamp, &hello.origin, &binding);
     let signature = hex_encode(&signing_key.sign(payload_to_sign.as_bytes()).to_bytes());
 
     let accept = FederationAccept {
@@ -311,10 +342,14 @@ pub async fn accept_federation(
 }
 
 /// Verify a FederationHello message.
-fn verify_hello(hello: &FederationHello, expected_public_key: &str) -> Result<(), FederationError> {
+fn verify_hello(
+    hello: &FederationHello,
+    expected_public_key: &str,
+    binding: &[u8; 32],
+) -> Result<(), FederationError> {
     // Check timestamp freshness
     let now = now_secs();
-    if now.saturating_sub(hello.timestamp) > CHALLENGE_MAX_AGE_SECS {
+    if now.abs_diff(hello.timestamp) > CHALLENGE_MAX_AGE_SECS {
         return Err(FederationError::TimestampExpired);
     }
 
@@ -327,7 +362,7 @@ fn verify_hello(hello: &FederationHello, expected_public_key: &str) -> Result<()
     }
 
     // Verify signature
-    let payload = format!("{}{}", hello.origin, hello.timestamp);
+    let payload = handshake_payload("hello", &hello.origin, hello.timestamp, "", binding);
     verify_signature(&payload, &hello.signature, &hello.public_key)?;
 
     Ok(())
@@ -338,9 +373,10 @@ fn verify_accept(
     accept: &FederationAccept,
     initiator_origin: &str,
     expected_public_key: &str,
+    binding: &[u8; 32],
 ) -> Result<(), FederationError> {
     let now = now_secs();
-    if now.saturating_sub(accept.timestamp) > CHALLENGE_MAX_AGE_SECS {
+    if now.abs_diff(accept.timestamp) > CHALLENGE_MAX_AGE_SECS {
         return Err(FederationError::TimestampExpired);
     }
 
@@ -351,7 +387,13 @@ fn verify_accept(
         )));
     }
 
-    let payload = format!("{}{}{}", accept.origin, accept.timestamp, initiator_origin);
+    let payload = handshake_payload(
+        "accept",
+        &accept.origin,
+        accept.timestamp,
+        initiator_origin,
+        binding,
+    );
     verify_signature(&payload, &accept.signature, &accept.public_key)?;
 
     Ok(())
@@ -377,7 +419,7 @@ fn verify_signature(
         .map_err(|_| FederationError::SignatureVerificationFailed)?;
 
     verifying_key
-        .verify(payload.as_bytes(), &signature)
+        .verify_strict(payload.as_bytes(), &signature)
         .map_err(|_| FederationError::SignatureVerificationFailed)
 }
 
@@ -509,9 +551,15 @@ fn hex_decode(hex: &str) -> Option<Vec<u8>> {
     if !hex.len().is_multiple_of(2) {
         return None;
     }
-    (0..hex.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
+    hex.as_bytes()
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| {
+            let high = (pair[0] as char).to_digit(16)?;
+            let low = (pair[1] as char).to_digit(16)?;
+            Some(((high << 4) | low) as u8)
+        })
         .collect()
 }
 
@@ -526,6 +574,8 @@ fn now_secs() -> u64 {
 mod tests {
     use super::*;
     use rand::RngCore;
+
+    const TEST_BINDING: [u8; 32] = [17; 32];
 
     fn generate_keypair() -> (SigningKey, String) {
         let mut secret = [0u8; 32];
@@ -544,11 +594,82 @@ mod tests {
     }
 
     #[test]
+    fn malformed_unicode_hex_does_not_panic() {
+        for value in ["aéx", "a😀bbb", "zz", "é", "a"] {
+            assert!(hex_decode(value).is_none());
+        }
+    }
+
+    #[test]
+    fn rejects_small_order_key_universal_forgery() {
+        // An identity public key with R = identity and S = 0 passes ordinary
+        // Ed25519 verification for any message, without a private key.
+        let mut identity = [0u8; 32];
+        identity[0] = 1;
+        let mut signature = [0u8; 64];
+        signature[0] = 1;
+        for payload in ["hello", "attacker-selected handshake"] {
+            assert!(matches!(
+                verify_signature(payload, &hex_encode(&signature), &hex_encode(&identity)),
+                Err(FederationError::SignatureVerificationFailed)
+            ));
+        }
+    }
+
+    #[test]
+    fn hello_cannot_be_replayed_on_another_tls_channel() {
+        let (key, pub_hex) = generate_keypair();
+        let timestamp = now_secs();
+        let origin = "honest.example";
+        let payload = handshake_payload("hello", origin, timestamp, "", &TEST_BINDING);
+        let hello = FederationHello {
+            origin: origin.into(),
+            public_key: pub_hex.clone(),
+            timestamp,
+            signature: hex_encode(&key.sign(payload.as_bytes()).to_bytes()),
+        };
+        verify_hello(&hello, &pub_hex, &TEST_BINDING).unwrap();
+        assert!(matches!(
+            verify_hello(&hello, &pub_hex, &[18; 32]),
+            Err(FederationError::SignatureVerificationFailed)
+        ));
+    }
+
+    #[test]
+    fn hello_and_accept_reject_future_timestamps() {
+        let (key, pub_hex) = generate_keypair();
+        let timestamp = now_secs() + CHALLENGE_MAX_AGE_SECS + 60;
+        let origin = "honest.example";
+        let payload = handshake_payload("hello", origin, timestamp, "", &TEST_BINDING);
+        let hello = FederationHello {
+            origin: origin.into(),
+            public_key: pub_hex.clone(),
+            timestamp,
+            signature: hex_encode(&key.sign(payload.as_bytes()).to_bytes()),
+        };
+        assert!(matches!(
+            verify_hello(&hello, &pub_hex, &TEST_BINDING),
+            Err(FederationError::TimestampExpired)
+        ));
+        let payload = handshake_payload("accept", origin, timestamp, "peer.example", &TEST_BINDING);
+        let accept = FederationAccept {
+            origin: origin.into(),
+            public_key: pub_hex.clone(),
+            timestamp,
+            signature: hex_encode(&key.sign(payload.as_bytes()).to_bytes()),
+        };
+        assert!(matches!(
+            verify_accept(&accept, "peer.example", &pub_hex, &TEST_BINDING),
+            Err(FederationError::TimestampExpired)
+        ));
+    }
+
+    #[test]
     fn hello_signature_valid() {
         let (key, pub_hex) = generate_keypair();
         let timestamp = now_secs();
         let origin = "chat.example.com";
-        let payload = format!("{}{}", origin, timestamp);
+        let payload = handshake_payload("hello", origin, timestamp, "", &TEST_BINDING);
         let sig = hex_encode(&key.sign(payload.as_bytes()).to_bytes());
 
         let hello = FederationHello {
@@ -558,7 +679,7 @@ mod tests {
             signature: sig,
         };
 
-        verify_hello(&hello, &pub_hex).unwrap();
+        verify_hello(&hello, &pub_hex, &TEST_BINDING).unwrap();
     }
 
     #[test]
@@ -568,7 +689,7 @@ mod tests {
 
         let timestamp = now_secs();
         let origin = "chat.example.com";
-        let payload = format!("{}{}", origin, timestamp);
+        let payload = handshake_payload("hello", origin, timestamp, "", &TEST_BINDING);
         let sig = hex_encode(&key.sign(payload.as_bytes()).to_bytes());
 
         let hello = FederationHello {
@@ -579,7 +700,7 @@ mod tests {
         };
 
         // Expecting the other key should fail
-        let result = verify_hello(&hello, &other_pub_hex);
+        let result = verify_hello(&hello, &other_pub_hex, &TEST_BINDING);
         assert!(result.is_err());
     }
 
@@ -587,7 +708,7 @@ mod tests {
     fn hello_rejects_tampered_origin() {
         let (key, pub_hex) = generate_keypair();
         let timestamp = now_secs();
-        let payload = format!("{}{}", "original.com", timestamp);
+        let payload = handshake_payload("hello", "original.com", timestamp, "", &TEST_BINDING);
         let sig = hex_encode(&key.sign(payload.as_bytes()).to_bytes());
 
         let hello = FederationHello {
@@ -597,7 +718,7 @@ mod tests {
             signature: sig,
         };
 
-        let result = verify_hello(&hello, &pub_hex);
+        let result = verify_hello(&hello, &pub_hex, &TEST_BINDING);
         assert!(result.is_err());
     }
 
@@ -607,7 +728,13 @@ mod tests {
         let timestamp = now_secs();
         let acceptor_origin = "server-b.com";
         let initiator_origin = "server-a.com";
-        let payload = format!("{}{}{}", acceptor_origin, timestamp, initiator_origin);
+        let payload = handshake_payload(
+            "accept",
+            acceptor_origin,
+            timestamp,
+            initiator_origin,
+            &TEST_BINDING,
+        );
         let sig = hex_encode(&key.sign(payload.as_bytes()).to_bytes());
 
         let accept = FederationAccept {
@@ -617,7 +744,7 @@ mod tests {
             signature: sig,
         };
 
-        verify_accept(&accept, initiator_origin, &pub_hex).unwrap();
+        verify_accept(&accept, initiator_origin, &pub_hex, &TEST_BINDING).unwrap();
     }
 
     #[test]
@@ -626,7 +753,13 @@ mod tests {
         let timestamp = now_secs();
         let acceptor_origin = "server-b.com";
         // Signed with "server-a.com" as initiator
-        let payload = format!("{}{}{}", acceptor_origin, timestamp, "server-a.com");
+        let payload = handshake_payload(
+            "accept",
+            acceptor_origin,
+            timestamp,
+            "server-a.com",
+            &TEST_BINDING,
+        );
         let sig = hex_encode(&key.sign(payload.as_bytes()).to_bytes());
 
         let accept = FederationAccept {
@@ -637,7 +770,7 @@ mod tests {
         };
 
         // Verifying with wrong initiator should fail
-        let result = verify_accept(&accept, "wrong-initiator.com", &pub_hex);
+        let result = verify_accept(&accept, "wrong-initiator.com", &pub_hex, &TEST_BINDING);
         assert!(result.is_err());
     }
 
@@ -646,7 +779,7 @@ mod tests {
         let (key, pub_hex) = generate_keypair();
         let old_timestamp = now_secs() - CHALLENGE_MAX_AGE_SECS - 10;
         let origin = "chat.example.com";
-        let payload = format!("{}{}", origin, old_timestamp);
+        let payload = handshake_payload("hello", origin, old_timestamp, "", &TEST_BINDING);
         let sig = hex_encode(&key.sign(payload.as_bytes()).to_bytes());
 
         let hello = FederationHello {
@@ -656,7 +789,7 @@ mod tests {
             signature: sig,
         };
 
-        let result = verify_hello(&hello, &pub_hex);
+        let result = verify_hello(&hello, &pub_hex, &TEST_BINDING);
         assert!(matches!(result, Err(FederationError::TimestampExpired)));
     }
 

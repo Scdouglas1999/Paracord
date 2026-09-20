@@ -474,7 +474,10 @@ function createAccountMessageStore(scope: AccountScope) {
   async function decryptMessageForChannel(channelId: string, message: Message): Promise<Message> {
     if (!message.e2ee) return message;
     try {
-      const plaintext = await runtime.decrypt(channelId, message.e2ee, message.id);
+      // The server's attribution is what the group reader checks the signed
+      // sender against, so it travels with the payload rather than being
+      // re-derived from it.
+      const plaintext = await runtime.decrypt(channelId, message.e2ee, message.id, message.author.id);
       // Encrypted attachment seam: the decrypted body is a versioned envelope
       // when it carries attachments, and plain text otherwise. A body this build
       // cannot read becomes the unreadable placeholder rather than losing its
@@ -994,8 +997,12 @@ function createAccountMessageStore(scope: AccountScope) {
             decryptingIds: nextDecrypting,
           });
         });
-        if (isE2ee) {
-          void hydrateMessage(channelId, baseMessage, messageSessionGeneration);
+        // A replayed receipt may already be present from gateway recovery.
+        // Hydrate the retained row: its deserialized envelope is a different
+        // object, and may also carry a newer edit than this create response.
+        const retained = get().messages[channelId]?.find(row => row.id === message.id);
+        if (retained?.e2ee) {
+          void hydrateMessage(channelId, retained, messageSessionGeneration);
         }
       },
 

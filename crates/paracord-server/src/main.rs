@@ -15,9 +15,11 @@ mod cli;
 mod config;
 #[cfg(feature = "embed-ui")]
 mod embedded_ui;
+mod file_transfer;
 mod livekit_proc;
 mod restore;
 mod tls;
+mod web_ui;
 
 const PUBLIC_IP_DETECTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 const PUBLIC_IP_DETECTION_BODY_LIMIT: usize = 128;
@@ -812,8 +814,11 @@ async fn main() -> Result<()> {
                             let relay = Arc::clone(&relay_forwarder);
                             let jwt_secret = config.auth.jwt_secret.clone();
                             let db = state.db.clone();
+                            let files =
+                                Arc::new(file_transfer::FileTransferRuntime::new(state.clone()));
                             tokio::spawn(async move {
-                                unified_media_accept_loop(endpoint, relay, jwt_secret, db).await;
+                                unified_media_accept_loop(endpoint, relay, jwt_secret, db, files)
+                                    .await;
                             });
                         }
                         None
@@ -921,13 +926,8 @@ async fn main() -> Result<()> {
     // limiter, which would double-count.
     let web_ui_status;
     let app = if let Some(ref dir) = web_dir {
-        let index_path = dir.join("index.html");
-        let spa_fallback = tower_http::services::ServeFile::new(&index_path);
-        let serve_dir = tower_http::services::ServeDir::new(dir).not_found_service(spa_fallback);
         web_ui_status = format!("Serving from {:?}", dir);
-        router.fallback_service(axum::Router::new().fallback_service(serve_dir).layer(
-            axum::middleware::from_fn(paracord_api::security_headers_middleware),
-        ))
+        router.fallback_service(web_ui::external_router(dir))
     } else {
         #[cfg(feature = "embed-ui")]
         {
@@ -960,27 +960,21 @@ async fn main() -> Result<()> {
     // ── TLS / HTTPS setup ───────────────────────────────────────────────────
     let tls_enabled = config.tls.enabled;
     let tls_rustls_config = if tls_enabled {
-        match tls::ensure_certs(
-            &config.tls,
-            detected_external_ip.as_deref(),
-            detected_local_ip.as_deref(),
+        Some(
+            tls::ensure_certs(
+                &config.tls,
+                detected_external_ip.as_deref(),
+                detected_local_ip.as_deref(),
+            )
+            .await
+            .context("TLS is enabled but certificate setup failed; refusing to serve credentials over plaintext HTTP")?,
         )
-        .await
-        {
-            Ok(cfg) => Some(cfg),
-            Err(e) => {
-                tracing::warn!("TLS setup failed, HTTPS disabled: {}", e);
-                None
-            }
-        }
     } else {
         None
     };
 
     let tls_status = if let Some(ref _cfg) = tls_rustls_config {
         format!("Enabled (port {})", tls_port)
-    } else if tls_enabled {
-        "Failed (see logs)".to_string()
     } else {
         "Disabled".to_string()
     };
@@ -3399,6 +3393,7 @@ async fn unified_media_accept_loop(
     relay: Arc<paracord_relay::relay::RelayForwarder>,
     jwt_secret: String,
     db: paracord_db::DbPool,
+    files: Arc<file_transfer::FileTransferRuntime>,
 ) {
     let admission = Arc::new(paracord_transport::admission::PreAuthAdmission::new());
     tracing::info!(
@@ -3444,6 +3439,7 @@ async fn unified_media_accept_loop(
         let relay = Arc::clone(&relay);
         let jwt_secret = jwt_secret.clone();
         let db = db.clone();
+        let files = files.clone();
         tokio::spawn(async move {
             // `permit` is moved into whichever handler runs and released the
             // moment that connection authenticates, so an established call never
@@ -3472,7 +3468,7 @@ async fn unified_media_accept_loop(
             let is_h3 = alpn.as_deref() == Some(b"h3");
 
             if is_h3 {
-                handle_webtransport_connection(conn, relay, jwt_secret, db, permit).await;
+                handle_webtransport_connection(conn, relay, jwt_secret, db, files, permit).await;
             } else {
                 handle_raw_quic_connection(conn, relay, jwt_secret, db, permit).await;
             }
@@ -3810,6 +3806,7 @@ async fn handle_webtransport_connection(
     relay: Arc<paracord_relay::relay::RelayForwarder>,
     jwt_secret: String,
     db: paracord_db::DbPool,
+    files: Arc<file_transfer::FileTransferRuntime>,
     permit: paracord_transport::admission::AdmissionGuard,
 ) {
     let remote_addr = conn.remote_address();
@@ -3855,6 +3852,11 @@ async fn handle_webtransport_connection(
             return;
         }
     };
+
+    if wt_session.path() == "/files" {
+        files.handle_session(&mut wt_session, permit).await;
+        return;
+    }
 
     if wt_session.path() != "/media" {
         tracing::warn!(addr = %remote_addr, path = %wt_session.path(), "WebTransport: invalid media path");

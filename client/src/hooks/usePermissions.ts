@@ -228,7 +228,7 @@ export function usePermissions(
     if (!isOwner) {
       const me = members?.find((member) => String(member.user.id) === String(currentUserId));
       if (me) {
-        memberRoleIds = me.roles.map(String);
+        memberRoleIds = Array.isArray(me.roles) ? me.roles.map(String) : [];
         for (const roleId of memberRoleIds) {
           permissions |= rolePermissions.get(String(roleId)) ?? 0n;
         }

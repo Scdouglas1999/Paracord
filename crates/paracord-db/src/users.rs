@@ -1051,6 +1051,12 @@ async fn replace_password_credential(
         query = query.bind(id);
     }
     query.execute(&mut **transaction).await?;
+    // Completing either password change or recovery retires every earlier
+    // recovery credential, including tokens other than the one just redeemed.
+    sqlx::query("DELETE FROM password_reset_tokens WHERE user_id = $1")
+        .bind(user.id)
+        .execute(&mut **transaction)
+        .await?;
     Ok(user.public_key.take().is_some())
 }
 
@@ -1206,6 +1212,57 @@ pub async fn update_user_email_unverified(
     email: &str,
 ) -> Result<UserRow, DbError> {
     update_user_email_unverified_typed(pool, UserId::new(id), email).await
+}
+
+/// Replace the recovery address under the same account/session lock as password
+/// changes. Revoke old-address recovery credentials before exposing the new email.
+pub async fn change_email_credential_in_transaction(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Any>,
+    user_id: i64,
+    session_id: &str,
+    verified_password_hash: &str,
+    email: &str,
+) -> Result<UserRow, DbError> {
+    lock_identity_account(transaction, user_id, session_id, verified_password_hash).await?;
+    let now = datetime_to_db_text(Utc::now());
+    let row = sqlx::query_as::<_, UserRow>(
+        "UPDATE users SET email = $2, email_verified = FALSE, updated_at = $3 WHERE id = $1
+         RETURNING id, username, discriminator, email, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key, email_verified",
+    ).bind(user_id).bind(normalize_email(email)).bind(&now)
+        .fetch_one(&mut **transaction).await?;
+    sqlx::query("DELETE FROM email_verification_tokens WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&mut **transaction)
+        .await?;
+    sqlx::query("DELETE FROM password_reset_tokens WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&mut **transaction)
+        .await?;
+    sqlx::query(
+        "UPDATE auth_sessions SET revoked_at = $2, revoked_reason = 'email_changed'
+                 WHERE user_id = $1 AND id != $3 AND revoked_at IS NULL",
+    )
+    .bind(user_id)
+    .bind(now)
+    .bind(session_id)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(row)
+}
+
+/// Serialize address-specific token issuance against email/password changes.
+/// The intended delivery address is taken from the request's account snapshot.
+pub(crate) async fn lock_email_token_account(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Any>,
+    user_id: i64,
+    expected_email: &str,
+) -> Result<bool, DbError> {
+    let result = sqlx::query("UPDATE users SET id = id WHERE id = $1 AND email = $2")
+        .bind(user_id)
+        .bind(expected_email)
+        .execute(&mut **transaction)
+        .await?;
+    Ok(result.rows_affected() == 1)
 }
 
 pub async fn get_user_by_public_key(
@@ -1441,6 +1498,66 @@ pub async fn create_email_verification_token(
     expires_at: DateTime<Utc>,
 ) -> Result<(), DbError> {
     create_email_verification_token_typed(pool, UserId::new(user_id), token_hash, expires_at).await
+}
+
+pub async fn create_email_verification_token_for_address(
+    pool: &DbPool,
+    user_id: i64,
+    expected_email: &str,
+    token_hash: &str,
+    expires_at: DateTime<Utc>,
+) -> Result<bool, DbError> {
+    let mut tx = pool.begin().await?;
+    if !lock_email_token_account(&mut tx, user_id, expected_email).await? {
+        return Ok(false);
+    }
+    sqlx::query("DELETE FROM email_verification_tokens WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("INSERT INTO email_verification_tokens (token_hash, user_id, expires_at) VALUES ($1, $2, $3)")
+        .bind(token_hash).bind(user_id).bind(expires_at.format("%Y-%m-%d %H:%M:%S").to_string())
+        .execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
+/// Recheck and consume verification under the account lock. A link fetched just
+/// before an email change must never verify the replacement address.
+pub async fn consume_email_verification_token(
+    pool: &DbPool,
+    user_id: i64,
+    token_hash: &str,
+    now: DateTime<Utc>,
+) -> Result<bool, DbError> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("UPDATE users SET id = id WHERE id = $1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    let consumed = sqlx::query(
+        "DELETE FROM email_verification_tokens
+                               WHERE user_id = $1 AND token_hash = $2 AND expires_at > $3",
+    )
+    .bind(user_id)
+    .bind(token_hash)
+    .bind(now.format("%Y-%m-%d %H:%M:%S").to_string())
+    .execute(&mut *tx)
+    .await?;
+    if consumed.rows_affected() != 1 {
+        return Ok(false);
+    }
+    sqlx::query("UPDATE users SET email_verified = TRUE, updated_at = $2 WHERE id = $1")
+        .bind(user_id)
+        .bind(datetime_to_db_text(now))
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM email_verification_tokens WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(true)
 }
 
 pub async fn get_email_verification_token(

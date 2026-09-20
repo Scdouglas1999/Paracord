@@ -165,6 +165,18 @@ pub async fn update_guild_onboarding(
     Json(body): Json<UpdateOnboardingSettingsRequest>,
 ) -> Result<Json<Value>, ApiError> {
     let (actor_perms, guild_owner_id) = ensure_manage_guild(&state, guild_id, auth.user_id).await?;
+    let actor_top_role = if auth.user_id == guild_owner_id {
+        None
+    } else {
+        Some(
+            paracord_db::roles::get_member_roles(&state.db, auth.user_id, guild_id)
+                .await?
+                .iter()
+                .map(|role| role.position)
+                .max()
+                .unwrap_or(0),
+        )
+    };
 
     let welcome_title = trim_opt(body.welcome_title.as_deref());
     let welcome_body = trim_opt(body.welcome_body.as_deref());
@@ -233,17 +245,7 @@ pub async fn update_guild_onboarding(
         ));
     }
 
-    let settings = paracord_db::onboarding::upsert_guild_onboarding_settings(
-        &state.db,
-        guild_id,
-        welcome_title.as_deref(),
-        welcome_body.as_deref(),
-        rules_text.as_deref(),
-        role_prompt.as_deref(),
-        progressive,
-    )
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let mut replacement_rows = None;
 
     if let Some(role_options) = body.role_options {
         if role_options.len() > MAX_ROLE_OPTIONS {
@@ -275,6 +277,9 @@ pub async fn update_guild_onboarding(
             // could publish a privileged or ADMINISTRATOR role and self-select
             // it via the onboarding self-service path.
             ensure_role_option_assignable(guild_owner_id, auth.user_id, actor_perms, &role)?;
+            if actor_top_role.is_some_and(|position| role.position >= position) {
+                return Err(ApiError::Forbidden);
+            }
             let label = trim_opt(option.label.as_deref());
             let description = trim_opt(option.description.as_deref());
             for (field, value) in [
@@ -295,9 +300,25 @@ pub async fn update_guild_onboarding(
                 option.position.unwrap_or(idx as i32),
             ));
         }
+        replacement_rows = Some(rows);
+    }
+
+    let settings = paracord_db::onboarding::upsert_guild_onboarding_settings(
+        &state.db,
+        guild_id,
+        welcome_title.as_deref(),
+        welcome_body.as_deref(),
+        rules_text.as_deref(),
+        role_prompt.as_deref(),
+        progressive,
+    )
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    if let Some(rows) = replacement_rows {
         paracord_db::onboarding::replace_guild_onboarding_role_options(&state.db, guild_id, &rows)
             .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+            .map_err(|e| ApiError::Internal(e.into()))?;
     }
 
     let updated_role_options =

@@ -20,6 +20,7 @@ import { clearUnlockedPrivateKey, setUnlockedPrivateKey } from '../accountSessio
 import { setAccessToken, setRefreshToken } from '../authToken';
 import { bytesToHex } from './util';
 import { attachAccountIdentity } from './attachAccountIdentity';
+import { coordinateRefresh, HOME_REFRESH_SCOPE, resetRefreshCoordination } from '../authRefreshCoordinator';
 
 const key = new Uint8Array(32).fill(42);
 const publicKey = bytesToHex(ed25519.getPublicKey(key));
@@ -28,6 +29,7 @@ const context = () => captureScopedOperation({ serverId: 'a', userId: '42' });
 let client: ReturnType<typeof axios.create>;
 beforeEach(() => {
   vi.clearAllMocks();
+  resetRefreshCoordination();
   tokens.access = null; tokens.refresh = null;
   client = axios.create(); fixture.client = client;
   setUnlockedPrivateKey(key.slice());
@@ -93,12 +95,16 @@ it('cannot adopt an attachment response for a different account', async () => {
 });
 
 it('installs the home access token, refresh token and matching profile together', async () => {
+  await coordinateRefresh(HOME_REFRESH_SCOPE, async () => ({ token: 'revoked-bootstrap-token' }));
   client.defaults.adapter = async config => ({ config, status: 200, statusText: 'OK', headers: {}, data: config.url === '/auth/challenge'
     ? { nonce: 'nonce', timestamp: Math.floor(Date.now() / 1000), server_origin: window.location.origin }
     : { token: 'new-home', refresh_token: 'new-refresh', user: user('home', publicKey) } });
   await attachAccountIdentity(captureScopedOperation({ serverId: '__local__', userId: 'home' }), 'secret');
   expect(setAccessToken).toHaveBeenCalledWith('new-home');
   expect(setRefreshToken).toHaveBeenCalledWith('new-refresh');
+  const refresh = vi.fn(async () => ({ token: 'current-session-token' }));
+  expect((await coordinateRefresh(HOME_REFRESH_SCOPE, refresh)).token).toBe('current-session-token');
+  expect(refresh).toHaveBeenCalledTimes(1);
   expect(useAuthStore.getState()).toMatchObject({ token: 'new-home', user: { id: 'home', public_key: publicKey } });
 });
 

@@ -366,8 +366,20 @@ async fn level_role_mapping_rejects_roles_the_actor_cannot_assign() -> anyhow::R
     let (mod_token, mod_uid) = ctx.add_user("moderator").await?;
     paracord_db::members::add_member(&ctx.db, mod_uid, guild_id).await?;
     paracord_db::roles::add_member_role(&ctx.db, mod_uid, guild_id, mod_role).await?;
+    let superior_role = ctx
+        .create_role(
+            guild_id,
+            "Senior without permission bits",
+            0,
+            &ctx.owner_token,
+        )
+        .await?;
 
-    for (label, role_id) in [("administrator", admin_role), ("ban", ban_role)] {
+    for (label, role_id) in [
+        ("administrator", admin_role),
+        ("ban", ban_role),
+        ("superior", superior_role),
+    ] {
         let (status, payload) = ctx
             .request(
                 Method::PUT,
@@ -384,6 +396,25 @@ async fn level_role_mapping_rejects_roles_the_actor_cannot_assign() -> anyhow::R
             "moderator must not map the {label} role: {payload}"
         );
     }
+
+    let (status, payload) = ctx
+        .request(
+            Method::PATCH,
+            &format!("/api/v1/guilds/{guild_id}/onboarding"),
+            Some(json!({ "role_options": [{ "role_id": superior_role.to_string() }] })),
+            &mod_token,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "self-service must not bypass role hierarchy: {payload}"
+    );
+    assert!(
+        paracord_db::onboarding::list_guild_onboarding_role_options(&ctx.db, guild_id)
+            .await?
+            .is_empty()
+    );
 
     // Nothing was persisted by the rejected attempts.
     let mappings = paracord_db::economy::list_level_roles(&ctx.db, guild_id).await?;

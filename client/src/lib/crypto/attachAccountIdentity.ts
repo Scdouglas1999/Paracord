@@ -9,6 +9,7 @@ import { resolveApiBaseUrl } from '../config/apiBaseUrl';
 import type { OperationContext } from '../operationContext';
 import { findHomeServerEntry } from '../serverIdentity';
 import { LOCAL_SERVER_ID } from '../serverScope';
+import { HOME_REFRESH_SCOPE, resetRefreshCoordination, serverRefreshScope } from '../authRefreshCoordinator';
 import { bytesToHex } from './util';
 
 /**
@@ -51,6 +52,7 @@ function adoptReplacedCredential(params: {
       (!!previousRefreshToken && server.refreshToken === previousRefreshToken) ||
       (server.id === homeEntryId && server.userId === user.id);
     if (!carriedDeadCredential) continue;
+    resetRefreshCoordination(serverRefreshScope(server.id));
     store.updateToken(server.id, token);
     store.updateRefreshToken(server.id, refreshToken);
     if (server.userId === user.id) store.setAuthenticatedUser(server.id, user);
@@ -119,9 +121,11 @@ export async function attachAccountIdentity(
       : useServerListStore.getState().getServer(context.scope.serverId);
     context.dispose();
     if (context.scope.serverId === LOCAL_SERVER_ID) {
+      resetRefreshCoordination(HOME_REFRESH_SCOPE);
       setAccessToken(result.token); setRefreshToken(result.refresh_token ?? null);
       useAuthStore.setState({ token: result.token, user: result.user });
     } else {
+      resetRefreshCoordination(serverRefreshScope(context.scope.serverId));
       const servers = useServerListStore.getState();
       servers.updateToken(context.scope.serverId, result.token);
       servers.updateRefreshToken(context.scope.serverId, result.refresh_token ?? null);
@@ -132,6 +136,7 @@ export async function attachAccountIdentity(
         (!!previousAccessToken && previousServer?.token === previousAccessToken) ||
         (!!previousRefreshToken && previousServer?.refreshToken === previousRefreshToken);
       if (sharedHomeCredential) {
+        resetRefreshCoordination(HOME_REFRESH_SCOPE);
         setAccessToken(result.token); setRefreshToken(result.refresh_token ?? null);
         useAuthStore.setState({ token: result.token, user: result.user });
       }

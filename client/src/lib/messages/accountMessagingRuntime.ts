@@ -28,6 +28,9 @@ import { createDeliveredDeletionTransport } from './deliveredMutationTransport';
 import { DurableDelivery, createDeliveryTransport, createDeliveryDiscardTransport, createDeliveryResolutionTransport, DELIVERY_RECEIPTS_NAMESPACE, type DeliveryReceipt } from './durableDelivery';
 import { createDeliveryEditTransport, createEditResolutionTransport } from './durableEdit';
 import { createDurableDm } from './durableDm';
+import { createDurableGroup } from './durableGroup';
+import { createChannelApi } from '../../api/channels';
+import type { GroupMember } from '../crypto/groupSenderKeys';
 import { enqueueMessageIntent, isPreparedSend, listQueuedSends, type DurableIntent, type QueuedSend } from './durableOutbox';
 import { assertLegacySignalReviewed, approveNewSignalSession, LegacySignalRecoveryError } from './legacySignalRecovery';
 import { migrateLegacyMessageDrafts, RECOVERY_NAMESPACE, type RecoveryDraft } from './legacyRecovery';
@@ -100,7 +103,7 @@ export class AccountMessagingRuntime {
   readonly store = createStore<MessagingSnapshot>(() => ({ storage: 'idle', encryption: 'locked', error: null, encryptionError: null, previousEpoch: null, draftGeneration: 0, queue: [], mutations: [], recovery: [], synchronization: 'awaiting-handshake' }));
   private readonly initialLease = crypto.randomUUID();
   private local: Lane | null = null;
-  private identity: (Lane & { session: IdentitySession; dm: ReturnType<typeof createDurableDm> }) | null = null;
+  private identity: (Lane & { session: IdentitySession; dm: ReturnType<typeof createDurableDm>; group: ReturnType<typeof createDurableGroup> }) | null = null;
   private localOpening: Promise<void> | null = null;
   /** The history the in-flight local open was started against. */
   private localOpeningEpoch: string | null | typeof NO_OPEN_EPOCH = NO_OPEN_EPOCH;
@@ -163,8 +166,8 @@ export class AccountMessagingRuntime {
       if (!session.signal.aborted) this.local = this.lane(session);
     }
     if (this.identity) {
-      const { session, dm } = this.identity; this.identity.driver.stop(); this.identity.mutations.stop();
-      if (!session.signal.aborted) this.identity = { ...this.lane(session, dm), session, dm };
+      const { session, dm, group } = this.identity; this.identity.driver.stop(); this.identity.mutations.stop();
+      if (!session.signal.aborted) this.identity = { ...this.lane(session, dm, group), session, dm, group };
     }
     this.store.setState({ synchronization: 'awaiting-handshake' });
   }
@@ -219,6 +222,10 @@ export class AccountMessagingRuntime {
       // authenticated recovery with their independent encrypted device vault.
       await this.enroll().catch(() => {}); lifetime.assertCurrent();
       await this.processEncryptedInbox(); lifetime.assertCurrent();
+      // Authority is published while the handshake is still fenced. Readers
+      // correctly refuse to decrypt then; once recovery commits, retry visible
+      // ciphertext even when the identity stayed unlocked across reconnect.
+      if (this.identity) for (const listener of this.listeners) listener({ kind: 'encryption-ready' });
       this.startDrivers(); await this.refresh();
     } catch (error) {
       lifetime.assertCurrent();
@@ -423,7 +430,8 @@ export class AccountMessagingRuntime {
     session.assertCurrent();
     for (const { id } of receipts) this.seenReceipts.add(`${source}:create:${id}`);
   }
-  private lane(session: DeviceSession | IdentitySession, dm?: ReturnType<typeof createDurableDm>): Lane {
+  private lane(session: DeviceSession | IdentitySession, dm?: ReturnType<typeof createDurableDm>,
+    group?: ReturnType<typeof createDurableGroup>): Lane {
     const { vault, context } = session;
     const changed = () => { this.changes?.postMessage('changed'); void this.refresh().catch(error => { if (!session.signal.aborted) this.store.setState({ error: errorText(error) }); }); };
     const plainRequest = (intent: DurableIntent): SendMessageRequest => ({ nonce: intent.nonce, content: intent.draft.content,
@@ -435,10 +443,31 @@ export class AccountMessagingRuntime {
         if (dm) { await this.synchronizeLocalDeletions(session as IdentitySession, dm, mutations); await dm.assertPreparedDeliveryAllowed(record.channelId); }
         return createDeliveryTransport(context)(record, signal);
       }, discard: createDeliveryDiscardTransport(context),
-      reconcileRemoved: dm?.reconcileRemoved,
-      acknowledgeSend: dm ? (tx, record, message) => dm.acknowledgeSend(tx, record.nonce, message) : undefined,
-      beforeIntentPrepare: dm
-        ? async intent => { if (intent.intent.encryption.kind === 'dm') await dm.uploadStagedAttachments(intent.id); }
+      // A prepared record no longer carries its encryption kind, so the lane
+      // that sealed it is identified by the binding it wrote. Group first: the
+      // 1:1 lane treats a missing binding as an error rather than a miss.
+      reconcileRemoved: dm || group
+        ? async (tx, removed) => {
+          if (group && await group.ownsSend(tx, removed.nonce)) return group.reconcileRemoved(tx, removed);
+          return dm?.reconcileRemoved(tx, removed);
+        }
+        : undefined,
+      acknowledgeSend: dm || group
+        ? async (tx, record, message) => {
+          if (group && await group.ownsSend(tx, record.nonce)) return group.acknowledgeSend(tx, record.nonce, message);
+          return dm?.acknowledgeSend(tx, record.nonce, message);
+        }
+        : undefined,
+      beforeIntentPrepare: dm || group
+        ? async intent => {
+          if (intent.intent.encryption.kind === 'dm') await dm?.uploadStagedAttachments(intent.id);
+          if (intent.intent.encryption.kind === 'group' && group) {
+            // Distribution is an HTTP round trip, so it happens here rather
+            // than inside the transaction that seals the body.
+            await group.uploadStagedAttachments(intent.id);
+            await this.distributeGroupKey(group, intent.channelId);
+          }
+        }
         : undefined,
       prepareIntent: async (tx, intent) => {
         this.assertDeliveryReady(intent.channelId);
@@ -446,11 +475,29 @@ export class AccountMessagingRuntime {
           if (!dm) throw new Error('Unlock this conversation’s encrypted account before delivery.');
           return dm.prepareIntent(tx, intent);
         }
+        if (intent.intent.encryption.kind === 'group') {
+          if (!group) throw new Error('Unlock this conversation’s encrypted account before delivery.');
+          const live = this.conversation(intent.channelId);
+          if (live.kind !== 'group') throw new Error('This conversation is no longer a group conversation.');
+          return group.prepareIntent(tx, intent, live);
+        }
         return plainRequest(intent);
       },
       edit: { resolveSend: createDeliveryResolutionTransport(context), resolveEdit: createEditResolutionTransport(context), send: createDeliveryEditTransport(context),
-        prepare: dm?.prepareEdit ?? (async (_tx, original, messageId, editNonce, content) => ({ channelId: original.channelId, messageId, editNonce, serializedRequest: JSON.stringify({ content, edit_nonce: editNonce }) })),
-        restore: dm?.restoreIntent ?? (async (_tx, original, content) => {
+        prepare: dm || group
+          ? (async (tx, original, messageId, editNonce, content) => {
+            if (group && await group.ownsSend(tx, original.nonce)) return group.prepareEdit(tx, original, messageId, editNonce, content);
+            if (!dm) throw new Error('Unlock this conversation’s encrypted account before editing.');
+            return dm.prepareEdit(tx, original, messageId, editNonce, content);
+          })
+          : (async (_tx, original, messageId, editNonce, content) => ({ channelId: original.channelId, messageId, editNonce, serializedRequest: JSON.stringify({ content, edit_nonce: editNonce }) })),
+        restore: dm || group
+          ? (async (tx, original, content) => {
+            if (group && await group.ownsSend(tx, original.nonce)) return group.restoreIntent(tx, original, content);
+            if (!dm) throw new Error('Unlock this conversation’s encrypted account before editing.');
+            return dm.restoreIntent(tx, original, content);
+          })
+          : (async (_tx, original, content) => {
           const { serializedRequest, mutation: _mutation, ...retained } = original;
           const request = JSON.parse(serializedRequest) as SendMessageRequest; const nonce = crypto.randomUUID();
           return { ...retained, id: nonce, nonce, revision: crypto.randomUUID(), draft: { content }, status: 'pending', attempts: 0, error: null,
@@ -576,12 +623,15 @@ export class AccountMessagingRuntime {
         session.assertCurrent(); this.assertCurrent();
         if (generation !== this.generation) throw new Error('The messaging history changed during enrollment.');
         const identityContext = session.context;
-        const dm = createDurableDm(session.vault, session.privateKey, createKeysApi(() => session!.context.api),
+        const uploadCiphertext = (input: { channelId: string; objectName: string; ciphertext: Uint8Array }) =>
           // Encrypted attachment seam: opaque ciphertext uploads are bound to the
           // same verified server account that will carry the message.
-          input => uploadOpaqueCiphertext(identityContext.request, input.channelId, input.objectName, input.ciphertext));
+          uploadOpaqueCiphertext(identityContext.request, input.channelId, input.objectName, input.ciphertext);
+        const dm = createDurableDm(session.vault, session.privateKey, createKeysApi(() => session!.context.api), uploadCiphertext);
+        const group = createDurableGroup(session.vault, session.privateKey,
+          createChannelApi(() => session!.context.api), uploadCiphertext);
         await this.markExistingReceipts(session, 'identity');
-        this.identity = { ...this.lane(session, dm), session, dm };
+        this.identity = { ...this.lane(session, dm, group), session, dm, group };
         registerIdentityTrustVault(this.scope, session.vault);
         if (this.handshakeAccepted) {
           for (const [channelId, ids] of await this.knownMessages()) if (!this.recoveredChannels.has(channelId)) await this.recoverChannel(channelId, [...ids]);
@@ -625,6 +675,31 @@ export class AccountMessagingRuntime {
     await this.startLocal(); await this.enroll();
     this.local?.driver.wake(); this.local?.mutations.wake(); this.identity?.driver.wake(); this.identity?.mutations.wake();
   }
+  /**
+   * Publish this account's group key for the roster as it stands *now*.
+   *
+   * The server refuses a publish whose membership version has moved, which is
+   * the whole point — it is what stops a key being wrapped to somebody who has
+   * already left. A refusal is not terminal here: this account's view is simply
+   * behind, so the roster is refetched and the error rethrown, and the delivery
+   * driver's next attempt mints against the membership it then sees.
+   */
+  private async distributeGroupKey(group: ReturnType<typeof createDurableGroup>, channelId: string) {
+    const attempt = async () => {
+      const live = this.conversation(channelId);
+      if (live.kind !== 'group') throw new Error('This conversation is no longer a group conversation.');
+      await group.distribute(channelId, live.members, live.membersVersion);
+    };
+    try {
+      await attempt();
+    } catch (error) {
+      if (!axios.isAxiosError(error) || error.response?.status !== 409) throw error;
+      await useChannelStore.getState().fetchDmChannels(this.scope);
+      this.assertCurrent();
+      window.dispatchEvent(new CustomEvent('paracord:conversation-capabilities-changed', { detail: this.scope }));
+      await attempt();
+    }
+  }
   private async requireLocal(allowBeforeHandshake = false) {
     await this.startLocal(); this.assertCurrent();
     const state = this.store.getState();
@@ -640,7 +715,29 @@ export class AccountMessagingRuntime {
     const channel = getAccountChannelView(this.scope).channelsById[channelId];
     if (!channel) throw new Error('Load this conversation before sending.');
     const type = channel.channel_type ?? channel.type;
-    if (!channel.guild_id && type === 3) throw new Error('Group DM encryption is awaiting the account-owned migration. Your draft remains saved.');
+    if (!channel.guild_id && type === 3) {
+      // Every member must have published an identity key: a sender key is
+      // wrapped to each of them, and one unenrolled member means a message
+      // nobody could have written to them. Naming who is missing is the only
+      // way the sender can act on it.
+      const roster = channel.recipients ?? [];
+      if (roster.length === 0) throw new Error('This group’s membership has not loaded yet. Reopen the conversation before sending.');
+      const unenrolled = roster.filter(member => !member.public_key);
+      if (unenrolled.length > 0) {
+        const names = unenrolled.map(member => member.username || member.id).join(', ');
+        throw new Error(`Everyone in a group conversation needs encryption set up before it can carry a message. Waiting on: ${names}.`);
+      }
+      const members: GroupMember[] = roster.map(member => ({ id: member.id, publicKey: member.public_key! }));
+      if (!members.some(member => member.id === this.scope.userId)) {
+        throw new Error('This account is not a member of the group conversation it is writing to.');
+      }
+      // The server's name for this exact roster. Publishing a sender key
+      // without it is refused, which is what keeps a key from being wrapped to
+      // a membership that has already moved.
+      const membersVersion = channel.members_version;
+      if (!membersVersion) throw new Error('This group’s membership has not loaded yet. Reopen the conversation before sending.');
+      return { kind: 'group' as const, members, membersVersion };
+    }
     if (!channel.guild_id && type === 1) {
       const peer = channel.recipient;
       if (!peer?.id || !peer.public_key) throw new Error('The recipient needs to finish encryption setup.');
@@ -650,7 +747,10 @@ export class AccountMessagingRuntime {
   }
   private async receiveConversation(channelId: string, refreshIdentity = false) {
     const channel = getAccountChannelView(this.scope).channelsById[channelId];
-    if (!channel || ((channel.channel_type ?? channel.type) === 1 && (refreshIdentity || !channel.recipient?.public_key))) {
+    const type = channel ? channel.channel_type ?? channel.type : null;
+    const staleGroup = type === 3 && (refreshIdentity || !channel!.recipients?.length
+      || channel!.recipients.some(member => !member.public_key));
+    if (!channel || (type === 1 && (refreshIdentity || !channel.recipient?.public_key)) || staleGroup) {
       // An incoming first DM can precede CHANNEL_CREATE or the peer's identity
       // projection. Refresh only this authenticated account's DM metadata.
       await useChannelStore.getState().fetchDmChannels(this.scope);
@@ -673,11 +773,11 @@ export class AccountMessagingRuntime {
     attachments?: EncryptedAttachmentSubmission) {
     await this.prepareChannelHistory(channelId); this.assertDeliveryReady(channelId);
     this.assertCurrent(); const encryption = await this.receiveConversation(channelId, true);
-    const lane = encryption.kind === 'dm' ? await this.requireIdentity() : await this.requireLocal();
-    if (encryption.kind === 'dm') {
+    const lane = encryption.kind === 'plain' ? await this.requireLocal() : await this.requireIdentity();
+    if (encryption.kind === 'dm' || encryption.kind === 'group') {
       if (attachmentIds?.length) throw new Error('An encrypted conversation cannot reference a plaintext upload.');
       if (stickerIds?.length) throw new Error('Encrypted stickers require an encrypted sticker producer.');
-      await this.checkLegacySession(lane.session as IdentitySession, channelId, encryption.peer);
+      if (encryption.kind === 'dm') await this.checkLegacySession(lane.session as IdentitySession, channelId, encryption.peer);
     } else if (attachments?.files.length) {
       throw new Error('This conversation is not encrypted; attach files through the ordinary upload path.');
     }
@@ -693,16 +793,22 @@ export class AccountMessagingRuntime {
     if (draft) {
       if (draft.content.trim() !== content.trim()) throw new Error('The submitted draft no longer matches this message.');
       const local = await this.requireLocal();
-      await acceptEncryptedDraft(local.session.vault, lane.session.vault, encryption.kind === 'dm' ? 'identity' : 'local', channelId, draft, intent, stage);
+      await acceptEncryptedDraft(local.session.vault, lane.session.vault, encryption.kind === 'plain' ? 'local' : 'identity', channelId, draft, intent, stage);
     } else await enqueueMessageIntent(lane.session.vault, channelId, content.trim(), intent, stage);
     await this.refresh(); lane.driver.wake();
   }
-  async decrypt(channelId: string, payload: MessageE2eePayload, messageId: string) {
+  async decrypt(channelId: string, payload: MessageE2eePayload, messageId: string, authorId: string) {
     const ownership = this.captureGatewayLease();
     await this.prepareChannelHistory(channelId, [messageId]);
     const encryption = await this.receiveConversation(channelId);
-    if (encryption.kind !== 'dm') throw new Error('This conversation has no supported encrypted message reader.');
+    if (encryption.kind === 'plain') throw new Error('This conversation has no supported encrypted message reader.');
     const lane = await this.requireIdentity();
+    if (encryption.kind === 'group') {
+      const keys = new Map(encryption.members.map(member => [member.id, member.publicKey]));
+      const content = await lane.group.decrypt(channelId, encryption.members, payload, messageId, authorId,
+        userId => keys.get(userId) ?? null);
+      ownership.assertCurrent(); return content;
+    }
     await this.checkLegacySession(lane.session, channelId, encryption.peer);
     const content = await lane.dm.decrypt(channelId, encryption.peer, payload, messageId);
     ownership.assertCurrent(); return content;
@@ -749,7 +855,18 @@ export class AccountMessagingRuntime {
           try {
             identity.session.assertCurrent();
             const encryption = await this.receiveConversation(value.channel_id);
-            if (encryption.kind !== 'dm' || !value.e2ee) continue;
+            if (encryption.kind === 'plain' || !value.e2ee) continue;
+            if (encryption.kind === 'group') {
+              if (!encryption.members.some(member => member.id === value.author.id)) throw new Error('The archived sender is not a member of this group conversation.');
+              const keys = new Map(encryption.members.map(member => [member.id, member.publicKey]));
+              await identity.group.decrypt(value.channel_id, encryption.members, value.e2ee, value.id, value.author.id,
+                userId => keys.get(userId) ?? null);
+              if (value.author.id === this.scope.userId && value.nonce) await identity.session.vault.transact(tx => identity.group.acknowledgeSend(tx, value.nonce!, value));
+              identity.session.assertCurrent();
+              await local.session.vault.transact(async tx => tx.remove(namespace, id));
+              this.receiveFailures.delete(value.channel_id);
+              continue;
+            }
             if (value.author.id !== this.scope.userId && value.author.id !== encryption.peer.id) throw new Error('The archived sender does not match this verified encrypted conversation.');
             await this.checkLegacySession(identity.session, value.channel_id, encryption.peer);
             await identity.dm.decrypt(value.channel_id, encryption.peer, value.e2ee, value.id);
@@ -892,7 +1009,7 @@ export class AccountMessagingRuntime {
       if (identity && this.identity === identity && !identity.session.signal.aborted) {
         if (identityGuardCommitted) {
           identity.mutations.stop();
-          this.identity = { ...this.lane(identity.session, identity.dm), session: identity.session, dm: identity.dm };
+          this.identity = { ...this.lane(identity.session, identity.dm, identity.group), session: identity.session, dm: identity.dm, group: identity.group };
           this.startDrivers();
         } else {
           this.clearIdentity(); this.store.setState({ encryption: 'recovery', encryptionError: 'The deleted message could not be recorded safely. Recover encrypted storage before continuing.' });
@@ -920,7 +1037,7 @@ export class AccountMessagingRuntime {
   async deleteMessage(message: Message) {
     await this.prepareChannelHistory(message.channel_id, [message.id]); this.assertDeliveryReady(message.channel_id);
     const encryption = this.conversation(message.channel_id);
-    const lane = encryption.kind === 'dm' ? await this.requireIdentity() : await this.requireLocal();
+    const lane = encryption.kind === 'plain' ? await this.requireLocal() : await this.requireIdentity();
     const queued = (await listQueuedSends(lane.session.vault)).find(row => row.nonce === message.nonce);
     if (queued) { if (isPreparedSend(queued)) await lane.driver.discardPrepared(queued.id); else await lane.driver.discardDraft(queued.id, queued.revision); return; }
     const target: DeliveredMessageTarget = { channelId: message.channel_id, messageId: message.id, authorId: message.author.id, encryption };

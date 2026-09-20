@@ -46,6 +46,74 @@ async function managerWithVectorKey(ssrc: number, epoch: number): Promise<Sender
 }
 
 describe('SenderKeyManager buildNonce / ROC layout', () => {
+  it('encrypts and authenticates only the supplied byte views', async () => {
+    const mgr = await managerWithVectorKey(VECTOR_SSRC, VECTOR_EPOCH);
+    const paddedHeader = new Uint8Array(40).fill(0xaa);
+    paddedHeader.set(VECTOR_HEADER, 4);
+    const paddedPayload = new TextEncoder().encode('secretHello, voice data!private');
+    const ct = await mgr.encrypt(
+      paddedHeader.subarray(4, 20),
+      paddedPayload.subarray(6, 24),
+      VECTOR_EPOCH, 1, VECTOR_SSRC,
+    );
+    expect(hex(ct)).toBe('c9611e22e84a7843baeea950f4874840d7de76e45bab8f2dc788366fe73643bb62f5');
+    const paddedCiphertext = new Uint8Array(ct.length + 10);
+    paddedCiphertext.set(ct, 5);
+    const paddedKey = new Uint8Array(32).fill(0xff);
+    paddedKey.set(VECTOR_KEY, 8);
+    const receiver = new SenderKeyManager();
+    await receiver.importPeerKey(VECTOR_SSRC, VECTOR_EPOCH, paddedKey.subarray(8, 24));
+    const pt = await receiver.decrypt(
+      paddedHeader.subarray(4, 20), paddedCiphertext.subarray(5, 5 + ct.length),
+      VECTOR_EPOCH, 1, VECTOR_SSRC,
+    );
+    expect(new TextDecoder().decode(pt)).toBe('Hello, voice data!');
+  });
+
+  it('accepts concurrent identical packets only once', async () => {
+    const mgr = await managerWithVectorKey(VECTOR_SSRC, VECTOR_EPOCH);
+    const ct = await mgr.encrypt(VECTOR_HEADER, new Uint8Array([1]), VECTOR_EPOCH, 10, VECTOR_SSRC);
+    const results = await Promise.allSettled([
+      mgr.decrypt(VECTOR_HEADER, ct, VECTOR_EPOCH, 10, VECTOR_SSRC),
+      mgr.decrypt(VECTOR_HEADER, ct, VECTOR_EPOCH, 10, VECTOR_SSRC),
+    ]);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    await expect(mgr.decrypt(VECTOR_HEADER, ct, VECTOR_EPOCH, 10, VECTOR_SSRC)).rejects.toThrow('replay');
+  });
+
+  it('does not consume a receive slot for a forged packet', async () => {
+    const mgr = await managerWithVectorKey(VECTOR_SSRC, VECTOR_EPOCH);
+    const ct = await mgr.encrypt(VECTOR_HEADER, new Uint8Array([1]), VECTOR_EPOCH, 10, VECTOR_SSRC);
+    const forged = ct.slice();
+    forged[0] ^= 1;
+    await expect(mgr.decrypt(VECTOR_HEADER, forged, VECTOR_EPOCH, 10, VECTOR_SSRC)).rejects.toThrow();
+    expect(await mgr.decrypt(VECTOR_HEADER, ct, VECTOR_EPOCH, 10, VECTOR_SSRC)).toEqual(new Uint8Array([1]));
+  });
+
+  it('keeps replay detection across a repeated peer key announcement', async () => {
+    const mgr = await managerWithVectorKey(VECTOR_SSRC, VECTOR_EPOCH);
+    await mgr.importPeerKey(VECTOR_SSRC, VECTOR_EPOCH, VECTOR_KEY);
+    const ct = await mgr.encrypt(VECTOR_HEADER, new Uint8Array([1]), VECTOR_EPOCH, 10, VECTOR_SSRC);
+    await mgr.decrypt(VECTOR_HEADER, ct, VECTOR_EPOCH, 10, VECTOR_SSRC);
+    await mgr.importPeerKey(VECTOR_SSRC, VECTOR_EPOCH, VECTOR_KEY);
+    await expect(mgr.decrypt(VECTOR_HEADER, ct, VECTOR_EPOCH, 10, VECTOR_SSRC)).rejects.toThrow('replay');
+  });
+
+  it('keeps key rotation working when the wire epoch wraps', async () => {
+    const sender = new SenderKeyManager();
+    const receiver = new SenderKeyManager();
+    for (let rotation = 0; rotation < 2; rotation++) {
+      (sender as unknown as { localEpoch: number }).localEpoch = 255;
+      const { epoch } = await sender.generateKey();
+      expect(epoch).toBe(1);
+      await receiver.importPeerKey(VECTOR_SSRC, epoch, await sender.exportKey());
+      for (const sequence of [65535, 0]) {
+        const ciphertext = await sender.encrypt(VECTOR_HEADER, new Uint8Array([1]), epoch, sequence, VECTOR_SSRC);
+        expect(await receiver.decrypt(VECTOR_HEADER, ciphertext, epoch, sequence, VECTOR_SSRC)).toEqual(new Uint8Array([1]));
+      }
+    }
+  });
+
   it('matches Rust cross-platform vector 1 (ROC = 0)', async () => {
     const mgr = await managerWithVectorKey(VECTOR_SSRC, VECTOR_EPOCH);
     const plaintext = new TextEncoder().encode('Hello, voice data!');

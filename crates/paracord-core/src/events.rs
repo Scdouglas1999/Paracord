@@ -16,6 +16,107 @@ pub struct ServerEvent {
     pub serialized_payload: Option<Arc<String>>,
 }
 
+/// Report audiences are permission-filtered when dispatched, but that old
+/// recipient list must not outlive a moderator's current authority.
+pub fn requires_report_moderator(event_type: &str) -> bool {
+    event_type.starts_with("GUILD_REPORT_")
+}
+
+/// User-targeted report dispatches carry their guild only in the payload.
+/// Do not infer guild membership for personal notices such as a ban notice,
+/// whose intended recipient may already have left the guild.
+pub fn replay_guild_id(
+    event_type: &str,
+    payload: &serde_json::Value,
+    guild_id: Option<i64>,
+) -> Option<i64> {
+    guild_id.or_else(|| {
+        requires_report_moderator(event_type)
+            .then(|| payload.get("guild_id")?.as_str()?.parse().ok())
+            .flatten()
+    })
+}
+
+/// Check current persisted access before replaying an event from a prior
+/// connection. Cached permission allows and an old recipient list are not
+/// sufficient after membership or channel visibility has been revoked.
+pub async fn can_receive_replayed_event(
+    pool: &paracord_db::DbPool,
+    user_id: i64,
+    event_type: &str,
+    guild_id: Option<i64>,
+    channel_id: Option<i64>,
+    target_user_ids: Option<&[i64]>,
+) -> bool {
+    if target_user_ids.is_some_and(|targets| !targets.contains(&user_id)) {
+        return false;
+    }
+    if requires_report_moderator(event_type) {
+        let Some(guild_id) = guild_id else {
+            return false;
+        };
+        let guild = match paracord_db::guilds::get_guild(pool, guild_id).await {
+            Ok(Some(guild)) => guild,
+            _ => return false,
+        };
+        if crate::permissions::ensure_guild_member(pool, guild_id, user_id)
+            .await
+            .is_err()
+        {
+            return false;
+        }
+        if !crate::permissions::compute_guild_permissions(pool, guild_id, guild.owner_id, user_id)
+            .await
+            .is_ok_and(crate::permissions::is_report_moderator)
+        {
+            return false;
+        }
+    }
+
+    let channel = if let Some(channel_id) = channel_id {
+        match paracord_db::channels::get_channel(pool, channel_id).await {
+            Ok(Some(channel)) => Some(channel),
+            _ => return false,
+        }
+    } else {
+        None
+    };
+    let guild_id = guild_id.or_else(|| channel.as_ref().and_then(|c| c.guild_id()));
+    if let Some(guild_id) = guild_id {
+        if crate::permissions::ensure_guild_member(pool, guild_id, user_id)
+            .await
+            .is_err()
+        {
+            return false;
+        }
+        if let Some(channel) = &channel {
+            if channel.guild_id() != Some(guild_id) {
+                return false;
+            }
+            let guild = match paracord_db::guilds::get_guild(pool, guild_id).await {
+                Ok(Some(guild)) => guild,
+                _ => return false,
+            };
+            return crate::permissions::compute_channel_permissions(
+                pool,
+                guild_id,
+                channel.id,
+                guild.owner_id,
+                user_id,
+            )
+            .await
+            .is_ok_and(|perms| {
+                perms.contains(paracord_models::permissions::Permissions::VIEW_CHANNEL)
+            });
+        }
+    } else if let Some(channel) = channel {
+        return paracord_db::dms::is_dm_recipient(pool, channel.id, user_id)
+            .await
+            .unwrap_or(false);
+    }
+    true
+}
+
 /// Per-session event queue depth used by [`EventBus::default`].
 ///
 /// `tokio::sync::broadcast` allocates its whole ring up front, and

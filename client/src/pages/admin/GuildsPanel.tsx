@@ -26,6 +26,7 @@ type GuildRow = {
   name: string;
   description: string | null;
   owner_id: string;
+  visibility?: 'private' | 'public' | 'roles';
   created_at: string;
 };
 
@@ -39,6 +40,7 @@ export function GuildsPanel() {
   const [editingGuild, setEditingGuild] = useState<GuildRow | null>(null);
   const [editName, setEditName] = useState('');
   const [editDescription, setEditDescription] = useState('');
+  const [editVisibility, setEditVisibility] = useState<'private' | 'public' | 'roles'>('private');
   const [saving, setSaving] = useState(false);
 
   const fetchGuilds = () => {
@@ -58,6 +60,7 @@ export function GuildsPanel() {
     setEditingGuild(g);
     setEditName(g.name);
     setEditDescription(g.description ?? '');
+    setEditVisibility(g.visibility ?? 'private');
   };
 
   const closeEdit = () => {
@@ -72,11 +75,14 @@ export function GuildsPanel() {
       await adminApi.updateGuild(editingGuild.id, {
         name: editName.trim() || undefined,
         description: editDescription.trim() || undefined,
+        ...(editVisibility !== (editingGuild.visibility ?? 'private') && editVisibility !== 'roles'
+          ? { visibility: editVisibility }
+          : {}),
       });
       setGuilds((prev) =>
         prev.map((g) =>
           g.id === editingGuild.id
-            ? { ...g, name: editName.trim() || g.name, description: editDescription.trim() || g.description }
+            ? { ...g, name: editName.trim() || g.name, description: editDescription.trim() || g.description, visibility: editVisibility }
             : g
         )
       );
@@ -220,6 +226,24 @@ export function GuildsPanel() {
               rows={3}
               className="resize-none"
             />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="admin-edit-guild-visibility" className="text-label font-medium text-text-secondary">
+              Local admission
+            </label>
+            <select
+              id="admin-edit-guild-visibility"
+              value={editVisibility}
+              onChange={(event) => setEditVisibility(event.target.value as 'private' | 'public' | 'roles')}
+              className="rounded-md border border-border-subtle bg-bg-primary px-3 py-2 text-text-primary"
+            >
+              <option value="private">Private — invite required</option>
+              <option value="public">Public — local users can join</option>
+              {editingGuild?.visibility === 'roles' && <option value="roles" disabled>Existing role restrictions</option>}
+            </select>
+            <p className="text-meta text-text-muted">
+              Public communities appear in discovery. For a federation mirror, this lets local users join through the trusted origin.
+            </p>
           </div>
         </ModalBody>
         <ModalFooter>

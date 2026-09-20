@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { X, ChevronLeft, ChevronRight, Download, ZoomIn, ZoomOut } from 'lucide-react';
-import { useLightboxStore } from '../../stores/lightboxStore';
+import { lightboxImageSource, useLightboxStore } from '../../stores/lightboxStore';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { usePresence } from '../../lib/motion';
-import { safeClientResourceUrl } from '../../lib/security';
 import { cn } from '../../lib/utils';
 
 const MIN_ZOOM = 0.5;
@@ -24,7 +23,7 @@ export function ImageLightbox() {
   const { mounted, exiting, scenery } = usePresence(isOpen);
 
   const currentImage = images[currentIndex];
-  const safeImageSrc = currentImage ? safeClientResourceUrl(currentImage.src) : null;
+  const safeImageSrc = currentImage ? lightboxImageSource(currentImage) : null;
   const hasNext = currentIndex < images.length - 1;
   const hasPrev = currentIndex > 0;
 

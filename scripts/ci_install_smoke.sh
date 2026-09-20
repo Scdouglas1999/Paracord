@@ -43,7 +43,7 @@ assert_not_exists() { if [ ! -e "$1" ]; then pass "$2"; else fail "$2 (unexpecte
 WORK="$(mktemp -d)"
 ROOT_INST=""   # root-owned install dir, removed with sudo in cleanup
 # Invoked via the EXIT trap below.
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 cleanup() {
     set +e
     [ -n "${HTTPD_PID:-}" ] && kill "$HTTPD_PID" 2>/dev/null

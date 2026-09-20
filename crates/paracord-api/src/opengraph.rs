@@ -61,6 +61,7 @@ async fn fetch_og(url: &str) -> Option<Value> {
         let host = current_url.host_str()?;
         let mut builder = reqwest::Client::builder()
             .timeout(FETCH_TIMEOUT)
+            .no_proxy() // The socket must use our validated IP, not proxy-side DNS.
             .redirect(reqwest::redirect::Policy::none());
         if !pinned.is_empty() {
             builder = builder.resolve_to_addrs(host, &pinned);
@@ -139,6 +140,7 @@ fn is_private_or_reserved_ip(ip: &IpAddr) -> bool {
                 || (o[0] == 192 && o[1] == 0 && o[2] == 0)
                 || (o[0] == 192 && o[1] == 0 && o[2] == 2)
                 || (o[0] == 198 && o[1] == 51 && o[2] == 100)
+                || (o[0] == 198 && (o[1] == 18 || o[1] == 19))
                 || (o[0] == 203 && o[1] == 0 && o[2] == 113)
                 || (224..=239).contains(&o[0])
                 || o[0] == 0
@@ -148,7 +150,24 @@ fn is_private_or_reserved_ip(ip: &IpAddr) -> bool {
             if let Some(v4) = v6.to_ipv4_mapped() {
                 return is_private_or_reserved_ip(&IpAddr::V4(v4));
             }
+            let segments = v6.segments();
+            // Translation/tunnel prefixes can route into private IPv4 networks.
+            let octets = v6.octets();
+            if segments[..6] == [0x64, 0xff9b, 0, 0, 0, 0] {
+                return is_private_or_reserved_ip(&IpAddr::V4(std::net::Ipv4Addr::new(
+                    octets[12], octets[13], octets[14], octets[15],
+                )));
+            }
+            if segments[0] == 0x2002 {
+                return is_private_or_reserved_ip(&IpAddr::V4(std::net::Ipv4Addr::new(
+                    octets[2], octets[3], octets[4], octets[5],
+                )));
+            }
             v6.is_loopback()
+                || segments[..6] == [0; 6]
+                || (segments[0] == 0x64 && segments[1] == 0xff9b && segments[2] == 1)
+                || (segments[0] == 0x2001 && segments[1] == 0)
+                || (segments[0] & 0xffc0) == 0xfec0
                 || (v6.segments()[0] & 0xfe00) == 0xfc00 // fc00::/7 unique local
                 || (v6.segments()[0] & 0xffc0) == 0xfe80 // fe80::/10 link local
                 || (v6.segments()[0] == 0x2001 && v6.segments()[1] == 0x0db8)
@@ -202,7 +221,12 @@ async fn validate_ssrf_target(url: &Url) -> Option<Vec<SocketAddr>> {
             }
 
             let lookup = format!("{domain}:{port}");
-            let addrs: Vec<SocketAddr> = tokio::net::lookup_host(&lookup).await.ok()?.collect();
+            let addrs: Vec<SocketAddr> =
+                tokio::time::timeout(FETCH_TIMEOUT, tokio::net::lookup_host(&lookup))
+                    .await
+                    .ok()?
+                    .ok()?
+                    .collect();
             if addrs.is_empty() {
                 return None;
             }
@@ -539,6 +563,33 @@ mod tests {
         ] {
             let url = Url::parse(raw).expect("valid URL");
             assert!(validate_ssrf_target(&url).await.is_none(), "{raw}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_preview_rejects_local_translation_and_special_use_targets() {
+        for host in [
+            "198.18.0.1",
+            "198.19.255.255",
+            "[::127.0.0.1]",
+            "[fec0::1]",
+            "[64:ff9b::a9fe:a9fe]",
+            "[64:ff9b::7f00:1]",
+            "[64:ff9b:1::1234]",
+            "[2002:7f00:1::1]",
+            "[2001:0::1]",
+        ] {
+            let url = Url::parse(&format!("http://{host}/metadata")).unwrap();
+            assert!(validate_ssrf_target(&url).await.is_none(), "{host}");
+        }
+        for host in [
+            "8.8.8.8",
+            "[2001:4860:4860::8888]",
+            "[64:ff9b::808:808]",
+            "[2002:808:808::1]",
+        ] {
+            let url = Url::parse(&format!("https://{host}/")).unwrap();
+            assert_eq!(validate_ssrf_target(&url).await, Some(Vec::new()), "{host}");
         }
     }
 

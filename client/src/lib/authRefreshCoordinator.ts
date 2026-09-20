@@ -56,6 +56,10 @@ interface SettledRefresh {
 const inFlight = new Map<string, Promise<SessionRefreshResult>>();
 const settled = new Map<string, SettledRefresh>();
 
+class RefreshSupersededError extends Error {
+  constructor() { super('Session refresh was superseded by a credential replacement.'); }
+}
+
 function now(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function'
     ? performance.now()
@@ -101,10 +105,12 @@ export function coordinateRefresh(
   const flight = (async () => perform())()
     .then(
       (result) => {
+        if (inFlight.get(scopeKey) !== flight) throw new RefreshSupersededError();
         settled.set(scopeKey, { at: now(), result });
         return result;
       },
       (error: unknown) => {
+        if (inFlight.get(scopeKey) !== flight) throw new RefreshSupersededError();
         settled.set(scopeKey, { at: now(), error });
         throw error;
       },

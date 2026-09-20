@@ -35,6 +35,8 @@ pub enum CryptoError {
     DecryptionFailed,
     #[error("ciphertext too short")]
     CiphertextTooShort,
+    #[error("media packet is a replay or is outside the receive window")]
+    ReplayDetected,
     #[error(
         "refusing to encrypt: sequence {sequence} was already used for ssrc {ssrc} epoch {epoch} \
          — this would reuse an AES-GCM (key, nonce) pair"
@@ -117,7 +119,7 @@ fn estimate_roc(ref_roc: u32, ref_seq: u16, seq: u16) -> u32 {
 /// place instead of being reimplemented (and independently fixed) in both.
 struct KeyRing {
     /// Keys indexed by (ssrc, epoch). SSRC 0 is treated as a wildcard fallback.
-    keys: HashMap<(u32, u8), Aes128Gcm>,
+    keys: HashMap<(u32, u8), (Aes128Gcm, [u8; KEY_SIZE])>,
     /// Rollover-counter state: `(ssrc, epoch) -> (roc, last/ref sequence)`.
     roc_state: HashMap<(u32, u8), (u32, u16)>,
 }
@@ -132,10 +134,22 @@ impl KeyRing {
 
     /// Install a cipher for a specific `(ssrc, epoch)`. SSRC 0 is the wildcard
     /// that matches any sender at that epoch.
-    fn set(&mut self, ssrc: u32, epoch: u8, key: &[u8; KEY_SIZE]) {
+    fn set(&mut self, ssrc: u32, epoch: u8, key: &[u8; KEY_SIZE]) -> bool {
+        let changed = self
+            .keys
+            .get(&(ssrc, epoch))
+            .or_else(|| self.keys.get(&(0, epoch)))
+            .is_none_or(|(_, previous)| previous != key);
         // Key is a fixed 16-byte array, so AES-128 construction is infallible.
         let cipher = Aes128Gcm::new((*key).as_ref().into());
-        self.keys.insert((ssrc, epoch), cipher);
+        self.keys.insert((ssrc, epoch), (cipher, *key));
+        if changed {
+            self.roc_state.retain(|&(stream, key_epoch), _| {
+                key_epoch != epoch
+                    || (stream != ssrc && (ssrc != 0 || self.keys.contains_key(&(stream, epoch))))
+            });
+        }
+        changed
     }
 
     /// Remove the cipher and any rollover-counter state for `(ssrc, epoch)`.
@@ -157,6 +171,7 @@ impl KeyRing {
         self.keys
             .get(&(ssrc, epoch))
             .or_else(|| self.keys.get(&(0, epoch)))
+            .map(|(cipher, _)| cipher)
             .ok_or(CryptoError::NoKeyForEpoch(epoch))
     }
 }
@@ -319,6 +334,53 @@ impl Default for FrameEncryptor {
 /// sequence wrap or moderate packet reordering.
 pub struct FrameDecryptor {
     ring: KeyRing,
+    replay: HashMap<(u32, u8), ReplayWindow>,
+}
+
+// Half the sequence space, matching the ROC estimator's reordering horizon.
+// A circular bitmap uses 4 KiB per active stream and admits reordered packets
+// once, including packets reordered across a sequence rollover.
+const REPLAY_WINDOW_SIZE: u64 = 32_768;
+
+struct ReplayWindow {
+    highest: u64,
+    seen: [u64; REPLAY_WINDOW_SIZE as usize / 64],
+}
+
+impl ReplayWindow {
+    fn new(index: u64) -> Self {
+        Self {
+            highest: index,
+            seen: [0; REPLAY_WINDOW_SIZE as usize / 64],
+        }
+    }
+
+    fn contains_or_expired(&self, index: u64) -> bool {
+        if index > self.highest {
+            return false;
+        }
+        if self.highest - index >= REPLAY_WINDOW_SIZE {
+            return true;
+        }
+        let slot = (index % REPLAY_WINDOW_SIZE) as usize;
+        self.seen[slot / 64] & (1 << (slot % 64)) != 0
+    }
+
+    fn accept(&mut self, index: u64) {
+        if index > self.highest {
+            if index - self.highest >= REPLAY_WINDOW_SIZE {
+                self.seen.fill(0);
+            } else {
+                for advanced in self.highest + 1..=index {
+                    let slot = (advanced % REPLAY_WINDOW_SIZE) as usize;
+                    self.seen[slot / 64] &= !(1 << (slot % 64));
+                }
+            }
+            self.highest = index;
+        }
+        let slot = (index % REPLAY_WINDOW_SIZE) as usize;
+        self.seen[slot / 64] |= 1 << (slot % 64);
+    }
 }
 
 impl FrameDecryptor {
@@ -326,27 +388,36 @@ impl FrameDecryptor {
     pub fn new() -> Self {
         Self {
             ring: KeyRing::new(),
+            replay: HashMap::new(),
         }
     }
 
     /// Set the decryption key for a given epoch.
     pub fn set_key(&mut self, epoch: u8, key: &[u8; KEY_SIZE]) {
-        self.ring.set(0, epoch, key);
+        if self.ring.set(0, epoch, key) {
+            self.replay.retain(|&(stream, key_epoch), _| {
+                key_epoch != epoch || (stream != 0 && self.ring.keys.contains_key(&(stream, epoch)))
+            });
+        }
     }
 
     /// Set the decryption key for a specific sender SSRC + epoch.
     pub fn set_peer_key(&mut self, ssrc: u32, epoch: u8, key: &[u8; KEY_SIZE]) {
-        self.ring.set(ssrc, epoch, key);
+        if self.ring.set(ssrc, epoch, key) {
+            self.replay.remove(&(ssrc, epoch));
+        }
     }
 
     /// Remove the key for a given epoch.
     pub fn remove_key(&mut self, epoch: u8) {
         self.ring.remove(0, epoch);
+        self.replay.retain(|(_, key_epoch), _| *key_epoch != epoch);
     }
 
     /// Remove the key for a specific sender SSRC + epoch.
     pub fn remove_peer_key(&mut self, ssrc: u32, epoch: u8) {
         self.ring.remove(ssrc, epoch);
+        self.replay.remove(&(ssrc, epoch));
     }
 
     /// Decrypt a media frame payload.
@@ -381,6 +452,15 @@ impl FrameDecryptor {
             None => 0,
         };
 
+        let index = ((roc as u64) << 16) | sequence as u64;
+        if self
+            .replay
+            .get(&(ssrc, epoch))
+            .is_some_and(|window| window.contains_or_expired(index))
+        {
+            return Err(CryptoError::ReplayDetected);
+        }
+
         let cipher = self.ring.cipher(ssrc, epoch)?;
 
         let nonce_bytes = build_nonce(ssrc, epoch, roc, sequence);
@@ -400,7 +480,10 @@ impl FrameDecryptor {
         // decrypt, and only when this packet's index is newer than the current
         // reference. This keeps the estimator anchored to real, verified traffic
         // and prevents forged sequence numbers from moving the window.
-        let index = ((roc as u64) << 16) | sequence as u64;
+        self.replay
+            .entry((ssrc, epoch))
+            .or_insert_with(|| ReplayWindow::new(index))
+            .accept(index);
         let advance = match self.ring.roc_state.get(&(ssrc, epoch)) {
             Some(&(ref_roc, ref_seq)) => index > (((ref_roc as u64) << 16) | ref_seq as u64),
             None => true,
@@ -422,6 +505,90 @@ impl Default for FrameDecryptor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_replays_but_accepts_reordering_across_rollover() {
+        let mut encryptor = FrameEncryptor::new();
+        let mut decryptor = FrameDecryptor::new();
+        encryptor.set_key(1, &test_key());
+        decryptor.set_key(1, &test_key());
+        let header = test_header();
+        let packets: Vec<_> = [65533, 65534, 65535, 0, 1]
+            .into_iter()
+            .map(|seq| {
+                (
+                    seq,
+                    encryptor.encrypt(&header, 7, 1, seq, b"audio").unwrap(),
+                )
+            })
+            .collect();
+        for i in [0, 3, 1, 4, 2] {
+            let (seq, ciphertext) = &packets[i];
+            assert_eq!(
+                decryptor.decrypt(&header, 7, 1, *seq, ciphertext).unwrap(),
+                b"audio"
+            );
+            // A repeated key delivery must not reopen the replay window.
+            decryptor.set_key(1, &test_key());
+            assert!(matches!(
+                decryptor.decrypt(&header, 7, 1, *seq, ciphertext),
+                Err(CryptoError::ReplayDetected)
+            ));
+        }
+    }
+
+    #[test]
+    fn fresh_key_at_reused_epoch_resets_receive_and_send_windows() {
+        let header = test_header();
+        let mut encryptor = FrameEncryptor::new();
+        let mut decryptor = FrameDecryptor::new();
+        for key in [test_key(), [42; KEY_SIZE]] {
+            encryptor.set_peer_key(7, 1, &key);
+            decryptor.set_peer_key(7, 1, &key);
+            for sequence in [65535, 0] {
+                let ciphertext = encryptor
+                    .encrypt(&header, 7, 1, sequence, b"frame")
+                    .unwrap();
+                assert_eq!(
+                    decryptor
+                        .decrypt(&header, 7, 1, sequence, &ciphertext)
+                        .unwrap(),
+                    b"frame"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn forged_packet_does_not_consume_a_receive_slot() {
+        let mut encryptor = FrameEncryptor::new();
+        let mut decryptor = FrameDecryptor::new();
+        encryptor.set_peer_key(7, 1, &test_key());
+        decryptor.set_peer_key(7, 1, &test_key());
+        let header = test_header();
+        let ciphertext = encryptor.encrypt(&header, 7, 1, 10, b"audio").unwrap();
+        let mut forged = ciphertext.clone();
+        forged[0] ^= 1;
+        assert!(decryptor.decrypt(&header, 7, 1, 10, &forged).is_err());
+        assert_eq!(
+            decryptor.decrypt(&header, 7, 1, 10, &ciphertext).unwrap(),
+            b"audio"
+        );
+    }
+
+    #[test]
+    fn replay_window_expires_old_packets_and_reuses_bitmap_slots() {
+        let mut window = ReplayWindow::new(0);
+        window.accept(0);
+        window.accept(REPLAY_WINDOW_SIZE - 1);
+        assert!(window.contains_or_expired(0));
+        assert!(!window.contains_or_expired(1));
+        window.accept(REPLAY_WINDOW_SIZE);
+        assert!(window.contains_or_expired(0));
+        assert!(window.contains_or_expired(REPLAY_WINDOW_SIZE));
+        window.accept(REPLAY_WINDOW_SIZE * 3);
+        assert!(!window.contains_or_expired(REPLAY_WINDOW_SIZE * 3 - 1));
+    }
 
     fn test_key() -> [u8; KEY_SIZE] {
         [

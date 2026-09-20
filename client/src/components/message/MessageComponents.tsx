@@ -619,7 +619,7 @@ function UserSelectMenu({
   const channelsByGuild = useCurrentChannelStore((s) => s.channelsByGuild);
   // Member avatars in this list are authenticated images; re-render when the
   // download ticket lands.
-  const downloadTicket = useDownloadTicket();
+  useDownloadTicket();
 
   // Derive guildId from the channelId
   const guildId =
@@ -640,7 +640,7 @@ function UserSelectMenu({
     }));
   }, [guildId]);
 
-  const renderItem = useCallback((item: EntityItem) => {
+  const renderItem = (item: EntityItem) => {
     const avatarSrc = resolveUserAvatarUrl(item.avatar);
     return (
       <div className="flex min-w-0 items-center gap-2">
@@ -662,7 +662,7 @@ function UserSelectMenu({
         </div>
       </div>
     );
-  }, [downloadTicket]);
+  };
 
   return (
     <EntitySelectMenu
@@ -764,7 +764,7 @@ function MentionableSelectMenu({
   const channelsByGuild = useCurrentChannelStore((s) => s.channelsByGuild);
   // Member avatars in this list are authenticated images; re-render when the
   // download ticket lands.
-  const downloadTicket = useDownloadTicket();
+  useDownloadTicket();
 
   const guildId =
     guildIdProp ??
@@ -797,7 +797,7 @@ function MentionableSelectMenu({
     return [...roleItems, ...memberItems];
   }, [guildId]);
 
-  const renderItem = useCallback((item: EntityItem) => {
+  const renderItem = (item: EntityItem) => {
     const isRole = item.id.startsWith('role:');
     const colorHex = item.color ? roleColorToHex(item.color) : undefined;
     const avatarSrc = resolveUserAvatarUrl(item.avatar);
@@ -835,7 +835,7 @@ function MentionableSelectMenu({
         </div>
       </div>
     );
-  }, [downloadTicket]);
+  };
 
   // Strip the type prefix before submitting (handled in EntitySelectMenu for MentionableSelect)
   const handleLoadItems = loadItems;

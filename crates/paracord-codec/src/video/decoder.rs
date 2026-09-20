@@ -347,12 +347,10 @@ mod vpx_impl {
                     first_frame.len() as u32,
                     &mut si,
                 );
-                // Only used to size threads; the real resolution bound still
-                // runs per decoded image. If peek fails, keep the default thread
-                // count. The peeked header is untrusted, so clamp it to the
-                // resolution the peer negotiated before it can buy a 16-thread
-                // decoder off a crafted 4K/8K header on a 320x180 layer.
+                // Refuse oversized keyframes before libvpx allocates reference
+                // buffers. The output-image check alone runs after allocation.
                 if ret == VPX_CODEC_OK && si.w > 0 && si.h > 0 {
+                    check_decode_resolution(si.w, si.h, self.config.max_dimensions)?;
                     let (max_w, max_h, max_px) = crate::video::negotiated_decode_ceiling(
                         self.config.max_dimensions,
                         super::MAX_DECODE_DIMENSION,
@@ -407,6 +405,28 @@ mod vpx_impl {
             // the decode thread count from its peeked resolution.
             if !self.initialized {
                 self.ensure_initialized(&frame.data)?;
+            } else {
+                // Inspect every bitstream, regardless of the untrusted outer
+                // keyframe flag. A later resolution-change keyframe must not
+                // bypass the allocation budget after a small valid first frame.
+                unsafe {
+                    let mut si: vpx_codec_stream_info_t = MaybeUninit::zeroed().assume_init();
+                    si.sz = std::mem::size_of::<vpx_codec_stream_info_t>() as u32;
+                    let ret = vpx_codec_peek_stream_info(
+                        vpx_codec_vp9_dx(),
+                        frame.data.as_ptr(),
+                        frame.data.len() as u32,
+                        &mut si,
+                    );
+                    if ret == VPX_CODEC_OK && si.w > 0 && si.h > 0 {
+                        if let Err(error) =
+                            check_decode_resolution(si.w, si.h, self.config.max_dimensions)
+                        {
+                            self.needs_keyframe = true;
+                            return Err(error);
+                        }
+                    }
+                }
             }
 
             // We got a keyframe (or didn't need one), clear the flag.
@@ -961,6 +981,38 @@ mod vpx_tests {
             !dec.needs_keyframe(),
             "decoder no longer needs a keyframe after decoding one"
         );
+    }
+
+    #[test]
+    fn vp9_rejects_oversized_bitstream_after_a_valid_initial_frame() {
+        let mut small_config = encoder_config();
+        small_config.width = 64;
+        small_config.height = 64;
+        let mut small = Vp9Encoder::new(small_config).unwrap();
+        let mut large = Vp9Encoder::new(encoder_config()).unwrap();
+        let mut decoder = Vp9Decoder::new(DecoderConfig {
+            pixel_format: PixelFormat::I420,
+            max_dimensions: Some((64, 64)),
+        })
+        .unwrap();
+        let initial = small.encode(0, &synthetic_i420(64, 64, 0), true).unwrap();
+        assert!(!decoder.decode(&initial[0]).unwrap().is_empty());
+        let mut oversized = large
+            .encode(1, &synthetic_i420(W, H, 1), true)
+            .unwrap()
+            .remove(0);
+        // The peer can lie about outer metadata. Inspect the real bitstream.
+        oversized.width = 64;
+        oversized.height = 64;
+        oversized.is_keyframe = false;
+        assert!(matches!(
+            decoder.decode(&oversized),
+            Err(VideoError::DecodeFailed(_))
+        ));
+        assert!(decoder.needs_keyframe());
+        // A refused packet must leave the decoder recoverable for valid media.
+        let next = small.encode(2, &synthetic_i420(64, 64, 2), true).unwrap();
+        assert!(!decoder.decode(&next[0]).unwrap().is_empty());
     }
 
     #[test]

@@ -172,10 +172,6 @@ vi.mock('../../stores/uiStore', () => ({
   useUIStore: (selector: (s: { lowBandwidthMode: boolean }) => unknown) => selector({ lowBandwidthMode: false }),
 }));
 
-vi.mock('../../stores/lightboxStore', () => ({
-  useLightboxStore: () => vi.fn(),
-}));
-
 vi.mock('../../stores/confirmStore', () => ({
   confirm: vi.fn(),
 }));

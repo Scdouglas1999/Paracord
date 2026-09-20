@@ -567,6 +567,220 @@ fn spawn_session(
     (handle, client_tx, server_rx)
 }
 
+/// Buffer through the live dispatch path so the test covers audience metadata
+/// even when it is absent from the JSON payload.
+async fn buffer_event_for_resume(
+    env: &TestEnv,
+    user_id: i64,
+    guild_id: i64,
+    owner_id: i64,
+    event_type: &str,
+    payload: Value,
+) -> String {
+    let session = Session::new(user_id, vec![guild_id], [(guild_id, owner_id)].into());
+    let session_id = session.session_id.clone();
+    let (handle, client_tx, mut server_rx) = spawn_session(session, env.state.clone());
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    env.state
+        .event_bus
+        .dispatch(event_type, payload, Some(guild_id));
+    let frame = next_text(&mut server_rx, 1000)
+        .await
+        .expect("initial delivery");
+    assert_eq!(frame["t"], event_type);
+    assert_eq!(frame["s"], 1);
+    drop(client_tx);
+    handle.await.unwrap();
+    session_id
+}
+
+#[tokio::test]
+async fn resume_reauthorizes_buffered_guild_events_even_without_payload_scope() {
+    let env = build_env().await;
+    let (owner_id, _) = make_user_token(&env).await;
+    let (member_id, token) = make_user_token(&env).await;
+    let guild_id = make_guild(&env, owner_id).await;
+    paracord_db::members::add_member(&env.db, member_id, guild_id)
+        .await
+        .unwrap();
+    let session_id = buffer_event_for_resume(
+        &env,
+        member_id,
+        guild_id,
+        owner_id,
+        "GUILD_UPDATE",
+        json!({"name":"private details"}),
+    )
+    .await;
+
+    // Unchanged access still permits normal replay.
+    let (mut client, tx, _, _) = duplex();
+    tx.send(resume_frame(&token, &session_id, 0)).unwrap();
+    let (_, resumed, _) = wait_for_identify_or_resume(&mut client, &env.state)
+        .await
+        .unwrap();
+    assert!(resumed);
+
+    paracord_db::members::remove_member(&env.db, member_id, guild_id)
+        .await
+        .unwrap();
+    let (mut client, tx, _, _) = duplex();
+    tx.send(resume_frame(&token, &session_id, 0)).unwrap();
+    let (fresh, resumed, seq) = wait_for_identify_or_resume(&mut client, &env.state)
+        .await
+        .unwrap();
+    assert!(!resumed, "revoked content must not enter the replay path");
+    assert_ne!(fresh.session_id, session_id);
+    assert_eq!(seq, 0);
+    assert!(fresh.guild_ids.is_empty());
+}
+
+#[tokio::test]
+async fn resume_reauthorizes_channel_overwrites_with_current_database_state() {
+    let env = build_env().await;
+    let (owner_id, _) = make_user_token(&env).await;
+    let (member_id, token) = make_user_token(&env).await;
+    let guild_id = make_guild(&env, owner_id).await;
+    let channel_id = sid();
+    paracord_db::members::add_member(&env.db, member_id, guild_id)
+        .await
+        .unwrap();
+    paracord_db::channels::create_channel(
+        &env.db, channel_id, guild_id, "general", 0, 0, None, None,
+    )
+    .await
+    .unwrap();
+    let role_id = sid();
+    paracord_db::roles::create_role(
+        &env.db,
+        role_id,
+        guild_id,
+        "viewers",
+        Permissions::VIEW_CHANNEL.bits(),
+    )
+    .await
+    .unwrap();
+    paracord_db::roles::add_member_role(&env.db, member_id, guild_id, role_id)
+        .await
+        .unwrap();
+    let session_id = buffer_event_for_resume(
+        &env,
+        member_id,
+        guild_id,
+        owner_id,
+        "MESSAGE_CREATE",
+        json!({"channel_id":channel_id.to_string(), "content":"revoked secret"}),
+    )
+    .await;
+
+    // Deliberately leave the live permission cache populated with the old allow.
+    paracord_db::channel_overwrites::upsert_channel_overwrite(
+        &env.db,
+        channel_id,
+        member_id,
+        1,
+        0,
+        Permissions::VIEW_CHANNEL.bits(),
+    )
+    .await
+    .unwrap();
+    let (mut client, tx, _, _) = duplex();
+    tx.send(resume_frame(&token, &session_id, 0)).unwrap();
+    let (fresh, resumed, _) = wait_for_identify_or_resume(&mut client, &env.state)
+        .await
+        .unwrap();
+    assert!(
+        !resumed,
+        "a cached allow cannot authorize replay after channel access is revoked"
+    );
+    assert_ne!(fresh.session_id, session_id);
+    assert!(fresh.guild_ids.contains(&guild_id));
+}
+
+#[tokio::test]
+async fn targeted_report_events_recheck_moderator_authority_on_delivery_and_resume() {
+    for event_type in ["GUILD_REPORT_CREATE", "GUILD_REPORT_UPDATE"] {
+        let env = build_env().await;
+        let (owner_id, _) = make_user_token(&env).await;
+        let (moderator_id, token) = make_user_token(&env).await;
+        let guild_id = make_guild(&env, owner_id).await;
+        let role_id = sid();
+        paracord_db::members::add_member(&env.db, moderator_id, guild_id)
+            .await
+            .unwrap();
+        paracord_db::roles::create_role(
+            &env.db,
+            role_id,
+            guild_id,
+            "moderator",
+            Permissions::MANAGE_MESSAGES.bits(),
+        )
+        .await
+        .unwrap();
+        paracord_db::roles::add_member_role(&env.db, moderator_id, guild_id, role_id)
+            .await
+            .unwrap();
+
+        let session = Session::new(moderator_id, vec![guild_id], [(guild_id, owner_id)].into());
+        let session_id = session.session_id.clone();
+        let (handle, client_tx, mut server_rx) = spawn_session(session, env.state.clone());
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let payload = json!({"guild_id":guild_id.to_string(), "reason":"confidential report"});
+        // Production report dispatch has no bus guild scope or channel id.
+        env.state
+            .event_bus
+            .dispatch_to_users(event_type, payload.clone(), vec![moderator_id]);
+        let frame = next_text(&mut server_rx, 1000)
+            .await
+            .expect("moderator report delivery");
+        assert_eq!(frame["t"], event_type);
+        drop(client_tx);
+        handle.await.unwrap();
+
+        let (mut client, tx, _, _) = duplex();
+        tx.send(resume_frame(&token, &session_id, 0)).unwrap();
+        assert!(
+            wait_for_identify_or_resume(&mut client, &env.state)
+                .await
+                .unwrap()
+                .1
+        );
+
+        paracord_db::roles::remove_member_role(&env.db, moderator_id, guild_id, role_id)
+            .await
+            .unwrap();
+        let (mut client, tx, _, _) = duplex();
+        tx.send(resume_frame(&token, &session_id, 0)).unwrap();
+        let (fresh, resumed, _) = wait_for_identify_or_resume(&mut client, &env.state)
+            .await
+            .unwrap();
+        assert!(!resumed, "old report target list must not survive demotion");
+        assert!(fresh.guild_ids.contains(&guild_id));
+
+        let (handle, client_tx, mut server_rx) = spawn_session(fresh, env.state.clone());
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        env.state
+            .event_bus
+            .dispatch_to_users(event_type, payload, vec![moderator_id]);
+        assert!(
+            next_text(&mut server_rx, 150).await.is_none(),
+            "stale live target leaked report"
+        );
+        // A personal notice remains deliverable independently of moderation.
+        env.state.event_bus.dispatch_to_users(
+            "MOD_ACTION_NOTICE",
+            json!({"guild_id":guild_id.to_string()}),
+            vec![moderator_id],
+        );
+        assert_eq!(
+            next_text(&mut server_rx, 1000).await.unwrap()["t"],
+            "MOD_ACTION_NOTICE"
+        );
+        drop(client_tx);
+        handle.await.unwrap();
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dynamic_scope_controls_event_delivery() {
     let env = build_env().await;
@@ -1135,4 +1349,254 @@ async fn a_shutting_down_server_closes_its_sessions_after_the_restart_notice() {
         ended.is_ok(),
         "the session must end itself: nothing else will, and the drain waits for it"
     );
+}
+
+async fn make_gateway_bot(env: &TestEnv) -> (i64, i64, String) {
+    let (user_id, _) = make_user_token(env).await;
+    paracord_db::users::update_user_flags(&env.db, user_id, paracord_core::USER_FLAG_BOT)
+        .await
+        .unwrap();
+    let app_id = sid();
+    let token = uuid::Uuid::new_v4().simple().to_string();
+    paracord_db::bot_applications::create_bot_application(
+        &env.db,
+        app_id,
+        "Gateway Bot",
+        None,
+        user_id,
+        user_id,
+        &paracord_db::bot_applications::hash_token(&token),
+        None,
+        Permissions::VIEW_CHANNEL.bits(),
+    )
+    .await
+    .unwrap();
+    (app_id, user_id, token)
+}
+
+async fn identify_gateway_bot(env: &TestEnv, token: &str) -> Option<Session> {
+    let (mut client, tx, _, _) = duplex();
+    tx.send(identify_frame(token)).unwrap();
+    drop(tx);
+    wait_for_identify_or_resume(&mut client, &env.state)
+        .await
+        .map(|result| result.0)
+}
+
+#[tokio::test]
+async fn bot_identify_accepts_opaque_credentials_and_only_installed_guilds() {
+    let env = build_env().await;
+    let (app_id, bot_id, token) = make_gateway_bot(&env).await;
+    let (owner_id, _) = make_user_token(&env).await;
+    let installed = make_guild(&env, owner_id).await;
+    let uninstalled = make_guild(&env, owner_id).await;
+    for guild_id in [installed, uninstalled] {
+        paracord_db::members::add_member(&env.db, bot_id, guild_id)
+            .await
+            .unwrap();
+    }
+    paracord_db::bot_applications::add_bot_to_guild(
+        &env.db,
+        app_id,
+        installed,
+        owner_id,
+        Permissions::VIEW_CHANNEL.bits(),
+    )
+    .await
+    .unwrap();
+    for credential in [token.clone(), format!("Bot {token}")] {
+        let session = identify_gateway_bot(&env, &credential)
+            .await
+            .expect("valid bot credential");
+        assert_eq!(session.user_id, bot_id);
+        assert_eq!(
+            session.guild_ids,
+            vec![installed],
+            "membership alone is not a bot installation"
+        );
+        assert_eq!(
+            session.bot_token_hash,
+            Some(paracord_db::bot_applications::hash_token(&token))
+        );
+        assert!(session.auth_session_id.is_empty());
+    }
+    paracord_db::bot_applications::set_bot_application_revoked(&env.db, app_id, true)
+        .await
+        .unwrap();
+    assert!(identify_gateway_bot(&env, &token).await.is_none());
+    let rotated = "rotated-gateway-bot-fixture-token";
+    paracord_db::bot_applications::regenerate_bot_token(
+        &env.db,
+        app_id,
+        &paracord_db::bot_applications::hash_token(rotated),
+    )
+    .await
+    .unwrap();
+    assert!(identify_gateway_bot(&env, &token).await.is_none());
+    assert!(identify_gateway_bot(&env, rotated).await.is_some());
+    paracord_db::users::update_user_flags(&env.db, bot_id, 0)
+        .await
+        .unwrap();
+    assert!(
+        identify_gateway_bot(&env, rotated).await.is_none(),
+        "bot credential must never authenticate an ordinary user"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bot_gateway_rotation_closes_live_socket_and_refuses_old_resume() {
+    let env = build_env().await;
+    let (app_id, _, token) = make_gateway_bot(&env).await;
+    let session = identify_gateway_bot(&env, &token).await.unwrap();
+    let session_id = session.session_id.clone();
+    let (handle, client_tx, mut server_rx) = spawn_session(session, env.state.clone());
+    paracord_db::bot_applications::regenerate_bot_token(
+        &env.db,
+        app_id,
+        &paracord_db::bot_applications::hash_token("new-bot-token"),
+    )
+    .await
+    .unwrap();
+    client_tx
+        .send(Ok(Message::Text(
+            json!({"op":1,"d":null}).to_string().into(),
+        )))
+        .unwrap();
+    loop {
+        match timeout(Duration::from_secs(2), server_rx.recv())
+            .await
+            .expect("revoked socket closes")
+        {
+            Some(Message::Close(Some(frame))) => {
+                assert_eq!(frame.code, 4004);
+                break;
+            }
+            Some(Message::Ping(_)) => {}
+            other => panic!("revoked bot must not receive a heartbeat ACK: {other:?}"),
+        }
+    }
+    handle.await.unwrap();
+    let (mut client, tx, _, _) = duplex();
+    tx.send(resume_frame(&token, &session_id, 0)).unwrap();
+    drop(tx);
+    assert!(wait_for_identify_or_resume(&mut client, &env.state)
+        .await
+        .is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bot_targeted_interactions_recheck_install_and_channel_grants() {
+    let env = build_env().await;
+    let (app_id, bot_id, token) = make_gateway_bot(&env).await;
+    let (owner_id, _) = make_user_token(&env).await;
+    let guild_id = make_guild(&env, owner_id).await;
+    paracord_db::members::add_member(&env.db, bot_id, guild_id)
+        .await
+        .unwrap();
+    paracord_db::roles::create_role(
+        &env.db,
+        guild_id,
+        guild_id,
+        "@everyone",
+        Permissions::VIEW_CHANNEL.bits(),
+    )
+    .await
+    .unwrap();
+    paracord_db::bot_applications::add_bot_to_guild(
+        &env.db,
+        app_id,
+        guild_id,
+        owner_id,
+        Permissions::VIEW_CHANNEL.bits(),
+    )
+    .await
+    .unwrap();
+    let channel_id = sid();
+    paracord_db::channels::create_channel(
+        &env.db,
+        channel_id,
+        guild_id,
+        "bot-commands",
+        0,
+        0,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let session = identify_gateway_bot(&env, &token).await.unwrap();
+    let session_id = session.session_id.clone();
+    let (handle, client_tx, mut server_rx) = spawn_session(session, env.state.clone());
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let interaction = json!({"guild_id":guild_id.to_string(), "channel_id":channel_id.to_string(), "token":"private-interaction-token"});
+    env.state
+        .event_bus
+        .dispatch_to_users("INTERACTION_CREATE", interaction.clone(), vec![bot_id]);
+    assert_eq!(
+        next_text(&mut server_rx, 1000).await.unwrap()["t"],
+        "INTERACTION_CREATE"
+    );
+    // A queued target list is not authority after an install permission reduction.
+    paracord_db::bot_applications::add_bot_to_guild(&env.db, app_id, guild_id, owner_id, 0)
+        .await
+        .unwrap();
+    env.state
+        .event_bus
+        .dispatch_to_users("INTERACTION_CREATE", interaction.clone(), vec![bot_id]);
+    env.state
+        .event_bus
+        .dispatch_to_users("SENTINEL", json!({}), vec![bot_id]);
+    assert_eq!(
+        next_text(&mut server_rx, 1000).await.unwrap()["t"],
+        "SENTINEL"
+    );
+    // Even stale membership must not preserve an uninstalled bot's subscriptions.
+    paracord_db::bot_applications::remove_bot_from_guild(&env.db, app_id, guild_id)
+        .await
+        .unwrap();
+    env.state
+        .event_bus
+        .dispatch_to_users("INTERACTION_CREATE", interaction, vec![bot_id]);
+    env.state.event_bus.dispatch(
+        "GUILD_UPDATE",
+        json!({"id":guild_id.to_string()}),
+        Some(guild_id),
+    );
+    env.state
+        .event_bus
+        .dispatch_to_users("SENTINEL", json!({}), vec![bot_id]);
+    assert_eq!(
+        next_text(&mut server_rx, 1000).await.unwrap()["t"],
+        "SENTINEL"
+    );
+    client_tx
+        .send(Ok(Message::Text(
+            json!({"op":8,"d":{"guild_id":guild_id.to_string()}})
+                .to_string()
+                .into(),
+        )))
+        .unwrap();
+    client_tx
+        .send(Ok(Message::Text(
+            json!({"op":1,"d":null}).to_string().into(),
+        )))
+        .unwrap();
+    assert_eq!(
+        next_text(&mut server_rx, 1000).await.unwrap()["op"],
+        11,
+        "uninstalled bot must not fetch a roster from its stale session scope"
+    );
+    drop(client_tx);
+    handle.await.unwrap();
+    let (mut client, tx, _, _) = duplex();
+    tx.send(resume_frame(&token, &session_id, 0)).unwrap();
+    drop(tx);
+    let (session, resumed, _) = wait_for_identify_or_resume(&mut client, &env.state)
+        .await
+        .unwrap();
+    assert!(
+        !resumed,
+        "uninstalled bot must not replay its old interaction token"
+    );
+    assert!(session.guild_ids.is_empty());
 }

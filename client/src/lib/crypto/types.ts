@@ -122,6 +122,8 @@ export interface SerializedLocalPrekeyStore {
 
 // Protocol constants
 export const MAX_SKIP = 256;
+/** Bound retained out-of-order keys across all receive chains, not just one gap. */
+export const MAX_RETAINED_SKIPPED_KEYS = MAX_SKIP * 4;
 export const OPK_LOW_THRESHOLD = 20;
 export const OPK_BATCH_SIZE = 50;
 export const SIGNED_PREKEY_ROTATION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days

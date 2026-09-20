@@ -116,6 +116,60 @@ pub async fn use_invite(pool: &DbPool, code: &str) -> Result<Option<InviteRow>, 
     Ok(row)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InviteRedemption {
+    Joined,
+    AlreadyMember,
+}
+
+/// Reserve the unique membership and consume its invite in one transaction.
+/// Concurrent first accepts by the same account wait on the membership key;
+/// only its actual inserter consumes a use or emits join side effects. An
+/// expired, exhausted, deleted, or retargeted invite rolls the reservation back.
+pub async fn redeem_invite_membership(
+    pool: &DbPool,
+    code: &str,
+    user_id: i64,
+    guild_id: i64,
+    channel_id: i64,
+) -> Result<Option<InviteRedemption>, DbError> {
+    let mut tx = pool.begin().await?;
+    let inserted = sqlx::query(
+        "INSERT INTO members (user_id, guild_id) VALUES ($1, $2)
+         ON CONFLICT(user_id, guild_id) DO NOTHING",
+    )
+    .bind(user_id)
+    .bind(guild_id)
+    .execute(&mut *tx)
+    .await?;
+    if inserted.rows_affected() == 0 {
+        tx.commit().await?;
+        return Ok(Some(InviteRedemption::AlreadyMember));
+    }
+
+    let not_expired = invite_not_expired_predicate("created_at", "max_age", "$2");
+    let sql = format!(
+        "UPDATE invites SET uses = uses + 1
+         WHERE code = $1 AND channel_id = $3
+           AND EXISTS (SELECT 1 FROM channels WHERE id = $3 AND space_id = $4)
+           AND (max_uses IS NULL OR max_uses = 0 OR uses < max_uses)
+           AND {not_expired}",
+    );
+    let consumed = sqlx::query(&sql)
+        .bind(code)
+        .bind(datetime_to_db_text(Utc::now()))
+        .bind(channel_id)
+        .bind(guild_id)
+        .execute(&mut *tx)
+        .await?;
+    if consumed.rows_affected() == 0 {
+        tx.rollback().await?;
+        return Ok(None);
+    }
+    tx.commit().await?;
+    Ok(Some(InviteRedemption::Joined))
+}
+
 pub async fn delete_invite(pool: &DbPool, code: &str) -> Result<(), DbError> {
     sqlx::query("DELETE FROM invites WHERE code = $1")
         .bind(code)

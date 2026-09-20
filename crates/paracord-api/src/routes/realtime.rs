@@ -685,6 +685,10 @@ fn check_command_rate_limit(user_id: i64, command_type: &str) -> Result<(), ApiE
 struct BufferedSseEvent {
     sequence: u64,
     data: String,
+    event_type: String,
+    guild_id: Option<i64>,
+    channel_id: Option<i64>,
+    target_user_ids: Option<Vec<i64>>,
     timestamp: Instant,
 }
 
@@ -1058,6 +1062,24 @@ async fn session_pump(
                     continue;
                 }
 
+                if paracord_core::events::requires_report_moderator(&event.event_type)
+                    && !paracord_core::events::can_receive_replayed_event(
+                        &state.db,
+                        user_id,
+                        &event.event_type,
+                        paracord_core::events::replay_guild_id(
+                            &event.event_type,
+                            &event.payload,
+                            event.guild_id,
+                        ),
+                        None,
+                        event.target_user_ids.as_deref(),
+                    )
+                    .await
+                {
+                    continue;
+                }
+
                 // First event from a guild this session gained while connected:
                 // adopt it now, so the channel check below has the owner id.
                 if let Some(guild_id) = event.guild_id {
@@ -1129,6 +1151,14 @@ async fn session_pump(
                 channel.record(BufferedSseEvent {
                     sequence,
                     data,
+                    event_type: event.event_type.clone(),
+                    guild_id: paracord_core::events::replay_guild_id(
+                        &event.event_type,
+                        &event.payload,
+                        event.guild_id,
+                    ),
+                    channel_id: extract_channel_id_from_event(&event.event_type, &event.payload),
+                    target_user_ids: event.target_user_ids.clone(),
                     timestamp: Instant::now(),
                 });
             }
@@ -1153,6 +1183,10 @@ async fn session_pump(
                 channel.record(BufferedSseEvent {
                     sequence,
                     data,
+                    event_type: String::new(),
+                    guild_id: None,
+                    channel_id: None,
+                    target_user_ids: Some(vec![user_id]),
                     timestamp: Instant::now(),
                 });
             }
@@ -1439,6 +1473,21 @@ struct RealtimeStreamState {
     last_emitted: u64,
 }
 
+/// Revalidate the actual frame just before delivery, including lag recovery.
+/// Ending a stream on denial makes its next attach use the READY recovery
+/// barrier without advancing the cursor past any undisclosed event.
+async fn can_replay_sse_event(st: &RealtimeStreamState, event: &BufferedSseEvent) -> bool {
+    paracord_core::events::can_receive_replayed_event(
+        &st.app_state.db,
+        st.user_id,
+        &event.event_type,
+        event.guild_id,
+        event.channel_id,
+        event.target_user_ids.as_deref(),
+    )
+    .await
+}
+
 /// Decide whether an attached SSE stream must be torn down.
 ///
 /// Enforces the hard `MAX_STREAM_LIFETIME` and, at most once per
@@ -1682,10 +1731,32 @@ pub async fn stream_events(
     let replay_snapshot = channel.replay_since(cursor);
     // Check after taking the snapshot so concurrent eviction or a pump loss
     // cannot turn a truncated range into a supposedly healthy replay.
-    let resync_required = channel.requires_resync(cursor)
+    let mut resync_required = channel.requires_resync(cursor)
         || replay_snapshot
             .first()
             .is_some_and(|event| event.sequence > cursor.saturating_add(1));
+
+    // The pump authorized these frames when it recorded them. Reconnecting is
+    // another disclosure, so revoked membership/visibility must prevent replay.
+    // Use the existing full-state recovery barrier rather than leaving cursor
+    // holes or sending stale private data after the new READY snapshot.
+    if !resync_required {
+        for event in &replay_snapshot {
+            if !paracord_core::events::can_receive_replayed_event(
+                &state.db,
+                user_id,
+                &event.event_type,
+                event.guild_id,
+                event.channel_id,
+                event.target_user_ids.as_deref(),
+            )
+            .await
+            {
+                resync_required = true;
+                break;
+            }
+        }
+    }
 
     // Snapshot the frames to replay in order, and decide the sequence the client
     // should track after READY (`ready_seq`).
@@ -1750,6 +1821,9 @@ pub async fn stream_events(
 
         // 3. Replay buffered gap events (seq > cursor), in order.
         if let Some(buffered) = st.replay_queue.pop_front() {
+            if !can_replay_sse_event(&st, &buffered).await {
+                return None;
+            }
             st.last_emitted = st.last_emitted.max(buffered.sequence);
             let event = Event::default()
                 .event("gateway")
@@ -1792,6 +1866,11 @@ pub async fn stream_events(
                     if buffered.sequence <= st.last_emitted {
                         continue;
                     }
+                    if paracord_core::events::requires_report_moderator(&buffered.event_type)
+                        && !can_replay_sse_event(&st, &buffered).await
+                    {
+                        return None;
+                    }
                     st.last_emitted = buffered.sequence;
                     st.channel.touch();
                     let event = Event::default()
@@ -1821,6 +1900,9 @@ pub async fn stream_events(
                     }
                     st.replay_queue.extend(replay);
                     if let Some(buffered) = st.replay_queue.pop_front() {
+                        if !can_replay_sse_event(&st, &buffered).await {
+                            return None;
+                        }
                         st.last_emitted = buffered.sequence;
                         let event = Event::default()
                             .event("gateway")

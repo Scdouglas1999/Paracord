@@ -272,6 +272,7 @@ pub async fn apply_template(
         ACTION_KICK => {
             paracord_core::admin::kick_member(&state.db, guild_id, auth.user_id, target_user_id)
                 .await?;
+            state.permission_cache.invalidate_user(target_user_id).await;
             state.member_index.remove_member(guild_id, target_user_id);
             // No `reason`: this event is guild-scoped, so every member receives
             // it, and the moderator's private justification for a kick is not
@@ -297,6 +298,7 @@ pub async fn apply_template(
                 Some(&rendered_reason),
             )
             .await?;
+            state.permission_cache.invalidate_user(target_user_id).await;
             state.member_index.remove_member(guild_id, target_user_id);
             // No `reason` — see the GUILD_MEMBER_REMOVE branch above.
             state.event_bus.dispatch(

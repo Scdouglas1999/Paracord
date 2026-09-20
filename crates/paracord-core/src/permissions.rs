@@ -5,8 +5,10 @@ use dashmap::DashMap;
 use moka::notification::RemovalCause;
 use paracord_db::DbPool;
 use paracord_models::permissions::Permissions;
-use std::collections::HashSet;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 pub const OVERWRITE_TARGET_ROLE: i16 = 0;
 pub const OVERWRITE_TARGET_MEMBER: i16 = 1;
@@ -21,13 +23,16 @@ pub const CHANNEL_TYPE_THREAD: i16 = 6;
 /// Remove `key` from the reverse index bucket `outer`, dropping the bucket when
 /// it becomes empty so the index cannot grow without bound.
 fn remove_from_reverse_index(
-    index: &DashMap<i64, HashSet<PermissionCacheKey>>,
+    index: &DashMap<i64, HashMap<PermissionCacheKey, u64>>,
     outer: i64,
     key: &PermissionCacheKey,
+    insertion_id: u64,
 ) {
     let now_empty = match index.get_mut(&outer) {
         Some(mut bucket) => {
-            bucket.remove(key);
+            if bucket.get(key) == Some(&insertion_id) {
+                bucket.remove(key);
+            }
             bucket.is_empty()
         }
         None => false,
@@ -47,65 +52,125 @@ fn remove_from_reverse_index(
 /// the underlying cache without an unbounded scan.
 #[derive(Clone)]
 pub struct PermissionCache {
-    cache: moka::future::Cache<PermissionCacheKey, Permissions>,
-    by_channel: Arc<DashMap<i64, HashSet<PermissionCacheKey>>>,
-    by_user: Arc<DashMap<i64, HashSet<PermissionCacheKey>>>,
+    cache: moka::future::Cache<PermissionCacheKey, CachedPermissions>,
+    by_channel: Arc<DashMap<i64, HashMap<PermissionCacheKey, u64>>>,
+    by_user: Arc<DashMap<i64, HashMap<PermissionCacheKey, u64>>>,
+    generation: Arc<AtomicU64>,
+    next_insertion: Arc<AtomicU64>,
+    // Serializes cache publication with invalidation; never held over DB I/O.
+    mutation: Arc<RwLock<()>>,
 }
+
+#[derive(Clone)]
+struct CachedPermissions {
+    permissions: Permissions,
+    insertion_id: u64,
+}
+
+#[derive(Clone, Copy)]
+pub struct PermissionCacheGeneration(u64);
 
 impl PermissionCache {
     /// Build the cache with the given max entry count and a 5-minute TTL.
     pub fn new(max_capacity: u64) -> Self {
-        let by_channel: Arc<DashMap<i64, HashSet<PermissionCacheKey>>> = Arc::new(DashMap::new());
-        let by_user: Arc<DashMap<i64, HashSet<PermissionCacheKey>>> = Arc::new(DashMap::new());
+        let by_channel: Arc<DashMap<i64, HashMap<PermissionCacheKey, u64>>> =
+            Arc::new(DashMap::new());
+        let by_user: Arc<DashMap<i64, HashMap<PermissionCacheKey, u64>>> = Arc::new(DashMap::new());
         let listener_channels = Arc::clone(&by_channel);
         let listener_users = Arc::clone(&by_user);
         let cache = moka::future::Cache::builder()
             .max_capacity(max_capacity)
             .time_to_live(std::time::Duration::from_secs(300))
-            .eviction_listener(move |key: Arc<PermissionCacheKey>, _perms, cause| {
-                // A replacement keeps the same key present with a new value, so
-                // its reverse-index entries must survive; only prune when the
-                // key genuinely leaves the cache.
-                if cause == RemovalCause::Replaced {
-                    return;
-                }
-                let (user_id, channel_id) = *key;
-                remove_from_reverse_index(&listener_channels, channel_id, &key);
-                remove_from_reverse_index(&listener_users, user_id, &key);
-            })
+            .eviction_listener(
+                move |key: Arc<PermissionCacheKey>, entry: CachedPermissions, cause| {
+                    // A replacement keeps the same key present with a new value, so
+                    // its reverse-index entries must survive; only prune when the
+                    // key genuinely leaves the cache.
+                    if cause == RemovalCause::Replaced {
+                        return;
+                    }
+                    let (user_id, channel_id) = *key;
+                    remove_from_reverse_index(
+                        &listener_channels,
+                        channel_id,
+                        &key,
+                        entry.insertion_id,
+                    );
+                    remove_from_reverse_index(&listener_users, user_id, &key, entry.insertion_id);
+                },
+            )
             .build();
         Self {
             cache,
             by_channel,
             by_user,
+            generation: Arc::new(AtomicU64::new(0)),
+            next_insertion: Arc::new(AtomicU64::new(0)),
+            mutation: Arc::new(RwLock::new(())),
         }
     }
 
     async fn get(&self, key: &PermissionCacheKey) -> Option<Permissions> {
-        self.cache.get(key).await
+        self.cache.get(key).await.map(|entry| entry.permissions)
     }
 
+    /// Capture before reading any DB inputs used to compute a cache entry.
+    pub fn generation(&self) -> PermissionCacheGeneration {
+        PermissionCacheGeneration(self.generation.load(Ordering::Acquire))
+    }
+
+    #[cfg(test)]
     async fn insert(&self, key: PermissionCacheKey, perms: Permissions) {
+        self.insert_if_current(key, perms, self.generation()).await;
+    }
+
+    async fn insert_if_current(
+        &self,
+        key: PermissionCacheKey,
+        perms: Permissions,
+        generation: PermissionCacheGeneration,
+    ) -> bool {
+        let _guard = self.mutation.write().await;
+        if generation.0 != self.generation.load(Ordering::Acquire) {
+            return false;
+        }
+        let insertion_id = self.next_insertion.fetch_add(1, Ordering::Relaxed);
         let (user_id, channel_id) = key;
-        self.by_channel.entry(channel_id).or_default().insert(key);
-        self.by_user.entry(user_id).or_default().insert(key);
-        // The eviction listener prunes the reverse indexes for any key it evicts
-        // as a side effect of this insert (size eviction); a Replaced cause for
-        // this same key is ignored so the entries added above are preserved.
-        self.cache.insert(key, perms).await;
+        self.by_channel
+            .entry(channel_id)
+            .or_default()
+            .insert(key, insertion_id);
+        self.by_user
+            .entry(user_id)
+            .or_default()
+            .insert(key, insertion_id);
+        self.cache
+            .insert(
+                key,
+                CachedPermissions {
+                    permissions: perms,
+                    insertion_id,
+                },
+            )
+            .await;
+        true
     }
 
     async fn invalidate_key(&self, key: &PermissionCacheKey) {
+        let _guard = self.mutation.write().await;
+        self.generation.fetch_add(1, Ordering::AcqRel);
         // Reverse-index cleanup happens in the eviction listener.
         self.cache.invalidate(key).await;
     }
 
     /// Invalidate every cached entry for `channel_id` (all users).
     pub async fn invalidate_channel(&self, channel_id: i64) {
+        let _guard = self.mutation.write().await;
+        self.generation.fetch_add(1, Ordering::AcqRel);
         let keys: Vec<PermissionCacheKey> = self
             .by_channel
             .get(&channel_id)
-            .map(|bucket| bucket.iter().copied().collect())
+            .map(|bucket| bucket.keys().copied().collect())
             .unwrap_or_default();
         for key in keys {
             self.cache.invalidate(&key).await;
@@ -114,14 +179,22 @@ impl PermissionCache {
 
     /// Invalidate every cached entry for `user_id` (all channels).
     pub async fn invalidate_user(&self, user_id: i64) {
+        let _guard = self.mutation.write().await;
+        self.generation.fetch_add(1, Ordering::AcqRel);
         let keys: Vec<PermissionCacheKey> = self
             .by_user
             .get(&user_id)
-            .map(|bucket| bucket.iter().copied().collect())
+            .map(|bucket| bucket.keys().copied().collect())
             .unwrap_or_default();
         for key in keys {
             self.cache.invalidate(&key).await;
         }
+    }
+
+    async fn invalidate_all(&self) {
+        let _guard = self.mutation.write().await;
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        self.cache.invalidate_all();
     }
 }
 
@@ -135,13 +208,17 @@ pub async fn compute_channel_permissions_cached(
     guild_owner_id: i64,
     user_id: i64,
 ) -> Result<Permissions, CoreError> {
+    let generation = cache.generation();
     let key = (user_id, channel_id);
     if let Some(perms) = cache.get(&key).await {
+        if user_id != guild_owner_id && !is_guild_member(pool, guild_id, user_id).await? {
+            return Ok(Permissions::empty());
+        }
         return Ok(perms);
     }
     let perms =
         compute_channel_permissions(pool, guild_id, channel_id, guild_owner_id, user_id).await?;
-    cache.insert(key, perms).await;
+    cache.insert_if_current(key, perms, generation).await;
     Ok(perms)
 }
 
@@ -152,9 +229,12 @@ pub async fn seed_channel_permissions(
     cache: &PermissionCache,
     user_id: i64,
     channel_permissions: &std::collections::HashMap<i64, Permissions>,
+    generation: PermissionCacheGeneration,
 ) {
     for (&channel_id, &perms) in channel_permissions {
-        cache.insert((user_id, channel_id), perms).await;
+        cache
+            .insert_if_current((user_id, channel_id), perms, generation)
+            .await;
     }
 }
 
@@ -185,7 +265,17 @@ pub async fn invalidate_channel_tree(
     channel_id: i64,
 ) -> Result<(), CoreError> {
     cache.invalidate_channel(channel_id).await;
-    for child in paracord_db::channels::get_child_channel_ids(pool, channel_id).await? {
+    let children = match paracord_db::channels::get_child_channel_ids(pool, channel_id).await {
+        Ok(children) => children,
+        Err(error) => {
+            // Callers may log a post-commit invalidation error and return success.
+            // If child discovery fails, leaving thread permissions cached would
+            // therefore preserve revoked access; discard all entries instead.
+            cache.invalidate_all().await;
+            return Err(error.into());
+        }
+    };
+    for child in children {
         cache.invalidate_channel(child).await;
     }
     Ok(())
@@ -354,10 +444,11 @@ fn apply_overwrites(
     // Combined role overwrites for the roles the member holds.
     let mut role_deny = Permissions::empty();
     let mut role_allow = Permissions::empty();
-    for overwrite in overwrites
-        .iter()
-        .filter(|o| o.target_type == OVERWRITE_TARGET_ROLE && role_ids.contains(&o.target_id))
-    {
+    for overwrite in overwrites.iter().filter(|o| {
+        o.target_type == OVERWRITE_TARGET_ROLE
+            && o.target_id != guild_id
+            && role_ids.contains(&o.target_id)
+    }) {
         role_deny |= Permissions::from_bits_truncate(overwrite.deny_perms);
         role_allow |= Permissions::from_bits_truncate(overwrite.allow_perms);
     }
@@ -527,6 +618,12 @@ pub async fn compute_channel_permissions(
     guild_owner_id: i64,
     user_id: i64,
 ) -> Result<Permissions, CoreError> {
+    // Channel overwrites can grant permissions without any role bits. Check
+    // membership here so an @everyone allow cannot admit a former member when
+    // a caller relies on this helper as its complete visibility check.
+    if user_id != guild_owner_id && !is_guild_member(pool, guild_id, user_id).await? {
+        return Ok(Permissions::empty());
+    }
     let roles = paracord_db::roles::get_member_roles(pool, user_id, guild_id).await?;
     let mut perms = compute_permissions_from_roles(&roles, guild_owner_id, user_id);
 
@@ -588,22 +685,44 @@ pub async fn compute_all_channel_permissions(
 ) -> Result<std::collections::HashMap<i64, Permissions>, CoreError> {
     use std::collections::HashMap;
 
-    // Owner fast path
-    if user_id == guild_owner_id {
+    if user_id != guild_owner_id && !is_guild_member(pool, guild_id, user_id).await? {
         return Ok(channels
             .iter()
-            .map(|c| (c.id, Permissions::all()))
+            .map(|c| (c.id, Permissions::empty()))
             .collect());
+    }
+
+    let is_bot = match paracord_db::users::get_user_by_id(pool, user_id).await? {
+        Some(user) => crate::is_bot(user.flags),
+        None => false,
+    };
+
+    // Owner fast path
+    if user_id == guild_owner_id {
+        let perms = cap_bot_install_permissions_hinted(
+            pool,
+            guild_id,
+            user_id,
+            Permissions::all(),
+            Some(is_bot),
+        )
+        .await?;
+        return Ok(channels.iter().map(|c| (c.id, perms)).collect());
     }
 
     // Load roles once
     let roles = paracord_db::roles::get_member_roles(pool, user_id, guild_id).await?;
     let base_perms = compute_permissions_from_roles(&roles, guild_owner_id, user_id);
     if base_perms.contains(Permissions::ADMINISTRATOR) {
-        return Ok(channels
-            .iter()
-            .map(|c| (c.id, Permissions::all()))
-            .collect());
+        let perms = cap_bot_install_permissions_hinted(
+            pool,
+            guild_id,
+            user_id,
+            Permissions::all(),
+            Some(is_bot),
+        )
+        .await?;
+        return Ok(channels.iter().map(|c| (c.id, perms)).collect());
     }
 
     let role_ids: std::collections::HashSet<i64> = roles.iter().map(|r| r.id).collect();
@@ -666,15 +785,6 @@ pub async fn compute_all_channel_permissions(
             .or_default()
             .push(ow);
     }
-
-    // Determine bot status once for the whole batch so the per-channel bot cap
-    // does not issue a `get_user_by_id` round-trip for each channel. Bots are
-    // rare on this path, so the single lookup is cheap and, more importantly,
-    // keeps the batch result identical to the single-channel path.
-    let is_bot = match paracord_db::users::get_user_by_id(pool, user_id).await? {
-        Some(user) => crate::is_bot(user.flags),
-        None => false,
-    };
 
     // Compute permissions per channel
     let mut result = HashMap::with_capacity(channels.len());
@@ -917,6 +1027,26 @@ mod tests {
                 expected: view | send,
             },
             Case {
+                name: "role deny overrides everyone allow when everyone is assigned",
+                base: view | send,
+                roles: vec![GUILD_ID, role_a],
+                overwrites: vec![
+                    ow(
+                        GUILD_ID,
+                        OVERWRITE_TARGET_ROLE,
+                        view | send,
+                        Permissions::empty(),
+                    ),
+                    ow(
+                        role_a,
+                        OVERWRITE_TARGET_ROLE,
+                        Permissions::empty(),
+                        view | send,
+                    ),
+                ],
+                expected: Permissions::empty(),
+            },
+            Case {
                 name: "member overwrite overrides role overwrite",
                 base: view,
                 roles: vec![role_a],
@@ -1126,6 +1256,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn assigned_everyone_allow_does_not_defeat_role_denies() {
+        let pool = mem_pool().await;
+        let allowed = Permissions::VIEW_CHANNEL | Permissions::SEND_MESSAGES;
+        let (guild_id, channel_id, role_id) = seed_guild(
+            &pool,
+            1,
+            7,
+            0,
+            allowed.bits(),
+            None,
+            &[(100, OVERWRITE_TARGET_ROLE, allowed, Permissions::empty())],
+        )
+        .await;
+        paracord_db::roles::create_role(&pool, guild_id, guild_id, "everyone", allowed.bits())
+            .await
+            .unwrap();
+        paracord_db::roles::add_member_role(&pool, 7, guild_id, guild_id)
+            .await
+            .unwrap();
+        paracord_db::channel_overwrites::upsert_channel_overwrite(
+            &pool,
+            channel_id,
+            role_id,
+            OVERWRITE_TARGET_ROLE,
+            0,
+            allowed.bits(),
+        )
+        .await
+        .unwrap();
+        let single = compute_channel_permissions(&pool, guild_id, channel_id, 1, 7)
+            .await
+            .unwrap();
+        let batch = batch_perms(&pool, guild_id, channel_id, 1, 7).await;
+        assert_eq!(single, Permissions::empty());
+        assert_eq!(single, batch);
+
+        // After departure, an @everyone allow must not turn the empty set of
+        // membership roles back into access to the former guild's channels.
+        paracord_db::members::remove_member(&pool, 7, guild_id)
+            .await
+            .unwrap();
+        let single = compute_channel_permissions(&pool, guild_id, channel_id, 1, 7)
+            .await
+            .unwrap();
+        let batch = batch_perms(&pool, guild_id, channel_id, 1, 7).await;
+        assert_eq!(single, Permissions::empty());
+        assert_eq!(single, batch);
+    }
+
+    #[tokio::test]
     async fn bot_install_cap_applies_in_both_paths() {
         let pool = mem_pool().await;
         let owner_id = 1;
@@ -1135,7 +1315,7 @@ mod tests {
         let role_perms =
             (Permissions::VIEW_CHANNEL | Permissions::SEND_MESSAGES | Permissions::MANAGE_MESSAGES)
                 .bits();
-        let (guild_id, channel_id, _role_id) = seed_guild(
+        let (guild_id, channel_id, role_id) = seed_guild(
             &pool,
             owner_id,
             bot_user_id,
@@ -1182,6 +1362,28 @@ mod tests {
             single,
             Permissions::VIEW_CHANNEL,
             "bot must be capped to its install permissions"
+        );
+        // Administrator-role fast paths must enforce the same install cap.
+        paracord_db::roles::update_role(
+            &pool,
+            role_id,
+            None,
+            None,
+            None,
+            Some(Permissions::ADMINISTRATOR.bits()),
+            None,
+        )
+        .await
+        .unwrap();
+        let single =
+            compute_channel_permissions(&pool, guild_id, channel_id, owner_id, bot_user_id)
+                .await
+                .unwrap();
+        let batch = batch_perms(&pool, guild_id, channel_id, owner_id, bot_user_id).await;
+        assert_eq!(single, Permissions::VIEW_CHANNEL);
+        assert_eq!(
+            single, batch,
+            "administrator fast path must not bypass the bot grant"
         );
     }
 
@@ -1481,6 +1683,43 @@ mod tests {
         assert_eq!(cache.get(&(1, 10)).await, None);
         assert_eq!(cache.get(&(2, 10)).await, None);
         assert_eq!(cache.get(&(1, 11)).await, Some(p));
+    }
+
+    #[tokio::test]
+    async fn invalidation_prevents_an_in_flight_cache_fill_from_restoring_access() {
+        let cache = PermissionCache::new(100);
+        let generation = cache.generation();
+        let (resume, pending) = tokio::sync::oneshot::channel();
+        let worker_cache = cache.clone();
+        let worker = tokio::spawn(async move {
+            // Simulate a permission computation paused after reading an allow.
+            pending.await.unwrap();
+            worker_cache
+                .insert_if_current((1, 10), Permissions::VIEW_CHANNEL, generation)
+                .await
+        });
+        // No entry exists yet: invalidating just the reverse-index keys used to
+        // miss this request, allowing its delayed insert to survive for 5 min.
+        cache.invalidate_channel(10).await;
+        resume.send(()).unwrap();
+        assert!(!worker.await.unwrap());
+        assert_eq!(cache.get(&(1, 10)).await, None);
+        assert!(
+            cache
+                .insert_if_current((1, 10), Permissions::empty(), cache.generation())
+                .await
+        );
+        assert_eq!(cache.get(&(1, 10)).await, Some(Permissions::empty()));
+    }
+
+    #[tokio::test]
+    async fn invalidation_prevents_stale_batch_seeding() {
+        let cache = PermissionCache::new(100);
+        let generation = cache.generation();
+        let old_batch = HashMap::from([(10, Permissions::VIEW_CHANNEL)]);
+        cache.invalidate_user(1).await;
+        seed_channel_permissions(&cache, 1, &old_batch, generation).await;
+        assert_eq!(cache.get(&(1, 10)).await, None);
     }
 
     #[tokio::test]

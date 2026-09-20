@@ -154,6 +154,7 @@ pub async fn upsert_federated_server(
     key_id: Option<&str>,
     trusted: bool,
 ) -> Result<(), sqlx::Error> {
+    let mut transaction = pool.begin().await?;
     sqlx::query(
         "INSERT INTO federated_servers (id, server_name, domain, federation_endpoint, public_key_hex, key_id, trusted)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -171,9 +172,57 @@ pub async fn upsert_federated_server(
     .bind(public_key_hex)
     .bind(key_id)
     .bind(trusted)
-    .execute(pool)
+    .execute(&mut *transaction)
     .await?;
+    // Explicit pins use an unbounded lifetime. Retire those whose key/id no
+    // longer matches the operator's current pin, including switching to discovery.
+    sqlx::query(
+        "DELETE FROM federation_server_keys WHERE server_name = $1 AND valid_until = $2
+         AND NOT EXISTS (SELECT 1 FROM federated_servers s
+             WHERE s.server_name = $1 AND s.key_id = federation_server_keys.key_id
+               AND lower(s.public_key_hex) = lower(federation_server_keys.public_key))",
+    )
+    .bind(server_name)
+    .bind(i64::MAX)
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
     Ok(())
+}
+
+/// Publish only the manual pin that still matches the locked operator config.
+pub async fn register_manual_server_key(
+    pool: &DbPool,
+    server_name: &str,
+    key_id: &str,
+    public_key: &str,
+) -> Result<bool, sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    let locked = sqlx::query(
+        "UPDATE federated_servers SET id = id
+        WHERE server_name = $1 AND key_id = $2 AND public_key_hex = $3",
+    )
+    .bind(server_name)
+    .bind(key_id)
+    .bind(public_key)
+    .execute(&mut *transaction)
+    .await?;
+    if locked.rows_affected() != 1 {
+        return Ok(false);
+    }
+    sqlx::query(
+        "INSERT INTO federation_server_keys (server_name, key_id, public_key, valid_until)
+        VALUES ($1, $2, $3, $4) ON CONFLICT (server_name, key_id) DO UPDATE SET
+        public_key = EXCLUDED.public_key, valid_until = EXCLUDED.valid_until",
+    )
+    .bind(server_name)
+    .bind(key_id)
+    .bind(public_key)
+    .bind(i64::MAX)
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    Ok(true)
 }
 
 /// Get a federated server by its server_name.
@@ -266,10 +315,16 @@ pub async fn delete_federated_server(
     pool: &DbPool,
     server_name: &str,
 ) -> Result<bool, sqlx::Error> {
+    let mut transaction = pool.begin().await?;
     let result = sqlx::query("DELETE FROM federated_servers WHERE server_name = $1")
         .bind(server_name)
-        .execute(pool)
+        .execute(&mut *transaction)
         .await?;
+    sqlx::query("DELETE FROM federation_server_keys WHERE server_name = $1")
+        .bind(server_name)
+        .execute(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
     Ok(result.rows_affected() > 0)
 }
 
@@ -320,6 +375,39 @@ pub async fn list_peer_trust_states(
     )
     .fetch_all(pool)
     .await
+}
+
+/// Remote moderation may only strengthen a local restriction. Enforce this
+/// atomically so a concurrent admin block cannot be overwritten by a list fetch.
+pub async fn restrict_peer_trust_state(
+    pool: &DbPool,
+    server_name: &str,
+    mode: &str,
+    reason: Option<&str>,
+    quarantined_until_ms: Option<i64>,
+    updated_at_ms: i64,
+) -> Result<(), sqlx::Error> {
+    if !matches!(mode, "block" | "quarantine") {
+        return Err(sqlx::Error::Protocol(
+            "remote moderation cannot grant trust".into(),
+        ));
+    }
+    sqlx::query(
+        "INSERT INTO federation_peer_trust_state (server_name, mode, reason, quarantined_until_ms, updated_at_ms)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (server_name) DO UPDATE SET
+             mode = EXCLUDED.mode, reason = EXCLUDED.reason,
+             quarantined_until_ms = EXCLUDED.quarantined_until_ms,
+             updated_at_ms = EXCLUDED.updated_at_ms
+         WHERE federation_peer_trust_state.mode != 'block'
+           AND (EXCLUDED.mode = 'block'
+                OR federation_peer_trust_state.mode != 'quarantine'
+                OR COALESCE(federation_peer_trust_state.quarantined_until_ms, 0)
+                   < COALESCE(EXCLUDED.quarantined_until_ms, 0))",
+    )
+    .bind(server_name).bind(mode).bind(reason).bind(quarantined_until_ms).bind(updated_at_ms)
+    .execute(pool).await?;
+    Ok(())
 }
 
 pub async fn upsert_moderation_subscription(
@@ -724,6 +812,44 @@ pub async fn map_federated_message(
     Ok(())
 }
 
+/// Committed, origin-authenticated metadata for an already authorized message page.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct FederatedMessageMetadata {
+    pub local_message_id: i64,
+    pub event_id: String,
+    pub origin_server: String,
+    pub remote_message_id: Option<String>,
+    pub sender: String,
+    pub content: String,
+}
+
+pub async fn get_message_metadata_batch(
+    pool: &DbPool,
+    message_ids: &[i64],
+) -> Result<Vec<FederatedMessageMetadata>, sqlx::Error> {
+    if message_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    if message_ids.len() > 500 {
+        return Err(sqlx::Error::Protocol(
+            "too many federation message IDs".into(),
+        ));
+    }
+    let placeholders = crate::messages::build_placeholders(1, message_ids.len());
+    let sql = format!(
+        "SELECT fm.local_message_id, fm.event_id, fm.origin_server, fm.remote_message_id,
+                fe.sender, CASE WHEN LENGTH(fe.content) <= 65536 THEN fe.content ELSE '{{}}' END AS content
+         FROM federation_message_map fm
+         JOIN federation_events fe ON fe.event_id = fm.event_id AND fe.origin_server = fm.origin_server
+         WHERE fm.local_message_id IN ({placeholders}) AND fe.event_type = 'm.message'"
+    );
+    let mut query = sqlx::query_as::<_, FederatedMessageMetadata>(&sql);
+    for id in message_ids {
+        query = query.bind(id);
+    }
+    query.fetch_all(pool).await
+}
+
 pub async fn get_local_message_id_by_remote(
     pool: &DbPool,
     origin_server: &str,
@@ -900,6 +1026,32 @@ pub async fn get_space_mapping_by_remote(
     .await
 }
 
+/// Recover a pre-namespace-migration mirror only from persisted room ownership
+/// evidence. Merely finding a system-owned guild with the same numeric ID is
+/// insufficient: another peer can freely choose that number.
+pub async fn legacy_room_owns_guild(
+    pool: &DbPool,
+    room_id: &str,
+    local_guild_id: i64,
+) -> Result<bool, sqlx::Error> {
+    let found: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM spaces s WHERE s.id = $2 AND s.owner_id = 0 AND (
+            EXISTS (SELECT 1 FROM federation_room_memberships r
+                WHERE r.room_id = $1 AND r.guild_id = s.id)
+            OR EXISTS (SELECT 1 FROM federation_events e
+                JOIN federation_message_map fm ON fm.event_id = e.event_id
+                JOIN messages m ON m.id = fm.local_message_id
+                JOIN channels c ON c.id = m.channel_id
+                WHERE e.room_id = $1 AND c.space_id = s.id)
+        )",
+    )
+    .bind(room_id)
+    .bind(local_guild_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(found.is_some())
+}
+
 pub async fn get_space_mapping_by_local(
     pool: &DbPool,
     local_guild_id: i64,
@@ -1008,6 +1160,61 @@ pub async fn get_room_sync_cursor(
     Ok(row.map(|(depth,)| depth).unwrap_or(0))
 }
 
+/// Stable catch-up cursor; NULL event_id preserves the legacy depth-only boundary.
+pub async fn get_room_sync_position(
+    pool: &DbPool,
+    server_name: &str,
+    room_id: &str,
+) -> Result<(i64, Option<String>), sqlx::Error> {
+    let row = sqlx::query_as(
+        "SELECT last_depth, last_event_id FROM federation_room_sync_cursors
+         WHERE server_name = $1 AND room_id = $2",
+    )
+    .bind(server_name)
+    .bind(room_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.unwrap_or((0, None)))
+}
+
+pub async fn upsert_room_sync_position(
+    pool: &DbPool,
+    server_name: &str,
+    room_id: &str,
+    last_depth: i64,
+    last_event_id: Option<&str>,
+    now_ms: i64,
+) -> Result<(), sqlx::Error> {
+    let collation = if pool.connect_options().database_url.scheme() == "sqlite" {
+        "BINARY"
+    } else {
+        "\"C\""
+    };
+    let query = format!(
+        "INSERT INTO federation_room_sync_cursors
+             (server_name, room_id, last_depth, last_event_id, updated_at_ms)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (server_name, room_id) DO UPDATE SET
+             last_depth = EXCLUDED.last_depth,
+             last_event_id = EXCLUDED.last_event_id,
+             updated_at_ms = EXCLUDED.updated_at_ms
+         WHERE EXCLUDED.last_depth > federation_room_sync_cursors.last_depth
+            OR (EXCLUDED.last_depth = federation_room_sync_cursors.last_depth
+                AND federation_room_sync_cursors.last_event_id IS NOT NULL
+                AND (EXCLUDED.last_event_id IS NULL
+                     OR EXCLUDED.last_event_id COLLATE {collation} > federation_room_sync_cursors.last_event_id))",
+    );
+    sqlx::query(&query)
+        .bind(server_name)
+        .bind(room_id)
+        .bind(last_depth)
+        .bind(last_event_id)
+        .bind(now_ms)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 pub async fn upsert_room_sync_cursor(
     pool: &DbPool,
     server_name: &str,
@@ -1023,6 +1230,10 @@ pub async fn upsert_room_sync_cursor(
              -- scalar two-argument MAX exists only on SQLite (PostgreSQL failed
              -- with `function max(bigint, bigint) does not exist`) and GREATEST
              -- exists only on PostgreSQL. CASE is the one form both accept.
+             last_event_id = CASE
+                 WHEN EXCLUDED.last_depth > federation_room_sync_cursors.last_depth THEN NULL
+                 ELSE federation_room_sync_cursors.last_event_id
+             END,
              last_depth = CASE
                  WHEN EXCLUDED.last_depth > federation_room_sync_cursors.last_depth
                      THEN EXCLUDED.last_depth

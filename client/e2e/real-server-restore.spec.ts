@@ -451,7 +451,7 @@ test('restored backup replaces live history for connected browsers without a rel
     await dismissOnboarding(ownerPage);
     await expect(ownerPage.getByText(ledgerPhrase).first()).toBeVisible();
     const memberHome = memberPage.getByRole('main');
-    const memberAttention = memberHome.getByRole('region', { name: 'Needs you' });
+    const memberAttention = memberHome.getByRole('region', { name: 'For you' });
     await expect(memberAttention).toBeVisible();
     await expect(memberAttention.getByText(/mentioned you|1 mention for you/)).toBeVisible();
     await expect(memberAttention.getByText(new RegExp(`@you ${mentionPhrase}`))).toBeVisible();
@@ -595,10 +595,10 @@ test('restored backup replaces live history for connected browsers without a rel
     const afterDeletes = await (await ownerApi.get(`${BASE}/api/v1/channels/${channel.id}`)).json();
     expect(afterDeletes.message_revision).toBe('4');
     // §7.5 keeps the Needs-you section on the surface and lets it say so:
-    // "Nothing is waiting on you right now." It is no longer removed when
+    // "Nothing new for you right now." It is no longer removed when
     // empty, because an absent section cannot tell you it checked.
-    await expect(memberHome.getByRole('region', { name: 'Needs you' }).getByRole('listitem')).toHaveCount(0);
-    await expect(memberHome.getByText('Nothing is waiting on you right now.')).toBeVisible();
+    await expect(memberHome.getByRole('region', { name: 'For you' }).getByRole('listitem')).toHaveCount(0);
+    await expect(memberHome.getByText('Nothing new for you right now.')).toBeVisible();
     await expect(ownerPage.getByText(ledgerPhrase)).toHaveCount(0);
     await memberPage.screenshot({ path: testInfo.outputPath('restore-quiet-member.png'), fullPage: true });
 

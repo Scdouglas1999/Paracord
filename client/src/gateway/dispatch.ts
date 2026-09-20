@@ -97,6 +97,16 @@ function warnDispatchParseFailure(event: string, reason: string): void {
   console.warn(`[gateway] dropping malformed ${event} payload: ${reason}`);
 }
 
+function isCompleteMember(data: unknown): data is Member {
+  if (!data || typeof data !== 'object') return false;
+  const member = data as Partial<Member>;
+  return typeof member.user?.id === 'string'
+    && typeof member.user.username === 'string'
+    && Array.isArray(member.roles) && member.roles.every(role => typeof role === 'string')
+    && typeof member.joined_at === 'string'
+    && typeof member.deaf === 'boolean' && typeof member.mute === 'boolean';
+}
+
 export function dispatchGatewayEvent(serverId: string, event: string, data: GatewayDispatchData, recovered = false): void | Promise<void> {
   const memberScope = getServerAccountScope(serverId);
   const channels = getAccountChannelView(memberScope);
@@ -481,8 +491,8 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
 
     case GatewayEvents.GUILD_MEMBER_ADD:
       if (!data.guild_id) break;
-      if (data.user) {
-        if (memberScope) useMemberStore.getState().addMember(data.guild_id, data as unknown as Member, memberScope);
+      if (isCompleteMember(data)) {
+        if (memberScope) useMemberStore.getState().addMember(data.guild_id, data, memberScope);
       } else {
         if (memberScope) void useMemberStore.getState().fetchMembers(data.guild_id, memberScope);
       }

@@ -131,8 +131,8 @@ pub struct AppState {
     pub presence_manager: Arc<presence_manager::PresenceManager>,
     /// Native QUIC media relay state (None when using LiveKit).
     pub native_media: Option<NativeMediaState>,
-    /// Temporary MFA login tickets: ticket UUID -> user_id. 5-min TTL.
-    pub mfa_tickets: moka::future::Cache<String, i64>,
+    /// Temporary MFA login tickets, bound to the verified credentials. 5-min TTL.
+    pub mfa_tickets: moka::future::Cache<String, auth::MfaLoginTicket>,
 }
 
 /// State for the native QUIC-based media server.

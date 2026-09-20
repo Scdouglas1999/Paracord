@@ -1,3 +1,4 @@
+use crate::web_ui::is_reserved_server_path;
 use axum::body::Body;
 use axum::extract::Request;
 use axum::http::{header, Method, StatusCode};
@@ -47,14 +48,6 @@ async fn serve_embedded(req: Request<Body>) -> Response {
             .into_response(),
         None => (StatusCode::NOT_FOUND, "Web UI not found").into_response(),
     }
-}
-
-fn is_reserved_server_path(path: &str) -> bool {
-    path == "health"
-        || path.starts_with("api/")
-        || path.starts_with("_paracord/")
-        || path.starts_with("gateway")
-        || path.starts_with("livekit")
 }
 
 /// Assets with hashes in their filename can be cached aggressively.

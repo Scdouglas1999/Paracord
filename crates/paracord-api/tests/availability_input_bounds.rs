@@ -273,6 +273,10 @@ async fn group_sender_keys_caps_envelopes() -> anyhow::Result<()> {
         .as_str()
         .context("group dm id should be a string")?
         .to_string();
+    let members_version = payload["members_version"]
+        .as_str()
+        .context("a group DM must name its membership")?
+        .to_string();
 
     let envelope = json!({
         "recipient_id": recipient_id.to_string(),
@@ -287,7 +291,7 @@ async fn group_sender_keys_caps_envelopes() -> anyhow::Result<()> {
         .request_json(
             Method::POST,
             &format!("/api/v1/channels/{channel_id}/e2ee/sender-keys"),
-            Some(json!({ "epoch": 1, "envelopes": over_cap })),
+            Some(json!({ "epoch": 1, "envelopes": over_cap, "members_version": members_version })),
         )
         .await?;
     assert_eq!(
@@ -307,7 +311,7 @@ async fn group_sender_keys_caps_envelopes() -> anyhow::Result<()> {
         .request_json(
             Method::POST,
             &format!("/api/v1/channels/{channel_id}/e2ee/sender-keys"),
-            Some(json!({ "epoch": 1, "envelopes": within_cap })),
+            Some(json!({ "epoch": 1, "envelopes": within_cap, "members_version": members_version })),
         )
         .await?;
     assert_eq!(

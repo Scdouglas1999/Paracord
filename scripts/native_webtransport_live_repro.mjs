@@ -4,9 +4,9 @@
  * Live repro harness for browser-native WebTransport voice connect.
  *
  * Usage (PowerShell):
- *   $env:PARACORD_URL="https://173.62.236.246:8443"
- *   $env:PARACORD_USER="Scdouglas"
- *   $env:PARACORD_PASS="KIC8462852"
+ *   $env:PARACORD_URL="https://server.example"
+ *   $env:PARACORD_USER="test-user"
+ *   $env:PARACORD_PASS="<test-password>"
  *   node scripts/native_webtransport_live_repro.mjs
  *
  * Optional:
@@ -64,6 +64,7 @@ async function main() {
   });
 
   let browser;
+  let joinedSession;
   try {
     const loginResp = await api.post('/api/v1/auth/login', {
       data: {
@@ -81,8 +82,10 @@ async function main() {
       throw new Error('Login response missing token');
     }
 
+    const csrf = (await api.storageState()).cookies.find((cookie) => cookie.name === 'paracord_csrf')?.value;
     const authHeaders = {
       authorization: `Bearer ${token}`,
+      ...(csrf ? { 'x-paracord-csrf': csrf } : {}),
     };
 
     const guildId = forcedGuildId ?? await (async () => {
@@ -121,6 +124,7 @@ async function main() {
       throw new Error(`Voice join failed (${joinResp.status()}): ${body}`);
     }
     const join = await joinResp.json();
+    joinedSession = { channelId, sessionId: join?.session_id, headers: authHeaders };
     const mediaEndpoint = join?.media_endpoint;
     const mediaEndpointCandidates = Array.isArray(join?.media_endpoint_candidates)
       ? join.media_endpoint_candidates.filter((value) => typeof value === 'string' && value.trim().length > 0)
@@ -129,10 +133,10 @@ async function main() {
     const certHash = typeof join?.cert_hash === 'string' ? join.cert_hash : '';
 
     if (!join?.native_media) {
-      throw new Error(`Join response is not native_media=true: ${JSON.stringify(join)}`);
+      throw new Error('Join response is not native_media=true');
     }
     if (!mediaEndpoint || !mediaToken) {
-      throw new Error(`Join response missing media endpoint/token: ${JSON.stringify(join)}`);
+      throw new Error('Join response missing media endpoint/token');
     }
 
     if (browserName === 'chromium') {
@@ -173,6 +177,23 @@ async function main() {
           };
         }
 
+        let transport;
+        let reader;
+        let writer;
+        const deadline = Date.now() + 10000;
+        async function beforeDeadline(promise) {
+          let timer;
+          try {
+            return await Promise.race([
+              promise,
+              new Promise((_, reject) => {
+                timer = setTimeout(() => reject(new Error('WebTransport authentication timed out')), Math.max(0, deadline - Date.now()));
+              }),
+            ]);
+          } finally {
+            clearTimeout(timer);
+          }
+        }
         try {
           const options = certHash
             ? {
@@ -184,43 +205,52 @@ async function main() {
                 ],
               }
             : undefined;
-          const transport = new WebTransport(endpoint, options);
+          transport = new WebTransport(endpoint, options);
+          // A failed or deliberately closed connection must not create an
+          // unhandled rejection while the bounded readiness/auth check runs.
+          transport.closed.catch(() => {});
           result.steps.push('constructed');
-
-          await transport.ready;
+          await beforeDeadline(transport.ready);
           result.steps.push('ready');
 
-          const stream = await transport.createBidirectionalStream();
+          const stream = await beforeDeadline(transport.createBidirectionalStream());
           result.steps.push('bidi_opened');
-
-          const writer = stream.writable.getWriter();
-          const payload = JSON.stringify({ type: 'auth', token }) + '\n';
-          await writer.write(new TextEncoder().encode(payload));
+          writer = stream.writable.getWriter();
+          const payload = new TextEncoder().encode(JSON.stringify({ type: 'auth', token }));
+          const frame = new Uint8Array(4 + payload.length);
+          new DataView(frame.buffer).setUint32(0, payload.length, false);
+          frame.set(payload, 4);
+          await beforeDeadline(writer.write(frame));
           writer.releaseLock();
+          writer = undefined;
           result.steps.push('auth_sent');
 
-          const reader = stream.readable.getReader();
-          const first = await Promise.race([
-            reader.read(),
-            new Promise((resolve) => setTimeout(() => resolve({ timeout: true }), 8000)),
-          ]);
-          if (first && first.timeout) {
-            return {
-              ok: false,
-              ...result,
-              error: { name: 'TimeoutError', message: 'Timed out waiting for auth response' },
-            };
+          reader = stream.readable.getReader();
+          let buffered = new Uint8Array(0);
+          let expected;
+          while (expected === undefined || buffered.length < 4 + expected) {
+            const { done, value } = await beforeDeadline(reader.read());
+            if (done) throw new Error('Connection closed before authentication acknowledgement');
+            if (buffered.length + value.length > 4 + 256 * 1024) {
+              throw new Error('Authentication acknowledgement exceeds control frame limit');
+            }
+            const combined = new Uint8Array(buffered.length + value.length);
+            combined.set(buffered);
+            combined.set(value, buffered.length);
+            buffered = combined;
+            if (expected === undefined && buffered.length >= 4) {
+              expected = new DataView(buffered.buffer).getUint32(0, false);
+              if (expected === 0 || expected > 256 * 1024) {
+                throw new Error('Invalid authentication acknowledgement frame size');
+              }
+            }
           }
-
-          const value = first?.value ? new TextDecoder().decode(first.value) : '';
-          result.steps.push('auth_response_received');
-
-          transport.close({ closeCode: 0, reason: 'repro done' });
-          return {
-            ok: true,
-            ...result,
-            authResponse: value.trim(),
-          };
+          const acknowledgement = JSON.parse(new TextDecoder().decode(buffered.subarray(4, 4 + expected)));
+          if (acknowledgement?.type !== 'pong') {
+            throw new Error('Server did not acknowledge authenticated transport');
+          }
+          result.steps.push('authenticated');
+          return { ok: true, ...result, authResponse: acknowledgement.type };
         } catch (err) {
           return {
             ok: false,
@@ -230,6 +260,10 @@ async function main() {
               message: err?.message ?? String(err),
             },
           };
+        } finally {
+          if (writer) writer.abort().catch(() => {});
+          if (reader) reader.cancel().catch(() => {});
+          transport?.close({ closeCode: 0, reason: 'repro done' });
         }
         },
         { endpoint, token: mediaToken, certHash },
@@ -240,6 +274,7 @@ async function main() {
       }
     }
     const wtResult = wtAttempts[wtAttempts.length - 1] ?? null;
+    if (!wtAttempts.some((attempt) => attempt.ok)) process.exitCode = 1;
 
     console.log(
       JSON.stringify(
@@ -262,6 +297,10 @@ async function main() {
       ),
     );
   } finally {
+    if (joinedSession?.sessionId) {
+      const { channelId, sessionId, headers } = joinedSession;
+      await api.post(`/api/v2/voice/${channelId}/leave?session_id=${encodeURIComponent(sessionId)}`, { headers }).catch(() => {});
+    }
     if (browser) {
       await browser.close().catch(() => {});
     }

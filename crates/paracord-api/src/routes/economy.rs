@@ -315,6 +315,18 @@ pub async fn update_level_roles(
     Json(body): Json<UpdateLevelRolesRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let (guild_owner_id, actor_perms) = ensure_manage_guild(&state, guild_id, auth.user_id).await?;
+    let actor_top_role = if auth.user_id == guild_owner_id {
+        None
+    } else {
+        Some(
+            paracord_db::roles::get_member_roles(&state.db, auth.user_id, guild_id)
+                .await?
+                .iter()
+                .map(|role| role.position)
+                .max()
+                .unwrap_or(0),
+        )
+    };
 
     if body.mappings.len() > 200 {
         return Err(ApiError::BadRequest(
@@ -354,6 +366,11 @@ pub async fn update_level_roles(
             actor_perms,
             &role,
         )?;
+        // Position is authority too: mapping a high role with zero permission
+        // bits would otherwise let a moderator outrank users they cannot kick.
+        if actor_top_role.is_some_and(|position| role.position >= position) {
+            return Err(ApiError::Forbidden);
+        }
         parsed_mappings.push((mapping.level, role_id));
     }
 

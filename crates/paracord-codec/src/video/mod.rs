@@ -577,7 +577,7 @@ fn packed_rgb_to_i420<const R: usize, const G: usize, const B: usize>(
         .zip(y_plane.chunks_exact_mut(w))
         .take(h)
     {
-        for (px, y_out) in src_row.chunks_exact(4).zip(y_row.iter_mut()) {
+        for (px, y_out) in src_row.as_chunks::<4>().0.iter().zip(y_row.iter_mut()) {
             *y_out = rgb_to_y(px[R] as i32, px[G] as i32, px[B] as i32);
         }
     }
@@ -592,8 +592,10 @@ fn packed_rgb_to_i420<const R: usize, const G: usize, const B: usize>(
     {
         let (top, bottom) = row_pair.split_at(row_bytes);
         for (((top_px, bottom_px), u_out), v_out) in top
-            .chunks_exact(8)
-            .zip(bottom.chunks_exact(8))
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .zip(bottom.as_chunks::<8>().0.iter())
             .zip(u_row.iter_mut())
             .zip(v_row.iter_mut())
         {
@@ -661,14 +663,19 @@ pub fn i420_to_rgba(i420: &[u8], width: u32, height: u32, rgba: &mut [u8]) {
         let v_row = &v_plane[chroma_row * uv_w..chroma_row * uv_w + uv_w];
 
         for (((y_pair, out_pair), &u), &v) in y_row
-            .chunks_exact(2)
-            .zip(out_row.chunks_exact_mut(8))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .zip(out_row.as_chunks_mut::<8>().0.iter_mut())
             .zip(u_row.iter())
             .zip(v_row.iter())
         {
             let d = u as i32 - 128;
             let e = v as i32 - 128;
-            for (&y, out) in y_pair.iter().zip(out_pair.chunks_exact_mut(4)) {
+            for (&y, out) in y_pair
+                .iter()
+                .zip(out_pair.as_chunks_mut::<4>().0.iter_mut())
+            {
                 let c = (y as i32 - 16).max(0);
                 // BT.709 limited-range dequant (Q8), inverse of rgb_to_{y,u,v}.
                 out[0] = clamp_to_u8((298 * c + 459 * e + 128) >> 8);

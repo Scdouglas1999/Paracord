@@ -7,7 +7,7 @@ import { LitAvatar } from '../../light';
 import { displayName } from '../../../lib/displayName';
 import { personLight } from '../../../lib/attention/light';
 import { presenceLight } from '../../../lib/presence';
-import { gateway } from '../../../gateway/manager';
+import { connectionManager as gateway } from '../../../lib/connectionManager';
 import { useAuthStore } from '../../../stores/authStore';
 import { usePresenceStore } from '../../../stores/presenceStore';
 import { useUIStore } from '../../../stores/uiStore';

@@ -57,10 +57,8 @@ export const LitAvatar = React.forwardRef<HTMLSpanElement, LitAvatarProps>(funct
 ) {
   // The avatar URL carries the server's download ticket, which is minted after
   // the first paint; without this the face stays a broken image all session.
-  const ticket = useDownloadTicket();
-  const src = useAuthenticatedImage(
-    React.useMemo(() => resolveUserAvatarUrl(person.avatar), [person.avatar, ticket]),
-  );
+  useDownloadTicket();
+  const src = useAuthenticatedImage(resolveUserAvatarUrl(person.avatar));
   const dimension = { width: size, height: size };
   const face = (
     <span

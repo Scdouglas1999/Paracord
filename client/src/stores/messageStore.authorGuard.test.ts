@@ -45,10 +45,6 @@ vi.mock('./channelStore', () => ({
 
 vi.mock('../lib/dmE2ee', () => ({ encryptDmMessageV2: vi.fn() }));
 vi.mock('../lib/dmE2eeWorker', () => ({ decryptDmMessageOffthread: vi.fn() }));
-vi.mock('../lib/groupDmE2ee', () => ({
-  decryptGroupDmMessage: vi.fn(),
-  encryptGroupDmMessage: vi.fn(),
-}));
 vi.mock('../lib/accountSession', () => ({
   hasUnlockedPrivateKey: vi.fn(() => false),
   withUnlockedPrivateKey: vi.fn(),

@@ -15,6 +15,7 @@ function parseArgs() {
   const args = {
     port: 18152,
     server: null,
+    webDir: null,
   };
   for (let i = 2; i < process.argv.length; i += 1) {
     const arg = process.argv[i];
@@ -22,6 +23,8 @@ function parseArgs() {
       args.port = Number(process.argv[++i]);
     } else if (arg === '--server') {
       args.server = process.argv[++i];
+    } else if (arg === '--web-dir') {
+      args.webDir = path.resolve(process.argv[++i]);
     } else {
       throw new Error(`unknown argument: ${arg}`);
     }
@@ -72,6 +75,11 @@ async function stopProcess(proc) {
     return;
   }
   proc.kill('SIGTERM');
+  await Promise.race([new Promise((resolve) => proc.once('exit', resolve)), sleep(12000)]);
+  if (proc.exitCode === null) {
+    proc.kill('SIGKILL');
+    await new Promise((resolve) => proc.once('exit', resolve));
+  }
 }
 
 async function requestJson(method, baseUrl, route, { token, body, expected = 200 } = {}) {
@@ -239,15 +247,12 @@ async function setSwitch(page, name, checked) {
   if (current !== checked) {
     await control.click();
   }
-  await page.waitForFunction(
-    ({ accessibleName, expected }) => {
-      const switches = Array.from(document.querySelectorAll('[role="switch"]'));
-      const match = switches.find((el) => el.getAttribute('aria-label') === accessibleName);
-      return match?.getAttribute('aria-checked') === String(expected);
-    },
-    { accessibleName: name, expected: checked },
-    { timeout: 15000 },
-  );
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    if ((await control.getAttribute('aria-checked')) === String(checked)) return;
+    await sleep(50);
+  }
+  throw new Error(`switch ${name} did not become ${checked}`);
 }
 
 async function expectInputValue(locator, expected) {
@@ -281,6 +286,14 @@ async function navigateSpa(page, route) {
   }, route);
 }
 
+async function dismissGuidance(page) {
+  const tour = page.getByRole('button', { name: 'Skip tour' });
+  await tour.waitFor({ state: 'visible', timeout: 1500 }).catch(() => undefined);
+  if (await tour.isVisible().catch(() => false)) await tour.click();
+  const welcome = page.getByRole('button', { name: 'Close welcome screen' });
+  if (await welcome.isVisible().catch(() => false)) await welcome.click();
+}
+
 async function runSmoke() {
   const args = parseArgs();
   const server = args.server ? path.resolve(args.server) : releaseServerPath();
@@ -298,8 +311,10 @@ async function runSmoke() {
   );
 
   const env = {
-    ...process.env,
+    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('PARACORD_'))),
     PARACORD_BIND_ADDRESS: `127.0.0.1:${args.port}`,
+    PARACORD_VOICE_PORT: process.env.PARACORD_VOICE_PORT || String(args.port + 1000),
+    PARACORD_SETUP_REQUIRE_CLAIM: 'false',
     PARACORD_DATABASE_ENGINE: 'sqlite',
     PARACORD_DATABASE_URL: `sqlite://${path.join(tempDir, 'paracord.db').replaceAll('\\', '/')}?mode=rwc`,
     PARACORD_JWT_SECRET: 'release-real-ui-smoke-secret-0123456789abcdef',
@@ -313,11 +328,18 @@ async function runSmoke() {
     PARACORD_FEDERATION_DOMAIN: 'real-ui-smoke.local',
     PARACORD_FEDERATION_SIGNING_KEY_PATH: path.join(tempDir, 'federation_signing_key.hex'),
     PARACORD_FEDERATION_ALLOW_DISCOVERY: 'false',
+    // The manually pinned peer fixture points to this disposable local process.
+    PARACORD_ALLOW_PRIVATE_FEDERATION_URLS: 'true',
     PARACORD_LOG_ANSI: 'false',
   };
 
-  const proc = spawn(server, ['-c', path.join(tempDir, 'paracord.toml')], {
-    cwd: ROOT,
+  const serverArgs = ['-c', path.join(tempDir, 'paracord.toml')];
+  if (args.webDir) {
+    serverArgs.push('--web-dir', args.webDir);
+    console.log(`Using separately built frontend assets: ${args.webDir}`);
+  }
+  const proc = spawn(server, serverArgs, {
+    cwd: tempDir,
     env,
     stdio: 'ignore',
   });
@@ -336,6 +358,12 @@ async function runSmoke() {
       const pageErrors = [];
       page.on('pageerror', (error) => {
         pageErrors.push(error.message);
+      });
+      page.on('response', (response) => {
+        if (response.status() >= 400) console.error(`HTTP ${response.status()} ${new URL(response.url()).pathname}`);
+      });
+      page.on('console', (message) => {
+        if (message.type() === 'error') console.error(`Browser console: ${message.text()}`);
       });
 
       await page.goto(`${baseUrl}/login`, { waitUntil: 'domcontentloaded' });
@@ -357,15 +385,17 @@ async function runSmoke() {
       try {
         await page.goto(`${baseUrl}/app/templates`, { waitUntil: 'domcontentloaded' });
         await page.getByRole('heading', { name: 'Template Gallery' }).waitFor({ timeout: 15000 });
-        await page.getByLabel('Source guild').selectOption(seeded.guildId);
+        await dismissGuidance(page);
+        await page.getByLabel('Source server').selectOption(seeded.guildId);
         await navigateSpa(page, `/app/guilds/${seeded.guildId}/channels/${seeded.channelId}`);
-        await page.getByPlaceholder(/Message #real-ui-smoke/i).waitFor({ timeout: 15000 });
+        await page.getByPlaceholder(/Say something in real-ui-smoke/i).waitFor({ timeout: 15000 });
+        await dismissGuidance(page);
         const closeWelcome = page.getByRole('button', { name: 'Close welcome screen' });
         if (await closeWelcome.isVisible().catch(() => false)) {
           await closeWelcome.click();
         }
 
-        await page.getByPlaceholder(/Message #real-ui-smoke/i).fill('real browser release UI smoke message');
+        await page.getByPlaceholder(/Say something in real-ui-smoke/i).fill('real browser release UI smoke message');
         await page.keyboard.press('Enter');
         await page.getByLabel('Message history').getByText('real browser release UI smoke message').waitFor({
           timeout: 15000,
@@ -373,14 +403,18 @@ async function runSmoke() {
 
         await page.locator('input[type="file"]').setInputFiles(pngPath);
         await page.getByText('release-ui-smoke.png').waitFor({ timeout: 15000 });
-        await page.getByPlaceholder(/Message #real-ui-smoke/i).fill('real browser image upload');
+        await page.getByPlaceholder(/Say something in real-ui-smoke/i).fill('real browser image upload');
+        const imagePosted = page.waitForResponse((response) => response.url().endsWith(`/channels/${seeded.channelId}/messages`) && response.request().method() === 'POST');
         await page.keyboard.press('Enter');
+        const imageResponse = await imagePosted;
+        if (imageResponse.status() !== 201) throw new Error(`image message failed: ${imageResponse.status()}`);
+        await imageResponse.json();
         await page.getByLabel('Message history').getByText('real browser image upload').waitFor({
           timeout: 15000,
         });
         const previewImage = page.getByRole('img', { name: 'release-ui-smoke.png' }).last();
         await previewImage.waitFor({ timeout: 15000 });
-        await previewImage.click();
+        await page.getByRole('button', { name: 'Open image preview: release-ui-smoke.png' }).click();
         await page.getByRole('dialog', { name: 'Image viewer' }).waitFor({
           timeout: 15000,
         });
@@ -392,8 +426,9 @@ async function runSmoke() {
 
         await navigateSpa(page, '/app/templates');
         await page.getByRole('heading', { name: 'Template Gallery' }).waitFor({ timeout: 15000 });
+        await dismissGuidance(page);
         await assertNoHorizontalOverflow(page, 'template gallery');
-        await page.getByLabel('Source guild').selectOption(seeded.guildId);
+        await page.getByLabel('Source server').selectOption(seeded.guildId);
         await page.getByRole('button', { name: 'Create Template' }).click();
         await page.getByRole('button', { name: 'View template Real UI Smoke Guild' }).waitFor({
           timeout: 15000,
@@ -421,7 +456,8 @@ async function runSmoke() {
         await page.getByText('Public guild for real browser discovery join coverage').waitFor({
           timeout: 15000,
         });
-        await page.getByRole('button', { name: 'Join' }).click();
+        await page.getByRole('button', { name: 'Preview', exact: true }).click();
+        await page.getByRole('dialog', { name: 'Discovery Join Guild' }).getByRole('button', { name: 'Join Discovery Join Guild' }).click();
         await page.waitForURL(new RegExp(`/app/guilds/${seeded.discoveryGuildId}/channels/`), {
           timeout: 15000,
         });
@@ -429,24 +465,28 @@ async function runSmoke() {
         await page.getByText('discovery-lobby').first().waitFor({ timeout: 15000 });
 
         await navigateSpa(page, `/app/guilds/${seeded.guildId}/channels/${seeded.channelId}`);
-        await page.getByPlaceholder(/Message #real-ui-smoke/i).waitFor({ timeout: 15000 });
+        await page.getByPlaceholder(/Say something in real-ui-smoke/i).waitFor({ timeout: 15000 });
+        await dismissGuidance(page);
         const restartChatting = page.getByRole('button', { name: 'Start Chatting' });
         if (await restartChatting.isVisible().catch(() => false)) {
           await restartChatting.click();
         }
 
-        await page.getByRole('button', { name: /Edit real-ui-smoke/i }).click({ force: true });
+        await page.getByRole('button', { name: 'More channel actions' }).click();
+        await page.getByRole('menuitem', { name: 'Server settings' }).click();
         const settingsDialog = page.getByRole('dialog', { name: 'Server settings' });
         await settingsDialog.waitFor({ timeout: 15000 });
+        await settingsDialog.getByRole('button', { name: 'Channels', exact: true }).click();
         await settingsDialog.getByRole('heading', { name: 'Channels' }).waitFor({ timeout: 15000 });
         await page.keyboard.press('Escape');
         await settingsDialog.waitFor({ state: 'hidden', timeout: 15000 });
 
-        const adminDashboardControl = page.getByRole('button', { name: 'Open admin dashboard' });
+        await page.getByRole('button', { name: /Open account menu/ }).click();
+        const adminDashboardControl = page.getByRole('menuitem', { name: 'Admin dashboard' });
         await adminDashboardControl.waitFor({ timeout: 15000 });
         await adminDashboardControl.click();
         await page.waitForURL(/\/app\/admin$/, { timeout: 15000 });
-        await page.getByRole('heading', { name: 'Server Overview' }).waitFor({ timeout: 15000 });
+        await page.getByRole('heading', { name: 'Instance health' }).waitFor({ timeout: 15000 });
         await assertNoHorizontalOverflow(page, 'admin overview');
         await page.getByRole('button', { name: 'Users' }).click();
         await page.getByRole('heading', { name: /Users/ }).waitFor({ timeout: 15000 });
@@ -459,42 +499,42 @@ async function runSmoke() {
           state: 'detached',
           timeout: 15000,
         });
-        await page.getByRole('button', { name: 'Guilds' }).click();
-        await page.getByRole('heading', { name: /Guilds/ }).waitFor({ timeout: 15000 });
+        await page.getByRole('button', { name: 'Servers', exact: true }).click();
+        await page.getByRole('heading', { name: 'Servers', exact: true }).waitFor({ timeout: 15000 });
         await assertNoHorizontalOverflow(page, 'admin guilds');
-        await page.getByRole('button', { name: 'Delete guild Disposable Admin Delete Guild' }).click();
-        const deleteGuildDialog = page.getByRole('alertdialog', { name: 'Delete guild?' });
+        await page.getByRole('button', { name: 'Delete server Disposable Admin Delete Guild' }).click();
+        const deleteGuildDialog = page.getByRole('alertdialog', { name: 'Delete server?' });
         await deleteGuildDialog.waitFor({ timeout: 15000 });
         await deleteGuildDialog.getByRole('button', { name: 'Delete' }).click();
-        await page.getByRole('button', { name: 'Delete guild Disposable Admin Delete Guild' }).waitFor({
+        await page.getByRole('button', { name: 'Delete server Disposable Admin Delete Guild' }).waitFor({
           state: 'detached',
           timeout: 15000,
         });
         await page.getByRole('button', { name: 'Federation' }).click();
-        await page.getByRole('heading', { name: 'Federation' }).waitFor({ timeout: 15000 });
+        await page.getByRole('heading', { name: 'Federation', exact: true }).waitFor({ timeout: 15000 });
         await assertNoHorizontalOverflow(page, 'admin federation');
-        await page.getByLabel('Server Name').fill('smoke-peer');
-        await page.getByLabel('Domain').fill('example.com');
-        await page.getByLabel('Federation Endpoint').fill('https://example.com/_paracord/federation/v1');
-        await page.getByLabel('Discover keys automatically').uncheck();
+        await page.locator('#fed-name').fill('smoke-peer.invalid');
+        await page.locator('#fed-domain').fill('smoke-peer.invalid');
+        await page.locator('#fed-endpoint').fill(`${baseUrl}/_paracord/federation/v1`);
+        await page.getByLabel('Public key (hex)').fill('d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a');
+        await page.getByLabel('Key ID', { exact: true }).fill('ed25519:smoke');
+        await setSwitch(page, 'Discover keys automatically', false);
         await page.getByRole('button', { name: 'Add Server' }).click();
-        await page.getByText('Federated server added: smoke-peer').waitFor({ timeout: 15000 });
-        const federationRow = page.locator('section').filter({ hasText: 'Known Servers' }).locator('div').filter({
-          hasText: 'smoke-peer',
-        }).first();
+        await page.getByText('Federated instance added.').waitFor({ timeout: 15000 });
+        const federationRow = page.locator('section').filter({ hasText: 'Known instances' }).locator('li').filter({ hasText: 'smoke-peer.invalid' });
         await federationRow.waitFor({ timeout: 15000 });
         await federationRow.getByRole('button', { name: 'Inspect' }).click();
-        await page.getByRole('heading', { name: 'Server Details: smoke-peer' }).waitFor({ timeout: 15000 });
+        await page.getByRole('heading', { name: 'Details — smoke-peer.invalid' }).waitFor({ timeout: 15000 });
         await federationRow.getByRole('button', { name: 'Remove' }).click();
-        const removeFederationDialog = page.getByRole('alertdialog', { name: 'Delete federated server?' });
+        const removeFederationDialog = page.getByRole('alertdialog', { name: 'Remove federated instance?' });
         await removeFederationDialog.waitFor({ timeout: 15000 });
-        await removeFederationDialog.getByRole('button', { name: 'Delete' }).click();
-        await page.getByText('Deleted federated server: smoke-peer').waitFor({ timeout: 15000 });
+        await removeFederationDialog.getByRole('button', { name: 'Remove' }).click();
+        await page.getByText('Federated instance removed.').waitFor({ timeout: 15000 });
         await federationRow.waitFor({ state: 'detached', timeout: 15000 });
-        await page.getByRole('button', { name: 'Settings' }).click();
-        await page.getByRole('heading', { name: 'Server Settings' }).waitFor({ timeout: 15000 });
+        await page.getByRole('button', { name: 'Settings', exact: true }).click();
+        await page.getByRole('heading', { name: 'Instance settings' }).waitFor({ timeout: 15000 });
         await assertNoHorizontalOverflow(page, 'admin settings');
-        await expectInputValue(page.getByLabel('Server Name'), 'Real UI Smoke 27');
+        await expectInputValue(page.getByLabel('Instance name'), 'Real UI Smoke 27');
         const expectedSettings = {
           server_name: 'Real UI Smoke Updated',
           server_description: 'Release smoke settings description',
@@ -506,30 +546,30 @@ async function runSmoke() {
           federation_file_cache_max_size: '321',
           federation_file_cache_ttl_hours: '72',
         };
-        await page.getByLabel('Server Name').fill(expectedSettings.server_name);
-        await page.getByLabel('Server Description').fill(expectedSettings.server_description);
-        await setSwitch(page, 'Toggle open registration', false);
-        await page.getByLabel('Max Guilds Per User').fill(expectedSettings.max_guilds_per_user);
-        await page.getByLabel('Max Members Per Guild').fill(expectedSettings.max_members_per_guild);
-        await page.getByLabel('Max Guild Storage Quota in MB').fill(expectedSettings.max_guild_storage_quota);
-        await setSwitch(page, 'Toggle federation file cache', true);
-        await page.getByLabel('Federation Cache Max Size in MB').fill(expectedSettings.federation_file_cache_max_size);
-        await page.getByLabel('Federation Cache TTL in hours').fill(expectedSettings.federation_file_cache_ttl_hours);
-        await expectInputValue(page.getByLabel('Server Name'), expectedSettings.server_name);
-        await expectInputValue(page.getByLabel('Server Description'), expectedSettings.server_description);
-        await expectInputValue(page.getByLabel('Max Guilds Per User'), expectedSettings.max_guilds_per_user);
-        await expectInputValue(page.getByLabel('Max Members Per Guild'), expectedSettings.max_members_per_guild);
-        await expectInputValue(page.getByLabel('Max Guild Storage Quota in MB'), expectedSettings.max_guild_storage_quota);
+        await page.getByLabel('Instance name').fill(expectedSettings.server_name);
+        await page.getByLabel('Instance description').fill(expectedSettings.server_description);
+        await setSwitch(page, 'Open registration', false);
+        await page.getByLabel('Max servers per user').fill(expectedSettings.max_guilds_per_user);
+        await page.getByLabel('Max members per server').fill(expectedSettings.max_members_per_guild);
+        await page.getByLabel('Max server storage quota (MB)').fill(expectedSettings.max_guild_storage_quota);
+        await setSwitch(page, 'Cache federated files', true);
+        await page.getByLabel('Cache max size (MB)').fill(expectedSettings.federation_file_cache_max_size);
+        await page.getByLabel('Cache TTL (hours)').fill(expectedSettings.federation_file_cache_ttl_hours);
+        await expectInputValue(page.getByLabel('Instance name'), expectedSettings.server_name);
+        await expectInputValue(page.getByLabel('Instance description'), expectedSettings.server_description);
+        await expectInputValue(page.getByLabel('Max servers per user'), expectedSettings.max_guilds_per_user);
+        await expectInputValue(page.getByLabel('Max members per server'), expectedSettings.max_members_per_guild);
+        await expectInputValue(page.getByLabel('Max server storage quota (MB)'), expectedSettings.max_guild_storage_quota);
         await expectInputValue(
-          page.getByLabel('Federation Cache Max Size in MB'),
+          page.getByLabel('Cache max size (MB)'),
           expectedSettings.federation_file_cache_max_size,
         );
         await expectInputValue(
-          page.getByLabel('Federation Cache TTL in hours'),
+          page.getByLabel('Cache TTL (hours)'),
           expectedSettings.federation_file_cache_ttl_hours,
         );
         await page.getByRole('button', { name: 'Save Changes' }).click();
-        await page.getByRole('button', { name: 'Saved!' }).waitFor({ timeout: 15000 });
+        await page.getByText('Saved', { exact: true }).waitFor({ timeout: 15000 });
         const savedSettings = await requestJson('GET', baseUrl, '/api/v1/admin/settings', {
           token: seeded.token,
         });
@@ -539,31 +579,31 @@ async function runSmoke() {
           }
         }
         await page.getByRole('button', { name: 'Overview' }).click();
-        await page.getByRole('heading', { name: 'Server Overview' }).waitFor({ timeout: 15000 });
-        await page.getByRole('button', { name: 'Settings' }).click();
-        await page.getByRole('heading', { name: 'Server Settings' }).waitFor({ timeout: 15000 });
+        await page.getByRole('heading', { name: 'Instance health' }).waitFor({ timeout: 15000 });
+        await page.getByRole('button', { name: 'Settings', exact: true }).click();
+        await page.getByRole('heading', { name: 'Instance settings' }).waitFor({ timeout: 15000 });
         await assertNoHorizontalOverflow(page, 'admin settings after reload');
-        await expectInputValue(page.getByLabel('Server Name'), expectedSettings.server_name);
-        await expectInputValue(page.getByLabel('Server Description'), expectedSettings.server_description);
-        await page.getByRole('switch', { name: 'Toggle open registration', checked: false }).waitFor({
+        await expectInputValue(page.getByLabel('Instance name'), expectedSettings.server_name);
+        await expectInputValue(page.getByLabel('Instance description'), expectedSettings.server_description);
+        await page.getByRole('switch', { name: 'Open registration', checked: false }).waitFor({
           timeout: 15000,
         });
-        await expectInputValue(page.getByLabel('Max Guilds Per User'), expectedSettings.max_guilds_per_user);
-        await expectInputValue(page.getByLabel('Max Members Per Guild'), expectedSettings.max_members_per_guild);
-        await expectInputValue(page.getByLabel('Max Guild Storage Quota in MB'), expectedSettings.max_guild_storage_quota);
-        await page.getByRole('switch', { name: 'Toggle federation file cache', checked: true }).waitFor({
+        await expectInputValue(page.getByLabel('Max servers per user'), expectedSettings.max_guilds_per_user);
+        await expectInputValue(page.getByLabel('Max members per server'), expectedSettings.max_members_per_guild);
+        await expectInputValue(page.getByLabel('Max server storage quota (MB)'), expectedSettings.max_guild_storage_quota);
+        await page.getByRole('switch', { name: 'Cache federated files', checked: true }).waitFor({
           timeout: 15000,
         });
         await expectInputValue(
-          page.getByLabel('Federation Cache Max Size in MB'),
+          page.getByLabel('Cache max size (MB)'),
           expectedSettings.federation_file_cache_max_size,
         );
         await expectInputValue(
-          page.getByLabel('Federation Cache TTL in hours'),
+          page.getByLabel('Cache TTL (hours)'),
           expectedSettings.federation_file_cache_ttl_hours,
         );
         await page.getByRole('button', { name: 'Backups' }).click();
-        await page.getByRole('heading', { name: 'Backups' }).waitFor({ timeout: 15000 });
+        await page.getByRole('heading', { name: 'Backups', exact: true }).waitFor({ timeout: 15000 });
         await assertNoHorizontalOverflow(page, 'admin backups');
         await page.getByRole('button', { name: 'Create Backup' }).click();
         await page.getByText(/Backup created:/).waitFor({ timeout: 30000 });
@@ -588,11 +628,11 @@ async function runSmoke() {
         await page.getByRole('button', { name: 'Security' }).click();
         await page.getByRole('heading', { name: 'Security Events' }).waitFor({ timeout: 15000 });
         await assertNoHorizontalOverflow(page, 'admin security');
-        await page.getByText(/Page 1 · Showing 25 events/).waitFor({ timeout: 15000 });
+        await page.getByText(/Page 1 · 25 events/).waitFor({ timeout: 15000 });
         await page.getByRole('button', { name: 'Next' }).click();
-        await page.getByText(/Page 2 · Showing/).waitFor({ timeout: 15000 });
+        await page.getByText(/Page 2 ·/).waitFor({ timeout: 15000 });
         await page.getByRole('button', { name: 'Previous' }).click();
-        await page.getByText(/Page 1 · Showing 25 events/).waitFor({ timeout: 15000 });
+        await page.getByText(/Page 1 · 25 events/).waitFor({ timeout: 15000 });
         await page.getByLabel('Filter security events by exact action').fill('admin.backup.create');
         await page.getByRole('button', { name: 'Apply' }).click();
         const backupCreateRow = page.locator('table tbody tr').filter({ hasText: 'admin.backup.create' }).first();
@@ -601,12 +641,17 @@ async function runSmoke() {
         await page.locator('pre').filter({ hasText: backupName }).first().waitFor({ timeout: 15000 });
 
         await page.getByRole('button', { name: 'Backups' }).click();
-        await page.getByRole('heading', { name: 'Backups' }).waitFor({ timeout: 15000 });
-        await page.getByRole('button', { name: `Restore backup ${backupName}` }).click();
-        const restoreDialog = page.getByRole('alertdialog', { name: 'Restore backup?' });
-        await restoreDialog.waitFor({ timeout: 15000 });
-        await restoreDialog.getByRole('button', { name: 'Restore' }).click();
-        await page.getByText(/Backup restored|Server restart recommended/).waitFor({ timeout: 30000 });
+        await page.getByRole('heading', { name: 'Backups', exact: true }).waitFor({ timeout: 15000 });
+        await page.getByRole('button', { name: `Recovery instructions for ${backupName}` }).click();
+        const recovery = page.getByRole('region', { name: 'Recovery instructions' });
+        await recovery.waitFor({ timeout: 15000 });
+        await recovery.locator('pre').filter({ hasText: 'restore-backup' }).waitFor({ timeout: 15000 });
+        if (!(await recovery.innerText()).includes(backupName)) throw new Error('recovery instructions reference the wrong archive');
+        // Recovery preparation must keep the running server and its data intact.
+        const survivingMessages = await requestJson('GET', baseUrl, `/api/v1/channels/${seeded.channelId}/messages`, { token: seeded.token });
+        if (!survivingMessages.some((message) => message.content === 'real browser release UI smoke message')) {
+          throw new Error('recovery preparation altered live message history');
+        }
 
         await page.getByRole('button', { name: `Delete backup ${backupName}` }).click();
         const deleteDialog = page.getByRole('alertdialog', { name: 'Delete backup?' });
@@ -620,9 +665,9 @@ async function runSmoke() {
 
         await page.getByRole('button', { name: 'Security' }).click();
         await page.getByRole('heading', { name: 'Security Events' }).waitFor({ timeout: 15000 });
-        await page.getByLabel('Filter security events by exact action').fill('admin.backup.restore');
+        await page.getByLabel('Filter security events by exact action').fill('admin.backup.recovery_instructions');
         await page.getByRole('button', { name: 'Apply' }).click();
-        await page.getByText('admin.backup.restore').waitFor({ timeout: 15000 });
+        await page.getByText('admin.backup.recovery_instructions').waitFor({ timeout: 15000 });
         await page.getByLabel('Filter security events by exact action').fill('admin.backup.delete');
         await page.getByRole('button', { name: 'Apply' }).click();
         await page.getByText('admin.backup.delete').waitFor({ timeout: 15000 });

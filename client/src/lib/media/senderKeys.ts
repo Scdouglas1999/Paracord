@@ -2,6 +2,8 @@
 // Each sender generates an ephemeral AES-128 key per voice session.
 // Key distributed to participants encrypted to each recipient's X25519 identity key.
 
+import { toArrayBuffer } from '../crypto/util';
+
 // ================================================================
 // Cross-platform interop test vectors (AES-128-GCM)
 // ================================================================
@@ -82,6 +84,38 @@ interface RocState {
   seq: number;
 }
 
+// Match the Rust receive window and the ROC estimator's reordering horizon.
+const REPLAY_WINDOW_SIZE = 32_768;
+
+class ReplayWindow {
+  private readonly seen = new Uint32Array(REPLAY_WINDOW_SIZE / 32);
+
+  constructor(private highest: number) {}
+
+  containsOrExpired(index: number): boolean {
+    if (index > this.highest) return false;
+    if (this.highest - index >= REPLAY_WINDOW_SIZE) return true;
+    const slot = index % REPLAY_WINDOW_SIZE;
+    return (this.seen[slot >>> 5] & (1 << (slot & 31))) !== 0;
+  }
+
+  accept(index: number): void {
+    if (index > this.highest) {
+      if (index - this.highest >= REPLAY_WINDOW_SIZE) {
+        this.seen.fill(0);
+      } else {
+        for (let advanced = this.highest + 1; advanced <= index; advanced++) {
+          const slot = advanced % REPLAY_WINDOW_SIZE;
+          this.seen[slot >>> 5] &= ~(1 << (slot & 31));
+        }
+      }
+      this.highest = index;
+    }
+    const slot = index % REPLAY_WINDOW_SIZE;
+    this.seen[slot >>> 5] |= 1 << (slot & 31);
+  }
+}
+
 /**
  * SRTP-style estimation of the rollover counter for a received sequence number.
  *
@@ -121,11 +155,13 @@ export class SenderKeyManager {
   private localEpoch = 0;
   private localRawKey: Uint8Array | null = null;
   private peerKeys: Map<string, CryptoKey> = new Map(); // "ssrc:epoch" -> key
+  private peerRawKeys: Map<string, Uint8Array> = new Map();
   // Rollover-counter state keyed by "ssrc:epoch". Send state tracks the last
   // sequence we emitted (incrementing the ROC on each wrap); receive state
   // tracks the highest authenticated index seen (for SRTP index estimation).
   private sendRocState: Map<string, RocState> = new Map();
   private recvRocState: Map<string, RocState> = new Map();
+  private recvReplay: Map<string, ReplayWindow> = new Map();
   private participantIds: Set<string> = new Set();
   private onKeyDistribution: KeyDistributionCallback | null = null;
   private onKeyRotation: KeyRotationCallback | null = null;
@@ -142,16 +178,20 @@ export class SenderKeyManager {
 
   /** Generate a new AES-128 sender key, incrementing the epoch. */
   async generateKey(): Promise<{ key: CryptoKey; epoch: number }> {
-    this.localEpoch++;
-    this.localKey = await crypto.subtle.generateKey(
+    const key = await crypto.subtle.generateKey(
       { name: 'AES-GCM', length: 128 },
       true,
       ['encrypt', 'decrypt'],
     );
     // Cache the raw key bytes for distribution.
-    const raw = await crypto.subtle.exportKey('raw', this.localKey);
+    const raw = await crypto.subtle.exportKey('raw', key);
+    // Commit key and wire epoch together. Fresh keys can reuse an 8-bit epoch
+    // after wrap, but must start a fresh ROC baseline on both implementations.
+    this.localEpoch = (this.localEpoch % 255) + 1;
+    this.localKey = key;
     this.localRawKey = new Uint8Array(raw);
-    return { key: this.localKey, epoch: this.localEpoch };
+    this.sendRocState.clear();
+    return { key, epoch: this.localEpoch };
   }
 
   /**
@@ -235,6 +275,7 @@ export class SenderKeyManager {
     for (const key of this.peerKeys.keys()) {
       if (key.startsWith(prefix)) {
         this.peerKeys.delete(key);
+        this.peerRawKeys.delete(key);
       }
     }
     // Drop the receive-side rollover-counter window for this stream so a later
@@ -242,6 +283,7 @@ export class SenderKeyManager {
     for (const key of this.recvRocState.keys()) {
       if (key.startsWith(prefix)) {
         this.recvRocState.delete(key);
+        this.recvReplay.delete(key);
       }
     }
   }
@@ -282,10 +324,10 @@ export class SenderKeyManager {
       {
         name: 'AES-GCM',
         iv: iv.buffer as ArrayBuffer,
-        additionalData: header.buffer as ArrayBuffer,
+        additionalData: toArrayBuffer(header),
       },
       this.localKey,
-      payload.buffer as ArrayBuffer,
+      toArrayBuffer(payload),
     );
     return new Uint8Array(ciphertext);
   }
@@ -315,20 +357,38 @@ export class SenderKeyManager {
     const stateKey = `${ssrc}:${epoch}`;
     const ref = this.recvRocState.get(stateKey);
     const roc = ref ? estimateRoc(ref.roc, ref.seq, seq) : 0;
+    const index = roc * 0x1_0000 + seq;
+    if (this.recvReplay.get(stateKey)?.containsOrExpired(index)) {
+      throw new Error('Media packet is a replay or is outside the receive window');
+    }
     const iv = this.buildNonce(ssrc, epoch, seq, roc);
     const plaintext = await crypto.subtle.decrypt(
       {
         name: 'AES-GCM',
         iv: iv.buffer as ArrayBuffer,
-        additionalData: header.buffer as ArrayBuffer,
+        additionalData: toArrayBuffer(header),
       },
       peerKey,
-      payload.buffer as ArrayBuffer,
+      toArrayBuffer(payload),
     );
     // Only advance the reference window on a verified decrypt, and only when
     // this packet's 48-bit index is newer than the current reference.
-    const index = roc * 0x1_0000 + seq;
-    if (!ref || index > ref.roc * 0x1_0000 + ref.seq) {
+    // WebCrypto yields: another decrypt can finish or the peer can leave while
+    // this one is pending. Commit against current state, never the old snapshot.
+    if (this.peerKeys.get(stateKey) !== peerKey) {
+      throw new Error('The media sender key changed during decryption');
+    }
+    let window = this.recvReplay.get(stateKey);
+    if (window?.containsOrExpired(index)) {
+      throw new Error('Media packet is a replay or is outside the receive window');
+    }
+    if (!window) {
+      window = new ReplayWindow(index);
+      this.recvReplay.set(stateKey, window);
+    }
+    window.accept(index);
+    const current = this.recvRocState.get(stateKey);
+    if (!current || index > current.roc * 0x1_0000 + current.seq) {
       this.recvRocState.set(stateKey, { roc, seq });
     }
     return new Uint8Array(plaintext);
@@ -336,19 +396,33 @@ export class SenderKeyManager {
 
   /** Store a received peer's sender key. */
   setPeerKey(ssrc: number, epoch: number, key: CryptoKey): void {
-    this.peerKeys.set(`${ssrc}:${epoch}`, key);
+    const stateKey = `${ssrc}:${epoch}`;
+    if (this.peerKeys.get(stateKey) !== key) {
+      this.recvRocState.delete(stateKey);
+      this.recvReplay.delete(stateKey);
+      this.peerRawKeys.delete(stateKey);
+    }
+    this.peerKeys.set(stateKey, key);
   }
 
   /** Import a raw key bytes buffer as a peer key. */
   async importPeerKey(ssrc: number, epoch: number, rawKey: Uint8Array): Promise<void> {
+    if (rawKey.byteLength !== 16) throw new Error('Media sender keys must be 16 bytes');
+    const material = rawKey.slice();
     const key = await crypto.subtle.importKey(
       'raw',
-      rawKey.buffer as ArrayBuffer,
+      toArrayBuffer(material),
       { name: 'AES-GCM', length: 128 },
       false,
       ['decrypt'],
     );
+    const stateKey = `${ssrc}:${epoch}`;
+    const previous = this.peerRawKeys.get(stateKey);
+    // Re-announcements can arrive while decrypting. Only a genuinely new key
+    // resets ROC/replay state; importing identical bytes must be idempotent.
+    if (previous?.every((byte, index) => byte === material[index])) return;
     this.setPeerKey(ssrc, epoch, key);
+    this.peerRawKeys.set(stateKey, material);
   }
 
   /** Export the local key as raw bytes for distribution. */

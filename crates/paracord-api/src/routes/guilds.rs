@@ -707,6 +707,7 @@ pub async fn get_channels(
     paracord_core::permissions::ensure_guild_member(&state.db, guild_id, auth.user_id).await?;
     let ensure_member_ms = ensure_member_started.elapsed().as_millis() as u64;
 
+    let permission_generation = state.permission_cache.generation();
     let guild_fetch_started = Instant::now();
     let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
         .await
@@ -733,6 +734,7 @@ pub async fn get_channels(
         &state.permission_cache,
         auth.user_id,
         &channel_permissions,
+        permission_generation,
     )
     .await;
     let permissions_ms = permissions_started.elapsed().as_millis() as u64;

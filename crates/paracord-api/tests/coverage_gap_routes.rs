@@ -1165,6 +1165,10 @@ async fn group_sender_keys_post_get_and_ack() -> anyhow::Result<()> {
         .as_str()
         .context("group dm id should exist")?
         .to_string();
+    let members_version = payload["members_version"]
+        .as_str()
+        .context("a group DM must name its membership")?
+        .to_string();
 
     let (status, payload) = ctx
         .request_json(
@@ -1172,6 +1176,7 @@ async fn group_sender_keys_post_get_and_ack() -> anyhow::Result<()> {
             &format!("/api/v1/channels/{channel_id}/e2ee/sender-keys"),
             Some(json!({
                 "epoch": 0,
+                "members_version": members_version,
                 "envelopes": [
                     {
                         "recipient_id": recipient_id,

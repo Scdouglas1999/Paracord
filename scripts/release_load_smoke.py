@@ -83,11 +83,30 @@ def request_json(
     expected: int | tuple[int, ...] = 200,
     label: str,
 ) -> Any:
-    session.cookies.clear()
-    headers = {"Authorization": f"Bearer {token}"} if token else {}
-    response = session.request(method, f"{base_url}{path}", headers=headers, json=body, timeout=20)
-    assert_status(response, expected, label)
-    return response.json() if response.text else None
+    # The chat burst and all simulated users share the loopback IP bucket.
+    # Voice/signaling operations must honor its backoff too, as a real client
+    # does; otherwise a successful load burst makes the next feature fail.
+    deadline = time.monotonic() + 60
+    while True:
+        session.cookies.clear()
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        response = session.request(method, f"{base_url}{path}", headers=headers, json=body, timeout=20)
+        if response.status_code != 429:
+            assert_status(response, expected, label)
+            return response.json() if response.text else None
+        delay = rate_limit_delay(response)
+        if time.monotonic() + delay > deadline:
+            raise AssertionError(f"{label}: rate limit did not clear within 60 seconds")
+        session.load_api_rate_limit_retries = getattr(session, "load_api_rate_limit_retries", 0) + 1
+        time.sleep(delay)
+
+
+def rate_limit_delay(response: requests.Response) -> float:
+    try:
+        retry_after = float(response.headers.get("Retry-After") or response.json().get("retry_after") or 1)
+    except (ValueError, TypeError):
+        retry_after = 1.0
+    return max(retry_after, 0.25) + 0.05
 
 
 def send_message_with_retry(
@@ -98,6 +117,7 @@ def send_message_with_retry(
     content: str,
 ) -> tuple[Any, int]:
     retries = 0
+    deadline = time.monotonic() + 60
     while True:
         session.cookies.clear()
         response = session.post(
@@ -111,11 +131,10 @@ def send_message_with_retry(
             return response.json(), retries
 
         retries += 1
-        try:
-            retry_after = float(response.json().get("retry_after") or 1)
-        except ValueError:
-            retry_after = 1.0
-        time.sleep(max(retry_after, 0.25) + 0.05)
+        delay = rate_limit_delay(response)
+        if time.monotonic() + delay > deadline:
+            raise AssertionError("send message: rate limit did not clear within 60 seconds")
+        time.sleep(delay)
 
 
 def wait_for_health(base_url: str, proc: subprocess.Popen[object]) -> None:
@@ -365,6 +384,7 @@ def run_smoke(args: argparse.Namespace) -> None:
                         f"messages={args.messages}",
                         f"voice_participants={len(voice_tokens)}",
                         f"rate_limit_retries={rate_limit_retries}",
+                        f"api_rate_limit_retries={getattr(session, 'load_api_rate_limit_retries', 0)}",
                         f"send_seconds={send_seconds:.3f}",
                         f"page_seconds={page_seconds:.3f}",
                         f"before_page_seconds={before_page_seconds:.3f}",

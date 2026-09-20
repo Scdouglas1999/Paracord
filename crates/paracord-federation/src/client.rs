@@ -290,7 +290,7 @@ impl FederationClient {
         event_id: &str,
         read_token: Option<&str>,
     ) -> Result<FederationEventEnvelope, FederationError> {
-        let url = format!("{}/event/{}", target.base(), event_id);
+        let url = format!("{}/event/{}", target.base(), urlencode(event_id));
         let mut extra_headers: Vec<(&str, String)> = Vec::new();
         if let Some(token) = read_token {
             extra_headers.push(("x-paracord-federation-token", token.to_string()));
@@ -309,24 +309,44 @@ impl FederationClient {
         since_depth: i64,
         limit: i64,
     ) -> Result<Vec<FederationEventEnvelope>, FederationError> {
-        let url = format!(
+        Ok(self
+            .fetch_messages_page(target, room_id, since_depth, None, limit)
+            .await?
+            .events)
+    }
+
+    pub async fn fetch_messages_page(
+        &self,
+        target: FederationTarget<'_>,
+        room_id: &str,
+        since_depth: i64,
+        since_event_id: Option<&str>,
+        limit: i64,
+    ) -> Result<FederationEventsResponse, FederationError> {
+        let mut url = format!(
             "{}/events?room_id={}&since_depth={}&limit={}",
             target.base(),
-            room_id,
+            urlencode(room_id),
             since_depth,
             limit
         );
+        if let Some(event_id) = since_event_id {
+            url.push_str("&since_event_id=");
+            url.push_str(&urlencode(event_id));
+        }
         let resp = self
             .get_with_retry_with_headers(&url, &target.destination(), &[])
             .await?;
-        let events: FederationEventsResponse =
+        let mut page: FederationEventsResponse =
             read_json_capped(resp, MAX_EVENTS_RESPONSE_BYTES, "events response").await?;
-        // `limit` in the query string is a request, not a constraint the peer is
-        // obliged to honour. Truncate to what we asked for so one hostile peer
-        // cannot make the caller's per-room catch-up loop unboundedly long.
-        let mut events = events.events;
-        events.truncate(limit.clamp(1, i64::from(u32::MAX)) as usize);
-        Ok(events)
+        // A hostile peer must not enlarge the caller's per-room work budget.
+        let limit = limit.clamp(1, i64::from(u32::MAX)) as usize;
+        if page.events.len() > limit {
+            page.events.truncate(limit);
+            page.next_depth = None;
+            page.next_event_id = None;
+        }
+        Ok(page)
     }
 
     pub async fn send_invite(
@@ -475,27 +495,47 @@ impl FederationClient {
         download_url: &str,
         max_size: u64,
     ) -> Result<(Vec<u8>, Option<String>, Option<String>), FederationError> {
+        let destination = transport::destination_from_url(download_url);
+        self.download_federated_file_from_peer_with_limit(download_url, &destination, max_size)
+            .await
+    }
+
+    /// Fetch a file with a transport signature addressed to the issuing peer's
+    /// configured identity, which may differ from its endpoint hostname.
+    pub async fn download_federated_file_from_peer_with_limit(
+        &self,
+        download_url: &str,
+        destination: &str,
+        max_size: u64,
+    ) -> Result<(Vec<u8>, Option<String>, Option<String>), FederationError> {
         // Manual redirects allow every hop to receive the same async DNS
         // validation before reqwest opens a connection. Each hop pins the
         // connection to the exact IP that just passed validation.
         let mut current_url = download_url.to_string();
         let mut redirects = 0usize;
         let resp = loop {
-            validate_ssrf_safe_url(&current_url)?;
-            let pinned_addrs = resolve_and_check_dns(&current_url).await?;
+            let pinned_addrs = if private_federation_urls_allowed() {
+                // The operator's explicit private-federation opt-in also
+                // covers its file transport (e.g. HTTP loopback development).
+                resolve_public_federation_addrs(&current_url).await?
+            } else {
+                validate_ssrf_safe_url(&current_url)?;
+                resolve_and_check_dns(&current_url).await?
+            };
             let download_client = self.client_for(&current_url, &pinned_addrs)?;
 
-            // Federated file tokens are bound to the peer that requested them,
-            // so the download must identify which peer is presenting the token.
-            // Without this the bearer token alone would authorize any holder.
-            let mut request = download_client.get(&current_url);
-            if let Some(signer) = self.transport_signer.as_ref() {
-                request = request.header("X-Paracord-Origin", signer.origin.as_str());
-            }
+            let request = self.with_transport_signature_headers(
+                download_client.get(&current_url),
+                "GET",
+                &transport::request_path_from_url(&current_url),
+                destination,
+                &[],
+                FEDERATION_PROTOCOL_DEFAULT,
+            );
             let resp = request
                 .send()
                 .await
-                .map_err(|e| FederationError::Http(e.to_string()))?;
+                .map_err(|e| FederationError::Http(e.without_url().to_string()))?;
 
             if resp.status().is_redirection() {
                 if redirects >= MAX_DOWNLOAD_REDIRECTS {
@@ -537,8 +577,7 @@ impl FederationClient {
 
         if !resp.status().is_success() {
             return Err(FederationError::RemoteError(format!(
-                "download from {} returned {}",
-                current_url,
+                "federated file download returned {}",
                 resp.status()
             )));
         }
@@ -579,7 +618,7 @@ impl FederationClient {
         while let Some(chunk) = resp
             .chunk()
             .await
-            .map_err(|e| FederationError::Http(e.to_string()))?
+            .map_err(|e| FederationError::Http(e.without_url().to_string()))?
         {
             if body.len() as u64 + chunk.len() as u64 > max_size {
                 return Err(FederationError::FileTooLarge { max: max_size });
@@ -788,6 +827,9 @@ pub fn ssrf_checked_http_client(
     timeout: Duration,
 ) -> Result<Client, FederationError> {
     Client::builder()
+        // An environment proxy can re-resolve the hostname independently of
+        // our validated DNS pin and reach private addresses behind the proxy.
+        .no_proxy()
         .timeout(timeout)
         .user_agent(user_agent)
         .redirect(reqwest::redirect::Policy::none())
@@ -808,6 +850,7 @@ fn ssrf_checked_http_client_pinned(
     addrs: &[SocketAddr],
 ) -> Result<Client, FederationError> {
     Client::builder()
+        .no_proxy()
         .timeout(timeout)
         .user_agent(user_agent)
         .redirect(reqwest::redirect::Policy::none())
@@ -867,8 +910,12 @@ pub struct PostEventResponse {
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
-struct FederationEventsResponse {
-    events: Vec<FederationEventEnvelope>,
+pub struct FederationEventsResponse {
+    pub events: Vec<FederationEventEnvelope>,
+    #[serde(default)]
+    pub next_depth: Option<i64>,
+    #[serde(default)]
+    pub next_event_id: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -1042,10 +1089,6 @@ pub fn validate_ssrf_safe_url(url_str: &str) -> Result<(), FederationError> {
 /// the target host must not be local, private, link-local, or otherwise
 /// reserved unless an operator explicitly opts into private federation URLs.
 pub fn validate_public_federation_url(url_str: &str) -> Result<(), FederationError> {
-    if private_federation_urls_allowed() {
-        return Ok(());
-    }
-
     let parsed = url::Url::parse(url_str)
         .map_err(|e| FederationError::Http(format!("SSRF protection: invalid URL: {e}")))?;
 
@@ -1054,6 +1097,10 @@ pub fn validate_public_federation_url(url_str: &str) -> Result<(), FederationErr
             "SSRF protection: unsupported federation URL scheme '{}'",
             parsed.scheme()
         )));
+    }
+
+    if private_federation_urls_allowed() {
+        return Ok(());
     }
 
     validate_url_host_is_public(&parsed)
@@ -1071,10 +1118,10 @@ pub async fn validate_public_federation_url_with_dns(url_str: &str) -> Result<()
 async fn resolve_public_federation_addrs(
     url_str: &str,
 ) -> Result<Vec<SocketAddr>, FederationError> {
+    validate_public_federation_url(url_str)?;
     if private_federation_urls_allowed() {
         return Ok(Vec::new());
     }
-    validate_public_federation_url(url_str)?;
     resolve_and_check_dns(url_str).await
 }
 
@@ -1158,16 +1205,20 @@ async fn resolve_and_check_dns(url_str: &str) -> Result<Vec<SocketAddr>, Federat
         return Ok(Vec::new());
     };
 
-    let port = parsed.port().unwrap_or(443);
+    let port = parsed.port_or_known_default().unwrap_or(443);
     let lookup = format!("{domain}:{port}");
-    let addrs: Vec<SocketAddr> = tokio::net::lookup_host(&lookup)
-        .await
-        .map_err(|e| {
-            FederationError::Http(format!(
-                "SSRF protection: DNS resolution failed for '{domain}': {e}"
-            ))
-        })?
-        .collect();
+    let addrs: Vec<SocketAddr> =
+        tokio::time::timeout(DEFAULT_TIMEOUT, tokio::net::lookup_host(&lookup))
+            .await
+            .map_err(|_| {
+                FederationError::Http("SSRF protection: DNS lookup timed out".to_string())
+            })?
+            .map_err(|e| {
+                FederationError::Http(format!(
+                    "SSRF protection: DNS resolution failed for '{domain}': {e}"
+                ))
+            })?
+            .collect();
     for addr in &addrs {
         if is_private_ip(&addr.ip()) {
             return Err(FederationError::Http(format!(
@@ -1206,6 +1257,8 @@ fn is_private_ip(ip: &IpAddr) -> bool {
             || (o[0] == 192 && o[1] == 0 && o[2] == 2)
             || (o[0] == 198 && o[1] == 51 && o[2] == 100)
             || (o[0] == 203 && o[1] == 0 && o[2] == 113)
+            // 198.18.0.0/15 (network benchmark networks)
+            || (o[0] == 198 && (o[1] == 18 || o[1] == 19))
             // 224.0.0.0/4 (multicast)
             || (224..=239).contains(&o[0])
             // 0.0.0.0/8
@@ -1218,8 +1271,30 @@ fn is_private_ip(ip: &IpAddr) -> bool {
             if let Some(v4) = v6.to_ipv4_mapped() {
                 return is_private_ip(&IpAddr::V4(v4));
             }
+            let segments = v6.segments();
+            // Well-known NAT64 translation can reach the embedded IPv4
+            // address. Reject internal targets just as for IPv4-mapped IPv6.
+            if segments[..6] == [0x64, 0xff9b, 0, 0, 0, 0] {
+                let octets = v6.octets();
+                return is_private_ip(&IpAddr::V4(std::net::Ipv4Addr::new(
+                    octets[12], octets[13], octets[14], octets[15],
+                )));
+            }
+            // 6to4 embeds its IPv4 gateway in the next 32 bits.
+            if segments[0] == 0x2002 {
+                let octets = v6.octets();
+                return is_private_ip(&IpAddr::V4(std::net::Ipv4Addr::new(
+                    octets[2], octets[3], octets[4], octets[5],
+                )));
+            }
             // ::1 loopback
             v6.is_loopback()
+            // Deprecated IPv4-compatible, local-use NAT64, Teredo and
+            // site-local ranges are not public federation endpoints.
+            || segments[..6] == [0; 6]
+            || (segments[0] == 0x64 && segments[1] == 0xff9b && segments[2] == 1)
+            || (segments[0] == 0x2001 && segments[1] == 0)
+            || (segments[0] & 0xffc0) == 0xfec0
             // fc00::/7 (unique local)
             || (v6.segments()[0] & 0xfe00) == 0xfc00
             // fe80::/10 (link-local)
@@ -1541,6 +1616,37 @@ mod ssrf_tests {
     fn blocks_ipv4_mapped_ipv6_loopback() {
         // ::ffff:127.0.0.1 is an IPv4-mapped IPv6 address for loopback
         assert!(validate_ssrf_safe_url("https://[::ffff:127.0.0.1]/file").is_err());
+    }
+
+    #[test]
+    fn blocks_special_and_translated_internal_networks() {
+        for host in [
+            "198.18.0.1",
+            "198.19.255.255",
+            "[::127.0.0.1]",
+            "[fec0::1]",
+            "[64:ff9b::a00:1]",
+            "[64:ff9b::7f00:1]",
+            "[64:ff9b:1::1]",
+            "[2002:7f00:1::]",
+            "[2002:a00:1::]",
+            "[2001:0::1]",
+        ] {
+            assert!(
+                validate_ssrf_safe_url(&format!("https://{host}/file")).is_err(),
+                "{host}"
+            );
+        }
+        for host in [
+            "[2001:4860:4860::8888]",
+            "[64:ff9b::808:808]",
+            "[2002:808:808::]",
+        ] {
+            assert!(
+                validate_ssrf_safe_url(&format!("https://{host}/file")).is_ok(),
+                "{host}"
+            );
+        }
     }
 
     #[test]

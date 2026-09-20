@@ -23,6 +23,17 @@ afterEach(() => {
 });
 
 describe('refresh coordination', () => {
+  it.each(['success', 'failure'])('rejects an old in-flight %s after a session replacement', async (outcome) => {
+    const gate = deferred<{ token: string }>();
+    const old = coordinateRefresh(HOME_REFRESH_SCOPE, () => gate.promise);
+    resetRefreshCoordination(HOME_REFRESH_SCOPE);
+    const replacement = await coordinateRefresh(HOME_REFRESH_SCOPE, async () => ({ token: 'replacement' }));
+    const rejected = expect(old).rejects.toThrow('Session refresh was superseded');
+    if (outcome === 'success') gate.resolve({ token: 'revoked' });
+    else gate.reject(Object.assign(new Error('revoked'), { response: { status: 401 } }));
+    await rejected;
+    expect(await coordinateRefresh(HOME_REFRESH_SCOPE, async () => ({ token: 'unexpected' }))).toEqual(replacement);
+  });
   it('runs one refresh for concurrent callers on the same credential', async () => {
     const gate = deferred<{ token: string; refreshToken: string }>();
     const perform = vi.fn(() => gate.promise);

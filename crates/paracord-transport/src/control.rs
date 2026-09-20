@@ -287,6 +287,9 @@ pub enum ControlMessage {
         attachment_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         url: Option<String>,
+        /// Authoritative stored metadata, including encrypted-name/type policy.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attachment: Option<serde_json::Value>,
     },
 
     /// Transfer error.
@@ -1146,6 +1149,9 @@ mod tests {
             transfer_id: "xfer-001".into(),
             attachment_id: Some("att-456".into()),
             url: Some("/files/att-456".into()),
+            attachment: Some(
+                serde_json::json!({"filename":"stored.bin","content_type":"application/octet-stream"}),
+            ),
         };
         let encoded = msg.encode().unwrap();
         let (decoded, _) = ControlMessage::decode(&encoded).unwrap().unwrap();
@@ -1158,6 +1164,7 @@ mod tests {
             transfer_id: "xfer-002".into(),
             attachment_id: None,
             url: None,
+            attachment: None,
         };
         let encoded = msg.encode().unwrap();
         let (decoded, _) = ControlMessage::decode(&encoded).unwrap().unwrap();

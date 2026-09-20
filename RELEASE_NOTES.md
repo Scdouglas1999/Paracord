@@ -1,3 +1,15 @@
+# Paracord v3.0.1 release candidate
+
+Security and release hardening is in progress. This candidate preserves native video,
+federation and encryption while repairing authorization, concurrency, recovery,
+attachment transfer, bot gateway and client failures found during real multiuser tests.
+
+See [release validation](docs/release-validation-2026-09-19.md) for executed coverage,
+remaining gates and build identities, and the [security audit](docs/security-audit-2026-09-19.md)
+for the original findings. Final publication notes will be completed after validation.
+
+---
+
 # Paracord 3.0.0
 
 This is a big release. The client has a new look, voice works from the browser, installing an instance is one command, and a lot of things that were broken or half-finished in 2.0 have been fixed. We tested it by having people actually use it — join calls, send messages, run instances, try to break things — and fixed what they found.
@@ -37,7 +49,7 @@ The wording has been made consistent throughout, and it is Discord's: a communit
 - After recovering on a new device, you can publish new encryption keys and send messages again. The app explains what that costs (older history stays unreadable unless you import a backup) before you do it. Previously you'd get an error about missing keys with no way forward.
 - If a message has been tampered with, you're told. Before, it failed silently.
 - In the browser, "verified" marks on contacts now survive a reload.
-- Group DMs still can't send messages (see limitations below), but the app now tells you before you create one instead of after.
+- Group DMs work. They're end-to-end encrypted, including attachments. Each member's key is shared with the others through their identity keys, and the key changes whenever somebody joins or leaves or rotates their own key, so a person who left can't read what's said afterwards. Every message is signed, so one member can't post something that looks like it came from another. If somebody in the group hasn't set up encryption yet, the composer says who instead of sending.
 - Fixed an error on every first login that caused a reconnect.
 
 ## Instance administration
@@ -65,7 +77,6 @@ Server binaries and client installers are attached. An instance upgrades in plac
 
 ## Known limitations
 
-- Group DMs can be created but not used yet.
 - There's no way to publish a bot to the bot store, so it's empty. Bots can only be installed by whoever made them.
 - AutoMod is per server, not instance-wide, and keyword rules don't catch look-alike characters.
 - Refreshing the page during a call ends the call.

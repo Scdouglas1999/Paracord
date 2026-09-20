@@ -30,6 +30,9 @@ test.setTimeout(180_000);
 
 /** Screenshots land with the rest of this workstream's evidence. */
 function shotPath(name: string): string {
+  if (process.env.PARACORD_E2E_MEDIA_EVIDENCE) {
+    return resolve(process.env.PARACORD_E2E_MEDIA_EVIDENCE, 'voice-diagnostics', name);
+  }
   // Playwright runs with `client/` as the working directory.
   return resolve(process.cwd(), '..', 'output', 'improvement-program', 'voice-diagnostics', name);
 }

@@ -601,6 +601,10 @@ pub async fn remove_guild_bot(
     paracord_db::bot_applications::remove_bot_from_guild(&state.db, bot_app_id, guild_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    state
+        .permission_cache
+        .invalidate_user(app.bot_user_id)
+        .await;
     let _ = paracord_db::members::remove_member(&state.db, app.bot_user_id, guild_id).await;
 
     state.member_index.remove_member(guild_id, app.bot_user_id);
@@ -733,6 +737,12 @@ pub async fn oauth2_authorize(
     )
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    // Reauthorization may reduce an existing grant. Cached channel permission
+    // bits must stop granting the superseded installation's authority at once.
+    state
+        .permission_cache
+        .invalidate_user(app.bot_user_id)
+        .await;
     let _ = paracord_db::bot_reviews::record_metric_event(
         &state.db,
         paracord_util::snowflake::generate(1),

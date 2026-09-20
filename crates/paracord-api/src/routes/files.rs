@@ -758,34 +758,7 @@ pub async fn upload_file(
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     cleanup_expired_pending_attachments(&state).await;
 
-    // Verify channel exists and caller can send attachments.
-    let channel = paracord_db::channels::get_channel(&state.db, channel_id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
-        .ok_or(ApiError::NotFound)?;
-    if let Some(guild_id) = channel.guild_id() {
-        paracord_core::permissions::ensure_guild_member(&state.db, guild_id, auth.user_id).await?;
-        let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
-            .ok_or(ApiError::NotFound)?;
-        let perms = paracord_core::permissions::compute_channel_permissions_cached(
-            &state.permission_cache,
-            &state.db,
-            guild_id,
-            channel_id,
-            guild.owner_id,
-            auth.user_id,
-        )
-        .await?;
-        paracord_core::permissions::require_permission(perms, Permissions::VIEW_CHANNEL)?;
-        paracord_core::permissions::require_permission(perms, Permissions::ATTACH_FILES)?;
-    } else if !paracord_db::dms::is_dm_recipient(&state.db, channel_id, auth.user_id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
-    {
-        return Err(ApiError::Forbidden);
-    }
+    validate_upload_permissions(&state, channel_id, auth.user_id).await?;
 
     // Resolved before a byte of the body is read so the size ceiling can bound
     // the read itself rather than being checked against an already-resident
@@ -802,103 +775,16 @@ pub async fn upload_file(
     let claimed_content_type = field.content_type().map(|s| s.to_string());
     let data = read_field_within_limit(&mut field, limits.max_bytes, || limits.too_large()).await?;
 
-    let size =
-        u64::try_from(data.len()).map_err(|_| ApiError::BadRequest("File too large".into()))?;
-
-    if size == 0 {
-        return Err(ApiError::BadRequest("Empty file".into()));
-    }
-
-    let db_size = i32::try_from(size).map_err(|_| ApiError::BadRequest("File too large".into()))?;
-
-    // Compute SHA-256 content hash
-    let mut hasher = Sha256::new();
-    hasher.update(&data);
-    let content_hash = format!("{:x}", hasher.finalize());
-
-    let attachment_id = paracord_util::snowflake::generate(1);
-    let encrypted_conversation = is_encrypted_conversation(&channel);
-
-    // Check guild-level upload policy against the type that will be stored,
-    // after active-content downgrades. Otherwise a forged Content-Type could
-    // bypass an allowlist before being persisted as application/octet-stream.
-    //
-    // An encrypted conversation skips that resolution entirely: its body is
-    // ciphertext, so there is nothing to sniff and nothing the claimed type
-    // could truthfully describe. The stored type is always opaque and the
-    // stored name is always generated, which is also what stops a filename from
-    // reaching the server for a conversation whose messages it cannot read.
-    let (filename, content_type) = if encrypted_conversation {
-        (
-            opaque_attachment_filename(attachment_id, &filename),
-            "application/octet-stream".to_string(),
-        )
-    } else {
-        let content_type =
-            resolve_stored_content_type(&filename, claimed_content_type.as_deref(), &data);
-        (filename, content_type)
-    };
-    validate_attachment_metadata(&filename, &content_type)?;
-    limits.check(&state, size, &content_type).await?;
-
-    // Store file via storage backend
-    scan_upload_with_malware_hook(&data, &filename, &state.config.storage_path, attachment_id)
-        .await?;
-
-    let ext = std::path::Path::new(&filename)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("bin");
-    let storage_key = format!("attachments/{}.{}", attachment_id, ext);
-
-    let stored_payload = if let Some(cryptor) = state.config.file_cryptor.as_ref() {
-        let aad = attachment_aad(attachment_id);
-        cryptor
-            .encrypt_with_aad(&data, aad.as_bytes())
-            .map_err(|err| ApiError::Internal(anyhow::anyhow!(err.to_string())))?
-    } else {
-        // The plaintext body is handed straight to the backend rather than
-        // copied, keeping one upload to one buffer.
-        data
-    };
-
-    state
-        .storage_backend
-        .store(&storage_key, &stored_payload)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-
-    let url = format!("/api/v1/attachments/{}", attachment_id);
-    let expires_at = Utc::now() + Duration::minutes(PENDING_ATTACHMENT_TTL_MINUTES);
-
-    let attachment = paracord_db::attachments::create_attachment(
-        &state.db,
-        attachment_id,
-        None, // pending attachment; linked during message creation
+    let attachment = process_uploaded_file(
+        &state,
+        &data,
         &filename,
-        Some(&content_type),
-        db_size,
-        &url,
-        None,
-        None,
-        Some(auth.user_id),
-        Some(channel_id),
-        Some(expires_at),
-        Some(&content_hash),
+        claimed_content_type.as_deref(),
+        channel_id,
+        auth.user_id,
     )
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-
-    Ok((
-        StatusCode::CREATED,
-        Json(json!({
-            "id": attachment.id.to_string(),
-            "filename": attachment.filename,
-            "size": attachment.size,
-            "content_type": attachment.content_type,
-            "url": attachment.url,
-        })),
-    ))
+    .await?;
+    Ok((StatusCode::CREATED, Json(attachment)))
 }
 
 pub async fn download_file(
@@ -957,41 +843,32 @@ pub async fn download_file(
         .map_err(|_| ApiError::NotFound)?;
     let data = if let Some(cryptor) = state.config.file_cryptor.as_ref() {
         let aad = attachment_aad(attachment.id);
-        match cryptor.decrypt_with_aad(&stored_data, aad.as_bytes()) {
-            Ok(decrypted) => decrypted,
-            Err(paracord_util::at_rest::FileCryptoError::PlaintextReadDisabled)
-                if !paracord_util::at_rest::FileCryptor::payload_is_encrypted(&stored_data) =>
-            {
+        // A strict configuration must never turn an unauthenticated plaintext
+        // replacement into an accepted attachment. Legacy migration is allowed
+        // only after the cryptor accepts the stored envelope under its policy.
+        let migrated = cryptor
+            .decrypt_with_aad_migrating(&stored_data, aad.as_bytes())
+            .map_err(|err| ApiError::Internal(anyhow::anyhow!(err.to_string())))?;
+        let rewrapped = if migrated.rewrapped.is_some() {
+            migrated.rewrapped
+        } else if !paracord_util::at_rest::FileCryptor::payload_is_encrypted(&stored_data) {
+            Some(
+                cryptor
+                    .encrypt_with_aad(&migrated.plaintext, aad.as_bytes())
+                    .map_err(|err| ApiError::Internal(anyhow::anyhow!(err.to_string())))?,
+            )
+        } else {
+            None
+        };
+        if let Some(rewrapped) = rewrapped {
+            if let Err(err) = state.storage_backend.store(&storage_key, &rewrapped).await {
                 tracing::warn!(
-                    "Serving legacy plaintext attachment {} while file encryption is enabled; re-encrypting in place",
-                    attachment.id
+                    attachment_id = attachment.id,
+                    "Failed to migrate attachment encryption: {err}"
                 );
-                match cryptor.encrypt_with_aad(&stored_data, aad.as_bytes()) {
-                    Ok(reencrypted) => {
-                        if let Err(err) = state
-                            .storage_backend
-                            .store(&storage_key, &reencrypted)
-                            .await
-                        {
-                            tracing::warn!(
-                                "Failed to re-encrypt attachment {} in storage: {}",
-                                attachment.id,
-                                err
-                            );
-                        }
-                    }
-                    Err(err) => {
-                        tracing::warn!(
-                            "Failed to encrypt legacy plaintext attachment {}: {}",
-                            attachment.id,
-                            err
-                        );
-                    }
-                }
-                stored_data
             }
-            Err(err) => return Err(ApiError::Internal(anyhow::anyhow!(err.to_string()))),
         }
+        migrated.plaintext
     } else {
         stored_data
     };
@@ -1091,6 +968,31 @@ pub async fn process_uploaded_file(
     channel_id: i64,
     user_id: i64,
 ) -> Result<Value, ApiError> {
+    process_uploaded_file_with_id(
+        state,
+        data,
+        filename,
+        claimed_content_type,
+        channel_id,
+        user_id,
+        paracord_util::snowflake::generate(1),
+    )
+    .await
+}
+
+/// Persist a server-issued transfer ID as the attachment ID. The caller must
+/// hold an exclusive transfer reservation and verify the ID has not already
+/// been committed; this makes successful transfer capabilities single use.
+pub async fn process_uploaded_file_with_id(
+    state: &AppState,
+    data: &[u8],
+    filename: &str,
+    claimed_content_type: Option<&str>,
+    channel_id: i64,
+    user_id: i64,
+    attachment_id: i64,
+) -> Result<Value, ApiError> {
+    validate_upload_permissions(state, channel_id, user_id).await?;
     let size =
         u64::try_from(data.len()).map_err(|_| ApiError::BadRequest("File too large".into()))?;
     if size == 0 {
@@ -1106,7 +1008,6 @@ pub async fn process_uploaded_file(
     hasher.update(data);
     let content_hash = format!("{:x}", hasher.finalize());
 
-    let attachment_id = paracord_util::snowflake::generate(1);
     // The transport-agnostic path applies the same rule as the multipart route:
     // an encrypted conversation stores opaque ciphertext under a generated name.
     let encrypted_conversation = paracord_db::channels::get_channel(&state.db, channel_id)
@@ -1130,7 +1031,13 @@ pub async fn process_uploaded_file(
     };
     let filename = filename.as_str();
     validate_attachment_metadata(filename, &content_type)?;
-    check_guild_upload_policy(state, channel_id, size, &content_type).await?;
+    let limits = resolve_upload_limits(state, channel_id).await?;
+    limits.check(state, size, &content_type).await?;
+    let quota = if limits.guild_id.is_some() {
+        effective_storage_quota(state, limits.policy.as_ref()).await
+    } else {
+        None
+    };
 
     scan_upload_with_malware_hook(data, filename, &state.config.storage_path, attachment_id)
         .await?;
@@ -1141,41 +1048,50 @@ pub async fn process_uploaded_file(
         .unwrap_or("bin");
     let storage_key = format!("attachments/{}.{}", attachment_id, ext);
 
-    let stored_payload = if let Some(cryptor) = state.config.file_cryptor.as_ref() {
-        let aad = attachment_aad(attachment_id);
-        cryptor
-            .encrypt_with_aad(data, aad.as_bytes())
-            .map_err(|err| ApiError::Internal(anyhow::anyhow!(err.to_string())))?
-    } else {
-        data.to_vec()
-    };
-
-    state
-        .storage_backend
-        .store(&storage_key, &stored_payload)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let stored_payload: std::borrow::Cow<'_, [u8]> =
+        if let Some(cryptor) = state.config.file_cryptor.as_ref() {
+            let aad = attachment_aad(attachment_id);
+            std::borrow::Cow::Owned(
+                cryptor
+                    .encrypt_with_aad(data, aad.as_bytes())
+                    .map_err(|err| ApiError::Internal(anyhow::anyhow!(err.to_string())))?,
+            )
+        } else {
+            std::borrow::Cow::Borrowed(data)
+        };
 
     let url = format!("/api/v1/attachments/{}", attachment_id);
     let expires_at = Utc::now() + Duration::minutes(PENDING_ATTACHMENT_TTL_MINUTES);
 
-    let attachment = paracord_db::attachments::create_attachment(
+    let attachment = paracord_db::attachments::create_pending_attachment_with_quota(
         &state.db,
         attachment_id,
-        None,
         filename,
         Some(&content_type),
         db_size,
         &url,
-        None,
-        None,
-        Some(user_id),
-        Some(channel_id),
-        Some(expires_at),
+        user_id,
+        channel_id,
+        expires_at,
         Some(&content_hash),
+        quota,
     )
     .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+    .ok_or_else(|| ApiError::BadRequest("Upload would exceed guild storage quota".into()))?;
+
+    // Reserve the primary key before touching shared storage. Two server
+    // processes accepting the same capability cannot overwrite the winning
+    // attachment's bytes before the losing database insert is rejected.
+    if let Err(error) = state
+        .storage_backend
+        .store(&storage_key, &stored_payload)
+        .await
+    {
+        let _ = state.storage_backend.delete(&storage_key).await;
+        let _ = paracord_db::attachments::delete_attachment(&state.db, attachment_id).await;
+        return Err(ApiError::Internal(anyhow::anyhow!(error.to_string())));
+    }
 
     Ok(json!({
         "id": attachment.id.to_string(),
@@ -1202,6 +1118,9 @@ fn default_content_type() -> String {
 
 #[derive(Serialize)]
 struct FileTransferClaims {
+    purpose: &'static str,
+    auth_sid: String,
+    content_type: String,
     sub: i64,
     tid: String,
     cid: i64,
@@ -1229,6 +1148,8 @@ pub async fn upload_token(
         return Err(file_too_large_error(state.config.max_upload_size));
     }
 
+    validate_attachment_metadata(&req.filename, &req.content_type)?;
+
     // 2b. Check guild-level upload policy (size, quota, type restrictions).
     // The token path cannot inspect bytes yet, but it can still apply the
     // same extension/claimed-type active-content downgrades used at storage.
@@ -1241,6 +1162,9 @@ pub async fn upload_token(
     // 4. Mint upload JWT (15 min expiry)
     let now = Utc::now();
     let claims = FileTransferClaims {
+        purpose: "file_upload_v1",
+        auth_sid: auth.session_id.clone().unwrap_or_default(),
+        content_type: req.content_type.clone(),
         sub: auth.user_id,
         tid: transfer_id.clone(),
         cid: channel_id,
@@ -1262,25 +1186,17 @@ pub async fn upload_token(
         .native_media
         .as_ref()
         .map(|native| native.cert_hash.get());
-    let quic_available = cert_hash.is_some();
+    let quic_available = cert_hash.is_some() && auth.session_id.is_some();
     let quic_endpoint = if quic_available {
-        let host = headers
-            .get("x-forwarded-host")
-            .or_else(|| headers.get("host"))
-            .and_then(|v| v.to_str().ok())
-            .and_then(|raw| raw.split(',').next())
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
+        let authority = headers
+            .get("host")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<axum::http::uri::Authority>().ok());
+        let host = authority
+            .as_ref()
+            .map(|value| value.host())
             .unwrap_or("localhost");
-        let host_no_port = host.split(':').next().unwrap_or(host);
-        let proto = headers
-            .get("x-forwarded-proto")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("https");
-        format!(
-            "{}://{}:{}/media",
-            proto, host_no_port, state.config.native_media_port
-        )
+        format!("https://{}:{}/files", host, state.config.native_media_port)
     } else {
         String::new()
     };
@@ -1414,22 +1330,30 @@ pub async fn download_federated_file(
     Path((origin_server, attachment_id)): Path<(String, String)>,
     Query(query): Query<FederatedFileQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let space_mappings =
-        paracord_db::federation::list_space_mappings_by_origin(&state.db, &origin_server)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    if space_mappings.is_empty() {
-        return Err(ApiError::Forbidden);
-    }
-
-    let selected_mapping = if let Some(channel_id) = query.channel_id {
+    let service = state
+        .federation_service
+        .clone()
+        .unwrap_or_else(crate::routes::federation::build_federation_service);
+    let room_id = if let Some(channel_id) = query.channel_id {
         let guild_id = ensure_channel_read_access(&state, auth.user_id, channel_id).await?;
-        space_mappings
-            .iter()
-            .find(|mapping| mapping.local_guild_id == guild_id)
-            .ok_or(ApiError::Forbidden)?
+        crate::routes::federation::ensure_federation_guild_allowed(guild_id)?;
+        // A message's file origin can be another participant of this room. The
+        // authoritative namespace belongs to the channel mapping, not the file
+        // server; the origin still authorizes this exact room and user below.
+        crate::routes::federation::resolve_outbound_context(
+            &state,
+            &service,
+            guild_id,
+            Some(channel_id),
+        )
+        .await
+        .room_id
     } else {
-        let mut authorized = Vec::new();
+        let space_mappings =
+            paracord_db::federation::list_space_mappings_by_origin(&state.db, &origin_server)
+                .await
+                .map_err(|e| ApiError::Internal(e.into()))?;
+        let mut authorized = None;
         for mapping in &space_mappings {
             if paracord_db::members::get_member(&state.db, auth.user_id, mapping.local_guild_id)
                 .await
@@ -1447,34 +1371,30 @@ pub async fn download_federated_file(
             )
             .await?
             {
-                authorized.push(mapping);
+                authorized = Some(mapping);
+                break;
             }
         }
-        if authorized.is_empty() {
-            return Err(ApiError::Forbidden);
-        }
-        if authorized.len() > 1 {
-            tracing::debug!(
-                origin_server = %origin_server,
-                attachment_id = %attachment_id,
-                mapping_count = authorized.len(),
-                "federated file download resolved first authorized space mapping; pass channel_id to disambiguate multi-space origins"
-            );
-        }
-        authorized[0]
+        let mapping = authorized.ok_or(ApiError::Forbidden)?;
+        crate::routes::federation::ensure_federation_guild_allowed(mapping.local_guild_id)?;
+        federated_room_id(&mapping.remote_space_id, &mapping.origin_server)
     };
-
-    let room_id = federated_room_id(
-        &selected_mapping.remote_space_id,
-        &selected_mapping.origin_server,
-    );
 
     let server = paracord_db::federation::get_federated_server(&state.db, &origin_server)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
-    let service = crate::routes::federation::build_federation_service();
+    if !paracord_db::federation::is_federated_server_trusted(
+        &state.db,
+        &server.server_name,
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+    {
+        return Err(ApiError::Forbidden);
+    }
     let client = crate::routes::federation::build_signed_federation_client(&service)
         .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("federation client unavailable")))?;
 
@@ -1518,11 +1438,23 @@ pub async fn download_federated_file(
                 paracord_db::federation_file_cache::update_cache_access_time(&state.db, cached.id)
                     .await;
 
-            let data = state
-                .storage_backend
-                .retrieve(&cached.storage_key)
-                .await
-                .map_err(|_| ApiError::NotFound)?;
+            let data = match state.storage_backend.retrieve(&cached.storage_key).await {
+                Ok(stored_data) => match state.config.file_cryptor.as_ref() {
+                    Some(cryptor) => {
+                        // Cache encryption was introduced with V2. An unbound
+                        // V1 blob can only be an unrelated legacy attachment;
+                        // recover the cache instead of accepting its relocation.
+                        if paracord_util::at_rest::FileCryptor::payload_is_legacy_v1(&stored_data) {
+                            None
+                        } else {
+                            let aad = format!("federation-cache:{origin_server}:{attachment_id}");
+                            cryptor.decrypt_with_aad(&stored_data, aad.as_bytes()).ok()
+                        }
+                    }
+                    None => Some(stored_data),
+                },
+                Err(_) => None,
+            };
 
             let content_type = cached
                 .content_type
@@ -1530,23 +1462,18 @@ pub async fn download_federated_file(
                 .unwrap_or_else(|| "application/octet-stream".to_string());
             let disposition = build_content_disposition(&cached.filename, false);
 
-            return Ok((download_response_headers(&content_type, &disposition), data));
+            // A legacy plaintext cache entry under strict encryption is a
+            // cache miss: fetch a fresh copy and store an encrypted envelope.
+            if let Some(data) = data {
+                return Ok((download_response_headers(&content_type, &disposition), data));
+            }
         }
     }
 
     // Download the file from origin
-    let full_download_url = if token_resp.download_url.starts_with("http") {
-        token_resp.download_url.clone()
-    } else {
-        format!(
-            "{}{}",
-            server
-                .federation_endpoint
-                .trim_end_matches('/')
-                .trim_end_matches("/v1"),
-            token_resp.download_url
-        )
-    };
+    let full_download_url = reqwest::Url::parse(&server.federation_endpoint)
+        .and_then(|base| base.join(&token_resp.download_url))
+        .map_err(|_| ApiError::Internal(anyhow::anyhow!("invalid federated download URL")))?;
 
     // Resolve cache settings before downloading so the operator-configured
     // maximum bounds the streamed body: download_federated_file_with_limit
@@ -1558,7 +1485,11 @@ pub async fn download_federated_file(
     let cache_settings = resolve_federation_cache_settings(&state).await;
 
     let (file_data, resp_content_type, resp_filename) = client
-        .download_federated_file_with_limit(&full_download_url, cache_settings.max_size)
+        .download_federated_file_from_peer_with_limit(
+            full_download_url.as_str(),
+            &server.server_name,
+            cache_settings.max_size,
+        )
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("failed to download file: {}", e)))?;
 
@@ -1573,13 +1504,23 @@ pub async fn download_federated_file(
         let hash = format!("{:x}", hasher.finalize());
 
         let cache_key = format!("fed-cache/{}/{}", origin_server, attachment_id);
+        let cache_data = if let Some(cryptor) = state.config.file_cryptor.as_ref() {
+            let aad = format!("federation-cache:{origin_server}:{attachment_id}");
+            std::borrow::Cow::Owned(
+                cryptor
+                    .encrypt_with_aad(&file_data, aad.as_bytes())
+                    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?,
+            )
+        } else {
+            std::borrow::Cow::Borrowed(file_data.as_slice())
+        };
         let cache_size = paracord_db::federation_file_cache::get_total_cache_size(&state.db)
             .await
             .unwrap_or(0);
         if cache_size + file_data.len() as i64 <= cache_settings.max_size as i64 {
             if state
                 .storage_backend
-                .store(&cache_key, &file_data)
+                .store(&cache_key, &cache_data)
                 .await
                 .is_ok()
             {

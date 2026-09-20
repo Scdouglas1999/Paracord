@@ -47,6 +47,14 @@ export interface Channel {
     avatar_hash?: string | null;
     public_key?: string | null;
   };
+  /**
+   * For group DMs (type 3), the server's name for this exact membership.
+   *
+   * A group sender key must be published against it; the server refuses a
+   * publish whose version has moved, which is what stops a key being wrapped
+   * to a roster somebody has already left.
+   */
+  members_version?: string | null;
   /** For group DMs (type 3), the list of all participants. */
   recipients?: Array<{
     id: string;

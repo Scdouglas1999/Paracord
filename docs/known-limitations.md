@@ -4,9 +4,9 @@ This page documents support boundaries for the v2.0.0 release. Items here are no
 
 ## AutoMod
 
-- AutoMod evaluates **human messages sent through the REST API**. Operator-authored paths — bots, webhooks, and scheduled-message delivery — are deliberately not filtered.
+- AutoMod evaluates REST message submissions and webhook sends/edits. Webhooks recheck creator membership, channel visibility and send permission. Creator timeouts block sends and edits; locked threads block new deliveries.
 - Members holding `ADMINISTRATOR` or `MANAGE_GUILD` are never filtered by their own space's rules.
-- Evaluation **fails open**: if a rule cannot be parsed, or evaluation errors, the message is delivered and the problem is logged. A broken filter must not take chat down.
+- Evaluation **fails closed**: invalid stored rules and evaluation errors are returned to the caller instead of permitting unfiltered content.
 - Regular expressions are compiled with Rust's `regex` crate (no backtracking, so no catastrophic-backtracking class of attack), with pattern length and compiled program size bounded. Patterns are validated at write time, not on the send path.
 - A rule is capped at 200 keywords, and a space at 50 rules.
 - Message-spam triggers count a member's messages **in the triggering channel**, not across the whole space.
@@ -27,9 +27,30 @@ This page documents support boundaries for the v2.0.0 release. Items here are no
   a 16-byte tag). Message size and timing are not padded.
 - **Space and channel attachments are unchanged** and remain readable by the server. They keep
   the existing plaintext upload path, including the filename and media type the sender chose.
-- Encrypted attachments are **not available in group direct messages** yet. Group-DM message
-  encryption itself is still awaiting its account-owned migration, so the composer refuses
-  attachments there with that reason rather than falling back to a plaintext upload.
+- **Group direct messages are end-to-end encrypted too**, under a sender-key scheme: each
+  member mints a symmetric key, wraps it once per peer under a pairwise X25519 secret derived
+  from the two identity keys, and seals every message under their own key. Text and attachments
+  both travel this way, so a group attachment is the same opaque ciphertext a 1:1 attachment is.
+  Three properties are worth stating because a naive sender-key design lacks them:
+  - **Every message is signed.** The sender key is held by every member, so its AEAD tag proves
+    only that *somebody in the group* wrote the message. Each message additionally carries an
+    Ed25519 signature over the channel, the authenticated header and the ciphertext, checked
+    against the sender's *pinned* identity key. The client also refuses a message whose signed
+    sender is not the account the server attributed it to.
+  - **The header is authenticated.** `sender_id`, the epoch and the membership fingerprint are
+    the AEAD's additional data, and a header carrying any field outside that set is refused
+    rather than passed along unauthenticated.
+  - **Keys rotate with membership.** The epoch turns over whenever the membership fingerprint
+    changes — somebody joining or leaving, or *any* member's identity key rotating — so the key
+    a departed member holds is never the key the next message uses. A recipient also refuses to
+    adopt a key minted for a roster naming somebody it can no longer see, and says so.
+- **What group encryption still trusts the server for**: the roster. There is no
+  server-authenticated membership epoch, so the member list is the one the account's own channel
+  view reports. A sender whose view has not yet caught up with a departure can mint one key
+  against the stale roster; the recipient-side check above is what catches it, and it is a check
+  on the recipient's view rather than on a signed fact.
+- A group conversation refuses to send while **any** member has not published an identity key,
+  and names who it is waiting on. There is no plaintext fallback.
 - A direct message that carries attachments **cannot be edited**. An edit replaces the whole
   encrypted body, and a delivered message's attachment keys cannot be recovered from the
   server, so the edit action is withheld rather than silently discarding them. Deleting the
@@ -77,6 +98,8 @@ This page documents support boundaries for the v2.0.0 release. Items here are no
 - Federation is disabled by default for new installs.
 - Treat federation as an explicit trust relationship. Enable it only after configuring trusted peers, signing keys, DNS/URL policy, and operational key rotation.
 - Federation media and feature parity are still evolving; validate every advertised cross-server flow in staging before enabling public federation.
+- File downloads require both the short-lived file token and a signed HTTP GET from the trusted peer to which it was issued. Updated senders can download from older receivers, but older senders must upgrade before downloading from an updated receiver. An unsigned fallback would restore the stolen-token vulnerability.
+- Federation QUIC handshake signatures bind the handshake role, protocol version and both peers to the TLS connection. Both media peers must run this handshake version; old unbound signatures are rejected. This does not change ordinary client voice/video packet formats.
 - A federation request is **addressed to the peer's `server_name`**, not to the hostname in
   its `federation_endpoint`, and the receiver refuses anything addressed to a name it does
   not answer to. Register a peer under the `server_name` that peer publishes at

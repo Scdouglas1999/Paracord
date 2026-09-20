@@ -25,7 +25,7 @@ import { extractApiError } from '../../api/client';
 import { ChannelType, MessageType, Permissions, hasPermission, type Channel, type ChannelOverwrite, type Member, type Message, type Role } from '../../types';
 import { guildApi } from '../../api/guilds';
 import { UserProfilePopup } from '../user/UserProfile';
-import { GROUP_DM_LIMITATION, isUnusableGroupDm } from '../../lib/messages/messagingReadiness';
+import { groupEnrollmentReason, isGroupDm, pendingGroupMembers } from '../../lib/messages/messagingReadiness';
 import { EmojiPicker } from '../ui/EmojiPicker';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
 import { usePermissions } from '../../hooks/usePermissions';
@@ -39,7 +39,7 @@ import { parseMarkdown } from '../../lib/markdown';
 import { useDownloadTicket } from '../../hooks/useDownloadTicket';
 import { getHighestRoleColor, getIdentityInk } from '../../lib/colors';
 import { formatFileSize, formatTimestamp, relativeTime, wallClock } from '../../lib/formatters';
-import { useLightboxStore, type LightboxImage } from '../../stores/lightboxStore';
+import { createResolvedLightboxImage, useLightboxStore } from '../../stores/lightboxStore';
 import { confirm } from '../../stores/confirmStore';
 import { parseCustomEmojiToken } from '../../lib/customEmoji';
 import { CustomEmojiImage, ResourceImage } from '../ui/ResourceImage';
@@ -251,6 +251,7 @@ function revokeLightboxBlobUrls(keepGeneration = Number.POSITIVE_INFINITY): void
 }
 
 function trackLightboxBlobUrl(generation: number, url: string): void {
+  if (generation !== lightboxBlobGeneration) { URL.revokeObjectURL(url); return; }
   const batch = lightboxBlobUrls.get(generation);
   if (batch) batch.push(url);
   else lightboxBlobUrls.set(generation, [url]);
@@ -790,9 +791,11 @@ function OwnedMessageList({
   const canAddReactions =
     !activeGuildId || isAdmin || hasPermission(permissions, Permissions.ADD_REACTIONS);
   const activeChannelType = activeChannel?.channel_type ?? activeChannel?.type;
-  // A group DM refuses every message it is offered (docs/known-limitations.md),
-  // so its empty state says so instead of inviting the one action that fails.
-  const emptyGroupDm = isUnusableGroupDm(activeChannelType);
+  // A group whose members have not all enrolled cannot seal a message to them,
+  // so its empty state names who it is waiting on instead of inviting the one
+  // action that would fail. A ready group is an ordinary empty conversation.
+  const groupPending = isGroupDm(activeChannelType) ? pendingGroupMembers(activeChannel?.recipients) : [];
+  const emptyGroupDm = groupPending.length > 0;
   /**
    * A thread is not a room, so it never "is dark" and nothing ever "lights up"
    * in it (§7.1). An empty one is a thread nobody has replied in yet, and that
@@ -1563,6 +1566,8 @@ function OwnedMessageList({
   useEffect(() => () => {
     if (jumpHighlightTimerRef.current) clearTimeout(jumpHighlightTimerRef.current);
     readStateWriteRef.current?.abort();
+    lightboxBlobGeneration++;
+    useLightboxStore.getState().close();
     revokeLightboxBlobUrls();
   }, []);
 
@@ -2901,11 +2906,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                           }
                           return {
                             attachment: imageAtt,
-                            image: {
-                              src: resolvedSrc,
-                              alt: imageAtt.filename,
-                              filename: imageAtt.filename,
-                            } satisfies LightboxImage,
+                            image: createResolvedLightboxImage(resolvedSrc, imageAtt.filename),
                           };
                         } catch {
                           return null;
@@ -2916,6 +2917,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                       (entry): entry is NonNullable<typeof entry> => entry !== null,
                     );
                     const lightboxImages = resolved.map(({ image }) => image);
+                    if (generation !== lightboxBlobGeneration) return;
                     if (lightboxImages.length === 0) return;
                     const imageIndex = resolved.findIndex(({ attachment }) => attachment.id === att.id);
                     useLightboxStore.getState().open(lightboxImages, imageIndex >= 0 ? imageIndex : 0);
@@ -3267,14 +3269,14 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
             <div>
               <h3 className="pc-display text-heading text-text-primary">
                 {emptyGroupDm
-                  ? 'Nothing can be said here yet'
+                  ? 'Waiting on everyone’s encryption'
                   : emptyThread
                   ? 'No replies yet'
                   : activeChannel?.name ? `${activeChannel.name} is dark` : 'Nobody has said anything here yet'}
               </h3>
               <p className="mt-1 max-w-md text-body text-text-body">
                 {emptyGroupDm
-                  ? GROUP_DM_LIMITATION
+                  ? groupEnrollmentReason(groupPending)
                   : emptyThread
                   ? 'Nobody has replied in this thread yet. Say the first thing.'
                   : activeChannel?.name

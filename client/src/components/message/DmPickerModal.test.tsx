@@ -101,24 +101,32 @@ describe('DmPickerModal', () => {
     expect(screen.getByText('No friends found')).toBeInTheDocument();
   });
 
-  it('says why a group cannot be created instead of creating a dead one', async () => {
+  it('creates a group from the selected friends', async () => {
     const user = userEvent.setup();
     mockRelationshipState.relationships = [friend('u1', 'Ada'), friend('u2', 'Grace')];
-    renderPicker();
+    const created = { id: 'gd-7', type: 3 };
+    mockChannelState.createGroupDm.mockImplementation(async (ids, name, scope) =>
+      ({ ...created, recipient_ids: ids, name, scope, key: JSON.stringify([scope.serverId, scope.userId, created.id]) }));
+    const { onCreated, onClose } = renderPicker();
 
     await user.click(screen.getByRole('tab', { name: 'Group' }));
     expect(screen.getByRole('tab', { name: 'Group' })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByText('Group conversations aren’t ready yet')).toBeInTheDocument();
-    expect(screen.getByText(/not encrypted yet/)).toBeInTheDocument();
+    // Selecting is not sending: the button stays refused until somebody is in
+    // the group, and the count says who will be.
+    expect(screen.getByRole('button', { name: 'Create group conversation' })).toBeDisabled();
 
-    // Nothing here can create a conversation the composer would refuse.
-    expect(screen.queryByRole('button', { name: 'Create group conversation' })).toBeNull();
-    expect(screen.queryByRole('button', { name: /Ada/i })).toBeNull();
-    expect(screen.queryByRole('searchbox', { name: 'Search friends' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: /Ada/i }));
+    await user.click(screen.getByRole('button', { name: /Grace/i }));
+    expect(screen.getByText('2 friends selected')).toBeInTheDocument();
+    expect(screen.getByText('3 total')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'Start a direct message instead' }));
-    expect(screen.getByRole('tab', { name: 'Direct' })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByRole('button', { name: /Ada/i })).toBeInTheDocument();
+    await user.type(screen.getByRole('textbox', { name: 'Group name' }), 'Three of us');
+    await user.click(screen.getByRole('button', { name: 'Create group conversation' }));
+
+    expect(mockChannelState.createGroupDm).toHaveBeenCalledWith(['u1', 'u2'], 'Three of us',
+      { serverId: '__local__', userId: 'me' });
+    expect(onCreated).toHaveBeenCalledWith(expect.objectContaining({ id: 'gd-7' }));
+    expect(onClose).toHaveBeenCalled();
   });
 
   it('creates a DM on selection, updates the store, fires onCreated and closes', async () => {

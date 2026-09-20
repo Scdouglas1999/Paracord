@@ -88,6 +88,72 @@ pub async fn create_attachment(
     Ok(row)
 }
 
+/// Reserve an upload's bytes and ID before writing storage. The guild row is
+/// locked before reading usage, so independent server processes cannot all
+/// admit uploads against the same remaining quota. Pending uploads count too.
+/// `None` means the quota is full; no attachment row has been inserted.
+#[allow(clippy::too_many_arguments)]
+pub async fn create_pending_attachment_with_quota(
+    pool: &DbPool,
+    id: i64,
+    filename: &str,
+    content_type: Option<&str>,
+    size: i32,
+    url: &str,
+    uploader_id: i64,
+    channel_id: i64,
+    expires_at: DateTime<Utc>,
+    content_hash: Option<&str>,
+    quota: Option<u64>,
+) -> Result<Option<AttachmentRow>, DbError> {
+    let mut tx = pool.begin().await?;
+    // A write is deliberately the first statement: SQLite must acquire its
+    // writer reservation before taking a read snapshot. PostgreSQL locks only
+    // this guild, and reads the committed usage after prior uploads finish.
+    let guild_id: Option<i64> = sqlx::query_scalar(
+        "UPDATE spaces SET id = id
+         WHERE id = (SELECT space_id FROM channels WHERE id = $1)
+         RETURNING id",
+    )
+    .bind(channel_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if let (Some(guild_id), Some(quota)) = (guild_id, quota) {
+        let used: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(a.size), 0) FROM attachments a
+             JOIN channels c ON c.id = a.upload_channel_id WHERE c.space_id = $1",
+        )
+        .bind(guild_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if size < 0 || (used.max(0) as u64).saturating_add(size as u64) > quota {
+            tx.rollback().await?;
+            return Ok(None);
+        }
+    }
+    let row = sqlx::query_as::<_, AttachmentRow>(
+        "INSERT INTO attachments (
+            id, message_id, filename, content_type, size, url, width, height,
+            uploader_id, upload_channel_id, upload_expires_at, content_hash
+         ) VALUES ($1, NULL, $2, $3, $4, $5, NULL, NULL, $6, $7, $8, $9)
+         RETURNING id, message_id, filename, content_type, size, url, width, height,
+            uploader_id, upload_channel_id, upload_created_at, upload_expires_at, content_hash",
+    )
+    .bind(id)
+    .bind(filename)
+    .bind(content_type)
+    .bind(size)
+    .bind(url)
+    .bind(uploader_id)
+    .bind(channel_id)
+    .bind(datetime_to_db_text(expires_at))
+    .bind(content_hash)
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Some(row))
+}
+
 pub async fn get_attachment(pool: &DbPool, id: i64) -> Result<Option<AttachmentRow>, DbError> {
     let row = sqlx::query_as::<_, AttachmentRow>(
         "SELECT

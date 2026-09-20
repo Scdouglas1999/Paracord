@@ -1305,7 +1305,7 @@ pub(crate) fn pending_frame_from_texture(
 
 fn rgbx_to_bgra(data: Vec<u8>) -> Vec<u8> {
     let mut out = data;
-    for px in out.chunks_exact_mut(4) {
+    for px in out.as_chunks_mut::<4>().0.iter_mut() {
         px.swap(0, 2);
         px[3] = 255;
     }
@@ -1314,7 +1314,7 @@ fn rgbx_to_bgra(data: Vec<u8>) -> Vec<u8> {
 
 fn xbgr_to_bgra(data: Vec<u8>) -> Vec<u8> {
     let mut out = data;
-    for px in out.chunks_exact_mut(4) {
+    for px in out.as_chunks_mut::<4>().0.iter_mut() {
         // x,B,G,R -> B,G,R,A
         px[0] = px[1];
         px[1] = px[2];
@@ -1327,7 +1327,7 @@ fn xbgr_to_bgra(data: Vec<u8>) -> Vec<u8> {
 
 fn rgb_to_bgra(data: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(data.len() / 3 * 4);
-    for px in data.chunks_exact(3) {
+    for px in data.as_chunks::<3>().0.iter() {
         out.extend_from_slice(&[px[2], px[1], px[0], 255]);
     }
     out

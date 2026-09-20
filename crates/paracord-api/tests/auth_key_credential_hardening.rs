@@ -695,6 +695,315 @@ async fn verify_requires_the_second_factor_when_the_account_has_mfa() -> anyhow:
     Ok(())
 }
 
+#[tokio::test]
+async fn pending_mfa_ticket_does_not_survive_password_replacement() -> anyhow::Result<()> {
+    let harness = Harness::new().await?;
+    let account = create_account(harness.db(), "mfapassword").await?;
+    enable_mfa_with_backup_code(harness.db(), account.id()).await?;
+    let (status, body) = harness
+        .send(json_request(
+            "POST",
+            "/api/v1/auth/login",
+            json!({
+                "email": account.user.email, "password": account.password,
+            }),
+            None,
+        ))
+        .await?;
+    assert_eq!(status, StatusCode::OK, "login: {body}");
+    let ticket = body["user"]["mfa_ticket"].as_str().expect("ticket");
+
+    // The first factor has been revoked while its second factor was pending.
+    paracord_db::users::update_user_password_hash(harness.db(), account.id(), "replacement-hash")
+        .await?;
+    let (status, body) = harness
+        .send(json_request(
+            "POST",
+            "/api/v1/auth/mfa/login",
+            json!({
+                "ticket": ticket, "code": BACKUP_CODE,
+            }),
+            None,
+        ))
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "stale primary must not mint a session: {body}"
+    );
+    assert_eq!(
+        paracord_db::mfa::get_unused_backup_codes(harness.db(), account.id())
+            .await?
+            .len(),
+        1,
+        "a stale ticket must be rejected before spending the current second factor"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn pending_mfa_ticket_does_not_survive_reenrollment() -> anyhow::Result<()> {
+    let harness = Harness::new().await?;
+    let account = create_account(harness.db(), "mfareenroll").await?;
+    enable_mfa_with_backup_code(harness.db(), account.id()).await?;
+    let (status, body) = harness
+        .send(json_request(
+            "POST",
+            "/api/v1/auth/login",
+            json!({
+                "email": account.user.email, "password": account.password,
+            }),
+            None,
+        ))
+        .await?;
+    assert_eq!(status, StatusCode::OK, "login: {body}");
+    let ticket = body["user"]["mfa_ticket"].as_str().expect("ticket");
+    paracord_db::mfa::disable_mfa(harness.db(), account.id()).await?;
+    enable_mfa_with_backup_code(harness.db(), account.id()).await?;
+    let (status, body) = harness
+        .send(json_request(
+            "POST",
+            "/api/v1/auth/mfa/login",
+            json!({
+                "ticket": ticket, "code": BACKUP_CODE,
+            }),
+            None,
+        ))
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "old ticket must not authorize a new setup: {body}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn concurrent_mfa_completions_issue_at_most_one_session() -> anyhow::Result<()> {
+    let harness = Harness::new().await?;
+    let account = create_account(harness.db(), "mfarace").await?;
+    enable_mfa_with_backup_code(harness.db(), account.id()).await?;
+    let other_code = "1111-2222-3333-4444";
+    paracord_db::mfa::store_backup_codes(
+        harness.db(),
+        account.id(),
+        &[
+            sha256_hex(&normalize(BACKUP_CODE)),
+            sha256_hex(&normalize(other_code)),
+        ],
+    )
+    .await?;
+    let (status, body) = harness
+        .send(json_request(
+            "POST",
+            "/api/v1/auth/login",
+            json!({
+                "email": account.user.email, "password": account.password,
+            }),
+            None,
+        ))
+        .await?;
+    assert_eq!(status, StatusCode::OK, "login: {body}");
+    let ticket = body["user"]["mfa_ticket"].as_str().expect("ticket");
+    let request = |code: &str| {
+        json_request(
+            "POST",
+            "/api/v1/auth/mfa/login",
+            json!({
+                "ticket": ticket, "code": code,
+            }),
+            None,
+        )
+    };
+    let (first, second) = tokio::join!(
+        harness.send(request(BACKUP_CODE)),
+        harness.send(request(other_code))
+    );
+    let statuses = [first?.0, second?.0];
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|status| **status == StatusCode::OK)
+            .count(),
+        1,
+        "{statuses:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn email_change_revokes_old_address_tokens_and_pending_delivery() -> anyhow::Result<()> {
+    let harness = Harness::new().await?;
+    let account = create_account(harness.db(), "emailrecovery").await?;
+    let token = session_token(harness.db(), &harness.test_app.jwt_secret, account.id()).await?;
+    let other_session =
+        session_token(harness.db(), &harness.test_app.jwt_secret, account.id()).await?;
+    let expires = chrono::Utc::now() + chrono::Duration::hours(1);
+    paracord_db::password_reset::create_reset_token(
+        harness.db(),
+        &sha256_hex("old-reset"),
+        account.id(),
+        expires,
+    )
+    .await?;
+    paracord_db::users::create_email_verification_token(
+        harness.db(),
+        account.id(),
+        &sha256_hex("old-verify"),
+        expires,
+    )
+    .await?;
+
+    let (status, body) = harness
+        .send(json_request(
+            "PUT",
+            "/api/v1/users/@me/email",
+            json!({
+                "current_password": account.password, "new_email": "new-recovery@example.com",
+            }),
+            Some(&token),
+        ))
+        .await?;
+    assert_eq!(status, StatusCode::NO_CONTENT, "email change: {body}");
+    assert_eq!(
+        harness
+            .send(get_request("/api/v1/users/@me", &token))
+            .await?
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        harness
+            .send(get_request("/api/v1/users/@me", &other_session))
+            .await?
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+
+    let (status, body) = harness
+        .send(json_request(
+            "POST",
+            "/api/v1/auth/reset-password",
+            json!({
+                "token": "old-reset", "new_password": "Attacker-Password-123!",
+            }),
+            None,
+        ))
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "former email reset must fail: {body}"
+    );
+    assert!(
+        !paracord_db::users::consume_email_verification_token(
+            harness.db(),
+            account.id(),
+            &sha256_hex("old-verify"),
+            chrono::Utc::now()
+        )
+        .await?
+    );
+    assert!(
+        !paracord_db::password_reset::create_reset_token_for_address(
+            harness.db(),
+            "queued-reset",
+            account.id(),
+            &account.user.email,
+            expires
+        )
+        .await?
+    );
+    assert!(
+        !paracord_db::users::create_email_verification_token_for_address(
+            harness.db(),
+            account.id(),
+            &account.user.email,
+            "queued-verify",
+            expires
+        )
+        .await?
+    );
+    assert!(
+        !paracord_db::users::get_user_by_id(harness.db(), account.id())
+            .await?
+            .unwrap()
+            .email_verified
+    );
+
+    // The replacement address can still request and redeem its verification.
+    assert!(
+        paracord_db::users::create_email_verification_token_for_address(
+            harness.db(),
+            account.id(),
+            "new-recovery@example.com",
+            "current-verify",
+            expires
+        )
+        .await?
+    );
+    assert!(
+        paracord_db::users::consume_email_verification_token(
+            harness.db(),
+            account.id(),
+            "current-verify",
+            chrono::Utc::now()
+        )
+        .await?
+    );
+    assert!(
+        !paracord_db::users::consume_email_verification_token(
+            harness.db(),
+            account.id(),
+            "current-verify",
+            chrono::Utc::now()
+        )
+        .await?
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn changing_password_invalidates_outstanding_recovery_links() -> anyhow::Result<()> {
+    let harness = Harness::new().await?;
+    let account = create_account(harness.db(), "oldrecovery").await?;
+    let token = session_token(harness.db(), &harness.test_app.jwt_secret, account.id()).await?;
+    paracord_db::password_reset::create_reset_token(
+        harness.db(),
+        &sha256_hex("prior-reset"),
+        account.id(),
+        chrono::Utc::now() + chrono::Duration::hours(1),
+    )
+    .await?;
+    let (status, body) = harness
+        .send(json_request(
+            "PUT",
+            "/api/v1/users/@me/password",
+            json!({
+                "current_password": account.password, "new_password": "Replacement-Password-123!",
+            }),
+            Some(&token),
+        ))
+        .await?;
+    assert_eq!(status, StatusCode::NO_CONTENT, "password change: {body}");
+    let (status, body) = harness
+        .send(json_request(
+            "POST",
+            "/api/v1/auth/reset-password",
+            json!({
+                "token": "prior-reset", "new_password": "Attacker-Password-123!",
+            }),
+            None,
+        ))
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "revoked recovery link must fail: {body}"
+    );
+    Ok(())
+}
+
 /// `require_email_verification` blocked `/auth/login` and not `/auth/verify`, so
 /// attaching a key was a way to skip it forever. Auto-registration of a brand-new
 /// key is deliberately still allowed: that account is created in this request

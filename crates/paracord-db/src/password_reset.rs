@@ -48,6 +48,36 @@ pub async fn create_reset_token(
     Ok(())
 }
 
+/// Issue recovery only for the address resolved by the request, serialized with
+/// credential changes. A queued email job must not resurrect a former address's
+/// reset token after the user has changed their recovery email.
+pub async fn create_reset_token_for_address(
+    pool: &DbPool,
+    token_hash: &str,
+    user_id: i64,
+    expected_email: &str,
+    expires_at: DateTime<Utc>,
+) -> Result<bool, DbError> {
+    let mut tx = pool.begin().await?;
+    if !crate::users::lock_email_token_account(&mut tx, user_id, expected_email).await? {
+        return Ok(false);
+    }
+    sqlx::query("DELETE FROM password_reset_tokens WHERE user_id = $1 AND used_at IS NULL")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "INSERT INTO password_reset_tokens (token_hash, user_id, expires_at) VALUES ($1, $2, $3)",
+    )
+    .bind(token_hash)
+    .bind(user_id)
+    .bind(expires_at.format("%Y-%m-%d %H:%M:%S").to_string())
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
 pub async fn get_valid_reset_token(
     pool: &DbPool,
     token_hash: &str,

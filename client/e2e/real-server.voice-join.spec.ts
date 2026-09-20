@@ -40,6 +40,9 @@ const BASE = `http://127.0.0.1:${PORT}`;
 test.setTimeout(180_000);
 
 function shotPath(name: string): string {
+  if (process.env.PARACORD_E2E_MEDIA_EVIDENCE) {
+    return resolve(process.env.PARACORD_E2E_MEDIA_EVIDENCE, 'browser-voice-join', name);
+  }
   // Playwright runs with `client/` as the working directory.
   return resolve(process.cwd(), '..', 'output', 'improvement-program', 'browser-voice-join', name);
 }
@@ -919,7 +922,7 @@ test('two browsers in one room see each other — one on camera, one sharing a s
   playwright,
 }) => {
   await withChromium(playwright, async (newParticipant) => {
-    const { host, guest, hostAccount, guestAccount, channelId } =
+    const { host, guest, hostAccount, channelId } =
       await twoInOneRoom(newParticipant);
 
     const pageErrors: string[] = [];
