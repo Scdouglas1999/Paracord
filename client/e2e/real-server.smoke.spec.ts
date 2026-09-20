@@ -169,6 +169,11 @@ test('real identity setup survives rejected credentials and reload, then adopts 
     await page.getByRole('button', { name: 'Open user settings', exact: true }).click();
     await page.getByRole('button', { name: 'Log out', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Welcome back' })).toBeVisible();
+    // A device that holds an identity is asked to unlock it after a sign-out,
+    // not to sign in. "Welcome back" heads both screens; the way on to another
+    // account is the password sign-in, which is where "Create one" lives.
+    const passwordInstead = page.getByRole('button', { name: 'Sign in with a password instead' });
+    if (await passwordInstead.isVisible()) await passwordInstead.click();
   }
   await logout();
   await page.getByRole('link', { name: 'Create one' }).click();
