@@ -540,6 +540,8 @@ pub async fn voice_enable_video(
     // "turn on my camera" came to freeze the whole app. `start_capture` calls
     // this again and finds the consent already fresh.
     if enabled {
+        // No camera, no question: the refusal comes before the prompt.
+        super::camera_capture::refuse_when_no_camera().await?;
         super::camera_capture::ensure_camera_consent(&app).await?;
     }
 

@@ -43,7 +43,14 @@ const THUMBNAIL_JPEG_QUALITY: u8 = 74;
 const SCREEN_CAPTURE_CONSENT_TTL: Duration = Duration::from_secs(120);
 /// Backstop for a capture backend that neither starts nor errors. A refused or
 /// unavailable display answers immediately and never reaches this.
-const SCREEN_START_TIMEOUT: Duration = Duration::from_secs(3);
+///
+/// It is a backstop, so it is generous. Startup is only signalled once the
+/// first frame has been ENCODED, which puts encoder initialisation inside this
+/// window: three NVENC AV1 simulcast layers took 3.4 s to come up on a machine
+/// where everything else was healthy, and at 3 s this cancelled a share that
+/// was 400 ms from working — and told the user to close a picker they had
+/// already closed.
+const SCREEN_START_TIMEOUT: Duration = Duration::from_secs(20);
 #[cfg(not(target_os = "linux"))]
 static SCREEN_CAPTURE_CONSENT_AT: LazyLock<Mutex<Option<Instant>>> =
     LazyLock::new(|| Mutex::new(None));
@@ -471,8 +478,7 @@ pub async fn start_capture(
             join_worker(worker).await;
             abandon_screen_publish(state).await;
             Err(format!(
-                "The screen did not start capturing within {}s. Close the screen picker and try \
-                 sharing again.",
+                "The screen did not start capturing within {}s. Try sharing again.",
                 SCREEN_START_TIMEOUT.as_secs()
             ))
         }

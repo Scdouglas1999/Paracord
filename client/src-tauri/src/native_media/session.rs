@@ -202,6 +202,13 @@ pub struct NativeMediaSession {
     pub video_layer_ssrcs: Vec<(u8, u32)>,
     #[cfg(feature = "vpx")]
     pub screen_layer_ssrcs: Vec<(u8, u32)>,
+    /// The packet sequence of each local video track, for the life of the
+    /// session — NOT of one share. A track's SSRC and key are the same every
+    /// time it is started within a call, and the nonce is a function of
+    /// `(ssrc, epoch, roc, sequence)`, so a restart that went back to 0 asked the
+    /// encryptor to reuse a nonce. It refuses (`SequenceReuse`), which is how a
+    /// second screen share in one call came to fail outright. Nothing resets
+    /// these; they wrap.
     pub video_seq: u16,
     pub screen_seq: u16,
     pub video_timestamp: u32,

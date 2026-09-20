@@ -1836,7 +1836,6 @@ pub fn start_camera_share(
         session.video_encoder_config = Some(config);
         session.video_encoder_codec = Some(codec);
         session.video_layer_ssrcs = build_track_layer_ssrcs(session.local_user_id, "video");
-        session.video_seq = 0;
         session.video_timestamp = 0;
         session.video_pts = 0;
         session.video_force_keyframe.store(true, Ordering::SeqCst);
@@ -1875,7 +1874,6 @@ pub fn stop_camera_share(session: &mut NativeMediaSession) {
         session.video_encoder_config = None;
         session.video_encoder_codec = None;
         session.video_layer_ssrcs.clear();
-        session.video_seq = 0;
         session.video_timestamp = 0;
         session.video_pts = 0;
         session.video_force_keyframe.store(true, Ordering::SeqCst);
@@ -2087,7 +2085,6 @@ pub fn start_screen_share(
         session.screen_encoder_config = Some(config);
         session.screen_encoder_codec = Some(codec);
         session.screen_layer_ssrcs = build_track_layer_ssrcs(session.local_user_id, "screen");
-        session.screen_seq = 0;
         session.screen_timestamp = 0;
         session.screen_pts = 0;
         session.screen_force_keyframe.store(true, Ordering::SeqCst);
@@ -2125,7 +2122,6 @@ pub fn stop_screen_share(session: &mut NativeMediaSession) {
         session.screen_encoder_config = None;
         session.screen_encoder_codec = None;
         session.screen_layer_ssrcs.clear();
-        session.screen_seq = 0;
         session.screen_timestamp = 0;
         session.screen_pts = 0;
         session.screen_force_keyframe.store(true, Ordering::SeqCst);
@@ -2423,7 +2419,6 @@ pub async fn begin_camera_frame(
         );
         session.video_simulcast = Some(encoder);
         session.video_encoder = None;
-        session.video_seq = 0;
         session.video_timestamp = 0;
         session.video_force_keyframe.store(true, Ordering::SeqCst);
         session.video_applied_bitrate_kbps = 0;
@@ -2999,7 +2994,6 @@ pub async fn begin_screen_frame(
         );
         session.screen_simulcast = Some(encoder);
         session.screen_encoder = None;
-        session.screen_seq = 0;
         session.screen_timestamp = 0;
         session.screen_force_keyframe.store(true, Ordering::SeqCst);
         session.screen_applied_bitrate_kbps = 0;

@@ -19,6 +19,8 @@ const CAMERA_CONSENT_TTL: Duration = Duration::from_secs(120);
 /// reaches this timeout — the wait exists only so a hung driver cannot hold the
 /// enable path open forever.
 const CAMERA_START_TIMEOUT: Duration = Duration::from_secs(5);
+/// What a machine with no camera is told, from whichever step finds out first.
+const NO_CAMERA_MESSAGE: &str = "No camera is connected to this computer.";
 static CAMERA_CONSENT_AT: LazyLock<Mutex<Option<Instant>>> = LazyLock::new(|| Mutex::new(None));
 
 fn camera_consent_is_fresh() -> bool {
@@ -191,7 +193,7 @@ pub(crate) fn describe_camera_open_error(raw: &str, device_count: usize) -> Stri
     eprintln!("[camera] open failed ({device_count} device(s) enumerated): {raw}");
     let lower = raw.to_ascii_lowercase();
     if device_count == 0 {
-        "No camera is connected to this computer.".to_string()
+        NO_CAMERA_MESSAGE.to_string()
     } else if lower.contains("no such file")
         || lower.contains("not found")
         || lower.contains("nosuchdevice")
@@ -288,6 +290,25 @@ fn camera_hw_group(id: &str) -> Option<String> {
 #[cfg(not(target_os = "linux"))]
 fn camera_hw_group(_id: &str) -> Option<String> {
     None
+}
+
+/// Refuse at once when there is no camera at all.
+///
+/// Runs BEFORE the consent prompt. Asking somebody to allow access to a camera
+/// that does not exist is a modal dialog about nothing, and on Linux that
+/// dialog holds the window until it is answered — with no camera connected,
+/// "turn on camera" read as the app hanging. Only a count leaves this function;
+/// the device list itself is still behind consent.
+pub async fn refuse_when_no_camera() -> Result<(), String> {
+    let count = tokio::task::spawn_blocking(|| list_devices().map(|devices| devices.len()))
+        .await
+        .map_err(|err| format!("camera enumeration failed: {err}"))?;
+    match count {
+        Ok(0) => Err(NO_CAMERA_MESSAGE.to_string()),
+        // A count, or an enumeration error: carry on. Opening the device is
+        // what reports a real failure, with the detail that belongs to it.
+        _ => Ok(()),
+    }
 }
 
 /// Enumerate available capture cameras (contract CAM1: `camera_list_devices`).
