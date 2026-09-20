@@ -22,9 +22,9 @@ export interface ClientConversationFeatures { encryptedAttachments: boolean; enc
 // `encryptedAttachments` is on because the client-side producer exists: files
 // for an encrypted conversation are encrypted per-file on this device and the
 // server only ever receives opaque ciphertext (see
-// `lib/messages/attachments/`). Group DMs are still refused, by the runtime
-// decision in `lib/messages/messagingReadiness.ts`, because their message
-// encryption itself has not been migrated yet.
+// `lib/messages/attachments/`). It covers group conversations as well as 1:1
+// ones — both seal attachments the same way, under the key the message itself
+// is sealed with.
 export const CLIENT_CONVERSATION_FEATURES: ClientConversationFeatures = { encryptedAttachments: true, encryptedScheduling: false };
 
 export function readConversationCapabilities(value: unknown, channelId: string, userId: string): ConversationCapabilities {
@@ -97,12 +97,12 @@ export function resolveConversationActions(
         decision = blocked('Encrypted message scheduling is not available in this client yet.', false);
       } else if (server.encrypted && ['send', 'attach', 'schedule'].includes(action)) {
         if (!platform.secureContext) decision = blocked('Open Paracord over HTTPS or in the desktop app to use encryption.');
-        else if (!server.own_identity_enrolled || encryption === 'setup') decision = blocked('Set up encryption before sending this direct message.');
+        else if (!server.own_identity_enrolled || encryption === 'setup') decision = blocked('Set up encryption before sending in this conversation.');
         // A device holding no identity, or a different one, cannot "unlock"
         // its way out: there is nothing here to unlock. Say what is true, and
         // the composer offers the one page that resolves both shapes of it.
         else if (encryption === 'identity_mismatch') decision = blocked('This device does not hold the encryption identity enrolled for this account.');
-        else if (encryption === 'unlock') decision = blocked('Unlock your encryption identity before sending this direct message.');
+        else if (encryption === 'unlock') decision = blocked('Unlock your encryption identity before sending in this conversation.');
         else if (!server.peers_ready) decision = blocked('The recipient needs to finish encryption setup before you can send a message.');
       }
       decision = applyPlatformLimits(action, decision, platform, blocked);

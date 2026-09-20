@@ -627,6 +627,24 @@ async fn load_message_json_batch(
     batch
 }
 
+/// The payload version a stored encrypted message should be reported as.
+///
+/// The version is not a column: the row keeps the header the sending device
+/// wrote, and the version is a property of that header. Guessing "2 whenever a
+/// header exists" was right while v2 was the only headered form, and began
+/// mislabelling group sender-key bodies as 1:1 Signal ones the moment v3
+/// existed. The header declares its own version, so it is read from there. A
+/// receiving device never trusts this number — its own signature covers the
+/// real one — but nothing downstream should be handed a wrong one either.
+fn e2ee_payload_version(header: Option<&str>) -> u8 {
+    let Some(header) = header else { return 1 };
+    serde_json::from_str::<serde_json::Value>(header)
+        .ok()
+        .and_then(|value| value.get("v").and_then(serde_json::Value::as_u64))
+        .filter(|version| (2..=3).contains(version))
+        .map_or(2, |version| version as u8)
+}
+
 /// Assemble a single message's JSON from the pre-loaded [`MessageJsonBatch`].
 /// This is a pure, in-memory transform and issues no queries. The output is
 /// byte-stable with the pre-batch implementation.
@@ -641,7 +659,7 @@ fn build_message_json(
             .as_ref()
             .zip(msg.content.as_ref())
             .map(|(nonce, ciphertext)| {
-                let version = if msg.e2ee_header.is_some() { 2 } else { 1 };
+                let version = e2ee_payload_version(msg.e2ee_header.as_deref());
                 let mut payload = json!({
                     "version": version,
                     "nonce": nonce,

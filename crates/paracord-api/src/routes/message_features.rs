@@ -587,10 +587,7 @@ pub fn membership_version(recipient_ids: &[i64]) -> String {
 }
 
 /// Refuse a publish that was minted against a membership that has since moved.
-fn require_current_membership(
-    declared: Option<&str>,
-    recipients: &[i64],
-) -> Result<(), ApiError> {
+fn require_current_membership(declared: Option<&str>, recipients: &[i64]) -> Result<(), ApiError> {
     let current = membership_version(recipients);
     match declared {
         Some(value) if value == current => Ok(()),

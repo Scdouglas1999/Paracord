@@ -182,7 +182,7 @@ describe('MessageInput', () => {
 
   it('offers account-bound encryption setup while retaining the composed draft', async () => {
     mockEncryption.encrypted = true; mockEncryption.encryption = 'setup';
-    mockActionOverrides.send = { supported: true, allowed: false, reason: 'Set up encryption before sending this direct message.' };
+    mockActionOverrides.send = { supported: true, allowed: false, reason: 'Set up encryption before sending in this conversation.' };
     render(<MemoryRouter><MessageInput channelId="ch1" channelName="Alice" /></MemoryRouter>);
     const input = screen.getByRole('textbox');
     await userEvent.type(input, 'Keep this private draft');
@@ -203,11 +203,11 @@ describe('MessageInput', () => {
     // reach the 1:1 rung and offer "Set up encryption" — an action that cannot
     // enrol somebody else, beside a timeline saying something different.
     mockEncryption.encrypted = true; mockEncryption.encryption = 'setup';
-    mockActionOverrides.send = { supported: true, allowed: false, reason: 'Set up encryption before sending this direct message.' };
+    mockActionOverrides.send = { supported: true, allowed: false, reason: 'Set up encryption before sending in this conversation.' };
     render(<MemoryRouter><MessageInput channelId="gd1" channelName="Three of us" /></MemoryRouter>);
     const blocker = await screen.findByText(groupEnrollmentReason(['ada']));
     expect(blocker).toBeInTheDocument();
-    expect(screen.queryByText(/Set up encryption before sending this direct message/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Set up encryption before sending in this conversation/)).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Set up encryption' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Check again' })).not.toBeInTheDocument();
   });
@@ -216,7 +216,7 @@ describe('MessageInput', () => {
     // The group's roster is complete, so the blocker is this person's identity,
     // not somebody else's — and /setup is exactly the page that resolves it.
     mockEncryption.encrypted = true; mockEncryption.encryption = 'setup';
-    mockActionOverrides.send = { supported: true, allowed: false, reason: 'Set up encryption before sending this direct message.' };
+    mockActionOverrides.send = { supported: true, allowed: false, reason: 'Set up encryption before sending in this conversation.' };
     render(<MemoryRouter><MessageInput channelId="gd2" channelName="All set" /></MemoryRouter>);
     expect(await screen.findByRole('link', { name: 'Set up encryption' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Check again' })).toBeInTheDocument();

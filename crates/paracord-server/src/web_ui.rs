@@ -53,12 +53,26 @@ mod tests {
             assert_eq!(response.headers()["x-content-type-options"], "nosniff");
             assert_eq!(response.text().await.unwrap(), "<html>Paracord</html>");
         }
-        for path in ["/api", "/api/v1/missing", "/_paracord/missing", "/gateway", "/health"] {
+        for path in [
+            "/api",
+            "/api/v1/missing",
+            "/_paracord/missing",
+            "/gateway",
+            "/health",
+        ] {
             let response = client.get(format!("{base}{path}")).send().await.unwrap();
             assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
             assert!(response.text().await.unwrap().is_empty());
         }
-        assert_eq!(client.post(format!("{base}/login")).send().await.unwrap().status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            client
+                .post(format!("{base}/login"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
         task.abort();
     }
 }

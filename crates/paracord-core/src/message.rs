@@ -28,10 +28,13 @@ impl DmE2eePayload {
                     ));
                 }
             }
-            2 => {
-                // v2: header is required and must be valid JSON
+            // v2 is the 1:1 Signal session; v3 is the group sender key. Both
+            // carry their routing in a JSON header the server never reads into:
+            // it checks only that the field is present, bounded and parseable,
+            // because everything it means is authenticated on the devices.
+            2 | 3 => {
                 let header = self.header.as_deref().ok_or_else(|| {
-                    CoreError::BadRequest("v2 DM E2EE payloads require a header".into())
+                    CoreError::BadRequest("v2 and v3 DM E2EE payloads require a header".into())
                 })?;
                 if header.is_empty() || header.len() > MAX_DM_E2EE_HEADER_LEN {
                     return Err(CoreError::BadRequest(
@@ -750,6 +753,50 @@ pub async fn prepare_message_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn payload(version: u8, header: Option<&str>) -> DmE2eePayload {
+        DmE2eePayload {
+            version,
+            nonce: "bm9uY2U=".into(),
+            ciphertext: "Y2lwaGVydGV4dA==".into(),
+            header: header.map(str::to_string),
+        }
+    }
+
+    /// The group sender-key payload is a third version, not a malformed second.
+    ///
+    /// Rejecting it here is invisible from the client's crypto tests — they only
+    /// ever see their own output — and shows up as a message that composes,
+    /// queues and is then refused by the instance.
+    #[test]
+    fn group_sender_key_payload_version_is_accepted() {
+        let header = r#"{"kind":"group_sender_key","v":3,"sender_id":"1","epoch":0,"members":"ab","sig":"c2ln"}"#;
+        payload(3, Some(header)).validate().unwrap();
+    }
+
+    #[test]
+    fn a_v3_payload_still_needs_a_parseable_header() {
+        assert!(matches!(
+            payload(3, None).validate(),
+            Err(CoreError::BadRequest(_))
+        ));
+        assert!(matches!(
+            payload(3, Some("not json")).validate(),
+            Err(CoreError::BadRequest(_))
+        ));
+    }
+
+    #[test]
+    fn unknown_payload_versions_are_still_refused() {
+        assert!(matches!(
+            payload(4, Some("{}")).validate(),
+            Err(CoreError::BadRequest(_))
+        ));
+        assert!(matches!(
+            payload(0, None).validate(),
+            Err(CoreError::BadRequest(_))
+        ));
+    }
 
     const GUILD_ID: i64 = 100;
     const OWNER_ID: i64 = 1;

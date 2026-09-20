@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { utf8ToBytes } from '@noble/hashes/utils.js';
 import {
-  adoptSenderKeyEnvelopes,
   buildSenderKeyEnvelopes,
+  commitSenderKeys,
   ensureLocalSenderKey,
   GroupE2eeError,
   markDistributed,
@@ -12,6 +12,7 @@ import {
   pendingDistribution,
   readReceivedSenderKey,
   sealGroupMessage,
+  verifySenderKeyEnvelopes,
   type GroupMember,
   type IncomingSenderKeyEnvelope,
   type LocalSenderKey,
@@ -39,7 +40,6 @@ function makeUser(id: string): TestUser {
  */
 function makeDevice(user: TestUser) {
   const records = new Map<string, unknown>();
-  const trust = new Map<string, unknown>();
   const { vault } = createIdentityTrustVault(records);
   return {
     user,
@@ -47,7 +47,9 @@ function makeDevice(user: TestUser) {
     vault: vault as AccountVault,
     activate() {
       resetIdentityTrust();
-      installIdentityTrustVault(trust, user.id);
+      // One vault per account, for peer trust *and* sender keys — which is what
+      // the runtime registers, and therefore one exclusive lock over both.
+      installIdentityTrustVault(records, user.id, vault as AccountVault);
     },
     transact<T>(run: (tx: VaultTransaction) => Promise<T>): Promise<T> {
       return vault.transact(run);
@@ -89,10 +91,16 @@ async function distribute(device: Device, server: ReturnType<typeof makeServer>,
 async function receive(device: Device, server: ReturnType<typeof makeServer>, channelId: string, members: GroupMember[], directory: TestUser[]) {
   device.activate();
   const keys = new Map(directory.map(user => [user.id, user.publicKey]));
-  return device.transact(tx => adoptSenderKeyEnvelopes(
-    tx, channelId, server.for(channelId, device.user.id), device.user.id, device.user.privateKey,
-    id => keys.get(id) ?? null, members,
-  ));
+  // Verification runs with no transaction open — the pins it asserts live in
+  // this same vault, behind the same exclusive lock.
+  const outcome = await verifySenderKeyEnvelopes(
+    channelId, server.for(channelId, device.user.id), device.user.id, device.user.privateKey,
+    (id: string) => keys.get(id) ?? null, members,
+  );
+  if (outcome.adopted.length > 0) {
+    await device.transact(async tx => { commitSenderKeys(tx, channelId, outcome.adopted); });
+  }
+  return outcome;
 }
 
 const channelId = '900000000000000001';
@@ -256,15 +264,35 @@ describe('group sender keys', () => {
       { ...forBob, recipient_id: carol.user.id },
       { ...forBob, epoch: 1 },
     ];
-    const { adopted, refused } = await receive(carol, server, channelId, members, directory)
-      .then(async () => {
-        carol.activate();
-        const keys = new Map(directory.map(user => [user.id, user.publicKey]));
-        return carol.transact(tx => adoptSenderKeyEnvelopes(tx, channelId, replays, carol.user.id, carol.user.privateKey,
-          id => keys.get(id) ?? null, members));
-      });
+    await receive(carol, server, channelId, members, directory);
+    carol.activate();
+    const keys = new Map(directory.map(user => [user.id, user.publicKey]));
+    const { adopted, refused } = await verifySenderKeyEnvelopes(channelId, replays, carol.user.id, carol.user.privateKey,
+      (id: string) => keys.get(id) ?? null, members);
     expect(adopted).toHaveLength(0);
     expect(refused).toHaveLength(2);
+  });
+
+  it('verifies sender keys without opening a vault transaction', async () => {
+    // The pin assertions inside verification open the identity-trust vault,
+    // which for a signed-in account is this same vault behind the same
+    // exclusive lock. Doing that from inside a transaction deadlocks: the
+    // conversation sticks on a spinner and the account's enrolment never
+    // finishes. It cost a live run to find, so it is pinned here.
+    await distribute(alice, server, channelId, members);
+    bob.activate();
+    const keys = new Map(directory.map(user => [user.id, user.publicKey]));
+    await expect(bob.transact(async () => verifySenderKeyEnvelopes(
+      channelId, server.for(channelId, bob.user.id), bob.user.id, bob.user.privateKey,
+      (id: string) => keys.get(id) ?? null, members,
+    ))).rejects.toThrow(/cannot nest/);
+
+    // Outside one, the same call is fine.
+    const outcome = await verifySenderKeyEnvelopes(
+      channelId, server.for(channelId, bob.user.id), bob.user.id, bob.user.privateKey,
+      (id: string) => keys.get(id) ?? null, members,
+    );
+    expect(outcome.adopted).toHaveLength(1);
   });
 
   it('refuses a membership that lists the same member twice', () => {

@@ -19,8 +19,25 @@ import { useServerListStore } from '../stores/serverListStore';
  */
 export function createIdentityTrustVault(records = new Map<string, unknown>()) {
   const address = (namespace: string, id: string) => JSON.stringify([namespace, id]);
+  // The real vault takes an exclusive `navigator.locks` lease for the account,
+  // so a transaction opened from inside another one waits on a lock its own
+  // caller holds and never returns. A mock that happily nests turns that
+  // deadlock into something only a live run can find, so it refuses instead.
+  let open = false;
   const vault = {
     async transact<T>(run: (transaction: VaultTransaction) => Promise<T>): Promise<T> {
+      if (open) {
+        throw new Error('Encrypted storage transactions cannot nest: the real vault holds an exclusive lock and this would deadlock.');
+      }
+      open = true;
+      try {
+        return await runTransaction(run);
+      } finally {
+        open = false;
+      }
+    },
+  };
+  async function runTransaction<T>(run: (transaction: VaultTransaction) => Promise<T>): Promise<T> {
       const staged = new Map<string, { namespace: string; id: string; value: unknown | null }>();
       const transaction: VaultTransaction = {
         async get<V>(namespace: string, id: string): Promise<V | null> {
@@ -54,17 +71,26 @@ export function createIdentityTrustVault(records = new Map<string, unknown>()) {
         else records.set(address(pending.namespace, pending.id), pending.value);
       }
       return result;
-    },
-  };
+  }
   return { vault: vault as unknown as AccountVault, records };
 }
 
-/** Register an open trust vault for the active account, as the runtime does. */
-export function installIdentityTrustVault(records?: Map<string, unknown>, userId = 'me') {
+/**
+ * Register an open trust vault for the active account, as the runtime does.
+ *
+ * `existing` supplies the account's *own* vault. The runtime registers exactly
+ * that object — `registerIdentityTrustVault(scope, session.vault)` — so trust
+ * reads and account records share one exclusive lock. A test that hands the
+ * trust store a second, independent vault cannot see a nested transaction for
+ * what it is in production: a deadlock.
+ */
+export function installIdentityTrustVault(records?: Map<string, unknown>, userId = 'me', existing?: AccountVault) {
   const scope: AccountScope = { serverId: LOCAL_SERVER_ID, userId };
   useServerListStore.setState({ activeServerId: LOCAL_SERVER_ID });
   useAuthStore.setState({ user: { id: scope.userId, username: userId } as User });
-  const { vault, records: backing } = createIdentityTrustVault(records);
+  const created = existing ? null : createIdentityTrustVault(records);
+  const vault = existing ?? created!.vault;
+  const backing = created?.records ?? records ?? new Map<string, unknown>();
   registerIdentityTrustVault(scope, vault);
   return {
     scope,

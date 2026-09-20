@@ -345,28 +345,37 @@ async function openSenderKeyEnvelope(
   };
 }
 
+export interface SenderKeyAdoption {
+  adopted: ReceivedSenderKey[];
+  refused: Array<{ senderId: string; epoch: number; reason: string }>;
+}
+
 /**
- * Take the sender keys this account can verify, and refuse the rest.
+ * Decide which of these sender keys this account will take, and why not for the
+ * rest. **Runs outside any vault transaction, and must.**
+ *
+ * The pin assertions below open the identity-trust vault, which for a signed-in
+ * account is the *same* `AccountVault` this module's records live in, and
+ * `AccountVault.transact` takes an exclusive `navigator.locks` lease. Verifying
+ * from inside a transaction therefore waits on a lock the caller is already
+ * holding, and deadlocks — silently, with the conversation stuck on a spinner
+ * and the account's enrolment never completing. Splitting verification from the
+ * write is what keeps that impossible rather than merely avoided.
  *
  * `currentMembers` is the roster this account can see. A key minted for a
  * *wider* roster than that — one naming somebody who has since left — is
  * refused, because adopting it would mean reading messages the departed member
  * can read too. A key minted for a narrower roster is history: it predates
  * whoever has joined since, and is adopted normally.
- *
- * Returns the ids of the envelopes that were adopted, and the reasons the
- * others were not, so a caller can report a stalled conversation instead of an
- * unexplained missing key.
  */
-export async function adoptSenderKeyEnvelopes(
-  tx: VaultTransaction,
+export async function verifySenderKeyEnvelopes(
   channelId: string,
   envelopes: readonly IncomingSenderKeyEnvelope[],
   myUserId: string,
   myPrivateKeyEd25519: Uint8Array,
   resolvePublicKey: (userId: string) => string | null,
   currentMembers: readonly GroupMember[],
-): Promise<{ adopted: ReceivedSenderKey[]; refused: Array<{ senderId: string; epoch: number; reason: string }> }> {
+): Promise<SenderKeyAdoption> {
   const known = new Set(currentMembers.map(member => member.id));
   const adopted: ReceivedSenderKey[] = [];
   const refused: Array<{ senderId: string; epoch: number; reason: string }> = [];
@@ -405,10 +414,20 @@ export async function adoptSenderKeyEnvelopes(
       });
       continue;
     }
-    tx.put(GROUP_RECEIVED_NAMESPACE, receivedId(channelId, opened.senderId, opened.epoch), opened);
     adopted.push(opened);
   }
   return { adopted, refused };
+}
+
+/** Commit verified sender keys. The caller owns the transaction. */
+export function commitSenderKeys(
+  tx: VaultTransaction,
+  channelId: string,
+  adopted: readonly ReceivedSenderKey[],
+): void {
+  for (const key of adopted) {
+    tx.put(GROUP_RECEIVED_NAMESPACE, receivedId(channelId, key.senderId, key.epoch), key);
+  }
 }
 
 // ---------------------------------------------------------------------------

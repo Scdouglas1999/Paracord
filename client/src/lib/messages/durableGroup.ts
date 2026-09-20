@@ -2,8 +2,8 @@ import type { PreparedDeliveryEdit } from './durableEdit';
 import type { Message, MessageE2eePayload, SendMessageRequest } from '../../types';
 import type { AccountVault, VaultTransaction } from '../crypto/accountVault';
 import {
-  adoptSenderKeyEnvelopes,
   buildSenderKeyEnvelopes,
+  commitSenderKeys,
   ensureLocalSenderKey,
   GroupE2eeError,
   markDistributed,
@@ -13,6 +13,7 @@ import {
   readLocalSenderKey,
   readReceivedSenderKey,
   sealGroupMessage,
+  verifySenderKeyEnvelopes,
   type GroupMember,
   type IncomingSenderKeyEnvelope,
 } from '../crypto/groupSenderKeys';
@@ -133,8 +134,12 @@ export function createDurableGroup(
     const { data } = await api.getGroupSenderKeys(channelId);
     const envelopes = (data?.sender_keys ?? []).filter(record => record.recipient_id === myUserId);
     if (envelopes.length === 0) return { adopted: [], refused: [] };
-    const outcome = await vault.transact(tx =>
-      adoptSenderKeyEnvelopes(tx, channelId, envelopes, myUserId, privateKey, resolvePublicKey, members));
+    // Verification first, with no transaction open: it asserts identity pins,
+    // and those live in this same vault behind the same exclusive lock.
+    const outcome = await verifySenderKeyEnvelopes(channelId, envelopes, myUserId, privateKey, resolvePublicKey, members);
+    if (outcome.adopted.length > 0) {
+      await vault.transact(async tx => { commitSenderKeys(tx, channelId, outcome.adopted); });
+    }
     for (const key of outcome.adopted) {
       // Acknowledged keys stop being served as pending, but stay readable by
       // explicit epoch so a reinstalled device can still fetch them.
