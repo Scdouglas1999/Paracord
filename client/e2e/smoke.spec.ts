@@ -16,6 +16,11 @@ const GUILD_NAME =
 const literal = (value: string) => new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
 
 test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo) => {
+  // This one test walks the whole product, and it reloads the channel once per
+  // theme. Seven themes instead of four took it past the suite's 45 s budget on
+  // a CI runner (it is ~33 s locally), which showed up as a composer that never
+  // appeared. The budget is this test's, not the suite's.
+  test.setTimeout(120_000);
   const guildId = '1001';
   const textChannelId = '2001';
   const voiceChannelId = '2002';

@@ -889,11 +889,17 @@ unsafe extern "C" fn compression_output_callback(
         match result {
             Ok(Ok(Some(frame))) => guard.frames.push(frame),
             Ok(Ok(None)) => {}
-            Ok(Err(msg)) => guard.error.get_or_insert(msg),
-            Err(_) => guard
-                .error
-                .get_or_insert_with(|| "encode callback panicked".into()),
-        };
+            // The first error is the one that is kept; `get_or_insert` hands
+            // back a reference this match has no use for.
+            Ok(Err(msg)) => {
+                guard.error.get_or_insert(msg);
+            }
+            Err(_) => {
+                guard
+                    .error
+                    .get_or_insert_with(|| "encode callback panicked".into());
+            }
+        }
     }
 }
 
