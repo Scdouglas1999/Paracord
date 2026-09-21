@@ -22,7 +22,7 @@
 </p>
 
 <p align="center">
-  Current release: <strong>v3.1.0</strong> — <a href="RELEASE_NOTES.md">what changed</a>
+  Current release: <strong>v3.1.1</strong> — <a href="RELEASE_NOTES.md">what changed</a>
 </p>
 
 ---

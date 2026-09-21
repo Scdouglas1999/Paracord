@@ -1,3 +1,19 @@
+# Paracord 3.1.1
+
+A small follow-up to 3.1.0. These were all found while taking the new screenshots for the README, by using the app the way a newcomer would.
+
+- On a phone, the message box's hint text was cut off mid-phrase ("Say something to the 1"). It now uses a shorter hint that fits.
+- In Paper & ink, the mention count in the sidebar was a dark red number on the blue sidebar and nearly impossible to read. The sidebar now has its own readable colours for counts and warnings.
+- A channel's "last message" line on a server's front page showed a number like `<@3604144…>` when the message started with an @mention. It shows the person's name now. The same fix applies to Home's conversation previews and to desktop notifications.
+- Replying to a message that starts with a code block showed the raw ``` markers in the little quote above your reply. It shows the code itself now.
+- A new server was created with a text channel called "general" and a voice channel called "General", which looked like a mistake sitting next to each other. The voice channel is now called "Lounge". Existing servers aren't touched, and you can rename it like any other channel.
+
+Compare: [v3.1.0...v3.1.1](https://github.com/Scdouglas1999/Paracord/compare/v3.1.0...v3.1.1)
+
+Nothing else changed, so the [3.1.0 notes](#paracord-310) below still describe this release. Upgrade the same way: run the install command again, or download the new installers.
+
+---
+
 # Paracord 3.1.0
 
 3.0.0 was built and tested but never made public, so for most people this is the first release since 2.0. Everything in the 3.0.0 notes further down is new to you too. This section covers what changed after 3.0.0.
