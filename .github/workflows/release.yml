@@ -298,17 +298,10 @@ jobs:
       - name: Build server binary
         run: cargo build --release --target ${{ matrix.target }} --bin paracord-server
 
-      - name: Download LiveKit (macOS)
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="${LIVEKIT_VERSION}"
-          version_num="${version#v}"
-          url="https://github.com/livekit/livekit/releases/download/${version}/livekit_${version_num}_${{ matrix.livekit }}.tar.gz"
-          curl -fsSL "$url" -o livekit.tar.gz
-          mkdir -p livekit-extracted
-          tar -xzf livekit.tar.gz -C livekit-extracted
-
+      # No LiveKit here, on purpose: LiveKit publishes no macOS binary (the step
+      # that fetched one could only ever 404), and voice and video run on
+      # Paracord's own media engine. The installer already treats the companion
+      # as optional.
       - name: Package server artifact (macOS)
         shell: bash
         run: |
@@ -316,10 +309,9 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           mkdir -p dist
           cp "target/${{ matrix.target }}/release/paracord-server" dist/
-          cp livekit-extracted/livekit-server dist/
-          chmod +x dist/paracord-server dist/livekit-server
+          chmod +x dist/paracord-server
           tar -czf "dist/paracord-server-macos-${{ matrix.arch }}-${version}.tar.gz" \
-            -C dist paracord-server livekit-server
+            -C dist paracord-server
 
       - name: Upload server artifact (macOS)
         uses: actions/upload-artifact@v4
@@ -396,7 +388,19 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npx tauri build --target ${{ matrix.target }} --bundles app,dmg
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A secret that is not configured arrives as an EMPTY variable, not an
+          # absent one, and Tauri takes a present APPLE_CERTIFICATE as an
+          # instruction to sign — then fails importing nothing into the keychain.
+          # Unset what is empty, so "not configured" builds unsigned as intended.
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY \
+                      APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID \
+                      TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD; do
+            if [ -z "${!name:-}" ]; then unset "$name"; fi
+          done
+          npx tauri build --target ${{ matrix.target }} --bundles app,dmg
 
       - name: Upload client macOS bundles
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
