@@ -21,6 +21,7 @@ import { MessagingQueuePanel } from './MessagingQueuePanel';
 import { MessagingRecoveryNotice } from './MessagingRecoveryNotice';
 import { useMemberStore } from '../../stores/memberStore';
 import { useFileUpload } from '../../hooks/useFileUpload';
+import { useMobile } from '../../hooks/useMobile';
 import { useTyping } from '../../hooks/useTyping';
 import { MAX_MESSAGE_LENGTH, SCHEDULED_MESSAGE_MIN_LEAD_MS } from '../../lib/constants';
 import { channelApi } from '../../api/channels';
@@ -136,7 +137,18 @@ export function composerPlaceholder(
   readingOthers: number,
   name?: string | null,
   kind: 'room' | 'person' = 'room',
+  compact = false,
 ): string {
+  // A phone's composer is about 230px of text. The full invitation needs nearly
+  // 300, and a placeholder cannot wrap, so it arrived cut off mid-phrase — "Say
+  // something to the 1". The short form still names who is there; a channel's
+  // name is dropped because there is no telling how long one is.
+  if (compact) {
+    if (readingOthers > 0) {
+      return readingOthers === 1 ? 'Say something to 1 person' : `Say something to ${readingOthers} people`;
+    }
+    return 'Say something';
+  }
   if (readingOthers > 0) {
     return readingOthers === 1
       ? 'Say something to the 1 person reading'
@@ -431,6 +443,8 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
   // reading" has to mean nobody *else*, or the fallback copy never appears.
   const readers = useConversationReaders(guildId, channelId, scope);
   const self = useSelfUser();
+  // Narrow enough that the full invitation cannot fit on one line.
+  const phoneWidth = useMobile(520);
   const readingOthers = useMemo(
     () => readers.filter((person) => person.userId !== self?.id).length,
     [readers, self?.id],
@@ -1619,7 +1633,7 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
                       // it arrived ellipsised mid-word — "Say something to the
                       // roor" on the Stage, "Say something in Bra" in a thread.
                       'Say something'
-                    : composerPlaceholder(readingOthers, channelName, conversationKind)
+                    : composerPlaceholder(readingOthers, channelName, conversationKind, phoneWidth)
           }
           rows={1}
           maxLength={MAX_MESSAGE_LENGTH}

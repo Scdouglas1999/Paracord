@@ -245,6 +245,16 @@ describe('the composer invites people, not a channel (§6.9, §7.4)', () => {
     expect(composerPlaceholder(1, 'build-log')).toBe('Say something to the 1 person reading');
   });
 
+  it('has a short form that fits a phone, and still names who is there', () => {
+    expect(composerPlaceholder(5, 'build-log', 'room', true)).toBe('Say something to 5 people');
+    expect(composerPlaceholder(1, 'build-log', 'room', true)).toBe('Say something to 1 person');
+    // A channel name can be any length, so the short form does not carry one.
+    expect(composerPlaceholder(0, 'a-very-long-channel-name-indeed', 'room', true)).toBe('Say something');
+    for (const n of [0, 1, 5, 42]) {
+      expect(composerPlaceholder(n, 'build-log', 'room', true).length).toBeLessThanOrEqual(26);
+    }
+  });
+
   it('falls back to the room when nobody else is here', () => {
     expect(composerPlaceholder(0, 'build-log')).toBe('Say something in build-log');
   });

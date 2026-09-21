@@ -430,7 +430,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   for (const width of responsiveWidths) {
     await page.setViewportSize({ width, height: 900 });
     await expect(page.getByRole('main')).toBeVisible();
-    await expect(page.getByPlaceholder(/Say something (in qa-general-channel|to the)/)).toBeVisible();
+    await expect(page.getByPlaceholder(/Say something( in qa-general-channel| to |$)/)).toBeVisible();
     await expect
       .poll(async () =>
         page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
@@ -446,7 +446,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   for (const viewport of desktopViewports) {
     await page.setViewportSize(viewport);
     await expect(page.getByRole('main')).toBeVisible();
-    await expect(page.getByPlaceholder(/Say something (in qa-general-channel|to the)/)).toBeVisible();
+    await expect(page.getByPlaceholder(/Say something( in qa-general-channel| to |$)/)).toBeVisible();
     await expect
       .poll(async () =>
         page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
@@ -606,7 +606,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   showDmFixtures = false;
   await page.goto(`/app/guilds/${guildId}/channels/${textChannelId}`);
 
-  const composer = page.getByPlaceholder(/Say something (in qa-general-channel|to the)/);
+  const composer = page.getByPlaceholder(/Say something( in qa-general-channel| to |$)/);
   for (const width of [320, 390, 768]) {
     await page.setViewportSize({ width, height: 800 });
     await expect(composer).toBeVisible();
