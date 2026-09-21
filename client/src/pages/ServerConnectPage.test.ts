@@ -116,7 +116,7 @@ describe('the connect wizard explains a CORS refusal', () => {
       new Error('Not a Paracord instance'),
       'http://127.0.0.1:18244',
     );
-    expect(message).toContain('does not identify as a Paracord instance');
+    expect(message).toContain('it is not a Paracord server');
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 });

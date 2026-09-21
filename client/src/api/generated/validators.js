@@ -2793,6 +2793,135 @@ function validate37(data, { instancePath = "", parentData, parentDataProperty, r
           } else {
             var valid0 = true;
           }
+          if (valid0) {
+            if (data.join_gate !== void 0) {
+              let data6 = data.join_gate;
+              const _errs18 = errors;
+              const _errs19 = errors;
+              let valid4 = false;
+              const _errs20 = errors;
+              const _errs21 = errors;
+              if (errors === _errs21) {
+                if (data6 && typeof data6 == "object" && !Array.isArray(data6)) {
+                  let missing2;
+                  if (data6.require_ack === void 0 && (missing2 = "require_ack") || data6.questions === void 0 && (missing2 = "questions")) {
+                    const err10 = { instancePath: instancePath + "/join_gate", schemaPath: "#/$defs/InviteJoinGate/required", keyword: "required", params: { missingProperty: missing2 }, message: "must have required property '" + missing2 + "'" };
+                    if (vErrors === null) {
+                      vErrors = [err10];
+                    } else {
+                      vErrors.push(err10);
+                    }
+                    errors++;
+                  } else {
+                    if (data6.questions !== void 0) {
+                      let data7 = data6.questions;
+                      const _errs23 = errors;
+                      if (errors === _errs23) {
+                        if (Array.isArray(data7)) {
+                          var valid7 = true;
+                          const len0 = data7.length;
+                          for (let i0 = 0; i0 < len0; i0++) {
+                            const _errs25 = errors;
+                            if (typeof data7[i0] !== "string") {
+                              const err11 = { instancePath: instancePath + "/join_gate/questions/" + i0, schemaPath: "#/$defs/InviteJoinGate/properties/questions/items/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                              if (vErrors === null) {
+                                vErrors = [err11];
+                              } else {
+                                vErrors.push(err11);
+                              }
+                              errors++;
+                            }
+                            var valid7 = _errs25 === errors;
+                            if (!valid7) {
+                              break;
+                            }
+                          }
+                        } else {
+                          const err12 = { instancePath: instancePath + "/join_gate/questions", schemaPath: "#/$defs/InviteJoinGate/properties/questions/type", keyword: "type", params: { type: "array" }, message: "must be array" };
+                          if (vErrors === null) {
+                            vErrors = [err12];
+                          } else {
+                            vErrors.push(err12);
+                          }
+                          errors++;
+                        }
+                      }
+                      var valid6 = _errs23 === errors;
+                    } else {
+                      var valid6 = true;
+                    }
+                    if (valid6) {
+                      if (data6.require_ack !== void 0) {
+                        const _errs27 = errors;
+                        if (typeof data6.require_ack !== "boolean") {
+                          const err13 = { instancePath: instancePath + "/join_gate/require_ack", schemaPath: "#/$defs/InviteJoinGate/properties/require_ack/type", keyword: "type", params: { type: "boolean" }, message: "must be boolean" };
+                          if (vErrors === null) {
+                            vErrors = [err13];
+                          } else {
+                            vErrors.push(err13);
+                          }
+                          errors++;
+                        }
+                        var valid6 = _errs27 === errors;
+                      } else {
+                        var valid6 = true;
+                      }
+                    }
+                  }
+                } else {
+                  const err14 = { instancePath: instancePath + "/join_gate", schemaPath: "#/$defs/InviteJoinGate/type", keyword: "type", params: { type: "object" }, message: "must be object" };
+                  if (vErrors === null) {
+                    vErrors = [err14];
+                  } else {
+                    vErrors.push(err14);
+                  }
+                  errors++;
+                }
+              }
+              var _valid1 = _errs20 === errors;
+              valid4 = valid4 || _valid1;
+              if (_valid1) {
+                var props1 = {};
+                props1.questions = true;
+                props1.require_ack = true;
+              }
+              const _errs29 = errors;
+              if (data6 !== null) {
+                const err15 = { instancePath: instancePath + "/join_gate", schemaPath: "#/properties/join_gate/anyOf/1/type", keyword: "type", params: { type: "null" }, message: "must be null" };
+                if (vErrors === null) {
+                  vErrors = [err15];
+                } else {
+                  vErrors.push(err15);
+                }
+                errors++;
+              }
+              var _valid1 = _errs29 === errors;
+              valid4 = valid4 || _valid1;
+              if (!valid4) {
+                const err16 = { instancePath: instancePath + "/join_gate", schemaPath: "#/properties/join_gate/anyOf", keyword: "anyOf", params: {}, message: "must match a schema in anyOf" };
+                if (vErrors === null) {
+                  vErrors = [err16];
+                } else {
+                  vErrors.push(err16);
+                }
+                errors++;
+                validate37.errors = vErrors;
+                return false;
+              } else {
+                errors = _errs19;
+                if (vErrors !== null) {
+                  if (_errs19) {
+                    vErrors.length = _errs19;
+                  } else {
+                    vErrors = null;
+                  }
+                }
+              }
+              var valid0 = _errs18 === errors;
+            } else {
+              var valid0 = true;
+            }
+          }
         }
       }
     } else {
@@ -2803,7 +2932,7 @@ function validate37(data, { instancePath = "", parentData, parentDataProperty, r
   validate37.errors = vErrors;
   return errors === 0;
 }
-validate37.evaluated = { "props": { "code": true, "guild": true }, "dynamicProps": false, "dynamicItems": false };
+validate37.evaluated = { "props": { "code": true, "guild": true, "join_gate": true }, "dynamicProps": false, "dynamicItems": false };
 var isOwnershipTransferResponse = validate38;
 function validate38(data, { instancePath = "", parentData, parentDataProperty, rootData = data, dynamicAnchors = {} } = {}) {
   ;
@@ -2856,9 +2985,9 @@ function validate38(data, { instancePath = "", parentData, parentDataProperty, r
 }
 validate38.evaluated = { "props": { "id": true, "owner_id": true }, "dynamicProps": false, "dynamicItems": false };
 var isPublicUserProfile = validate39;
-var schema64 = { "description": "A friend shared by the viewer and the profile subject.", "properties": { "avatar_hash": { "type": ["string", "null"] }, "discriminator": { "format": "int32", "type": "integer" }, "id": { "type": "string" }, "username": { "type": "string" } }, "required": ["id", "username", "discriminator", "avatar_hash"], "type": "object" };
-var schema65 = { "description": "A guild shared by the viewer and the profile subject. `icon_url` is the\npersisted icon hash; the wire name predates the `icon_hash` convention.", "properties": { "icon_url": { "type": ["string", "null"] }, "id": { "type": "string" }, "name": { "type": "string" } }, "required": ["id", "name", "icon_url"], "type": "object" };
-var schema67 = { "description": "The user object embedded in the public profile response.", "properties": { "avatar_hash": { "type": ["string", "null"] }, "banner_hash": { "type": ["string", "null"] }, "bio": { "type": ["string", "null"] }, "bot": { "type": "boolean" }, "created_at": { "type": "string" }, "discriminator": { "format": "int32", "type": "integer" }, "display_name": { "type": ["string", "null"] }, "flags": { "format": "int32", "type": "integer" }, "id": { "type": "string" }, "linked_accounts": { "items": { "$ref": "#/$defs/LinkedAccount" }, "type": "array" }, "pronouns": { "type": ["string", "null"] }, "system": { "type": "boolean" }, "username": { "type": "string" } }, "required": ["id", "username", "discriminator", "display_name", "avatar_hash", "banner_hash", "bio", "flags", "bot", "system", "created_at", "pronouns", "linked_accounts"], "type": "object" };
+var schema65 = { "description": "A friend shared by the viewer and the profile subject.", "properties": { "avatar_hash": { "type": ["string", "null"] }, "discriminator": { "format": "int32", "type": "integer" }, "id": { "type": "string" }, "username": { "type": "string" } }, "required": ["id", "username", "discriminator", "avatar_hash"], "type": "object" };
+var schema66 = { "description": "A guild shared by the viewer and the profile subject. `icon_url` is the\npersisted icon hash; the wire name predates the `icon_hash` convention.", "properties": { "icon_url": { "type": ["string", "null"] }, "id": { "type": "string" }, "name": { "type": "string" } }, "required": ["id", "name", "icon_url"], "type": "object" };
+var schema68 = { "description": "The user object embedded in the public profile response.", "properties": { "avatar_hash": { "type": ["string", "null"] }, "banner_hash": { "type": ["string", "null"] }, "bio": { "type": ["string", "null"] }, "bot": { "type": "boolean" }, "created_at": { "type": "string" }, "discriminator": { "format": "int32", "type": "integer" }, "display_name": { "type": ["string", "null"] }, "flags": { "format": "int32", "type": "integer" }, "id": { "type": "string" }, "linked_accounts": { "items": { "$ref": "#/$defs/LinkedAccount" }, "type": "array" }, "pronouns": { "type": ["string", "null"] }, "system": { "type": "boolean" }, "username": { "type": "string" } }, "required": ["id", "username", "discriminator", "display_name", "avatar_hash", "banner_hash", "bio", "flags", "bot", "system", "created_at", "pronouns", "linked_accounts"], "type": "object" };
 function validate40(data, { instancePath = "", parentData, parentDataProperty, rootData = data, dynamicAnchors = {} } = {}) {
   let vErrors = null;
   let errors = 0;
@@ -2880,7 +3009,7 @@ function validate40(data, { instancePath = "", parentData, parentDataProperty, r
           let data0 = data.avatar_hash;
           const _errs1 = errors;
           if (typeof data0 !== "string" && data0 !== null) {
-            validate40.errors = [{ instancePath: instancePath + "/avatar_hash", schemaPath: "#/properties/avatar_hash/type", keyword: "type", params: { type: schema67.properties.avatar_hash.type }, message: "must be string,null" }];
+            validate40.errors = [{ instancePath: instancePath + "/avatar_hash", schemaPath: "#/properties/avatar_hash/type", keyword: "type", params: { type: schema68.properties.avatar_hash.type }, message: "must be string,null" }];
             return false;
           }
           var valid0 = _errs1 === errors;
@@ -2892,7 +3021,7 @@ function validate40(data, { instancePath = "", parentData, parentDataProperty, r
             let data1 = data.banner_hash;
             const _errs3 = errors;
             if (typeof data1 !== "string" && data1 !== null) {
-              validate40.errors = [{ instancePath: instancePath + "/banner_hash", schemaPath: "#/properties/banner_hash/type", keyword: "type", params: { type: schema67.properties.banner_hash.type }, message: "must be string,null" }];
+              validate40.errors = [{ instancePath: instancePath + "/banner_hash", schemaPath: "#/properties/banner_hash/type", keyword: "type", params: { type: schema68.properties.banner_hash.type }, message: "must be string,null" }];
               return false;
             }
             var valid0 = _errs3 === errors;
@@ -2904,7 +3033,7 @@ function validate40(data, { instancePath = "", parentData, parentDataProperty, r
               let data2 = data.bio;
               const _errs5 = errors;
               if (typeof data2 !== "string" && data2 !== null) {
-                validate40.errors = [{ instancePath: instancePath + "/bio", schemaPath: "#/properties/bio/type", keyword: "type", params: { type: schema67.properties.bio.type }, message: "must be string,null" }];
+                validate40.errors = [{ instancePath: instancePath + "/bio", schemaPath: "#/properties/bio/type", keyword: "type", params: { type: schema68.properties.bio.type }, message: "must be string,null" }];
                 return false;
               }
               var valid0 = _errs5 === errors;
@@ -2950,7 +3079,7 @@ function validate40(data, { instancePath = "", parentData, parentDataProperty, r
                       let data6 = data.display_name;
                       const _errs13 = errors;
                       if (typeof data6 !== "string" && data6 !== null) {
-                        validate40.errors = [{ instancePath: instancePath + "/display_name", schemaPath: "#/properties/display_name/type", keyword: "type", params: { type: schema67.properties.display_name.type }, message: "must be string,null" }];
+                        validate40.errors = [{ instancePath: instancePath + "/display_name", schemaPath: "#/properties/display_name/type", keyword: "type", params: { type: schema68.properties.display_name.type }, message: "must be string,null" }];
                         return false;
                       }
                       var valid0 = _errs13 === errors;
@@ -3046,7 +3175,7 @@ function validate40(data, { instancePath = "", parentData, parentDataProperty, r
                               let data13 = data.pronouns;
                               const _errs28 = errors;
                               if (typeof data13 !== "string" && data13 !== null) {
-                                validate40.errors = [{ instancePath: instancePath + "/pronouns", schemaPath: "#/properties/pronouns/type", keyword: "type", params: { type: schema67.properties.pronouns.type }, message: "must be string,null" }];
+                                validate40.errors = [{ instancePath: instancePath + "/pronouns", schemaPath: "#/properties/pronouns/type", keyword: "type", params: { type: schema68.properties.pronouns.type }, message: "must be string,null" }];
                                 return false;
                               }
                               var valid0 = _errs28 === errors;
@@ -3148,7 +3277,7 @@ function validate39(data, { instancePath = "", parentData, parentDataProperty, r
                           let data3 = data2.avatar_hash;
                           const _errs8 = errors;
                           if (typeof data3 !== "string" && data3 !== null) {
-                            validate39.errors = [{ instancePath: instancePath + "/mutual_friends/" + i0 + "/avatar_hash", schemaPath: "#/$defs/MutualFriend/properties/avatar_hash/type", keyword: "type", params: { type: schema64.properties.avatar_hash.type }, message: "must be string,null" }];
+                            validate39.errors = [{ instancePath: instancePath + "/mutual_friends/" + i0 + "/avatar_hash", schemaPath: "#/$defs/MutualFriend/properties/avatar_hash/type", keyword: "type", params: { type: schema65.properties.avatar_hash.type }, message: "must be string,null" }];
                             return false;
                           }
                           var valid3 = _errs8 === errors;
@@ -3235,7 +3364,7 @@ function validate39(data, { instancePath = "", parentData, parentDataProperty, r
                             let data9 = data8.icon_url;
                             const _errs21 = errors;
                             if (typeof data9 !== "string" && data9 !== null) {
-                              validate39.errors = [{ instancePath: instancePath + "/mutual_guilds/" + i1 + "/icon_url", schemaPath: "#/$defs/MutualGuild/properties/icon_url/type", keyword: "type", params: { type: schema65.properties.icon_url.type }, message: "must be string,null" }];
+                              validate39.errors = [{ instancePath: instancePath + "/mutual_guilds/" + i1 + "/icon_url", schemaPath: "#/$defs/MutualGuild/properties/icon_url/type", keyword: "type", params: { type: schema66.properties.icon_url.type }, message: "must be string,null" }];
                               return false;
                             }
                             var valid6 = _errs21 === errors;
@@ -3459,7 +3588,7 @@ function validate39(data, { instancePath = "", parentData, parentDataProperty, r
 }
 validate39.evaluated = { "props": { "created_at": true, "mutual_friends": true, "mutual_guilds": true, "roles": true, "user": true }, "dynamicProps": false, "dynamicItems": false };
 var isReadyGuildCore = validate42;
-var schema69 = { "$id": "urn:paracord:contract:ReadyGuildCore", "$schema": "https://json-schema.org/draft/2020-12/schema", "description": "Persisted space metadata carried by the gateway READY payload.\nDistinct from `GuildSummary`: READY sends only durable fields, never the\nREST settings surface. Nullable fields are present, including when null.", "properties": { "created_at": { "minLength": 1, "type": "string" }, "icon_hash": { "type": ["string", "null"] }, "id": { "minLength": 1, "pattern": "\\S", "type": "string" }, "member_count": { "format": "uint32", "maximum": 4294967295, "minimum": 0, "type": "integer" }, "name": { "minLength": 1, "pattern": "\\S", "type": "string" }, "owner_id": { "minLength": 1, "pattern": "\\S", "type": "string" } }, "required": ["id", "owner_id", "name", "icon_hash", "created_at", "member_count"], "title": "ReadyGuildCore", "type": "object" };
+var schema70 = { "$id": "urn:paracord:contract:ReadyGuildCore", "$schema": "https://json-schema.org/draft/2020-12/schema", "description": "Persisted space metadata carried by the gateway READY payload.\nDistinct from `GuildSummary`: READY sends only durable fields, never the\nREST settings surface. Nullable fields are present, including when null.", "properties": { "created_at": { "minLength": 1, "type": "string" }, "icon_hash": { "type": ["string", "null"] }, "id": { "minLength": 1, "pattern": "\\S", "type": "string" }, "member_count": { "format": "uint32", "maximum": 4294967295, "minimum": 0, "type": "integer" }, "name": { "minLength": 1, "pattern": "\\S", "type": "string" }, "owner_id": { "minLength": 1, "pattern": "\\S", "type": "string" } }, "required": ["id", "owner_id", "name", "icon_hash", "created_at", "member_count"], "title": "ReadyGuildCore", "type": "object" };
 var func1 = require_ucs2length().default;
 var pattern4 = new RegExp("\\S", "u");
 function validate42(data, { instancePath = "", parentData, parentDataProperty, rootData = data, dynamicAnchors = {} } = {}) {
@@ -3503,7 +3632,7 @@ function validate42(data, { instancePath = "", parentData, parentDataProperty, r
             let data1 = data.icon_hash;
             const _errs3 = errors;
             if (typeof data1 !== "string" && data1 !== null) {
-              validate42.errors = [{ instancePath: instancePath + "/icon_hash", schemaPath: "#/properties/icon_hash/type", keyword: "type", params: { type: schema69.properties.icon_hash.type }, message: "must be string,null" }];
+              validate42.errors = [{ instancePath: instancePath + "/icon_hash", schemaPath: "#/properties/icon_hash/type", keyword: "type", params: { type: schema70.properties.icon_hash.type }, message: "must be string,null" }];
               return false;
             }
             var valid0 = _errs3 === errors;
@@ -3623,7 +3752,7 @@ function validate42(data, { instancePath = "", parentData, parentDataProperty, r
 }
 validate42.evaluated = { "props": { "created_at": true, "icon_hash": true, "id": true, "member_count": true, "name": true, "owner_id": true }, "dynamicProps": false, "dynamicItems": false };
 var isRelationshipList = validate43;
-var schema72 = { "description": "The other party's identity embedded in a relationship entry.\nNullable fields are present in responses, including when their value is null.", "properties": { "avatar_hash": { "type": ["string", "null"] }, "discriminator": { "format": "int32", "type": "integer" }, "display_name": { "type": ["string", "null"] }, "id": { "type": "string" }, "username": { "type": "string" } }, "required": ["id", "username", "display_name", "discriminator", "avatar_hash"], "type": "object" };
+var schema73 = { "description": "The other party's identity embedded in a relationship entry.\nNullable fields are present in responses, including when their value is null.", "properties": { "avatar_hash": { "type": ["string", "null"] }, "discriminator": { "format": "int32", "type": "integer" }, "display_name": { "type": ["string", "null"] }, "id": { "type": "string" }, "username": { "type": "string" } }, "required": ["id", "username", "display_name", "discriminator", "avatar_hash"], "type": "object" };
 function validate44(data, { instancePath = "", parentData, parentDataProperty, rootData = data, dynamicAnchors = {} } = {}) {
   let vErrors = null;
   let errors = 0;
@@ -3713,7 +3842,7 @@ function validate44(data, { instancePath = "", parentData, parentDataProperty, r
                             let data6 = data5.avatar_hash;
                             const _errs14 = errors;
                             if (typeof data6 !== "string" && data6 !== null) {
-                              validate44.errors = [{ instancePath: instancePath + "/user/avatar_hash", schemaPath: "#/$defs/RelationshipUser/properties/avatar_hash/type", keyword: "type", params: { type: schema72.properties.avatar_hash.type }, message: "must be string,null" }];
+                              validate44.errors = [{ instancePath: instancePath + "/user/avatar_hash", schemaPath: "#/$defs/RelationshipUser/properties/avatar_hash/type", keyword: "type", params: { type: schema73.properties.avatar_hash.type }, message: "must be string,null" }];
                               return false;
                             }
                             var valid2 = _errs14 === errors;
@@ -3737,7 +3866,7 @@ function validate44(data, { instancePath = "", parentData, parentDataProperty, r
                                 let data8 = data5.display_name;
                                 const _errs18 = errors;
                                 if (typeof data8 !== "string" && data8 !== null) {
-                                  validate44.errors = [{ instancePath: instancePath + "/user/display_name", schemaPath: "#/$defs/RelationshipUser/properties/display_name/type", keyword: "type", params: { type: schema72.properties.display_name.type }, message: "must be string,null" }];
+                                  validate44.errors = [{ instancePath: instancePath + "/user/display_name", schemaPath: "#/$defs/RelationshipUser/properties/display_name/type", keyword: "type", params: { type: schema73.properties.display_name.type }, message: "must be string,null" }];
                                   return false;
                                 }
                                 var valid2 = _errs18 === errors;
@@ -3878,7 +4007,7 @@ function validate46(data, { instancePath = "", parentData, parentDataProperty, r
 }
 validate46.evaluated = { "props": { "new_owner_id": true }, "dynamicProps": false, "dynamicItems": false };
 var isUpdatedCurrentUser = validate47;
-var schema74 = { "$id": "urn:paracord:contract:UpdatedCurrentUser", "$schema": "https://json-schema.org/draft/2020-12/schema", "description": "`PATCH /users/@me` and `POST /users/@me/avatar`: the updated account fields.\nSettings-derived extras (pronouns, linked accounts) and key metadata are\nonly returned by `GET /users/@me`.", "properties": { "avatar_hash": { "type": ["string", "null"] }, "banner_hash": { "type": ["string", "null"] }, "bio": { "type": ["string", "null"] }, "bot": { "type": "boolean" }, "created_at": { "type": "string" }, "discriminator": { "format": "int32", "type": "integer" }, "display_name": { "type": ["string", "null"] }, "email": { "type": "string" }, "flags": { "format": "int32", "type": "integer" }, "id": { "type": "string" }, "system": { "type": "boolean" }, "username": { "type": "string" } }, "required": ["id", "username", "discriminator", "display_name", "avatar_hash", "banner_hash", "bio", "flags", "bot", "system", "created_at", "email"], "title": "UpdatedCurrentUser", "type": "object" };
+var schema75 = { "$id": "urn:paracord:contract:UpdatedCurrentUser", "$schema": "https://json-schema.org/draft/2020-12/schema", "description": "`PATCH /users/@me` and `POST /users/@me/avatar`: the updated account fields.\nSettings-derived extras (pronouns, linked accounts) and key metadata are\nonly returned by `GET /users/@me`.", "properties": { "avatar_hash": { "type": ["string", "null"] }, "banner_hash": { "type": ["string", "null"] }, "bio": { "type": ["string", "null"] }, "bot": { "type": "boolean" }, "created_at": { "type": "string" }, "discriminator": { "format": "int32", "type": "integer" }, "display_name": { "type": ["string", "null"] }, "email": { "type": "string" }, "flags": { "format": "int32", "type": "integer" }, "id": { "type": "string" }, "system": { "type": "boolean" }, "username": { "type": "string" } }, "required": ["id", "username", "discriminator", "display_name", "avatar_hash", "banner_hash", "bio", "flags", "bot", "system", "created_at", "email"], "title": "UpdatedCurrentUser", "type": "object" };
 function validate47(data, { instancePath = "", parentData, parentDataProperty, rootData = data, dynamicAnchors = {} } = {}) {
   ;
   let vErrors = null;
@@ -3901,7 +4030,7 @@ function validate47(data, { instancePath = "", parentData, parentDataProperty, r
           let data0 = data.avatar_hash;
           const _errs1 = errors;
           if (typeof data0 !== "string" && data0 !== null) {
-            validate47.errors = [{ instancePath: instancePath + "/avatar_hash", schemaPath: "#/properties/avatar_hash/type", keyword: "type", params: { type: schema74.properties.avatar_hash.type }, message: "must be string,null" }];
+            validate47.errors = [{ instancePath: instancePath + "/avatar_hash", schemaPath: "#/properties/avatar_hash/type", keyword: "type", params: { type: schema75.properties.avatar_hash.type }, message: "must be string,null" }];
             return false;
           }
           var valid0 = _errs1 === errors;
@@ -3913,7 +4042,7 @@ function validate47(data, { instancePath = "", parentData, parentDataProperty, r
             let data1 = data.banner_hash;
             const _errs3 = errors;
             if (typeof data1 !== "string" && data1 !== null) {
-              validate47.errors = [{ instancePath: instancePath + "/banner_hash", schemaPath: "#/properties/banner_hash/type", keyword: "type", params: { type: schema74.properties.banner_hash.type }, message: "must be string,null" }];
+              validate47.errors = [{ instancePath: instancePath + "/banner_hash", schemaPath: "#/properties/banner_hash/type", keyword: "type", params: { type: schema75.properties.banner_hash.type }, message: "must be string,null" }];
               return false;
             }
             var valid0 = _errs3 === errors;
@@ -3925,7 +4054,7 @@ function validate47(data, { instancePath = "", parentData, parentDataProperty, r
               let data2 = data.bio;
               const _errs5 = errors;
               if (typeof data2 !== "string" && data2 !== null) {
-                validate47.errors = [{ instancePath: instancePath + "/bio", schemaPath: "#/properties/bio/type", keyword: "type", params: { type: schema74.properties.bio.type }, message: "must be string,null" }];
+                validate47.errors = [{ instancePath: instancePath + "/bio", schemaPath: "#/properties/bio/type", keyword: "type", params: { type: schema75.properties.bio.type }, message: "must be string,null" }];
                 return false;
               }
               var valid0 = _errs5 === errors;
@@ -3971,7 +4100,7 @@ function validate47(data, { instancePath = "", parentData, parentDataProperty, r
                       let data6 = data.display_name;
                       const _errs13 = errors;
                       if (typeof data6 !== "string" && data6 !== null) {
-                        validate47.errors = [{ instancePath: instancePath + "/display_name", schemaPath: "#/properties/display_name/type", keyword: "type", params: { type: schema74.properties.display_name.type }, message: "must be string,null" }];
+                        validate47.errors = [{ instancePath: instancePath + "/display_name", schemaPath: "#/properties/display_name/type", keyword: "type", params: { type: schema75.properties.display_name.type }, message: "must be string,null" }];
                         return false;
                       }
                       var valid0 = _errs13 === errors;
@@ -4091,9 +4220,9 @@ function validate48(data, { instancePath = "", parentData, parentDataProperty, r
 }
 validate48.evaluated = { "props": { "name": true }, "dynamicProps": false, "dynamicItems": false };
 var isUpdateGuildRequest = validate49;
-var schema76 = { "$defs": { "GuildBotConfig": { "additionalProperties": true, "properties": { "enabled": { "type": ["boolean", "null"] } }, "type": "object" }, "HubSettings": { "additionalProperties": true, "properties": { "banner_hash": { "type": ["string", "null"] }, "description": { "type": ["string", "null"] }, "pinned_channels": { "items": { "type": "string" }, "type": ["array", "null"] }, "welcome_text": { "type": ["string", "null"] } }, "type": "object" } }, "$id": "urn:paracord:contract:UpdateGuildRequest", "$schema": "https://json-schema.org/draft/2020-12/schema", "properties": { "allowed_roles": { "items": { "type": "string" }, "type": ["array", "null"] }, "bot_settings": { "additionalProperties": { "$ref": "#/$defs/GuildBotConfig" }, "type": ["object", "null"] }, "description": { "type": ["string", "null"] }, "discovery_tags": { "items": { "type": "string" }, "type": ["array", "null"] }, "hub_settings": { "anyOf": [{ "$ref": "#/$defs/HubSettings" }, { "type": "null" }] }, "icon": { "type": ["string", "null"] }, "name": { "type": ["string", "null"] }, "visibility": { "type": ["string", "null"] } }, "title": "UpdateGuildRequest", "type": "object" };
-var schema77 = { "additionalProperties": true, "properties": { "enabled": { "type": ["boolean", "null"] } }, "type": "object" };
-var schema78 = { "additionalProperties": true, "properties": { "banner_hash": { "type": ["string", "null"] }, "description": { "type": ["string", "null"] }, "pinned_channels": { "items": { "type": "string" }, "type": ["array", "null"] }, "welcome_text": { "type": ["string", "null"] } }, "type": "object" };
+var schema77 = { "$defs": { "GuildBotConfig": { "additionalProperties": true, "properties": { "enabled": { "type": ["boolean", "null"] } }, "type": "object" }, "HubSettings": { "additionalProperties": true, "properties": { "banner_hash": { "type": ["string", "null"] }, "description": { "type": ["string", "null"] }, "pinned_channels": { "items": { "type": "string" }, "type": ["array", "null"] }, "welcome_text": { "type": ["string", "null"] } }, "type": "object" } }, "$id": "urn:paracord:contract:UpdateGuildRequest", "$schema": "https://json-schema.org/draft/2020-12/schema", "properties": { "allowed_roles": { "items": { "type": "string" }, "type": ["array", "null"] }, "bot_settings": { "additionalProperties": { "$ref": "#/$defs/GuildBotConfig" }, "type": ["object", "null"] }, "description": { "type": ["string", "null"] }, "discovery_tags": { "items": { "type": "string" }, "type": ["array", "null"] }, "hub_settings": { "anyOf": [{ "$ref": "#/$defs/HubSettings" }, { "type": "null" }] }, "icon": { "type": ["string", "null"] }, "name": { "type": ["string", "null"] }, "visibility": { "type": ["string", "null"] } }, "title": "UpdateGuildRequest", "type": "object" };
+var schema78 = { "additionalProperties": true, "properties": { "enabled": { "type": ["boolean", "null"] } }, "type": "object" };
+var schema79 = { "additionalProperties": true, "properties": { "banner_hash": { "type": ["string", "null"] }, "description": { "type": ["string", "null"] }, "pinned_channels": { "items": { "type": "string" }, "type": ["array", "null"] }, "welcome_text": { "type": ["string", "null"] } }, "type": "object" };
 function validate49(data, { instancePath = "", parentData, parentDataProperty, rootData = data, dynamicAnchors = {} } = {}) {
   ;
   let vErrors = null;
@@ -4111,7 +4240,7 @@ function validate49(data, { instancePath = "", parentData, parentDataProperty, r
         let data0 = data.allowed_roles;
         const _errs1 = errors;
         if (!Array.isArray(data0) && data0 !== null) {
-          validate49.errors = [{ instancePath: instancePath + "/allowed_roles", schemaPath: "#/properties/allowed_roles/type", keyword: "type", params: { type: schema76.properties.allowed_roles.type }, message: "must be array,null" }];
+          validate49.errors = [{ instancePath: instancePath + "/allowed_roles", schemaPath: "#/properties/allowed_roles/type", keyword: "type", params: { type: schema77.properties.allowed_roles.type }, message: "must be array,null" }];
           return false;
         }
         if (errors === _errs1) {
@@ -4140,7 +4269,7 @@ function validate49(data, { instancePath = "", parentData, parentDataProperty, r
           let data2 = data.bot_settings;
           const _errs5 = errors;
           if (!(data2 && typeof data2 == "object" && !Array.isArray(data2)) && data2 !== null) {
-            validate49.errors = [{ instancePath: instancePath + "/bot_settings", schemaPath: "#/properties/bot_settings/type", keyword: "type", params: { type: schema76.properties.bot_settings.type }, message: "must be object,null" }];
+            validate49.errors = [{ instancePath: instancePath + "/bot_settings", schemaPath: "#/properties/bot_settings/type", keyword: "type", params: { type: schema77.properties.bot_settings.type }, message: "must be object,null" }];
             return false;
           }
           if (errors === _errs5) {
@@ -4154,7 +4283,7 @@ function validate49(data, { instancePath = "", parentData, parentDataProperty, r
                     if (data3.enabled !== void 0) {
                       let data4 = data3.enabled;
                       if (typeof data4 !== "boolean" && data4 !== null) {
-                        validate49.errors = [{ instancePath: instancePath + "/bot_settings/" + key0.replace(/~/g, "~0").replace(/\//g, "~1") + "/enabled", schemaPath: "#/$defs/GuildBotConfig/properties/enabled/type", keyword: "type", params: { type: schema77.properties.enabled.type }, message: "must be boolean,null" }];
+                        validate49.errors = [{ instancePath: instancePath + "/bot_settings/" + key0.replace(/~/g, "~0").replace(/\//g, "~1") + "/enabled", schemaPath: "#/$defs/GuildBotConfig/properties/enabled/type", keyword: "type", params: { type: schema78.properties.enabled.type }, message: "must be boolean,null" }];
                         return false;
                       }
                     }
@@ -4179,7 +4308,7 @@ function validate49(data, { instancePath = "", parentData, parentDataProperty, r
             let data5 = data.description;
             const _errs14 = errors;
             if (typeof data5 !== "string" && data5 !== null) {
-              validate49.errors = [{ instancePath: instancePath + "/description", schemaPath: "#/properties/description/type", keyword: "type", params: { type: schema76.properties.description.type }, message: "must be string,null" }];
+              validate49.errors = [{ instancePath: instancePath + "/description", schemaPath: "#/properties/description/type", keyword: "type", params: { type: schema77.properties.description.type }, message: "must be string,null" }];
               return false;
             }
             var valid0 = _errs14 === errors;
@@ -4191,7 +4320,7 @@ function validate49(data, { instancePath = "", parentData, parentDataProperty, r
               let data6 = data.discovery_tags;
               const _errs16 = errors;
               if (!Array.isArray(data6) && data6 !== null) {
-                validate49.errors = [{ instancePath: instancePath + "/discovery_tags", schemaPath: "#/properties/discovery_tags/type", keyword: "type", params: { type: schema76.properties.discovery_tags.type }, message: "must be array,null" }];
+                validate49.errors = [{ instancePath: instancePath + "/discovery_tags", schemaPath: "#/properties/discovery_tags/type", keyword: "type", params: { type: schema77.properties.discovery_tags.type }, message: "must be array,null" }];
                 return false;
               }
               if (errors === _errs16) {
@@ -4229,7 +4358,7 @@ function validate49(data, { instancePath = "", parentData, parentDataProperty, r
                       let data9 = data8.banner_hash;
                       const _errs26 = errors;
                       if (typeof data9 !== "string" && data9 !== null) {
-                        const err0 = { instancePath: instancePath + "/hub_settings/banner_hash", schemaPath: "#/$defs/HubSettings/properties/banner_hash/type", keyword: "type", params: { type: schema78.properties.banner_hash.type }, message: "must be string,null" };
+                        const err0 = { instancePath: instancePath + "/hub_settings/banner_hash", schemaPath: "#/$defs/HubSettings/properties/banner_hash/type", keyword: "type", params: { type: schema79.properties.banner_hash.type }, message: "must be string,null" };
                         if (vErrors === null) {
                           vErrors = [err0];
                         } else {
@@ -4246,7 +4375,7 @@ function validate49(data, { instancePath = "", parentData, parentDataProperty, r
                         let data10 = data8.description;
                         const _errs28 = errors;
                         if (typeof data10 !== "string" && data10 !== null) {
-                          const err1 = { instancePath: instancePath + "/hub_settings/description", schemaPath: "#/$defs/HubSettings/properties/description/type", keyword: "type", params: { type: schema78.properties.description.type }, message: "must be string,null" };
+                          const err1 = { instancePath: instancePath + "/hub_settings/description", schemaPath: "#/$defs/HubSettings/properties/description/type", keyword: "type", params: { type: schema79.properties.description.type }, message: "must be string,null" };
                           if (vErrors === null) {
                             vErrors = [err1];
                           } else {
@@ -4263,7 +4392,7 @@ function validate49(data, { instancePath = "", parentData, parentDataProperty, r
                           let data11 = data8.pinned_channels;
                           const _errs30 = errors;
                           if (!Array.isArray(data11) && data11 !== null) {
-                            const err2 = { instancePath: instancePath + "/hub_settings/pinned_channels", schemaPath: "#/$defs/HubSettings/properties/pinned_channels/type", keyword: "type", params: { type: schema78.properties.pinned_channels.type }, message: "must be array,null" };
+                            const err2 = { instancePath: instancePath + "/hub_settings/pinned_channels", schemaPath: "#/$defs/HubSettings/properties/pinned_channels/type", keyword: "type", params: { type: schema79.properties.pinned_channels.type }, message: "must be array,null" };
                             if (vErrors === null) {
                               vErrors = [err2];
                             } else {
@@ -4302,7 +4431,7 @@ function validate49(data, { instancePath = "", parentData, parentDataProperty, r
                             let data13 = data8.welcome_text;
                             const _errs34 = errors;
                             if (typeof data13 !== "string" && data13 !== null) {
-                              const err4 = { instancePath: instancePath + "/hub_settings/welcome_text", schemaPath: "#/$defs/HubSettings/properties/welcome_text/type", keyword: "type", params: { type: schema78.properties.welcome_text.type }, message: "must be string,null" };
+                              const err4 = { instancePath: instancePath + "/hub_settings/welcome_text", schemaPath: "#/$defs/HubSettings/properties/welcome_text/type", keyword: "type", params: { type: schema79.properties.welcome_text.type }, message: "must be string,null" };
                               if (vErrors === null) {
                                 vErrors = [err4];
                               } else {
@@ -4370,7 +4499,7 @@ function validate49(data, { instancePath = "", parentData, parentDataProperty, r
                   let data14 = data.icon;
                   const _errs38 = errors;
                   if (typeof data14 !== "string" && data14 !== null) {
-                    validate49.errors = [{ instancePath: instancePath + "/icon", schemaPath: "#/properties/icon/type", keyword: "type", params: { type: schema76.properties.icon.type }, message: "must be string,null" }];
+                    validate49.errors = [{ instancePath: instancePath + "/icon", schemaPath: "#/properties/icon/type", keyword: "type", params: { type: schema77.properties.icon.type }, message: "must be string,null" }];
                     return false;
                   }
                   var valid0 = _errs38 === errors;
@@ -4382,7 +4511,7 @@ function validate49(data, { instancePath = "", parentData, parentDataProperty, r
                     let data15 = data.name;
                     const _errs40 = errors;
                     if (typeof data15 !== "string" && data15 !== null) {
-                      validate49.errors = [{ instancePath: instancePath + "/name", schemaPath: "#/properties/name/type", keyword: "type", params: { type: schema76.properties.name.type }, message: "must be string,null" }];
+                      validate49.errors = [{ instancePath: instancePath + "/name", schemaPath: "#/properties/name/type", keyword: "type", params: { type: schema77.properties.name.type }, message: "must be string,null" }];
                       return false;
                     }
                     var valid0 = _errs40 === errors;
@@ -4394,7 +4523,7 @@ function validate49(data, { instancePath = "", parentData, parentDataProperty, r
                       let data16 = data.visibility;
                       const _errs42 = errors;
                       if (typeof data16 !== "string" && data16 !== null) {
-                        validate49.errors = [{ instancePath: instancePath + "/visibility", schemaPath: "#/properties/visibility/type", keyword: "type", params: { type: schema76.properties.visibility.type }, message: "must be string,null" }];
+                        validate49.errors = [{ instancePath: instancePath + "/visibility", schemaPath: "#/properties/visibility/type", keyword: "type", params: { type: schema77.properties.visibility.type }, message: "must be string,null" }];
                         return false;
                       }
                       var valid0 = _errs42 === errors;
@@ -4418,7 +4547,7 @@ function validate49(data, { instancePath = "", parentData, parentDataProperty, r
 }
 validate49.evaluated = { "props": { "allowed_roles": true, "bot_settings": true, "description": true, "discovery_tags": true, "hub_settings": true, "icon": true, "name": true, "visibility": true }, "dynamicProps": false, "dynamicItems": false };
 var isUpdateMeRequest = validate50;
-var schema79 = { "$id": "urn:paracord:contract:UpdateMeRequest", "$schema": "https://json-schema.org/draft/2020-12/schema", "properties": { "avatar_hash": { "description": "Legacy data-URL avatars are still accepted for backward compatibility,\nbut clients should prefer `POST /users/@me/avatar`.", "type": ["string", "null"] }, "bio": { "type": ["string", "null"] }, "display_name": { "type": ["string", "null"] } }, "title": "UpdateMeRequest", "type": "object" };
+var schema80 = { "$id": "urn:paracord:contract:UpdateMeRequest", "$schema": "https://json-schema.org/draft/2020-12/schema", "properties": { "avatar_hash": { "description": "Legacy data-URL avatars are still accepted for backward compatibility,\nbut clients should prefer `POST /users/@me/avatar`.", "type": ["string", "null"] }, "bio": { "type": ["string", "null"] }, "display_name": { "type": ["string", "null"] } }, "title": "UpdateMeRequest", "type": "object" };
 function validate50(data, { instancePath = "", parentData, parentDataProperty, rootData = data, dynamicAnchors = {} } = {}) {
   ;
   let vErrors = null;
@@ -4436,7 +4565,7 @@ function validate50(data, { instancePath = "", parentData, parentDataProperty, r
         let data0 = data.avatar_hash;
         const _errs1 = errors;
         if (typeof data0 !== "string" && data0 !== null) {
-          validate50.errors = [{ instancePath: instancePath + "/avatar_hash", schemaPath: "#/properties/avatar_hash/type", keyword: "type", params: { type: schema79.properties.avatar_hash.type }, message: "must be string,null" }];
+          validate50.errors = [{ instancePath: instancePath + "/avatar_hash", schemaPath: "#/properties/avatar_hash/type", keyword: "type", params: { type: schema80.properties.avatar_hash.type }, message: "must be string,null" }];
           return false;
         }
         var valid0 = _errs1 === errors;
@@ -4448,7 +4577,7 @@ function validate50(data, { instancePath = "", parentData, parentDataProperty, r
           let data1 = data.bio;
           const _errs3 = errors;
           if (typeof data1 !== "string" && data1 !== null) {
-            validate50.errors = [{ instancePath: instancePath + "/bio", schemaPath: "#/properties/bio/type", keyword: "type", params: { type: schema79.properties.bio.type }, message: "must be string,null" }];
+            validate50.errors = [{ instancePath: instancePath + "/bio", schemaPath: "#/properties/bio/type", keyword: "type", params: { type: schema80.properties.bio.type }, message: "must be string,null" }];
             return false;
           }
           var valid0 = _errs3 === errors;
@@ -4460,7 +4589,7 @@ function validate50(data, { instancePath = "", parentData, parentDataProperty, r
             let data2 = data.display_name;
             const _errs5 = errors;
             if (typeof data2 !== "string" && data2 !== null) {
-              validate50.errors = [{ instancePath: instancePath + "/display_name", schemaPath: "#/properties/display_name/type", keyword: "type", params: { type: schema79.properties.display_name.type }, message: "must be string,null" }];
+              validate50.errors = [{ instancePath: instancePath + "/display_name", schemaPath: "#/properties/display_name/type", keyword: "type", params: { type: schema80.properties.display_name.type }, message: "must be string,null" }];
               return false;
             }
             var valid0 = _errs5 === errors;
@@ -4479,7 +4608,7 @@ function validate50(data, { instancePath = "", parentData, parentDataProperty, r
 }
 validate50.evaluated = { "props": { "avatar_hash": true, "bio": true, "display_name": true }, "dynamicProps": false, "dynamicItems": false };
 var isUpdateSettingsRequest = validate51;
-var schema80 = { "$id": "urn:paracord:contract:UpdateSettingsRequest", "$schema": "https://json-schema.org/draft/2020-12/schema", "properties": { "crypto_auth_enabled": { "type": ["boolean", "null"] }, "custom_css": { "type": ["string", "null"] }, "custom_status": { "type": ["string", "null"] }, "keybinds": true, "locale": { "type": ["string", "null"] }, "message_display_compact": { "type": ["boolean", "null"] }, "notifications": true, "status": { "type": ["string", "null"] }, "theme": { "type": ["string", "null"] } }, "title": "UpdateSettingsRequest", "type": "object" };
+var schema81 = { "$id": "urn:paracord:contract:UpdateSettingsRequest", "$schema": "https://json-schema.org/draft/2020-12/schema", "properties": { "crypto_auth_enabled": { "type": ["boolean", "null"] }, "custom_css": { "type": ["string", "null"] }, "custom_status": { "type": ["string", "null"] }, "keybinds": true, "locale": { "type": ["string", "null"] }, "message_display_compact": { "type": ["boolean", "null"] }, "notifications": true, "status": { "type": ["string", "null"] }, "theme": { "type": ["string", "null"] } }, "title": "UpdateSettingsRequest", "type": "object" };
 function validate51(data, { instancePath = "", parentData, parentDataProperty, rootData = data, dynamicAnchors = {} } = {}) {
   ;
   let vErrors = null;
@@ -4497,7 +4626,7 @@ function validate51(data, { instancePath = "", parentData, parentDataProperty, r
         let data0 = data.crypto_auth_enabled;
         const _errs1 = errors;
         if (typeof data0 !== "boolean" && data0 !== null) {
-          validate51.errors = [{ instancePath: instancePath + "/crypto_auth_enabled", schemaPath: "#/properties/crypto_auth_enabled/type", keyword: "type", params: { type: schema80.properties.crypto_auth_enabled.type }, message: "must be boolean,null" }];
+          validate51.errors = [{ instancePath: instancePath + "/crypto_auth_enabled", schemaPath: "#/properties/crypto_auth_enabled/type", keyword: "type", params: { type: schema81.properties.crypto_auth_enabled.type }, message: "must be boolean,null" }];
           return false;
         }
         var valid0 = _errs1 === errors;
@@ -4509,7 +4638,7 @@ function validate51(data, { instancePath = "", parentData, parentDataProperty, r
           let data1 = data.custom_css;
           const _errs3 = errors;
           if (typeof data1 !== "string" && data1 !== null) {
-            validate51.errors = [{ instancePath: instancePath + "/custom_css", schemaPath: "#/properties/custom_css/type", keyword: "type", params: { type: schema80.properties.custom_css.type }, message: "must be string,null" }];
+            validate51.errors = [{ instancePath: instancePath + "/custom_css", schemaPath: "#/properties/custom_css/type", keyword: "type", params: { type: schema81.properties.custom_css.type }, message: "must be string,null" }];
             return false;
           }
           var valid0 = _errs3 === errors;
@@ -4521,7 +4650,7 @@ function validate51(data, { instancePath = "", parentData, parentDataProperty, r
             let data2 = data.custom_status;
             const _errs5 = errors;
             if (typeof data2 !== "string" && data2 !== null) {
-              validate51.errors = [{ instancePath: instancePath + "/custom_status", schemaPath: "#/properties/custom_status/type", keyword: "type", params: { type: schema80.properties.custom_status.type }, message: "must be string,null" }];
+              validate51.errors = [{ instancePath: instancePath + "/custom_status", schemaPath: "#/properties/custom_status/type", keyword: "type", params: { type: schema81.properties.custom_status.type }, message: "must be string,null" }];
               return false;
             }
             var valid0 = _errs5 === errors;
@@ -4533,7 +4662,7 @@ function validate51(data, { instancePath = "", parentData, parentDataProperty, r
               let data3 = data.locale;
               const _errs7 = errors;
               if (typeof data3 !== "string" && data3 !== null) {
-                validate51.errors = [{ instancePath: instancePath + "/locale", schemaPath: "#/properties/locale/type", keyword: "type", params: { type: schema80.properties.locale.type }, message: "must be string,null" }];
+                validate51.errors = [{ instancePath: instancePath + "/locale", schemaPath: "#/properties/locale/type", keyword: "type", params: { type: schema81.properties.locale.type }, message: "must be string,null" }];
                 return false;
               }
               var valid0 = _errs7 === errors;
@@ -4545,7 +4674,7 @@ function validate51(data, { instancePath = "", parentData, parentDataProperty, r
                 let data4 = data.message_display_compact;
                 const _errs9 = errors;
                 if (typeof data4 !== "boolean" && data4 !== null) {
-                  validate51.errors = [{ instancePath: instancePath + "/message_display_compact", schemaPath: "#/properties/message_display_compact/type", keyword: "type", params: { type: schema80.properties.message_display_compact.type }, message: "must be boolean,null" }];
+                  validate51.errors = [{ instancePath: instancePath + "/message_display_compact", schemaPath: "#/properties/message_display_compact/type", keyword: "type", params: { type: schema81.properties.message_display_compact.type }, message: "must be boolean,null" }];
                   return false;
                 }
                 var valid0 = _errs9 === errors;
@@ -4557,7 +4686,7 @@ function validate51(data, { instancePath = "", parentData, parentDataProperty, r
                   let data5 = data.status;
                   const _errs11 = errors;
                   if (typeof data5 !== "string" && data5 !== null) {
-                    validate51.errors = [{ instancePath: instancePath + "/status", schemaPath: "#/properties/status/type", keyword: "type", params: { type: schema80.properties.status.type }, message: "must be string,null" }];
+                    validate51.errors = [{ instancePath: instancePath + "/status", schemaPath: "#/properties/status/type", keyword: "type", params: { type: schema81.properties.status.type }, message: "must be string,null" }];
                     return false;
                   }
                   var valid0 = _errs11 === errors;
@@ -4569,7 +4698,7 @@ function validate51(data, { instancePath = "", parentData, parentDataProperty, r
                     let data6 = data.theme;
                     const _errs13 = errors;
                     if (typeof data6 !== "string" && data6 !== null) {
-                      validate51.errors = [{ instancePath: instancePath + "/theme", schemaPath: "#/properties/theme/type", keyword: "type", params: { type: schema80.properties.theme.type }, message: "must be string,null" }];
+                      validate51.errors = [{ instancePath: instancePath + "/theme", schemaPath: "#/properties/theme/type", keyword: "type", params: { type: schema81.properties.theme.type }, message: "must be string,null" }];
                       return false;
                     }
                     var valid0 = _errs13 === errors;
@@ -4592,7 +4721,7 @@ function validate51(data, { instancePath = "", parentData, parentDataProperty, r
 }
 validate51.evaluated = { "props": { "crypto_auth_enabled": true, "custom_css": true, "custom_status": true, "keybinds": true, "locale": true, "message_display_compact": true, "notifications": true, "status": true, "theme": true }, "dynamicProps": false, "dynamicItems": false };
 var isUserSettingsResponse = validate52;
-var schema81 = { "$id": "urn:paracord:contract:UserSettingsResponse", "$schema": "https://json-schema.org/draft/2020-12/schema", "description": "`GET`/`PATCH /users/@me/settings`. The server stores `theme`, `locale`, and\n`status` as opaque strings (bounded by length only), and `notifications` and\n`keybinds` as free-form JSON objects; they are echoed verbatim.", "properties": { "crypto_auth_enabled": { "type": "boolean" }, "custom_css": { "type": ["string", "null"] }, "custom_status": { "type": ["string", "null"] }, "keybinds": { "additionalProperties": true, "type": "object" }, "locale": { "type": "string" }, "message_display_compact": { "type": "boolean" }, "notifications": { "additionalProperties": true, "type": "object" }, "status": { "type": "string" }, "theme": { "type": "string" }, "user_id": { "type": "string" } }, "required": ["user_id", "theme", "locale", "message_display_compact", "custom_css", "status", "custom_status", "crypto_auth_enabled", "notifications", "keybinds"], "title": "UserSettingsResponse", "type": "object" };
+var schema82 = { "$id": "urn:paracord:contract:UserSettingsResponse", "$schema": "https://json-schema.org/draft/2020-12/schema", "description": "`GET`/`PATCH /users/@me/settings`. The server stores `theme`, `locale`, and\n`status` as opaque strings (bounded by length only), and `notifications` and\n`keybinds` as free-form JSON objects; they are echoed verbatim.", "properties": { "crypto_auth_enabled": { "type": "boolean" }, "custom_css": { "type": ["string", "null"] }, "custom_status": { "type": ["string", "null"] }, "keybinds": { "additionalProperties": true, "type": "object" }, "locale": { "type": "string" }, "message_display_compact": { "type": "boolean" }, "notifications": { "additionalProperties": true, "type": "object" }, "status": { "type": "string" }, "theme": { "type": "string" }, "user_id": { "type": "string" } }, "required": ["user_id", "theme", "locale", "message_display_compact", "custom_css", "status", "custom_status", "crypto_auth_enabled", "notifications", "keybinds"], "title": "UserSettingsResponse", "type": "object" };
 function validate52(data, { instancePath = "", parentData, parentDataProperty, rootData = data, dynamicAnchors = {} } = {}) {
   ;
   let vErrors = null;
@@ -4626,7 +4755,7 @@ function validate52(data, { instancePath = "", parentData, parentDataProperty, r
             let data1 = data.custom_css;
             const _errs3 = errors;
             if (typeof data1 !== "string" && data1 !== null) {
-              validate52.errors = [{ instancePath: instancePath + "/custom_css", schemaPath: "#/properties/custom_css/type", keyword: "type", params: { type: schema81.properties.custom_css.type }, message: "must be string,null" }];
+              validate52.errors = [{ instancePath: instancePath + "/custom_css", schemaPath: "#/properties/custom_css/type", keyword: "type", params: { type: schema82.properties.custom_css.type }, message: "must be string,null" }];
               return false;
             }
             var valid0 = _errs3 === errors;
@@ -4638,7 +4767,7 @@ function validate52(data, { instancePath = "", parentData, parentDataProperty, r
               let data2 = data.custom_status;
               const _errs5 = errors;
               if (typeof data2 !== "string" && data2 !== null) {
-                validate52.errors = [{ instancePath: instancePath + "/custom_status", schemaPath: "#/properties/custom_status/type", keyword: "type", params: { type: schema81.properties.custom_status.type }, message: "must be string,null" }];
+                validate52.errors = [{ instancePath: instancePath + "/custom_status", schemaPath: "#/properties/custom_status/type", keyword: "type", params: { type: schema82.properties.custom_status.type }, message: "must be string,null" }];
                 return false;
               }
               var valid0 = _errs5 === errors;

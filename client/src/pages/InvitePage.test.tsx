@@ -30,6 +30,7 @@ const mockChannelState = vi.hoisted(() => ({
 }));
 
 const mockUIState = vi.hoisted(() => ({
+  connectionStatus: 'connected' as string,
   setGuildSettingsId: vi.fn(),
 }));
 
@@ -58,10 +59,17 @@ vi.mock('../stores/channelStore', () => ({
   },
 }));
 
+const mockHistory = vi.hoisted(() => ({ known: true }));
+vi.mock('../lib/databaseHistory', () => ({
+  subscribeDatabaseHistory: () => () => {},
+  getDatabaseHistoryEpoch: () => (mockHistory.known ? 'epoch' : null),
+}));
+
 vi.mock('../stores/uiStore', () => ({
-  useUIStore: {
-    getState: vi.fn(() => mockUIState),
-  },
+  useUIStore: Object.assign(
+    (selector: (state: typeof mockUIState) => unknown) => selector(mockUIState),
+    { getState: vi.fn(() => mockUIState) },
+  ),
 }));
 
 const invitePreview = {
@@ -72,14 +80,16 @@ const invitePreview = {
     member_count: 42,
     default_channel_id: null,
   },
+  join_gate: null as null | { require_ack: boolean; questions: string[] },
 };
 
-function renderInvitePage() {
+function renderInvitePage(entry = '/invite/abc123') {
   render(
-    <MemoryRouter initialEntries={['/invite/abc123']}>
+    <MemoryRouter initialEntries={[entry]}>
       <Routes>
         <Route path="/invite/:code" element={<InvitePage />} />
         <Route path="/login" element={<div>Login page</div>} />
+        <Route path="/register" element={<div>Register page</div>} />
         <Route path="/app/guilds/:guildId/channels/:channelId" element={<div>Guild channel</div>} />
         <Route path="/app" element={<div>App shell</div>} />
       </Routes>
@@ -90,6 +100,9 @@ function renderInvitePage() {
 describe('InvitePage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    sessionStorage.clear();
+    mockUIState.connectionStatus = 'connected';
+    mockHistory.known = true;
     mockAuthState.token = 'auth-token';
     mockInviteApi.get.mockResolvedValue({ data: invitePreview });
     mockGuildState.acceptInvite.mockResolvedValue({ ...invitePreview.guild, scope: { serverId: '__local__', userId: 'user-1' } });
@@ -110,58 +123,112 @@ describe('InvitePage', () => {
     expect(mockInviteApi.accept).not.toHaveBeenCalled();
   });
 
-  it('sends unauthenticated users to login after invite preview loads', async () => {
+  it('offers somebody with no account a way to make one, and keeps the sign-in path', async () => {
     const user = userEvent.setup();
     mockAuthState.token = null;
 
     renderInvitePage();
 
     expect(await screen.findByText('Launch Guild')).toBeInTheDocument();
-    await user.click(screen.getByRole('checkbox'));
-    await user.click(screen.getByRole('button', { name: 'Accept invite' }));
+    // An ordinary server asks a newcomer for nothing at all.
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
 
-    expect(await screen.findByText('Login page')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Create an account to join' }));
+    expect(await screen.findByText('Register page')).toBeInTheDocument();
+    expect(sessionStorage.getItem('paracord:pending-invite')).toBe('abc123');
     expect(mockInviteApi.accept).not.toHaveBeenCalled();
   });
 
-  it('will not accept until the rules are acknowledged', async () => {
+  it('sends somebody who already has an account to sign in', async () => {
     const user = userEvent.setup();
+    mockAuthState.token = null;
 
     renderInvitePage();
 
-    // The box arrives empty, and Accept waits for it. It used to arrive ticked,
-    // which made the acknowledgement a decoration: the one reader it exists for
-    // — someone joining a building whose verification gate the server enforces
-    // — agreed to rules they had not been shown.
-    expect(await screen.findByText('Launch Guild')).toBeInTheDocument();
-    expect(screen.getByRole('checkbox')).not.toBeChecked();
-    expect(screen.getByRole('button', { name: 'Accept invite' })).toBeDisabled();
-
-    await user.click(screen.getByRole('checkbox'));
-    expect(screen.getByRole('button', { name: 'Accept invite' })).toBeEnabled();
+    await user.click(await screen.findByRole('button', { name: 'I already have an account' }));
+    expect(await screen.findByText('Login page')).toBeInTheDocument();
   });
 
-  it('accepts an invite with verification payload and selects the first text channel', async () => {
+  it('joins an ungated server with one press and nothing to fill in', async () => {
     const user = userEvent.setup();
 
     renderInvitePage();
 
     expect(await screen.findByText('Launch Guild')).toBeInTheDocument();
-    await user.type(
-      screen.getByPlaceholderText(/Verification answers/),
-      'I accept the rules\nI am over 13',
-    );
-    await user.click(screen.getByRole('checkbox'));
     await user.click(screen.getByRole('button', { name: 'Accept invite' }));
 
     await waitFor(() =>
-      expect(mockGuildState.acceptInvite).toHaveBeenCalledWith('abc123', { serverId: '__local__', userId: 'user-1' }, {
-        verification_ack: true,
-        verification_answers: ['I accept the rules', 'I am over 13'],
-      }),
+      expect(mockGuildState.acceptInvite).toHaveBeenCalledWith(
+        'abc123',
+        { serverId: '__local__', userId: 'user-1' },
+        { verification_ack: undefined, verification_answers: undefined },
+      ),
     );
-    expect(guildLandingPath).toHaveBeenCalledWith(expect.objectContaining({ id: 'guild-1', scope: { serverId: '__local__', userId: 'user-1' } }));
     expect(await screen.findByText('Guild channel')).toBeInTheDocument();
+  });
+
+  it('joins without another press when they came back from making an account', async () => {
+    renderInvitePage('/invite/abc123?joining=1');
+
+    await waitFor(() => expect(mockGuildState.acceptInvite).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText('Guild channel')).toBeInTheDocument();
+  });
+
+  it('waits until it knows which history it is talking to, not just for the stream to open', async () => {
+    mockHistory.known = false;
+    renderInvitePage('/invite/abc123?joining=1');
+
+    expect(await screen.findByText('Launch Guild')).toBeInTheDocument();
+    expect(mockGuildState.acceptInvite).not.toHaveBeenCalled();
+  });
+
+  it('waits for the connection before joining on its own', async () => {
+    mockUIState.connectionStatus = 'connecting';
+    renderInvitePage('/invite/abc123?joining=1');
+
+    expect(await screen.findByText('Launch Guild')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Accept invite' })).toBeDisabled();
+    expect(mockGuildState.acceptInvite).not.toHaveBeenCalled();
+  });
+
+  describe('a server whose owner turned the join gate on', () => {
+    beforeEach(() => {
+      mockInviteApi.get.mockResolvedValue({
+        data: {
+          ...invitePreview,
+          join_gate: { require_ack: true, questions: ['Who invited you?', 'Are you over 13?'] },
+        },
+      });
+    });
+
+    it('shows the actual questions and will not accept until they and the rules are answered', async () => {
+      const user = userEvent.setup();
+
+      renderInvitePage('/invite/abc123?joining=1');
+
+      // The box arrives empty, and Accept waits for it — and coming back from
+      // sign-up must not skip a gate the server will enforce anyway.
+      expect(await screen.findByLabelText(/Who invited you\?/)).toBeInTheDocument();
+      expect(screen.getByRole('checkbox')).not.toBeChecked();
+      expect(screen.getByRole('button', { name: 'Accept invite' })).toBeDisabled();
+      expect(mockGuildState.acceptInvite).not.toHaveBeenCalled();
+
+      await user.type(screen.getByLabelText(/Who invited you\?/), 'Ada');
+      await user.type(screen.getByLabelText(/Are you over 13\?/), 'yes');
+      expect(screen.getByRole('button', { name: 'Accept invite' })).toBeDisabled();
+      await user.click(screen.getByRole('checkbox'));
+      await user.click(screen.getByRole('button', { name: 'Accept invite' }));
+
+      await waitFor(() =>
+        expect(mockGuildState.acceptInvite).toHaveBeenCalledWith(
+          'abc123',
+          { serverId: '__local__', userId: 'user-1' },
+          { verification_ack: true, verification_answers: ['Ada', 'yes'] },
+        ),
+      );
+      expect(guildLandingPath).toHaveBeenCalledWith(expect.objectContaining({ id: 'guild-1' }));
+    });
   });
 });
 

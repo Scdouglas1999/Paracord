@@ -44,6 +44,7 @@ const preview: InvitePreview = {
     icon_hash: null,
     member_count: 3,
   },
+
 };
 
 const accepted: InviteAcceptResponse = {

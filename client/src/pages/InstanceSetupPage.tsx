@@ -61,12 +61,44 @@ export function passwordRulesMismatch(requirements: PasswordRequirements | null)
  * is passed through untouched.
  */
 function claimFailureMessage(err: unknown): string {
-  const status = (err as { response?: { status?: number } })?.response?.status;
   const message = extractApiError(err);
-  if (status === 401 || message === 'unauthorized') {
-    return 'That claim token is not the one this instance printed. Copy it again from the instance’s terminal or from first-owner-claim.txt — it is case-sensitive, and whitespace counts.';
+  if (setupCodeWasRefused(err)) {
+    return 'That setup code is not the one your server printed. Open the setup link it printed again, or copy the code from first-owner-claim.txt next to the server’s config — it is case-sensitive.';
   }
-  return message || 'Setup failed. Check the claim token and try again.';
+  return message || 'Setup failed. Check the setup code and try again.';
+}
+
+function setupCodeWasRefused(err: unknown): boolean {
+  const status = (err as { response?: { status?: number } })?.response?.status;
+  return status === 401 || extractApiError(err) === 'unauthorized';
+}
+
+/**
+ * The setup code, when the owner arrived by the link their server printed.
+ *
+ * The server and the installers print `…/setup-server#claim=<code>` and open it
+ * in the browser, so the first thing a new owner is asked is their name, not to
+ * go and find a code in a terminal. It rides in the FRAGMENT because a fragment
+ * is never sent to the server, so the code reaches no access log; and it is
+ * scrubbed from the address bar the moment it is read, so it is not left in
+ * history or copied along with the URL.
+ */
+export function takeSetupCodeFromLocation(
+  location: Pick<Location, 'hash' | 'pathname' | 'search'> = window.location,
+  history: Pick<History, 'replaceState'> = window.history,
+): string | null {
+  const match = /(?:^#|&)claim=([^&]+)/.exec(location.hash);
+  if (!match) return null;
+  let code: string;
+  try {
+    code = decodeURIComponent(match[1]).trim();
+  } catch {
+    return null;
+  }
+  history.replaceState(null, '', `${location.pathname}${location.search}`);
+  // What the server mints is long and alphanumeric. Anything else is not a
+  // code, and is not worth offering to the claim endpoint.
+  return /^[A-Za-z0-9_-]{16,256}$/.test(code) ? code : null;
 }
 
 /**
@@ -133,7 +165,7 @@ export function claimStepError(
       if (!draft.token.trim()) {
         return {
           field: 'token',
-          message: 'Paste the claim token from your instance’s terminal to continue.',
+          message: 'Paste the setup code your server printed to continue.',
         };
       }
       return null;
@@ -201,8 +233,13 @@ export function InstanceSetupPage() {
   const [requirements, setRequirements] = useState<PasswordRequirements | null>(null);
   const [requireEmail, setRequireEmail] = useState(false);
 
+  // Read once, on the first render: reading it scrubs it from the address bar.
+  const [codeFromLink] = useState(() => takeSetupCodeFromLocation());
+  // Off again if the server refuses the code, so the field comes back.
+  const [usingLinkCode, setUsingLinkCode] = useState(codeFromLink != null);
+
   const [draft, setDraft] = useState<ClaimDraft>({
-    token: '',
+    token: codeFromLink ?? '',
     username: '',
     displayName: '',
     email: '',
@@ -211,7 +248,7 @@ export function InstanceSetupPage() {
     instanceName: '',
     spaceName: '',
   });
-  const [stepIndex, setStepIndex] = useState(0);
+  const [stepIndex, setStepIndex] = useState(codeFromLink != null ? 1 : 0);
   const [fieldError, setFieldError] = useState<{ field: ClaimField; message: string } | null>(null);
 
   const [error, setError] = useState('');
@@ -222,6 +259,9 @@ export function InstanceSetupPage() {
   const formRef = useRef<HTMLFormElement>(null);
   useFocusRejectedField(formRef, fieldError);
 
+  // Arriving by the link answers the first step already, so it is not shown
+  // and not counted.
+  const firstStepIndex = usingLinkCode ? 1 : 0;
   const step = CLAIM_STEPS[stepIndex];
   const isLastStep = stepIndex === CLAIM_STEPS.length - 1;
 
@@ -347,6 +387,12 @@ export function InstanceSetupPage() {
       navigate(`/app/guilds/${data.space.id}`, { replace: true });
     } catch (err: unknown) {
       rejectWith(claimFailureMessage(err));
+      if (setupCodeWasRefused(err)) {
+        // The code from the link did not work. Put the field back in front of
+        // them with what they typed elsewhere intact.
+        setUsingLinkCode(false);
+        setStepIndex(0);
+      }
       setLoading(false);
     }
   };
@@ -375,7 +421,7 @@ export function InstanceSetupPage() {
   };
 
   const goBack = () => {
-    if (stepIndex === 0) return;
+    if (stepIndex === firstStepIndex) return;
     // Nothing is validated on the way back and nothing is cleared: a half-typed
     // value is still the operator's work.
     setFieldError(null);
@@ -396,7 +442,9 @@ export function InstanceSetupPage() {
     );
   }
 
-  const progress = <AuthSteps step={stepIndex + 1} count={CLAIM_STEPS.length} />;
+  const progress = (
+    <AuthSteps step={stepIndex + 1 - firstStepIndex} count={CLAIM_STEPS.length - firstStepIndex} />
+  );
 
   return (
     <AuthCanvas>
@@ -427,12 +475,12 @@ export function InstanceSetupPage() {
             <AuthStep
               key="token"
               progress={progress}
-              title="Prove you run this instance"
-              description="You’re setting up the instance itself, not joining one. Your instance printed a one-time claim token when it started; it is also saved as first-owner-claim.txt next to the instance’s config file, readable only by the account that runs it. Nobody can create an account here until this token is used."
+              title="Enter your setup code"
+              description="This makes you the owner. When your server started it printed a setup link — opening that link fills this in for you. Otherwise paste the long code from the end of that link, or from first-owner-claim.txt next to the server’s config file. Nobody can create an account here until it has been used."
             >
               <AuthScroll>
                 <Field
-                  label="Claim token"
+                  label="Setup code"
                   required
                   error={errorFor('token')}
                   hint="Paste it exactly as printed — it is used once and then stops working."
@@ -650,7 +698,7 @@ export function InstanceSetupPage() {
           )}
 
           <div className="flex items-center gap-3">
-            {stepIndex > 0 && (
+            {stepIndex > firstStepIndex && (
               <Button type="button" variant="ghost" size="lg" onClick={goBack} disabled={loading}>
                 Back
               </Button>
@@ -668,8 +716,8 @@ export function InstanceSetupPage() {
 
           {stepIndex === 0 && (
             <p className="text-meta leading-relaxed text-text-secondary">
-              Joining someone else’s community instead? You don’t need a claim token — ask them for
-              an invite link and sign up there as a member.
+              Joining someone else’s server instead? You don’t need a setup code — ask them for an
+              invite link and sign up there.
             </p>
           )}
         </form>

@@ -266,12 +266,17 @@ describe('the thing inside a server is a channel', () => {
 });
 
 describe('the host you run is an instance', () => {
-  it('connects to an instance, not to a server', () => {
+  // "Instance" is the right word for the person who RUNS one. It is not a word
+  // somebody who was sent an invite should have to look up, so the first screen
+  // a newcomer sees talks about the thing they were sent and the thing they are
+  // joining. (2026-09-20: install and first run must need no glossary.)
+  it('asks a newcomer for an invite link, in words they already have', () => {
     const copy = copyOf('pages/ServerConnectPage.tsx');
-    expect(copy).toContain('Connect to an instance');
-    expect(copy).toContain('Instance address or invite link');
-    expect(copy).toContain('Add instance');
-    expect(copy).toContain('Your instances');
+    expect(copy).toContain('Join a server');
+    expect(copy).toContain('Invite link');
+    expect(copy).not.toContain('Connect to an instance');
+    expect(copy).not.toContain('Probing');
+    expect(copy).not.toContain('portable link');
   });
 
   it('claims an instance, and names the first server inside it', () => {

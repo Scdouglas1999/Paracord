@@ -26,12 +26,31 @@ pub struct InviteGuildPreview {
     pub member_count: u32,
 }
 
+/// What joining asks of a newcomer, when the server's owner has turned the
+/// verification gate on. The questions are the prompts only; the expected
+/// answers never leave the server.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct InviteJoinGate {
+    /// The newcomer must tick an acknowledgement of the server's rules.
+    pub require_ack: bool,
+    /// Questions to answer, in order. Empty when the gate asks none.
+    pub questions: Vec<String>,
+}
+
 /// `GET /invites/{code}`: public invite resolution. `guild` is null when the
-/// invite's channel no longer resolves to a guild.
+/// invite's channel no longer resolves to a guild. `join_gate` is null unless
+/// the owner enabled one — which is what lets the invite page ask a newcomer
+/// for nothing at all in the ordinary case.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct InvitePreview {
     pub code: String,
     pub guild: Option<InviteGuildPreview>,
+    /// Present only when the owner enabled a gate. Absent is the ordinary case,
+    /// and it is also what a server that predates this field sends — so a
+    /// client can still open its invites; such a server enforces its gate on
+    /// accept and says what is missing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub join_gate: Option<InviteJoinGate>,
 }
 
 /// The guild card returned after successfully accepting an invite.

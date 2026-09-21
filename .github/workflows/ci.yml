@@ -407,6 +407,15 @@ jobs:
           brew install libvpx ffmpeg pkg-config speexdsp
           pkg-config --modversion vpx
 
+      # With default features Tauri embeds the web client at compile time and
+      # refuses to build if `client/dist` does not exist. This job checks that
+      # the Rust compiles, not what it embeds, so an empty shell is enough.
+      - name: Placeholder web client for the desktop check (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          mkdir -p client/dist
+          [ -f client/dist/index.html ] || echo '<!doctype html><title>placeholder</title>' > client/dist/index.html
+
       - name: Desktop client check (macOS)
         if: matrix.os == 'macos-latest'
         run: cargo check --manifest-path client/src-tauri/Cargo.toml --all-targets

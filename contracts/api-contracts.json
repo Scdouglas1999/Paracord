@@ -1014,11 +1014,32 @@
             "member_count"
           ],
           "type": "object"
+        },
+        "InviteJoinGate": {
+          "description": "What joining asks of a newcomer, when the server's owner has turned the\nverification gate on. The questions are the prompts only; the expected\nanswers never leave the server.",
+          "properties": {
+            "questions": {
+              "description": "Questions to answer, in order. Empty when the gate asks none.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "require_ack": {
+              "description": "The newcomer must tick an acknowledgement of the server's rules.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "require_ack",
+            "questions"
+          ],
+          "type": "object"
         }
       },
       "$id": "urn:paracord:contract:InvitePreview",
       "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "description": "`GET /invites/{code}`: public invite resolution. `guild` is null when the\ninvite's channel no longer resolves to a guild.",
+      "description": "`GET /invites/{code}`: public invite resolution. `guild` is null when the\ninvite's channel no longer resolves to a guild. `join_gate` is null unless\nthe owner enabled one — which is what lets the invite page ask a newcomer\nfor nothing at all in the ordinary case.",
       "properties": {
         "code": {
           "type": "string"
@@ -1032,6 +1053,17 @@
               "type": "null"
             }
           ]
+        },
+        "join_gate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InviteJoinGate"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present only when the owner enabled a gate. Absent is the ordinary case,\nand it is also what a server that predates this field sends — so a\nclient can still open its invites; such a server enforces its gate on\naccept and says what is missing."
         }
       },
       "required": [

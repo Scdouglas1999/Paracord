@@ -62,7 +62,8 @@ export function destinationAfterLogin(
   pendingInvite: string | null,
   stillOnSignInScreen: boolean,
 ): string | null {
-  if (pendingInvite) return `/invite/${pendingInvite}`;
+  // `joining=1`: they already pressed Join on that page before being sent here.
+  if (pendingInvite) return `/invite/${pendingInvite}?joining=1`;
   if (!stillOnSignInScreen) return null;
   return '/app';
 }

@@ -1,18 +1,20 @@
 import { useCurrentAccountScope } from '../hooks/useCurrentUser';
 import { guildLandingPath } from '../lib/guildNavigation';
-import { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useParams, useNavigate, useSearchParams } from 'react-router';
 import { ArrowRight, Hash, Users } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import { inviteApi } from '../api/invites';
 import { useGuildStore } from '../stores/guildStore';
+import { useUIStore } from '../stores/uiStore';
+import { getDatabaseHistoryEpoch, subscribeDatabaseHistory } from '../lib/databaseHistory';
 import { extractApiError } from '../api/client';
 import { safeStoredImageDataUrl } from '../lib/security';
 import { ErrorBanner } from '../components/ui/Feedback';
 import { Button } from '../components/ui/Button';
-import { Textarea } from '../components/ui/Input';
+import { Input } from '../components/ui/Input';
 import { Divider } from '../components/ui/Divider';
-import { AUTH_FORM, AuthCanvas, AuthCard, AuthScroll } from './authScaffold';
+import { AUTH_FORM, AuthCanvas, AuthCard, AuthScroll, Field } from './authScaffold';
 import type { InvitePreview } from '../api/generated/InvitePreview';
 
 export function InvitePage() {
@@ -24,12 +26,15 @@ export function InvitePage() {
   const [loadingPreview, setLoadingPreview] = useState(true);
   const [invitePreview, setInvitePreview] = useState<InvitePreview | null>(null);
   const [error, setError] = useState('');
-  // An acknowledgement that arrives already ticked is not an acknowledgement:
-  // the server refuses the join without it on a gated building, so the one
-  // reader it exists for was agreeing to rules they had not been shown. It
-  // starts empty and gates Accept, the way the Terms box on /register does.
+  // Most servers ask a newcomer for nothing, and then this page asks for
+  // nothing: no box to tick, no answers to give. When the owner HAS turned the
+  // gate on, the preview says so (`join_gate`) and carries the questions, so
+  // they can be shown rather than guessed at. An acknowledgement that arrives
+  // already ticked is not an acknowledgement, so it starts empty.
   const [verificationAck, setVerificationAck] = useState(false);
-  const [verificationAnswers, setVerificationAnswers] = useState('');
+  const [verificationAnswers, setVerificationAnswers] = useState<string[]>([]);
+  const [searchParams] = useSearchParams();
+  const autoJoinTried = useRef(false);
 
   useEffect(() => {
     if (!code) return;
@@ -42,27 +47,35 @@ export function InvitePage() {
       .finally(() => setLoadingPreview(false));
   }, [code]);
 
+  const gate = invitePreview?.join_gate ?? null;
+  const questions = gate?.questions ?? [];
+  const gateSatisfied =
+    (!gate?.require_ack || verificationAck) &&
+    questions.every((_, index) => (verificationAnswers[index] ?? '').trim().length > 0);
+
+  /** Remember the invite, then send a signed-out person to make or use an account. */
+  const continueSignedOut = (destination: '/register' | '/login') => {
+    if (code) {
+      try {
+        sessionStorage.setItem('paracord:pending-invite', code);
+      } catch {
+        /* ignore quota / private mode */
+      }
+    }
+    navigate(destination);
+  };
+
   const handleAccept = async () => {
     if (!token || !guildScope) {
-      if (code) {
-        try {
-          sessionStorage.setItem('paracord:pending-invite', code);
-        } catch {
-          /* ignore quota / private mode */
-        }
-      }
-      navigate('/login');
+      continueSignedOut('/register');
       return;
     }
     setLoading(true);
     setError('');
     try {
-      const answers = verificationAnswers
-        .split('\n')
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0);
+      const answers = questions.map((_, index) => (verificationAnswers[index] ?? '').trim());
       const guild = await useGuildStore.getState().acceptInvite(code!, guildScope, {
-        verification_ack: verificationAck,
+        verification_ack: gate?.require_ack ? verificationAck : undefined,
         verification_answers: answers.length ? answers : undefined,
       });
       navigate(await guildLandingPath(guild));
@@ -72,6 +85,34 @@ export function InvitePage() {
       setLoading(false);
     }
   };
+
+  // Somebody who came back here from creating an account (or signing in) to
+  // use this invite has already said yes. If the server asks them nothing, do
+  // not make them say it again.
+  //
+  // It waits for the realtime connection. A brand-new session learns which
+  // database history it is talking to when that connection comes up, and any
+  // action begun before then is cancelled on purpose ("Database history
+  // changed…") — which is what a join fired the instant sign-up finished got.
+  const cameBackToJoin = searchParams.get('joining') === '1';
+  const connected = useUIStore((state) => state.connectionStatus) === 'connected';
+  // "Connected" is the stream opening; the history identity arrives with the
+  // first event on it, a few milliseconds later. That is the thing to wait for.
+  const historyKnown = useSyncExternalStore(
+    subscribeDatabaseHistory,
+    () => (guildScope ? getDatabaseHistoryEpoch(guildScope) != null : false),
+  );
+  useEffect(() => {
+    if (!cameBackToJoin || autoJoinTried.current) return;
+    if (!token || !guildScope || !invitePreview || gate || !connected || !historyKnown) return;
+    autoJoinTried.current = true;
+    void handleAccept();
+    // handleAccept is recreated every render; the guards above make this run once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cameBackToJoin, token, guildScope, invitePreview, gate, connected, historyKnown]);
+
+  const joiningSoon =
+    cameBackToJoin && !autoJoinTried.current && Boolean(token) && !gate && !error && (!connected || !historyKnown || !invitePreview);
 
   const guild = invitePreview?.guild;
   const iconSrc = safeStoredImageDataUrl(guild?.icon_hash);
@@ -138,23 +179,38 @@ export function InvitePage() {
             </p>
           )}
 
-          {invitePreview && (
+          {gate && (
             <div className="flex flex-col gap-3">
-              <label className="flex cursor-pointer items-start gap-2.5 text-label leading-relaxed text-text-secondary">
-                <input
-                  type="checkbox"
-                  checked={verificationAck}
-                  onChange={(e) => setVerificationAck(e.target.checked)}
-                  className="pc-checkbox mt-0.5"
-                />
-                I acknowledge this server’s rules and verification requirements.
-              </label>
-              <Textarea
-                className="min-h-[72px] resize-y"
-                placeholder="Verification answers (one per line, if this server requires them)"
-                value={verificationAnswers}
-                onChange={(e) => setVerificationAnswers(e.target.value)}
-              />
+              <p className="text-label text-text-secondary">
+                {guild?.name ?? 'This server'} asks new people for the following before they join.
+              </p>
+              {questions.map((question, index) => (
+                <Field key={index} label={question || `Question ${index + 1}`} required>
+                  <Input
+                    type="text"
+                    value={verificationAnswers[index] ?? ''}
+                    onChange={(e) =>
+                      setVerificationAnswers((previous) => {
+                        const next = [...previous];
+                        next[index] = e.target.value;
+                        return next;
+                      })
+                    }
+                    autoComplete="off"
+                  />
+                </Field>
+              ))}
+              {gate.require_ack && (
+                <label className="flex cursor-pointer items-start gap-2.5 text-label leading-relaxed text-text-secondary">
+                  <input
+                    type="checkbox"
+                    checked={verificationAck}
+                    onChange={(e) => setVerificationAck(e.target.checked)}
+                    className="pc-checkbox mt-0.5"
+                  />
+                  I have read this server’s rules and agree to follow them.
+                </label>
+              )}
             </div>
           )}
           </AuthScroll>
@@ -162,19 +218,25 @@ export function InvitePage() {
           <Button
             onClick={handleAccept}
             size="lg"
-            loading={loading}
-            disabled={loading || loadingPreview || !invitePreview || !verificationAck}
-            aria-label={loading ? 'Joining server' : 'Accept invite'}
+            loading={loading || joiningSoon}
+            disabled={loading || joiningSoon || loadingPreview || !invitePreview || (Boolean(token) && !gateSatisfied)}
+            aria-label={loading ? 'Joining server' : token ? 'Accept invite' : 'Create an account to join'}
             className="w-full"
           >
-            {loading ? 'Joining…' : 'Accept invite'}
+            {loading || joiningSoon ? 'Joining…' : token ? 'Accept invite' : 'Create an account to join'}
             {!loading && <ArrowRight size={16} aria-hidden />}
           </Button>
 
           {!token && (
-            <p className="text-meta leading-relaxed text-text-faint">
-              You’ll be asked to sign in first — your invite is saved and applied right after.
-            </p>
+            <Button
+              type="button"
+              variant="ghost"
+              size="lg"
+              onClick={() => continueSignedOut('/login')}
+              className="w-full"
+            >
+              I already have an account
+            </Button>
           )}
         </div>
       </AuthCard>

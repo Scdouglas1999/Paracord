@@ -82,34 +82,28 @@ const STEPS = [
     ),
   },
   {
-    title: 'Connect to an instance',
-    subtitle: 'You need an instance to get started',
+    title: 'Join a server, or start your own',
+    subtitle: 'Either way it takes a minute',
     icon: Server,
     content: (
       <>
         <p className="text-body text-text-secondary">
-          To use Paracord, you connect to an instance hosted by you or someone you trust.
+          Paracord has no central company server. Every community runs on a computer that belongs
+          to somebody in it.
         </p>
         <div className="pc-well px-3.5 py-1">
           <div className="py-3">
-            <div className="text-label text-text-primary">Join an existing instance</div>
+            <div className="text-label text-text-primary">A friend sent you an invite</div>
             <div className="mt-0.5 text-meta leading-relaxed text-text-faint">
-              Ask your admin for an instance address or invite link. It looks like{' '}
-              <code className="rounded-[var(--radius-chip)] bg-bg-mod-strong px-1 py-0.5 pc-mono text-text-secondary">
-                192.168.1.5:8090
-              </code>{' '}
-              or{' '}
-              <code className="rounded-[var(--radius-chip)] bg-bg-mod-strong px-1 py-0.5 pc-mono text-text-secondary">
-                paracord://invite/…
-              </code>
+              Paste the link and you are in. That is the whole job.
             </div>
           </div>
           <Divider />
           <div className="py-3">
-            <div className="text-label text-text-primary">Host your own instance</div>
+            <div className="text-label text-text-primary">You want to start one</div>
             <div className="mt-0.5 text-meta leading-relaxed text-text-faint">
-              Download the Paracord binary and run it on your machine, a VPS, or a box at home. It takes
-              a few minutes.
+              Run the one-line installer from paracord&rsquo;s download page on any computer that
+              stays on. It sets everything up and opens a link for you to finish in your browser.
             </div>
           </div>
         </div>
@@ -215,7 +209,7 @@ export function OnboardingWizard({ onComplete, onTryDemo }: OnboardingWizardProp
               className="flex-1"
               onClick={isLast ? handleComplete : () => setStep(step + 1)}
             >
-              {isLast ? 'Enter an instance address' : 'Next'}
+              {isLast ? 'Paste my invite link' : 'Next'}
               {!isLast && <ArrowRight size={16} aria-hidden />}
             </Button>
           </div>

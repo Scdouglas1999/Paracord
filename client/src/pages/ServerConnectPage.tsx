@@ -241,31 +241,31 @@ export function toFriendlyConnectionError(err: unknown): string {
     return err.message;
   }
   if (!(err instanceof Error)) {
-    return 'Could not connect. Check the address and make sure the instance is running.';
+    return 'Could not connect. Check the link, and ask whoever runs the server whether it is up.';
   }
 
   const msg = err.message.trim();
   const lower = msg.toLowerCase();
   if (!msg) {
-    return 'Could not connect. Check the URL and ensure the server is running.';
+    return 'Could not connect. Check the link, and ask whoever runs the server whether it is up.';
   }
   if (lower.includes('not a paracord instance')) {
-    return 'That address is reachable, but it does not identify as a Paracord instance.';
+    return 'Something answered at that address, but it is not a Paracord server. Check the link for a typo.';
   }
   if (lower.includes('timed out')) {
-    return 'Connection timed out. The instance may be down, blocked by a firewall, or too slow to respond.';
+    return 'The server did not answer. It may be switched off, or not reachable from your network. Ask whoever runs it, then try again.';
   }
   if (lower.includes('network request failed') || lower.includes('failed to fetch')) {
-    return 'Network request failed. Verify DNS, protocol (http/https), CORS configuration, and TLS certificate trust.';
+    return 'Could not reach that server. Check the link and your internet connection, then try again.';
   }
   if (lower.includes('certificate') || lower.includes('tls') || lower.includes('ssl')) {
-    return 'TLS handshake failed. Check the instance certificate chain and hostname.';
+    return 'The connection to that server could not be secured. If you typed the address by hand, check it; otherwise tell whoever runs the server that its certificate was refused.';
   }
   if (lower.includes('account not unlocked')) {
-    return 'Unlock your local account before connecting to this instance.';
+    return 'Unlock your account on this device first, then join.';
   }
   if (lower.includes('authentication failed') || lower.includes('challenge-response')) {
-    return 'Instance authentication failed. Check that this instance supports challenge-response auth and that your account exists.';
+    return 'That server did not accept your sign-in. Try again, or sign in with a password instead.';
   }
   return msg;
 }
@@ -348,7 +348,7 @@ export function ServerConnectPage() {
 
     const input = url.trim();
     if (!input) {
-      setError('Please enter an instance address or invite link.');
+      setError('Paste your invite link to continue.');
       setLoading(false);
       return;
     }
@@ -363,7 +363,7 @@ export function ServerConnectPage() {
       const parsedUrl = new URL(serverUrl);
       if (parsedUrl.protocol !== 'https:' && !(parsedUrl.protocol === 'http:' && isLocalhostHost(parsedUrl.hostname))) {
         throw new Error(
-          'Remote Paracord instances must use HTTPS. Plain HTTP is allowed only for localhost development instances.',
+          'That link starts with http://, which is only allowed for a server on this same computer. Ask for a link that starts with https://.',
         );
       }
 
@@ -371,7 +371,7 @@ export function ServerConnectPage() {
       const existingUrls = useServerListStore.getState().servers.map((s) => s.url);
       await syncTrustedHosts([...existingUrls, serverUrl]);
 
-      setStatus('Probing instance…');
+      setStatus('Finding the server…');
       const probe = await probeServer(serverUrl);
       const canonicalServerUrl = probe.canonicalServerUrl;
       const serverName = probe.name;
@@ -382,7 +382,7 @@ export function ServerConnectPage() {
 
       // Try challenge-response auth if the local account is set up.
       // If not, just save the server and redirect to login for password auth.
-      setStatus('Authenticating...');
+      setStatus('Signing you in…');
       try {
         await gateway.connectServer(serverId);
       } catch (authErr) {
@@ -445,8 +445,8 @@ export function ServerConnectPage() {
         <AuthCard>
           <form onSubmit={handleSubmit} className={AUTH_FORM}>
             <AuthHeading
-              title="Connect to an instance"
-              subtitle="Paste an instance address, invite, or portable link. Paracord probes it before you sign in."
+              title="Join a server"
+              subtitle="Paste the invite link you were sent. That is all you need."
             />
 
             {error && <ErrorBanner multiline message={error} />}
@@ -455,28 +455,25 @@ export function ServerConnectPage() {
                 wide window they sit beside the box they describe rather than
                 below it. */}
             <AuthScroll paired>
-            <Field label="Instance address or invite link" required>
+            <Field label="Invite link" required>
               <Input
                 type="text"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 required
                 className="pc-mono"
-                placeholder="chat.example.com or paracord://invite/…"
+                placeholder="Paste your invite link here"
                 autoFocus
               />
             </Field>
 
-            <div className="pc-well px-4 py-3">
-              <span className="text-section text-text-faint">Accepted formats</span>
-              {/* URLs have no spaces to break at: without this they run out
-                  of the well rather than wrapping inside it. */}
-              <ul className="mt-2 space-y-1 break-all pc-mono text-meta leading-relaxed text-text-secondary">
-                <li>paracord://invite/aBcDeFgH…</li>
-                <li>http://192.168.1.5:8090/invite/abc123</li>
-                <li>192.168.1.5:8090 · chat.example.com</li>
-              </ul>
-            </div>
+            {/* One sentence, not a table of URL formats: the person on this
+                screen was sent a link, and the box takes whatever they paste —
+                an invite, a paracord:// link, or a bare address. */}
+            <p className="text-meta leading-relaxed text-text-secondary">
+              No invite link? The address of the server works too, for example{' '}
+              <span className="pc-mono">chat.example.com</span>. Whoever runs it can tell you.
+            </p>
             </AuthScroll>
 
             {status && (
@@ -491,7 +488,7 @@ export function ServerConnectPage() {
 
             <div className="flex flex-col gap-2.5">
               <Button type="submit" size="lg" loading={loading} disabled={loading} className="w-full">
-                Add instance
+                Continue
               </Button>
               <Button
                 type="button"
@@ -501,7 +498,7 @@ export function ServerConnectPage() {
                 className="w-full"
               >
                 <Sparkles size={15} aria-hidden />
-                Try a public demo instance
+                Just looking? Try the demo server
               </Button>
             </div>
           </form>
@@ -513,7 +510,7 @@ export function ServerConnectPage() {
           <AuthCard>
             <div className="flex min-h-0 flex-col p-4 sm:p-5">
               <div className="flex items-center justify-between px-2 pb-1">
-                <h2 className="pc-display text-heading text-text-primary">Your instances</h2>
+                <h2 className="pc-display text-heading text-text-primary">Servers you have joined</h2>
                 <span className="pc-mono text-meta text-text-faint">{servers.length}</span>
               </div>
               <ul className="mt-1 flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">

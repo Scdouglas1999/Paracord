@@ -227,7 +227,7 @@ test.describe('first-run and account screens fit a native window', () => {
     await page.goto('/setup-server');
 
     const steps = [
-      { title: /Prove you run this instance/, counter: 'Step 1 of 4' },
+      { title: /Enter your setup code/, counter: 'Step 1 of 4' },
       { title: /Create the owner account/, counter: 'Step 2 of 4' },
       { title: /Protect the owner account/, counter: 'Step 3 of 4' },
       { title: /Name the place/, counter: 'Step 4 of 4' },
@@ -253,7 +253,7 @@ test.describe('first-run and account screens fit a native window', () => {
 
       if (index === steps.length - 1) break;
 
-      if (index === 0) await fill(/Claim token/, 'A1B2C3D4E5F6G7H8J9K0MNPQRSTVWXYZ23456789');
+      if (index === 0) await fill(/Setup code/, 'A1B2C3D4E5F6G7H8J9K0MNPQRSTVWXYZ23456789');
       if (index === 1) {
         await fill(/Username/, 'ada');
         await fill(/Email/, 'ada@example.test');
@@ -272,7 +272,7 @@ test.describe('first-run and account screens fit a native window', () => {
     await page.getByRole('button', { name: /^Back$/ }).click();
     await expect(page.getByLabel(/Username/)).toHaveValue('ada');
     await page.getByRole('button', { name: /^Back$/ }).click();
-    await expect(page.getByLabel(/Claim token/)).toHaveValue(
+    await expect(page.getByLabel(/Setup code/)).toHaveValue(
       'A1B2C3D4E5F6G7H8J9K0MNPQRSTVWXYZ23456789',
     );
   });
@@ -306,7 +306,7 @@ test.describe('first-run and account screens fit a native window', () => {
     for (const [label, viewport] of NATIVE_VIEWPORTS) {
       await page.setViewportSize(viewport);
       await page.goto('/connect');
-      const action = page.getByRole('button', { name: /^Add instance$/ });
+      const action = page.getByRole('button', { name: /^Continue$/ });
       await expect(action).toBeVisible();
       await expect(action).toBeInViewport({ ratio: 1 });
       await expectNoPageScroll(page, `connect at ${label}`);

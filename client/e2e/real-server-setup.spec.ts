@@ -257,7 +257,7 @@ test.describe('first-owner claim on a real unclaimed server', () => {
       // 3. A wrong token is refused, and says so, without creating anything.
       //    It is only the claim itself that can know that, so the wizard is
       //    walked to the end before the server ever sees it.
-      await page.getByLabel(/Claim token/).fill('X'.repeat(CLAIM_TOKEN.length));
+      await page.getByLabel(/Setup code/).fill('X'.repeat(CLAIM_TOKEN.length));
       await continueButton.click();
 
       await expect(page.getByText('Step 2 of 4')).toBeVisible();
@@ -285,8 +285,8 @@ test.describe('first-owner claim on a real unclaimed server', () => {
       await backButton.click();
       await backButton.click();
       await backButton.click();
-      await expect(page.getByLabel(/Claim token/)).toHaveValue('X'.repeat(CLAIM_TOKEN.length));
-      await page.getByLabel(/Claim token/).fill(CLAIM_TOKEN);
+      await expect(page.getByLabel(/Setup code/)).toHaveValue('X'.repeat(CLAIM_TOKEN.length));
+      await page.getByLabel(/Setup code/).fill(CLAIM_TOKEN);
       await continueButton.click();
       await expect(page.getByLabel(/Username/)).toHaveValue(ownerName);
       await continueButton.click();

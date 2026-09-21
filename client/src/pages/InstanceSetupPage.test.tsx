@@ -2,7 +2,12 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { InstanceSetupPage, claimStepError, passwordRulesMismatch } from './InstanceSetupPage';
+import {
+  InstanceSetupPage,
+  claimStepError,
+  passwordRulesMismatch,
+  takeSetupCodeFromLocation,
+} from './InstanceSetupPage';
 
 const mockGetSetupStatus = vi.hoisted(() => vi.fn());
 const mockGetPasswordRequirements = vi.hoisted(() => vi.fn());
@@ -78,7 +83,7 @@ type User = ReturnType<typeof userEvent.setup>;
 
 /** Step 1 → step 2. */
 async function passToken(user: User, token = CLAIM_TOKEN) {
-  await user.type(await screen.findByLabelText(/Claim token/), token);
+  await user.type(await screen.findByLabelText(/Setup code/), token);
   await user.click(continueButton());
 }
 
@@ -120,18 +125,18 @@ describe('InstanceSetupPage', () => {
 
     expect(await screen.findByText('Set up your Paracord instance')).toBeInTheDocument();
     expect(
-      screen.getByText(/You’re setting up the instance itself, not joining one/),
+      screen.getByText(/This makes you the owner/),
     ).toBeInTheDocument();
-    expect(screen.getByText(/Joining someone else’s community instead\?/)).toBeInTheDocument();
+    expect(screen.getByText(/Joining someone else’s server instead\?/)).toBeInTheDocument();
   });
 
   it('explains where the claim token comes from before asking for it', async () => {
     renderPage();
 
-    expect(await screen.findByText(/Prove you run this instance/)).toBeInTheDocument();
+    expect(await screen.findByText(/Enter your setup code/)).toBeInTheDocument();
     expect(screen.getByText(/first-owner-claim\.txt/)).toBeInTheDocument();
     expect(
-      screen.getByText(/Nobody can create an account here until this token is used/),
+      screen.getByText(/Nobody can create an account here until it has been used/),
     ).toBeInTheDocument();
   });
 
@@ -143,12 +148,12 @@ describe('InstanceSetupPage', () => {
     // Only this step's field is on screen — the rest of the form is not below
     // a fold, it is not rendered yet.
     expect(screen.queryByLabelText(/Instance name/)).not.toBeInTheDocument();
-    expect(screen.getByLabelText(/Claim token/)).toHaveFocus();
+    expect(screen.getByLabelText(/Setup code/)).toHaveFocus();
 
     await passToken(user);
     expect(await screen.findByText('Step 2 of 4')).toBeInTheDocument();
     expect(screen.getByLabelText(/Username/)).toHaveFocus();
-    expect(screen.queryByLabelText(/Claim token/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Setup code/)).not.toBeInTheDocument();
 
     await passOwner(user);
     expect(await screen.findByText('Step 3 of 4')).toBeInTheDocument();
@@ -174,16 +179,16 @@ describe('InstanceSetupPage', () => {
   it('refuses to leave a step whose field is wrong, and says so on the field', async () => {
     const user = userEvent.setup();
     renderPage();
-    await screen.findByLabelText(/Claim token/);
+    await screen.findByLabelText(/Setup code/);
 
     // Whitespace only: the `required` attribute accepts it, the server does not.
-    await user.type(screen.getByLabelText(/Claim token/), '   ');
+    await user.type(screen.getByLabelText(/Setup code/), '   ');
     await user.click(continueButton());
 
     expect(
-      await screen.findByText(/Paste the claim token from your instance’s terminal/),
+      await screen.findByText(/Paste the setup code your server printed/),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText(/Claim token/)).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByLabelText(/Setup code/)).toHaveAttribute('aria-invalid', 'true');
     // Still on step 1.
     expect(screen.getByText('Step 1 of 4')).toBeInTheDocument();
   });
@@ -191,20 +196,20 @@ describe('InstanceSetupPage', () => {
   it('withdraws a field rejection as soon as the field is edited', async () => {
     const user = userEvent.setup();
     renderPage();
-    await screen.findByLabelText(/Claim token/);
+    await screen.findByLabelText(/Setup code/);
 
     await user.click(continueButton());
-    expect(await screen.findByText(/Paste the claim token/)).toBeInTheDocument();
+    expect(await screen.findByText(/Paste the setup code/)).toBeInTheDocument();
 
-    await user.type(screen.getByLabelText(/Claim token/), CLAIM_TOKEN);
-    await waitFor(() => expect(screen.queryByText(/Paste the claim token/)).not.toBeInTheDocument());
+    await user.type(screen.getByLabelText(/Setup code/), CLAIM_TOKEN);
+    await waitFor(() => expect(screen.queryByText(/Paste the setup code/)).not.toBeInTheDocument());
   });
 
   it('advances on Enter, exactly like the visible button', async () => {
     const user = userEvent.setup();
     renderPage();
 
-    await user.type(await screen.findByLabelText(/Claim token/), `${CLAIM_TOKEN}{Enter}`);
+    await user.type(await screen.findByLabelText(/Setup code/), `${CLAIM_TOKEN}{Enter}`);
 
     expect(await screen.findByText('Step 2 of 4')).toBeInTheDocument();
   });
@@ -238,7 +243,7 @@ describe('InstanceSetupPage', () => {
     expect(screen.getByLabelText(/Display name/)).toHaveValue('Ada Lovelace');
 
     await user.click(await screen.findByRole('button', { name: 'Back' }));
-    expect(await screen.findByLabelText(/Claim token/)).toHaveValue(CLAIM_TOKEN);
+    expect(await screen.findByLabelText(/Setup code/)).toHaveValue(CLAIM_TOKEN);
   });
 
   it('does not validate on the way back — a half-typed value is still your work', async () => {
@@ -259,7 +264,7 @@ describe('InstanceSetupPage', () => {
     renderPage();
 
     expect(await screen.findByText('Welcome back')).toBeInTheDocument();
-    expect(screen.queryByLabelText(/Claim token/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Setup code/)).not.toBeInTheDocument();
   });
 
   it('reports an unreachable server instead of offering a claim that cannot work', async () => {
@@ -370,7 +375,7 @@ describe('InstanceSetupPage', () => {
       await walkToLastStep(user);
       await user.click(claimButton());
 
-      const banner = await screen.findByText(/not the one this instance printed/);
+      const banner = await screen.findByText(/not the one your server printed/);
       expect(scrollIntoView).toHaveBeenCalled();
       // The live region holding the banner takes focus, so the rejection is
       // announced as well as scrolled to.
@@ -396,9 +401,12 @@ describe('InstanceSetupPage', () => {
     await walkToLastStep(user);
     await user.click(claimButton());
 
-    expect(await screen.findByText(/not the one this instance printed/)).toBeInTheDocument();
+    expect(await screen.findByText(/not the one your server printed/)).toBeInTheDocument();
     expect(screen.queryByText('unauthorized')).not.toBeInTheDocument();
-    expect(claimButton()).toBeEnabled();
+    // The code is the thing that was wrong, so that is the field they are
+    // returned to — with it, and everything after it, still filled in.
+    expect(await screen.findByLabelText(/Setup code/)).toHaveValue(CLAIM_TOKEN);
+    expect(continueButton()).toBeEnabled();
   });
 
   it('passes through the operator-authored message the server sends for other failures', async () => {
@@ -495,5 +503,76 @@ describe('passwordRulesMismatch', () => {
     });
     expect(message).toMatch(/16–128 bytes/);
     expect(message).toMatch(/symbol not required/);
+  });
+});
+
+describe('takeSetupCodeFromLocation', () => {
+  const at = (hash: string) => ({ hash, pathname: '/setup-server', search: '' });
+
+  it('reads the code from the fragment and scrubs it from the address bar', () => {
+    const replaceState = vi.fn();
+    const code = takeSetupCodeFromLocation(at(`#claim=${CLAIM_TOKEN}`), { replaceState });
+    expect(code).toBe(CLAIM_TOKEN);
+    expect(replaceState).toHaveBeenCalledWith(null, '', '/setup-server');
+  });
+
+  it('leaves an ordinary visit alone', () => {
+    const replaceState = vi.fn();
+    expect(takeSetupCodeFromLocation(at(''), { replaceState })).toBeNull();
+    expect(takeSetupCodeFromLocation(at('#something-else'), { replaceState })).toBeNull();
+    expect(replaceState).not.toHaveBeenCalled();
+  });
+
+  it('refuses something that is not a code, and still scrubs it', () => {
+    const replaceState = vi.fn();
+    expect(takeSetupCodeFromLocation(at('#claim=<script>'), { replaceState })).toBeNull();
+    expect(takeSetupCodeFromLocation(at('#claim=short'), { replaceState })).toBeNull();
+    expect(replaceState).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('InstanceSetupPage, opened from the link the server printed', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetSetupStatus.mockResolvedValue({ data: { setup_required: true } });
+    mockGetPasswordRequirements.mockResolvedValue({ data: SERVER_REQUIREMENTS });
+    mockAuthOptions.mockResolvedValue({ data: { require_email: false } });
+    mockFetchUser.mockResolvedValue(undefined);
+    window.location.hash = `#claim=${CLAIM_TOKEN}`;
+  });
+
+  it('starts at who the owner is, never shows the code field, and claims with the code', async () => {
+    const user = userEvent.setup();
+    mockClaimInstance.mockResolvedValue({
+      data: { token: 't', refresh_token: 'r', user: { id: '1' }, space: { id: '9' } },
+    });
+    renderPage();
+
+    expect(await screen.findByLabelText(/Username/)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Setup code/)).not.toBeInTheDocument();
+    expect(screen.getByText('Step 1 of 3')).toBeInTheDocument();
+    expect(window.location.hash).toBe('');
+
+    await passOwner(user);
+    await passPassword(user);
+    for (const input of await screen.findAllByRole('textbox')) await user.type(input, 'Home');
+    await user.click(claimButton());
+    await waitFor(() =>
+      expect(mockClaimInstance).toHaveBeenCalledWith(expect.objectContaining({ token: CLAIM_TOKEN })),
+    );
+  });
+
+  it('puts the code field back when the server refuses the code', async () => {
+    const user = userEvent.setup();
+    mockClaimInstance.mockRejectedValue({ response: { status: 401, data: {} } });
+    renderPage();
+    await passOwner(user);
+    await passPassword(user);
+    const inputs = await screen.findAllByRole('textbox');
+    for (const input of inputs) await user.type(input, 'Home');
+    await user.click(claimButton());
+
+    expect(await screen.findByLabelText(/Setup code/)).toHaveValue(CLAIM_TOKEN);
+    expect(screen.getByText(/not the one your server printed/)).toBeInTheDocument();
   });
 });

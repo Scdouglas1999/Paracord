@@ -146,6 +146,17 @@ export function LayoutTour() {
   const [guildDone, setGuildDone] = useState(() => getVersionedStorageItem(GUILD_KEY) === DONE);
   const [active, setActive] = useState<{ tour: TourName; index: number } | null>(null);
   const [rect, setRect] = useState<DOMRect | null>(null);
+  const [coveredByModal, setCoveredByModal] = useState(false);
+  useEffect(() => {
+    if (!active) {
+      setCoveredByModal(false);
+      return undefined;
+    }
+    const check = () => setCoveredByModal(modalIsOpen());
+    check();
+    const timer = window.setInterval(check, START_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [active]);
 
   const tooltipRef = useRef<HTMLDivElement>(null);
   const focusedStepRef = useRef<string | null>(null);
@@ -293,7 +304,11 @@ export function LayoutTour() {
     return () => cancelAnimationFrame(id);
   }, [active, rect]);
 
-  if (!active || !rect) return null;
+  // …and steps aside if one opens after it has started. The shell tour begins
+  // on the first frame; a server's welcome dialog opens a moment later, once its
+  // channels have loaded — so a new member's very first screen was a coach mark
+  // sitting on top of the dialog welcoming them. It comes back when that closes.
+  if (!active || !rect || coveredByModal) return null;
 
   const steps = stepsFor(active.tour);
   const step = steps[active.index];

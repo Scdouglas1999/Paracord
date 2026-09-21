@@ -1,3 +1,4 @@
+import { destinationAfterLogin } from './LoginPage';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useAuthStore } from '../stores/authStore';
@@ -170,9 +171,17 @@ export function RegisterPage() {
         draft.displayName.trim(),
       );
 
-      // Go straight to the app — legacy token auth works without a local
-      // keypair. Users can set up a local crypto identity later in Settings.
-      navigate('/app');
+      // Somebody who arrived by an invite made this account in order to use
+      // it. Sending them to an empty app instead lost the invite entirely —
+      // only the sign-in path ever looked for it.
+      let pendingInvite: string | null = null;
+      try {
+        pendingInvite = sessionStorage.getItem('paracord:pending-invite');
+        if (pendingInvite) sessionStorage.removeItem('paracord:pending-invite');
+      } catch {
+        /* storage unavailable: fall through to the app */
+      }
+      navigate(destinationAfterLogin(pendingInvite, true) ?? '/app');
     } catch (err: unknown) {
       setError(extractApiError(err) || 'Registration failed. Please try again.');
     } finally {

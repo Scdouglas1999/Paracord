@@ -6,7 +6,7 @@ use axum::{
 use chrono::Utc;
 use paracord_contracts::invite::{
     AcceptInviteRequest, CreateInviteRequest, GuildInvite, InviteAcceptGuild, InviteAcceptResponse,
-    InviteGuildPreview, InvitePreview,
+    InviteGuildPreview, InviteJoinGate, InvitePreview,
 };
 use paracord_core::AppState;
 use paracord_federation::client::{FederationInviteRequest, FederationJoinRequest};
@@ -230,6 +230,41 @@ pub async fn create_invite(
     Ok((StatusCode::CREATED, Json(guild_invite(&invite, space_id))))
 }
 
+/// The verification gate as a newcomer needs to see it: whether they must
+/// acknowledge the rules, and the questions — never the answers. `None` when the
+/// gate is off, so the invite page asks for nothing. Reads the same two
+/// locations `accept_invite` enforces from, so what is shown is what is checked.
+fn join_gate_preview(bot_settings: &Value) -> Option<InviteJoinGate> {
+    let config = bot_settings
+        .get("auto_mod")
+        .and_then(|value| value.get("verification_gate"))
+        .or_else(|| bot_settings.get("verification_gate"))?;
+    if !parse_bool(config.get("enabled"), false) {
+        return None;
+    }
+    let questions = config
+        .get("questions")
+        .and_then(|value| value.as_array())
+        .map(|questions| {
+            questions
+                .iter()
+                .map(|question| {
+                    question
+                        .get("question")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string()
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    Some(InviteJoinGate {
+        require_ack: parse_bool(config.get("require_ack"), true),
+        questions,
+    })
+}
+
 pub async fn get_invite(
     State(state): State<AppState>,
     Path(code): Path<String>,
@@ -266,8 +301,15 @@ pub async fn get_invite(
     let member_count = u32::try_from(member_count)
         .map_err(|_| ApiError::Internal(anyhow::anyhow!("Invalid member count")))?;
 
+    let join_gate = guild
+        .as_ref()
+        .and_then(|g| g.bot_settings.as_deref())
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .and_then(|settings| join_gate_preview(&settings));
+
     Ok(Json(InvitePreview {
         code: invite.code.clone(),
+        join_gate,
         guild: guild.map(|g| InviteGuildPreview {
             id: g.id.to_string(),
             name: g.name.clone(),
@@ -735,4 +777,33 @@ pub async fn delete_invite(
     )
     .await;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod join_gate_preview_tests {
+    use super::join_gate_preview;
+    use serde_json::json;
+
+    #[test]
+    fn an_ordinary_server_asks_a_newcomer_for_nothing() {
+        assert!(join_gate_preview(&json!({})).is_none());
+        assert!(join_gate_preview(&json!({ "verification_gate": { "enabled": false } })).is_none());
+    }
+
+    #[test]
+    fn an_enabled_gate_shows_its_questions_and_never_its_answers() {
+        let settings = json!({ "auto_mod": { "verification_gate": {
+            "enabled": true,
+            "questions": [{ "question": " Who invited you? ", "answer": "ada" }],
+        } } });
+        let gate = join_gate_preview(&settings).expect("gate is on");
+        // `require_ack` defaults to true, exactly as `accept_invite` enforces it.
+        assert!(gate.require_ack);
+        assert_eq!(gate.questions, vec!["Who invited you?".to_string()]);
+        let wire = serde_json::to_string(&gate).unwrap();
+        assert!(
+            !wire.contains("ada"),
+            "an expected answer reached the wire: {wire}"
+        );
+    }
 }
