@@ -3,20 +3,29 @@
 #
 # What it covers (all offline — no GitHub access required):
 #   1. bash/sh syntax + shellcheck (when installed) on scripts/install.sh
-#   2. PowerShell syntax check on scripts/install.ps1 via PSParser (when pwsh
-#      is available — preinstalled on GitHub hosted runners; skipped otherwise)
+#   2. scripts/install.ps1 is pure ASCII with no BOM (Windows PowerShell 5.1
+#      parse safety and `irm | iex` safety), plus tokenizer and full-grammar
+#      parse checks when pwsh is available — preinstalled on GitHub hosted
+#      runners, skipped otherwise
 #   3. Builds a fake release tarball matching the real layout
 #      (paracord-server/{paracord-server,livekit-server,paracord.example.toml,
 #      README.txt}), using target/release/paracord-server when it exists and a
 #      stub shell-script binary otherwise.
 #   4. Local-archive install into a temp prefix (non-root, no systemd) and
-#      asserts binary/config/data land where documented.
+#      asserts binary/config/data land where documented, and that the closing
+#      instructions are the short plain-language ones (the server's own `init`
+#      walkthrough is held back).
 #   5. Re-run = upgrade: config preserved byte-for-byte, old binary backed up.
-#   6. HTTP download path: serves the tarball + a SHA256SUMS file from a local
+#   6. The one link that finishes setup: built from the token file the server
+#      writes beside the config, preferring the link file when one exists,
+#      always against the loopback address and the configured port. Checks the
+#      closing block for jargon and length, and that PARACORD_NO_BROWSER=1 is
+#      honoured (nothing here may open a browser).
+#   7. HTTP download path: serves the tarball + a SHA256SUMS file from a local
 #      web server, asserting checksum verification runs and succeeds.
-#   7. Negative test: a wrong checksum aborts before touching the install dir.
-#   8. Bare-binary PARACORD_LOCAL_ARCHIVE (a plain executable, not a tarball).
-#   9. When passwordless sudo + systemd are available (and PARACORD_SMOKE_SKIP_ROOT
+#   8. Negative test: a wrong checksum aborts before touching the install dir.
+#   9. Bare-binary PARACORD_LOCAL_ARCHIVE (a plain executable, not a tarball).
+#  10. When passwordless sudo + systemd are available (and PARACORD_SMOKE_SKIP_ROOT
 #      is not 1): the root path creates
 #      the `paracord` user and a working system unit (using the stub binary so
 #      no real ports are bound), then cleans up everything it created.
@@ -71,6 +80,17 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 echo "== Step 2: install.ps1 syntax (PowerShell)"
 
+# Pure ASCII, no BOM. Windows PowerShell 5.1 reads a BOM-less file in the
+# machine's ANSI code page, so any non-ASCII byte either changes meaning or
+# needs a BOM - and a BOM is exactly what breaks `irm ... | iex`, which parses
+# the bytes it downloads. ASCII sidesteps both. Checked without PowerShell so it
+# runs everywhere.
+if python3 -c 'import sys; d = open("scripts/install.ps1", "rb").read(); sys.exit(0 if all(b < 128 for b in d) else 1)'; then
+    pass 'install.ps1 is pure ASCII with no BOM'
+else
+    fail 'install.ps1 has non-ASCII bytes (5.1 would need a BOM, and a BOM breaks the iex one-liner)'
+fi
+
 PWSH="$(command -v pwsh || command -v powershell || true)"
 if [ -n "$PWSH" ]; then
     # Intentional single quotes: the whole block is PowerShell, not shell.
@@ -86,8 +106,23 @@ if [ -n "$PWSH" ]; then
     else
         fail "PowerShell syntax check on install.ps1"
     fi
+    # Tokenizing accepts text the grammar rejects, so also run the real parser:
+    # this is the only automated check of install.ps1 there is, since nothing in
+    # CI can execute the Windows path.
+    # shellcheck disable=SC2016
+    if "$PWSH" -NoProfile -Command '
+        $errs = $null
+        [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path "scripts/install.ps1").Path, [ref]$null, [ref]$errs)
+        if ($errs) { $errs | ForEach-Object { Write-Host $_ }; exit 1 }
+        exit 0
+    '; then
+        pass "PowerShell parse check (full grammar) on install.ps1"
+    else
+        fail "PowerShell parse check (full grammar) on install.ps1"
+    fi
 else
-    note "pwsh not available — skipping install.ps1 syntax check"
+    note "pwsh not available — skipping install.ps1 syntax checks"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -192,6 +227,7 @@ PARACORD_LOCAL_ARCHIVE="$WORK/$ASSET" \
 PARACORD_INSTALL_DIR="$INST" \
 PARACORD_LINK_DIR="$LINKD" \
 PARACORD_NO_SYSTEMD=1 \
+PARACORD_NO_BROWSER=1 \
     sh scripts/install.sh > "$WORK/install1.log" 2>&1 || { cat "$WORK/install1.log"; fail "local-archive install exited non-zero"; }
 
 assert_executable "$INST/paracord-server"            "server binary installed + executable"
@@ -202,10 +238,17 @@ assert_contains    "$INST/config/paracord.toml" "jwt_secret" "config contains a 
 assert_contains    "$INST/config/paracord.toml" "$INST/data/" "config data paths pinned to install dir"
 assert_not_exists  "$INST/config/paracord.toml.bak" "no stray config backup"
 assert_symlink     "$LINKD/paracord-server"        "PATH symlink created"
-if grep -q "Open / share" "$WORK/install1.log"; then
-    pass "installer prints the share URL"
+assert_contains "$WORK/install1.log" "Paracord is installed" "ending says the install is done"
+assert_contains "$WORK/install1.log" "every channel has an Invite button" "ending says how to invite friends"
+assert_contains "$WORK/install1.log" "To update later, run this same command again" "ending says how to update"
+assert_contains "$WORK/install1.log" "Address:" "Details block prints the address"
+assert_contains "$WORK/install1.log" "$INST/config/paracord.toml" "Details block prints the settings path"
+# `paracord-server init` prints its own operator walkthrough; the installer
+# holds it back so there is exactly one set of closing instructions.
+if grep -qiE "claim token|Next steps" "$WORK/install1.log"; then
+    fail "installer leaked the server's init walkthrough"
 else
-    fail "installer prints the share URL"
+    pass "server's own init walkthrough held back"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -220,6 +263,7 @@ PARACORD_LOCAL_ARCHIVE="$WORK/$ASSET" \
 PARACORD_INSTALL_DIR="$INST" \
 PARACORD_LINK_DIR="$LINKD" \
 PARACORD_NO_SYSTEMD=1 \
+PARACORD_NO_BROWSER=1 \
     sh scripts/install.sh > "$WORK/install2.log" 2>&1 || { cat "$WORK/install2.log"; fail "upgrade run exited non-zero"; }
 
 if cmp -s "$WORK/config.before" "$INST/config/paracord.toml"; then
@@ -236,7 +280,80 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-echo "== Step 6: HTTP download path with SHA-256 verification"
+echo "== Step 6: the one link that finishes setup"
+
+# The link the owner clicks carries the one-time owner token the server writes
+# beside the config. `init` never mints one (only a real server start does), so
+# the token is planted here and the installer re-run over the same directory
+# with its binary removed - what a fresh install sees once its server is up.
+LINK_INST="$WORK/inst_link"
+link_install() {
+    # link_install <logfile>
+    PARACORD_LOCAL_ARCHIVE="$WORK/$ASSET" \
+    PARACORD_INSTALL_DIR="$LINK_INST" \
+    PARACORD_LINK_DIR=none \
+    PARACORD_NO_SYSTEMD=1 \
+    PARACORD_NO_BROWSER=1 \
+        sh scripts/install.sh > "$1" 2>&1
+}
+
+link_install "$WORK/install_link1.log" || { cat "$WORK/install_link1.log"; fail "setup-link install exited non-zero"; }
+
+# Move the server off 8443 before planting anything: the installer asks the
+# address in the config whether setup is still needed, and on a developer box
+# something else answering there must not be mistaken for this install.
+sed -i -e 's/^port = 8443$/port = 18999/' "$LINK_INST/config/paracord.toml"
+rm -f "$LINK_INST/paracord-server"
+printf 'SMOKETOKEN123456\n' > "$LINK_INST/config/first-owner-claim.txt"
+link_install "$WORK/install_link2.log" || { cat "$WORK/install_link2.log"; fail "setup-link re-install exited non-zero"; }
+
+assert_contains "$WORK/install_link2.log" "source: token file" "link was built from the token file"
+assert_contains "$WORK/install_link2.log" "https://localhost:18999/setup-server#claim=SMOKETOKEN123456" \
+    "link is loopback + configured port + token in the fragment"
+assert_contains "$WORK/install_link2.log" "Finish setting up" "ending leads with finishing setup"
+# PARACORD_NO_BROWSER=1: nothing was opened, so the wording must not claim it was.
+if grep -q "Finish setting up (opens in your browser)" "$WORK/install_link2.log"; then
+    fail "PARACORD_NO_BROWSER=1 still claimed to open a browser"
+else
+    pass "PARACORD_NO_BROWSER=1 honoured (link printed, nothing opened)"
+fi
+
+# A link file published by the server wins over the raw token, and the address
+# the owner is told to open on this machine stays loopback.
+printf 'https://192.168.5.5:18999/setup-server#claim=LINKFILETOKEN\n' \
+    > "$LINK_INST/config/first-owner-claim-link.txt"
+rm -f "$LINK_INST/paracord-server"
+link_install "$WORK/install_link3.log" || { cat "$WORK/install_link3.log"; fail "link-file install exited non-zero"; }
+assert_contains "$WORK/install_link3.log" "source: link file" "link file preferred over the token file"
+assert_contains "$WORK/install_link3.log" "https://localhost:18999/setup-server#claim=LINKFILETOKEN" \
+    "link file's token re-based on the loopback address"
+if grep -q "192.168.5.5" "$WORK/install_link3.log"; then
+    fail "local setup link should not point at a LAN address"
+else
+    pass "local setup link does not point at a LAN address"
+fi
+
+# What a non-technical owner reads: the block from the headline down to
+# "Details". Jargon belongs below that line, not above it.
+awk '/^Paracord (is installed|was updated)/ { on = 1 } on && /^Details$/ { exit } on { print }' \
+    "$WORK/install_link2.log" > "$WORK/ending.txt"
+if [ -s "$WORK/ending.txt" ]; then pass "closing block found"; else fail "closing block found"; fi
+# `|| true`: no jargon means grep exits 1, and this script runs under `set -e`.
+JARGON="$(grep -Eio 'claim token|instance|self-signed|QUIC|TCP|UDP|systemd|systemctl|operator|space' "$WORK/ending.txt" | sort -u | tr '\n' ' ' || true)"
+if [ -z "$JARGON" ]; then
+    pass "closing block is free of jargon"
+else
+    fail "closing block uses jargon: $JARGON"
+fi
+ENDING_LINES="$(wc -l < "$WORK/ending.txt")"
+if [ "$ENDING_LINES" -le 13 ]; then
+    pass "closing block is short ($ENDING_LINES lines)"
+else
+    fail "closing block is $ENDING_LINES lines; it should be at most 13"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+echo "== Step 7: HTTP download path with SHA-256 verification"
 
 SERVE_DIR="$WORK/serve"
 mkdir -p "$SERVE_DIR/v$FAKE_VERSION"
@@ -263,6 +380,7 @@ PARACORD_RELEASE_BASE_URL="http://127.0.0.1:$HTTP_PORT" \
 PARACORD_INSTALL_DIR="$INST2" \
 PARACORD_LINK_DIR=none \
 PARACORD_NO_SYSTEMD=1 \
+PARACORD_NO_BROWSER=1 \
     sh scripts/install.sh > "$WORK/install3.log" 2>&1 || { cat "$WORK/install3.log"; fail "HTTP install exited non-zero"; }
 
 assert_executable "$INST2/paracord-server" "HTTP install placed the binary"
@@ -274,7 +392,7 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-echo "== Step 7: bad checksum aborts before installing"
+echo "== Step 8: bad checksum aborts before installing"
 
 # Deliberately wrong digest — constant so the corruption can never be a no-op.
 printf '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef  %s\n' "$ASSET" \
@@ -285,6 +403,7 @@ if PARACORD_VERSION="$FAKE_VERSION" \
    PARACORD_INSTALL_DIR="$INST3" \
    PARACORD_LINK_DIR=none \
    PARACORD_NO_SYSTEMD=1 \
+   PARACORD_NO_BROWSER=1 \
        sh scripts/install.sh > "$WORK/install4.log" 2>&1; then
     fail "corrupt checksum install should have failed"
 else
@@ -301,7 +420,7 @@ kill "$HTTPD_PID" 2>/dev/null || true
 unset HTTPD_PID
 
 # ─────────────────────────────────────────────────────────────────────────────
-echo "== Step 8: bare binary as PARACORD_LOCAL_ARCHIVE"
+echo "== Step 9: bare binary as PARACORD_LOCAL_ARCHIVE"
 
 if [ -x "$REAL_BIN" ] && head -c 4 "$REAL_BIN" | grep -q ELF; then
     INST4="$WORK/inst4"
@@ -309,6 +428,7 @@ if [ -x "$REAL_BIN" ] && head -c 4 "$REAL_BIN" | grep -q ELF; then
     PARACORD_INSTALL_DIR="$INST4" \
     PARACORD_LINK_DIR=none \
     PARACORD_NO_SYSTEMD=1 \
+    PARACORD_NO_BROWSER=1 \
         sh scripts/install.sh > "$WORK/install5.log" 2>&1 || { cat "$WORK/install5.log"; fail "bare-binary install exited non-zero"; }
     assert_executable "$INST4/paracord-server" "bare binary installed"
     assert_file "$INST4/config/paracord.toml" "bare binary install ran init"
@@ -317,7 +437,7 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-echo "== Step 9: root + systemd path (only when safely testable)"
+echo "== Step 10: root + systemd path (only when safely testable)"
 
 ROOT_OK=0
 ROOT_NOTED=0   # set when a specific skip reason was already printed
@@ -347,6 +467,7 @@ if [ "$ROOT_OK" = "1" ]; then
         PARACORD_LOCAL_ARCHIVE="$WORK/$STUB_ASSET" \
         PARACORD_INSTALL_DIR="$RINST" \
         PARACORD_LINK_DIR=none \
+        PARACORD_NO_BROWSER=1 \
             sh scripts/install.sh > "$WORK/install_root.log" 2>&1; then
 
         assert_executable "$RINST/paracord-server" "root install placed binary"

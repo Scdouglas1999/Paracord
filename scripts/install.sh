@@ -16,6 +16,10 @@
 #     user manager: a per-user unit; otherwise prints the command to run
 #   - runs `paracord-server init` to generate config/paracord.toml (fresh JWT
 #     secret, self-signed TLS defaults) and prints the URL to open
+#   - waits for the running server to mint the one-time owner setup token, turns
+#     it into a ready-to-open link (<local-url>/setup-server#claim=<TOKEN> — a
+#     fragment, so the token never reaches a server log or proxy log), opens it
+#     in the default browser on a desktop session and always prints it
 #   - re-running upgrades the binary in place: config/ and data/ are preserved
 #     and the previous binary is kept under backups/
 #
@@ -27,6 +31,7 @@
 #   PARACORD_INSTALL_DIR        install destination
 #   PARACORD_LINK_DIR           directory for a `paracord-server` PATH symlink
 #   PARACORD_NO_SYSTEMD=1       never create or touch systemd units
+#   PARACORD_NO_BROWSER=1       never open a browser; just print the setup link
 #   PARACORD_GITHUB_REPO        owner/repo for release lookup
 #                               (default Scdouglas1999/Paracord)
 #
@@ -43,11 +48,45 @@ SERVICE_NAME="paracord"
 LAUNCHD_LABEL="com.paracord.server"
 OS_FAMILY="linux"
 RUN_USER="paracord"
+DOCS_URL="https://github.com/${GITHUB_REPO}/blob/main/docs/port-forwarding.md"
+
+# State the ending text reads. Set before anything can print.
+IS_UPGRADE=0
+SERVER_STARTED=0
+# Set only when this run handed the server to a service manager that started it.
+SERVICE_MANAGED=0
+BROWSER_OPENED=0
+CLAIM_LINK=""
+CLAIM_LINK_SOURCE=""
+CLAIM_TOKEN_FILE=""
+CLAIM_LINK_FILE=""
+LINGER_HINT=""
+SERVICE_DESC=""
+SERVICE_LOGS=""
+VERSION_LABEL=""
+LOCAL_URL="https://localhost:8443"
+SHARE_URL="$LOCAL_URL"
+WEB_PORT="8443"
+VOICE_PORT="8443"
+WEB_SCHEME="https"
 
 say()  { printf '%s\n' "$*"; }
 step() { printf '\n==> %s\n' "$*"; }
 warn() { printf '%s: warning: %s\n' "$PROG" "$*" >&2; }
 die()  { printf '%s: error: %s\n' "$PROG" "$*" >&2; exit 1; }
+
+# The closing "Details" block is deliberately quieter than the steps above it.
+# Only a real terminal gets the escape; a log file or a pipe stays plain text.
+dim_start() {
+    if [ -t 1 ] && [ -n "${TERM:-}" ] && [ "${TERM:-}" != "dumb" ]; then
+        printf '\033[2m'
+    fi
+}
+dim_end() {
+    if [ -t 1 ] && [ -n "${TERM:-}" ] && [ "${TERM:-}" != "dumb" ]; then
+        printf '\033[0m'
+    fi
+}
 
 usage() {
     cat <<'EOF'
@@ -64,7 +103,7 @@ Common invocations:
 
 Environment overrides: PARACORD_VERSION, PARACORD_RELEASE_BASE_URL,
 PARACORD_LOCAL_ARCHIVE, PARACORD_INSTALL_DIR, PARACORD_LINK_DIR,
-PARACORD_NO_SYSTEMD=1, PARACORD_GITHUB_REPO.
+PARACORD_NO_SYSTEMD=1, PARACORD_NO_BROWSER=1, PARACORD_GITHUB_REPO.
 EOF
 }
 
@@ -309,8 +348,10 @@ install_files() {
     done
     rm -rf "$stage"
 
+    # Not a problem: voice and video run on Paracord's own media engine. The
+    # optional LiveKit companion is only needed by deployments that opt into it.
     [ -f "$INSTALL_DIR/livekit-server" ] || \
-        warn "archive ships no livekit-server — fine for the default native QUIC media; needed only if you later opt into LiveKit"
+        say "Note: this build ships no optional LiveKit companion — voice and video do not need it."
 }
 
 # ── paracord system user (root installs) ─────────────────────────────────────
@@ -365,17 +406,31 @@ run_init() {
         return 0
     fi
     step "Generating configuration"
+    # `init` prints its own operator-facing walkthrough. Hold it back: this
+    # installer prints one short set of instructions at the end, and two
+    # competing sets of "next steps" is how a simple install starts to look
+    # complicated. The output is kept and shown in full if `init` fails.
+    init_log="$TMP_DIR/init.log"
     init_cmd="\"$INSTALL_DIR/paracord-server\" -c \"$CONFIG_PATH\" init"
+    init_rc=0
     if [ "$(id -u)" = "0" ] && id "$RUN_USER" >/dev/null 2>&1; then
         if need_cmd runuser; then
-            (cd "$INSTALL_DIR" && runuser -u "$RUN_USER" -- ./paracord-server -c "$CONFIG_PATH" init)
+            (cd "$INSTALL_DIR" && runuser -u "$RUN_USER" -- ./paracord-server -c "$CONFIG_PATH" init) \
+                >"$init_log" 2>&1 || init_rc=$?
         else
-            (cd "$INSTALL_DIR" && su -s /bin/sh "$RUN_USER" -c "$init_cmd")
+            (cd "$INSTALL_DIR" && su -s /bin/sh "$RUN_USER" -c "$init_cmd") \
+                >"$init_log" 2>&1 || init_rc=$?
         fi
     else
-        (cd "$INSTALL_DIR" && ./paracord-server -c "$CONFIG_PATH" init)
+        (cd "$INSTALL_DIR" && ./paracord-server -c "$CONFIG_PATH" init) \
+            >"$init_log" 2>&1 || init_rc=$?
     fi
-    [ -f "$CONFIG_PATH" ] || die "paracord-server init did not create $CONFIG_PATH"
+    if [ "$init_rc" != "0" ]; then
+        cat "$init_log" >&2
+        die "paracord-server init failed (exit $init_rc)"
+    fi
+    [ -f "$CONFIG_PATH" ] || { cat "$init_log" >&2; die "paracord-server init did not create $CONFIG_PATH"; }
+    say "Settings written to $CONFIG_PATH"
     absolutize_data_paths
     # sed -i above recreated the config as root; hand it back to the service user.
     [ "$(id -u)" = "0" ] && chown "$RUN_USER:$RUN_USER" "$CONFIG_PATH"
@@ -462,22 +517,29 @@ install_launchd_service() {
         # `bootout` first so an upgrade reloads the new plist rather than
         # leaving the old job definition resident.
         launchctl bootout system "$plist" >/dev/null 2>&1 || true
+        SERVICE_DESC="launchd job '$LAUNCHD_LABEL' (starts with the computer)"
+        SERVICE_LOGS="$INSTALL_DIR/logs/paracord.log"
         if launchctl bootstrap system "$plist" 2>/dev/null; then
+            SERVER_STARTED=1
+            SERVICE_MANAGED=1
             say "LaunchDaemon '$LAUNCHD_LABEL' installed and started (starts at boot)"
         else
             warn "could not bootstrap the LaunchDaemon — load it with: sudo launchctl bootstrap system $plist"
-            print_manual_run
+            no_service_configured
         fi
     else
         plist="$HOME/Library/LaunchAgents/${LAUNCHD_LABEL}.plist"
         write_launchd_plist "$plist" ""
         launchctl bootout "gui/$(id -u)" "$plist" >/dev/null 2>&1 || true
+        SERVICE_DESC="launchd job '$LAUNCHD_LABEL' (starts when you log in)"
+        SERVICE_LOGS="$INSTALL_DIR/logs/paracord.log"
         if launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null; then
+            SERVER_STARTED=1
+            SERVICE_MANAGED=1
             say "LaunchAgent '$LAUNCHD_LABEL' installed and started (starts at login)"
-            say "It runs while you are logged in; for a boot-time service re-run this installer with sudo."
         else
             warn "could not bootstrap the LaunchAgent — load it with: launchctl bootstrap gui/$(id -u) $plist"
-            print_manual_run
+            no_service_configured
         fi
     fi
 }
@@ -562,21 +624,38 @@ EOF
     say "Wrote $unit"
 }
 
-print_manual_run() {
-    cat <<EOF
+# No service manager took charge of the server, so the ending has to tell the
+# owner how to start it. Never clears a description an earlier branch set (the
+# unit exists and its log command is still the useful thing to print).
+no_service_configured() {
+    SERVER_STARTED=0
+    if [ -z "$SERVICE_DESC" ]; then
+        SERVICE_DESC="nothing starts it automatically on this system"
+    fi
+}
 
-  No service manager was configured. Run the server with:
-
-      cd $INSTALL_DIR && ./paracord-server
-
-  (or in the background:  nohup ./paracord-server > server.log 2>&1 &)
-EOF
+# Keep a per-user server alive after the owner logs out. Normal desktop
+# sessions are allowed to do this without a password (polkit's
+# set-self-linger); when that is refused there is nothing to do but say so, in
+# words, once, at the end.
+enable_user_linger() {
+    LINGER_HINT=""
+    need_cmd loginctl || return 0
+    linger_user="$(id -un)"
+    if loginctl show-user "$linger_user" --property=Linger 2>/dev/null | grep -q 'Linger=yes'; then
+        return 0
+    fi
+    if loginctl enable-linger "$linger_user" >/dev/null 2>&1; then
+        return 0
+    fi
+    LINGER_HINT="$linger_user"
+    return 0
 }
 
 setup_service() {
     if [ "${PARACORD_NO_SYSTEMD:-0}" = "1" ] || [ "${PARACORD_NO_SERVICE:-0}" = "1" ]; then
         say "service setup skipped by request"
-        print_manual_run
+        no_service_configured
         return 0
     fi
     # macOS reaches launchd here and returns; the systemd branches below are
@@ -586,7 +665,7 @@ setup_service() {
             install_launchd_service
         else
             warn "launchctl not available — no service installed"
-            print_manual_run
+            no_service_configured
         fi
         return 0
     fi
@@ -601,14 +680,18 @@ setup_service() {
                 systemctl start "$SERVICE_NAME" || true
             fi
             sleep 1
+            SERVICE_DESC="systemd service '$SERVICE_NAME' (starts with the computer)"
+            SERVICE_LOGS="journalctl -u $SERVICE_NAME -n 50"
             if systemctl is-active --quiet "$SERVICE_NAME"; then
+                SERVER_STARTED=1
+                SERVICE_MANAGED=1
                 say "Service '$SERVICE_NAME' is enabled and running (systemctl status $SERVICE_NAME)"
             else
                 warn "service did not report active — inspect with: journalctl -u $SERVICE_NAME -n 50"
             fi
         else
             warn "running as root but systemd is not present — no service installed"
-            print_manual_run
+            no_service_configured
         fi
     elif user_systemd_available; then
         write_user_unit
@@ -620,66 +703,343 @@ setup_service() {
             systemctl --user start "$SERVICE_NAME" || true
         fi
         sleep 1
+        SERVICE_DESC="systemd user service '$SERVICE_NAME' (starts when you log in)"
+        SERVICE_LOGS="journalctl --user -u $SERVICE_NAME -n 50"
         if systemctl --user is-active --quiet "$SERVICE_NAME"; then
+            SERVER_STARTED=1
+            SERVICE_MANAGED=1
             say "User service '$SERVICE_NAME' is enabled and running"
-            say "To keep it running after logout: loginctl enable-linger $(id -un)"
+            enable_user_linger
         else
             warn "user service did not report active — inspect with: journalctl --user -u $SERVICE_NAME -n 50"
-            print_manual_run
+            no_service_configured
         fi
     else
-        print_manual_run
+        no_service_configured
     fi
 }
 
-# ── Summary ──────────────────────────────────────────────────────────────────
+# ── Addresses, setup link, browser ───────────────────────────────────────────
+
+# config_value <section> <key> — first value of a key inside a TOML section,
+# unquoted, empty when absent. Commented lines never match: the comment is
+# stripped first, which leaves nothing for the key pattern to hit.
+config_value() {
+    [ -f "$CONFIG_PATH" ] || return 0
+    awk -v sect="$1" -v key="$2" '
+        /^[[:space:]]*\[/ { in_s = ($0 ~ ("^[[:space:]]*\\[" sect "\\]")); next }
+        !in_s { next }
+        {
+            line = $0
+            sub(/#.*/, "", line)
+            if (line !~ ("^[[:space:]]*" key "[[:space:]]*=")) next
+            sub(/^[^=]*=[[:space:]]*/, "", line)
+            gsub(/^"|"$/, "", line)
+            sub(/[[:space:]]+$/, "", line)
+            print line
+            exit
+        }' "$CONFIG_PATH"
+}
+
+# LOCAL_URL is what the owner opens on this machine — always loopback, so it
+# resolves and matches the certificate the server generated for itself.
+# SHARE_URL is the address other people use: the configured public URL when
+# there is one, otherwise the same loopback address.
+compute_urls() {
+    tls_on="$(config_value tls enabled)"
+    tls_port="$(config_value tls port)"
+    bind_addr="$(config_value server bind_address)"
+    voice_port="$(config_value voice port)"
+    public_url="$(config_value server public_url)"
+
+    bind_port="${bind_addr##*:}"
+    case "$bind_port" in ''|*[!0-9]*) bind_port="8090" ;; esac
+    case "$tls_port"  in ''|*[!0-9]*) tls_port="8443" ;; esac
+
+    if [ "$tls_on" = "false" ]; then
+        WEB_SCHEME="http"
+        WEB_PORT="$bind_port"
+    else
+        WEB_SCHEME="https"
+        WEB_PORT="$tls_port"
+    fi
+    case "$voice_port" in ''|*[!0-9]*) voice_port="$WEB_PORT" ;; esac
+    VOICE_PORT="$voice_port"
+    LOCAL_URL="${WEB_SCHEME}://localhost:${WEB_PORT}"
+    if [ -n "$public_url" ]; then
+        SHARE_URL="${public_url%/}"
+    else
+        SHARE_URL="$LOCAL_URL"
+    fi
+}
+
+# First non-empty line of a file, stripped of surrounding whitespace and CR.
+first_line_of() {
+    sed -e 's/\r$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$1" 2>/dev/null \
+        | grep -v '^$' | head -n 1
+}
+
+# The server mints the one-time owner token on its first real start, not during
+# `init`, and writes it beside the config (mode 0600). Wait for it — but only
+# when this run actually started the server and there is a first owner to
+# create; otherwise look once and move on.
+resolve_claim_link() {
+    cfg_dir="$(dirname "$CONFIG_PATH")"
+    CLAIM_TOKEN_FILE="$cfg_dir/first-owner-claim.txt"
+    CLAIM_LINK_FILE="$cfg_dir/first-owner-claim-link.txt"
+
+    limit=0
+    if [ "$IS_UPGRADE" = "0" ] && [ "$SERVER_STARTED" = "1" ]; then
+        limit=20
+    fi
+    waited=0
+    while :; do
+        if [ -s "$CLAIM_LINK_FILE" ] || [ -s "$CLAIM_TOKEN_FILE" ]; then
+            break
+        fi
+        if [ "$waited" -ge "$limit" ]; then
+            break
+        fi
+        if [ "$waited" = "0" ]; then
+            say "Waiting for the server to finish starting..."
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    claim_token=""
+    if [ -s "$CLAIM_LINK_FILE" ]; then
+        published="$(first_line_of "$CLAIM_LINK_FILE")"
+        case "$published" in
+            *"#claim="*)
+                # Use the server's token, but against the loopback address: the
+                # server builds its link from the address it shares with other
+                # people, which can be a name only they can resolve.
+                claim_token="${published##*#claim=}"
+                CLAIM_LINK_SOURCE="link file"
+                ;;
+            ?*)
+                CLAIM_LINK="$published"
+                CLAIM_LINK_SOURCE="link file (verbatim)"
+                ;;
+        esac
+    fi
+    if [ -z "$CLAIM_LINK" ] && [ -z "$claim_token" ] && [ -s "$CLAIM_TOKEN_FILE" ]; then
+        claim_token="$(first_line_of "$CLAIM_TOKEN_FILE")"
+        CLAIM_LINK_SOURCE="token file"
+    fi
+    if [ -z "$CLAIM_LINK" ] && [ -n "$claim_token" ]; then
+        CLAIM_LINK="${LOCAL_URL}/setup-server#claim=${claim_token}"
+    fi
+    [ -n "$CLAIM_LINK" ] || CLAIM_LINK_SOURCE=""
+
+    # A token file outlives the claim that spends it, so on an upgrade the file
+    # alone cannot say whether setup is still needed. The running server can.
+    if [ -n "$CLAIM_LINK" ]; then
+        case "$(setup_state)" in
+            done) CLAIM_LINK=""; CLAIM_LINK_SOURCE="" ;;
+            pending)
+                # A server is answering at this address, it still needs its
+                # first owner, and the token beside this config is the one that
+                # claims it. Whatever started it, it is running.
+                SERVER_STARTED=1
+                ;;
+            *) [ "$IS_UPGRADE" = "0" ] || { CLAIM_LINK=""; CLAIM_LINK_SOURCE=""; } ;;
+        esac
+    fi
+    if [ -n "$CLAIM_LINK" ]; then
+        say "Setup link ready (source: $CLAIM_LINK_SOURCE)."
+    fi
+}
+
+# pending | done | unknown — from the server's own public setup status.
+setup_state() {
+    body="$TMP_DIR/setup-status.json"
+    got=0
+    if need_cmd curl; then
+        # -k: the first-run certificate is the server's own, and this request
+        # never leaves the machine.
+        if curl -fsS -k --max-time 4 "$LOCAL_URL/api/v1/setup/status" -o "$body" 2>/dev/null; then
+            got=1
+        fi
+    elif need_cmd wget; then
+        if wget -q --no-check-certificate -T 4 -O "$body" "$LOCAL_URL/api/v1/setup/status" 2>/dev/null; then
+            got=1
+        fi
+    fi
+    if [ "$got" = "0" ]; then
+        say "unknown"
+        return 0
+    fi
+    if grep -q '"setup_required"[[:space:]]*:[[:space:]]*true' "$body"; then
+        say "pending"
+    elif grep -q '"setup_required"[[:space:]]*:[[:space:]]*false' "$body"; then
+        say "done"
+    else
+        say "unknown"
+    fi
+}
+
+# Opening a browser is a convenience, never a requirement: every failure path
+# falls through to printing the link.
+maybe_open_browser() {
+    BROWSER_OPENED=0
+    [ -n "$CLAIM_LINK" ] || return 0
+    [ "${PARACORD_NO_BROWSER:-0}" = "1" ] && return 0
+
+    if [ "$OS_FAMILY" = "macos" ]; then
+        need_cmd open || return 0
+        if open "$CLAIM_LINK" >/dev/null 2>&1; then
+            BROWSER_OPENED=1
+        fi
+        return 0
+    fi
+
+    # Linux: a graphical session has to exist to open into.
+    if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+        return 0
+    fi
+    need_cmd xdg-open || return 0
+
+    if [ "$(id -u)" = "0" ]; then
+        # root has no desktop of its own. Hand the link to the account that ran
+        # sudo when that is unambiguous; otherwise print it and let them click.
+        [ -n "${SUDO_USER:-}" ] || return 0
+        [ "$SUDO_USER" != "root" ] || return 0
+        need_cmd runuser || return 0
+        sudo_uid="$(id -u "$SUDO_USER" 2>/dev/null || true)"
+        [ -n "$sudo_uid" ] || return 0
+        runuser -u "$SUDO_USER" -- env \
+            DISPLAY="${DISPLAY:-}" \
+            WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-}" \
+            XDG_RUNTIME_DIR="/run/user/$sudo_uid" \
+            xdg-open "$CLAIM_LINK" >/dev/null 2>&1 &
+        BROWSER_OPENED=1
+        return 0
+    fi
+
+    # Backgrounded: some desktop handlers do not return until the browser does,
+    # and an install must not hang waiting for a window to be closed.
+    xdg-open "$CLAIM_LINK" >/dev/null 2>&1 &
+    BROWSER_OPENED=1
+    return 0
+}
+
+# ── Ending ───────────────────────────────────────────────────────────────────
+
+resolve_version_label() {
+    if [ -n "${VERSION_NUM:-}" ]; then
+        VERSION_LABEL="$VERSION_NUM"
+        return 0
+    fi
+    # Offline installs have no release tag; the archive name usually carries one.
+    base="$(basename "${ARCHIVE_PATH:-}")"
+    case "$base" in
+        "paracord-server-${PLATFORM}-"*.tar.gz)
+            base="${base%.tar.gz}"
+            VERSION_LABEL="${base#paracord-server-"${PLATFORM}"-}"
+            ;;
+        *) VERSION_LABEL="" ;;
+    esac
+}
+
+print_details() {
+    dim_start
+    say ""
+    say "Details"
+    if [ -n "$VERSION_LABEL" ]; then
+        say "  Version:   $VERSION_LABEL"
+    fi
+    say "  Installed: $INSTALL_DIR"
+    say "  Settings:  $CONFIG_PATH"
+    say "  Your data: $DATA_DIR"
+    if [ -n "$SERVICE_LOGS" ]; then
+        say "  Service:   $SERVICE_DESC"
+        say "  Logs:      $SERVICE_LOGS"
+    else
+        say "  Service:   ${SERVICE_DESC:-nothing starts it automatically}; start it with"
+        say "             cd \"$INSTALL_DIR\" && ./paracord-server"
+    fi
+    if [ "$WEB_PORT" = "$VOICE_PORT" ]; then
+        say "  Ports:     $WEB_PORT (TCP for the app, UDP for voice and video)"
+    else
+        say "  Ports:     $WEB_PORT TCP (app), $VOICE_PORT UDP (voice and video)"
+    fi
+    say "  Address:   $SHARE_URL"
+    if [ "$(id -u)" != "0" ] && [ -z "${PARACORD_INSTALL_DIR:-}" ]; then
+        say "  Installed for you only. For every account on this computer, run the"
+        say "  same command with sudo."
+    fi
+    dim_end
+}
 
 print_summary() {
-    # Prefer the operator-configured public URL when the config sets one
-    # (e.g. on upgrades); otherwise the release default is HTTPS :8443.
-    share_url="$(awk '
-        /^\[/ { in_server = ($0 ~ /^\[server\]/) }
-        in_server && /^[[:space:]]*public_url[[:space:]]*=/ {
-            sub(/^[^"]*"/, ""); sub(/".*$/, ""); print; exit
-        }' "$CONFIG_PATH" 2>/dev/null)"
-    [ -n "$share_url" ] || share_url="https://localhost:8443"
-    cat <<EOF
-
-  ┌─ Paracord installed ─────────────────────────────────
-  │
-  │  Install dir:  $INSTALL_DIR
-  │  Config:       $CONFIG_PATH
-  │  Data:         $DATA_DIR
-  │
-  │  Open / share: $share_url   (self-signed cert — accept
-  │  the one-time browser warning)
-  │
-  │  Next steps:
-  │   1. Claim the server: a fresh instance has no owner
-  │      and refuses registrations until claimed. Open
-  │      $share_url/setup-server and paste the
-  │      one-time claim token from
-  │      $(dirname "$CONFIG_PATH")/first-owner-claim.txt
-  │      (also printed in the server log). That creates
-  │      your owner account, names the server and opens
-  │      its first space. Do this before sharing the URL.
-  │   2. Invite others: share the URL, or create an
-  │      invite link from any channel once you're in.
-  │   3. Remote access + voice/video: forward port 8443
-  │      (TCP + UDP) to this machine. TCP carries HTTPS,
-  │      UDP carries native QUIC media.
-  │
-  │  Upgrade: re-run this installer any time — config and
-  │  data are preserved and the old binary is backed up
-  │  under $INSTALL_DIR/backups/.
-  │
-  └──────────────────────────────────────────────────────
-EOF
-    if [ "$(id -u)" != "0" ]; then
-        say "  Tip: for a system-wide install under /opt with a systemd service:"
-        say "       curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPO}/main/scripts/install.sh | sudo sh"
-        say ""
+    say ""
+    if [ "$IS_UPGRADE" = "1" ]; then
+        # "and restarted" only when something actually restarted it.
+        upgrade_tail=" and restarted."
+        if [ "$SERVICE_MANAGED" = "0" ]; then
+            upgrade_tail="."
+        fi
+        if [ -n "$VERSION_LABEL" ]; then
+            say "Paracord was updated to ${VERSION_LABEL}${upgrade_tail}"
+        else
+            say "Paracord was updated${upgrade_tail}"
+        fi
+        say "Your accounts, messages and settings are kept."
+        if [ "$SERVER_STARTED" = "0" ]; then
+            say "Start it again with:  cd \"$INSTALL_DIR\" && ./paracord-server"
+        fi
+        if [ -n "$CLAIM_LINK" ]; then
+            say ""
+            say "This server still has no owner. Finish setting it up:"
+            say "     $CLAIM_LINK"
+        fi
+        print_details
+        return 0
     fi
+
+    if [ "$SERVER_STARTED" = "1" ]; then
+        say "Paracord is installed and running."
+    else
+        say "Paracord is installed."
+    fi
+    say ""
+
+    if [ -n "$CLAIM_LINK" ]; then
+        if [ "$BROWSER_OPENED" = "1" ]; then
+            say "1. Finish setting up (opens in your browser):"
+        else
+            say "1. Finish setting up - open this link in your browser:"
+        fi
+        say "     $CLAIM_LINK"
+        say "   Your browser may show a one-time security warning because the server made its own"
+        say "   certificate - choose Advanced, then Continue. (The desktop app never shows this.)"
+    elif [ "$SERVER_STARTED" = "1" ]; then
+        say "1. Finish setting up - open this link in your browser:"
+        say "     $LOCAL_URL/setup-server"
+        say "   It asks for the one-time setup code your server printed when it started."
+        if [ -f "$CLAIM_TOKEN_FILE" ]; then
+            say "   The code is also saved here:"
+            say "     $CLAIM_TOKEN_FILE"
+        fi
+    else
+        say "1. Start the server:"
+        say "     cd \"$INSTALL_DIR\" && ./paracord-server"
+        say "   It prints a link that finishes setting up - open that link in your browser."
+    fi
+    say "2. Then invite friends from inside the app - every channel has an Invite button."
+    say ""
+    say "Friends outside your home network: the server tries to open the door on your"
+    say "router by itself. If someone can't connect, see $DOCS_URL"
+    if [ -n "$LINGER_HINT" ]; then
+        say ""
+        say "One thing this computer would not let the installer do: keep the server running"
+        say "while you are logged out. To allow it, run: loginctl enable-linger $LINGER_HINT"
+    fi
+    say ""
+    say "To update later, run this same command again. Your data is kept."
+    print_details
 }
 
 # ── Main ─────────────────────────────────────────────────────────────────────
@@ -689,6 +1049,14 @@ main() {
     trap 'rm -rf "$TMP_DIR"' EXIT
 
     say "Paracord server installer"
+    # Said once, up front, in the words that matter to whoever is watching: what
+    # this install covers and when the server will be running.
+    if [ "$(id -u)" = "0" ]; then
+        say "Installing for everyone on this computer. The server will start with the computer."
+    else
+        say "Installing just for you (no administrator password needed)."
+        say "The server will start when you log in."
+    fi
     check_tools
     detect_platform
     if [ -z "${PARACORD_LOCAL_ARCHIVE:-}" ]; then
@@ -705,6 +1073,10 @@ main() {
     run_init
     link_binary
     setup_service
+    resolve_version_label
+    compute_urls
+    resolve_claim_link
+    maybe_open_browser
     print_summary
 }
 
