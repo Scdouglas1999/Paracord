@@ -322,7 +322,17 @@ jobs:
 
   build-client-macos:
     name: Build Client (macOS ${{ matrix.arch }})
-    runs-on: macos-14
+    # Each architecture builds on a runner OF that architecture. The desktop app
+    # links libvpx and FFmpeg from Homebrew, and Homebrew installs them for the
+    # machine it runs on: cross-compiling the Intel app on an Apple Silicon
+    # runner found ARM libraries (and pkg-config refuses to cross-compile at
+    # all). The server has no native media libraries, so it cross-compiles fine.
+    runs-on: ${{ matrix.runner }}
+    # The Intel build is the one macOS package nothing else depends on, and it
+    # runs on the rarest runner. If it fails, the release still ships everything
+    # else (the release step does not require macOS artifacts) and says nothing
+    # false: the Intel .dmg is simply absent from the assets.
+    continue-on-error: ${{ matrix.arch == 'x86_64' }}
     needs: validate-release-version
     strategy:
       # One failing architecture must not hide the other's result.
@@ -331,8 +341,10 @@ jobs:
         include:
           - arch: aarch64
             target: aarch64-apple-darwin
+            runner: macos-14
           - arch: x86_64
             target: x86_64-apple-darwin
+            runner: macos-15-intel
     env:
       # Presence flag only — never the key itself. See build-client-windows.
       HAS_SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
