@@ -670,8 +670,8 @@ jobs:
           msi_sig_path="$(find artifacts/client-windows-msi -maxdepth 1 -type f -name '*.msi.sig' 2>/dev/null | head -n1)"
           appimage_sig_path="$(find artifacts/client-linux-appimage -maxdepth 1 -type f -name '*.AppImage.sig' 2>/dev/null | head -n1)"
           deb_sig_path="$(find artifacts/client-linux-deb -maxdepth 1 -type f -name '*.deb.sig' 2>/dev/null | head -n1)"
-          mac_arm_sig_path="$(find artifacts/client-macos-aarch64 -maxdepth 1 -type f -name '*.app.tar.gz.sig' 2>/dev/null | head -n1)"
-          mac_x64_sig_path="$(find artifacts/client-macos-x86_64 -maxdepth 1 -type f -name '*.app.tar.gz.sig' 2>/dev/null | head -n1)"
+          mac_arm_sig_path="$(find artifacts/client-macos-aarch64 -maxdepth 2 -type f -name '*.app.tar.gz.sig' 2>/dev/null | head -n1)"
+          mac_x64_sig_path="$(find artifacts/client-macos-x86_64 -maxdepth 2 -type f -name '*.app.tar.gz.sig' 2>/dev/null | head -n1)"
 
           # Only generate latest.json if all signature files exist (signing key was configured)
           if [ -z "$msi_sig_path" ] || [ -z "$appimage_sig_path" ] || [ -z "$deb_sig_path" ]; then
@@ -843,10 +843,10 @@ jobs:
             artifacts/client-linux-rpm/*.rpm.sig
             artifacts/server-macos-arm64/*.tar.gz
             artifacts/server-macos-x64/*.tar.gz
-            artifacts/client-macos-aarch64/*.dmg
-            artifacts/client-macos-aarch64/*.app.tar.gz
-            artifacts/client-macos-aarch64/*.app.tar.gz.sig
-            artifacts/client-macos-x86_64/*.dmg
-            artifacts/client-macos-x86_64/*.app.tar.gz
-            artifacts/client-macos-x86_64/*.app.tar.gz.sig
+            artifacts/client-macos-aarch64/dmg/*.dmg
+            artifacts/client-macos-aarch64/macos/*.app.tar.gz
+            artifacts/client-macos-aarch64/macos/*.app.tar.gz.sig
+            artifacts/client-macos-x86_64/dmg/*.dmg
+            artifacts/client-macos-x86_64/macos/*.app.tar.gz
+            artifacts/client-macos-x86_64/macos/*.app.tar.gz.sig
             artifacts/latest.json
