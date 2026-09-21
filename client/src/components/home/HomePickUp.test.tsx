@@ -216,6 +216,6 @@ describe('Pick up the conversation', () => {
   it('only relabels mentions of the account receiving the preview', async () => {
     request.mockResolvedValue({ data: [message('<@99> bring <@!99> and <@123>')] });
     render(<HomePickUp entries={[entry({ scope: { serverId: 'a', userId: '99' } })]} litRooms={new Set()} onOpen={vi.fn()} />);
-    expect(await screen.findByText('@you bring @you and <@123>')).toBeVisible();
+    expect(await screen.findByText('@you bring @you and @someone')).toBeVisible();
   });
 });

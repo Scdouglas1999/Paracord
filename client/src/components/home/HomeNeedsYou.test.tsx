@@ -387,5 +387,5 @@ it('renders the receiving account mention as @you without relabeling other users
       {...shell({ entries: [entry('chat', { mentionCount: 1, scope: { serverId: 'a', userId: '99' } })] })}
     />,
   );
-  expect(await screen.findByText(/chat · @you review @you and <@123>/)).toBeInTheDocument();
+  expect(await screen.findByText(/chat · @you review @you and @someone/)).toBeInTheDocument();
 });

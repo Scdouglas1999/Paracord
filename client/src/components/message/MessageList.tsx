@@ -35,7 +35,7 @@ import { getDownloadTicket } from '../../lib/downloadTicket';
 import { writeClipboardText } from '../../lib/clipboard';
 import { SkeletonMessage } from '../ui/Skeleton';
 import { fadeIn, flicker, motionToken, ms, onMotion, prefersReducedMotion, RollingNumber, settleIn, useFlipList, walkIntoRoom } from '../../lib/motion';
-import { parseMarkdown } from '../../lib/markdown';
+import { messagePreviewText, parseMarkdown } from '../../lib/markdown';
 import { useDownloadTicket } from '../../hooks/useDownloadTicket';
 import { getHighestRoleColor, getIdentityColor, getIdentityInk } from '../../lib/colors';
 import { formatFileSize, formatTimestamp, relativeTime, wallClock } from '../../lib/formatters';
@@ -414,9 +414,9 @@ function truncateInline(value: string, max = 96): string {
   return `${value.slice(0, max - 1)}...`;
 }
 
-function getReplyPreviewText(message: Message): string {
-  const text = (message.content || '').trim();
-  if (text) return truncateInline(text.replace(/\s+/g, ' '));
+function getReplyPreviewText(message: Message, names?: ReadonlyMap<string, string>): string {
+  const text = messagePreviewText(message.content || '', names);
+  if (text) return truncateInline(text);
   if (message.poll) return '[Poll]';
   if (message.attachments?.length) {
     return message.attachments.length === 1 ? '[Attachment]' : `[${message.attachments.length} attachments]`;
@@ -2574,7 +2574,7 @@ function OwnedMessageList({
               }
               preview={
                 replyParentMessage
-                  ? getReplyPreviewText(replyParentMessage)
+                  ? getReplyPreviewText(replyParentMessage, mentionMap)
                   : deletedMessageIds.has(replyParentId)
                     ? 'This message was deleted'
                     : 'Message not loaded'

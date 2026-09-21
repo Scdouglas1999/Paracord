@@ -263,3 +263,26 @@ describe('parseMarkdown spoilers (accessibility)', () => {
     expect(styles[0].textContent).toContain('.paracord-md-link:hover');
   });
 });
+
+describe('messagePreviewText', () => {
+  it('previews a code block as its code, not as its fence', async () => {
+    const { messagePreviewText } = await import('./markdown');
+    expect(messagePreviewText('These are the numbers:\n```ini\nretract_length = 0.8\n```')).toBe(
+      'These are the numbers: retract_length = 0.8',
+    );
+    // A preview is often a truncated message, so the closing fence may be missing.
+    expect(messagePreviewText('```ini retra')).toBe('retra');
+  });
+
+  it('writes a mention as a name, and never as an id', async () => {
+    const { messagePreviewText } = await import('./markdown');
+    const names = new Map([['360414412240064512', 'Dmitri']]);
+    expect(messagePreviewText('<@360414412240064512> dry the filament', names)).toBe('@Dmitri dry the filament');
+    expect(messagePreviewText('<@!99> hello <#12> <@&7>')).toBe('@someone hello #channel @role');
+  });
+
+  it('is one line of plain words', async () => {
+    const { messagePreviewText } = await import('./markdown');
+    expect(messagePreviewText('**bold**  and\n\n`code`   and [a link](https://example.test)')).toBe('bold and code and a link');
+  });
+});

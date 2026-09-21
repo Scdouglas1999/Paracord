@@ -1,3 +1,4 @@
+import { messagePreviewText } from '../../../lib/markdown';
 import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 
@@ -115,6 +116,13 @@ export function Lobby({ guildId }: LobbyProps) {
     scope ? state.members.get(entityScopeKey(scope, guildId)) : undefined,
   );
   const fetchMembers = useMemberStore((state) => state.fetchMembers);
+  // Names for the mentions in a channel's "last said" line, which otherwise
+  // printed the person's id.
+  const memberNames = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const member of members ?? []) map.set(member.user.id, displayName(member.user, member.nick));
+    return map;
+  }, [members]);
   const messagesByChannel = useCurrentMessageStore((state) => state.messages);
 
   const { permissions, isAdmin } = usePermissions(guildId);
@@ -455,7 +463,8 @@ export function Lobby({ guildId }: LobbyProps) {
                       ? snowflakeMs(fallbackId)
                       : null;
                 const author = last?.author ? displayName(last.author) : fetched?.author ?? null;
-                const preview = last ? last.content ?? null : fetched?.preview || null;
+                const rawPreview = last ? last.content ?? null : fetched?.preview || null;
+                const preview = rawPreview ? messagePreviewText(rawPreview, memberNames) : rawPreview;
                 // Nothing loaded, nothing fetched and no snowflake: the room has
                 // genuinely never been written in, and says so rather than
                 // rendering as three blanks (§6.9).

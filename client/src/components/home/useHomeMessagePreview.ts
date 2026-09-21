@@ -1,3 +1,4 @@
+import { messagePreviewText } from '../../lib/markdown';
 import { useEffect, useState, useSyncExternalStore } from 'react';
 
 import type { ConversationEntry } from '../../lib/attention/conversationModel';
@@ -39,10 +40,9 @@ function previewOf(message: Message, userId: string): HomeMessagePreview {
     };
   }
   const author = message.author?.display_name || message.author?.username || null;
-  const content = message.content
-    ?.trim()
-    .replace(/\s+/g, ' ')
-    .replace(/<@!?([0-9]+)>/g, (token, id: string) => (id === userId ? '@you' : token));
+  // Plain words: no code fences, no markup, and a mention is a name. Home has no
+  // member list to hand, so the one name it is sure of is the reader's own.
+  const content = messagePreviewText(message.content ?? '', new Map([[userId, 'you']]));
   const text = content || (message.poll
     ? `Poll: ${message.poll.question}`
     : message.attachments?.length

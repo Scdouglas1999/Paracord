@@ -595,3 +595,29 @@ export function stripMarkdown(text: string): string {
     .replace(/^\s*\d+\.\s+/gm, '')
     .replace(/^#{1,3}\s+/gm, '');
 }
+
+/**
+ * One line of plain words standing in for a message: a reply chip, a channel's
+ * "last said" line, a notification.
+ *
+ * A preview is read, not rendered, so the markup has to go rather than show. A
+ * message that opens with a code block used to preview as "```ini retra…", and
+ * one that opens with a mention as "<@3604144…" — the person's id instead of
+ * their name. `names` is the same id-to-name map the timeline renders mentions
+ * with; somebody it does not know is "@someone", never a number.
+ */
+export function messagePreviewText(content: string, names?: ReadonlyMap<string, string>): string {
+  return stripMarkdown(
+    content
+      // A fenced block previews as its code, without the fence or the language tag.
+      .replace(/```[^\n`]*\n?([\s\S]*?)```/g, (_match, code: string) => ` ${code} `)
+      // An unclosed fence (a preview is often a truncated message) loses the fence too.
+      .replace(/```[^\s`]*/g, ' '),
+  )
+    .replace(/<@!?(\d+)>/g, (_match, id: string) => `@${names?.get(id) ?? 'someone'}`)
+    .replace(/<@&\d+>/g, '@role')
+    .replace(/<#\d+>/g, '#channel')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+

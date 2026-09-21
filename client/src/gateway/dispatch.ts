@@ -17,6 +17,7 @@ import { useInteractionStore } from '../stores/interactionStore';
 import { getAccountMessagingRuntime } from '../lib/messages/accountMessagingRuntime';
 import { GatewayEvents } from './events';
 import { sendNotification, isEnabled as notificationsEnabled } from '../lib/features/notifications';
+import { messagePreviewText } from '../lib/markdown';
 import {
   effectiveNotificationLevel,
   messageAddressesReader,
@@ -303,7 +304,7 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
           const title = channelName ? `#${channelName}` : `DM from ${authorName}`;
           const body = data.e2ee
             ? '[Encrypted message]'
-            : (data.content || '').slice(0, 200) || '(attachment)';
+            : messagePreviewText(data.content || '', currentUserId ? new Map([[currentUserId, 'you']]) : undefined).slice(0, 200) || '(attachment)';
           void sendNotification(title, body);
         }
       }
