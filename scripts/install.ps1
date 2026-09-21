@@ -671,7 +671,7 @@ try {
             Write-Host ("     cd `"$InstallDir`"; .\paracord-server.exe -c `"$ConfigPath`"")
             Write-Host '   It prints a link that finishes setting up - open that link in your browser.'
         }
-        Write-Host '2. Then invite friends from inside the app - every channel has an Invite button.'
+        Write-Host '2. Then invite friends: open your server in the app and press Invite.'
         Write-Host ''
         Write-Host 'Friends outside your home network: the server tries to open the door on your'
         Write-Host "router by itself. If someone can't connect, see $DocsUrl"

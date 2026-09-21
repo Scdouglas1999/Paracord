@@ -1028,7 +1028,7 @@ print_summary() {
         say "     cd \"$INSTALL_DIR\" && ./paracord-server"
         say "   It prints a link that finishes setting up - open that link in your browser."
     fi
-    say "2. Then invite friends from inside the app - every channel has an Invite button."
+    say "2. Then invite friends: open your server in the app and press Invite."
     say ""
     say "Friends outside your home network: the server tries to open the door on your"
     say "router by itself. If someone can't connect, see $DOCS_URL"

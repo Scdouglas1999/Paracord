@@ -152,7 +152,7 @@ it starts that way, because anyone who reaches it first would own it.
 
 ## 4. Invite your friends
 
-Every channel has an **Invite** button. It gives you a link to send, and says
+Open your server and press **Invite**. It gives you a link to send, and says
 plainly who it will work for:
 
 - **Anyone** — your router let Paracord open the way in, or you have a public

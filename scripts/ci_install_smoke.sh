@@ -239,7 +239,7 @@ assert_contains    "$INST/config/paracord.toml" "$INST/data/" "config data paths
 assert_not_exists  "$INST/config/paracord.toml.bak" "no stray config backup"
 assert_symlink     "$LINKD/paracord-server"        "PATH symlink created"
 assert_contains "$WORK/install1.log" "Paracord is installed" "ending says the install is done"
-assert_contains "$WORK/install1.log" "every channel has an Invite button" "ending says how to invite friends"
+assert_contains "$WORK/install1.log" "open your server in the app and press Invite" "ending says how to invite friends"
 assert_contains "$WORK/install1.log" "To update later, run this same command again" "ending says how to update"
 assert_contains "$WORK/install1.log" "Address:" "Details block prints the address"
 assert_contains "$WORK/install1.log" "$INST/config/paracord.toml" "Details block prints the settings path"
