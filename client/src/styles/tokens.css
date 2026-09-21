@@ -1205,13 +1205,18 @@
   /* The spine's own ink. */
   --spine-bg: #1f3fd0;
   --spine-well: #1833b0;
-  --spine-raised: #2a4be0;
+  --spine-raised: #152d9f;
   --spine-window-dark: #122a96;
   --spine-text-primary: #fff6e4;
   --spine-text-secondary: #eceaff;
   --spine-text-muted: #d4d8ff;
   --spine-text-faint: #cdd2ff;
   --spine-light-amber: #ffc53d;
+  /* The look's accent is a dark red made for cream paper; on cobalt it is
+     unreadable (a mention count was a dark red numeral on blue). The spine
+     carries its own accent and its own danger. */
+  --spine-accent: #ffc53d;
+  --spine-danger: #ffc0b3;
   --spine-selected: #fff6e4;
   --spine-selected-ink: #1f3fd0;
   --spine-border: rgba(255, 246, 228, 0.26);
@@ -1240,6 +1245,15 @@
   --interactive-muted: var(--spine-text-faint);
   --light-white: var(--spine-text-primary);
   --light-amber: var(--spine-light-amber);
+  --accent-primary: var(--spine-accent);
+  --accent-primary-hover: var(--spine-accent);
+  --accent: var(--spine-accent);
+  --text-link: var(--spine-accent);
+  --accent-danger: var(--spine-danger);
+  --accent-warning: var(--spine-accent);
+  --accent-tint: rgba(255, 197, 61, 0.18);
+  --accent-tint-strong: rgba(255, 197, 61, 0.28);
+  --sidebar-active-indicator: var(--spine-accent);
   --glow-window-white: 0 0 0 1px var(--spine-text-primary);
   --glow-window-amber: 0 0 0 1px var(--spine-light-amber);
   --border-subtle: var(--spine-border);

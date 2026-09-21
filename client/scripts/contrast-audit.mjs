@@ -297,7 +297,9 @@ const checks = [
 // Paper & ink's spine: the sidebar is a block of cobalt with an ink set of its
 // own. Only a theme that declares `--spine-bg` is asked these.
 const spineChecks = [
-  ...['--spine-bg', '--spine-well'].flatMap((bg) => [
+  ...['--spine-bg', '--spine-well', '--spine-raised'].flatMap((bg) => [
+    { fg: '--spine-accent', bg, min: 4.5 },
+    { fg: '--spine-danger', bg, min: 4.5 },
     { fg: '--spine-text-primary', bg, min: 7 },
     { fg: '--spine-text-secondary', bg, min: 4.5 },
     { fg: '--spine-text-muted', bg, min: 4.5 },
