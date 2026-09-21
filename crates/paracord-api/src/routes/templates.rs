@@ -382,7 +382,7 @@ pub async fn apply_template(
     }
 
     // Then non-category, non-default channels.
-    // The default "general" (text, pos 0) and "General" (voice, pos 1) are created by
+    // The default "general" (text, pos 0) and the default voice channel (pos 1) are created by
     // create_guild_full already, so we skip exact duplicates.
     for ch in template_channels
         .iter()
@@ -396,7 +396,10 @@ pub async fn apply_template(
         if ch.name == "general" && ch.channel_type == 0 && ch.position == 0 && parent_id.is_none() {
             continue;
         }
-        if ch.name == "General" && ch.channel_type == 2 && ch.position == 1 && parent_id.is_none() {
+        let is_default_voice_name = ch.name == paracord_core::guild::DEFAULT_VOICE_CHANNEL_NAME
+            || ch.name == paracord_core::guild::LEGACY_DEFAULT_VOICE_CHANNEL_NAME;
+        if is_default_voice_name && ch.channel_type == 2 && ch.position == 1 && parent_id.is_none()
+        {
             continue;
         }
 

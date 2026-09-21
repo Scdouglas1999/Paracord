@@ -5,6 +5,15 @@ use crate::permissions;
 use paracord_db::DbPool;
 use paracord_models::permissions::Permissions;
 
+/// What a new server's voice channel is called. It used to be "General", beside
+/// a text channel called "general": two rows in one list that differ by a
+/// capital letter, which reads like a mistake to somebody seeing it for the
+/// first time.
+pub const DEFAULT_VOICE_CHANNEL_NAME: &str = "Lounge";
+/// The name older releases gave it. Templates exported from those servers
+/// carry it, and it still means "the default voice channel".
+pub const LEGACY_DEFAULT_VOICE_CHANNEL_NAME: &str = "General";
+
 /// Bound on `spaces.icon_hash`.
 ///
 /// The column is `TEXT` on purpose — it legitimately holds an inline `data:`
@@ -107,10 +116,19 @@ async fn seed_new_guild(pool: &DbPool, guild_id: i64, owner_id: i64) -> Result<(
     paracord_db::channels::create_channel(pool, general_id, guild_id, "general", 0, 0, None, None)
         .await?;
 
-    // Create General voice channel
+    // Create the default voice channel
     let voice_id = paracord_util::snowflake::generate(1);
-    paracord_db::channels::create_channel(pool, voice_id, guild_id, "General", 2, 1, None, None)
-        .await?;
+    paracord_db::channels::create_channel(
+        pool,
+        voice_id,
+        guild_id,
+        DEFAULT_VOICE_CHANNEL_NAME,
+        2,
+        1,
+        None,
+        None,
+    )
+    .await?;
 
     Ok(())
 }
