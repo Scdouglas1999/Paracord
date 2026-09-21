@@ -235,6 +235,10 @@ as flat dark panels; these change its character, and the person chooses.
 
 Rules a look lives by:
 
+- **Voices is the default (2026-09-20).** A fresh install, and an account that
+  never chose a theme, gets Voices: `DEFAULT_THEME` in `client/src/lib/themes.ts`
+  and in `crates/paracord-api/src/routes/users.rs` must agree, because the client
+  adopts the server's value on first sign-in. Night remains one click away.
 - **It brings its own colours.** A look defines its accent and its grounds, so
   the accent presets and the base-colour control are inert (shown disabled, with
   the reason) while one is on. `lib/themes.ts` `LOOK_THEMES` is the list.

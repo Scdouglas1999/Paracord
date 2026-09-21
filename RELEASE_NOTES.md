@@ -9,6 +9,7 @@ Compare: [v2.0.0...v3.1.0](https://github.com/Scdouglas1999/Paracord/compare/v2.
 The dark theme was too grey. Most of the screen was the same near-black with small grey text, and the only colour came from people being online, so a quiet server looked dead.
 
 - The default dark theme now has real colour: the sidebar side is a deep blue, the panels you read in are warm, and empty channels no longer show up as black holes.
+- **Voices is the new default** for fresh installs and for accounts that never picked a theme. If you chose a theme before, you keep it.
 - Settings → Appearance has three new options under the existing themes. They switch instantly.
   - **Dusk sky** puts a sunset behind the whole app, with dark glass panels over it.
   - **Paper & ink** is a light look: cream paper, dark ink, a solid blue sidebar and hard printed-style shadows.
@@ -16,6 +17,19 @@ The dark theme was too grey. Most of the screen was the same near-black with sma
 - Each of the three brings its own colours, so the accent and base colour pickers are switched off while one is on. Pick Night, Daylight, AMOLED or High contrast to get them back.
 - You can pick the base colour of the four regular themes (a few presets or any hue), and it changes as you drag. Text stays readable whatever you pick.
 - Names in chat are written in each person's own colour, and the Friends list uses the same colours instead of green for everyone.
+
+## Installing and joining are much simpler
+
+- **Running a server is one command, then one link.** The installer sets everything up, starts the server, and opens a link in your browser that takes you straight to creating your account and naming your server. No more hunting for a token in a terminal and pasting it into a page.
+- **Windows is a single command** in any PowerShell window (`irm …/install.ps1 | iex`). It asks for administrator permission itself.
+- **The server opens the way in on your router by itself** (UPnP or NAT-PMP), so friends outside your home can usually join with no router setup at all. If your router says no, the server and the Invite dialog both tell you plainly, and [docs/port-forwarding.md](docs/port-forwarding.md) walks through the one setting to change. Turn it off with `auto_port_forward = false` under `[network]`.
+- **Invite links are normal links now.** They open in any browser, where a friend presses "Create an account to join" and lands in your server. Before, the main link only worked if the friend already had the app installed.
+- The Invite dialog tells you who the link will work for: anyone, or only people on your Wi-Fi. It no longer hands out links pointing at `localhost` if you set the server up on the same machine.
+- Opening an invite used to make everybody tick "I acknowledge this server's rules and verification requirements" and showed a box for "verification answers", even on servers that had neither. Now you're only asked if the owner actually turned that on, and you see the real questions.
+- Creating an account from an invite used to forget the invite and drop you into an empty app. Fixed.
+- The desktop app's first screen asks for your invite link instead of an "instance address", and its error messages say what went wrong in plain words.
+- A new member no longer gets a tour bubble stacked on top of the welcome screen.
+- The installer's closing message, and what the server prints when it first starts, were rewritten to say what to do next without any networking vocabulary.
 
 ## Home
 
@@ -38,6 +52,8 @@ Home now leads with people and conversations: who's around, your servers, and th
 - Avatars, emoji and stickers didn't load in the desktop app. Fixed.
 - The microphone you pick is the one that gets opened, it's listed by its real name, and the level meter shows what it hears. A microphone that's silent or missing says so straight away.
 - If you already answered the system's screen-share picker, the app doesn't ask you for permission again.
+- Screen shares could fail to start ("did not start capturing within 3s") on machines where the video encoder takes a few seconds to warm up, and after one failure every retry in the same call failed too. Both fixed.
+- Turning the camera on with no camera connected made the app appear to hang. It now says there's no camera straight away.
 - **Linux with NVIDIA's driver:** the app opened a black window and crashed when you clicked anything. It now turns off WebKit's GPU compositing on those machines and renders normally. Video never went through that path, so it's unaffected. Set `PARACORD_WEBKIT_ACCELERATION=ondemand` to get the old behaviour back if your driver copes.
 
 ## Other fixes
@@ -78,6 +94,8 @@ We went through the server and clients looking for ways to get around permission
 
 - If the instance rejects the session the desktop app saved (after a long time away, or if the session was revoked), the app can open with "Unknown user" and no servers instead of taking you to the sign-in screen. Open Settings, log out, and sign in again.
 - Dusk sky and Paper & ink have rules for when a native video stream is on screen in the Linux desktop app (the glass goes solid, the paper texture is removed). Those rules haven't been tried against a real stream yet.
+- The Windows installer was rewritten for this release and has been checked by tools but not run by hand on a Windows machine yet. If it misbehaves, the old two-step way still works: download `install.ps1` and run it with `powershell -ExecutionPolicy Bypass -File .\install.ps1`.
+- Automatic router setup was tested against a router that refuses it (the server says so correctly and carries on). We didn't have a router that accepts it to hand, so that path is covered by automated tests only.
 - Home and a server's front page still have a lot of empty space when a server is quiet. That's a layout job for a later release.
 - The rest of the list is in [docs/known-limitations.md](docs/known-limitations.md).
 
@@ -91,9 +109,9 @@ We went through the server and clients looking for ways to get around permission
 
 ## How this was tested
 
-- The server's own tests (1,700 of them) and the client's (2,827) pass. So do the colour-contrast check across all seven themes, the accessibility check, and 92 browser tests against a mocked server.
+- The server's own tests (1,732 of them) and the client's (2,839) pass. So do the colour-contrast check across all seven themes, the accessibility check, and 92 browser tests against a mocked server.
 - 16 browser tests ran against the real server binary, including two people in a call who hear and see each other, a backup being restored under connected clients, and claiming a brand-new instance.
-- Three real accounts were driven through one live instance of this build: making a server, joining by invite, chatting live, an encrypted DM, an encrypted group DM, removing someone from the group and checking they can no longer read it, edits, reactions and deletes. All 25 steps passed.
+- Three real accounts were driven through one live instance of this build: making a server, joining by invite, chatting live, an encrypted DM, an encrypted group DM, removing someone from the group and checking they can no longer read it, edits, reactions and deletes. All 25 steps passed. The new owner and newcomer paths were each walked in a real browser against this build: from the link the server prints to a working invite, and from that invite to a new member's first message screen.
 - Windows and macOS builds are compiled and packaged by the release pipeline. They weren't run by hand on those systems before this was written; the macOS builds in particular are new.
 
 ---

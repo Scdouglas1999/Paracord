@@ -33,10 +33,17 @@ config are pinned to the install directory, so nothing depends on the process
 working directory.
 
 On Windows, [`scripts/install.ps1`](../scripts/install.ps1) is the equivalent
-one-command path from an elevated PowerShell: it installs under
-`%ProgramFiles%\Paracord`, registers an auto-start scheduled task running as
-`SYSTEM` with crash restarts, and opens inbound firewall rules for TCP and UDP
-`8443`.
+one-command path from *any* PowerShell window —
+`irm https://raw.githubusercontent.com/Scdouglas1999/Paracord/main/scripts/install.ps1 | iex` —
+it elevates itself, installs under `%ProgramFiles%\Paracord`, registers an
+auto-start scheduled task running as `SYSTEM` with crash restarts, and opens the
+inbound firewall for the configured app (TCP) and voice (UDP) ports.
+
+Both installers finish by opening the one-time setup link in a browser
+(`PARACORD_NO_BROWSER=1` only prints it), and the server asks the router to
+forward its ports by itself (`[network] auto_port_forward`, on by default;
+see [port-forwarding.md](port-forwarding.md)). On a server you expose
+deliberately behind a reverse proxy or a cloud firewall, turn that off.
 
 That gives you a working self-signed-HTTPS server on `8443`. The rest of this
 page is about turning that into an internet-facing production deployment: a

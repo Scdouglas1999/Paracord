@@ -134,26 +134,46 @@ Read the [known limitations](docs/known-limitations.md) and the deployment guide
 
 ## Quick start
 
-A new instance starts with **no owner and no accounts**, and it refuses every registration until you claim it. Starting the server prints a one-time claim token (also saved as `first-owner-claim.txt` next to your config, readable only by the account that runs the server). Open `<your server URL>/setup-server`, paste that token, and the claim creates your owner account, names the server and opens its first space. Everyone you invite afterwards registers normally and joins as a member — so nobody who finds the address before you can take the server.
+Paracord has no company server in the middle. Somebody in your group runs the server on a computer that stays on, and everyone else joins it with an invite link.
 
-### One-command server install
+### Join a server somebody sent you an invite for
 
-**Linux** — downloads the latest release, installs it, generates the config, and prints the URL to open:
+1. Open the invite link. It works in any browser.
+2. Press **Create an account to join**, pick a name and a password, and you're in.
+
+If you'd rather use the desktop app, download it from [Releases](../../releases/latest), open it, and paste the same invite link.
+
+### Run your own server
+
+One command. It downloads Paracord, sets it up to start by itself, and opens a link in your browser to finish.
+
+**Linux or macOS**, in a terminal:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Scdouglas1999/Paracord/main/scripts/install.sh | sh
 ```
 
-Run it with `sudo` for a system-wide install under `/opt/paracord` — it creates a `paracord` service user and a hardened, auto-restarting systemd unit. Without root it installs under `~/.local/share/paracord` with a per-user systemd service when a user manager is available. Re-running the same command upgrades the binary while preserving your config and data (the old binary is kept under `backups/`).
-
-**Windows** — in an elevated PowerShell:
+**Windows**, in any PowerShell window (it asks for administrator permission itself):
 
 ```powershell
-irm https://raw.githubusercontent.com/Scdouglas1999/Paracord/main/scripts/install.ps1 -OutFile install.ps1
-powershell -ExecutionPolicy Bypass -File .\install.ps1
+irm https://raw.githubusercontent.com/Scdouglas1999/Paracord/main/scripts/install.ps1 | iex
 ```
 
-Elevated, it installs under `%ProgramFiles%\Paracord`, registers an auto-start scheduled task running as `SYSTEM` with crash restarts, and opens inbound firewall rules for TCP and UDP `8443`. Without elevation it installs under `%LOCALAPPDATA%\Paracord` with Start Menu and logon-startup shortcuts.
+Then:
+
+1. **Finish setting up.** The installer opens a link in your browser (and prints it). Choose your name and password, name your server, done. That link only works once and only for you, so nobody who finds your server first can take it over. Your browser may show a one-time security warning because the server made its own certificate: choose Advanced, then Continue. The desktop app never shows this.
+2. **Invite friends.** Every channel has an **Invite** button. It gives you a link to send, and tells you plainly whether it will work for anyone or only for people on your Wi-Fi.
+
+**Friends outside your home.** The server asks your router to let them in automatically, and most routers say yes. If yours doesn't, the Invite dialog and the server's startup message both say so, and [Friends outside your network](docs/port-forwarding.md) walks through the one router setting to change.
+
+Running the same command again later updates Paracord and keeps all your data.
+
+<details>
+<summary>What the installer does, for the curious</summary>
+
+On Linux with `sudo` it installs under `/opt/paracord`, creates a `paracord` service user and a hardened, auto-restarting systemd unit. Without root it installs under `~/.local/share/paracord` with a per-user service. On macOS it installs a launchd job. On Windows with administrator permission it installs under `%ProgramFiles%\Paracord`, registers an auto-start task running as `SYSTEM`, and opens the firewall for the app and voice ports; without it, it installs just for you under `%LOCALAPPDATA%\Paracord`. Upgrades keep your config and data and back up the old binary. `PARACORD_NO_BROWSER=1` prints the setup link without opening it; the header of `scripts/install.sh` lists every other override. The server maps its ports on the router with UPnP or NAT-PMP; turn that off with `[network] auto_port_forward = false`.
+
+</details>
 
 ### Manual download
 
@@ -170,7 +190,7 @@ Grab `paracord-server-linux-x64-*.tar.gz` or `paracord-server-windows-x64-*.zip`
 .\paracord-server.exe
 ```
 
-First run creates `config/paracord.toml`, a random JWT signing secret, the SQLite database, and a self-signed certificate, then prints the URL to open.
+First run creates everything it needs (config, database, certificate) and prints the one-time link that finishes setup. The same link is saved as `first-owner-claim-link.txt` next to the config.
 
 ### Docker Compose
 
@@ -205,7 +225,7 @@ The standalone server's default remote-access path uses port `8443` over both pr
 | TCP `8443` | HTTPS, web client, API, and gateway |
 | UDP `8443` | Native QUIC/WebTransport media |
 
-Forward **both** when hosting outside your own network — voice needs the UDP half. Docker keeps application HTTP on loopback and expects a reverse proxy to provide public TLS.
+The server asks the router to forward both by itself (UPnP or NAT-PMP). If your router refuses, forward **both** by hand when hosting outside your own network — voice needs the UDP half — following [Friends outside your network](docs/port-forwarding.md). Docker keeps application HTTP on loopback and expects a reverse proxy to provide public TLS.
 
 ### Data
 
@@ -229,7 +249,7 @@ Download a desktop build from [Releases](../../releases/latest), or just open th
 | macOS desktop | `Paracord_<ver>_aarch64.dmg` (Apple Silicon) or `_x64.dmg` (Intel) | Unsigned unless a Developer ID is configured: right-click → Open the first time |
 | Browser | `https://<your-server>:8443` — served by the Paracord server itself | Accept the self-signed cert warning once |
 
-On first launch the desktop client asks for a **server URL** — paste the `https://<server>:8443` address the installer printed (or your server's public URL), then register an account. The desktop client speaks raw QUIC and auto-trusts the server's certificate.
+On first launch the desktop app asks for your **invite link** — paste it and create your account. A bare server address works too. The desktop app trusts the server's own certificate by itself, so it never shows the browser's security warning.
 
 Windows is the primary native screen and system-audio capture path. Linux screen sharing depends on the distribution's PipeWire and portal setup, and is worth testing before you publish a build. macOS system-audio capture is not implemented.
 

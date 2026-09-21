@@ -1,56 +1,44 @@
 # Getting Started
 
-This is the step-by-step first-run walkthrough for standing up your own Paracord
-server and inviting friends. Paracord is **zero-config**: there are no secrets to
-generate by hand, no external voice server to provision, and no database to set up
-before you start. The server creates everything it needs on first run.
+Paracord has no company server in the middle. Somebody in your group runs the
+server on a computer that stays on, and everyone else joins with an invite link.
+This page walks the person running the server through it. It takes a few minutes
+and there is nothing to configure by hand.
 
-Two things are true of every Paracord server and worth knowing up front:
-
-- **A new server has no owner until you claim it, and refuses registrations
-  until then.** Starting it prints a one-time claim token; you paste that at
-  `<server URL>/setup-server` to create the owner account, name the server and
-  open its first space. Nobody who finds the address before you can take it.
-- **Voice and video use Paracord's own native QUIC media engine by default.**
-  You do **not** need LiveKit or any external SFU. LiveKit is an optional
-  fallback (see [Native media vs. LiveKit](#native-media-vs-livekit) below).
+If you were only **sent an invite**, you don't need this page: open the link,
+press **Create an account to join**, and you're in. (Or install the
+[desktop app](../../releases/latest) and paste the link there.)
 
 ## 1. Get the server
 
-Pick whichever is easiest for you.
+### Option A — one command (recommended)
 
-### Option A — one-command installer (recommended)
-
-**Linux** — this downloads the latest release, installs it, generates the
-config, and prints the URL to open:
+**Linux or macOS**, in a terminal:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Scdouglas1999/Paracord/main/scripts/install.sh | sh
 ```
 
-- With `sudo` it installs system-wide under `/opt/paracord`, creates a
-  `paracord` service user, and registers a hardened, auto-restarting
-  **systemd service** — the server is already running when the script exits.
-- Without root it installs under `~/.local/share/paracord` and sets up a
-  per-user systemd service when a user manager is available (or prints the
-  exact command to run).
-- Re-running the same command **upgrades** the binary while preserving your
-  config and data; the previous binary is kept under `backups/`.
-- Offline/pinned installs: `PARACORD_VERSION=2.0.0`, or
-  `PARACORD_LOCAL_ARCHIVE=./paracord-server-linux-x64-2.0.0.tar.gz` — see the
-  header comment in `scripts/install.sh` for every override.
-
-**Windows** — in an elevated PowerShell:
+**Windows**, in any PowerShell window:
 
 ```powershell
-irm https://raw.githubusercontent.com/Scdouglas1999/Paracord/main/scripts/install.ps1 -OutFile install.ps1
-powershell -ExecutionPolicy Bypass -File .\install.ps1
+irm https://raw.githubusercontent.com/Scdouglas1999/Paracord/main/scripts/install.ps1 | iex
 ```
 
-Elevated, it installs under `%ProgramFiles%\Paracord`, registers an auto-start
-scheduled task (running as `SYSTEM`, restarting on crash), and opens inbound
-firewall rules for TCP and UDP `8443`. Without elevation it installs under
-`%LOCALAPPDATA%\Paracord` with Start Menu and logon-startup shortcuts.
+The installer downloads the latest release, sets the server up to start by
+itself, starts it, and **opens the link that finishes setup in your browser**
+(it prints the link too). If you used this option, skip to step 3.
+
+- On Windows it asks for administrator permission itself. Say yes and Paracord
+  is installed for the whole computer, starts with it, and the firewall is
+  opened so friends can connect. Say no and it installs just for you.
+- On Linux, run it with `sudo` for a whole-computer install with a system
+  service; without it, it installs just for you and starts when you log in.
+- Running the same command again later **updates** Paracord. Your accounts,
+  messages and settings are kept.
+- `PARACORD_NO_BROWSER=1` prints the setup link without opening a browser.
+  Offline and pinned installs (`PARACORD_VERSION`, `PARACORD_LOCAL_ARCHIVE`) are
+  described in the header of `scripts/install.sh`.
 
 ### Option B — download a release
 
@@ -81,8 +69,10 @@ cargo build --release --bin paracord-server
 
 ## 2. Run it
 
+(Only if you did not use the installer — it already did this.)
+
 ```bash
-# Linux (from the directory containing the binary)
+# Linux / macOS, from the directory containing the binary
 ./paracord-server
 ```
 
@@ -91,54 +81,30 @@ cargo build --release --bin paracord-server
 .\paracord-server.exe
 ```
 
-On the very first run the server:
-
-- writes its config to `config/paracord.toml`,
-- generates a random JWT signing secret and persists it,
-- creates the SQLite database under `./data/`,
-- generates a self-signed TLS certificate under `./data/certs/`, and
-- prints the URL to open/share plus a short **Next steps** block.
-
-You'll see something like:
-
-```
-  ➜  Open / share:  https://192.168.1.50:8443
-
-  ┌─ Next steps ───────────────────────────────────────
-  │
-  │  1. Open Paracord in your browser: https://192.168.1.50:8443
-  │  2. Claim the server: open https://192.168.1.50:8443/setup-server
-  │     and paste the one-time claim token printed above. That
-  │     creates the OWNER account, names the server and makes
-  │     its first space.
-  │  3. Invite others: share the URL, or create an invite link in-app.
-  │     They register normally and join as members, not operators.
-  │  4. Voice & video run on Paracord's native QUIC engine — forward
-  │     port 8443 (UDP + TCP) on your router for access off your network.
-  │
-  └────────────────────────────────────────────────────
-```
-
-Above that block the server prints the claim token itself:
+The first time it runs, the server creates everything it needs — its settings
+file, its database and its own certificate — and prints two things worth
+reading:
 
 ```
   ┌─ This server has no owner yet ─────────────────────
   │
-  │  Claim it at:
-  │       https://192.168.1.50:8443/setup-server
+  │  Finish setting up — open this link:
+  │       https://192.168.1.50:8443/setup-server#claim=K4M7PQ2X…
   │
-  │  One-time claim token (generated for this first run):
-  │       K4M7PQ2XВ…
+  └────────────────────────────────────────────────────
+
+  ┌─ Next steps ───────────────────────────────────────
   │
-  │  Also saved (owner-readable only) at:
-  │       config/first-owner-claim.txt
-  │
-  │  Until it is claimed, nobody can register an
-  │  account here — including anyone who finds this
-  │  address before you do.
+  │  1. Finish setting up — open this link: …
+  │  2. Invite friends:
+  │     Friends anywhere can join at https://203.0.113.7:8443 …
   │
   └────────────────────────────────────────────────────
 ```
+
+The link is also saved next to the settings file as
+`first-owner-claim-link.txt`, readable only by the account that runs the server,
+and is deleted once it has been used.
 
 ### Want to generate the config first?
 
@@ -153,24 +119,22 @@ an existing config) and exits without starting anything:
 ./paracord-server -c /etc/paracord/paracord.toml        # start with a custom config path
 ```
 
-## 3. Open the URL and claim the server
+## 3. Finish setting up
 
-Open the **Open / share** URL from the console in your browser.
+Open the link from the installer or the server. It takes you straight to
+creating **your** account — the owner's — then asks you to name things. That is
+the whole setup.
 
-Because the native/binary server uses a **self-signed** certificate, your browser
-shows a one-time security warning the first time you connect — accept it to
-continue. (The desktop client auto-trusts the server's certificate, so it never
-shows this warning.)
+Your browser may show a one-time security warning first, because the server made
+its own certificate: choose **Advanced**, then **Continue**. The desktop app
+never shows this.
 
-The sign-in page sends you straight to **Set up your Paracord server**, because
-this server has no accounts yet. Paste the claim token from the console (or from
-`config/first-owner-claim.txt`), pick a username and password, name the server,
-and name its first space. That one step creates the **owner** account — the
-person who runs this machine — and lands you in the new space.
+The link works once and only for you. Until it has been used nobody can create
+an account on your server, so somebody who finds the address before you cannot
+take it over. Everyone who joins afterwards is an ordinary member.
 
-The token works once. After the claim, `/setup-server` redirects to sign-in, and
-ordinary registration opens: everyone who joins later is a **community member**,
-not an operator.
+If the link doesn't fill the code in by itself, the setup page has a box for it:
+paste the long code from the end of the link, or from `first-owner-claim.txt`.
 
 **Pinning the token in advance.** Provisioning systems and CI can set the token
 rather than reading it from the console — in the config:
@@ -188,22 +152,24 @@ it starts that way, because anyone who reaches it first would own it.
 
 ## 4. Invite your friends
 
-- **Same network:** share the **Open / share** URL directly.
-- **Over the internet:** forward **one port — `8443` over both TCP and UDP** — to
-  the machine running the server, then share your public URL
-  (`https://<your-public-ip>:8443`). TCP `8443` carries HTTPS (web UI + gateway);
-  UDP `8443` carries native QUIC voice/video media. That single port covers both
-  browser and desktop clients.
-- **In-app invites:** once you're in a guild, create an invite link from any
-  channel and send it to friends.
+Every channel has an **Invite** button. It gives you a link to send, and says
+plainly who it will work for:
 
-Friends can join two ways:
+- **Anyone** — your router let Paracord open the way in, or you have a public
+  address configured. Send the link to whoever you like.
+- **Only people on the same Wi-Fi** — your router refused. Friends elsewhere
+  can't connect until one setting is changed on the router;
+  [Friends outside your network](port-forwarding.md) walks through it and shows
+  how to check it worked.
 
-- **Desktop app** — install the [desktop client](../../releases/latest), paste the
-  server URL, and create an account. The desktop client speaks raw QUIC directly
-  and auto-trusts the self-signed certificate.
-- **Browser** — open `https://<server-ip>:8443`, accept the self-signed
-  certificate warning, and create an account.
+The server asks the router by itself every time it starts (UPnP, then NAT-PMP).
+To turn that off, set `auto_port_forward = false` under `[network]` in the
+settings file.
+
+A friend who opens the link in a browser presses **Create an account to join**
+and lands in your server. A friend with the [desktop app](../../releases/latest)
+pastes the same link into it. The browser shows the one-time certificate warning
+described above; the desktop app does not.
 
 ## Native media vs. LiveKit
 
