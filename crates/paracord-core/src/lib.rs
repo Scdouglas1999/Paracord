@@ -20,6 +20,7 @@ pub mod message_attention;
 pub mod observability;
 pub mod permissions;
 pub mod presence_manager;
+pub mod share_address;
 pub mod shutdown;
 pub mod user;
 pub mod voice_cleanup;

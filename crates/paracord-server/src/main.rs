@@ -17,6 +17,7 @@ mod config;
 mod embedded_ui;
 mod file_transfer;
 mod livekit_proc;
+mod portmap;
 mod restore;
 mod tls;
 mod web_ui;
@@ -169,6 +170,42 @@ fn parse_detected_public_ip(text: &str) -> Option<String> {
         return None;
     }
     Some(ip.to_string())
+}
+
+/// Ask an outside service what this network's public address is.
+///
+/// Two callers need it and neither can derive it locally: LiveKit, for ICE
+/// candidates, and the port mapper, because a NAT-PMP gateway (unlike PCP or
+/// UPnP) never reports the address it forwards from — and without the address
+/// the banner cannot tell the owner where friends should connect. Bounded by
+/// `PUBLIC_IP_DETECTION_TIMEOUT` and a tiny body limit; `None` on any failure,
+/// which every caller treats as "unknown" rather than as an error.
+async fn detect_public_ip_via_http() -> Option<String> {
+    let client = reqwest::Client::builder()
+        .timeout(PUBLIC_IP_DETECTION_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .ok()?;
+    let response = client.get("https://api.ipify.org").send().await.ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let bytes = axum::body::to_bytes(
+        axum::body::Body::from_stream(response.bytes_stream()),
+        PUBLIC_IP_DETECTION_BODY_LIMIT,
+    )
+    .await
+    .ok()?;
+    parse_detected_public_ip(&String::from_utf8_lossy(&bytes))
+}
+
+/// Whether the startup path launched a port-mapping attempt, or decided not to.
+///
+/// Kept as one value so the decision is made once, in one place, and the banner
+/// reports what actually happened rather than re-deriving it.
+enum PortMapStart {
+    Skipped(portmap::SkipReason),
+    Running(tokio::task::JoinHandle<portmap::Attempt>),
 }
 
 #[derive(Clone, Default)]
@@ -362,48 +399,50 @@ async fn main() -> Result<()> {
     // media join times out" failures when only HTTPS is reachable.
     let public_signal_port = if tls_preferred { tls_port } else { bind_port };
 
-    // Manual port forwarding status (automatic router mapping removed).
     let server_public_port = public_signal_port;
     let bind_is_loopback = config.server.bind_address.starts_with("127.0.0.1:")
         || config.server.bind_address.starts_with("localhost:")
         || config.server.bind_address.starts_with("[::1]:");
-    let port_forwarding_status = if bind_is_loopback {
-        "N/A (loopback-only bind)".to_string()
-    } else {
-        "Manual (configure router/firewall for WAN access)".to_string()
-    };
-    let needs_manual_forwarding = !bind_is_loopback;
-    let mut detected_external_ip: Option<String> = None;
 
-    // If we don't yet have an external IP but
-    // LiveKit is local, detect the public IP via HTTP so we can configure
-    // LiveKit's ICE candidates correctly for remote users.
-    if detected_external_ip.is_none()
-        && (config.livekit.url.contains("localhost") || config.livekit.url.contains("127.0.0.1"))
-    {
-        let public_ip_client = reqwest::Client::builder()
-            .timeout(PUBLIC_IP_DETECTION_TIMEOUT)
-            .redirect(reqwest::redirect::Policy::none())
-            .build();
-        if let Ok(client) = public_ip_client {
-            let response = client.get("https://api.ipify.org").send().await;
-            if let Ok(resp) = response {
-                if resp.status().is_success() {
-                    let text = match axum::body::to_bytes(
-                        axum::body::Body::from_stream(resp.bytes_stream()),
-                        PUBLIC_IP_DETECTION_BODY_LIMIT,
-                    )
-                    .await
-                    {
-                        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
-                        Err(_) => String::new(),
-                    };
-                    if let Some(ip) = parse_detected_public_ip(&text) {
-                        tracing::info!("Detected external IP via HTTP: {}", ip);
-                        detected_external_ip = Some(ip);
-                    }
-                }
-            }
+    // ── Ask the router to let friends in ────────────────────────────────────
+    // Started here and collected just before the banner, so the whole 8s budget
+    // overlaps the database migrations and TLS setup that follow. A router that
+    // never answers therefore costs a first-time owner nothing they can notice.
+    //
+    // Exactly two ports: the TCP port a browser reaches the app on, and the UDP
+    // port native media uses. Under the generated defaults both are 8443.
+    let portmap_request = portmap::PortRequest {
+        tcp_port: server_public_port,
+        udp_port: config.voice.port,
+    };
+    let portmap_lease = portmap::lease_from_seconds(config.network.port_forward_lease_seconds);
+    let portmap_start = if !config.network.auto_port_forward {
+        PortMapStart::Skipped(portmap::SkipReason::Disabled)
+    } else if bind_is_loopback {
+        PortMapStart::Skipped(portmap::SkipReason::LoopbackBind)
+    } else {
+        PortMapStart::Running(tokio::spawn(async move {
+            portmap::establish(
+                &portmap::default_routers(),
+                portmap_request,
+                portmap_lease,
+                portmap::DISCOVERY_BUDGET,
+            )
+            .await
+        }))
+    };
+    let port_mapping_attempted = matches!(portmap_start, PortMapStart::Running(_));
+
+    // The public address of this network. LiveKit needs it for ICE candidates;
+    // the port mapper needs it because a NAT-PMP gateway never reports one, and
+    // without it the banner cannot say where friends should connect.
+    let mut detected_external_ip: Option<String> = None;
+    let livekit_is_local =
+        config.livekit.url.contains("localhost") || config.livekit.url.contains("127.0.0.1");
+    if livekit_is_local || port_mapping_attempted {
+        if let Some(ip) = detect_public_ip_via_http().await {
+            tracing::info!("Detected external IP via HTTP: {}", ip);
+            detected_external_ip = Some(ip);
         }
     }
 
@@ -423,8 +462,7 @@ async fn main() -> Result<()> {
     // missing binary is a normal, silent outcome rather than an error.
     let mut managed_livekit = None;
     let mut livekit_reachable = false;
-    let livekit_url_is_local =
-        config.livekit.url.contains("localhost") || config.livekit.url.contains("127.0.0.1");
+    let livekit_url_is_local = livekit_is_local;
     let livekit_opt_in =
         !config.voice.native_media || !livekit_url_is_local || config.livekit.public_url.is_some();
     let livekit_status = if !livekit_opt_in {
@@ -501,7 +539,7 @@ async fn main() -> Result<()> {
     // Decided before anything can serve a request: while the instance is
     // unclaimed the API refuses every registration, so the bootstrap token has
     // to exist by the time the listener opens.
-    let setup_state = provision_instance_setup(&db, &config, &args.config).await?;
+    let mut setup_state = provision_instance_setup(&db, &config, &args.config).await?;
 
     // Clear stale voice states from the database. After a server restart no
     // client is actually connected to a LiveKit room, so any leftover rows
@@ -882,6 +920,19 @@ async fn main() -> Result<()> {
     paracord_api::install_http_rate_limiter();
     paracord_api::spawn_http_rate_limiter_cleanup(shutdown_notify.clone());
 
+    // The two first-owner files hold a credential that is spent the instant
+    // somebody finishes setting the server up. The route that finishes it lives
+    // in `paracord-api`, which has no business reaching into this process's
+    // config directory — so the moment is watched for here instead of leaving a
+    // dead secret readable on disk until the next restart.
+    if setup_state.is_some() {
+        spawn_claim_file_cleanup(
+            state.db.clone(),
+            args.config.clone(),
+            shutdown_notify.clone(),
+        );
+    }
+
     spawn_pending_attachment_cleanup(
         state.db.clone(),
         state.storage_backend.clone(),
@@ -1044,6 +1095,82 @@ async fn main() -> Result<()> {
         bind_port,
     );
 
+    // Collect the router attempt started at the top of startup. Everything since
+    // then — migrations, workers, TLS — ran alongside it, so on a cooperative
+    // network this is already done and on a silent one it has already spent its
+    // own bounded budget rather than adding to boot time.
+    let port_mapping = match portmap_start {
+        PortMapStart::Skipped(reason) => portmap::Attempt {
+            outcome: portmap::Outcome::Skipped(reason),
+            router: None,
+        },
+        PortMapStart::Running(handle) => match handle.await {
+            Ok(attempt) => attempt,
+            Err(err) => portmap::Attempt {
+                outcome: portmap::Outcome::NotAvailable {
+                    external_ip: None,
+                    reason: format!("the port-mapping attempt did not finish ({err})"),
+                },
+                router: None,
+            },
+        },
+    };
+    let port_mapping_outcome = port_mapping.outcome.with_fallback_ip(
+        detected_external_ip
+            .as_deref()
+            .and_then(|ip| ip.parse::<std::net::IpAddr>().ok()),
+    );
+    port_mapping_outcome.log(portmap_request);
+    if let Some(router) = port_mapping.router.as_ref() {
+        portmap::spawn_renewal(
+            Arc::clone(router),
+            portmap_request,
+            portmap_lease,
+            shutdown_notify.clone(),
+        );
+    }
+    // Moved into the shutdown path below, so the mappings this process asked for
+    // are taken back down when it leaves.
+    let port_mapping_release = port_mapping
+        .router
+        .clone()
+        .map(|router| (router, portmap_request));
+
+    let tls_active = tls_rustls_config.is_some();
+    let self_made_certificate = certificate_is_self_made(&config.tls, tls_active);
+    let invite = invite_lines(
+        &port_mapping_outcome,
+        &share_url,
+        detected_local_ip.as_deref(),
+        if tls_active { "https" } else { "http" },
+        server_public_port,
+        config.voice.port,
+    );
+
+    // What an invite link should point at. The app asks for this when the owner
+    // is on `localhost`, where their own address bar is no use to a friend.
+    paracord_core::share_address::set_share_address(share_address_for(
+        &port_mapping_outcome,
+        config.server.public_url.as_deref(),
+        &share_url,
+        if tls_active { "https" } else { "http" },
+        server_public_port,
+    ));
+
+    // The link the owner clicks, with the one-time code already in it. Built here
+    // because it needs the address the banner is about to print.
+    if let Some(pending) = setup_state.as_mut() {
+        record_claim_link(
+            pending,
+            &share_url,
+            &config.server.bind_address,
+            tls_active,
+            tls_port,
+            bind_port,
+            &args.config,
+        );
+    }
+
     print_startup_banner(
         &config.server.bind_address,
         &share_url,
@@ -1051,14 +1178,13 @@ async fn main() -> Result<()> {
         setup_state.as_ref(),
         &livekit_status,
         &config.database.url,
-        &port_forwarding_status,
+        &port_mapping_outcome,
         &web_ui_status,
         &tls_status,
-        tls_rustls_config.is_some(),
+        tls_active,
         tls_port,
-        needs_manual_forwarding,
-        server_public_port,
-        config.voice.port,
+        self_made_certificate,
+        &invite,
         &voice_status,
     );
 
@@ -1144,6 +1270,13 @@ async fn main() -> Result<()> {
 
         if let Some(mut lk) = managed_livekit {
             lk.kill().await;
+        }
+
+        // Close the doors this process asked the router to open. Bounded inside
+        // `release`, so a router that stopped answering cannot hold a restart
+        // hostage — an entry left behind expires with its lease either way.
+        if let Some((router, request)) = port_mapping_release {
+            portmap::release(router, request).await;
         }
 
         // From here axum waits for whatever is still open; start the clock.
@@ -2853,8 +2986,8 @@ fn derive_share_url(
     format!("{scheme}://{host}:{port}")
 }
 
-/// Where an operator can find the bootstrap claim token for an unclaimed
-/// instance, and (for a freshly minted one) the token itself.
+/// Where an owner can find the bootstrap credential for a server that nobody has
+/// finished setting up yet, and (for a freshly minted one) the token itself.
 pub struct PendingSetup {
     /// The plaintext token, shown only when this process minted or was handed
     /// it. `None` when a token from a previous run is being reused and the
@@ -2864,6 +2997,15 @@ pub struct PendingSetup {
     source: String,
     /// Path of the 0600 file the token was written to, when one was written.
     token_file: Option<String>,
+    /// The one link that finishes setup, with the token already in it. Built
+    /// once the startup path knows which address to print, so it is filled in
+    /// after `provision_instance_setup` returns.
+    link: Option<String>,
+    /// Path of the 0600 file that link was written to, when one was written.
+    link_file: Option<String>,
+    /// The same link built on the server's shared address, when that differs
+    /// from the one above (a LAN or public address versus this machine's own).
+    remote_link: Option<String>,
 }
 
 /// Decide, before the server can accept a request, whether this instance still
@@ -2882,6 +3024,10 @@ async fn provision_instance_setup(
         .await
         .context("Failed to read instance setup state")?;
     if !row.is_pending() {
+        // Setup is finished, so the bootstrap credential is spent. Both files
+        // that carried it are useless from this moment on, and a spent secret
+        // lying around on disk is only a liability — take them away.
+        remove_claim_files(config_path);
         return Ok(None);
     }
 
@@ -2927,6 +3073,9 @@ async fn provision_instance_setup(
             token: Some(configured.to_string()),
             source: format!("[setup] claim_token in {config_path}"),
             token_file: None,
+            link: None,
+            link_file: None,
+            remote_link: None,
         }));
     }
 
@@ -2947,6 +3096,9 @@ async fn provision_instance_setup(
                         token: Some(existing.to_string()),
                         source: "generated on a previous start".to_string(),
                         token_file: Some(token_path_display),
+                        link: None,
+                        link_file: None,
+                        remote_link: None,
                     }));
                 }
             }
@@ -2988,24 +3140,230 @@ async fn provision_instance_setup(
         token: Some(token),
         source: "generated for this first run".to_string(),
         token_file,
+        link: None,
+        link_file: None,
+        remote_link: None,
     }))
 }
 
-/// `first-owner-claim.txt`, beside the config file.
-fn claim_token_file_path(config_path: &str) -> std::path::PathBuf {
+/// A file beside the config file, by name.
+fn config_sibling_path(config_path: &str, name: &str) -> std::path::PathBuf {
     let base = std::path::Path::new(config_path);
     match base
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
     {
-        Some(parent) => parent.join("first-owner-claim.txt"),
-        None => std::path::PathBuf::from("first-owner-claim.txt"),
+        Some(parent) => parent.join(name),
+        None => std::path::PathBuf::from(name),
     }
+}
+
+/// `first-owner-claim.txt`, beside the config file. Its content is exactly the
+/// token: installers read this file, so the format is fixed.
+fn claim_token_file_path(config_path: &str) -> std::path::PathBuf {
+    config_sibling_path(config_path, "first-owner-claim.txt")
+}
+
+/// `first-owner-claim-link.txt`, beside the config file. Its content is exactly
+/// the finish-setup link, token included — the thing a human actually needs.
+fn claim_link_file_path(config_path: &str) -> std::path::PathBuf {
+    config_sibling_path(config_path, "first-owner-claim-link.txt")
+}
+
+/// Delete both bootstrap files, ignoring the ones that are not there.
+///
+/// Called the moment this process sees that setup is finished, because from then
+/// on the token they hold opens nothing and is only worth stealing.
+fn remove_claim_files(config_path: &str) {
+    for path in [
+        claim_token_file_path(config_path),
+        claim_link_file_path(config_path),
+    ] {
+        match std::fs::remove_file(&path) {
+            Ok(()) => tracing::info!(
+                target: "paracord::setup",
+                path = %path.display(),
+                "removed a spent first-owner file: this server already has an owner"
+            ),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => tracing::warn!(
+                target: "paracord::setup",
+                path = %path.display(),
+                error = %err,
+                "could not remove a spent first-owner file; delete it by hand"
+            ),
+        }
+    }
+}
+
+/// Watch for the moment setup is finished, then take the bootstrap files away.
+///
+/// Polling is the honest mechanism here: the claim is completed by an HTTP route
+/// in another crate, the check is one tiny row read, the task only exists while
+/// this server has no owner, and it ends the first time it fires.
+fn spawn_claim_file_cleanup(
+    db: paracord_db::DbPool,
+    config_path: String,
+    shutdown: Arc<tokio::sync::Notify>,
+) {
+    const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+    tokio::spawn(async move {
+        let mut warned = false;
+        loop {
+            tokio::select! {
+                _ = shutdown.notified() => break,
+                _ = tokio::time::sleep(POLL_INTERVAL) => {
+                    match paracord_db::instance_setup::get(&db).await {
+                        Ok(row) if !row.is_pending() => {
+                            remove_claim_files(&config_path);
+                            break;
+                        }
+                        Ok(_) => {}
+                        Err(err) => {
+                            if !warned {
+                                warned = true;
+                                tracing::warn!(
+                                    target: "paracord::setup",
+                                    error = %err,
+                                    "could not check whether setup is finished; the first-owner \
+                                     files will be removed on the next start instead"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+/// Percent-encode a value for use inside a URL fragment.
+///
+/// A generated token is base32 and needs none of this, but a token pinned via
+/// `[setup] claim_token` is whatever the operator typed — and a `#`, a space or
+/// a `&` in it would silently truncate the link the owner clicks.
+fn encode_fragment_value(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(char::from(*byte))
+            }
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+    out
+}
+
+/// The one link that finishes setting up a server.
+///
+/// The token rides in the URL *fragment* on purpose: a fragment is never sent to
+/// any server and never reaches an access log or a proxy log, so pasting this
+/// link somewhere does not leak the credential the way a query string would. The
+/// web client reads `#claim=` and fills the field in.
+fn build_claim_link(base_url: &str, token: &str) -> String {
+    format!(
+        "{}/setup-server#claim={}",
+        base_url.trim_end_matches('/'),
+        encode_fragment_value(token)
+    )
+}
+
+/// Which address to build the finish-setup link on.
+///
+/// The banner's shared address is the right thing to hand to other people, but
+/// it is not always the right thing for the person sitting at this machine: a
+/// non-loopback HTTPS address means a certificate tied to a name or IP the local
+/// browser may not match. When this machine can reach the server over loopback —
+/// which it can whenever the bind address is a wildcard or loopback itself — the
+/// link the owner clicks is built there instead. The base is produced by
+/// `derive_share_url`, the same function the banner uses, so there is exactly one
+/// piece of URL logic in this file.
+fn claim_link_base(
+    share_url: &str,
+    bind_address: &str,
+    tls_active: bool,
+    tls_port: u16,
+    bind_port: u16,
+) -> String {
+    let reachable_on_this_machine = {
+        let host = bind_address
+            .rsplit_once(':')
+            .map(|(host, _)| host)
+            .unwrap_or(bind_address);
+        host.is_empty()
+            || host == "0.0.0.0"
+            || host == "[::]"
+            || host == "::"
+            || host == "127.0.0.1"
+            || host == "localhost"
+            || host == "[::1]"
+    };
+    let shared_host_is_local = share_url.contains("//localhost")
+        || share_url.contains("//127.0.0.1")
+        || share_url.contains("//[::1]");
+
+    if share_url.starts_with("https://") && !shared_host_is_local && reachable_on_this_machine {
+        return derive_share_url(
+            &None,
+            &format!("127.0.0.1:{bind_port}"),
+            None,
+            tls_active,
+            tls_port,
+            bind_port,
+        );
+    }
+    share_url.to_string()
+}
+
+/// Build the finish-setup link, write it beside the token file, and record both
+/// on the pending state so the banner can print them.
+fn record_claim_link(
+    pending: &mut PendingSetup,
+    share_url: &str,
+    bind_address: &str,
+    tls_active: bool,
+    tls_port: u16,
+    bind_port: u16,
+    config_path: &str,
+) {
+    let Some(token) = pending.token.as_deref() else {
+        return;
+    };
+    let local_base = claim_link_base(share_url, bind_address, tls_active, tls_port, bind_port);
+    let link = build_claim_link(&local_base, token);
+    let shared_link = build_claim_link(share_url, token);
+    pending.remote_link = (shared_link != link).then_some(shared_link);
+
+    // Only write the link file when a token file was written too: a token pinned
+    // in the config is a secret the operator already holds, and copying it onto
+    // disk would widen its exposure for nothing.
+    if pending.token_file.is_some() {
+        let path = claim_link_file_path(config_path);
+        match write_owner_only_line(&path, &link) {
+            Ok(()) => pending.link_file = Some(path.display().to_string()),
+            Err(err) => tracing::error!(
+                target: "paracord::setup",
+                path = %path.display(),
+                error = %err,
+                "could not write the finish-setup link file; the link below is the only copy"
+            ),
+        }
+    }
+    pending.link = Some(link);
 }
 
 /// Write the token with owner-only permissions, established before any bytes
 /// are written so there is no window in which another local user can read it.
 fn write_claim_token_file(path: &std::path::Path, token: &str) -> std::io::Result<()> {
+    write_owner_only_line(path, token)
+}
+
+/// Write one line to a file only the account running the server can read.
+///
+/// The mode is set as the file is created rather than chmod-ed afterwards, so
+/// there is no window in which another local user can read the secret.
+fn write_owner_only_line(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
     use std::io::Write;
 
     if let Some(parent) = path
@@ -3033,108 +3391,324 @@ fn write_claim_token_file(path: &std::path::Path, token: &str) -> std::io::Resul
         .create_new(true)
         .open(path)?;
 
-    writeln!(file, "{token}")?;
+    writeln!(file, "{contents}")?;
     file.sync_all()?;
     Ok(())
 }
 
-/// The claim-token block, printed whenever the instance is still unclaimed.
+/// The block printed whenever nobody has finished setting this server up.
+///
+/// One clickable link is the whole point: the token is already in it, as a URL
+/// *fragment*, which no server and no proxy ever sees. The bare token stays
+/// below it as the fallback for a terminal that mangles long links — and because
+/// installers and the release smoke test read it from the log.
 fn print_claim_instructions(share_url: &str, pending: &PendingSetup) {
     println!();
     println!("  ┌─ This server has no owner yet ─────────────────────");
     println!("  │");
-    println!("  │  Claim it at:");
-    println!("  │       {share_url}/setup-server");
+    match pending.link.as_deref() {
+        Some(link) => {
+            println!("  │  Finish setting up — open this link:");
+            println!("  │       {link}");
+            if let Some(remote) = pending.remote_link.as_deref() {
+                println!("  │");
+                println!("  │  From another computer, the same page is at:");
+                println!("  │       {remote}");
+            }
+        }
+        None => {
+            println!("  │  Finish setting up — open this page:");
+            println!("  │       {share_url}/setup-server");
+        }
+    }
     println!("  │");
     match pending.token.as_deref() {
         Some(token) => {
-            println!("  │  One-time claim token ({}):", pending.source);
+            println!("  │  If the link does not fill in the code for you, paste");
+            println!("  │  it in by hand. One-time claim token");
+            println!("  │  ({}):", pending.source);
             println!("  │       {token}");
         }
         None => {
             println!("  │  One-time claim token: {}", pending.source);
         }
     }
-    if let Some(path) = pending.token_file.as_deref() {
+    let saved: Vec<&str> = [pending.link_file.as_deref(), pending.token_file.as_deref()]
+        .into_iter()
+        .flatten()
+        .collect();
+    if !saved.is_empty() {
         println!("  │");
-        println!("  │  Also saved (owner-readable only) at:");
-        println!("  │       {path}");
+        println!("  │  Also saved, readable only by the account running this");
+        println!("  │  server:");
+        for path in saved {
+            println!("  │       {path}");
+        }
     }
     println!("  │");
-    println!("  │  Until it is claimed, nobody can register an");
+    println!("  │  Until someone does this, nobody can create an");
     println!("  │  account here — including anyone who finds this");
     println!("  │  address before you do.");
     println!("  │");
     println!("  └────────────────────────────────────────────────────");
 }
 
-/// Friendly onboarding block, printed on a genuine first run and by `init`.
-/// Uses a single left border (not a fully-closed box) so variable-width URLs
-/// never produce a ragged right edge across terminals.
-/// `web_port` is the TCP port a browser reaches this server on (the TLS port
-/// when HTTPS is on, otherwise the bind port). `voice_port` is the UDP port the
-/// native QUIC media endpoint binds — `[voice] port`, a different setting.
-/// Under the generated defaults they are both 8443 and the distinction is
-/// invisible; the moment an operator moves either one, naming only the web port
-/// sends them to forward a port that carries no media.
-/// The ports an operator has to open, as the box's narrow lines.
-///
-/// Two different settings: the TCP port a browser reaches the app on, and
-/// `[voice] port`, the UDP port the native QUIC media endpoint binds. The
-/// generated config puts both at 8443, which is why one number read correctly
-/// for so long; with TLS off, or `[voice] port` moved, the web port carries no
-/// media and forwarding it alone leaves every outside caller silent.
-fn forwarding_lines(web_port: u16, voice_port: u16) -> Vec<String> {
-    if web_port == voice_port {
-        vec![format!(
-            "forward port {web_port} (TCP + UDP) on your router."
-        )]
+/// `host:port`, with an IPv6 literal bracketed so it can be pasted into a
+/// browser as-is.
+fn format_host_port(host: &str, port: u16) -> String {
+    if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]:{port}")
     } else {
-        vec![
-            format!("forward TCP {web_port} (the app) and UDP {voice_port}"),
-            "(voice & video) on your router.".to_string(),
-        ]
+        format!("{host}:{port}")
     }
 }
 
-fn print_next_steps(share_url: &str, web_port: u16, voice_port: u16, claim_required: bool) {
+/// The port numbers a friend outside this network has to be able to reach, as
+/// one phrase.
+///
+/// Two different settings hide behind them: the TCP port a browser reaches the
+/// app on, and `[voice] port`, the UDP port that carries voice and video. The
+/// generated config puts both at 8443, which is why one number read correctly
+/// for so long; the moment either moves, naming only the first sends someone to
+/// open a port that carries no calls.
+fn forwarded_ports_phrase(web_port: u16, voice_port: u16) -> String {
+    if web_port == voice_port {
+        format!("port {web_port} (TCP and UDP)")
+    } else {
+        format!("port {web_port} (TCP) and port {voice_port} (UDP)")
+    }
+}
+
+/// What the app should put in an invite link, and how far that link carries.
+///
+/// An operator's configured `public_url` is the last word. Otherwise a mapped
+/// router with a known public address reaches the internet; anything else that
+/// is not a loopback bind reaches the local network at the address the banner
+/// already prints.
+fn share_address_for(
+    outcome: &portmap::Outcome,
+    public_url: Option<&str>,
+    share_url: &str,
+    scheme: &str,
+    public_port: u16,
+) -> paracord_core::share_address::ShareAddress {
+    use paracord_core::share_address::{ShareAddress, ShareReach};
+    if let Some(url) = public_url.map(str::trim).filter(|url| !url.is_empty()) {
+        return ShareAddress {
+            url: Some(url.to_string()),
+            reach: ShareReach::Internet,
+        };
+    }
+    let is_loopback = |url: &str| {
+        url.contains("://localhost") || url.contains("://127.") || url.contains("://[::1]")
+    };
+    match outcome {
+        portmap::Outcome::Skipped(portmap::SkipReason::LoopbackBind) => ShareAddress {
+            url: None,
+            reach: ShareReach::ThisComputer,
+        },
+        portmap::Outcome::Mapped {
+            external_ip: Some(ip),
+            ..
+        } => {
+            let host = match ip {
+                std::net::IpAddr::V6(v6) => format!("[{v6}]"),
+                std::net::IpAddr::V4(v4) => v4.to_string(),
+            };
+            ShareAddress {
+                url: Some(format!("{scheme}://{host}:{public_port}")),
+                reach: ShareReach::Internet,
+            }
+        }
+        _ if is_loopback(share_url) => ShareAddress {
+            url: None,
+            reach: ShareReach::ThisComputer,
+        },
+        _ => ShareAddress {
+            url: Some(share_url.to_string()),
+            reach: ShareReach::LocalNetwork,
+        },
+    }
+}
+
+/// The "Invite friends" paragraph, chosen from what the router actually did.
+///
+/// Pure and side-effect-free: this is the sentence a first-time owner acts on,
+/// and it is the one part of the banner that must never overstate what works.
+/// Every branch ends by naming what would have to change on the router, so the
+/// reader is never left with "it did not work" and nothing to do about it.
+fn invite_lines(
+    outcome: &portmap::Outcome,
+    share_url: &str,
+    lan_ip: Option<&str>,
+    scheme: &str,
+    web_port: u16,
+    voice_port: u16,
+) -> Vec<String> {
+    let ports = forwarded_ports_phrase(web_port, voice_port);
+    let this_computer = match lan_ip {
+        Some(ip) => format!("this computer ({ip})"),
+        None => "this computer".to_string(),
+    };
+
+    match outcome {
+        portmap::Outcome::Mapped {
+            external_ip: Some(ip),
+            ..
+        } => vec![
+            "Friends anywhere can join at:".to_string(),
+            format!(
+                "     {scheme}://{}",
+                format_host_port(&ip.to_string(), web_port)
+            ),
+            "Paracord asked your router to allow that, so there is".to_string(),
+            "nothing left for you to change on your router.".to_string(),
+        ],
+        portmap::Outcome::Mapped {
+            external_ip: None, ..
+        } => vec![
+            "Your router is letting people in from outside, but it".to_string(),
+            "did not say what this network's address is. Look it up".to_string(),
+            "at https://ifconfig.me and give friends that address".to_string(),
+            format!("with port {web_port}. There is nothing else to change"),
+            "on your router.".to_string(),
+        ],
+        portmap::Outcome::Skipped(portmap::SkipReason::LoopbackBind) => vec![
+            "Nobody else can reach this server yet: it is only".to_string(),
+            "listening on this computer. To let other people in,".to_string(),
+            "set bind_address = \"0.0.0.0:<port>\" in the config and".to_string(),
+            "start it again — then friends outside your home also".to_string(),
+            format!("need {ports} opened on your router."),
+        ],
+        portmap::Outcome::Skipped(portmap::SkipReason::Disabled) => vec![
+            "Right now only people on the same Wi-Fi or network as".to_string(),
+            "this computer can join, at:".to_string(),
+            format!("     {share_url}"),
+            String::new(),
+            "Paracord was told not to ask your router for anything".to_string(),
+            "([network] auto_port_forward = false). To let anyone".to_string(),
+            format!("else in, {ports}"),
+            format!("must reach {this_computer}."),
+            "docs/port-forwarding.md walks through it — look for".to_string(),
+            "\"port forwarding\" on your router.".to_string(),
+        ],
+        portmap::Outcome::Skipped(portmap::SkipReason::NotAskedYet) => vec![
+            "When the server starts it asks your router to let".to_string(),
+            "people outside your network in. If the router says no,".to_string(),
+            "only people on the same Wi-Fi can join — and to change".to_string(),
+            format!("that, {ports}"),
+            "must reach this computer. docs/port-forwarding.md walks".to_string(),
+            "through it — look for \"port forwarding\" on your router.".to_string(),
+        ],
+        portmap::Outcome::NotAvailable { external_ip, .. } => {
+            let mut lines = vec![
+                "Right now only people on the same Wi-Fi or network as".to_string(),
+                "this computer can join, at:".to_string(),
+                format!("     {share_url}"),
+                String::new(),
+                "Your router did not open the way in by itself. To let".to_string(),
+                format!("anyone else in, {ports}"),
+                format!("must reach {this_computer}."),
+            ];
+            if let Some(ip) = external_ip {
+                lines.push(format!(
+                    "Friends would then join at {scheme}://{}.",
+                    format_host_port(&ip.to_string(), web_port)
+                ));
+            }
+            lines.push("docs/port-forwarding.md walks through it step by step,".to_string());
+            lines.push("including how to check it worked — look for".to_string());
+            lines.push("\"port forwarding\" on your router.".to_string());
+            lines
+        }
+    }
+}
+
+/// The plain sentence about the certificate this server made for itself.
+///
+/// Printed only when it applies, because a warning that does not happen is worse
+/// than no warning: the owner starts distrusting the rest of the page.
+const SELF_MADE_CERT_LINES: [&str; 3] = [
+    "Your browser will show a one-time security warning",
+    "because this server made its own certificate — choose",
+    "Advanced, then Continue. The desktop app does not show this.",
+];
+
+/// True when HTTPS is on and the certificate is the one this server generated
+/// for itself, rather than one from a certificate authority.
+///
+/// Derived from configuration rather than from the certificate bytes: with ACME
+/// off and `auto_generate` on, the file at `cert_path` is the one this server
+/// wrote. An operator who drops a CA-issued certificate at that path and leaves
+/// `auto_generate = true` gets one sentence too many — the honest fix, and the
+/// setting that says so, is `auto_generate = false`.
+fn certificate_is_self_made(tls: &config::TlsConfig, tls_active: bool) -> bool {
+    tls_active && !tls.acme.enabled && tls.auto_generate
+}
+
+/// What a person who has never run a server has to do next, in order.
+///
+/// Printed on a genuine first run and by `init`. `claim_link` is the one link
+/// that finishes setup; `init` has no database yet, so it passes `None` and says
+/// where the link will appear instead.
+fn print_next_steps(
+    share_url: &str,
+    claim_link: Option<&str>,
+    claim_required: bool,
+    invite: &[String],
+    self_made_certificate: bool,
+) {
     println!();
     println!("  ┌─ Next steps ───────────────────────────────────────");
     println!("  │");
-    println!("  │  1. Open Paracord in your browser:");
-    println!("  │       {share_url}");
-    println!("  │");
-    // Step 2 has to match how this server actually bootstraps. Telling an
-    // operator to paste a claim token that was never minted — because
-    // `require_claim` is off — sends them looking for a secret that does not
-    // exist, and hides the fact that the next person to register owns the box.
+    // Step 1 has to match how this server actually bootstraps. Pointing someone
+    // at a link that was never minted — because `require_claim` is off — sends
+    // them looking for a secret that does not exist, and hides the fact that the
+    // next person to register owns the server.
     if claim_required {
-        println!("  │  2. Claim the server: open {share_url}/setup-server");
-        println!("  │     and paste the one-time claim token printed above");
-        println!("  │     (also saved as first-owner-claim.txt next to your");
-        println!("  │     config). That creates the OWNER account — the");
-        println!("  │     person who runs this server — names the instance");
-        println!("  │     and makes its first space.");
+        println!("  │  1. Finish setting up — open this link:");
+        match claim_link {
+            Some(link) => println!("  │       {link}"),
+            None => {
+                println!("  │       {share_url}/setup-server");
+                println!("  │     The first start prints the full link, with the");
+                println!("  │     one-time code already in it.");
+            }
+        }
+        println!("  │     It makes you the owner of this server: it creates");
+        println!("  │     your OWNER account, gives the server its name and");
+        println!("  │     opens its first channel. Nobody can create an");
+        println!("  │     account here until you do. (Older guides and the");
+        println!("  │     installer call this step \"Claim the server\".)");
     } else {
-        println!("  │  2. The first-owner claim is DISABLED for this server");
-        println!("  │     ([setup] require_claim = false), so the FIRST");
-        println!("  │     account registered becomes the owner/admin —");
-        println!("  │     including anyone who reaches this address before");
-        println!("  │     you do. Register yours now, or turn the claim back");
-        println!("  │     on before sharing the URL.");
+        println!("  │  1. Open this address and create your account:");
+        println!("  │       {share_url}");
+        println!("  │     This server is set to hand ownership to the FIRST");
+        println!("  │     account that registers ([setup] require_claim =");
+        println!("  │     false) — including a stranger who gets there before");
+        println!("  │     you. Register yours now, or turn that setting back");
+        println!("  │     on before sharing the address.");
     }
     println!("  │");
-    println!("  │  3. Invite others: share the URL above, or create an");
-    println!("  │     invite link from any channel once you're in.");
-    println!("  │     They register normally and join as members, not");
-    println!("  │     as operators.");
-    println!("  │");
-    println!("  │  4. Voice & video run on Paracord's native QUIC engine");
-    println!("  │     — no extra setup. For access outside your network,");
-    for line in forwarding_lines(web_port, voice_port) {
-        println!("  │     {line}");
+    if !invite.is_empty() {
+        println!("  │  2. Invite friends:");
+        for line in invite {
+            if line.is_empty() {
+                println!("  │");
+            } else {
+                println!("  │     {line}");
+            }
+        }
+        println!("  │");
     }
-    println!("  │");
+    if self_made_certificate {
+        let step = if invite.is_empty() { 2 } else { 3 };
+        println!("  │  {step}. {}", SELF_MADE_CERT_LINES[0]);
+        for line in &SELF_MADE_CERT_LINES[1..] {
+            println!("  │     {line}");
+        }
+        println!("  │");
+    }
     println!("  └────────────────────────────────────────────────────");
 }
 
@@ -3146,14 +3720,13 @@ fn print_startup_banner(
     pending_setup: Option<&PendingSetup>,
     livekit_status: &str,
     db_url: &str,
-    port_forwarding_status: &str,
+    port_mapping: &portmap::Outcome,
     web_ui: &str,
     tls_status: &str,
     tls_active: bool,
     tls_port: u16,
-    needs_manual_forwarding: bool,
-    server_port: u16,
-    voice_port: u16,
+    self_made_certificate: bool,
+    invite: &[String],
     voice_status: &str,
 ) {
     println!();
@@ -3186,47 +3759,46 @@ fn print_startup_banner(
         livekit_status
     };
     println!("  LiveKit:     {}", livekit_line);
-    println!("  Port Fwd:    {}", port_forwarding_status);
     println!("  Web UI:      {}", web_ui);
     println!("  TLS/HTTPS:   {}", tls_status);
+    // The one line in this block a non-technical owner reads, so it is a plain
+    // answer to a plain question rather than a protocol name.
+    println!(
+        "  Friends outside your network:  {}",
+        port_mapping.status_line()
+    );
 
-    // An unclaimed instance is the single most important thing on this screen:
-    // nobody can register until it is claimed, and the token is shown once.
+    // A server nobody has finished setting up is the single most important thing
+    // on this screen: nobody can register until someone does, and the credential
+    // is shown once.
     if let Some(pending) = pending_setup {
         print_claim_instructions(share_url, pending);
     }
 
     if first_run {
-        // Genuine first run: the Next-steps block already covers the port to
-        // forward, so the standalone forwarding box below is redundant here.
-        print_next_steps(share_url, server_port, voice_port, pending_setup.is_some());
-    } else if needs_manual_forwarding {
+        print_next_steps(
+            share_url,
+            pending_setup.and_then(|pending| pending.link.as_deref()),
+            pending_setup.is_some(),
+            invite,
+            self_made_certificate,
+        );
+    } else if !port_mapping.is_mapped() && !invite.is_empty() {
+        // Not a first run, so the Next-steps block is not printed — but the one
+        // thing that still stands between this server and a friend who cannot
+        // reach it does need saying, every time, until it is fixed.
         println!();
-        println!("  ╔══════════════════════════════════════════════════╗");
-        println!("  ║  Port forwarding required for remote access     ║");
-        println!("  ║                                                  ║");
-        if tls_active && server_port == tls_port {
-            println!(
-                "  ║  Forward port {:<5} (TCP + UDP) in router to  ║",
-                server_port
-            );
-            println!("  ║  this machine (HTTPS + voice media).           ║");
-        } else {
-            println!(
-                "  ║  Forward port {:<5} (TCP + UDP) in router to  ║",
-                server_port
-            );
-            println!("  ║  this machine. Most routers have this under:     ║");
+        println!("  ┌─ Letting friends outside your network in ──────────");
+        println!("  │");
+        for line in invite {
+            if line.is_empty() {
+                println!("  │");
+            } else {
+                println!("  │  {line}");
+            }
         }
-        if tls_active && server_port != tls_port {
-            println!(
-                "  ║  and port {:<5} (TCP) for HTTPS.              ║",
-                tls_port
-            );
-        }
-        println!("  ║  Settings > Firewall > Port Forwarding           ║");
-        println!("  ║                                                  ║");
-        println!("  ╚══════════════════════════════════════════════════╝");
+        println!("  │");
+        println!("  └────────────────────────────────────────────────────");
     }
     println!();
 }
@@ -3271,23 +3843,38 @@ fn run_init(init_args: &cli::InitArgs, default_config: &str) -> Result<()> {
         bind_port,
     );
 
+    // `init` never opens a socket, so it cannot know what the router will say.
+    // Describe the step the way a server that has not asked yet has to describe
+    // it, rather than reporting a result it does not have.
+    let invite = invite_lines(
+        &portmap::Outcome::Skipped(portmap::SkipReason::NotAskedYet),
+        &share_url,
+        None,
+        if tls_active { "https" } else { "http" },
+        web_port,
+        config.voice.port,
+    );
+
     println!();
     println!("  Generated a new Paracord config at: {path}");
     print_next_steps(
         &share_url,
-        web_port,
-        config.voice.port,
+        None,
         config.setup.require_claim,
+        &invite,
+        certificate_is_self_made(&config.tls, tls_active),
     );
     println!();
     println!("  Start the server with:  paracord-server -c {path}");
     println!();
-    // The claim token needs the database, which `init` deliberately does not
-    // open, so it is minted on the first real start. Say exactly where it will
-    // appear rather than leaving step 2 above hanging.
+    // The one-time code needs the database, which `init` deliberately does not
+    // open, so it is minted on the first real start. Say exactly where the link
+    // will appear rather than leaving step 1 above hanging.
     if config.setup.require_claim {
-        println!("  The one-time claim token for step 2 is printed by that first");
-        println!("  start, and saved (owner-readable only) as:");
+        println!("  That first start prints the finish-setup link for step 1, and");
+        println!("  saves it (readable only by the account running the server) as:");
+        println!("      {}", claim_link_file_path(path).display());
+        println!("  The one-time claim token on its own is saved as:");
         println!("      {}", claim_token_file_path(path).display());
         println!();
         println!("  To pin it in advance instead, set [setup] claim_token in the");
@@ -4129,15 +4716,15 @@ async fn handle_webtransport_connection(
 
 #[cfg(test)]
 mod tests {
-    use super::forwarding_lines;
+    use super::forwarded_ports_phrase;
 
     /// The generated config puts the app and the media endpoint on the same
     /// 8443, and one number is the honest thing to print for it.
     #[test]
     fn coincident_ports_are_named_once() {
         assert_eq!(
-            forwarding_lines(8443, 8443),
-            vec!["forward port 8443 (TCP + UDP) on your router.".to_string()]
+            forwarded_ports_phrase(8443, 8443),
+            "port 8443 (TCP and UDP)".to_string()
         );
     }
 
@@ -4146,21 +4733,427 @@ mod tests {
     /// forward a port that carries no media.
     #[test]
     fn a_moved_voice_port_is_named_too() {
-        let lines = forwarding_lines(8090, 8443).join(" ");
-        assert!(lines.contains("TCP 8090"), "{lines}");
-        assert!(lines.contains("UDP 8443"), "{lines}");
+        let phrase = forwarded_ports_phrase(8090, 8443);
+        assert!(phrase.contains("8090 (TCP)"), "{phrase}");
+        assert!(phrase.contains("8443 (UDP)"), "{phrase}");
     }
 
     use super::{
-        build_at_rest_profile, derive_share_url, describe_http_bind_error,
-        ensure_federation_signing_key_file, livekit_credentials_look_insecure,
-        normalize_https_host, parse_detected_public_ip,
+        build_at_rest_profile, build_claim_link, certificate_is_self_made, claim_link_base,
+        claim_link_file_path, claim_token_file_path, derive_share_url, describe_http_bind_error,
+        encode_fragment_value, ensure_federation_signing_key_file, invite_lines,
+        livekit_credentials_look_insecure, normalize_https_host, parse_detected_public_ip,
+        remove_claim_files, share_address_for, write_owner_only_line,
     };
+    use crate::portmap;
     use std::sync::{Mutex, OnceLock};
 
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    // ── The one link that finishes setup ────────────────────────────────────
+
+    /// The token rides in the fragment, after `#`, because a fragment is never
+    /// sent to a server and so never lands in an access log or a proxy log. A
+    /// query string would put the only credential that owns this server into
+    /// every log between the browser and the process.
+    #[test]
+    fn the_claim_link_carries_the_token_in_a_fragment() {
+        let link = build_claim_link("https://localhost:8443", "ABCDEF234567");
+        assert_eq!(
+            link,
+            "https://localhost:8443/setup-server#claim=ABCDEF234567"
+        );
+        assert!(!link.contains('?'), "the token must not be a query: {link}");
+        let (before_hash, _) = link.split_once('#').expect("a fragment");
+        assert!(
+            !before_hash.contains("ABCDEF234567"),
+            "the token leaked into the part a server sees: {link}"
+        );
+        // A trailing slash on the base must not double up.
+        assert_eq!(
+            build_claim_link("https://localhost:8443/", "TOKEN"),
+            "https://localhost:8443/setup-server#claim=TOKEN"
+        );
+    }
+
+    /// A generated token is base32 and needs no escaping; a token pinned in the
+    /// config is whatever the operator typed, and an unescaped `#`, `&` or space
+    /// would silently truncate the link they click.
+    #[test]
+    fn a_pinned_token_is_escaped_into_a_usable_link() {
+        assert_eq!(
+            encode_fragment_value("plain-token_1.2~3"),
+            "plain-token_1.2~3"
+        );
+        assert_eq!(encode_fragment_value("a b"), "a%20b");
+        assert_eq!(
+            encode_fragment_value("a#b&c=d/e?f"),
+            "a%23b%26c%3Dd%2Fe%3Ff"
+        );
+        assert_eq!(encode_fragment_value("%"), "%25");
+
+        let link = build_claim_link("https://localhost:8443", "tok en#with&junk");
+        assert_eq!(
+            link,
+            "https://localhost:8443/setup-server#claim=tok%20en%23with%26junk"
+        );
+        // Everything after the single '#' is the fragment: no second '#' can cut
+        // the token short.
+        assert_eq!(link.matches('#').count(), 1, "{link}");
+    }
+
+    /// When the shared address is HTTPS on a LAN or public host, the link the
+    /// owner clicks is the loopback one: it is the same server, and it avoids a
+    /// certificate tied to a name this machine's browser may not match.
+    #[test]
+    fn the_link_prefers_the_address_this_machine_can_open() {
+        assert_eq!(
+            claim_link_base("https://192.168.1.5:8443", "0.0.0.0:8090", true, 8443, 8090),
+            "https://localhost:8443"
+        );
+        assert_eq!(
+            claim_link_base("https://chat.example.com", "0.0.0.0:8090", true, 8443, 8090),
+            "https://localhost:8443"
+        );
+
+        // Plain HTTP has no certificate to mismatch, so the shared address is
+        // already the friendliest thing to print.
+        assert_eq!(
+            claim_link_base("http://192.168.1.5:8090", "0.0.0.0:8090", false, 8443, 8090),
+            "http://192.168.1.5:8090"
+        );
+        // Already local: nothing to prefer.
+        assert_eq!(
+            claim_link_base("https://localhost:8443", "127.0.0.1:8090", true, 8443, 8090),
+            "https://localhost:8443"
+        );
+        // Bound to one specific LAN address: loopback would not answer, so the
+        // shared address is the only honest one.
+        assert_eq!(
+            claim_link_base(
+                "https://192.168.1.5:8443",
+                "192.168.1.5:8090",
+                true,
+                8443,
+                8090
+            ),
+            "https://192.168.1.5:8443"
+        );
+    }
+
+    /// Both files are owner-only, and both go away the moment they are spent —
+    /// a used bootstrap credential sitting on disk is only worth stealing.
+    #[test]
+    fn both_bootstrap_files_are_owner_only_and_removable_together() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let config_path = temp.path().join("paracord.toml");
+        let config_path = config_path.to_str().expect("utf8 path");
+
+        let token_path = claim_token_file_path(config_path);
+        let link_path = claim_link_file_path(config_path);
+        assert_eq!(token_path.file_name().unwrap(), "first-owner-claim.txt");
+        assert_eq!(link_path.file_name().unwrap(), "first-owner-claim-link.txt");
+
+        let link = build_claim_link("https://localhost:8443", "TOKEN234567");
+        write_owner_only_line(&token_path, "TOKEN234567").expect("write token");
+        write_owner_only_line(&link_path, &link).expect("write link");
+
+        // The token file's format is fixed: installers read it, so it is exactly
+        // the token and nothing else.
+        assert_eq!(
+            std::fs::read_to_string(&token_path).expect("read token"),
+            "TOKEN234567\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&link_path)
+                .expect("read link")
+                .trim(),
+            link
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for path in [&token_path, &link_path] {
+                let mode = std::fs::metadata(path)
+                    .expect("metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777;
+                assert_eq!(mode, 0o600, "{} is not owner-only", path.display());
+            }
+        }
+
+        remove_claim_files(config_path);
+        assert!(!token_path.exists(), "the spent token file survived");
+        assert!(!link_path.exists(), "the spent link file survived");
+        // Removing again is a no-op, not an error: a server that starts claimed
+        // runs this on every boot.
+        remove_claim_files(config_path);
+    }
+
+    // ── What the banner tells a first-time owner ────────────────────────────
+
+    #[test]
+    fn an_invite_points_where_friends_can_actually_reach_the_server() {
+        use paracord_core::share_address::ShareReach;
+        let lan = "https://192.168.1.20:8443";
+        let mapped = portmap::Outcome::Mapped {
+            external_ip: Some("203.0.113.7".parse().unwrap()),
+            method: "UPnP",
+        };
+        let address = share_address_for(&mapped, None, lan, "https", 8443);
+        assert_eq!(address.url.as_deref(), Some("https://203.0.113.7:8443"));
+        assert_eq!(address.reach, ShareReach::Internet);
+
+        // A configured public URL is the last word, whatever the router said.
+        let address = share_address_for(
+            &mapped,
+            Some("https://chat.example.com"),
+            lan,
+            "https",
+            8443,
+        );
+        assert_eq!(address.url.as_deref(), Some("https://chat.example.com"));
+
+        let closed = portmap::Outcome::NotAvailable {
+            external_ip: Some("203.0.113.7".parse().unwrap()),
+            reason: "no router answered".into(),
+        };
+        let address = share_address_for(&closed, None, lan, "https", 8443);
+        assert_eq!(address.url.as_deref(), Some(lan));
+        assert_eq!(address.reach, ShareReach::LocalNetwork);
+
+        // Never hand out a link to localhost.
+        let loopback = portmap::Outcome::Skipped(portmap::SkipReason::LoopbackBind);
+        let address = share_address_for(&loopback, None, "https://localhost:8443", "https", 8443);
+        assert_eq!(address.url, None);
+        assert_eq!(address.reach, ShareReach::ThisComputer);
+        let address = share_address_for(&closed, None, "https://localhost:8443", "https", 8443);
+        assert_eq!(address.url, None);
+    }
+
+    fn invite_text(outcome: &portmap::Outcome, lan_ip: Option<&str>) -> String {
+        invite_lines(
+            outcome,
+            "https://192.168.1.5:8443",
+            lan_ip,
+            "https",
+            8443,
+            8443,
+        )
+        .join(" ")
+    }
+
+    /// Mapped: the one thing the owner wants to know is the address to give out,
+    /// and that there is nothing left for them to do.
+    #[test]
+    fn a_mapped_router_names_the_address_friends_use() {
+        let text = invite_text(
+            &portmap::Outcome::Mapped {
+                external_ip: Some("203.0.113.9".parse().unwrap()),
+                method: "UPnP",
+            },
+            Some("192.168.1.5"),
+        );
+        assert!(text.contains("Friends anywhere can join at:"), "{text}");
+        assert!(text.contains("https://203.0.113.9:8443"), "{text}");
+        assert!(text.contains("nothing left for you to change"), "{text}");
+        assert!(
+            !text.contains("docs/port-forwarding.md"),
+            "a working server must not send its owner to a router guide: {text}"
+        );
+    }
+
+    /// An IPv6 public address has to be bracketed or it cannot be pasted into a
+    /// browser at all.
+    #[test]
+    fn an_ipv6_address_is_bracketed_so_it_can_be_pasted() {
+        let text = invite_text(
+            &portmap::Outcome::Mapped {
+                external_ip: Some("2001:db8::1".parse().unwrap()),
+                method: "UPnP",
+            },
+            None,
+        );
+        assert!(text.contains("https://[2001:db8::1]:8443"), "{text}");
+    }
+
+    /// Not mapped: say plainly who can join now, then exactly what has to change
+    /// and where the instructions are. Never "it failed" with nothing to do.
+    #[test]
+    fn a_router_that_did_not_answer_gets_a_plain_explanation_and_a_way_forward() {
+        let text = invite_text(
+            &portmap::Outcome::NotAvailable {
+                external_ip: Some("203.0.113.9".parse().unwrap()),
+                reason: "no UPnP router answered".to_string(),
+            },
+            Some("192.168.1.5"),
+        );
+        assert!(text.contains("same Wi-Fi or network"), "{text}");
+        assert!(text.contains("https://192.168.1.5:8443"), "{text}");
+        assert!(text.contains("port 8443 (TCP and UDP)"), "{text}");
+        assert!(text.contains("this computer (192.168.1.5)"), "{text}");
+        assert!(text.contains("docs/port-forwarding.md"), "{text}");
+        assert!(text.contains("port forwarding"), "{text}");
+        // The address a hand-made rule would be reachable at is still named.
+        assert!(text.contains("https://203.0.113.9:8443"), "{text}");
+    }
+
+    /// A moved media port has to be named too, or the owner forwards a port that
+    /// carries no calls and every outside caller is silent.
+    #[test]
+    fn a_split_port_pair_is_named_in_the_invite_text() {
+        let text = invite_lines(
+            &portmap::Outcome::NotAvailable {
+                external_ip: None,
+                reason: "no router answered".to_string(),
+            },
+            "http://192.168.1.5:8090",
+            Some("192.168.1.5"),
+            "http",
+            8090,
+            8443,
+        )
+        .join(" ");
+        assert!(text.contains("port 8090 (TCP)"), "{text}");
+        assert!(text.contains("port 8443 (UDP)"), "{text}");
+    }
+
+    /// Loopback: nobody else can reach this at all, and pretending port
+    /// forwarding is the next step would send the owner to the wrong place.
+    #[test]
+    fn a_loopback_bind_says_nobody_else_can_reach_it_yet() {
+        let text = invite_text(
+            &portmap::Outcome::Skipped(portmap::SkipReason::LoopbackBind),
+            None,
+        );
+        assert!(
+            text.contains("Nobody else can reach this server yet"),
+            "{text}"
+        );
+        assert!(text.contains("bind_address"), "{text}");
+        assert!(
+            !text.contains("Friends anywhere"),
+            "a loopback server must not claim to be reachable: {text}"
+        );
+    }
+
+    /// Turned off on purpose: say so, and say what the owner has to do instead.
+    #[test]
+    fn a_disabled_router_request_admits_it_was_disabled() {
+        let text = invite_text(
+            &portmap::Outcome::Skipped(portmap::SkipReason::Disabled),
+            Some("192.168.1.5"),
+        );
+        assert!(text.contains("auto_port_forward = false"), "{text}");
+        assert!(text.contains("docs/port-forwarding.md"), "{text}");
+        assert!(text.contains("port 8443 (TCP and UDP)"), "{text}");
+    }
+
+    /// The instructions a first-time owner reads must not contain a word they
+    /// would have to look up. The compact status block above them is allowed to
+    /// stay technical; these lines are not.
+    #[test]
+    fn the_invite_text_never_uses_a_word_that_needs_looking_up() {
+        let outcomes = [
+            portmap::Outcome::Mapped {
+                external_ip: Some("203.0.113.9".parse().unwrap()),
+                method: "UPnP",
+            },
+            portmap::Outcome::Mapped {
+                external_ip: None,
+                method: "NAT-PMP/PCP",
+            },
+            portmap::Outcome::NotAvailable {
+                external_ip: None,
+                reason: "no UPnP router answered".to_string(),
+            },
+            portmap::Outcome::Skipped(portmap::SkipReason::LoopbackBind),
+            portmap::Outcome::Skipped(portmap::SkipReason::Disabled),
+            portmap::Outcome::Skipped(portmap::SkipReason::NotAskedYet),
+        ];
+        for outcome in &outcomes {
+            let text = invite_text(outcome, Some("192.168.1.5")).to_lowercase();
+            for jargon in [
+                "quic",
+                "sfu",
+                "jwt",
+                "self-signed",
+                "instance",
+                "operator",
+                "upnp",
+                "nat-pmp",
+                "pcp",
+                "igd",
+                "claim token",
+            ] {
+                assert!(
+                    !text.contains(jargon),
+                    "invite text leaks {jargon:?} for {outcome:?}: {text}"
+                );
+            }
+        }
+    }
+
+    /// Every branch ends by naming what would have to change on the router, so
+    /// the reader is never left with a dead end — and the release smoke test
+    /// anchors its log read on exactly this sentence ending.
+    #[test]
+    fn every_invite_branch_ends_by_naming_the_router() {
+        let outcomes = [
+            portmap::Outcome::Mapped {
+                external_ip: Some("203.0.113.9".parse().unwrap()),
+                method: "UPnP",
+            },
+            portmap::Outcome::Mapped {
+                external_ip: None,
+                method: "NAT-PMP/PCP",
+            },
+            portmap::Outcome::NotAvailable {
+                external_ip: None,
+                reason: "no UPnP router answered".to_string(),
+            },
+            portmap::Outcome::Skipped(portmap::SkipReason::LoopbackBind),
+            portmap::Outcome::Skipped(portmap::SkipReason::Disabled),
+            portmap::Outcome::Skipped(portmap::SkipReason::NotAskedYet),
+        ];
+        for outcome in &outcomes {
+            let lines = invite_lines(
+                outcome,
+                "https://192.168.1.5:8443",
+                Some("192.168.1.5"),
+                "https",
+                8443,
+                8443,
+            );
+            let last = lines.last().expect("invite text is never empty");
+            assert!(
+                last.ends_with("on your router."),
+                "{outcome:?} ends with {last:?}"
+            );
+        }
+    }
+
+    /// The certificate sentence is printed only when it is true: a warning the
+    /// owner never sees teaches them to distrust the rest of the page.
+    #[test]
+    fn the_certificate_warning_only_applies_to_a_certificate_we_made() {
+        let mut tls = crate::config::TlsConfig::default();
+        assert!(tls.auto_generate);
+        assert!(!tls.acme.enabled);
+        assert!(certificate_is_self_made(&tls, true));
+        // TLS off: there is no certificate and no warning.
+        assert!(!certificate_is_self_made(&tls, false));
+        // A real certificate from an authority produces no warning.
+        tls.acme.enabled = true;
+        assert!(!certificate_is_self_made(&tls, true));
+        tls.acme.enabled = false;
+        tls.auto_generate = false;
+        assert!(!certificate_is_self_made(&tls, true));
     }
 
     #[test]

@@ -36,6 +36,8 @@ serde_json = { workspace = true }
 regex = { workspace = true }
 tower-http = { workspace = true }
 reqwest = { workspace = true }
+igd-next = { workspace = true }
+crab_nat = { workspace = true }
 which = { workspace = true }
 tempfile = { workspace = true }
 rand = { workspace = true }

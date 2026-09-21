@@ -699,6 +699,10 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
             post(routes::invites::create_invite),
         )
         .route(
+            "/api/v1/instance/share-address",
+            get(routes::invites::share_address),
+        )
+        .route(
             "/api/v1/invites/{code}",
             get(routes::invites::get_invite)
                 .post(routes::invites::accept_invite)

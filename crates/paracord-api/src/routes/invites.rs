@@ -230,6 +230,16 @@ pub async fn create_invite(
     Ok((StatusCode::CREATED, Json(guild_invite(&invite, space_id))))
 }
 
+/// `GET /api/v1/instance/share-address` — signed-in accounts only.
+///
+/// What an invite link should point at. The invite dialog asks when the address
+/// the person is using is no use to anybody else (`localhost`), which is exactly
+/// the owner who set the server up on the machine it runs on. Members already
+/// know an address that reaches the server, so this tells them nothing new.
+pub async fn share_address(_auth: AuthUser) -> Json<paracord_core::share_address::ShareAddress> {
+    Json(paracord_core::share_address::share_address())
+}
+
 /// The verification gate as a newcomer needs to see it: whether they must
 /// acknowledge the rules, and the questions — never the answers. `None` when the
 /// gate is off, so the invite page asks for nothing. Reads the same two

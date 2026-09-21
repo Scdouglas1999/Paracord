@@ -299,12 +299,27 @@ pub struct NetworkConfig {
     /// On Windows, automatically add local firewall allow rules on startup.
     #[serde(default = "default_false")]
     pub windows_firewall_auto_allow: bool,
+    /// Ask the router, on startup, to let people outside this network reach the
+    /// server (UPnP IGD, then NAT-PMP/PCP). On by default: without it a
+    /// first-time owner has to log into their router before a single friend
+    /// outside the house can join, which is the one step nothing else can
+    /// automate away. Exposure is safe by default because an unclaimed server
+    /// refuses every registration until its owner finishes setup.
+    #[serde(default = "default_true")]
+    pub auto_port_forward: bool,
+    /// How long each requested mapping should last, in seconds. Refreshed at
+    /// half this interval for as long as the server runs, so a router reboot
+    /// costs at most half a lease.
+    #[serde(default = "default_port_forward_lease_seconds")]
+    pub port_forward_lease_seconds: u32,
 }
 
 impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
             windows_firewall_auto_allow: false,
+            auto_port_forward: true,
+            port_forward_lease_seconds: default_port_forward_lease_seconds(),
         }
     }
 }
@@ -606,6 +621,9 @@ fn default_true() -> bool {
 fn default_false() -> bool {
     false
 }
+fn default_port_forward_lease_seconds() -> u32 {
+    3600
+}
 fn default_storage_type() -> String {
     "local".into()
 }
@@ -888,6 +906,14 @@ allow_discovery = {federation_allow_discovery}
 [network]
 # On Windows, optionally auto-create local firewall allow rules.
 windows_firewall_auto_allow = {windows_firewall_auto_allow}
+# Ask your router to let friends outside your home network reach this server, so
+# you never have to open its settings page yourself. Set to false if you would
+# rather set up port forwarding by hand (see docs/port-forwarding.md).
+# Env override: PARACORD_AUTO_PORT_FORWARD
+auto_port_forward = {auto_port_forward}
+# How long each router entry lasts, in seconds. It is refreshed automatically
+# while the server runs. Env override: PARACORD_PORT_FORWARD_LEASE_SECONDS
+port_forward_lease_seconds = {port_forward_lease_seconds}
 
 [tls]
 # HTTPS support — required for getUserMedia() on non-localhost origins.
@@ -1004,6 +1030,8 @@ timeout_seconds = {ai_timeout_seconds}
             .unwrap_or("./data/federation_signing_key.hex"),
         federation_allow_discovery = config.federation.allow_discovery,
         windows_firewall_auto_allow = config.network.windows_firewall_auto_allow,
+        auto_port_forward = config.network.auto_port_forward,
+        port_forward_lease_seconds = config.network.port_forward_lease_seconds,
         tls_enabled = config.tls.enabled,
         tls_port = config.tls.port,
         tls_cert = config.tls.cert_path,
@@ -1260,6 +1288,16 @@ impl Config {
         if let Ok(value) = std::env::var("PARACORD_WINDOWS_FIREWALL_AUTO_ALLOW") {
             if let Ok(parsed) = value.parse::<bool>() {
                 config.network.windows_firewall_auto_allow = parsed;
+            }
+        }
+        if let Ok(value) = std::env::var("PARACORD_AUTO_PORT_FORWARD") {
+            if let Ok(parsed) = value.parse::<bool>() {
+                config.network.auto_port_forward = parsed;
+            }
+        }
+        if let Ok(value) = std::env::var("PARACORD_PORT_FORWARD_LEASE_SECONDS") {
+            if let Ok(parsed) = value.parse::<u32>() {
+                config.network.port_forward_lease_seconds = parsed;
             }
         }
         if let Ok(value) = std::env::var("PARACORD_TLS_ENABLED") {
@@ -1708,5 +1746,72 @@ mod tests {
         assert_eq!(config.storage.storage_type, "local");
         assert_eq!(config.s3.bucket, "paracord-test");
         assert!(config.s3.use_aws_credential_chain);
+    }
+
+    /// Asking the router to let friends in is the default, because the whole
+    /// point is that a first-time owner never has to find their router's
+    /// settings page. Anything else would leave the hardest step un-automated.
+    #[test]
+    fn asking_the_router_is_on_by_default() {
+        let config = Config::default();
+        assert!(config.network.auto_port_forward);
+        assert_eq!(config.network.port_forward_lease_seconds, 3600);
+    }
+
+    /// The generated config file both documents the option and round-trips it,
+    /// so an owner who edits the file gets what the comment promised.
+    #[test]
+    fn generated_config_documents_and_round_trips_auto_port_forward() {
+        let template = generate_config_template(&Config::default());
+        assert!(
+            template.contains("auto_port_forward = true"),
+            "generated config must set the option explicitly:\n{template}"
+        );
+        assert!(
+            template.contains("PARACORD_AUTO_PORT_FORWARD"),
+            "generated config must name the env override:\n{template}"
+        );
+        assert!(
+            template.contains("port_forward_lease_seconds = 3600"),
+            "generated config must set the lease:\n{template}"
+        );
+        let parsed: Config = toml::from_str(&template).expect("template must round-trip");
+        assert!(parsed.network.auto_port_forward);
+        assert_eq!(parsed.network.port_forward_lease_seconds, 3600);
+    }
+
+    /// An operator who does not want the server touching their router turns it
+    /// off from the environment, the same way every other switch in this file
+    /// can be turned off.
+    #[test]
+    fn env_override_turns_the_router_request_off_and_back_on() {
+        let _guard = ENV_LOCK.lock().expect("env lock poisoned");
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::env::set_var("PARACORD_JWT_SECRET", "0123456789abcdef0123456789abcdef");
+
+        std::env::set_var("PARACORD_AUTO_PORT_FORWARD", "false");
+        std::env::set_var("PARACORD_PORT_FORWARD_LEASE_SECONDS", "900");
+        let off_path = temp.path().join("off.toml");
+        let off = Config::load(off_path.to_str().expect("config path utf8")).expect("load config");
+        assert!(!off.network.auto_port_forward);
+        assert_eq!(off.network.port_forward_lease_seconds, 900);
+
+        std::env::set_var("PARACORD_AUTO_PORT_FORWARD", "true");
+        std::env::remove_var("PARACORD_PORT_FORWARD_LEASE_SECONDS");
+        let on_path = temp.path().join("on.toml");
+        let on = Config::load(on_path.to_str().expect("config path utf8")).expect("load config");
+        assert!(on.network.auto_port_forward);
+        assert_eq!(on.network.port_forward_lease_seconds, 3600);
+
+        // A value that is not a boolean must leave the default alone rather
+        // than silently disabling the feature.
+        std::env::set_var("PARACORD_AUTO_PORT_FORWARD", "maybe");
+        let junk_path = temp.path().join("junk.toml");
+        let junk =
+            Config::load(junk_path.to_str().expect("config path utf8")).expect("load config");
+        assert!(junk.network.auto_port_forward);
+
+        std::env::remove_var("PARACORD_AUTO_PORT_FORWARD");
+        std::env::remove_var("PARACORD_JWT_SECRET");
     }
 }

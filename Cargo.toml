@@ -97,6 +97,10 @@ anyhow = "1"
 # Networking
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 url = "2"
+# Automatic router port mapping (UPnP IGD, then NAT-PMP/PCP) so a first-time
+# owner does not have to log into their router to let friends in.
+igd-next = { version = "0.17", features = ["aio_tokio"] }
+crab_nat = "0.8"
 tokio-tungstenite = "0.28"
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls", "hostname"] }
 

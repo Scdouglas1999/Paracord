@@ -162,6 +162,14 @@ allow_discovery = false
 [network]
 # On Windows, optionally auto-create local firewall allow rules for Paracord binaries.
 windows_firewall_auto_allow = false
+# Ask your router to let friends outside your home network reach this server, so
+# you never have to open its settings page yourself. Set to false if you would
+# rather set up port forwarding by hand (see docs/port-forwarding.md).
+# Env override: PARACORD_AUTO_PORT_FORWARD
+auto_port_forward = true
+# How long each router entry lasts, in seconds. It is refreshed automatically
+# while the server runs. Env override: PARACORD_PORT_FORWARD_LEASE_SECONDS
+port_forward_lease_seconds = 3600
 
 [retention]
 # Enabled by default to bound sensitive data retention.
