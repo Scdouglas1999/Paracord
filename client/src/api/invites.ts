@@ -10,6 +10,14 @@ import type { AcceptInviteRequest } from './generated/AcceptInviteRequest';
 import type { CreateInviteRequest } from './generated/CreateInviteRequest';
 import type { RestClient } from './restClient';
 
+export type ShareReach = 'internet' | 'local_network' | 'this_computer' | 'unknown';
+
+/** What the server says it can be reached as. `url` is an origin, no trailing slash. */
+export interface ShareAddress {
+  url: string | null;
+  reach: ShareReach;
+}
+
 export function createInviteApi(getApi: () => RestClient) {
   return {
   get: async (code: string) =>
@@ -27,6 +35,8 @@ export function createInviteApi(getApi: () => RestClient) {
       'GuildInvite',
     ),
   delete: async (code: string) => getApi().delete(`/invites/${code}`),
+  /** Where an invite link should point, when the address bar is no use. */
+  shareAddress: async () => getApi().get<ShareAddress>('/instance/share-address'),
   listGuild: async (guildId: string) =>
     responseContract(
       getApi().get(`/guilds/${guildId}/invites`),

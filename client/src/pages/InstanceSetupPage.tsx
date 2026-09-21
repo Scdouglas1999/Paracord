@@ -650,7 +650,7 @@ export function InstanceSetupPage() {
               dense
               progress={progress}
               title="Name the place"
-              description="The instance name is shown to everyone who signs in here. A server is where conversations live; the first one is created with a #general channel and a voice channel, and you can add more later."
+              description="Two names, and you can change both later. The first is for this whole Paracord — everyone who signs in here sees it. The second is for your first server: the place with channels where people actually talk. It starts with a #general channel and a voice channel."
             >
               <AuthScroll paired>
                 <Field

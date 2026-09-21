@@ -241,7 +241,7 @@ test.describe('first-owner claim on a real unclaimed server', () => {
       // 2. Step one says who this is for, and where the token comes from.
       await expect(page.getByText('Step 1 of 4')).toBeVisible();
       await expect(
-        page.getByText(/You’re setting up the instance itself, not joining one/),
+        page.getByText(/This makes you the owner/),
       ).toBeVisible();
       await expect(page.getByText(/first-owner-claim\.txt/)).toBeVisible();
 
@@ -252,7 +252,6 @@ test.describe('first-owner claim on a real unclaimed server', () => {
       // that the stepped flow still claims a real server.
       const continueButton = page.getByRole('button', { name: 'Continue' });
       const claimButton = page.getByRole('button', { name: 'Claim this instance' });
-      const backButton = page.getByRole('button', { name: 'Back' });
 
       // 3. A wrong token is refused, and says so, without creating anything.
       //    It is only the claim itself that can know that, so the wizard is
@@ -276,15 +275,11 @@ test.describe('first-owner claim on a real unclaimed server', () => {
       await page.getByLabel(/Instance name/).fill('Riverside Studio');
       await page.getByLabel(/First server name/).fill('The Lounge');
       await claimButton.click();
-      await expect(page.getByText(/not the one this instance printed/)).toBeVisible();
-      await expect(claimButton).toBeEnabled();
+      await expect(page.getByText(/not the one your server printed/)).toBeVisible();
       await expect(page).toHaveURL(/\/setup-server$/);
 
-      // 4. Correcting the token means stepping back to it — and every value
-      //    typed on the way is still there when the operator returns.
-      await backButton.click();
-      await backButton.click();
-      await backButton.click();
+      // 4. The code is the thing that was wrong, so the wizard returns to it by
+      //    itself — and every value typed on the way is still there.
       await expect(page.getByLabel(/Setup code/)).toHaveValue('X'.repeat(CLAIM_TOKEN.length));
       await page.getByLabel(/Setup code/).fill(CLAIM_TOKEN);
       await continueButton.click();

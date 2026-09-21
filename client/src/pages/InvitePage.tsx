@@ -7,6 +7,8 @@ import { useAuthStore } from '../stores/authStore';
 import { inviteApi } from '../api/invites';
 import { useGuildStore } from '../stores/guildStore';
 import { useUIStore } from '../stores/uiStore';
+import { isTauri } from '../lib/tauriEnv';
+import { toPortableUri } from '../lib/portableLinks';
 import { getDatabaseHistoryEpoch, subscribeDatabaseHistory } from '../lib/databaseHistory';
 import { extractApiError } from '../api/client';
 import { safeStoredImageDataUrl } from '../lib/security';
@@ -16,6 +18,9 @@ import { Input } from '../components/ui/Input';
 import { Divider } from '../components/ui/Divider';
 import { AUTH_FORM, AuthCanvas, AuthCard, AuthScroll, Field } from './authScaffold';
 import type { InvitePreview } from '../api/generated/InvitePreview';
+
+/** Where the desktop installers live. */
+const APP_DOWNLOAD_URL = 'https://github.com/Scdouglas1999/Paracord/releases/latest';
 
 export function InvitePage() {
   const guildScope = useCurrentAccountScope();
@@ -237,6 +242,28 @@ export function InvitePage() {
             >
               I already have an account
             </Button>
+          )}
+
+          {/* In a browser, the desktop app is one click away for somebody who
+              has it, and one download away for somebody who does not. Inside
+              the app there is nothing to offer. */}
+          {!isTauri() && code && (
+            <p className="text-meta leading-relaxed text-text-faint">
+              Prefer the desktop app?{' '}
+              <a className="text-text-link hover:underline" href={toPortableUri(window.location.origin, code)}>
+                Open this invite in it
+              </a>
+              , or{' '}
+              <a
+                className="text-text-link hover:underline"
+                href={APP_DOWNLOAD_URL}
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                get the app
+              </a>
+              .
+            </p>
           )}
         </div>
       </AuthCard>

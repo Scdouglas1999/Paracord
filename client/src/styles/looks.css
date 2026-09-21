@@ -132,6 +132,23 @@ html[data-theme='paper'][data-native-underlay] body::after {
   box-shadow: inset 0 0 0 1.5px var(--accent-primary);
 }
 
+/* A row's hover actions sit on its top-right corner, which on a full-width row
+   is empty space. A bubble is as wide as its words, so the same spot is the
+   header line — the toolbar covered the author, the time and the "edited" link
+   of any short message. Beside the bubble instead, touching it so the pointer
+   never crosses a gap on the way over: outside-right for other people, and
+   outside-left for yours, which hug the right edge. */
+[data-message-style='bubbles'] .pc-message-row .pc-message-actions {
+  top: 4px;
+  right: auto;
+  left: calc(100% - 2px);
+}
+
+[data-message-style='bubbles'] .pc-message-row[data-own] .pc-message-actions {
+  left: auto;
+  right: calc(100% - 2px);
+}
+
 @media (hover: hover) {
   [data-message-style='bubbles'] .pc-message-row:hover {
     filter: brightness(1.08);

@@ -177,7 +177,7 @@ const ENTRY_SCREENS: EntryScreen[] = [
   { name: 'connect-onboarding', url: '/connect', action: /^Next$/, settled: /Welcome to Paracord/ },
   { name: 'account-setup', url: '/setup', action: /^Create identity$/, settled: /local identity/i },
   { name: 'account-recover', url: '/recover', action: /^Continue$/, settled: /Recover your account/ },
-  { name: 'invite', url: '/invite/kestrel', action: /^Accept invite$/, settled: /invited/i },
+  { name: 'invite', url: '/invite/kestrel', action: /^(Accept invite|Create an account to join)$/, settled: /invited/i },
 ];
 
 test.describe('first-run and account screens fit a native window', () => {

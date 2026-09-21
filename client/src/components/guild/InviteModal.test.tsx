@@ -9,6 +9,7 @@ vi.mock('../../api/invites', () => ({
   inviteApi: {
     create: vi.fn(),
     delete: vi.fn(),
+    shareAddress: vi.fn(),
   },
 }));
 
@@ -25,6 +26,11 @@ describe('InviteModal', () => {
       },
     } as never);
     vi.mocked(inviteApi.delete).mockResolvedValue(undefined as never);
+    // jsdom lives at http://localhost, which is exactly the owner-on-the-server
+    // case: the address bar is no use to a friend, so the server is asked.
+    vi.mocked(inviteApi.shareAddress).mockResolvedValue({
+      data: { url: 'https://203.0.113.7:8443', reach: 'internet' },
+    } as never);
     vi.mocked(writeClipboardText).mockResolvedValue(undefined);
   });
 
@@ -36,7 +42,7 @@ describe('InviteModal', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Failed to generate invite: Invite service unavailable.',
     );
-    expect(screen.getByLabelText('Copy portable invite link')).toBeDisabled();
+    expect(screen.getByLabelText('Copy invite link')).toBeDisabled();
     expect(screen.getByLabelText('Copy invite code')).toBeDisabled();
     expect(screen.queryByDisplayValue('Failed to generate invite')).not.toBeInTheDocument();
   });
@@ -48,14 +54,42 @@ describe('InviteModal', () => {
     render(<InviteModal guildName="Launch Guild" channelId="channel-1" onClose={vi.fn()} />);
 
     await waitFor(() => expect(inviteApi.create).toHaveBeenCalled());
-    await user.click(screen.getByLabelText('Copy portable invite link'));
+    await user.click(screen.getByLabelText('Copy invite link'));
 
     await waitFor(() => {
       expect(writeClipboardText).toHaveBeenCalled();
       expect(screen.getByRole('alert')).toHaveTextContent(
-        'Failed to copy portable invite link: Clipboard permission denied.',
+        'Failed to copy the invite link: Clipboard permission denied.',
       );
     });
+  });
+
+  it('builds the link from what the server says it is reachable as, never from localhost', async () => {
+    render(<InviteModal guildName="Launch Guild" channelId="channel-1" onClose={vi.fn()} />);
+
+    expect(await screen.findByDisplayValue('https://203.0.113.7:8443/invite/abc123')).toBeInTheDocument();
+    expect(screen.getByText(/opens in any browser/)).toBeInTheDocument();
+  });
+
+  it('says so plainly when only people on the same network can use the link', async () => {
+    vi.mocked(inviteApi.shareAddress).mockResolvedValue({
+      data: { url: 'https://192.168.1.50:8443', reach: 'local_network' },
+    } as never);
+
+    render(<InviteModal guildName="Launch Guild" channelId="channel-1" onClose={vi.fn()} />);
+
+    expect(await screen.findByDisplayValue('https://192.168.1.50:8443/invite/abc123')).toBeInTheDocument();
+    expect(screen.getByText(/same network \(the same Wi-Fi\)/)).toBeInTheDocument();
+  });
+
+  it('offers no link at all rather than one that points at localhost', async () => {
+    vi.mocked(inviteApi.shareAddress).mockRejectedValue(new Error('404'));
+
+    render(<InviteModal guildName="Launch Guild" channelId="channel-1" onClose={vi.fn()} />);
+
+    expect(await screen.findByText(/only be reached from this computer/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Copy invite link')).toBeDisabled();
+    expect(screen.queryByDisplayValue(/localhost/)).not.toBeInTheDocument();
   });
 
   it('does not mint a new invite when options change; only on explicit regenerate', async () => {

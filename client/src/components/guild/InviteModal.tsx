@@ -1,6 +1,6 @@
 import { useState, useEffect, type ReactNode } from 'react';
 import { Copy, Check, RefreshCw } from 'lucide-react';
-import { inviteApi } from '../../api/invites';
+import { inviteApi, type ShareAddress, type ShareReach } from '../../api/invites';
 import { getStoredServerUrl } from '../../lib/config/apiBaseUrl';
 import { toPortableUri } from '../../lib/portableLinks';
 import {
@@ -71,11 +71,51 @@ function InviteReadout({
   );
 }
 
-/** Resolve the server's base URL for encoding into portable links. */
-function resolveServerBaseUrl(): string {
+/** The address this person reaches the server by. */
+function ownServerBaseUrl(): string {
   const stored = getStoredServerUrl();
   if (stored) return stored.replace(/\/+$/, '');
   return window.location.origin;
+}
+
+function isLoopbackOrigin(origin: string): boolean {
+  try {
+    const host = new URL(origin).hostname.replace(/^\[|\]$/g, '');
+    return host === 'localhost' || host === '::1' || host.endsWith('.localhost') || /^127\./.test(host);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * What an invite should point at, and how far it will carry.
+ *
+ * The address somebody is using works for other people too — unless it is
+ * `localhost`, which is exactly the owner who set the server up on the machine
+ * it runs on, and whose links used to send every friend to the friend's own
+ * computer. Then, and only then, the server is asked what it is reachable as.
+ */
+async function resolveShareAddress(): Promise<ShareAddress> {
+  const own = ownServerBaseUrl();
+  if (!isLoopbackOrigin(own)) return { url: own, reach: 'unknown' };
+  try {
+    const { data } = await inviteApi.shareAddress();
+    if (data?.url && !isLoopbackOrigin(data.url)) return { url: data.url, reach: data.reach };
+  } catch {
+    // An older server has no such endpoint. The note below says what that means.
+  }
+  return { url: null, reach: 'this_computer' };
+}
+
+function reachNote(reach: ShareReach): string {
+  switch (reach) {
+    case 'local_network':
+      return 'Right now this only works for people on the same network (the same Wi-Fi) as the server. For friends elsewhere, the router needs a port opened: see “Friends outside your network” in the Paracord docs.';
+    case 'this_computer':
+      return 'This server can only be reached from this computer right now, so nobody else can use an invite yet. It needs to be started so that other computers can reach it.';
+    default:
+      return 'Send this to a friend. It opens in any browser, and the Paracord app accepts it too.';
+  }
 }
 
 export function InviteModal({ guildName, channelId, onClose }: InviteModalProps) {
@@ -85,6 +125,8 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
   const [maxUses, setMaxUses] = useState('unlimited');
   const [inviteCode, setInviteCode] = useState('');
   const [portableLink, setPortableLink] = useState('');
+  const [inviteLink, setInviteLink] = useState('');
+  const [reach, setReach] = useState<ShareReach>('unknown');
   const [loading, setLoading] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [copyError, setCopyError] = useState<string | null>(null);
@@ -107,9 +149,11 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
         max_uses: MAX_USES_MAP[maxUses],
       });
       const code = data.code;
-      const serverUrl = resolveServerBaseUrl();
+      const share = await resolveShareAddress();
       setInviteCode(code);
-      setPortableLink(toPortableUri(serverUrl, code));
+      setReach(share.reach);
+      setInviteLink(share.url ? `${share.url}/invite/${code}` : '');
+      setPortableLink(share.url ? toPortableUri(share.url, code) : '');
       setOptionsDirty(false);
       // Best-effort cleanup of the invite this one replaces. The new invite is
       // already live, so a failed revoke should not surface as a user error.
@@ -126,6 +170,7 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
       if (!previousCode) {
         setInviteCode('');
         setPortableLink('');
+        setInviteLink('');
       }
       setInviteError(`Failed to generate invite: ${extractApiError(err)}`);
     } finally {
@@ -148,12 +193,23 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
   const handleCopyPortable = async () => {
     try {
       setCopyError(null);
-      await writeClipboardText(portableLink);
+      await writeClipboardText(inviteLink);
       setCopiedPortable(true);
       toast.success('Invite link copied to clipboard.');
       setTimeout(() => setCopiedPortable(false), 2000);
     } catch (err) {
-      setCopyError(`Failed to copy portable invite link: ${extractApiError(err)}`);
+      setCopyError(`Failed to copy the invite link: ${extractApiError(err)}`);
+    }
+  };
+
+  /** `paracord://…` — opens straight in the desktop app, for a friend who has it. */
+  const handleCopyAppLink = async () => {
+    try {
+      setCopyError(null);
+      await writeClipboardText(portableLink);
+      toast.success('App link copied to clipboard.');
+    } catch (err) {
+      setCopyError(`Failed to copy the app link: ${extractApiError(err)}`);
     }
   };
 
@@ -191,27 +247,29 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
           {inviteError && <ErrorBanner message={inviteError} multiline />}
           {copyError && <ErrorBanner message={copyError} multiline />}
 
-          {/* Portable invite link — the one primary action in this dialog. */}
+          {/* The invite link — the one primary action in this dialog. An
+              ordinary https link, because that is what works for a friend who
+              has never heard of Paracord: it opens in their browser. */}
           <div>
-            <FieldLabel>Portable invite link</FieldLabel>
+            <FieldLabel>Invite link</FieldLabel>
             <InviteReadout dimmed={optionsDirty}>
               <input
                 type="text"
-                value={loading ? 'Generating…' : portableLink}
+                value={loading ? 'Generating…' : inviteLink || 'No link that other people can use yet'}
                 readOnly
-                aria-label="Portable invite link"
+                aria-label="Invite link"
                 className="min-w-0 flex-1 bg-transparent text-label text-text-primary outline-none"
               />
               <Button
                 variant="primary"
                 onClick={handleCopyPortable}
-                disabled={loading || !portableLink || optionsDirty}
+                disabled={loading || !inviteLink || optionsDirty}
                 aria-label={
                   copiedPortable
-                    ? 'Portable invite link copied'
+                    ? 'Invite link copied'
                     : optionsDirty
-                      ? 'Copy portable invite link (apply changed options first)'
-                      : 'Copy portable invite link'
+                      ? 'Copy invite link (apply changed options first)'
+                      : 'Copy invite link'
                 }
               >
                 {copiedPortable ? (
@@ -221,9 +279,16 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
                 )}
               </Button>
             </InviteReadout>
-            <p className="mt-1.5 text-meta leading-relaxed text-text-muted">
-              Works from any device, even on a different network.
-            </p>
+            <p className="mt-1.5 text-meta leading-relaxed text-text-muted">{reachNote(reach)}</p>
+            {portableLink && !optionsDirty && (
+              <button
+                type="button"
+                onClick={handleCopyAppLink}
+                className="pc-focusable mt-1 rounded-chip text-meta font-medium text-text-link hover:underline"
+              >
+                Friend already has the Paracord app? Copy a link that opens it directly
+              </button>
+            )}
           </div>
 
           {/* Raw invite code — mono, because it is an id you read out loud. */}
