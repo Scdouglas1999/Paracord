@@ -1,151 +1,71 @@
 <p align="center">
-  <img src="docs/logo-banner.svg" alt="Paracord — a home for your people, on your terms" width="760"/>
+  <img src="docs/logo-banner.svg" alt="Paracord" width="760"/>
 </p>
 
 <p align="center">
-  <strong>Self-hosted community chat with first-party voice, video, and screen sharing.</strong><br/>
-  Keep the server, the conversations, and the media path under your control.
+  Text, voice and video chat for a group of friends or a small community, running on a computer you own.
 </p>
 
 <p align="center">
   <a href="../../releases/latest"><img src="https://img.shields.io/github/v/release/Scdouglas1999/Paracord?label=release&color=24b78b" alt="Latest release"/></a>
-  <img src="https://img.shields.io/badge/client-Windows%20%7C%20Linux-17221b" alt="Windows and Linux desktop clients"/>
+  <img src="https://img.shields.io/badge/desktop-Windows%20%7C%20Linux%20%7C%20macOS-17221b" alt="Desktop app for Windows, Linux and macOS"/>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-source--available-315f4b" alt="Source-available license"/></a>
 </p>
 
 <p align="center">
   <a href="../../releases/latest">Download</a> ·
-  <a href="#quick-start">Quick start</a> ·
-  <a href="#what-paracord-includes">Features</a> ·
-  <a href="#running-it">Deployment</a> ·
+  <a href="#getting-started">Getting started</a> ·
+  <a href="#whats-in-it">What's in it</a> ·
+  <a href="#running-it">Running it</a> ·
   <a href="#development">Development</a> ·
-  <a href="docs/getting-started.md">Documentation</a>
+  <a href="docs/getting-started.md">Docs</a>
 </p>
 
 <p align="center">
-  Current release: <strong>v3.1.0</strong> — see the <a href="RELEASE_NOTES.md">release notes</a>
+  Current release: <strong>v3.1.0</strong> — <a href="RELEASE_NOTES.md">what changed</a>
 </p>
 
 ---
 
-Paracord is a source-available, Discord-style community platform that you run yourself. One server hosts buildings, text and voice rooms, direct messages, roles, moderation, bots, events, and community tools — without renting a third-party media service or handing your members' conversations to someone else.
+![A text channel with several people talking. Each message sits in a bubble tinted with its author's colour, and your own messages are on the right.](docs/images/readme/hero.jpg)
 
-The client is a building at night, and light means people. Every community you belong to is a building; every room in it is a window, lit while somebody is in there. The app opens on Home — the street outside your buildings — rather than a wall of server icons, so you can see where people are before you go looking.
+Paracord looks and works about how you'd expect from Discord: servers, text channels,
+voice channels, direct messages, roles, moderation. The difference is that there is no
+company in the middle. Somebody in your group runs the Paracord server on a computer
+that stays on, and everyone else joins it with a link.
 
-![Home: the buildings you belong to, which of their rooms are lit, and the work waiting on you](docs/images/readme/home.jpg)
+Setting that up is one command. It downloads Paracord, sets it to start by itself, asks
+your router to let people in, and opens a link in your browser where you make your
+account and name your server. Friends open an invite link in any browser, or install the
+desktop app for Windows, Linux or macOS.
 
-## Why Paracord
+Inside a server you get text channels with replies, threads, reactions, polls,
+attachments and code that arrives readable, plus voice channels with video and screen
+sharing. Direct messages and group messages are encrypted end to end. There are roles and
+permissions, automatic moderation, bots and webhooks, and an optional link between two
+Paracord servers so their members can talk. The voice and video are Paracord's own code,
+so there is no third-party media service to sign up for.
 
-- **Own the deployment.** One server binary, or Docker Compose. SQLite works out of the box; PostgreSQL is there when the instance outgrows it.
-- **Own the media path.** Voice, video, and screen share run on Paracord's native QUIC/WebTransport stack by default. LiveKit is an option, not a dependency.
-- **Start without a configuration ceremony.** First run writes the config, generates a JWT signing secret and SQLite database, and — for the standalone binary — issues a self-signed certificate. Then it prints the URL to open.
-- **Use one client everywhere.** Connect to several Paracord servers and move between their buildings, conversations, and notifications without switching apps.
-- **Shape the community.** Roles, permissions, onboarding, moderation, AutoMod, bots, webhooks, storage policy, events, and audit logs are all managed in the app.
-- **See what the server is doing.** A built-in health view reports backups, database size, transport security, and capacity — and tells you what to fix, not just what broke.
+It suits a group that has somebody willing to keep a machine on and read a docs page when
+something breaks. Nobody is hosting this for you, and it is a young project, so the
+[things that don't work yet](#good-to-know) are worth reading before you move a community
+onto it.
 
-## A look around
+## Getting started
 
-A building's lobby is what you see from the street: who has their lights on, which rooms are lit right now and who is in them, what is coming up, and the text rooms below. A lit room shows you what is happening in it before you decide to walk in.
+### Somebody sent you an invite link
 
-![A building's lobby: two rooms lit with the people in them, one dark, and an event coming up](docs/images/readme/lobby.jpg)
+Open it in any browser, press **Create an account to join**, pick a name and a password.
+That's the whole thing.
 
-Conversations carry what you would expect them to: replies, reactions, threads, polls, attachments, and code that arrives readable. The header counts the people reading rather than listing everyone who ever joined.
+<p align="center"><img src="docs/images/readme/join.jpg" alt="An invite page in a browser. It names the server and shows a Create an account to join button." width="720"/></p>
 
-| | |
-| :--- | :--- |
-| ![A text room with replies, reactions, inline code, and an open poll](docs/images/readme/messaging.jpg) | ![A syntax-highlighted code block and the thread branching off it](docs/images/readme/engineering.jpg) |
-| Markdown, attachments, reactions, polls, scheduled messages, commands, GIFs, stickers, and embeds. | Syntax-highlighted code blocks, and threads that split a tangent off without derailing the room. |
+If you'd rather have the app, get it from [Releases](../../releases/latest), open it, and
+paste the same link in.
 
-There is no member list pinned to the side of every room. The people who are here *now* are a lit strip in the header, and its sheet is the one place a full list lives.
+### Running your own server
 
-| | |
-| :--- | :--- |
-| ![The header's people sheet, showing who is reading and who has their lights on](docs/images/readme/people.jpg) | ![The command palette](docs/images/readme/command-palette.jpg) |
-| Who is reading, who is in a room, and who is simply around — on request, not permanently docked. | Jump to any action, building, room, DM, or setting with <kbd>Ctrl</kbd>/<kbd>⌘</kbd> + <kbd>K</kbd>. |
-
-The client is yours to set up, and so is the building.
-
-| | |
-| :--- | :--- |
-| ![Appearance settings: Night, Daylight, AMOLED and high-contrast themes, accent colours and message density](docs/images/readme/appearance.jpg) | ![The building's administration overview](docs/images/readme/space-settings.jpg) |
-| Night, Daylight, AMOLED, and high-contrast themes; accent colours; message density; locale; and guarded custom CSS. The accent recolours the actions you can take — never the light that says who is present. | Roles, rooms, invites, bots, events, onboarding, economy, storage, moderation, reports, and audit logs. |
-
-## What Paracord includes
-
-### Conversations
-
-- Text channels, direct messages, and group DMs
-- Threads, replies, mentions, reactions, pins, and saved messages
-- Markdown, syntax-highlighted code blocks, attachments, image previews, and rich embeds
-- Polls, scheduled messages, slash commands, GIFs, stickers, and custom emoji
-- Search, inbox, typing state, unread tracking, and notification controls
-- End-to-end encrypted direct messages
-
-### Voice, video, and streaming
-
-- Native QUIC media for the desktop client, WebTransport for browsers
-- Voice rooms, video grids, screen sharing, stream viewing, and device controls
-- Opus audio, RNNoise noise suppression, VP9 video, speaker detection, and encrypted media frames
-- Optional LiveKit/WebRTC path for deployments that specifically want an SFU
-
-Desktop VP9 video and screen sharing need **libvpx** at build time. The `vpx` feature is on by default and should stay that way.
-
-### Spaces and community operations
-
-- Text, voice, stage, and forum channels
-- Roles and granular permissions
-- Invites, discovery, templates, welcome screens, and member onboarding
-- AutoMod rules — keywords, patterns, links and invites, mention floods, and spam — with block, timeout, and moderator-alert actions
-- Member management, bans, reports, moderation templates, and audit logs
-- Events, custom emoji, file-storage policy, and a configurable community economy
-- Server hub settings and public-community discovery
-
-### Extensibility and federation
-
-- Bot applications, slash commands, interaction components, and a developer portal
-- Webhooks and a published [bot SDK](packages/paracord-bot-sdk)
-- Several connected servers in one client
-- Ed25519-signed server-to-server federation
-
-Federation is off by default and should be treated as an explicit trust relationship. Stage and validate the flows you intend to use before turning it on for a public instance.
-
-### Where the privacy boundary sits
-
-Self-hosting decides *where* your data lives. It is not the same promise as end-to-end encryption everywhere, so it is worth being precise:
-
-- Direct message **text** is end-to-end encrypted; the server relays ciphertext it cannot read.
-- Direct message **attachments** are encrypted on the sending device, each file under its own
-  AES-256-GCM key. The server receives ciphertext under a generated name as
-  `application/octet-stream`, and stores no filename, media type, dimensions or preview for
-  it. The file key, the original filename, its type, its length and its SHA-256 travel inside
-  the encrypted message, and the recipient decrypts previews and downloads locally.
-- What a direct-message attachment still reveals to the server: that a file was sent, when,
-  between whom, how many files, and roughly how large each one is (ciphertext length). Its
-  contents, name and type are not available to the server or to anyone with database or disk
-  access.
-- Native voice and video frames travel over the encrypted media path.
-- **Space and channel messages and their attachments are readable by the server**, and by
-  anyone with database access. Attachment encryption applies to direct messages only.
-- At-rest AES-256-GCM protection covers configured secret and file paths. It is not a blanket
-  claim that every database column is encrypted. It is also irrelevant to direct-message
-  attachments: those are already unreadable to the server before it receives them.
-
-Read the [known limitations](docs/known-limitations.md) and the deployment guide before running Paracord for a public or high-risk community.
-
-## Quick start
-
-Paracord has no company server in the middle. Somebody in your group runs the server on a computer that stays on, and everyone else joins it with an invite link.
-
-### Join a server somebody sent you an invite for
-
-1. Open the invite link. It works in any browser.
-2. Press **Create an account to join**, pick a name and a password, and you're in.
-
-If you'd rather use the desktop app, download it from [Releases](../../releases/latest), open it, and paste the same invite link.
-
-### Run your own server
-
-One command. It downloads Paracord, sets it up to start by itself, and opens a link in your browser to finish.
+One command, then one link.
 
 **Linux or macOS**, in a terminal:
 
@@ -159,29 +79,55 @@ curl -fsSL https://raw.githubusercontent.com/Scdouglas1999/Paracord/main/scripts
 irm https://raw.githubusercontent.com/Scdouglas1999/Paracord/main/scripts/install.ps1 | iex
 ```
 
-Then:
+**1. Finish setting up.** The installer opens a link in your browser, and prints it as well.
+Choose your name and password, name your server, done. That link works once and only for
+you, so nobody who finds your server first can take it over. Your browser shows a one-time
+security warning on the way in, because the server made its own certificate: choose
+Advanced, then Continue. The desktop app never shows this.
 
-1. **Finish setting up.** The installer opens a link in your browser (and prints it). Choose your name and password, name your server, done. That link only works once and only for you, so nobody who finds your server first can take it over. Your browser may show a one-time security warning because the server made its own certificate: choose Advanced, then Continue. The desktop app never shows this.
-2. **Invite friends.** Every channel has an **Invite** button. It gives you a link to send, and tells you plainly whether it will work for anyone or only for people on your Wi-Fi.
+<p align="center"><img src="docs/images/readme/setup.jpg" alt="The first setup screen in a browser: step 1 of 3, creating the owner's account with a username, display name and optional email." width="720"/></p>
 
-**Friends outside your home.** The server asks your router to let them in automatically, and most routers say yes. If yours doesn't, the Invite dialog and the server's startup message both say so, and [Friends outside your network](docs/port-forwarding.md) walks through the one router setting to change.
+**2. Invite people.** Open your server and press **Invite**. You get a link to
+send, and it tells you plainly whether the link will work for anyone or only for people on
+your Wi-Fi.
+
+<p align="center"><img src="docs/images/readme/invite.jpg" alt="The Invite dialog, showing an invite link with a copy button and a line saying who the link will work for." width="620"/></p>
+
+The server asks your router to let outside traffic through when it starts, and most routers
+say yes. If yours refuses, the Invite dialog and the server's startup message both say so,
+and [Friends outside your network](docs/port-forwarding.md) walks through the one router
+setting to change.
 
 Running the same command again later updates Paracord and keeps all your data.
 
 <details>
-<summary>What the installer does, for the curious</summary>
+<summary>What the installer does, if you want to know before you run it</summary>
 
-On Linux with `sudo` it installs under `/opt/paracord`, creates a `paracord` service user and a hardened, auto-restarting systemd unit. Without root it installs under `~/.local/share/paracord` with a per-user service. On macOS it installs a launchd job. On Windows with administrator permission it installs under `%ProgramFiles%\Paracord`, registers an auto-start task running as `SYSTEM`, and opens the firewall for the app and voice ports; without it, it installs just for you under `%LOCALAPPDATA%\Paracord`. Upgrades keep your config and data and back up the old binary. `PARACORD_NO_BROWSER=1` prints the setup link without opening it; the header of `scripts/install.sh` lists every other override. The server maps its ports on the router with UPnP or NAT-PMP; turn that off with `[network] auto_port_forward = false`.
+On Linux with `sudo` it installs under `/opt/paracord`, creates a `paracord` service user
+and an auto-restarting systemd unit. Without root it installs under
+`~/.local/share/paracord` with a per-user service. On macOS it installs a launchd job. On
+Windows with administrator permission it installs under `%ProgramFiles%\Paracord`,
+registers an auto-start task running as `SYSTEM`, and opens the firewall for the app and
+voice ports; without it, it installs just for you under `%LOCALAPPDATA%\Paracord`.
+Upgrades keep your config and data and back up the old binary. `PARACORD_NO_BROWSER=1`
+prints the setup link instead of opening it, and the header of `scripts/install.sh` lists
+the other overrides. The server maps its ports on the router with UPnP or NAT-PMP; turn
+that off with `auto_port_forward = false` under `[network]`.
+
+Downloads are verified by TLS to the official GitHub releases and nothing else. The
+release pipeline does not publish checksums yet, and the installer says so while it runs.
 
 </details>
 
 ### Manual download
 
-Grab `paracord-server-linux-x64-*.tar.gz` or `paracord-server-windows-x64-*.zip` from [Releases](../../releases/latest), extract it, and run:
+Take `paracord-server-linux-x64-*.tar.gz`, `paracord-server-windows-x64-*.zip` or
+`paracord-server-macos-*.tar.gz` from [Releases](../../releases/latest), extract it, and
+run it:
 
 ```bash
-# Linux
-./paracord-server init   # optional: write the config and print the first-run guide
+# Linux and macOS
+./paracord-server init   # optional: write the config and print what to do next
 ./paracord-server
 ```
 
@@ -190,183 +136,302 @@ Grab `paracord-server-linux-x64-*.tar.gz` or `paracord-server-windows-x64-*.zip`
 .\paracord-server.exe
 ```
 
-First run creates everything it needs (config, database, certificate) and prints the one-time link that finishes setup. The same link is saved as `first-owner-claim-link.txt` next to the config.
+First run creates its settings file, its database and its own certificate, then prints the
+one-time link that finishes setup. The same link is saved next to the config as
+`first-owner-claim-link.txt`.
 
 ### Docker Compose
 
 ```bash
-git clone https://github.com/Scdouglas1999/Paracord.git
-cd Paracord
-docker compose up -d
-```
-
-The default stack needs no `.env` file. It publishes HTTP on `127.0.0.1:8090` and native media on UDP `8443`. Put a TLS reverse proxy in front before exposing the browser client — browsers require HTTPS for microphone, camera, screen share, and WebTransport.
-
-No clone needed — fetch just the compose file and either pull the image CI publishes to GHCR, or build straight from the remote repo:
-
-```bash
 curl -fsSL -o docker-compose.yml https://raw.githubusercontent.com/Scdouglas1999/Paracord/main/docker-compose.yml
-PARACORD_PULL_POLICY=missing docker compose up -d    # pull prebuilt image
-# or: PARACORD_BUILD_CONTEXT=https://github.com/Scdouglas1999/Paracord.git#main docker compose up -d
+PARACORD_PULL_POLICY=missing docker compose up -d
 ```
 
-(If the pull is denied the GHCR package isn't public on your fork — use the remote-build variant, which needs no published image.)
+That pulls the image CI publishes to GHCR. Leave `PARACORD_PULL_POLICY` off to build the
+image locally instead, or point `PARACORD_BUILD_CONTEXT` at
+`https://github.com/Scdouglas1999/Paracord.git#main` to build from the remote repository
+without cloning it. No `.env` file is needed.
 
-For a walk through the first run, see [Getting Started](docs/getting-started.md). For TLS, PostgreSQL, backups, public URLs, and proxy guidance, see [Deployment](docs/deployment.md) and [Docker Setup](docs/docker-setup.md).
+The stack publishes the app on `127.0.0.1:8090` and voice on UDP `8443`, and expects a
+reverse proxy to handle HTTPS. Browsers only give a page the microphone, camera and screen
+once it is served over HTTPS, so put the proxy in front before you send anyone the address;
+[Docker Setup](docs/docker-setup.md) has an example.
+
+For the longer walk through a first run see [Getting Started](docs/getting-started.md); for
+a domain name, PostgreSQL and backups see [Deployment](docs/deployment.md).
+
+## A look around
+
+| | |
+| :--- | :--- |
+| ![Home, showing who is online, the servers you belong to, and the conversation you were last in.](docs/images/readme/home.jpg) | ![A server's front page, listing its voice channels with the people currently in them, and its text channels below.](docs/images/readme/server.jpg) |
+| Home opens on people and conversations: who's around, your servers, and where you left off. | A server's front page. Voice channels show who is in them before you join. |
+
+| | |
+| :--- | :--- |
+| ![A voice call with three video tiles, a row of controls for microphone, camera and screen sharing, and the call's chat at the side.](docs/images/readme/call.jpg) | ![An encrypted group conversation, with a note in the header saying the messages are end-to-end encrypted.](docs/images/readme/dm.jpg) |
+| A call with three people on camera. The pictures in the tiles are test patterns, not webcams; the call itself is real. | Direct messages and group messages are encrypted end to end, attachments included. |
+
+It works at phone width too.
+
+<p align="center">
+  <img src="docs/images/readme/phone-home.jpg" alt="Home on a phone-width screen, listing people and servers in a single column." width="300"/> <img src="docs/images/readme/phone-channel.jpg" alt="A text channel on a phone-width screen, with the composer at the bottom." width="300"/>
+</p>
+
+## What's in it
+
+**Talking.** Text channels, announcement channels, forums and threads. Replies, mentions,
+reactions, pins and saved messages. Markdown, syntax-highlighted code, attachments, image
+previews and link embeds. Polls, scheduled messages, slash commands, GIFs, stickers and
+custom emoji. Search, an inbox, unread counts and per-channel notification settings.
+
+**Voice, video and screen sharing.** Voice channels, video grids, screen sharing and device
+controls, over Paracord's own QUIC transport: raw QUIC in the desktop app, WebTransport in
+the browser. Opus audio with RNNoise noise suppression, VP9 video, speaker detection, and
+media frames the relay cannot read. A LiveKit path is still in the codebase for anyone who
+specifically wants a WebRTC SFU, but it is not the route that gets tested and it needs a
+LiveKit server of its own.
+
+**Direct messages.** One-to-one and group conversations, encrypted end to end. Text and
+attachments are both encrypted on your device, so the server stores files it cannot read and
+does not learn their names or types. Group keys change whenever somebody joins or leaves, so
+a person who left cannot read what is said afterwards, and every message is signed, so one
+member cannot post as another.
+
+Messages in a server's channels are a different matter: those are **not** encrypted end to
+end. Whoever runs the server can read them, as can anyone with access to its database or
+disk. Self-hosting decides where your conversations live, which is a smaller promise than
+encryption. The [known limitations](docs/known-limitations.md) page sets out exactly what
+the server can and cannot see in each case.
+
+**Running a community.** Roles and fine-grained permissions. Invites, discovery, templates,
+welcome screens and member onboarding. Bans, reports, moderation templates and audit logs.
+Events, custom emoji, storage limits, and a community economy if you want one. Automatic
+moderation covers keywords, patterns, links, invites, mention floods and spam, with block,
+timeout and moderator-alert actions ([AutoMod](docs/automod.md) has the details). There's
+also a health page that reports backups, database size, transport security and capacity, and
+says what to fix.
+
+**Bots and other servers.** Bot applications with slash commands and interaction components,
+webhooks, and a [bot SDK](packages/paracord-bot-sdk). One client can connect to several
+Paracord servers and move between them. Servers can also be linked to each other with signed
+server-to-server requests, which is off by default and is a trust decision rather than a
+switch to flip, so read [Federation Protocol](docs/federation-protocol.md) first.
+
+### Looks and themes
+
+There are four themes (Night, Daylight, AMOLED and High contrast), and you can set their
+base colour and accent to any hue you like without the text becoming unreadable. On top of
+those are three looks, each of which brings a whole palette of its own:
+
+- **Voices**, the default, puts every message in a bubble tinted with its author's colour,
+  with your own on the right.
+- **Dusk sky** puts a sunset behind the app, with dark glass panels over it.
+- **Paper & ink** is a light look: cream paper, dark ink, hard printed-style shadows.
+
+A look supplies its own colours, so the base and accent pickers switch off while one is on;
+pick any of the four themes to get them back. Looks switch instantly and the colour changes
+as you drag. Names in chat are written in each person's own colour throughout, and the
+Friends list uses the same colours.
+
+The same channel in each:
+
+| | |
+| :--- | :--- |
+| ![A text channel in Voices: message bubbles tinted by author on a dark aubergine background.](docs/images/readme/hero.jpg) | ![The same channel in Dusk sky: a sunset gradient behind dark glass panels.](docs/images/readme/look-dusk.jpg) |
+| Voices | Dusk sky |
+| ![The same channel in Paper & ink: cream background, dark text, a solid blue sidebar.](docs/images/readme/look-paper.jpg) | ![The same channel in Night: warm dark panels beside a deep blue sidebar.](docs/images/readme/look-night.jpg) |
+| Paper & ink | Night |
+
+<p align="center"><img src="docs/images/readme/appearance.jpg" alt="Settings, Appearance: the four themes, the three looks, and pickers for base colour, accent and motion." width="880"/></p>
+
+## Good to know
+
+Things that will come up, in rough order of how likely you are to hit them. The full list
+lives in [known limitations](docs/known-limitations.md) and in the release notes.
+
+- The browser shows a certificate warning the first time anyone visits, because a new
+  server makes its own certificate and browsers do not recognise it. Choose Advanced, then
+  Continue; it happens once per browser. The desktop app trusts the server's certificate by
+  itself and never asks. Pointing a domain name at the server and turning on automatic
+  certificates (`[tls.acme]`) gets rid of the warning for good.
+- Joining a call from the browser needs a Chromium-based browser, such as Chrome or Edge.
+  It depends on pinning that self-made certificate by fingerprint, which Chromium supports
+  and Firefox and Safari do not. The desktop app is unaffected and works in any case; if a
+  call fails, Settings → Voice & Video has a connection check that says which step broke.
+- The desktop app does not update itself yet. That needs a signed update file published
+  with each release, which isn't set up. Download the new version when there is one; for
+  the server, re-run the install command.
+- macOS builds are unsigned unless a Developer ID is configured, so the first launch needs
+  right-click → Open. These packages are new in this release and were built by CI rather
+  than run by hand, so expect rough edges. macOS system-audio capture isn't implemented, so
+  a screen share from a Mac carries no system sound.
+- Linux screen sharing works but leans on your desktop's PipeWire and portal setup, so try
+  it before you need it.
+- NVIDIA's proprietary driver and WebKit don't get along. On those machines the Linux app
+  turns off WebKit's GPU compositing at startup, because WebKitGTK crashes against that
+  driver and the window never paints. Video still decodes on the GPU; only the interface is
+  affected. The AppImage is a separate problem and is still broken there, so install the
+  `.deb` or build from source. `PARACORD_WEBKIT_ACCELERATION=ondemand` overrides the choice
+  if your driver has since been fixed.
+- The Windows installer was rewritten for this release and has been checked by tools but
+  not run by hand on a Windows machine. If it misbehaves, download `install.ps1` and run it
+  with `powershell -ExecutionPolicy Bypass -File .\install.ps1`.
+- After a long time away the desktop app sometimes opens as "Unknown user" with no servers,
+  instead of taking you to the sign-in screen. Open Settings, log out, and sign in again.
+- There is no way to publish a bot to the bot store, so it is empty. A bot can only be
+  installed by whoever made it.
+- Home and a server's front page look empty when a server is quiet. That's a layout job for
+  a later release.
 
 ## Running it
 
 ### Networking
 
-The standalone server's default remote-access path uses port `8443` over both protocols:
+One port number covers everything, over both protocols:
 
-| Protocol | Carries |
+| | Carries |
 |---|---|
-| TCP `8443` | HTTPS, web client, API, and gateway |
-| UDP `8443` | Native QUIC/WebTransport media |
+| TCP `8443` | the web client, the API and the realtime connection |
+| UDP `8443` | voice, video and screen sharing |
 
-The server asks the router to forward both by itself (UPnP or NAT-PMP). If your router refuses, forward **both** by hand when hosting outside your own network — voice needs the UDP half — following [Friends outside your network](docs/port-forwarding.md). Docker keeps application HTTP on loopback and expects a reverse proxy to provide public TLS.
+The server asks the router to forward both when it starts, using UPnP or NAT-PMP. If the
+router refuses, forward both by hand. UDP is the half people forget, and calls are silent
+without it. [Friends outside your network](docs/port-forwarding.md) has the steps and a way
+to check it worked. Under Docker the app stays on loopback and a reverse proxy provides the
+public HTTPS.
 
-### Data
+### Data and TLS
 
-| Component | Default | Production option |
+| | Default | Other option |
 |---|---|---|
 | Database | SQLite | PostgreSQL |
-| Uploads | Local filesystem | S3-compatible object storage when built and configured for it |
-| Media | Native QUIC/WebTransport | Optional LiveKit/WebRTC |
-| TLS | Auto-generated self-signed certificate | Reverse proxy or ACME-managed certificate |
+| Uploads | local filesystem | S3-compatible storage, in a build that enables it |
+| Media | Paracord's QUIC/WebTransport stack | LiveKit, if you want a WebRTC SFU |
+| HTTPS | a certificate the server makes itself | a reverse proxy, or ACME certificates |
 
-SQLite comfortably carries a small instance. PostgreSQL is the recommendation for sustained multi-user production use; the offline `migrate-to-postgres` command supports a dry run and verifies copied row counts before you commit to it.
+SQLite carries a small server fine. PostgreSQL is the one to move to for sustained
+day-to-day use; the offline `migrate-to-postgres` command copies an existing SQLite
+database across, has a dry-run mode, and verifies row counts before you commit to it.
 
-### Clients
+### Downloads
 
-Download a desktop build from [Releases](../../releases/latest), or just open the browser client your server serves itself:
+Desktop builds are on the [releases page](../../releases/latest), or you can just open the
+web client the server already serves.
 
-| Client | Download | Notes |
+| | File | Notes |
 |---|---|---|
-| Windows desktop | `Paracord-Setup-<ver>.exe` — guided installer (recommended) | Also `Paracord_<ver>_x64_en-US.msi` |
-| Linux desktop | `Paracord_<ver>_amd64.AppImage` — portable, no install | Or `Paracord_<ver>_amd64.deb` / `.rpm` |
-| macOS desktop | `Paracord_<ver>_aarch64.dmg` (Apple Silicon) or `_x64.dmg` (Intel) | Unsigned unless a Developer ID is configured: right-click → Open the first time |
-| Browser | `https://<your-server>:8443` — served by the Paracord server itself | Accept the self-signed cert warning once |
+| Windows | `Paracord-Setup-<ver>.exe` | the guided installer, and the one to use. `Paracord_<ver>_x64_en-US.msi` is there too |
+| Linux | `Paracord_<ver>_amd64.AppImage` | portable, no install. Or `Paracord_<ver>_amd64.deb` / `Paracord-<ver>-1.x86_64.rpm` |
+| macOS | `Paracord_<ver>_aarch64.dmg` | Apple Silicon. `Paracord_<ver>_x64.dmg` for Intel. Unsigned: right-click → Open the first time |
+| Browser | nothing to install | open `https://<your-server>:8443`, which the server serves itself |
 
-On first launch the desktop app asks for your **invite link** — paste it and create your account. A bare server address works too. The desktop app trusts the server's own certificate by itself, so it never shows the browser's security warning.
+Server packages are on the same page: `paracord-server-linux-x64-<ver>.tar.gz`,
+`paracord-server-windows-x64-<ver>.zip`, `paracord-server-macos-arm64-<ver>.tar.gz` and
+`paracord-server-macos-x64-<ver>.tar.gz`.
 
-Windows is the primary native screen and system-audio capture path. Linux screen sharing depends on the distribution's PipeWire and portal setup, and is worth testing before you publish a build. macOS system-audio capture is not implemented.
-
-On Linux with NVIDIA's proprietary driver the client turns off WebKit's GPU compositing at startup, because WebKitGTK crashes against that driver and the window never paints. This costs GPU compositing of the interface only — video still decodes and renders on the GPU. Override with `PARACORD_WEBKIT_ACCELERATION=ondemand` if your driver handles it.
+The desktop app asks for your invite link on first launch. A plain server address works
+too.
 
 ## Architecture
 
-A Rust workspace with a React/Tauri client:
-
-| Layer | Technology |
-|---|---|
-| Server | Rust, Axum, Tokio |
-| API and realtime | REST plus WebSocket/SSE realtime transport |
-| Database | SQLx over SQLite and PostgreSQL |
-| Client | React 19, TypeScript, Tauri v2, Tailwind CSS v4 |
-| Client state | Zustand |
-| Native media | QUIC/WebTransport, Opus, RNNoise, VP9 |
-| Optional media | LiveKit/WebRTC |
-| Identity and auth | Argon2, JWT sessions, Ed25519 identity |
+The server is a Rust workspace: axum on Tokio, SQLx over SQLite or PostgreSQL, a REST API
+and a WebSocket gateway, with Argon2 passwords, JWT sessions and Ed25519 identity keys. The
+client is React 19, TypeScript, Tailwind CSS v4 and Zustand, wrapped in a Tauri v2 shell
+for the desktop builds.
 
 ```text
 crates/
-├── paracord-server       # executable, config, TLS, embedded web client
+├── paracord-server       # the binary: config, TLS, embedded web client
 ├── paracord-api          # HTTP API
 ├── paracord-ws           # realtime gateway
 ├── paracord-core         # permissions, services, event bus
-├── paracord-db           # SQLite/PostgreSQL persistence
-├── paracord-models       # shared models and permission flags
+├── paracord-db           # SQLite and PostgreSQL persistence
+├── paracord-models       # shared types and permission flags
 ├── paracord-transport    # QUIC and WebTransport
 ├── paracord-relay        # encrypted media routing
-├── paracord-codec        # Opus, RNNoise, and VP9
-├── paracord-media        # file storage and optional LiveKit integration
+├── paracord-codec        # Opus, RNNoise and VP9
+├── paracord-media        # file storage, optional LiveKit
 └── paracord-federation   # signed server-to-server protocol
 
 client/                   # React web app and Tauri desktop shell
 packages/paracord-bot-sdk # bot SDK
 ```
 
-Release builds embed `client/dist` into `paracord-server`, so the standalone binary serves the UI itself.
+Release builds compile `client/dist` into `paracord-server`, so the single binary serves
+the web client itself.
 
 ## Development
 
-### Prerequisites
+You need [Rust 1.88 or newer](https://rustup.rs/), [Node 22 or
+newer](https://nodejs.org/), libvpx for VP9 video and screen sharing, and Tauri's platform
+dependencies if you're building the desktop app. `CLAUDE.md` has the per-platform notes for
+libvpx.
 
-- [Rust 1.88 or newer](https://rustup.rs/)
-- [Node.js 22 or newer](https://nodejs.org/)
-- libvpx, for desktop VP9 video and screen sharing
-- Tauri platform dependencies, when building the desktop app
-
-### Run the web client and server
+Run the client against a local server:
 
 ```bash
-# Terminal 1
-cd client
-npm install
-npm run dev
-```
+# terminal 1
+cd client && npm install && npm run dev
 
-```bash
-# Terminal 2
+# terminal 2
 cargo run --bin paracord-server --no-default-features
 ```
 
-Vite serves `http://localhost:1420` and proxies API traffic to the development server.
+Vite serves `http://localhost:1420` and proxies the API to the server. The
+`--no-default-features` flag skips embedding the web client, which you have no build of yet.
 
-### Build and test
+Check and test:
 
 ```bash
-# Rust
 cargo fmt --all -- --check
 cargo clippy --workspace -- -D warnings
 cargo test --workspace
 
-# Client
 cd client
 npm run typecheck
-npm test
-npm run build
+npm test              # typecheck plus unit tests
+npm run test:e2e      # Playwright
 ```
 
-Build a release server with the current web client embedded:
+Build a release server with the current web client inside it, then the desktop app:
 
 ```bash
 cd client && npm install && npm run build && cd ..
 cargo build --release --bin paracord-server
+
+cd client && npx tauri build
 ```
 
-Build the desktop client, once the Tauri and libvpx dependencies are in place:
-
-```bash
-cd client
-npm install
-npx tauri build
-```
+The `vpx` feature in `paracord-codec` is on by default and turning it off to get past a
+build error is the wrong move: the build succeeds and video and screen sharing then fail at
+runtime with nothing to explain why. Fix the libvpx setup instead. On recent Linux
+toolchains the AppImage build needs `NO_STRIP=1`, because linuxdeploy's bundled `strip`
+cannot read the relocation sections a modern linker emits.
 
 ## Documentation
 
 | Guide | Covers |
 |---|---|
-| [Getting Started](docs/getting-started.md) | First run, owner registration, invites, and media choices |
-| [Deployment](docs/deployment.md) | TLS, networking, PostgreSQL, backups, and production hardening |
-| [Docker Setup](docs/docker-setup.md) | Compose services, volumes, and reverse proxy setup |
-| [AutoMod](docs/automod.md) | Content rules, triggers, actions, exemptions, and the rule API |
-| [Known Limitations](docs/known-limitations.md) | Platform and operational support boundaries |
-| [Bot Development](docs/bot-development.md) | Bots, commands, interactions, and webhooks |
-| [Federation Protocol](docs/federation-protocol.md) | Signed federation envelopes and the trust model |
-| [Design language](docs/lantern-stage-spec.md) | The Lantern Stage visual system — light means people |
-| [Layout Spec](docs/layout-spec.md) | Unified navigation, Home, Rooms, and context panels |
-| [API Contracts](docs/api-contracts.md) | API and realtime interface notes |
-| [Release Notes](RELEASE_NOTES.md) | What changed in the current release |
+| [Getting Started](docs/getting-started.md) | first run, the setup link, invites, media choices |
+| [Friends outside your network](docs/port-forwarding.md) | what to change on the router, and how to check it |
+| [Deployment](docs/deployment.md) | a domain name, TLS at a proxy, PostgreSQL, backups |
+| [Docker Setup](docs/docker-setup.md) | compose services, volumes, reverse proxy |
+| [Known Limitations](docs/known-limitations.md) | the full list of what does and doesn't work |
+| [AutoMod](docs/automod.md) | rules, triggers, actions, exemptions, the rule API |
+| [Bot Development](docs/bot-development.md) | bots, commands, interactions, webhooks |
+| [Federation Protocol](docs/federation-protocol.md) | signed requests between servers and the trust model |
+| [Backup Recovery](docs/backup-recovery.md) | restoring an archive, and what it can't restore |
+| [Release Notes](RELEASE_NOTES.md) | what changed in v3.1.0 |
 
-## License and contributing
+## Licence and contributing
 
-Paracord is **source-available**, not OSI open source. It is distributed under the [Paracord Source-Available License](LICENSE). You may use, study, and modify it for personal use and share official releases; redistributing modified versions or derivative works requires written permission from the copyright holder.
+Paracord is source-available rather than open source, under the [Paracord Source-Available
+License](LICENSE). You can run it for anything, including a business. You can read the
+source, modify it for your own machines, and pass the official releases around unchanged.
+Publishing a modified version, or a fork for other people to use, needs written permission
+from the author.
 
-Issues and pull requests are welcome. Please include reproduction details for bugs, and skim the security and deployment docs before reporting behavior that depends on a particular trust boundary.
-
-<p align="center">
-  <sub>Built for communities that want their conversations back.</sub>
-</p>
+Issues and pull requests are welcome. For a bug, say what you did and what happened. If it
+involves voice, screen sharing or encryption, include the platform and whether you were in
+the browser or the desktop app, because those behave differently.
