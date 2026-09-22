@@ -139,6 +139,53 @@ export interface SportsAthlete {
   name: string;
   short_name: string;
   headshot: string;
+  /** Position abbreviation from the feed, or null when it has none. */
+  position?: string | null;
+}
+
+export interface LineScoreSide {
+  periods: (number | null)[];
+  total: number | null;
+  hits: number | null;
+  errors: number | null;
+}
+
+export interface LineScore {
+  periods: string[];
+  home: LineScoreSide;
+  away: LineScoreSide;
+}
+
+export interface GameLeader {
+  team_id: string;
+  category: string;
+  label: string;
+  athlete: SportsAthlete;
+  value: string;
+}
+
+export interface GameProbable {
+  team_id: string;
+  athlete: SportsAthlete;
+  role: string;
+  note: string;
+}
+
+export interface BoxRow {
+  athlete: SportsAthlete;
+  position: string;
+  values: string[];
+}
+
+export interface BoxTable {
+  type: string;
+  columns: string[];
+  rows: BoxRow[];
+}
+
+export interface BoxScore {
+  home: BoxTable[];
+  away: BoxTable[];
 }
 
 export interface WinProbabilityPoint {
@@ -249,6 +296,10 @@ export interface GameDetail {
   kind: GameDetailKind;
   win_probability: WinProbabilityPoint[];
   scoring_plays: ScoringPlay[];
+  line_score: LineScore | null;
+  leaders: GameLeader[];
+  probables: GameProbable[];
+  box: BoxScore | null;
   football?: FootballDetail | null;
   baseball?: BaseballDetail | null;
 }

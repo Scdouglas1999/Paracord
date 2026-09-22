@@ -22,6 +22,7 @@ import {
   openingDriveId,
   ordinal,
   pitchAnnouncement,
+  scoreCall,
   redZoneYards,
   situationBugText,
   stepIndex,
@@ -32,6 +33,7 @@ import {
 } from './gamecast';
 import { FootballField, PlayLegend } from './FootballField';
 import { BaseballPanels } from './BaseballPanels';
+import { BoxScorePanel, DriveChart, GameSkeleton, LeadersPanel, LineScoreTable } from './detailPanels';
 import { TeamMark } from './TeamMark';
 
 export function GameDetailView({
@@ -67,9 +69,7 @@ export function GameDetailView({
         <Link to={sportsHref(guildId)} className="pc-focusable w-fit text-meta text-text-link">
           Back to Sports
         </Link>
-        {status === 'loading' && !detail && (
-          <p role="status" className="text-label text-text-secondary">Loading this game…</p>
-        )}
+        {status === 'loading' && !detail && <GameSkeleton sport={sport} />}
         {status === 'error' && (
           <div role="status" className="pc-well flex flex-wrap items-center justify-between gap-3 px-4 py-3">
             <p className="text-label text-text-secondary">{error || 'This game could not be loaded.'}</p>
@@ -136,6 +136,9 @@ function DetailBody({
           </span>
         </div>
         <Scoreboard game={game} hideScores={hideScores} />
+        {!hideScores && detail.line_score && (
+          <LineScoreTable line={detail.line_score} game={game} baseball={detail.kind === 'baseball'} />
+        )}
         {game.broadcasts.length > 0 && (
           <p className="text-center text-meta text-text-muted">On {game.broadcasts.slice(0, 4).join(', ')}</p>
         )}
@@ -159,7 +162,14 @@ function DetailBody({
       </header>
 
       {detail.kind === 'football' && detail.football && (
-        <FootballBody game={game} football={detail.football} hideScores={hideScores} scoringPlays={detail.scoring_plays ?? []} />
+        <FootballBody
+          game={game}
+          football={detail.football}
+          hideScores={hideScores}
+          scoringPlays={detail.scoring_plays ?? []}
+          leaders={detail.leaders ?? []}
+          box={detail.box}
+        />
       )}
       {detail.kind === 'football' && !detail.football && (
         <p className="text-body text-text-secondary">This game did not include a field.</p>
@@ -292,16 +302,22 @@ function WinChart({
   );
 }
 
+const FOOTBALL_BOX = ['passing', 'rushing', 'receiving', 'defensive'];
+
 function FootballBody({
   game,
   football,
   hideScores,
   scoringPlays,
+  leaders,
+  box,
 }: {
   game: SportsGame;
   football: FootballDetail;
   hideScores: boolean;
   scoringPlays: GameDetail['scoring_plays'];
+  leaders: GameDetail['leaders'];
+  box: GameDetail['box'];
 }) {
   const drives = football.drives ?? [];
   const liveDrive = drives[drives.length - 1] ?? null;
@@ -315,7 +331,8 @@ function FootballBody({
   const [playing, setPlaying] = useState(false);
   const [manual, setManual] = useState(!live);
   const [flat, setFlat] = useState(false);
-  const [tab, setTab] = useState<'drive' | 'drives' | 'scoring'>('drive');
+  const [tab, setTab] = useState<'drive' | 'drives' | 'scoring' | 'box'>('drive');
+  const [scoreBanner, setScoreBanner] = useState<'TOUCHDOWN' | 'FIELD GOAL' | null>(null);
   const tabId = useId();
   const playsBodyRef = useRef<HTMLDivElement>(null);
   const currentPlayRef = useRef<HTMLButtonElement>(null);
@@ -323,6 +340,7 @@ function FootballBody({
   const [notice, setNotice] = useState<string | null>(null);
   const [seenPlay, setSeenPlay] = useState<string | null>(null);
   const [seenPossession, setSeenPossession] = useState<string | null>(null);
+  const scoredPlay = useRef<string | null>(null);
 
   const drive = drives.find((item) => item.id === driveId) ?? liveDrive;
   const plays = drive?.plays ?? [];
@@ -331,8 +349,26 @@ function FootballBody({
   const following = live && !manual && (driveId == null || drive?.id === liveDrive?.id);
 
   useEffect(() => {
-    if (hideScores && tab === 'scoring') setTab('drive');
+    if (hideScores && (tab === 'scoring' || tab === 'box')) setTab('drive');
   }, [hideScores, tab]);
+
+  useEffect(() => {
+    const id = play?.id ?? null;
+    const call = scoreCall(play?.type, Boolean(play?.scoring) && !hideScores);
+    if (scoredPlay.current === null) {
+      scoredPlay.current = id;
+      return;
+    }
+    if (scoredPlay.current === id) return;
+    scoredPlay.current = id;
+    if (!call) {
+      setScoreBanner(null);
+      return;
+    }
+    setScoreBanner(call);
+    const timer = window.setTimeout(() => setScoreBanner(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [play?.id, play?.type, play?.scoring, hideScores]);
 
   useEffect(() => {
     const node = currentPlayRef.current;
@@ -472,6 +508,12 @@ function FootballBody({
           playIndex={Math.min(playIndex, Math.max(0, count - 1))}
           label={label || gameAriaLabel(game, hideScores)}
           notice={live ? notice : null}
+          scoreCall={scoreBanner}
+          scoreSide={scoreBanner ? (direction > 0 ? 'right' : 'left') : null}
+          scorePaint={scoreBanner && play?.team_id ? teamPaint(
+            play.team_id === game.away.id ? game.away : game.home,
+            play.team_id === game.away.id ? game.home : game.away,
+          ).fill : null}
           flat={flat}
           bugText={situationBugText({
             state: game.state,
@@ -510,6 +552,7 @@ function FootballBody({
           </div>
         )}
         <PlayLegend live={live} />
+        {!hideScores && <LeadersPanel leaders={leaders} game={game} />}
       </div>
       <div className="pc-sports-plays">
         <div role="tablist" aria-label="Drives" className="pc-sports-tabs">
@@ -517,6 +560,9 @@ function FootballBody({
           <button type="button" role="tab" id={`${tabId}-drives`} className="pc-focusable" aria-selected={tab === 'drives'} aria-controls={`${tabId}-panel-drives`} onClick={() => setTab('drives')}>All drives</button>
           {!hideScores && (
             <button type="button" role="tab" id={`${tabId}-scoring`} className="pc-focusable" aria-selected={tab === 'scoring'} aria-controls={`${tabId}-panel-scoring`} onClick={() => setTab('scoring')}>Scoring</button>
+          )}
+          {!hideScores && box && (
+            <button type="button" role="tab" id={`${tabId}-box`} className="pc-focusable" aria-selected={tab === 'box'} aria-controls={`${tabId}-panel-box`} onClick={() => setTab('box')}>Box score</button>
           )}
         </div>
         <div ref={playsBodyRef} role="tabpanel" id={`${tabId}-panel-drive`} aria-labelledby={`${tabId}-drive`} hidden={tab !== 'drive'} className="pc-sports-plays-body">
@@ -547,29 +593,20 @@ function FootballBody({
           </ul>
         </div>
         <div role="tabpanel" id={`${tabId}-panel-drives`} aria-labelledby={`${tabId}-drives`} hidden={tab !== 'drives'} className="pc-sports-plays-body">
-          <ul className="flex flex-col gap-1">
-            {drives.map((item, index) => {
-              const side = teamFor(item.team_id, game);
-              return (
-                <li key={item.id}>
-                  <button
-                    type="button"
-                    className="pc-focusable flex w-full items-center gap-2 rounded-[var(--radius-control)] px-2 py-1.5 text-left text-label text-text-secondary hover:bg-bg-mod-strong"
-                    aria-pressed={drive?.id === item.id}
-                    onClick={() => chooseDrive(item.id)}
-                  >
-                    {side && <TeamMark team={side} />}
-                    <span>
-                      {abbrFor(item.team_id, game) || 'Drive'} {index + 1}
-                      {item.result ? ` · ${item.result}` : ''}
-                      {item.live ? ' · Live' : ''}
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+          <DriveChart
+            drives={drives}
+            game={game}
+            selectedId={drive?.id ?? null}
+            onSelect={chooseDrive}
+            scoringPlays={scoringPlays}
+            hideScores={hideScores}
+          />
         </div>
+        {!hideScores && box && (
+          <div role="tabpanel" id={`${tabId}-panel-box`} aria-labelledby={`${tabId}-box`} hidden={tab !== 'box'} className="pc-sports-plays-body">
+            <BoxScorePanel box={box} game={game} kinds={FOOTBALL_BOX} />
+          </div>
+        )}
         {!hideScores && (
           <div role="tabpanel" id={`${tabId}-panel-scoring`} aria-labelledby={`${tabId}-scoring`} hidden={tab !== 'scoring'} className="pc-sports-plays-body">
             <section aria-label="Scoring plays">
@@ -622,7 +659,17 @@ function BaseballBody({ detail, hideScores }: { detail: GameDetail; hideScores: 
         </Button>
       </div>
       {baseball && (
-        <BaseballPanels baseball={baseball} game={detail.game} selectedId={atBatId} onSelect={setAtBatId} flat={flat} hideScores={hideScores} />
+        <BaseballPanels
+          baseball={baseball}
+          game={detail.game}
+          selectedId={atBatId}
+          onSelect={setAtBatId}
+          flat={flat}
+          hideScores={hideScores}
+          leaders={detail.leaders ?? []}
+          probables={detail.probables ?? []}
+          box={detail.box}
+        />
       )}
     </div>
   );

@@ -19,6 +19,10 @@ function detail(state: 'pre' | 'in' | 'post'): GameDetail {
     kind: 'other',
     win_probability: [],
     scoring_plays: [],
+    line_score: null,
+    leaders: [],
+    probables: [],
+    box: null,
     game: {
       id: '401872945',
       sport: 'basketball',

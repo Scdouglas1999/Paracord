@@ -12,8 +12,9 @@ mod service;
 
 pub use models::{
     format_rfc3339, league_catalog, league_label, AtBat, Athlete, BaseballDetail, Bases,
-    BoardLeague, FavoriteTeam, FootballDetail, FootballDrive, FootballPlay, Game, GameDetail, Hit,
-    LeagueCatalogEntry, LeagueTeams, Pitch, RosterTeam, ScoringPlay, SportsBoard, StrikeZone, Team,
+    BoardLeague, BoxRow, BoxScore, BoxTable, FavoriteTeam, FootballDetail, FootballDrive,
+    FootballPlay, Game, GameDetail, Hit, Leader, LeagueCatalogEntry, LeagueTeams, LineScore,
+    LineScoreTeam, Pitch, Probable, RosterTeam, ScoringPlay, SportsBoard, StrikeZone, Team,
     WinPoint, LEAGUE_CATALOG,
 };
 pub use service::{

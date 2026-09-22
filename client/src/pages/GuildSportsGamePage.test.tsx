@@ -69,6 +69,10 @@ function footballDetail(over: Partial<GameDetail> = {}): GameDetail {
     kind: 'football',
     win_probability: [{ home_pct: 77 }, { home_pct: 41 }],
     scoring_plays: [{ text: 'Taylor scores', period: 2, clock: '6:20', team_id: '12', home_score: 27, away_score: 24 }],
+    line_score: null,
+    leaders: [],
+    probables: [],
+    box: null,
     football: {
       possession_team_id: '12',
       ball_on: 14,
@@ -243,6 +247,25 @@ describe('GuildSportsGamePage', () => {
     }
   });
 
+  it('shows the line score under the header and hides it with the scores', async () => {
+    const user = userEvent.setup();
+    vi.mocked(sportsApi.getGame).mockResolvedValue({
+      data: footballDetail({
+        line_score: {
+          periods: ['1', '2', '3', '4'],
+          away: { periods: [7, 10, 0, 7], total: 24, hits: null, errors: null },
+          home: { periods: [3, 7, 14, 3], total: 27, hits: null, errors: null },
+        },
+      }),
+    } as never);
+    renderGame();
+    const table = await screen.findByRole('table', { name: 'Line score' });
+    expect(screen.getByRole('columnheader', { name: '2' })).toHaveClass('is-live');
+    expect(screen.getByRole('columnheader', { name: 'T' })).toBeInTheDocument();
+    await user.click(screen.getByRole('switch', { name: 'Hide scores' }));
+    expect(table).not.toBeInTheDocument();
+  });
+
   it('hides the score, the chart and the scoring plays together', async () => {
     const user = userEvent.setup();
     renderGame();
@@ -284,6 +307,10 @@ describe('GuildSportsGamePage', () => {
         kind: 'baseball',
         win_probability: [],
         scoring_plays: [],
+        line_score: null,
+        leaders: [],
+        probables: [],
+        box: null,
         game: game({
           sport: 'baseball',
           league: 'MLB',
@@ -426,6 +453,10 @@ describe('GuildSportsGamePage', () => {
         kind: 'baseball',
         win_probability: [],
         scoring_plays: [],
+        line_score: null,
+        leaders: [],
+        probables: [],
+        box: null,
         game: game({
           state: 'post',
           detail: 'Final',

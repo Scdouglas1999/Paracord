@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import type { AtBat, BaseballDetail, Pitch, PitchResult, SportsAthlete, SportsGame, SportsTeam } from '../../api/sports';
+import type { AtBat, BaseballDetail, BoxScore, GameLeader, GameProbable, Pitch, PitchResult, SportsAthlete, SportsGame, SportsTeam } from '../../api/sports';
+import { BoxScorePanel, LeadersPanel, MatchupPair, StartingPitchers } from './detailPanels';
 import { AthleteMark } from './TeamMark';
 import {
   BASE_POINTS,
@@ -74,6 +75,9 @@ export function BaseballPanels({
   onSelect,
   flat,
   hideScores,
+  leaders = [],
+  probables = [],
+  box = null,
 }: {
   baseball: BaseballDetail;
   game: SportsGame;
@@ -81,6 +85,9 @@ export function BaseballPanels({
   onSelect: (id: string) => void;
   flat: boolean;
   hideScores: boolean;
+  leaders?: GameLeader[];
+  probables?: GameProbable[];
+  box?: BoxScore | null;
 }) {
   const atBats = baseball.at_bats ?? [];
   const selected = atBats.find((atBat) => atBat.id === selectedId) ?? atBats[atBats.length - 1] ?? null;
@@ -115,25 +122,16 @@ export function BaseballPanels({
   const atBatHalf = selected?.half ?? baseball.half;
   const atBatTeam = atBatHalf === 'bottom' ? game.home : atBatHalf === 'top' ? game.away : null;
   const atBatOther = atBatTeam?.id === game.home.id ? game.away : game.home;
+  const fielding = atBatTeam?.id === game.home.id ? game.away : atBatTeam ? game.home : null;
+  const [sheet, setSheet] = useState<'bats' | 'box'>('bats');
+  const showBox = Boolean(box) && !hideScores;
 
   return (
     <div className="flex min-w-0 flex-col gap-4">
       <p className="pc-sports-scorebug pc-mono text-label text-text-secondary">{status}</p>
-      {(batter || pitcher) && (
-        <div className="flex min-w-0 flex-wrap gap-4">
-          {batter && (
-            <p className="flex min-w-0 items-center gap-2 text-label text-text-primary">
-              <AthleteMark athlete={batter} />
-              <span className="min-w-0 truncate">{batter.short_name || batter.name || 'Batter'}</span>
-            </p>
-          )}
-          {pitcher && (
-            <p className="flex min-w-0 items-center gap-2 text-label text-text-secondary">
-              <AthleteMark athlete={pitcher} />
-              <span className="min-w-0 truncate">{pitcher.short_name || pitcher.name || 'Pitcher'}</span>
-            </p>
-          )}
-        </div>
+      {game.state === 'pre' && <StartingPitchers probables={probables} game={game} />}
+      {game.state !== 'pre' && (
+        <MatchupPair batter={batter} pitcher={pitcher} batting={atBatTeam} fielding={fielding} />
       )}
       <div className="pc-sports-baseball">
         <div className="flex min-w-0 flex-col gap-2">
@@ -196,8 +194,17 @@ export function BaseballPanels({
           status={status}
         />
       </div>
+      {!hideScores && <LeadersPanel leaders={leaders} game={game} />}
       <div className="flex min-w-0 flex-col gap-1">
-        <h2 className="text-section text-text-faint">At-bats</h2>
+        <div className="pc-sports-tabs" role="tablist" aria-label="At-bats">
+          <button type="button" role="tab" className="pc-focusable" aria-selected={sheet === 'bats'} onClick={() => setSheet('bats')}>At-bats</button>
+          {showBox && box && (
+            <button type="button" role="tab" className="pc-focusable" aria-selected={sheet === 'box'} onClick={() => setSheet('box')}>Box score</button>
+          )}
+        </div>
+        {sheet === 'box' && showBox && box ? (
+          <BoxScorePanel box={box} game={game} />
+        ) : (
         <ul className="flex max-h-64 flex-col gap-1 overflow-y-auto">
           {atBats.map((atBat) => (
             <li key={atBat.id}>
@@ -213,6 +220,7 @@ export function BaseballPanels({
             </li>
           ))}
         </ul>
+        )}
       </div>
     </div>
   );
@@ -276,8 +284,6 @@ function StrikeZone({
   const points = pitches.map((pitch) => pitchInFrame(pitch.x ?? 0, pitch.y ?? 0, zone));
   const counts = heatCounts(points, zoneRect);
   const peak = Math.max(1, ...counts);
-  const feet = boxes.y + boxes.height;
-  const stanceX = stance === 'L' ? boxes.right + boxes.width / 2 : boxes.left + boxes.width / 2;
   return (
     <div className="pc-sports-zone-frame">
       <svg viewBox={`0 0 ${ZONE_VIEW.width} ${ZONE_VIEW.height}`} className="block h-full w-full" role="img" aria-label={label}>
@@ -357,8 +363,13 @@ function StrikeZone({
           d={`M${plate.cx} ${plate.top} L${plate.cx + half} ${plate.top + plate.height * 0.42} L${plate.cx + half} ${plate.top + plate.height} L${plate.cx - half} ${plate.top + plate.height} L${plate.cx - half} ${plate.top + plate.height * 0.42} Z`}
           fill="var(--sports-chalk)"
         />
-        <Catcher box={catcher} />
-        <Batter stance={stance} x={stanceX} feetY={feet} height={layout.batterHeight} />
+        <BatterBox
+          x={stance === 'L' ? boxes.right : boxes.left}
+          y={boxes.y}
+          width={boxes.width}
+          height={boxes.height}
+          stance={stance}
+        />
       </svg>
       <div className="pc-sports-pitch-hits">
         {pitches.map((pitch, index) => {
@@ -418,38 +429,38 @@ function heatCounts(
 }
 
 /**
- * A right-handed stance faces +x (toward the plate). The bat is cocked
- * behind the helmet, so the body stays in the box and out of the zone.
+ * The box the hitter is standing in, lit faintly, with the side written in
+ * it. Nothing pretends to be a figure: the feed knows the side, not the pose.
  */
-function Batter({ stance, x, feetY, height }: { stance: 'L' | 'R'; x: number; feetY: number; height: number }) {
-  const unit = height / 100;
-  const face = stance === 'L' ? -unit : unit;
+function BatterBox({
+  x,
+  y,
+  width,
+  height,
+  stance,
+}: {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  stance: 'L' | 'R';
+}) {
   return (
-    <g transform={`translate(${x} ${feetY}) scale(${face} ${-unit})`} fill="var(--text-faint)">
-      <path d="M-1 0 L-5 28 L-1 34 L2 6 Z" />
-      <path d="M1 4 L3 16 L8 22 L10 14 L7 2 L3 0 Z" />
-      <path d="M-3 30 C-5 52 -1 66 4 64 L6 48 C2 40 1 32 2 28 Z" />
-      <path d="M-1 58 L1 76 L-1 78 L-3 60 Z" />
-      <circle cx="1" cy="86" r="8" />
-      <path d="M-3 82 H7 L6 86 H-2 Z" />
-      <path d="M0 64 L-1 74 L-9 94 L-6 97 L2 76 Z" />
-    </g>
-  );
-}
-
-/** A crouched catcher in the box below the plate. Geography, not a tracked player. */
-function Catcher({ box }: { box: { x: number; y: number; width: number; height: number } }) {
-  const unit = box.height / 26;
-  return (
-    <g
-      transform={`translate(${box.x + box.width / 2} ${box.y + box.height - 1}) scale(${unit} ${-unit})`}
-      fill="var(--text-faint)"
-    >
-      <path d="M-8 0 L-10 8 L-4 10 L-2 2 Z" />
-      <path d="M6 0 L8 8 L2 10 L0 2 Z" />
-      <path d="M-6 8 C-8 16 -2 20 0 16 C2 20 8 16 6 8 Z" />
-      <circle cx="0" cy="22" r="4.5" />
-      <path d="M4 12 L12 14 L11 17 L3 15 Z" />
+    <g>
+      <rect x={x} y={y} width={width} height={height} fill="var(--sports-chalk)" opacity="0.14" />
+      <text
+        x={x + width / 2}
+        y={y + height / 2}
+        textAnchor="middle"
+        dominantBaseline="central"
+        fill="var(--sports-chalk)"
+        opacity="0.8"
+        fontSize="13"
+        fontWeight="700"
+        fontFamily="var(--font-display)"
+      >
+        {stance}
+      </text>
     </g>
   );
 }
@@ -543,10 +554,24 @@ function Diamond({
               <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="2" />
               <feColorMatrix type="saturate" values="0" />
             </filter>
+            <linearGradient id={`${uid}-tiers`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stopColor="var(--sports-chalk)" stopOpacity="0.2" />
+              <stop offset="1" stopColor="var(--sports-stadium)" stopOpacity="0" />
+            </linearGradient>
+            <filter id={`${uid}-crowdnoise`} x="0" y="0" width="100%" height="100%">
+              <feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="2" seed="7" />
+              <feColorMatrix type="saturate" values="0" />
+            </filter>
           </defs>
           <rect width={GAMEDAY.size} height={GAMEDAY.size} fill="var(--sports-turf)" />
-          <path d="M4 6 H246 V34 Q125 10 4 34 Z" fill="var(--sports-stadium)" opacity="0.88" />
-          <path d="M4 6 H246 V34 Q125 10 4 34 Z" fill={`url(#${uid}-stands)`} />
+          <path d="M4 2 H246 V18 Q125 4 4 18 Z" fill="var(--sports-stadium)" opacity="0.5" />
+          <path d="M4 8 H246 V26 Q125 8 4 26 Z" fill="var(--sports-stadium)" opacity="0.72" />
+          <path d="M4 14 H246 V36 Q125 12 4 36 Z" fill="var(--sports-stadium)" opacity="0.9" />
+          <path d="M4 2 H246 V36 Q125 8 4 36 Z" fill={`url(#${uid}-tiers)`} />
+          <path d="M4 2 H246 V36 Q125 8 4 36 Z" fill={`url(#${uid}-stands)`} />
+          <path d="M4 2 H246 V36 Q125 8 4 36 Z" filter={`url(#${uid}-crowdnoise)`} opacity="0.22" />
+          <circle cx="22" cy="10" r="8" fill="var(--sports-chalk)" opacity="0.2" />
+          <circle cx="228" cy="10" r="8" fill="var(--sports-chalk)" opacity="0.2" />
           <clipPath id={`${uid}-outfield`}>
             <path d="M16 28 L125 198 L234 28 L234 8 L16 8 Z" />
           </clipPath>

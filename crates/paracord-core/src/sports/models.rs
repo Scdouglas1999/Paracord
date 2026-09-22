@@ -284,6 +284,13 @@ pub struct GameDetail {
     pub football: Option<FootballDetail>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub baseball: Option<BaseballDetail>,
+    /// Quarter or inning totals. Null when the summary has no linescores.
+    pub line_score: Option<LineScore>,
+    pub leaders: Vec<Leader>,
+    pub probables: Vec<Probable>,
+    /// Player tables. Null when the summary has no box score.
+    #[serde(rename = "box")]
+    pub box_score: Option<BoxScore>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -407,12 +414,67 @@ pub struct Hit {
     pub trajectory: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LineScore {
+    pub periods: Vec<String>,
+    pub home: LineScoreTeam,
+    pub away: LineScoreTeam,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+pub struct LineScoreTeam {
+    pub periods: Vec<Option<i32>>,
+    pub total: Option<i32>,
+    pub hits: Option<i32>,
+    pub errors: Option<i32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Leader {
+    pub team_id: String,
+    pub category: String,
+    pub label: String,
+    pub athlete: Athlete,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Probable {
+    pub team_id: String,
+    pub athlete: Athlete,
+    pub role: String,
+    pub note: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct BoxScore {
+    pub home: Vec<BoxTable>,
+    pub away: Vec<BoxTable>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct BoxTable {
+    #[serde(rename = "type")]
+    pub table_type: String,
+    pub columns: Vec<String>,
+    pub rows: Vec<BoxRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct BoxRow {
+    pub athlete: Athlete,
+    pub position: Option<String>,
+    pub values: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Athlete {
     pub id: String,
     pub name: String,
     pub short_name: String,
     pub headshot: String,
+    /// Position abbreviation from the feed, or null when it gives none.
+    pub position: Option<String>,
 }
 
 #[cfg(test)]

@@ -14,8 +14,14 @@ import {
   hitArcLift,
   hitToField,
   losingSide,
+  driveChartSpan,
+  driveResultChip,
+  lineScoreLiveColumn,
+  lineScoreWinner,
   miniFieldBar,
   openingDriveId,
+  passArc,
+  scoreCall,
   pitchInFrame,
   pitchAnnouncement,
   pitchLabel,
@@ -418,5 +424,50 @@ describe('situation bug', () => {
     expect(situationBugText({ state: 'post', hideScores: true, awayAbbr: 'IND', homeAbbr: 'KC' })).toBe('Final. Scores hidden');
     expect(situationBugText({ state: 'post' })).toBe('Final');
     expect(situationBugText({ state: 'pre' })).toBe('Not started');
+  });
+});
+
+describe('line score', () => {
+  it('highlights the live period and names the leader', () => {
+    expect(lineScoreLiveColumn(2, 4, 'in')).toBe(1);
+    expect(lineScoreLiveColumn(2, 4, 'post')).toBe(-1);
+    expect(lineScoreLiveColumn(null, 4, 'in')).toBe(-1);
+    expect(lineScoreLiveColumn(5, 4, 'in')).toBe(-1);
+    expect(lineScoreWinner(27, 24)).toBe('home');
+    expect(lineScoreWinner(10, 14)).toBe('away');
+    expect(lineScoreWinner(7, 7)).toBeNull();
+  });
+});
+
+describe('drive chart geometry', () => {
+  it('draws a bar from the start yard toward the end yard', () => {
+    expect(driveChartSpan(25, 61)).toEqual({ x: 25, width: 36, pointsRight: true });
+    expect(driveChartSpan(80, 40)).toEqual({ x: 40, width: 40, pointsRight: false });
+    expect(driveChartSpan(100, 100)).toEqual({ x: 98.5, width: 1.5, pointsRight: true });
+    expect(driveChartSpan(null, 40)).toBeNull();
+  });
+
+  it('shortens the feed result onto a chip', () => {
+    expect(driveResultChip('Touchdown')).toBe('TD');
+    expect(driveResultChip('Field Goal')).toBe('FG');
+    expect(driveResultChip('Punt')).toBe('Punt');
+    expect(driveResultChip('Interception')).toBe('INT');
+    expect(driveResultChip('Fumble')).toBe('Fumble');
+    expect(driveResultChip('Turnover on downs')).toBe('Downs');
+    expect(driveResultChip('End of half')).toBe('End of half');
+    expect(driveResultChip('Kickoff')).toBeNull();
+  });
+});
+
+describe('pass arc', () => {
+  it('lifts the ball above the straight line', () => {
+    const arc = passArc(200, 260, 640);
+    expect(arc.d.startsWith('M200 260 Q')).toBe(true);
+    expect(arc.midY).toBeLessThan(260);
+    expect(arc.midX).toBe(420);
+    expect(scoreCall('Pass', true)).toBe('TOUCHDOWN');
+    expect(scoreCall('Field Goal', true)).toBe('FIELD GOAL');
+    expect(scoreCall('Safety', true)).toBeNull();
+    expect(scoreCall('Pass', false)).toBeNull();
   });
 });

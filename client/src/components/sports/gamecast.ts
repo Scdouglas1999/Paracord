@@ -561,6 +561,80 @@ export function winProbabilityText(
   return `${who} win probability started at ${first}% and ${tail}.`;
 }
 
+/** Column index to highlight, or -1 when the game is not live or the period is missing. */
+export function lineScoreLiveColumn(period: number | null, count: number, state: string): number {
+  if (state !== 'in' || period == null || period < 1 || period > count) return -1;
+  return period - 1;
+}
+
+/** Which total leads. A tie or a missing total has no winner. */
+export function lineScoreWinner(home: number | null, away: number | null): 'home' | 'away' | null {
+  if (home == null || away == null || home === away) return null;
+  return home > away ? 'home' : 'away';
+}
+
+export interface DriveChartSpan {
+  /** Left edge, yards from the home goal line. */
+  x: number;
+  /** Length in yards. A short gain still draws a sliver. */
+  width: number;
+  /** True when the drive moved toward the away goal, which is to the right. */
+  pointsRight: boolean;
+}
+
+/** Bar on a 100-yard strip. Null when the feed did not give both yard lines. */
+export function driveChartSpan(start: number | null, end: number | null): DriveChartSpan | null {
+  if (start == null || end == null || !Number.isFinite(start) || !Number.isFinite(end)) return null;
+  const a = clamp(start, 0, 100);
+  const b = clamp(end, 0, 100);
+  const width = Math.min(100, Math.max(1.5, Math.abs(b - a)));
+  return {
+    x: Math.min(Math.min(a, b), 100 - width),
+    width,
+    pointsRight: b >= a,
+  };
+}
+
+/** Short result for the chip at the end of a drive bar. Other results stay unlabeled. */
+export function driveResultChip(result: string | null | undefined): string | null {
+  const text = (result ?? '').trim().toLowerCase();
+  if (!text) return null;
+  if (text.includes('touchdown') || text === 'td') return 'TD';
+  if (text.includes('field goal') || text === 'fg') return 'FG';
+  if (text.includes('punt')) return 'Punt';
+  if (text.includes('interception') || text === 'int') return 'INT';
+  if (text.includes('fumble')) return 'Fumble';
+  if (text.includes('down')) return 'Downs';
+  if (text.includes('half')) return 'End of half';
+  return null;
+}
+
+export interface PassArc {
+  d: string;
+  midX: number;
+  midY: number;
+}
+
+/**
+ * A rising quadratic from the throw to the catch. The control point sits
+ * above the straight line so the ball climbs and comes back down.
+ */
+export function passArc(x1: number, y: number, x2: number): PassArc {
+  const lift = Math.max(36, Math.abs(x2 - x1) * 0.22);
+  const midX = (x1 + x2) / 2;
+  const midY = y - lift;
+  return { d: `M${x1} ${y} Q${midX} ${midY} ${x2} ${y}`, midX, midY };
+}
+
+/** The chip a scoring play drops on the field. A safety is not labeled as a touchdown. */
+export function scoreCall(type: string | null | undefined, scoring: boolean): 'TOUCHDOWN' | 'FIELD GOAL' | null {
+  if (!scoring) return null;
+  const text = (type ?? '').toLowerCase();
+  if (text.includes('safety')) return null;
+  if (text.includes('field goal') || text === 'fg') return 'FIELD GOAL';
+  return 'TOUCHDOWN';
+}
+
 /**
  * A live game follows the drive in progress (null). A finished or unstarted
  * game opens on the last scoring drive, or the last drive if nobody scored.

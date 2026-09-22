@@ -10,12 +10,15 @@ use serde_json::Value;
 
 use super::espn::{self, bool_field, dbl_field, int_field, loose_id, sanitize_logo, str_field};
 use super::models::{
-    AtBat, Athlete, BaseballDetail, Bases, FootballDetail, FootballDrive, FootballPlay, GameDetail,
-    Hit, Pitch, ScoringPlay, StrikeZone, WinPoint,
+    AtBat, Athlete, BaseballDetail, Bases, BoxRow, BoxScore, BoxTable, FootballDetail,
+    FootballDrive, FootballPlay, GameDetail, Hit, Leader, LineScore, LineScoreTeam, Pitch,
+    Probable, ScoringPlay, StrikeZone, WinPoint,
 };
 
 const MAX_WIN_POINTS: usize = 120;
 const MAX_AT_BATS: usize = 12;
+const MAX_LEADERS_PER_TEAM: usize = 3;
+const MAX_BOX_COLUMNS: usize = 6;
 
 pub(crate) fn parse(json: &str, league_path: &str) -> Result<GameDetail, String> {
     let root: Value = serde_json::from_str(json).map_err(|_| "invalid summary json".to_string())?;
@@ -23,8 +26,10 @@ pub(crate) fn parse(json: &str, league_path: &str) -> Result<GameDetail, String>
         .ok_or_else(|| "summary has no game".to_string())?;
     let kind = kind_of(league_path);
     let athletes = collect_athletes(&root);
-    let football = (kind == "football").then(|| football_detail(&root));
-    let baseball = (kind == "baseball").then(|| baseball_detail(&root, &athletes, &game.state));
+    let football_game = kind == "football";
+    let baseball_game = kind == "baseball";
+    let football = football_game.then(|| football_detail(&root));
+    let baseball = baseball_game.then(|| baseball_detail(&root, &athletes, &game.state));
     Ok(GameDetail {
         fetched_at: DateTime::<Utc>::UNIX_EPOCH,
         stale: false,
@@ -34,6 +39,14 @@ pub(crate) fn parse(json: &str, league_path: &str) -> Result<GameDetail, String>
         scoring_plays: scoring_plays(&root),
         football,
         baseball,
+        line_score: line_score(&root, football_game),
+        leaders: leaders(&root),
+        probables: if baseball_game {
+            probables(&root)
+        } else {
+            Vec::new()
+        },
+        box_score: box_score(&root, football_game),
     })
 }
 
@@ -636,6 +649,353 @@ fn score_field(value: &Value, name: &str) -> Option<i32> {
         .or_else(|| str_field(value, name).and_then(|text| text.trim().parse().ok()))
 }
 
+fn line_score(root: &Value, football: bool) -> Option<LineScore> {
+    let competitors = competition(root)?.get("competitors")?.as_array()?;
+    let mut home = LineScoreTeam::default();
+    let mut away = LineScoreTeam::default();
+    let mut saw_lines = false;
+    for competitor in competitors {
+        if !competitor.is_object() {
+            continue;
+        }
+        let Some(side) = str_field(competitor, "homeAway") else {
+            continue;
+        };
+        if competitor
+            .get("linescores")
+            .and_then(Value::as_array)
+            .is_some()
+        {
+            saw_lines = true;
+        }
+        let team = line_score_team(competitor);
+        if side.eq_ignore_ascii_case("home") {
+            home = team;
+        } else if side.eq_ignore_ascii_case("away") {
+            away = team;
+        }
+    }
+    let count = home.periods.len().max(away.periods.len());
+    if !saw_lines || count == 0 {
+        return None;
+    }
+    pad_periods(&mut home.periods, count);
+    pad_periods(&mut away.periods, count);
+    Some(LineScore {
+        periods: period_labels(count, football),
+        home,
+        away,
+    })
+}
+
+fn line_score_team(competitor: &Value) -> LineScoreTeam {
+    let mut periods = Vec::new();
+    if let Some(lines) = competitor.get("linescores").and_then(Value::as_array) {
+        for line in lines {
+            // A bad cell stays a null slot so the innings after it keep their place.
+            periods.push(line.get("displayValue").and_then(whole_number));
+        }
+    }
+    LineScoreTeam {
+        periods,
+        total: competitor.get("score").and_then(whole_number),
+        hits: competitor.get("hits").and_then(whole_number),
+        errors: competitor.get("errors").and_then(whole_number),
+    }
+}
+
+fn pad_periods(periods: &mut Vec<Option<i32>>, count: usize) {
+    periods.resize(count, None);
+}
+
+fn period_labels(count: usize, football: bool) -> Vec<String> {
+    (0..count)
+        .map(|index| {
+            let period = index + 1;
+            if football && period >= 5 {
+                if period == 5 {
+                    "OT".to_string()
+                } else {
+                    format!("{}OT", period - 4)
+                }
+            } else {
+                period.to_string()
+            }
+        })
+        .collect()
+}
+
+fn whole_number(value: &Value) -> Option<i32> {
+    match value {
+        Value::Number(number) => {
+            let number = number.as_f64()?;
+            if number.is_finite()
+                && number.fract() == 0.0
+                && (i32::MIN as f64..=i32::MAX as f64).contains(&number)
+            {
+                Some(number as i32)
+            } else {
+                None
+            }
+        }
+        Value::String(text) => text.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+fn leaders(root: &Value) -> Vec<Leader> {
+    let Some(blocks) = root.get("leaders").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for block in blocks {
+        if !block.is_object() {
+            continue;
+        }
+        let team_id = block.get("team").and_then(loose_id).unwrap_or_default();
+        let Some(categories) = block.get("leaders").and_then(Value::as_array) else {
+            continue;
+        };
+        let mut kept = 0;
+        for category in categories {
+            if kept >= MAX_LEADERS_PER_TEAM {
+                break;
+            }
+            if let Some(leader) = leader(category, &team_id) {
+                out.push(leader);
+                kept += 1;
+            }
+        }
+    }
+    out
+}
+
+fn leader(category: &Value, team_id: &str) -> Option<Leader> {
+    if !category.is_object() {
+        return None;
+    }
+    let row = category
+        .get("leaders")
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|row| row.is_object())?;
+    let athlete = row.get("athlete").and_then(athlete_from)?;
+    let value = str_field(row, "displayValue").filter(|text| !text.is_empty())?;
+    Some(Leader {
+        team_id: team_id.to_string(),
+        category: str_field(category, "name").unwrap_or_default(),
+        label: str_field(category, "displayName").unwrap_or_default(),
+        athlete,
+        value,
+    })
+}
+
+fn probables(root: &Value) -> Vec<Probable> {
+    let Some(competitors) = competition(root)
+        .and_then(|comp| comp.get("competitors"))
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for competitor in competitors {
+        if !competitor.is_object() {
+            continue;
+        }
+        let team_id = competitor
+            .get("team")
+            .and_then(loose_id)
+            .unwrap_or_default();
+        let Some(items) = competitor.get("probables").and_then(Value::as_array) else {
+            continue;
+        };
+        for item in items {
+            if let Some(probable) = probable(item, &team_id) {
+                out.push(probable);
+            }
+        }
+    }
+    out
+}
+
+fn probable(item: &Value, team_id: &str) -> Option<Probable> {
+    if !item.is_object() {
+        return None;
+    }
+    let athlete = item
+        .get("athlete")
+        .and_then(athlete_from)
+        .or_else(|| loose_id(item).map(blank_athlete))?;
+    Some(Probable {
+        team_id: team_id.to_string(),
+        athlete,
+        role: str_field(item, "abbreviation").unwrap_or_default(),
+        note: str_field(item, "note").unwrap_or_default(),
+    })
+}
+
+fn box_score(root: &Value, football: bool) -> Option<BoxScore> {
+    let players = root
+        .get("boxscore")
+        .and_then(|boxscore| boxscore.get("players"))
+        .and_then(Value::as_array)?;
+    let (home_id, away_id) = home_away_ids(root);
+    let mut home = Vec::new();
+    let mut away = Vec::new();
+    for side in players {
+        if !side.is_object() {
+            continue;
+        }
+        let tables = box_tables(side, football);
+        let team_id = side.get("team").and_then(loose_id);
+        if team_id.is_some() && team_id == home_id {
+            home = tables;
+        } else if team_id.is_some() && team_id == away_id {
+            away = tables;
+        }
+    }
+    Some(BoxScore { home, away })
+}
+
+fn home_away_ids(root: &Value) -> (Option<String>, Option<String>) {
+    let Some(competitors) = competition(root)
+        .and_then(|comp| comp.get("competitors"))
+        .and_then(Value::as_array)
+    else {
+        return (None, None);
+    };
+    let mut home = None;
+    let mut away = None;
+    for competitor in competitors {
+        let id = competitor.get("team").and_then(loose_id);
+        match str_field(competitor, "homeAway").as_deref() {
+            Some(side) if side.eq_ignore_ascii_case("home") => home = id,
+            Some(side) if side.eq_ignore_ascii_case("away") => away = id,
+            _ => {}
+        }
+    }
+    (home, away)
+}
+
+fn box_tables(side: &Value, football: bool) -> Vec<BoxTable> {
+    let Some(groups) = side.get("statistics").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    groups
+        .iter()
+        .filter_map(|group| box_table(group, football))
+        .collect()
+}
+
+fn box_table(group: &Value, football: bool) -> Option<BoxTable> {
+    if !group.is_object() {
+        return None;
+    }
+    let table_type = str_field(group, "name")
+        .filter(|text| !text.is_empty())
+        .or_else(|| str_field(group, "type").filter(|text| !text.is_empty()))?
+        .to_ascii_lowercase();
+    if football
+        && !matches!(
+            table_type.as_str(),
+            "passing" | "rushing" | "receiving" | "defensive"
+        )
+    {
+        return None;
+    }
+    let (columns, indexes) = box_columns(group);
+    if columns.is_empty() {
+        return None;
+    }
+    let mut rows = Vec::new();
+    if let Some(athletes) = group.get("athletes").and_then(Value::as_array) {
+        for row in athletes {
+            if let Some(row) = box_row(row, &indexes) {
+                rows.push(row);
+            }
+        }
+    }
+    if rows.is_empty() {
+        return None;
+    }
+    Some(BoxTable {
+        table_type,
+        columns,
+        rows,
+    })
+}
+
+fn box_columns(group: &Value) -> (Vec<String>, Vec<usize>) {
+    let labels = group
+        .get("names")
+        .filter(|value| value.as_array().is_some_and(|items| !items.is_empty()))
+        .or_else(|| group.get("labels"))
+        .and_then(Value::as_array);
+    let Some(labels) = labels else {
+        return (Vec::new(), Vec::new());
+    };
+    let mut columns = Vec::new();
+    let mut indexes = Vec::new();
+    for (index, label) in labels.iter().enumerate() {
+        if columns.len() == MAX_BOX_COLUMNS {
+            break;
+        }
+        if let Some(text) = label.as_str().filter(|text| !text.is_empty()) {
+            columns.push(text.to_string());
+            indexes.push(index);
+        }
+    }
+    (columns, indexes)
+}
+
+fn box_row(row: &Value, indexes: &[usize]) -> Option<BoxRow> {
+    if !row.is_object() {
+        return None;
+    }
+    let athlete = row.get("athlete").and_then(athlete_from)?;
+    let stats = row.get("stats").and_then(Value::as_array);
+    let values = indexes
+        .iter()
+        .map(|index| {
+            stats
+                .and_then(|items| items.get(*index))
+                .map(stat_text)
+                .unwrap_or_default()
+        })
+        .collect();
+    Some(BoxRow {
+        athlete,
+        position: row.get("position").and_then(abbreviation),
+        values,
+    })
+}
+
+fn stat_text(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        Value::Number(number) => number.to_string(),
+        _ => String::new(),
+    }
+}
+
+fn abbreviation(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) if !text.is_empty() => Some(text.clone()),
+        Value::Object(_) => str_field(value, "abbreviation").filter(|text| !text.is_empty()),
+        _ => None,
+    }
+}
+
+fn blank_athlete(id: String) -> Athlete {
+    Athlete {
+        id,
+        name: String::new(),
+        short_name: String::new(),
+        headshot: String::new(),
+        position: None,
+    }
+}
+
 /// Live state lives on the summary root. Older payloads nest it under the header.
 fn summary_situation(root: &Value) -> Option<&Value> {
     root.get("situation")
@@ -712,8 +1072,12 @@ fn remember(index: &mut HashMap<String, Athlete>, raw: &Value) {
     let Some(athlete) = athlete_from(raw) else {
         return;
     };
-    match index.get(&athlete.id) {
-        Some(existing) if !existing.name.is_empty() => {}
+    match index.get_mut(&athlete.id) {
+        Some(existing) if !existing.name.is_empty() => {
+            if existing.position.is_none() {
+                existing.position = athlete.position;
+            }
+        }
         _ => {
             index.insert(athlete.id.clone(), athlete);
         }
@@ -738,16 +1102,15 @@ fn athlete_from(raw: &Value) -> Option<Athlete> {
         name,
         short_name,
         headshot,
+        position: raw.get("position").and_then(abbreviation),
     })
 }
 
 fn resolve(id: &str, index: &HashMap<String, Athlete>) -> Athlete {
-    index.get(id).cloned().unwrap_or(Athlete {
-        id: id.to_string(),
-        name: String::new(),
-        short_name: String::new(),
-        headshot: String::new(),
-    })
+    index
+        .get(id)
+        .cloned()
+        .unwrap_or_else(|| blank_athlete(id.to_string()))
 }
 
 fn str_field_value(value: &Value) -> Option<String> {
@@ -984,6 +1347,10 @@ mod tests {
         assert!(detail.baseball.is_none());
         assert!(detail.win_probability.is_empty());
         assert!(detail.scoring_plays.is_empty());
+        assert!(detail.line_score.is_none());
+        assert!(detail.leaders.is_empty());
+        assert!(detail.probables.is_empty());
+        assert!(detail.box_score.is_none());
 
         let mut points = Vec::new();
         for index in 0..121 {
@@ -1001,6 +1368,179 @@ mod tests {
         assert!((detail.win_probability[0].home_pct).abs() < 0.001);
         assert!((detail.win_probability[119].home_pct - 100.0).abs() < 0.001);
         assert!(detail.football.as_ref().unwrap().drives.is_empty());
+    }
+
+    #[test]
+    fn line_score_leaders_and_box_come_from_both_fixtures() {
+        let nfl = parse(include_str!("fixtures/nfl_summary.json"), "football/nfl").unwrap();
+        let line = nfl.line_score.as_ref().unwrap();
+        assert_eq!(line.periods, ["1", "2", "3", "4", "OT"]);
+        assert_eq!(
+            line.home.periods,
+            [Some(10), Some(7), Some(7), Some(3), Some(6)]
+        );
+        assert_eq!(line.home.total, Some(33));
+        assert!(line.home.hits.is_none());
+        assert!(line.home.errors.is_none());
+        assert_eq!(
+            line.away.periods,
+            [Some(7), Some(13), Some(0), Some(7), Some(3)]
+        );
+        assert_eq!(line.away.total, Some(30));
+        assert_eq!(
+            nfl.leaders
+                .iter()
+                .map(|leader| (leader.team_id.as_str(), leader.category.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("12", "passingYards"),
+                ("12", "rushingYards"),
+                ("11", "passingYards"),
+                ("11", "rushingYards"),
+            ]
+        );
+        let mahomes = &nfl.leaders[0];
+        assert_eq!(mahomes.label, "Passing Yards");
+        assert_eq!(mahomes.value, "32/47, 382 YDS, 3 TD");
+        assert_eq!(mahomes.athlete.name, "Patrick Mahomes");
+        assert_eq!(mahomes.athlete.short_name, "P. Mahomes");
+        assert_eq!(mahomes.athlete.position.as_deref(), Some("QB"));
+        assert!(nfl.probables.is_empty());
+        let football_box = nfl.box_score.as_ref().unwrap();
+        assert_eq!(
+            football_box
+                .home
+                .iter()
+                .map(|table| table.table_type.as_str())
+                .collect::<Vec<_>>(),
+            ["passing", "rushing", "receiving", "defensive"]
+        );
+        assert_eq!(
+            football_box.home[0].columns,
+            ["C/ATT", "YDS", "AVG", "TD", "INT", "SACKS"]
+        );
+        assert_eq!(
+            football_box.home[0].rows[0].values,
+            ["32/47", "382", "8.1", "3", "0", "2-11"]
+        );
+        assert!(football_box.home[0].rows[0].athlete.position.is_none());
+        assert_eq!(
+            football_box.home[1].rows.len(),
+            2,
+            "the bad rushing row is skipped"
+        );
+        assert_eq!(
+            football_box.home[1].rows[0].athlete.name,
+            "Kenneth Walker III"
+        );
+        assert_eq!(football_box.away[0].rows[0].athlete.name, "Daniel Jones");
+        let nfl_wire = serde_json::to_value(&nfl).unwrap();
+        assert!(nfl_wire.get("box").is_some());
+        assert!(nfl_wire.get("box_score").is_none());
+        assert_eq!(nfl_wire["line_score"]["periods"][4], "OT");
+        assert_eq!(nfl_wire["leaders"][0]["athlete"]["position"], "QB");
+
+        let mlb = parse(include_str!("fixtures/mlb_summary.json"), "baseball/mlb").unwrap();
+        let line = mlb.line_score.as_ref().unwrap();
+        assert_eq!(line.periods, ["1", "2", "3", "4", "5", "6", "7", "8", "9"]);
+        assert_eq!(
+            line.home.periods,
+            [
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(1),
+                Some(1),
+                Some(0),
+                Some(0)
+            ]
+        );
+        assert_eq!(line.home.total, Some(2));
+        assert_eq!(line.home.hits, Some(10));
+        assert_eq!(line.home.errors, Some(0));
+        assert_eq!(line.away.total, Some(7));
+        assert_eq!(line.away.hits, Some(7));
+        assert_eq!(line.away.errors, Some(0));
+        assert!(
+            mlb.leaders.is_empty(),
+            "the captured MLB summary has no leaders"
+        );
+        assert_eq!(mlb.probables.len(), 2, "the bad probable is skipped");
+        assert_eq!(mlb.probables[0].team_id, "21");
+        assert_eq!(mlb.probables[0].athlete.name, "Jonah Tong");
+        assert_eq!(mlb.probables[0].athlete.position.as_deref(), Some("SP"));
+        assert_eq!(mlb.probables[0].role, "SP");
+        assert_eq!(mlb.probables[0].note, "");
+        assert_eq!(mlb.probables[1].athlete.short_name, "C. Sanchez");
+        let baseball_box = mlb.box_score.as_ref().unwrap();
+        assert_eq!(baseball_box.home[0].table_type, "batting");
+        assert_eq!(
+            baseball_box.home[0].columns,
+            ["H-AB", "AB", "R", "H", "RBI", "HR"]
+        );
+        assert_eq!(
+            baseball_box.home[0].rows[0].athlete.name,
+            "Francisco Lindor"
+        );
+        assert_eq!(baseball_box.home[0].rows[0].position.as_deref(), Some("SS"));
+        assert_eq!(
+            baseball_box.away[0].rows.len(),
+            2,
+            "the batter without an id is skipped"
+        );
+        assert_eq!(baseball_box.away[0].rows[0].athlete.name, "Kyle Schwarber");
+        assert_eq!(baseball_box.away[0].rows[0].position.as_deref(), Some("DH"));
+        let pitching = &baseball_box.away[1];
+        assert_eq!(pitching.table_type, "pitching");
+        assert_eq!(pitching.rows[0].position.as_deref(), Some("P"));
+        assert_eq!(pitching.rows[0].athlete.position.as_deref(), Some("SP"));
+        assert_eq!(pitching.columns.len(), 6);
+        assert_eq!(pitching.rows[0].values.len(), 6);
+        let mlb_wire = serde_json::to_value(&mlb).unwrap();
+        assert!(mlb_wire["leaders"].as_array().unwrap().is_empty());
+        assert_eq!(mlb_wire["probables"][0]["note"], "");
+        assert_eq!(mlb_wire["probables"][0]["role"], "SP");
+        assert!(mlb_wire["line_score"]["away"]["hits"].is_number());
+    }
+
+    #[test]
+    fn a_bad_leader_or_column_does_not_drop_the_rest() {
+        let detail = parse(
+            r#"{"header":{"id":"1","competitions":[{"date":"2026-09-22T00:00:00Z","competitors":[{"homeAway":"home","score":"6","hits":1,"team":{"id":"12","abbreviation":"H","displayName":"Home"},"linescores":[{"displayValue":"3"},{"displayValue":"X"},"bad",{"displayValue":"3"}]},{"homeAway":"away","score":"0","team":{"id":"11","abbreviation":"A","displayName":"Away"},"linescores":[{"displayValue":"0"}]}],"status":{"type":{"state":"post","shortDetail":"Final"}}}]},"leaders":[{"team":{"id":"12"},"leaders":["nope",{"name":"passingYards","displayName":"Passing Yards","leaders":[{"displayValue":"1","athlete":{"id":"1","displayName":"A"}}]},{"name":"rushingYards","displayName":"Rushing Yards","leaders":[]},{"name":"receivingYards","displayName":"Receiving Yards","leaders":[{"displayValue":"2","athlete":{"id":"2","displayName":"B"}}]},{"name":"sacks","displayName":"Sacks","leaders":[{"displayValue":"3","athlete":{}}]},{"name":"totalTackles","displayName":"Tackles","leaders":[{"displayValue":"4","athlete":{"id":"4","displayName":"D"}}]},{"name":"interceptions","displayName":"Interceptions","leaders":[{"displayValue":"5","athlete":{"id":"5","displayName":"E"}}]}]}],"boxscore":{"players":[{"team":{"id":"12"},"statistics":["bad-table",{"name":"fumbles","labels":["FUM"],"athletes":[{"athlete":{"id":"9","displayName":"Fumble"},"stats":["1"]}]},{"name":"passing","labels":["C/ATT","YDS",7,"TD","INT","SACKS","QBR","RTG"],"athletes":["bad-row",{"athlete":{"id":"1","displayName":"A"},"stats":["10","20","30","40","50","60","70","80"]}]}]}]}}"#,
+            "football/nfl",
+        )
+        .unwrap();
+        let line = detail.line_score.as_ref().unwrap();
+        assert_eq!(line.periods, ["1", "2", "3", "4"]);
+        assert_eq!(
+            line.home.periods,
+            [Some(3), None, None, Some(3)],
+            "a bad cell and a non-integer stay null without shifting the rest"
+        );
+        assert_eq!(line.away.periods, [Some(0), None, None, None]);
+        assert_eq!(line.home.total, Some(6));
+        assert_eq!(
+            detail
+                .leaders
+                .iter()
+                .map(|leader| leader.category.as_str())
+                .collect::<Vec<_>>(),
+            ["passingYards", "receivingYards", "totalTackles"]
+        );
+        let tables = &detail.box_score.as_ref().unwrap().home;
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].table_type, "passing");
+        assert_eq!(
+            tables[0].columns,
+            ["C/ATT", "YDS", "TD", "INT", "SACKS", "QBR"]
+        );
+        assert_eq!(tables[0].rows.len(), 1);
+        assert_eq!(
+            tables[0].rows[0].values,
+            ["10", "20", "40", "50", "60", "70"]
+        );
     }
 
     #[test]

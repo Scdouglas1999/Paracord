@@ -4,6 +4,7 @@ import {
   FIELD,
   fieldPoint,
   firstDownYard,
+  passArc,
   playStroke,
   redZoneYards,
   teamPaint,
@@ -43,6 +44,9 @@ export function FootballField({
   playIndex,
   label,
   notice,
+  scoreCall = null,
+  scoreSide = null,
+  scorePaint = null,
   flat,
   bugText,
 }: {
@@ -57,6 +61,9 @@ export function FootballField({
   playIndex: number;
   label: string;
   notice: string | null;
+  scoreCall?: 'TOUCHDOWN' | 'FIELD GOAL' | null;
+  scoreSide?: 'left' | 'right' | null;
+  scorePaint?: string | null;
   flat: boolean;
   bugText: string;
 }) {
@@ -102,6 +109,14 @@ export function FootballField({
               <circle cx="3" cy="4" r="1.15" fill="var(--sports-chalk)" opacity="0.45" />
               <circle cx="11" cy="7" r="0.9" fill="var(--sports-chalk)" opacity="0.28" />
             </pattern>
+            <linearGradient id={`${uid}-tiers`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stopColor="var(--sports-chalk)" stopOpacity="0.22" />
+              <stop offset="1" stopColor="var(--sports-stadium)" stopOpacity="0" />
+            </linearGradient>
+            <filter id={`${uid}-crowdnoise`} x="0" y="0" width="100%" height="100%">
+              <feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="2" seed="7" />
+              <feColorMatrix type="saturate" values="0" />
+            </filter>
             <linearGradient id={`${uid}-vignette`} x1="0" y1="0" x2="0" y2="1">
               <stop offset="0" stopColor="var(--sports-stadium)" stopOpacity="0.45" />
               <stop offset="0.35" stopColor="var(--sports-stadium)" stopOpacity="0" />
@@ -120,12 +135,19 @@ export function FootballField({
               fill={index % 2 === 0 ? 'var(--sports-turf-alt)' : 'var(--sports-turf)'}
             />
           ))}
-          <rect width={FIELD.width} height="60" fill="var(--sports-sideline)" />
-          <rect width={FIELD.width} height="28" fill="var(--sports-stadium)" />
-          <rect width={FIELD.width} height="28" fill={`url(#${uid}-crowd)`} />
+          <g aria-hidden>
+            <rect width={FIELD.width} height="20" fill="var(--sports-stadium)" opacity="0.42" />
+            <rect y="20" width={FIELD.width} height="20" fill="var(--sports-stadium)" opacity="0.68" />
+            <rect y="40" width={FIELD.width} height="20" fill="var(--sports-stadium)" />
+            <rect width={FIELD.width} height="60" fill={`url(#${uid}-tiers)`} />
+            <rect width={FIELD.width} height="60" fill={`url(#${uid}-crowd)`} />
+            <rect width={FIELD.width} height="60" filter={`url(#${uid}-crowdnoise)`} opacity="0.28" />
+            <circle cx="52" cy="16" r="26" fill="var(--sports-chalk)" opacity="0.28" />
+            <circle cx={FIELD.width - 52} cy="16" r="26" fill="var(--sports-chalk)" opacity="0.28" />
+          </g>
           <rect y={FIELD.height - 60} width={FIELD.width} height="60" fill="var(--sports-sideline)" />
-          <EndZone x={0} paint={homePaint} abbr={home.abbr} vignette={`${uid}-vignette`} />
-          <EndZone x={FIELD.width - FIELD.endzone} paint={awayPaint} abbr={away.abbr} vignette={`${uid}-vignette`} />
+          <EndZone x={0} paint={homePaint} abbr={home.abbr} vignette={`${uid}-vignette`} pulse={scoreSide === 'left'} pulseFill={scorePaint} />
+          <EndZone x={FIELD.width - FIELD.endzone} paint={awayPaint} abbr={away.abbr} vignette={`${uid}-vignette`} pulse={scoreSide === 'right'} pulseFill={scorePaint} />
           {zone && (
             <rect
               x={yardsToFieldX(zone.from)}
@@ -181,6 +203,7 @@ export function FootballField({
             const x2 = yardsToFieldX(play.end_yard);
             const fade = shown.length <= 1 ? 1 : 0.28 + (0.72 * index) / (shown.length - 1);
             const lane = CHAIN_Y + (index % 2 === 0 ? -11 : 11);
+            const arc = current && style === 'dashed' ? passArc(x1, lane, x2) : null;
             return (
               <g key={play.id} opacity={fade}>
                 <line
@@ -193,16 +216,27 @@ export function FootballField({
                   strokeLinecap="round"
                   opacity="0.35"
                 />
-                <line
-                  x1={x1}
-                  x2={x2}
-                  y1={lane}
-                  y2={lane}
-                  stroke={strokeColor(style, paint.fill)}
-                  strokeWidth={current ? 6 : 4}
-                  strokeLinecap="round"
-                  strokeDasharray={STROKE[style]}
-                />
+                {arc ? (
+                  <path
+                    d={arc.d}
+                    fill="none"
+                    stroke={strokeColor(style, paint.fill)}
+                    strokeWidth="6"
+                    strokeLinecap="round"
+                    strokeDasharray={STROKE.dashed}
+                  />
+                ) : (
+                  <line
+                    x1={x1}
+                    x2={x2}
+                    y1={lane}
+                    y2={lane}
+                    stroke={strokeColor(style, paint.fill)}
+                    strokeWidth={current ? 6 : 4}
+                    strokeLinecap="round"
+                    strokeDasharray={STROKE[style]}
+                  />
+                )}
                 <circle cx={x2} cy={lane} r={current ? 9 : 6.5} fill={paint.fill} />
                 {current && (
                   <circle cx={x2} cy={lane} r="14" fill="none" stroke="var(--sports-chalk)" strokeWidth="2" />
@@ -261,15 +295,10 @@ export function FootballField({
         <GoalPost side="right" />
         <div className="pc-sports-field-overlay" aria-hidden>
           {placed && (
-            <div
-              className="pc-sports-marker"
-              style={{
-                ['--nx' as string]: String(placed.x / FIELD.width),
-                ['--ny' as string]: String(((shown.length === 0 ? CHAIN_Y : CHAIN_Y + ((shown.length - 1) % 2 === 0 ? -11 : 11)) + 22) / FIELD.height),
-              }}
-            >
-              <span key={placed.x} className="pc-sports-football is-pulse" />
-            </div>
+            <BallMarker shown={shown} placedX={placed.x} />
+          )}
+          {scoreCall && (
+            <span className="pc-sports-scorecall">{scoreCall}</span>
           )}
           {notice && placed && (
             <div
@@ -284,10 +313,35 @@ export function FootballField({
           )}
         </div>
       </div>
-      <div className="pc-sports-bug" aria-hidden>
+      <div className={notice === 'Turnover' ? 'pc-sports-bug is-turnover' : 'pc-sports-bug'} aria-hidden>
         {live && <TeamMark team={possession} />}
         <span className="pc-mono">{bugText}</span>
       </div>
+    </div>
+  );
+}
+
+function BallMarker({ shown, placedX }: { shown: FootballPlay[]; placedX: number }) {
+  const last = shown[shown.length - 1];
+  const lane = shown.length === 0 ? CHAIN_Y : CHAIN_Y + ((shown.length - 1) % 2 === 0 ? -11 : 11);
+  const flight = last && playStroke(last.type) === 'dashed' && last.start_yard != null && last.end_yard != null
+    ? passArc(yardsToFieldX(last.start_yard), lane, yardsToFieldX(last.end_yard))
+    : null;
+  const ny = (lane + 22) / FIELD.height;
+  return (
+    <div
+      key={last?.id ?? 'ball'}
+      className={flight ? 'pc-sports-marker is-arc' : 'pc-sports-marker'}
+      style={{
+        ['--nx' as string]: String(placedX / FIELD.width),
+        ['--ny' as string]: String(ny),
+        ['--ax' as string]: flight ? String(yardsToFieldX(last?.start_yard ?? 0) / FIELD.width) : undefined,
+        ['--ay' as string]: flight ? String(lane / FIELD.height) : undefined,
+        ['--mx' as string]: flight ? String(flight.midX / FIELD.width) : undefined,
+        ['--my' as string]: flight ? String(flight.midY / FIELD.height) : undefined,
+      }}
+    >
+      <span className="pc-sports-football is-pulse" />
     </div>
   );
 }
@@ -297,16 +351,27 @@ function EndZone({
   paint,
   abbr,
   vignette,
+  pulse,
+  pulseFill,
 }: {
   x: number;
   paint: TeamPaint;
   abbr: string;
   vignette: string;
+  pulse?: boolean;
+  pulseFill?: string | null;
 }) {
   return (
     <g>
       <rect x={x} width={FIELD.endzone} height={FIELD.height} fill="var(--sports-turf)" />
-      <rect x={x} width={FIELD.endzone} height={FIELD.height} fill={paint.fill} opacity="0.78" />
+      <rect
+        x={x}
+        width={FIELD.endzone}
+        height={FIELD.height}
+        fill={pulse && pulseFill ? pulseFill : paint.fill}
+        opacity="0.78"
+        className={pulse ? 'pc-sports-endzone-pulse' : undefined}
+      />
       <rect x={x} width={FIELD.endzone} height={FIELD.height} fill={`url(#${vignette})`} />
       <rect x={x + 3} y="3" width={FIELD.endzone - 6} height={FIELD.height - 6} fill="none" stroke="var(--sports-chalk)" strokeWidth="1.5" />
       <text

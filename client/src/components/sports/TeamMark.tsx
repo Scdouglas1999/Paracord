@@ -38,13 +38,19 @@ export function TeamMark({ team, size = 'md' }: { team: SportsTeam; size?: 'md' 
   );
 }
 
-export function AthleteMark({ athlete }: { athlete: SportsAthlete | null | undefined }) {
+export function AthleteMark({
+  athlete,
+  size = 'md',
+}: {
+  athlete: SportsAthlete | null | undefined;
+  size?: 'sm' | 'md' | 'lg';
+}) {
   const [failed, setFailed] = useState(false);
   const src = !failed ? espnImage(athlete?.headshot) : null;
   const letter = (athlete?.short_name || athlete?.name || '').trim().slice(0, 1).toUpperCase();
   if (!src && !letter) return null;
   return (
-    <span className="pc-sports-headshot" aria-hidden>
+    <span className={cn('pc-sports-headshot', size === 'sm' && 'is-sm', size === 'lg' && 'is-lg')} aria-hidden>
       {src ? (
         <img
           src={src}
