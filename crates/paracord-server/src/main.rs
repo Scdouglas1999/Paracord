@@ -539,6 +539,15 @@ async fn main() -> Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("Failed to run {} migrations: {}", db_engine.as_str(), e))?;
 
+    // Servers from before uploaded banners kept theirs inside the hub settings
+    // as a data URL. Turn each into a real banner before anything reads them.
+    let converted = paracord_api::convert_legacy_hub_banners(&db, &config.storage.path)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to convert old server banners: {e}"))?;
+    if converted > 0 {
+        tracing::info!("Converted {converted} old server banner(s) to uploaded banners");
+    }
+
     // ── First-owner claim ───────────────────────────────────────────────────
     // Decided before anything can serve a request: while the instance is
     // unclaimed the API refuses every registration, so the bootstrap token has

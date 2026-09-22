@@ -321,6 +321,41 @@ pub async fn set_guild_banner_hash(
     Ok(row)
 }
 
+/// Servers whose hub settings may still carry the old data-URL banner:
+/// `(id, banner_hash, hub_settings)`. A text match is enough to narrow the scan;
+/// the caller parses the JSON.
+pub async fn list_guilds_with_legacy_hub_banner(
+    pool: &DbPool,
+) -> Result<Vec<(i64, Option<String>, String)>, DbError> {
+    let rows = sqlx::query(
+        "SELECT id, banner_hash, hub_settings FROM spaces
+         WHERE hub_settings IS NOT NULL AND hub_settings LIKE '%\"banner_hash\"%'",
+    )
+    .fetch_all(pool)
+    .await?;
+    rows.iter()
+        .map(|row| {
+            Ok((
+                row.try_get::<i64, _>("id")?,
+                row.try_get::<Option<String>, _>("banner_hash")?,
+                row.try_get::<String, _>("hub_settings")?,
+            ))
+        })
+        .collect::<Result<Vec<_>, sqlx::Error>>()
+        .map_err(DbError::from)
+}
+
+/// Replace a server's hub settings JSON outright.
+pub async fn set_hub_settings(pool: &DbPool, id: i64, hub_settings: &str) -> Result<(), DbError> {
+    sqlx::query("UPDATE spaces SET hub_settings = $2, updated_at = $3 WHERE id = $1")
+        .bind(id)
+        .bind(hub_settings)
+        .bind(datetime_to_db_text(Utc::now()))
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Set or clear the vanity URL code for a guild. Pass `None` to clear it.
 /// Core implementation using newtype ID.
 pub async fn update_vanity_url(

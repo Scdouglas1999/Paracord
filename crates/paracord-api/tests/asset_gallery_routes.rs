@@ -662,29 +662,6 @@ async fn server_list_carries_the_banner_and_the_hub_keeps_none() -> anyhow::Resu
 }
 
 #[tokio::test]
-async fn hub_banner_migration_drops_only_the_banner() -> anyhow::Result<()> {
-    let ctx = TestContext::new().await?;
-    let guild_id = create_guild(&ctx, "Old Hub").await?;
-    sqlx::query("UPDATE spaces SET hub_settings = $2 WHERE id = $1")
-        .bind(guild_id)
-        .bind(r#"{"welcome_text":"Hi","banner_hash":"data:image/png;base64,AAAA"}"#)
-        .execute(&ctx.db)
-        .await?;
-    sqlx::raw_sql(include_str!(
-        "../../paracord-db/migrations/20260923000202_drop_hub_banner.sql"
-    ))
-    .execute(&ctx.db)
-    .await?;
-    let stored: String = sqlx::query_scalar("SELECT hub_settings FROM spaces WHERE id = $1")
-        .bind(guild_id)
-        .fetch_one(&ctx.db)
-        .await?;
-    let stored: Value = serde_json::from_str(&stored)?;
-    assert_eq!(stored, json!({ "welcome_text": "Hi" }));
-    Ok(())
-}
-
-#[tokio::test]
 async fn link_pages_resume_where_the_last_one_stopped() -> anyhow::Result<()> {
     let ctx = TestContext::new().await?;
     let guild_id = create_guild(&ctx, "Links Guild").await?;
@@ -731,6 +708,81 @@ async fn link_pages_resume_where_the_last_one_stopped() -> anyhow::Result<()> {
             .rev()
             .map(|index| format!("https://example.com/{index}"))
             .collect::<Vec<_>>()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn old_hub_banners_become_uploaded_banners() -> anyhow::Result<()> {
+    use base64::Engine;
+
+    let ctx = TestContext::new().await?;
+    let storage = ctx._test_app.state.config.storage_path.clone();
+    let with_old = create_guild(&ctx, "Old hub banner").await?;
+    let already_uploaded = create_guild(&ctx, "Has an upload").await?;
+    let not_an_image = create_guild(&ctx, "Broken hub banner").await?;
+
+    let data_url = format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(PNG_1X1)
+    );
+    let hub = |banner: &str| json!({ "welcome": "hi", "banner_hash": banner }).to_string();
+    paracord_db::guilds::set_hub_settings(&ctx.db, with_old, &hub(&data_url)).await?;
+    paracord_db::guilds::set_hub_settings(&ctx.db, already_uploaded, &hub(&data_url)).await?;
+    paracord_db::guilds::set_guild_banner_hash(
+        &ctx.db,
+        already_uploaded,
+        Some("/api/v1/guilds/1/banner?v=1"),
+    )
+    .await?;
+    paracord_db::guilds::set_hub_settings(
+        &ctx.db,
+        not_an_image,
+        &hub("data:text/plain;base64,aGk="),
+    )
+    .await?;
+
+    let converted = paracord_api::convert_legacy_hub_banners(&ctx.db, &storage).await?;
+    assert_eq!(converted, 1);
+
+    let row = paracord_db::guilds::get_guild(&ctx.db, with_old)
+        .await?
+        .context("guild")?;
+    let banner = row.banner_hash.context("converted banner")?;
+    assert!(banner.starts_with(&format!("/api/v1/guilds/{with_old}/banner?v=")));
+    let stored = std::path::Path::new(&storage)
+        .join("guild-banners")
+        .join(format!("{with_old}.png"));
+    assert_eq!(std::fs::read(stored)?, PNG_1X1);
+    let hub_after: Value = serde_json::from_str(row.hub_settings.as_deref().context("hub")?)?;
+    assert!(hub_after.get("banner_hash").is_none());
+    assert_eq!(hub_after["welcome"], "hi");
+
+    let kept = paracord_db::guilds::get_guild(&ctx.db, already_uploaded)
+        .await?
+        .context("guild")?;
+    assert_eq!(
+        kept.banner_hash.as_deref(),
+        Some("/api/v1/guilds/1/banner?v=1")
+    );
+    assert!(!kept
+        .hub_settings
+        .unwrap_or_default()
+        .contains("banner_hash"));
+
+    let broken = paracord_db::guilds::get_guild(&ctx.db, not_an_image)
+        .await?
+        .context("guild")?;
+    assert!(broken.banner_hash.is_none());
+    assert!(!broken
+        .hub_settings
+        .unwrap_or_default()
+        .contains("banner_hash"));
+
+    // Nothing left to do on the next start.
+    assert_eq!(
+        paracord_api::convert_legacy_hub_banners(&ctx.db, &storage).await?,
+        0
     );
     Ok(())
 }

@@ -40,6 +40,7 @@ pub mod secure_tokens;
 
 /// Live counts of the connections this server holds open by design, read by the
 /// shutdown path when its drain deadline expires.
+pub use routes::banners::convert_legacy_hub_banners;
 pub use routes::livekit_proxy::live_voice_signaling_count;
 pub use routes::realtime::live_stream_count;
 

@@ -178,3 +178,76 @@ pub(crate) async fn serve_banner(
     }
     Err(ApiError::NotFound)
 }
+
+/// Before 3.2 a server's banner lived inside its hub settings as an image data
+/// URL. Move each one into an uploaded banner so no server loses its picture,
+/// then drop the data URL from the hub settings. Runs at startup; a second run
+/// finds nothing to do.
+///
+/// A server that already has an uploaded banner keeps it (it replaced the old
+/// one). A data URL that is not a PNG, JPEG, GIF or WebP image under 8 MB was
+/// never drawn by any client, so it is dropped and logged.
+///
+/// Returns how many banners were converted.
+pub async fn convert_legacy_hub_banners(
+    db: &paracord_db::DbPool,
+    storage_path: &str,
+) -> anyhow::Result<usize> {
+    use base64::Engine;
+
+    let mut converted = 0;
+    for (guild_id, banner_hash, raw) in
+        paracord_db::guilds::list_guilds_with_legacy_hub_banner(db).await?
+    {
+        let Ok(serde_json::Value::Object(mut hub)) = serde_json::from_str(&raw) else {
+            continue;
+        };
+        let Some(legacy) = hub.remove("banner_hash") else {
+            continue;
+        };
+        if banner_hash.is_none() {
+            let image = legacy
+                .as_str()
+                .and_then(|url| url.strip_prefix("data:"))
+                .and_then(|rest| rest.split_once(','))
+                .filter(|(meta, _)| meta.starts_with("image/") && meta.ends_with(";base64"))
+                .and_then(|(meta, data)| {
+                    let bytes = base64::engine::general_purpose::STANDARD
+                        .decode(data.trim())
+                        .ok()?;
+                    Some((meta.trim_end_matches(";base64").to_string(), bytes))
+                })
+                .filter(|(_, bytes)| !bytes.is_empty() && bytes.len() <= MAX_BANNER_IMAGE_SIZE);
+            match image {
+                Some((content_type, bytes)) => {
+                    match store_banner(
+                        storage_path,
+                        BannerOwner::Guild,
+                        guild_id,
+                        &bytes,
+                        Some(&content_type),
+                    )
+                    .await
+                    {
+                        Ok(path) => {
+                            paracord_db::guilds::set_guild_banner_hash(db, guild_id, Some(&path))
+                                .await?;
+                            converted += 1;
+                        }
+                        Err(err) => tracing::warn!(
+                            guild_id,
+                            "dropping an old hub banner that is not a usable image: {err:?}"
+                        ),
+                    }
+                }
+                None => tracing::warn!(
+                    guild_id,
+                    "dropping an old hub banner that is not an image data URL under 8 MB"
+                ),
+            }
+        }
+        let hub = serde_json::to_string(&serde_json::Value::Object(hub))?;
+        paracord_db::guilds::set_hub_settings(db, guild_id, &hub).await?;
+    }
+    Ok(converted)
+}
