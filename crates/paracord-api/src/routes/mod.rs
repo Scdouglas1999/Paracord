@@ -35,6 +35,7 @@ pub mod reminders;
 pub mod reports;
 pub mod roles;
 pub mod security;
+pub mod server_feed;
 pub mod setup;
 pub mod sports;
 pub mod sports_announce;

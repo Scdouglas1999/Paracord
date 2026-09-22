@@ -6,6 +6,8 @@ import { guildApi } from '../../api/guilds';
 import { extractApiError } from '../../api/client';
 import { Button, Divider, Input, Textarea } from '../ui';
 import { SectionHeader, FieldLabel, GroupLabel, ToggleRow } from './SettingsPrimitives';
+import { HomePageSettings } from '../rooms/lobby/widgets/HomePageSettings';
+import { readHomeWidgets, type HomeWidgetSetting } from '../rooms/lobby/widgets/widgetConfig';
 
 type VisibilityMode = 'private' | 'public' | 'roles';
 
@@ -38,6 +40,7 @@ export function ServerHubSettings({ guild, channels, roles = [], onUpdate, setEr
     );
     const [discoveryTags, setDiscoveryTags] = useState((guild.discovery_tags || []).join(', '));
     const [allowedRoleIds, setAllowedRoleIds] = useState<string[]>(guild.allowed_roles || []);
+    const [homeWidgets, setHomeWidgets] = useState<HomeWidgetSetting[]>(() => readHomeWidgets(guild.hub_settings));
 
     const textChannels = channels.filter(c => c.type === 0 || c.channel_type === 0);
     const assignableRoles = roles.filter((role) => role.id !== guild.id);
@@ -71,7 +74,7 @@ export function ServerHubSettings({ guild, channels, roles = [], onUpdate, setEr
         setError(null);
         try {
             await guildApi.update(guild.id, {
-                hub_settings: hubSettings,
+                hub_settings: { ...hubSettings, widgets: homeWidgets },
                 visibility,
                 discovery_tags: discoveryTags
                     .split(',')
@@ -124,6 +127,19 @@ export function ServerHubSettings({ guild, channels, roles = [], onUpdate, setEr
                             maxLength={2000}
                         />
                     </label>
+                </div>
+            </section>
+
+            <Divider />
+
+            {/* The server home page's widget column (docs/server-home-spec.md) */}
+            <section>
+                <GroupLabel>Home page</GroupLabel>
+                <p className="mt-2 text-body leading-relaxed text-text-secondary">
+                    The widgets beside the feed on this server&apos;s home page, top to bottom. One with nothing to show stays hidden.
+                </p>
+                <div className="mt-4">
+                    <HomePageSettings widgets={homeWidgets} onChange={setHomeWidgets} />
                 </div>
             </section>
 

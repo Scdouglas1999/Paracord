@@ -59,9 +59,11 @@ const SHELL_STEPS: TourStepDef[] = [
 const GUILD_STEPS: TourStepDef[] = [
   {
     id: 'rooms',
-    // The Lobby's rooms grid (§7.3). The older "Live rooms" label is kept in
-    // the selector so a tour started against a stale bundle still finds it.
-    selector: 'section[aria-label="Voice channels"], section[aria-label="Rooms"], section[aria-label="Live rooms"]',
+    // The server home page's "Live now" section, or its one-line list of voice
+    // channels when nothing is live (docs/server-home-spec.md). The older
+    // labels are kept so a tour started against a stale bundle still finds it.
+    selector:
+      'section[aria-label="Live now"], section[aria-label="Voice channels"], section[aria-label="Rooms"], section[aria-label="Live rooms"]',
     body: "Servers open on who's around — join a call or pick a channel below.",
     side: 'top',
   },

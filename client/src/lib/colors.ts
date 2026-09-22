@@ -39,7 +39,7 @@ const IDENTITY_COLORS = [
 const IDENTITY_INKS = IDENTITY_COLORS.map((_, index) => `var(--identity-ink-${index + 1})`);
 
 /** The palette slot a snowflake falls in. One hash, so a fill and its ink agree. */
-function identityIndex(id: string): number {
+export function identityIndex(id: string): number {
   let hash = 0;
   for (let i = 0; i < id.length; i++) {
     hash = ((hash << 5) - hash) + id.charCodeAt(i);

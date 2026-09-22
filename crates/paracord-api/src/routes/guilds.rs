@@ -395,6 +395,16 @@ pub async fn update_guild(
         ));
     }
 
+    // The home page's widget column (`hub_settings.widgets`): known ids only,
+    // each once, before anything is written.
+    if let Some(widgets) = body
+        .hub_settings
+        .as_ref()
+        .and_then(|hub| hub.extensions.get("widgets"))
+    {
+        crate::routes::server_feed::validate_home_widgets(widgets)?;
+    }
+
     // The server banner is `spaces.banner_hash`, set through
     // `POST /guilds/{id}/banner`; the hub no longer carries one of its own.
     let hub_settings_str = body.hub_settings.as_ref().map(|v| {
