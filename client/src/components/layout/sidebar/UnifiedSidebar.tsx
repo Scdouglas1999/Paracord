@@ -182,6 +182,10 @@ export function UnifiedSidebar() {
   const openSearch = useCallback(() => useUIStore.getState().setCommandPaletteOpen(true), []);
   const openSettings = useCallback(() => useUIStore.getState().setUserSettingsOpen(true), []);
 
+  const openSports = useCallback((guildId: string) => {
+    navigate(`/app/guilds/${guildId}/sports`);
+  }, [navigate]);
+
   const openLobby = useCallback(
     (building: BuildingLight) => {
       try {
@@ -367,6 +371,7 @@ export function UnifiedSidebar() {
             onRoomContextMenu={onRoomContextMenu}
             openThread={openThread}
             onOpenThread={onOpenThread}
+            onOpenSports={openSports}
             footer={
               <div className="flex flex-col gap-2">
                 <CallDock />

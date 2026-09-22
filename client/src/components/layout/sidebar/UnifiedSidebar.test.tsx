@@ -51,6 +51,24 @@ vi.mock('../../guild/CreateGuildModal', () => ({
 // The call dock is WP3's surface (it renders their on-air pill); the column
 // only owns the slot it sits in, so it is stubbed out here.
 vi.mock('./CallDock', () => ({ CallDock: () => null }));
+vi.mock('../../../api/sports', () => ({
+  sportsApi: {
+    getSettings: vi.fn(async () => ({
+      data: {
+        guild_id: 'g1',
+        enabled: false,
+        leagues: [],
+        favorite_teams: [],
+        show_on_server_page: false,
+        default_view: 'all',
+        updated_at: '2026-01-01T00:00:00.000Z',
+      },
+    })),
+    getBoard: vi.fn(),
+    listLeagues: vi.fn(),
+    updateSettings: vi.fn(),
+  },
+}));
 
 const SCOPE = { serverId: 'srv', userId: 'user-1' };
 const NOW = 1_800_000_000_000;

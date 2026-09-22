@@ -381,6 +381,23 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
             "/api/v1/guilds/{guild_id}/economy/level-roles",
             get(routes::economy::list_level_roles).put(routes::economy::update_level_roles),
         )
+        .route("/api/v1/sports/leagues", get(routes::sports::list_leagues))
+        .route(
+            "/api/v1/sports/leagues/{sport}/{league}/teams",
+            get(routes::sports::list_teams),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/sports",
+            get(routes::sports::get_settings).put(routes::sports::put_settings),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/sports/board",
+            get(routes::sports::get_board),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/sports/games/{sport}/{league}/{event_id}",
+            get(routes::sports::get_game),
+        )
         .route(
             "/api/v1/guilds/{guild_id}/members/@me",
             put(routes::members::join_public_guild).delete(routes::members::leave_guild),

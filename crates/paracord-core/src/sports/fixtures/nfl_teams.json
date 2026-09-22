@@ -1,0 +1,34 @@
+{
+  "sports": [
+    {
+      "leagues": [
+        {
+          "teams": [
+            {
+              "team": {
+                "id": "12",
+                "abbreviation": "KC",
+                "displayName": "Kansas City Chiefs",
+                "shortDisplayName": "Chiefs",
+                "logos": [
+                  { "href": "https://a.espncdn.com/i/teamlogos/nfl/500/kc.png" }
+                ]
+              }
+            },
+            {
+              "team": {
+                "id": 2,
+                "abbreviation": "BUF",
+                "displayName": "Buffalo Bills",
+                "shortDisplayName": "Bills",
+                "logos": [
+                  { "href": "https://evil.example/buf.png" }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

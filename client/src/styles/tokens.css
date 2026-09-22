@@ -1265,6 +1265,51 @@
 }
 
 /* =============================================================================
+   Sports field. Real colours, not a mix of the accent: a field has to read as
+   grass in every look, including when the accent is not green. Night, AMOLED,
+   high contrast, Dusk and Voices use the dark set. Daylight and Paper use the
+   light set below. Chalk stays light so yard numbers and end-zone letters
+   clear the turf. The logo chip stays light so a dark mark does not vanish.
+   ============================================================================= */
+:root {
+  --sports-turf: oklch(0.42 0.09 150);
+  --sports-turf-alt: oklch(0.36 0.078 148);
+  --sports-infield: oklch(0.40 0.085 152);
+  --sports-chalk: oklch(0.97 0.012 155);
+  --sports-dirt: oklch(0.50 0.072 68);
+  --sports-dirt-dark: oklch(0.40 0.055 58);
+  --sports-endzone: oklch(0.33 0.055 165);
+  --sports-redzone: oklch(0.45 0.12 25 / 0.4);
+  --sports-logo-chip: oklch(0.96 0.01 95);
+  --sports-lace: oklch(0.32 0.045 55);
+  --sports-ball-shadow: 0 2px 3px oklch(0.2 0.03 150 / 0.55);
+  --sports-chain-shadow: oklch(0.22 0.03 150 / 0.7);
+  --sports-pitch-ball: oklch(0.38 0.02 255);
+  --sports-pitch-looking: oklch(0.42 0.06 78);
+  --sports-pitch-swinging: oklch(0.40 0.14 27);
+  --sports-pitch-foul: oklch(0.40 0.07 255);
+  --sports-pitch-inplay: oklch(0.38 0.08 155);
+  --sports-pitch-other: oklch(0.34 0.012 255);
+  --sports-pitch-ink: oklch(0.985 0.004 95);
+  --sports-los: oklch(0.97 0.012 155);
+  --sports-first-down: oklch(0.82 0.08 90);
+}
+
+[data-theme='paper'],
+[data-theme='light'] {
+  --sports-turf: oklch(0.45 0.1 148);
+  --sports-turf-alt: oklch(0.39 0.088 146);
+  --sports-infield: oklch(0.43 0.095 150);
+  --sports-chalk: oklch(0.98 0.008 155);
+  --sports-dirt: oklch(0.55 0.08 70);
+  --sports-dirt-dark: oklch(0.44 0.06 60);
+  --sports-endzone: oklch(0.35 0.058 162);
+  --sports-redzone: oklch(0.46 0.12 25 / 0.38);
+  --sports-logo-chip: oklch(0.97 0.008 95);
+  --sports-lace: oklch(0.30 0.04 55);
+}
+
+/* =============================================================================
    Density + responsive metrics
    ============================================================================= */
 :root[data-density='compact'] {

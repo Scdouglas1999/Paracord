@@ -41,6 +41,7 @@ import {
   nextEventCaption,
   roomsLitCaption,
 } from './lobbyCaptions';
+import { LiveNowStrip } from '../../sports/LiveNowStrip';
 import { featuredFirst, readHubWelcome } from './hubWelcome';
 import { shortClock, trafficStamp } from './lobbyTime';
 import { useNextEvent } from './useNextEvent';
@@ -369,6 +370,8 @@ export function Lobby({ guildId }: LobbyProps) {
           onInvite={inviteChannelId ? () => setShowInvite(true) : undefined}
           onSettings={canManage ? () => openGuildSettings(guildId) : undefined}
         />
+
+        <LiveNowStrip guildId={guildId} />
 
         <AroundNowWell
           people={litPeople}

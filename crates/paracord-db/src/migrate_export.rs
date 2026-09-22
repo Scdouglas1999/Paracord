@@ -90,6 +90,7 @@ pub const MIGRATION_TABLE_ORDER: &[&str] = &[
     "forum_tags",
     "group_e2ee_sender_keys",
     "guild_onboarding_settings",
+    "guild_sports_settings",
     "guild_storage_policies",
     "invites",
     "member_onboarding_state",

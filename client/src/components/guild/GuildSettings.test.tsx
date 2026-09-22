@@ -4,8 +4,10 @@ import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { guildApi } from '../../api/guilds';
 import { confirm } from '../../stores/confirmStore';
-import type { Guild, Member } from '../../types';
+import { Permissions, type Guild, type Member } from '../../types';
 import { GuildSettings } from './GuildSettings';
+
+const perms = vi.hoisted(() => ({ permissions: 0n as bigint, isAdmin: false }));
 
 const GUILD_ID = 'guild-1';
 const OWNER_ID = 'owner-1';
@@ -70,7 +72,7 @@ vi.mock('../../stores/authStore', () => ({
 }));
 
 vi.mock('../../hooks/usePermissions', () => ({
-  usePermissions: () => ({ permissions: 0n, isAdmin: false }),
+  usePermissions: () => ({ permissions: perms.permissions, isAdmin: perms.isAdmin }),
   invalidateGuildPermissionCache: vi.fn(),
 }));
 
@@ -84,6 +86,7 @@ vi.mock('./ServerHubSettings', () => ({ ServerHubSettings: () => null }));
 vi.mock('./BotStoreSection', () => ({ BotStoreSection: () => null }));
 vi.mock('./OnboardingSettingsSection', () => ({ OnboardingSettingsSection: () => null }));
 vi.mock('./EconomySettingsSection', () => ({ EconomySettingsSection: () => null }));
+vi.mock('../sports/SportsSettingsSection', () => ({ SportsSettingsSection: () => null }));
 
 const renderSettings = (onClose = vi.fn()) =>
   render(
@@ -97,6 +100,8 @@ const findTransferButton = () => screen.findByRole('button', { name: 'Transfer' 
 
 describe('GuildSettings destructive flows', () => {
   beforeEach(() => {
+    perms.permissions = 0n;
+    perms.isAdmin = false;
     vi.clearAllMocks();
     vi.mocked(guildApi.get).mockResolvedValue({ data: guild } as never);
     vi.mocked(guildApi.getRoles).mockResolvedValue({ data: [] } as never);
@@ -170,5 +175,17 @@ describe('GuildSettings destructive flows', () => {
 
     expect(screen.queryByPlaceholderText('Test Guild')).not.toBeInTheDocument();
     expect(deleteGuild).not.toHaveBeenCalled();
+  });
+
+  it('hides Add-ons from someone who cannot manage the server', async () => {
+    renderSettings();
+    await findTransferButton();
+    expect(screen.queryByRole('button', { name: 'Add-ons' })).not.toBeInTheDocument();
+  });
+
+  it('shows Add-ons to someone who can manage the server', async () => {
+    perms.permissions = Permissions.MANAGE_GUILD;
+    renderSettings();
+    expect(await screen.findByRole('button', { name: 'Add-ons' })).toBeInTheDocument();
   });
 });

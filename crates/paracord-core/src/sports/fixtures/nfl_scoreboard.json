@@ -1,0 +1,65 @@
+{
+  "leagues": [{ "id": "28", "abbreviation": "NFL" }],
+  "events": [
+    {
+      "id": "401872933",
+      "date": "2026-09-20T17:00Z",
+      "shortName": "CAR @ ATL",
+      "status": {
+        "clock": 478.0,
+        "displayClock": "7:58",
+        "period": 4,
+        "type": { "state": "in", "shortDetail": "7:58 - 4th" }
+      },
+      "competitions": [
+        {
+          "broadcasts": [{ "market": "national", "names": ["FOX"] }],
+          "geoBroadcasts": [
+            { "media": { "shortName": "FOX" } },
+            { "media": { "shortName": "NFL+" } }
+          ],
+          "competitors": [
+            {
+              "homeAway": "home",
+              "score": "27",
+              "records": [{ "summary": "0-1" }],
+              "team": {
+                "id": "1",
+                "abbreviation": "ATL",
+                "displayName": "Atlanta Falcons",
+                "shortDisplayName": "Falcons",
+                "name": "Falcons",
+                "location": "Atlanta",
+                "logo": "https://a/atl.png"
+              }
+            },
+            {
+              "homeAway": "away",
+              "score": "34",
+              "team": {
+                "id": "29",
+                "abbreviation": "CAR",
+                "displayName": "Carolina Panthers",
+                "shortDisplayName": "Panthers",
+                "name": "Panthers",
+                "location": "Carolina"
+              }
+            }
+          ],
+          "situation": {
+            "downDistanceText": "2nd & 7 at CAR 36",
+            "isRedZone": true,
+            "possession": "29",
+            "lastPlay": {
+              "text": " (Shotgun) J.Strand pass short left for 3 yards. ",
+              "scoreValue": 0,
+              "type": { "text": "Pass Reception" },
+              "probability": { "homeWinPercentage": 0.31 }
+            }
+          }
+        }
+      ]
+    },
+    { "id": "broken" }
+  ]
+}

@@ -50,6 +50,7 @@
    utility layer. Every rule in it is scoped to one look. */
 @import './looks.css';
 @import './components.css' layer(components);
+@import './sports.css' layer(components);
 @import './utilities.css';
 /* Last, and in a layer of its own: the §9 focus ring outranks the utilities, so
    a resting-state `shadow-*` cannot silently delete it. See focus.css. */

@@ -208,7 +208,7 @@ export function SettingsShell({
           <Kbd>Esc</Kbd>
         </div>
         <div className={cn('min-h-0 flex-1 overflow-y-auto px-6 py-8 lg:px-10 lg:py-9', contentClassName)}>
-          <div className="mx-auto w-full max-w-[46rem] pr-14">{children}</div>
+          <div className="mx-auto flex h-full min-h-0 w-full max-w-[46rem] flex-col pr-14">{children}</div>
         </div>
       </div>
     </div>

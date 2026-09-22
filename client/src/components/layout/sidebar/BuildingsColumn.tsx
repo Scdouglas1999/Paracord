@@ -108,6 +108,8 @@ export interface BuildingsColumnProps {
    */
   openThread?: OpenThread | null;
   onOpenThread?: (thread: OpenThread) => void;
+  /** Opens a server's sports board. */
+  onOpenSports?: (guildId: string) => void;
   /** The account plate, and the call dock while you are in a room. */
   footer?: ReactNode;
 }
@@ -142,6 +144,7 @@ export function BuildingsColumn({
   onRoomContextMenu,
   openThread = null,
   onOpenThread,
+  onOpenSports,
   footer,
 }: BuildingsColumnProps) {
   const [openBuildings, setOpenBuildings] = useState<ReadonlySet<string>>(() => new Set<string>());
@@ -301,6 +304,7 @@ export function BuildingsColumn({
             onOpenThread={onOpenThread}
             navIndexStart={section.navIndexStart}
             activeNavIndex={activeNavIndex}
+            onOpenSports={onOpenSports}
           />
         ))}
 

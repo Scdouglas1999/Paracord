@@ -27,6 +27,9 @@ jsonwebtoken = { workspace = true }
 chrono = { workspace = true }
 ed25519-dalek = { workspace = true }
 rand = { workspace = true }
+# ESPN's public scoreboard. The workspace already depends on reqwest; this crate
+# did not, and the pull-through cache lives here rather than in the HTTP layer.
+reqwest = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 moka = { workspace = true }

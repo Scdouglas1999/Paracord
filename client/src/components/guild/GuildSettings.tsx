@@ -2,7 +2,7 @@ import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ChangeEvent, ReactNode } from 'react';
-import { Shield, ShieldAlert, Users, Hash, Link, Gavel, ScrollText, RefreshCw, Smile, Calendar, Bot, HardDrive, LayoutTemplate, MessageSquare, TrendingUp } from 'lucide-react';
+import { Shield, ShieldAlert, Users, Hash, Link, Gavel, ScrollText, RefreshCw, Smile, Calendar, Bot, HardDrive, LayoutTemplate, MessageSquare, TrendingUp, Puzzle } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router';
 import { guildApi } from '../../api/guilds';
 import { inviteApi } from '../../api/invites';
@@ -28,6 +28,7 @@ import { ServerHubSettings } from './ServerHubSettings';
 import { BotStoreSection } from './BotStoreSection';
 import { OnboardingSettingsSection } from './OnboardingSettingsSection';
 import { EconomySettingsSection } from './EconomySettingsSection';
+import { SportsSettingsSection } from '../sports/SportsSettingsSection';
 import {
   AuditLogSection,
   BansSection,
@@ -60,7 +61,7 @@ interface GuildSettingsProps {
   initialChannelId?: string | null;
 }
 
-type SettingsSection = 'overview' | 'server-hub' | 'bot-store' | 'roles' | 'members' | 'channels' | 'invites' | 'emojis' | 'webhooks' | 'bots' | 'events' | 'onboarding' | 'bans' | 'reports' | 'audit-log' | 'file-storage' | 'mod-templates' | 'automod' | 'economy';
+type SettingsSection = 'overview' | 'server-hub' | 'bot-store' | 'roles' | 'members' | 'channels' | 'invites' | 'emojis' | 'webhooks' | 'bots' | 'events' | 'onboarding' | 'bans' | 'reports' | 'audit-log' | 'file-storage' | 'mod-templates' | 'automod' | 'economy' | 'sports';
 
 import { DEFAULT_ROLE_COLOR } from '../../lib/colors';
 
@@ -86,6 +87,7 @@ const NAV_ITEMS: { id: SettingsSection; label: string; icon: ReactNode; group: N
   { id: 'channels', label: 'Channels', icon: <Hash size={16} />, group: 'The server' },
   { id: 'emojis', label: 'Emojis', icon: <Smile size={16} />, group: 'The server' },
   { id: 'events', label: 'Events', icon: <Calendar size={16} />, group: 'The server' },
+  { id: 'sports', label: 'Add-ons', icon: <Puzzle size={16} />, group: 'The server' },
   { id: 'file-storage', label: 'File storage', icon: <HardDrive size={16} />, group: 'The server' },
   { id: 'roles', label: 'Roles', icon: <Shield size={16} />, group: 'People' },
   { id: 'members', label: 'Members', icon: <Users size={16} />, group: 'People' },
@@ -431,6 +433,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
         case 'events':
         case 'onboarding':
         case 'economy':
+        case 'sports':
         case 'file-storage':
         case 'mod-templates':
         case 'automod':
@@ -522,7 +525,8 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
       requested === 'reports' ||
       requested === 'audit-log' ||
       requested === 'file-storage' ||
-      requested === 'economy'
+      requested === 'economy' ||
+      requested === 'sports'
     ) {
       setActiveSection(requested);
     }
@@ -1141,7 +1145,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
         </>
       }
     >
-      <div className="flex flex-col gap-8">
+      <div className="flex h-full min-h-0 flex-1 flex-col gap-8">
         {error && <ErrorBanner message={error} multiline onRetry={() => void refreshAll()} />}
 
         {activeSection === 'overview' && (
@@ -1414,6 +1418,8 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
         )}
 
         {activeSection === 'economy' && <EconomySettingsSection guildId={guildId} roles={roles} />}
+
+        {activeSection === 'sports' && <SportsSettingsSection guildId={guildId} />}
 
         {activeSection === 'audit-log' && (
           <AuditLogSection

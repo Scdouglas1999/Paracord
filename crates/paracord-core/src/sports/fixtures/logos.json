@@ -1,0 +1,64 @@
+{
+  "events": [
+    {
+      "id": "keep",
+      "competitions": [
+        {
+          "competitors": [
+            {
+              "homeAway": "home",
+              "team": {
+                "id": "1",
+                "logo": "https://a.espncdn.com/i/teamlogos/nfl/500/kc.png"
+              }
+            },
+            {
+              "homeAway": "away",
+              "team": { "id": "2", "logo": "https://evil.example/x.png" }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "apex-and-reject",
+      "competitions": [
+        {
+          "competitors": [
+            {
+              "homeAway": "home",
+              "team": { "id": "3", "logo": "https://ESPNCDN.com/logo.png" }
+            },
+            {
+              "homeAway": "away",
+              "team": {
+                "id": "4",
+                "logo": "http://a.espncdn.com/logo.png"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "suffix-attack",
+      "competitions": [
+        {
+          "competitors": [
+            {
+              "homeAway": "home",
+              "team": {
+                "id": "5",
+                "logo": "https://a.espncdn.com.evil.com/logo.png"
+              }
+            },
+            {
+              "homeAway": "away",
+              "team": { "id": "6", "logo": "https://notespncdn.com/logo.png" }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

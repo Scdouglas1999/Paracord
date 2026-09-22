@@ -12,6 +12,27 @@ import {
 } from '../../../lib/attention/light';
 import { BuildingsColumn, ROOM_ROWS_VISIBLE } from './BuildingsColumn';
 
+// The sports row reads settings once per server. These tests are about channels,
+// and a real request would sit on the axios timeout.
+vi.mock('../../../api/sports', () => ({
+  sportsApi: {
+    getSettings: vi.fn(async () => ({
+      data: {
+        guild_id: 'g1',
+        enabled: false,
+        leagues: [],
+        favorite_teams: [],
+        show_on_server_page: false,
+        default_view: 'all',
+        updated_at: '2026-01-01T00:00:00.000Z',
+      },
+    })),
+    getBoard: vi.fn(),
+    listLeagues: vi.fn(),
+    updateSettings: vi.fn(),
+  },
+}));
+
 /**
  * The Buildings column (docs/lantern-stage-spec.md §7.1).
  *

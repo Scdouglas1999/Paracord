@@ -22,6 +22,7 @@ pub mod permissions;
 pub mod presence_manager;
 pub mod share_address;
 pub mod shutdown;
+pub mod sports;
 pub mod user;
 pub mod voice_cleanup;
 

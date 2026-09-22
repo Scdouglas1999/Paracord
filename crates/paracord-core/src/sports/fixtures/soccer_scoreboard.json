@@ -1,0 +1,58 @@
+{
+  "leagues": [{ "abbreviation": "ENG.1" }],
+  "events": [
+    {
+      "id": "1",
+      "date": "2026-09-20T13:00Z",
+      "shortName": "LIV @ BOU",
+      "status": {
+        "clock": 4920.0,
+        "displayClock": "82'",
+        "period": 2,
+        "type": { "state": "in", "shortDetail": "82'" }
+      },
+      "competitions": [
+        {
+          "situation": null,
+          "details": [
+            {
+              "type": { "text": "Yellow Card" },
+              "clock": { "displayValue": "46'" },
+              "scoringPlay": false
+            },
+            {
+              "type": { "text": "Goal" },
+              "clock": { "displayValue": "80'" },
+              "scoringPlay": true,
+              "scoreValue": 1,
+              "athletesInvolved": [{ "shortName": "M. Salah" }]
+            }
+          ],
+          "competitors": [
+            {
+              "homeAway": "home",
+              "score": "0",
+              "team": {
+                "id": "349",
+                "abbreviation": "BOU",
+                "displayName": "AFC Bournemouth",
+                "shortDisplayName": "Bournemouth",
+                "name": "AFC Bournemouth",
+                "location": "AFC Bournemouth"
+              }
+            },
+            {
+              "homeAway": "away",
+              "score": "1",
+              "team": {
+                "id": "364",
+                "abbreviation": "LIV",
+                "displayName": "Liverpool"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

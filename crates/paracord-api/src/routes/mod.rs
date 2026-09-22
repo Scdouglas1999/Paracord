@@ -32,6 +32,7 @@ pub mod reports;
 pub mod roles;
 pub mod security;
 pub mod setup;
+pub mod sports;
 pub mod stage;
 pub mod stickers;
 pub mod templates;

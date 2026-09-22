@@ -292,6 +292,17 @@ const checks = [
   { fg: '--text-primary', bg: '--row-selected', over: '--bg-plate', min: 7 },
   { fg: '--text-secondary', bg: '--row-selected', over: '--bg-plate', min: 4.5 },
   { fg: '--text-primary', bg: '--bg-mod-strong', over: '--bg-plate', min: 7 },
+  // Yard numbers, end-zone letters and the digits inside a pitch marker.
+  // The field is a fixed green, so these pairs do not move with --ui-hue.
+  { fg: '--sports-chalk', bg: '--sports-turf', min: 4.5 },
+  { fg: '--sports-chalk', bg: '--sports-turf-alt', min: 4.5 },
+  { fg: '--sports-chalk', bg: '--sports-endzone', min: 4.5 },
+  { fg: '--sports-pitch-ink', bg: '--sports-pitch-ball', min: 4.5 },
+  { fg: '--sports-pitch-ink', bg: '--sports-pitch-looking', min: 4.5 },
+  { fg: '--sports-pitch-ink', bg: '--sports-pitch-swinging', min: 4.5 },
+  { fg: '--sports-pitch-ink', bg: '--sports-pitch-foul', min: 4.5 },
+  { fg: '--sports-pitch-ink', bg: '--sports-pitch-inplay', min: 4.5 },
+  { fg: '--sports-pitch-ink', bg: '--sports-pitch-other', min: 4.5 },
 ];
 
 // Paper & ink's spine: the sidebar is a block of cobalt with an ink set of its
