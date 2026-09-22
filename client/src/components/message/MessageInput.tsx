@@ -5,7 +5,7 @@ import { getAccountChannelView } from '../../lib/channelView';
 import { isGroupDm, pendingGroupMembers, runtimeAttachDecision, runtimeSendDecision } from '../../lib/messages/messagingReadiness';
 import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
 import { entityScopeKey as memberScopeKey, type AccountScope } from '../../lib/serverScope';
-import { useState, useRef, useEffect, useMemo, useCallback, lazy, Suspense } from 'react';
+import { Fragment, useState, useRef, useEffect, useMemo, useCallback, lazy, Suspense } from 'react';
 
 // §5.3: one reduced-motion switch for the whole app — lib/motion is the only
 // JavaScript motion engine; the composer's enter/exit surfaces are CSS.
@@ -39,7 +39,11 @@ import { useCommandStore } from '../../stores/commandStore';
 import { useInteractionStore, type AutocompleteChoice } from '../../stores/interactionStore';
 import { useConversationActions } from '../../hooks/useConversationActions';
 import { captureScopedOperation } from '../../lib/operationContext';
-import type { Message } from '../../types';
+import type { Message, Role } from '../../types';
+import { Permissions, hasPermission } from '../../types';
+import { usePermissions } from '../../hooks/usePermissions';
+import { fetchGuildRoles } from '../../lib/permissionDataCache';
+import { roleColorToHex } from '../../lib/colors';
 import { isAllowedImageMimeType } from '../../lib/security';
 import { formatFileSize, toDatetimeLocalValue } from '../../lib/formatters';
 import { toast } from '../../stores/toastStore';
@@ -503,16 +507,63 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
   const guildMembers = useMemberStore((s) => (guildId ? (memberScope ? s.members.get(memberScopeKey(memberScope, guildId)) : undefined) : undefined));
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
+  const { permissions: mentionPerms } = usePermissions(guildId ?? null);
+  const canMentionRoles = hasPermission(mentionPerms, Permissions.MENTION_EVERYONE);
+  const [composerRoles, setComposerRoles] = useState<Role[]>([]);
+  const [composerRolesError, setComposerRolesError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!guildId) {
+      setComposerRoles([]);
+      setComposerRolesError(null);
+      return;
+    }
+    let cancelled = false;
+    fetchGuildRoles(guildId)
+      .then((roles) => {
+        if (!cancelled) {
+          setComposerRoles(roles);
+          setComposerRolesError(null);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setComposerRolesError(extractApiError(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [guildId]);
+
+  useEffect(() => {
+    if (mentionQuery === null || !guildId || !memberScope || guildMembers) return;
+    void useMemberStore.getState().fetchMembers(guildId, memberScope);
+  }, [mentionQuery, guildId, memberScope, guildMembers]);
+
+  type MentionOption =
+    | { kind: 'member'; id: string; member: NonNullable<typeof guildMembers>[number] }
+    | { kind: 'role'; id: string; role: Role; count: number };
+
   const mentionResults = useMemo(() => {
-    if (mentionQuery === null || !guildId) return [];
+    if (mentionQuery === null || !guildId) return [] as MentionOption[];
     const q = mentionQuery.toLowerCase();
-    return (guildMembers || [])
+    const people: MentionOption[] = (guildMembers || [])
       .filter((m) => {
         const visibleName = displayName(m.user, m.nick).toLowerCase();
         return visibleName.includes(q) || m.user.username.toLowerCase().includes(q);
       })
-      .slice(0, 8);
-  }, [mentionQuery, guildId, guildMembers]);
+      .slice(0, 8)
+      .map((member) => ({ kind: 'member' as const, id: member.user.id, member }));
+    const roles: MentionOption[] = composerRoles
+      // @everyone is its own mention, not a role to pick here.
+      .filter((role) => role.id !== guildId && (role.mentionable || canMentionRoles) && role.name.toLowerCase().includes(q))
+      .slice(0, 5)
+      .map((role) => ({
+        kind: 'role' as const,
+        id: role.id,
+        role,
+        count: guildMembers ? guildMembers.filter((member) => member.roles.includes(role.id)).length : -1,
+      }));
+    return [...people, ...roles];
+  }, [mentionQuery, guildId, guildMembers, composerRoles, canMentionRoles]);
 
   const resizeDraft = useCallback(() => {
     const textarea = textareaRef.current;
@@ -983,14 +1034,14 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
     [content, clearAutocompleteChoices, setContent],
   );
 
-  const insertMention = useCallback((userId: string) => {
+  const insertMention = useCallback((token: string) => {
     const textarea = textareaRef.current;
     if (!textarea) return;
     const before = content.slice(0, textarea.selectionStart);
     const after = content.slice(textarea.selectionStart);
     const mentionStart = before.lastIndexOf('@');
     if (mentionStart === -1) return;
-    const mentionText = `<@${userId}>`;
+    const mentionText = token;
     const newContent = before.slice(0, mentionStart) + mentionText + ' ' + after;
     setContent(newContent);
     setMentionQuery(null);
@@ -1042,7 +1093,8 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
       if (e.key === 'Tab' || e.key === 'Enter') {
         e.preventDefault();
         const selected = mentionResults[mentionIndex];
-        if (selected) insertMention(selected.user.id);
+        if (selected?.kind === 'member') insertMention(`<@${selected.member.user.id}>`);
+        if (selected?.kind === 'role') insertMention(`<@&${selected.role.id}>`);
         return;
       }
     }
@@ -1534,11 +1586,17 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
         )}
 
         {/* @mention autocomplete */}
-        {mentionQuery !== null && mentionResults.length > 0 && (
+        {mentionQuery !== null && (mentionResults.length > 0 || composerRolesError) && (
           <div className="pc-enter pc-floating absolute bottom-full left-2 right-2 z-20 mb-2 max-h-64 overflow-y-auto p-1">
-            {mentionResults.map((member, i) => (
+            {composerRolesError && (
+              <p className="px-2 py-1 text-meta text-accent-danger">{composerRolesError}</p>
+            )}
+            {mentionResults.map((option, i) => (
+              <Fragment key={`${option.kind}-${option.id}`}>
+              {option.kind === 'role' && mentionResults[i - 1]?.kind !== 'role' && (
+                <p className="px-2 pb-1 pt-2 text-section text-text-faint" aria-hidden>Roles</p>
+              )}
               <button
-                key={member.user.id}
                 type="button"
                 className={cn(
                   'pc-focusable flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-2 py-1.5 text-left',
@@ -1549,20 +1607,38 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
                 )}
                 onMouseDown={(e) => {
                   e.preventDefault();
-                  insertMention(member.user.id);
+                  insertMention(option.kind === 'member' ? `<@${option.member.user.id}>` : `<@&${option.role.id}>`);
                 }}
                 onMouseEnter={() => setMentionIndex(i)}
               >
-                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-bg-mod-strong text-meta font-semibold text-text-secondary">
-                  {displayName(member.user, member.nick).charAt(0).toUpperCase()}
-                </span>
-                <span className="min-w-0 flex-1 truncate">
-                  <span className="text-label text-text-primary">{displayName(member.user, member.nick)}</span>
-                  {displayName(member.user, member.nick) !== member.user.username && (
-                    <span className="ml-1.5 text-meta text-text-muted">@{member.user.username}</span>
-                  )}
-                </span>
+                {option.kind === 'member' ? (
+                  <>
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-bg-mod-strong text-meta font-semibold text-text-secondary">
+                      {displayName(option.member.user, option.member.nick).charAt(0).toUpperCase()}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate">
+                      <span className="text-label text-text-primary">{displayName(option.member.user, option.member.nick)}</span>
+                      {displayName(option.member.user, option.member.nick) !== option.member.user.username && (
+                        <span className="ml-1.5 text-meta text-text-muted">@{option.member.user.username}</span>
+                      )}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center" aria-hidden>
+                      <span
+                        className="h-2.5 w-2.5 rounded-full"
+                        style={{ backgroundColor: option.role.color === 0 ? 'var(--text-muted)' : roleColorToHex(option.role.color) }}
+                      />
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-label text-text-primary">@{option.role.name}</span>
+                    <span className="shrink-0 text-meta text-text-muted">
+                      {option.count < 0 ? 'Loading…' : `${option.count} ${option.count === 1 ? 'member' : 'members'}`}
+                    </span>
+                  </>
+                )}
               </button>
+              </Fragment>
             ))}
           </div>
         )}

@@ -1,4 +1,6 @@
 import { messagePreviewText } from '../../../lib/markdown';
+import { fetchGuildRoles } from '../../../lib/permissionDataCache';
+import { extractApiError } from '../../../api/client';
 import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 
@@ -124,6 +126,23 @@ export function Lobby({ guildId }: LobbyProps) {
     for (const member of members ?? []) map.set(member.user.id, displayName(member.user, member.nick));
     return map;
   }, [members]);
+  const [roleNames, setRoleNames] = useState<Map<string, string> | null>(null);
+  const [roleNamesError, setRoleNamesError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetchGuildRoles(guildId)
+      .then((roles) => {
+        if (cancelled) return;
+        setRoleNames(new Map(roles.map((role) => [role.id, role.name])));
+        setRoleNamesError(null);
+      })
+      .catch((err) => {
+        if (!cancelled) setRoleNamesError(extractApiError(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [guildId]);
   const messagesByChannel = useCurrentMessageStore((state) => state.messages);
 
   const { permissions, isAdmin } = usePermissions(guildId);
@@ -467,7 +486,14 @@ export function Lobby({ guildId }: LobbyProps) {
                       : null;
                 const author = last?.author ? displayName(last.author) : fetched?.author ?? null;
                 const rawPreview = last ? last.content ?? null : fetched?.preview || null;
-                const preview = rawPreview ? messagePreviewText(rawPreview, memberNames) : rawPreview;
+                const mentionsRole = Boolean(rawPreview && /<@&\d+>/.test(rawPreview));
+                const preview = mentionsRole && roleNamesError
+                  ? roleNamesError
+                  : mentionsRole && !roleNames
+                    ? 'Loading roles…'
+                    : rawPreview
+                      ? messagePreviewText(rawPreview, memberNames, roleNames ?? undefined)
+                      : rawPreview;
                 // Nothing loaded, nothing fetched and no snowflake: the room has
                 // genuinely never been written in, and says so rather than
                 // rendering as three blanks (§6.9).

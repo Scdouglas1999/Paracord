@@ -8,6 +8,7 @@ import {
   subscribeDatabaseHistory,
 } from '../../lib/databaseHistory';
 import { captureScopedOperation } from '../../lib/operationContext';
+import { fetchGuildRoles } from '../../lib/permissionDataCache';
 import { accountScopeKey, type AccountScope } from '../../lib/serverScope';
 import { useReadStateStore } from '../../stores/readStateStore';
 import type { Message } from '../../types';
@@ -26,7 +27,11 @@ interface PreviewState extends HomeMessagePreview {
 }
 
 /** Home only formats server messages. It never decrypts a DM or advances its ratchet. */
-function previewOf(message: Message, userId: string): HomeMessagePreview {
+function previewOf(
+  message: Message,
+  userId: string,
+  roleNames?: ReadonlyMap<string, string>,
+): HomeMessagePreview {
   const identity = {
     authorId: message.author?.id ?? null,
     avatar: message.author?.avatar_hash ?? null,
@@ -42,7 +47,7 @@ function previewOf(message: Message, userId: string): HomeMessagePreview {
   const author = message.author?.display_name || message.author?.username || null;
   // Plain words: no code fences, no markup, and a mention is a name. Home has no
   // member list to hand, so the one name it is sure of is the reader's own.
-  const content = messagePreviewText(message.content ?? '', new Map([[userId, 'you']]));
+  const content = messagePreviewText(message.content ?? '', new Map([[userId, 'you']]), roleNames);
   const text = content || (message.poll
     ? `Poll: ${message.poll.question}`
     : message.attachments?.length
@@ -156,9 +161,19 @@ export function useHomeMessagePreview(entry: ConversationEntry, mode: 'attention
         )) {
           throw new Error('Invalid preview message');
         }
+        let roleNames: Map<string, string> | undefined;
+        if (message && entry.guildId && /<@&\d+>/.test(message.content ?? '')) {
+          try {
+            const roles = await fetchGuildRoles(entry.guildId);
+            if (disposed) return;
+            roleNames = new Map(roles.map((role) => [role.id, role.name]));
+          } catch (err) {
+            throw new Error(err instanceof Error ? `Could not load roles for this preview. ${err.message}` : 'Could not load roles for this preview.');
+          }
+        }
         setPreview({
           revision,
-          ...(message ? previewOf(message, userId) : emptyPreview(
+          ...(message ? previewOf(message, userId, roleNames) : emptyPreview(
             kind === 'mention'
               ? 'No unread mention target is available'
               : kind === 'unread'
@@ -166,9 +181,12 @@ export function useHomeMessagePreview(entry: ConversationEntry, mode: 'attention
                 : 'No message preview available',
           )),
         });
-      } catch {
+      } catch (err) {
         if (!disposed) {
-          setPreview({ revision, ...emptyPreview('Preview unavailable'), failed: true });
+          const message = err instanceof Error && err.message.startsWith('Could not load roles')
+            ? err.message
+            : 'Preview unavailable';
+          setPreview({ revision, ...emptyPreview(message), failed: true });
         }
       } finally {
         context?.dispose();
@@ -182,11 +200,16 @@ export function useHomeMessagePreview(entry: ConversationEntry, mode: 'attention
   }, [entry.channelId, entry.lastActivityId, serverId, userId, revision, kind, after, historyUnavailable]);
 
   const fresh = preview?.revision === revision && !preview.failed ? preview : null;
+  const roleFailure = preview?.revision === revision && preview.failed && preview.text.startsWith('Could not load roles')
+    ? preview.text
+    : null;
   const text = historyUnavailable
     ? 'Reconnect this account to restore previews'
-    : failed
-      ? 'Preview unavailable'
-      : fresh?.text ?? (entry.lastActivityId ? 'Loading…' : 'No message preview available');
+    : roleFailure
+      ? roleFailure
+      : failed
+        ? 'Preview unavailable'
+        : fresh?.text ?? (entry.lastActivityId ? 'Loading…' : 'No message preview available');
 
   return {
     preview: fresh,

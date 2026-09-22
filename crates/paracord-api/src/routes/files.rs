@@ -787,6 +787,115 @@ pub async fn upload_file(
     Ok((StatusCode::CREATED, Json(attachment)))
 }
 
+/// Stage a copy of a server-channel attachment for a forward into `dest_channel_id`.
+///
+/// Stored bytes are keyed (and sealed at rest) by the attachment's own id, so
+/// a second row cannot point at the first one's object: the bytes are read
+/// back, sealed again under a new id and stored as a pending upload by the
+/// forwarder, exactly as if they had uploaded the file into the destination.
+/// The destination's own upload rules apply (size, types, storage quota).
+/// `send_message` links the copy once the forward exists and discards it when
+/// the send turns out to be a retry of one already stored.
+pub(crate) async fn stage_forwarded_attachment(
+    state: &AppState,
+    source: &paracord_db::attachments::AttachmentRow,
+    dest_channel_id: i64,
+    user_id: i64,
+) -> Result<paracord_db::attachments::AttachmentRow, ApiError> {
+    let ext = std::path::Path::new(&source.filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("bin");
+    let source_key = format!("attachments/{}.{}", source.id, ext);
+    let stored = state
+        .storage_backend
+        .retrieve(&source_key)
+        .await
+        .map_err(|_| {
+            ApiError::BadRequest(format!(
+                "{} is no longer stored on this instance, so it cannot be forwarded.",
+                source.filename
+            ))
+        })?;
+    let data = match state.config.file_cryptor.as_ref() {
+        Some(cryptor) => {
+            cryptor
+                .decrypt_with_aad_migrating(&stored, attachment_aad(source.id).as_bytes())
+                .map_err(|err| ApiError::Internal(anyhow::anyhow!(err.to_string())))?
+                .plaintext
+        }
+        None => stored,
+    };
+
+    let size =
+        u64::try_from(data.len()).map_err(|_| ApiError::BadRequest("File too large".into()))?;
+    let db_size = i32::try_from(size).map_err(|_| ApiError::BadRequest("File too large".into()))?;
+    let content_type = source
+        .content_type
+        .clone()
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+    let limits = resolve_upload_limits(state, dest_channel_id).await?;
+    limits.check(state, size, &content_type).await?;
+    let quota = if limits.guild_id.is_some() {
+        effective_storage_quota(state, limits.policy.as_ref()).await
+    } else {
+        None
+    };
+
+    let attachment_id = paracord_util::snowflake::generate(1);
+    let url = format!("/api/v1/attachments/{attachment_id}");
+    let expires_at = Utc::now() + Duration::minutes(PENDING_ATTACHMENT_TTL_MINUTES);
+    let attachment = paracord_db::attachments::create_pending_attachment_with_quota(
+        &state.db,
+        attachment_id,
+        &source.filename,
+        Some(&content_type),
+        db_size,
+        &url,
+        user_id,
+        dest_channel_id,
+        expires_at,
+        source.content_hash.as_deref(),
+        quota,
+    )
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+    .ok_or_else(|| ApiError::BadRequest("Upload would exceed guild storage quota".into()))?;
+
+    let storage_key = format!("attachments/{attachment_id}.{ext}");
+    let payload = match state.config.file_cryptor.as_ref() {
+        Some(cryptor) => cryptor
+            .encrypt_with_aad(&data, attachment_aad(attachment_id).as_bytes())
+            .map_err(|err| ApiError::Internal(anyhow::anyhow!(err.to_string())))?,
+        None => data,
+    };
+    if let Err(error) = state.storage_backend.store(&storage_key, &payload).await {
+        let _ = state.storage_backend.delete(&storage_key).await;
+        let _ = paracord_db::attachments::delete_attachment(&state.db, attachment_id).await;
+        return Err(ApiError::Internal(anyhow::anyhow!(error.to_string())));
+    }
+    Ok(attachment)
+}
+
+/// Remove a staged forward copy that will not be linked to a message.
+pub(crate) async fn discard_staged_attachment(
+    state: &AppState,
+    attachment: &paracord_db::attachments::AttachmentRow,
+) -> Result<(), ApiError> {
+    paracord_db::attachments::delete_attachment(&state.db, attachment.id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let ext = std::path::Path::new(&attachment.filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("bin");
+    let _ = state
+        .storage_backend
+        .delete(&format!("attachments/{}.{}", attachment.id, ext))
+        .await;
+    Ok(())
+}
+
 pub async fn download_file(
     State(state): State<AppState>,
     auth: AuthUser,

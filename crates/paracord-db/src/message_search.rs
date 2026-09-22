@@ -19,7 +19,7 @@ const MESSAGE_FLAG_DM_E2EE: i32 = 1 << 0;
 const SEARCH_COLUMNS: &str =
     "m.id, m.channel_id, m.author_id, m.content, m.nonce, m.delivery_nonce, \
      m.message_type, m.flags, m.edited_at, CASE WHEN m.pinned THEN 1 ELSE 0 END AS pinned, \
-     m.reference_id, m.e2ee_header, m.created_at, m.embeds, m.components, m.recovery_revision";
+     m.reference_id, m.e2ee_header, m.created_at, m.embeds, m.components, m.recovery_revision, m.forwarded_from";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageSearchOrder {

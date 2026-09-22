@@ -1,5 +1,5 @@
 import type { PreparedDeliveryEdit } from './durableEdit';
-import type { SendMessageRequest } from '../../types';
+import type { ForwardedFromRequest, SendMessageRequest } from '../../types';
 import type { AccountVault, VaultTransaction } from '../crypto/accountVault';
 // Encrypted attachment seam: a discarded draft must take its staged ciphertext
 // with it, so no encrypted body outlives the message that owned it.
@@ -79,6 +79,7 @@ export interface DurableIntent extends Omit<DurableSend, 'serializedRequest'> {
     referencedMessageId?: string;
     attachmentIds?: string[];
     stickerIds?: string[];
+    forwardedFrom?: ForwardedFromRequest;
   };
 }
 export type QueuedSend = DurableSend | DurableIntent;

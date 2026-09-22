@@ -29,6 +29,7 @@ pub mod notification_settings;
 pub mod onboarding;
 pub mod realtime;
 pub mod relationships;
+pub mod reminders;
 pub mod reports;
 pub mod roles;
 pub mod security;

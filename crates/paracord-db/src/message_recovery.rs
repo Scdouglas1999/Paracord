@@ -202,7 +202,7 @@ pub async fn get_page(
     targets.extend(changes.iter().map(|change| change.message_id));
     let mut current = std::collections::BTreeMap::new();
     if !targets.is_empty() {
-        let sql = format!("SELECT id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision FROM messages WHERE channel_id = $1 AND id IN ({})", crate::messages::build_placeholders(2, targets.len()));
+        let sql = format!("SELECT id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision, forwarded_from FROM messages WHERE channel_id = $1 AND id IN ({})", crate::messages::build_placeholders(2, targets.len()));
         let mut query = sqlx::query_as::<_, MessageRow>(&sql).bind(channel_id);
         for id in &targets {
             query = query.bind(id);

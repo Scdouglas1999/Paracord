@@ -16,8 +16,11 @@ import { useReadStateStore } from '../stores/readStateStore';
 import { useInteractionStore } from '../stores/interactionStore';
 import { getAccountMessagingRuntime } from '../lib/messages/accountMessagingRuntime';
 import { GatewayEvents } from './events';
+import { toast } from '../stores/toastStore';
 import { sendNotification, isEnabled as notificationsEnabled } from '../lib/features/notifications';
 import { messagePreviewText } from '../lib/markdown';
+import { fetchGuildRoles } from '../lib/permissionDataCache';
+import { extractApiError } from '../api/client';
 import {
   effectiveNotificationLevel,
   messageAddressesReader,
@@ -302,10 +305,23 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
           const channelName = channels.channelsById[data.channel_id]?.name;
           const authorName = data.author?.username ?? 'Someone';
           const title = channelName ? `#${channelName}` : `DM from ${authorName}`;
-          const body = data.e2ee
-            ? '[Encrypted message]'
-            : messagePreviewText(data.content || '', currentUserId ? new Map([[currentUserId, 'you']]) : undefined).slice(0, 200) || '(attachment)';
-          void sendNotification(title, body);
+          const names = currentUserId ? new Map([[currentUserId, 'you']]) : undefined;
+          const raw = data.content || '';
+          if (!data.e2ee && guildId && /<@&\d+>/.test(raw)) {
+            void fetchGuildRoles(guildId)
+              .then((roles) => {
+                const body = messagePreviewText(raw, names, new Map(roles.map((role) => [role.id, role.name]))).slice(0, 200) || '(attachment)';
+                void sendNotification(title, body);
+              })
+              .catch((err) => {
+                void sendNotification(title, extractApiError(err));
+              });
+          } else {
+            const body = data.e2ee
+              ? '[Encrypted message]'
+              : messagePreviewText(raw, names).slice(0, 200) || '(attachment)';
+            void sendNotification(title, body);
+          }
         }
       }
       if (!recovered && memberScope && data.e2ee) {
@@ -713,6 +729,14 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
           if (memberScope) refreshGuildChannelVisibility(data.guild_id, memberScope);
         }
       }
+      break;
+
+    case GatewayEvents.REMINDER_FIRED:
+      void import('../lib/reminderNotify')
+        .then(({ presentReminderFired }) => presentReminderFired(memberScope, data))
+        .catch((err: unknown) => {
+          toast.error(`A reminder arrived but could not be shown: ${err instanceof Error ? err.message : String(err)}`);
+        });
       break;
 
     case GatewayEvents.SERVER_RESTART:

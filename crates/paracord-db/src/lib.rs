@@ -41,6 +41,7 @@ pub mod rate_limits;
 pub mod reactions;
 pub mod read_states;
 pub mod relationships;
+pub mod reminders;
 pub mod roles;
 pub mod saved_messages;
 pub mod scheduled_events;

@@ -23,6 +23,7 @@ use crate::routes::mod_log;
 // other callers are unchanged.
 mod capabilities;
 mod forums;
+mod forwards;
 mod messages;
 mod pins;
 mod polls;
@@ -32,6 +33,7 @@ mod threads;
 
 pub use capabilities::*;
 pub use forums::*;
+pub use forwards::*;
 pub use messages::*;
 pub use pins::*;
 pub use polls::*;
@@ -848,6 +850,7 @@ fn build_message_json(
         "anonymous": anonymous_json,
         "expires_at": expires_at,
         "webhook_id": webhook_id.map(|id| id.to_string()),
+        "forwarded_from": forwarded_from_json(msg.forwarded_from.as_deref()),
     })
 }
 

@@ -2,6 +2,7 @@ import { useFreshRelationships } from '../hooks/useFreshRelationships';
 import { useCurrentChannelStore } from '../hooks/useChannels';
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { Outlet, useLocation, useNavigate, useParams } from 'react-router';
+import { registerAppNavigate } from '../lib/appNavigate';
 // §5.1/§5.3: every overlay here rides the shared recipes — backdrops fade
 // (pc-fade), panels enter/exit on pc-enter/pc-exit, drawers slide on the
 // pc-drawer set — and usePresence keeps each mounted for its leave. The
@@ -48,6 +49,11 @@ import { ErrorBoundary } from '../components/ErrorBoundary';
  */
 export function AppShell() {
   useKeyboardNavigation();
+  const navigate = useNavigate();
+  useEffect(() => {
+    registerAppNavigate(navigate);
+    return () => registerAppNavigate(null);
+  }, [navigate]);
 
   const sidebarCollapsed = useUIStore((s) => s.sidebarCollapsed);
   const setSidebarCollapsed = useUIStore((s) => s.setSidebarCollapsed);
