@@ -1,5 +1,5 @@
 import type { ChannelType } from './channel.types';
-import type { MessageE2eePayload } from './message.types';
+import type { ForwardedFromRequest, MessageE2eePayload } from './message.types';
 import type { User } from './user.types';
 
 export interface LoginRequest {
@@ -44,6 +44,7 @@ export interface SendMessageRequest {
   sticker_ids?: string[];
   e2ee?: MessageE2eePayload;
   nonce?: string;
+  forwarded_from?: ForwardedFromRequest;
 }
 
 export interface EditMessageRequest {

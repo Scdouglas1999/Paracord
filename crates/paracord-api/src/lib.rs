@@ -336,6 +336,10 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
             get(routes::channels::list_saved_messages),
         )
         .route(
+            "/api/v1/users/@me/reminders",
+            get(routes::reminders::list_my_reminders),
+        )
+        .route(
             "/api/v1/users/@me/saved-messages/{message_id}",
             put(routes::channels::save_message).delete(routes::channels::remove_saved_message),
         )
@@ -671,6 +675,14 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
         .route(
             "/api/v1/channels/{channel_id}/messages/{message_id}/reactions/{emoji}/@me",
             put(routes::channels::add_reaction).delete(routes::channels::remove_reaction),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/messages/{message_id}/reactions/{emoji}",
+            get(routes::channels::list_reaction_users),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/messages/{message_id}/reminder",
+            put(routes::reminders::put_reminder).delete(routes::reminders::delete_reminder),
         )
         .route(
             "/api/v1/channels/{channel_id}/webhooks",

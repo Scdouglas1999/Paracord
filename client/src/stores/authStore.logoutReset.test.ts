@@ -53,6 +53,7 @@ import { useVoiceStore } from './voiceStore';
 import { useTypingStore } from './typingStore';
 import { useReadStateStore } from './readStateStore';
 import { useSavedMessageStore } from './savedMessageStore';
+import { useReminderStore } from './reminderStore';
 
 let useMessageStore: ReturnType<typeof getMessageStore>;
 
@@ -149,12 +150,14 @@ describe('logout clears every store holding account data', () => {
     const typingReset = vi.spyOn(useTypingStore.getState(), 'reset');
     const readStateReset = vi.spyOn(useReadStateStore.getState(), 'reset');
     const savedReset = vi.spyOn(useSavedMessageStore.getState(), 'reset');
+    const reminderReset = vi.spyOn(useReminderStore.getState(), 'reset');
 
     await useAuthStore.getState().logout();
 
     expect(typingReset).toHaveBeenCalled();
     expect(readStateReset).toHaveBeenCalled();
     expect(savedReset).toHaveBeenCalled();
+    expect(reminderReset).toHaveBeenCalled();
   });
 
   it('a second account starting fresh sees none of the first account content', async () => {

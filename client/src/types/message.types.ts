@@ -150,4 +150,29 @@ export interface Message {
   } | null;
   expires_at?: string | null;
   flags?: number | null;
+  /**
+   * Set when this message is a forward. `content` is the quoted text when the
+   * server has it, and null when both ends are end-to-end encrypted.
+   */
+  forwarded_from?: ForwardedFrom | null;
+}
+
+/** Attribution stored with a forwarded message and returned on message objects. */
+export interface ForwardedFrom {
+  channel_id: string;
+  message_id: string;
+  guild_id?: string | null;
+  author_id?: string;
+  author_name?: string;
+  sent_at?: string;
+  channel_name?: string | null;
+  content?: string | null;
+  error?: string;
+}
+
+/** What a send tells the server. The server rewrites the stored attribution. */
+export interface ForwardedFromRequest {
+  channel_id: string;
+  message_id: string;
+  content?: string;
 }

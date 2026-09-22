@@ -5,6 +5,7 @@ import { captureScopedOperation, type OperationContext } from '../lib/operationC
 import axios from 'axios';
 import { create } from 'zustand';
 import type {
+  ForwardedFromRequest,
   Message,
   MessageAuthor,
   PaginationParams,
@@ -137,6 +138,7 @@ export interface MessageState {
     // Encrypted attachment seam: files for an end-to-end encrypted conversation
     // never become plaintext `attachmentIds`; they go to the encrypted producer.
     attachments?: EncryptedAttachmentSubmission,
+    forwardedFrom?: ForwardedFromRequest,
   ) => Promise<void>;
   scheduleMessage: (
     channelId: string,
@@ -203,6 +205,9 @@ function rememberDeleted(previous: Set<string>, added: Set<string>): Set<string>
   return new Set([...next].slice(next.size - DELETED_MEMORY / 2));
 }
 
+/** What an encrypted message reads as when this device cannot decrypt it. */
+export const ENCRYPTED_DM_PLACEHOLDER = '[Encrypted message]';
+
 function createAccountMessageStore(scope: AccountScope) {
   let revoked = false;
 
@@ -221,7 +226,6 @@ function createAccountMessageStore(scope: AccountScope) {
     return scope.userId;
   }
 
-  const ENCRYPTED_DM_PLACEHOLDER = '[Encrypted message]';
   const runtime = getAccountMessagingRuntime(scope);
 
   const _messageFetchRequests = new Map<string, HistoryRequest>();
@@ -610,10 +614,14 @@ function createAccountMessageStore(scope: AccountScope) {
         } finally { context.dispose(); }
       },
 
-      sendMessage: async (channelId, content, referencedMessageId, attachmentIds, stickerIds, draft, attachments) => {
-        if (!content.trim() && !attachmentIds?.length && !stickerIds?.length && !attachments?.files.length) return;
+      sendMessage: async (channelId, content, referencedMessageId, attachmentIds, stickerIds, draft, attachments, forwardedFrom) => {
+        if (!content.trim() && !attachmentIds?.length && !stickerIds?.length && !attachments?.files.length && !forwardedFrom) return;
         if (revoked) throw new Error('This account message session has ended.');
-        await runtime.send(channelId, content, referencedMessageId, attachmentIds, stickerIds, draft, attachments);
+        if (forwardedFrom) {
+          await runtime.send(channelId, content, referencedMessageId, attachmentIds, stickerIds, draft, attachments, forwardedFrom);
+        } else {
+          await runtime.send(channelId, content, referencedMessageId, attachmentIds, stickerIds, draft, attachments);
+        }
       },
 
       scheduleMessage: async (channelId, content, sendAtIso, referencedMessageId) => {

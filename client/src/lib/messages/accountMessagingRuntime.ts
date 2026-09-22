@@ -4,7 +4,7 @@ import { createKeysApi } from '../../api/keys';
 import { uploadOpaqueCiphertext } from '../../api/files';
 import { prepareEncryptedAttachments } from './attachments/attachmentProducer';
 import { stageAttachments } from './attachments/attachmentStaging';
-import type { Message, MessageE2eePayload, SendMessageRequest } from '../../types';
+import type { ForwardedFromRequest, Message, MessageE2eePayload, SendMessageRequest } from '../../types';
 import { useChannelStore } from '../../stores/channelStore';
 import { useAccountStore } from '../../stores/accountStore';
 import { useAuthStore } from '../../stores/authStore';
@@ -434,8 +434,12 @@ export class AccountMessagingRuntime {
     group?: ReturnType<typeof createDurableGroup>): Lane {
     const { vault, context } = session;
     const changed = () => { this.changes?.postMessage('changed'); void this.refresh().catch(error => { if (!session.signal.aborted) this.store.setState({ error: errorText(error) }); }); };
-    const plainRequest = (intent: DurableIntent): SendMessageRequest => ({ nonce: intent.nonce, content: intent.draft.content,
-      referenced_message_id: intent.intent.referencedMessageId, attachment_ids: intent.intent.attachmentIds, sticker_ids: intent.intent.stickerIds });
+    const plainRequest = (intent: DurableIntent): SendMessageRequest => {
+      const request: SendMessageRequest = { nonce: intent.nonce, content: intent.draft.content,
+        referenced_message_id: intent.intent.referencedMessageId, attachment_ids: intent.intent.attachmentIds, sticker_ids: intent.intent.stickerIds };
+      if (intent.intent.forwardedFrom) request.forwarded_from = intent.intent.forwardedFrom;
+      return request;
+    };
     const driver = new DurableDelivery({ vault, lifetime: session,
       beforeAttempt: async () => { this.assertDeliveryReady(); if (dm) await this.synchronizeLocalDeletions(session as IdentitySession, dm, mutations); },
       send: async (record, signal) => {
@@ -770,7 +774,7 @@ export class AccountMessagingRuntime {
    * how guild channels work, and is refused for an encrypted conversation.
    */
   async send(channelId: string, content: string, referencedMessageId?: string, attachmentIds?: string[], stickerIds?: string[], draft?: MessageDraft,
-    attachments?: EncryptedAttachmentSubmission) {
+    attachments?: EncryptedAttachmentSubmission, forwardedFrom?: ForwardedFromRequest) {
     await this.prepareChannelHistory(channelId); this.assertDeliveryReady(channelId);
     this.assertCurrent(); const encryption = await this.receiveConversation(channelId, true);
     const lane = encryption.kind === 'plain' ? await this.requireLocal() : await this.requireIdentity();
@@ -789,7 +793,7 @@ export class AccountMessagingRuntime {
     const stage = prepared.length
       ? (tx: VaultTransaction, messageId: string) => { stageAttachments(tx, messageId, channelId, prepared); }
       : undefined;
-    const intent = { encryption, referencedMessageId, attachmentIds, stickerIds };
+    const intent = { encryption, referencedMessageId, attachmentIds, stickerIds, forwardedFrom };
     if (draft) {
       if (draft.content.trim() !== content.trim()) throw new Error('The submitted draft no longer matches this message.');
       const local = await this.requireLocal();

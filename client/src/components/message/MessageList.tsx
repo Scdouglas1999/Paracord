@@ -5,16 +5,18 @@ import { useRef, useEffect, useMemo, useState, useReducer, useCallback, type CSS
 import { createPortal } from 'react-dom';
 import { captureScopedOperation, type OperationContext } from '../../lib/operationContext';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { AlertTriangle, ArrowDown, Smile, Reply, MoreHorizontal, Hash, Check, X as XIcon, Pencil, Pin, PinOff, Copy, Clipboard, Trash2, MessageSquare, Send, Eye, Loader2, Bookmark, BookmarkCheck, Trophy } from 'lucide-react';
+import { AlertTriangle, ArrowDown, Smile, Reply, MoreHorizontal, Hash, Check, X as XIcon, Pencil, Pin, PinOff, Copy, Clipboard, Trash2, MessageSquare, Send, Eye, Loader2, Bookmark, BookmarkCheck, Trophy, Clock, Forward } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { useMessages } from '../../hooks/useMessages';
 import { useTypingStore } from '../../stores/typingStore';
 import { useCurrentMessageStore } from '../../hooks/useMessageStore';
+import { ENCRYPTED_DM_PLACEHOLDER } from '../../stores/messageStore';
 import { useGuild } from '../../hooks/useGuilds';
 import { useServerListStore } from '../../stores/serverListStore';
 import { useReadStateStore } from '../../stores/readStateStore';
 import { useMemberStore } from '../../stores/memberStore';
 import { useSavedMessageStore } from '../../stores/savedMessageStore';
+import { pendingReminderMessageIds, useReminderStore } from '../../stores/reminderStore';
 import { useUIStore } from '../../stores/uiStore';
 import { channelApi } from '../../api/channels';
 import { MessageEditHistoryDialog } from './MessageEditHistoryDialog';
@@ -34,7 +36,7 @@ import { resolveResourceUrl } from '../../lib/config/apiBaseUrl';
 import { getDownloadTicket } from '../../lib/downloadTicket';
 import { writeClipboardText } from '../../lib/clipboard';
 import { SkeletonMessage } from '../ui/Skeleton';
-import { fadeIn, flicker, motionToken, ms, onMotion, prefersReducedMotion, RollingNumber, settleIn, useFlipList, walkIntoRoom } from '../../lib/motion';
+import { fadeIn, flicker, motionToken, ms, onMotion, prefersReducedMotion, settleIn, useFlipList, walkIntoRoom } from '../../lib/motion';
 import { messagePreviewText, parseMarkdown } from '../../lib/markdown';
 import { useDownloadTicket } from '../../hooks/useDownloadTicket';
 import { getHighestRoleColor, getIdentityColor, getIdentityInk } from '../../lib/colors';
@@ -75,6 +77,11 @@ import { Modal, ModalDescription, ModalFooter, ModalHeader, ModalTitle } from '.
 import { displayName } from '../../lib/displayName';
 import { cn } from '../../lib/utils';
 import { fetchChannelOverwrites, fetchGuildRoles } from '../../lib/permissionDataCache';
+import { forwardBlockedReason, forwardQuote, messageBubbleText } from '../../lib/forwardedMessage';
+import { ReactionChip } from './ReactionPeople';
+import { RemindMeMenu } from './RemindMeMenu';
+import { ForwardPicker } from './ForwardPicker';
+import { ForwardedCard } from './ForwardedCard';
 
 const EMPTY_TYPING: string[] = [];
 
@@ -99,10 +106,14 @@ interface ReactionTally {
 function ReactionRow({
   reactions,
   guildId,
+  channelId,
+  messageId,
   onToggle,
 }: {
   reactions: readonly ReactionTally[];
   guildId: string | null | undefined;
+  channelId: string;
+  messageId: string;
   onToggle: (reaction: ReactionTally) => void;
 }) {
   const rowRef = useFlipList<HTMLDivElement>({ enter: 'pop' });
@@ -114,19 +125,16 @@ function ReactionRow({
       {reactions.map((r, reactionIndex) => {
         const parsedCustomEmoji = guildId ? parseCustomEmojiToken(r.emoji) : null;
         return (
-          <Chip
-            as="button"
+          <ReactionChip
             key={`${r.emoji}-${reactionIndex}`}
-            data-flip-key={r.emoji}
-            data-flip-own={r.me || undefined}
-            onClick={() => onToggle(r)}
-            className={cn(
-              'gap-1.5 px-2.5',
-              r.me && 'bg-accent-tint text-accent-primary shadow-none hover:bg-accent-tint-strong hover:text-accent-primary',
-            )}
-          >
-            <span data-flip-glyph>
-              {parsedCustomEmoji && guildId ? (
+            emoji={r.emoji}
+            count={r.count}
+            me={r.me}
+            channelId={channelId}
+            messageId={messageId}
+            onToggle={() => onToggle(r)}
+            glyph={
+              parsedCustomEmoji && guildId ? (
                 <CustomEmojiImage
                   guildId={guildId}
                   emojiId={parsedCustomEmoji.id}
@@ -138,13 +146,9 @@ function ReactionRow({
                 />
               ) : (
                 r.emoji
-              )}
-            </span>
-            {/* The tally re-rolls like every other count (§5.1). */}
-            <span className="font-medium">
-              <RollingNumber value={r.count} announce={false} />
-            </span>
-          </Chip>
+              )
+            }
+          />
         );
       })}
     </div>
@@ -168,6 +172,7 @@ function TypingDots() {
 const EMPTY_CHANNELS: Channel[] = [];
 const EMPTY_MEMBERS: Member[] = [];
 const EMPTY_SAVED_IDS = new Set<string>();
+const EMPTY_REMINDERS: ReturnType<typeof useReminderStore.getState>['items'] = [];
 
 /** Avoid re-parsing markdown on hover/typing re-renders when message content is unchanged. */
 const markdownParseCache = new Map<string, {
@@ -293,11 +298,14 @@ function ResolvedAttachmentImage({
   alt,
   className,
   style,
+  compact = false,
 }: {
   url: string;
   alt: string;
   className?: string;
   style?: CSSProperties;
+  /** A thumbnail: while loading, hold its own box instead of the full-size well. */
+  compact?: boolean;
 }) {
   const [resolvedSrc, setResolvedSrc] = useState<string | null>(null);
   const safeRawUrl = safeClientResourceUrl(url);
@@ -325,6 +333,9 @@ function ResolvedAttachmentImage({
     };
   }, [safeRawUrl]);
 
+  if ((!safeRawUrl || !resolvedSrc) && compact) {
+    return <span className={cn(className, 'block bg-bg-mod-subtle')} role="img" aria-label={`Loading ${alt}`} />;
+  }
   if (!safeRawUrl || !resolvedSrc) {
     return (
       <div
@@ -350,6 +361,34 @@ function isImageAttachment(att: { content_type?: string; filename: string }): bo
   const contentType = (att.content_type || '').toLowerCase();
   if (contentType.startsWith('image/')) return isAllowedImageMimeType(contentType);
   return IMAGE_ATTACHMENT_EXTENSION_RE.test(att.filename);
+}
+
+/**
+ * A forwarded server message shows its pictures as thumbnails inside the
+ * quoted card. An encrypted conversation's files are decrypted by their own
+ * renderer, so they stay in the ordinary attachment list.
+ */
+function inForwardCard(message: Message, att: { content_type?: string; filename: string }): boolean {
+  return Boolean(message.forwarded_from) && !message.e2ee && isImageAttachment(att);
+}
+
+function forwardThumbnails(message: Message): ReactNode {
+  const images = (message.attachments ?? []).filter((att) => inForwardCard(message, att));
+  if (images.length === 0) return null;
+  return images.map((att) => {
+    const src = resolveFederatedAttachmentUrl(att, message.channel_id);
+    return src ? (
+      <ResolvedAttachmentImage
+        key={att.id}
+        url={src}
+        alt={att.filename}
+        className="h-20 w-20 rounded-[var(--radius-chip)] object-cover"
+        compact
+      />
+    ) : (
+      <span key={att.id} className="text-meta text-accent-danger">{att.filename} cannot be shown.</span>
+    );
+  });
 }
 
 /** "4 replies · 12 min ago" — the meta line on a thread row (§7.4). */
@@ -417,8 +456,12 @@ function truncateInline(value: string, max = 96): string {
   return `${value.slice(0, max - 1)}...`;
 }
 
-function getReplyPreviewText(message: Message, names?: ReadonlyMap<string, string>): string {
-  const text = messagePreviewText(message.content || '', names);
+function getReplyPreviewText(
+  message: Message,
+  names?: ReadonlyMap<string, string>,
+  roleNames?: ReadonlyMap<string, string>,
+): string {
+  const text = messagePreviewText(messageBubbleText(message), names, roleNames);
   if (text) return truncateInline(text);
   if (message.poll) return '[Poll]';
   if (message.attachments?.length) {
@@ -682,6 +725,29 @@ function OwnedMessageList({
   const savedIds = useSavedMessageStore((state) =>
     state.serverId === savedServerScope ? state.savedIds : EMPTY_SAVED_IDS,
   );
+  const reminderItems = useReminderStore((state) =>
+    state.serverId === savedServerScope ? state.items : EMPTY_REMINDERS,
+  );
+  const pendingReminderIds = useMemo(
+    () => pendingReminderMessageIds(reminderItems),
+    [reminderItems],
+  );
+  const actionAnchor = useRef<HTMLDivElement>(null);
+  const [remindTarget, setRemindTarget] = useState<Message | null>(null);
+  const [forwardTarget, setForwardTarget] = useState<Message | null>(null);
+  const [forwardOpen, setForwardOpen] = useState(false);
+  const forwardBlockedFor = (message: Message) => forwardBlockedReason(message, {
+    sourceIsDm: !activeGuildId,
+    unreadable: decryptingIds.has(message.id) || (Boolean(message.e2ee) && message.content === ENCRYPTED_DM_PLACEHOLDER),
+  });
+  const openRemind = (message: Message, x: number, y: number) => {
+    const node = actionAnchor.current;
+    if (node) {
+      node.style.left = `${x}px`;
+      node.style.top = `${y}px`;
+    }
+    setRemindTarget(message);
+  };
   const channelServerId = originServerId ?? activeServerId;
   const activeGuildChannels = useCurrentChannelStore(
     useCallback(
@@ -759,6 +825,7 @@ function OwnedMessageList({
 
   useEffect(() => {
     void useSavedMessageStore.getState().load();
+    void useReminderStore.getState().load();
   }, [savedServerScope]);
   // Reading a room's overwrite list needs MANAGE_CHANNELS. Asking for it
   // regardless answered 403 on every room a plain member opened — a failed
@@ -1009,6 +1076,12 @@ function OwnedMessageList({
     }
     return map;
   }, [activeGuildMembers]);
+
+  const roleNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const role of guildRoles) map.set(role.id, role.name);
+    return map;
+  }, [guildRoles]);
 
   const activeGuildMemberById = useMemo(() => {
     const map = new Map<string, Member>();
@@ -2223,7 +2296,7 @@ function OwnedMessageList({
     }
   };
 
-  const buildMessageContextMenuItems = (msg: Message): ContextMenuItem[] => {
+  const buildMessageContextMenuItems = (msg: Message, at: { x: number; y: number }): ContextMenuItem[] => {
     const isOwnMessage = msg.author.id === me;
     // Editing rewrites the whole encrypted body, and a delivered message's
     // attachment descriptors cannot be recovered from the server, so an
@@ -2295,6 +2368,26 @@ function OwnedMessageList({
     }
 
     items.push({
+      label: 'Remind me',
+      icon: <Clock size={14} />,
+      // The click point itself: `contextMenuAnchor` is still the previous one
+      // while this list is being built.
+      action: () => openRemind(msg, at.x, at.y),
+    });
+    const forwardBlocked = forwardBlockedFor(msg);
+    items.push({
+      label: 'Forward',
+      icon: <Forward size={14} />,
+      disabled: Boolean(forwardBlocked),
+      description: forwardBlocked ?? undefined,
+      action: () => {
+        if (forwardBlocked) return;
+        setForwardTarget(msg);
+        setForwardOpen(true);
+      },
+    });
+
+    items.push({
       label: savedIds.has(msg.id) ? 'Remove from Saved' : 'Save for later',
       icon: savedIds.has(msg.id) ? <BookmarkCheck size={14} /> : <Bookmark size={14} />,
       action: () => {
@@ -2364,7 +2457,7 @@ function OwnedMessageList({
 
   const handleMessageContextMenu = (e: React.MouseEvent, msg: Message) => {
     setContextMenuAnchor({ x: e.clientX, y: e.clientY });
-    onContextMenu(e, buildMessageContextMenuItems(msg));
+    onContextMenu(e, buildMessageContextMenuItems(msg, { x: e.clientX, y: e.clientY }));
   };
 
   // Render a single virtual row
@@ -2439,12 +2532,11 @@ function OwnedMessageList({
     const canEditMessage = isOwnMessage && !hasEncryptedAttachments(msg);
     const canDeleteMessage = isOwnMessage || canManageMessages;
     const canPinMessage = canPinInChannel;
-    const canReportMessage = Boolean(activeGuildId) && msg.author.id !== me;
-    const canOpenMessageMenu =
-      canEditMessage || canDeleteMessage || canPinMessage || canCreateThreads || canReportMessage || Boolean(msg.anonymous?.can_deanonymize);
+    const forwardBlocked = forwardBlockedFor(msg);
     const linkedThreads = linkedThreadsByStarterMessageId[msg.id] ?? [];
     const authorGuildMember = activeGuildMemberById.get(msg.author.id);
     const authorName = displayName(msg.author, authorGuildMember?.nick);
+    const bubbleText = messageBubbleText(msg);
     const scoreUpdate = isSportsScoreAuthor(msg.author) ? parseScoreUpdate(msg.content || '') : null;
     const scoreSides = scoreUpdate ? resolveScoreSides(pinnedSportsGame, scoreUpdate) : null;
     const authorRoleColor = authorGuildMember ? getHighestRoleColor(authorGuildMember.roles ?? [], guildRoles) : undefined;
@@ -2588,7 +2680,7 @@ function OwnedMessageList({
               }
               preview={
                 replyParentMessage
-                  ? getReplyPreviewText(replyParentMessage, mentionMap)
+                  ? getReplyPreviewText(replyParentMessage, mentionMap, roleNameMap)
                   : deletedMessageIds.has(replyParentId)
                     ? 'This message was deleted'
                     : 'Message not loaded'
@@ -2620,6 +2712,15 @@ function OwnedMessageList({
                 <Chip size="sm" className="text-accent-primary">
                   Bot
                 </Chip>
+              )}
+              {pendingReminderIds.has(msg.id) && (
+                <span
+                  className="inline-flex items-center gap-1 text-meta text-text-muted"
+                  title="Reminder set"
+                >
+                  <Clock size={12} aria-hidden />
+                  <span className="sr-only">Reminder set</span>
+                </span>
               )}
               <AuthorMeta
                 person={authorPerson}
@@ -2704,7 +2805,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                     <div className={cn('break-words text-body text-text-body', ribbon && 'text-ribbon')}>
                       {getCachedParsedMarkdown(
                         msg.id,
-                        msg.content || '',
+                        bubbleText,
                         String(msg.edited_timestamp || msg.edited_at || ''),
                         activeGuildId || undefined,
                         mentionMap,
@@ -2728,9 +2829,17 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                 />
               ) : !msg.poll ? (
                 <div className={cn('mt-0.5 break-words text-body text-text-body', ribbon && 'text-ribbon')}>
+                  {msg.forwarded_from && (
+                    <ForwardedCard
+                      forward={msg.forwarded_from}
+                      scope={scope}
+                      quote={decryptingIds.has(msg.id) ? 'Decrypting this message…' : forwardQuote(msg)}
+                      thumbnails={forwardThumbnails(msg)}
+                    />
+                  )}
                   {getCachedParsedMarkdown(
                     msg.id,
-                    msg.content || '',
+                    bubbleText,
                     String(msg.edited_timestamp || msg.edited_at || ''),
                     activeGuildId || undefined,
                     mentionMap,
@@ -2816,6 +2925,8 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
             <ReactionRow
               reactions={msg.reactions as ReactionTally[]}
               guildId={activeGuildId}
+              channelId={channelId}
+              messageId={msg.id}
               onToggle={(reaction) => void toggleReaction(msg.id, reaction)}
             />
           )}
@@ -2855,7 +2966,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
           {/* Attachments */}
           {msg.attachments && msg.attachments.length > 0 && (
             <div className="mt-1.5 flex flex-col gap-2">
-              {msg.attachments.map((att) => {
+              {msg.attachments.filter((att) => !inForwardCard(msg, att)).map((att) => {
                 // Encrypted attachment seam: in an end-to-end encrypted
                 // conversation the server's row is an opaque blob. Its real
                 // name, type and bytes come from the encrypted message body and
@@ -3053,7 +3164,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
           )}
         </div>
 
-        {isCoarsePointer && canOpenMessageMenu && (
+        {isCoarsePointer && (
           <button
             // This is the ONLY way into a message's actions on a touch screen —
             // the hover row beside it never appears — and at 32x32 it was under
@@ -3080,7 +3191,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
             <button className="hover-action-btn rounded-chip" title="Reply" aria-label="Reply" onClick={() => onReply?.(msg)}>
               <Reply size={16} />
             </button>
-            {canOpenMessageMenu && (
+            {(
               <button
                 className="hover-action-btn rounded-chip"
                 title="More actions"
@@ -3092,7 +3203,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
             )}
           </div>
         )}
-        {menuMessageId === msg.id && canOpenMessageMenu && (
+        {menuMessageId === msg.id && (
           <div
             // The menu hangs below its trigger, which is fine in the middle of
             // a timeline and wrong at the end of one: the newest message is the
@@ -3220,6 +3331,31 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
             )}
             <button
               className="context-menu-item w-full text-left"
+              onClick={(event) => openRemind(msg, event.clientX, event.clientY)}
+            >
+              <span className="flex items-center gap-2 whitespace-nowrap">
+                <Clock size={14} />
+                Remind me
+              </span>
+            </button>
+            <button
+              className="context-menu-item w-full text-left"
+              disabled={Boolean(forwardBlocked)}
+              title={forwardBlocked ?? undefined}
+              onClick={() => {
+                if (forwardBlocked) return;
+                setMenuMessageId(null);
+                setForwardTarget(msg);
+                setForwardOpen(true);
+              }}
+            >
+              <span className="flex items-center gap-2 whitespace-nowrap">
+                <Forward size={14} />
+                Forward
+              </span>
+            </button>
+            <button
+              className="context-menu-item w-full text-left"
               onClick={() => void toggleSavedMessage(msg)}
             >
               {/* `.context-menu-item` sets `display:block`, which beats the
@@ -3251,6 +3387,26 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
 
   return (
     <div className="relative flex-1 overflow-hidden">
+      <div ref={actionAnchor} className="pointer-events-none fixed h-px w-px" aria-hidden />
+      {remindTarget && (
+        <RemindMeMenu
+          anchor={actionAnchor}
+          open
+          onClose={() => setRemindTarget(null)}
+          channelId={remindTarget.channel_id}
+          messageId={remindTarget.id}
+        />
+      )}
+      {forwardTarget && scope && (
+        <ForwardPicker
+          key={forwardTarget.id}
+          message={forwardTarget}
+          scope={scope}
+          sourceEncrypted={!activeGuildId}
+          open={forwardOpen}
+          onClose={() => setForwardOpen(false)}
+        />
+      )}
       {/*
         New-message announcements live here, NOT on the scroll container.
         `aria-live` on a virtualized list makes every row mount an announcement,

@@ -1,5 +1,5 @@
 import type { PreparedDeliveryEdit } from './durableEdit';
-import type { Message, MessageE2eePayload, SendMessageRequest } from '../../types';
+import type { ForwardedFromRequest, Message, MessageE2eePayload, SendMessageRequest } from '../../types';
 import type { DmCipherDependencies } from '../dmCipher';
 import type { AccountVault, VaultTransaction } from '../crypto/accountVault';
 import { assertSignalMessageId, createSignalSessionCipher, retireSignalSendingSession, type SignalSessionReference } from '../crypto/signalSessions';
@@ -14,7 +14,7 @@ import type { EncryptedAttachmentUploader } from './attachments/attachmentProduc
 const PLAINTEXT_NAMESPACE = 'messages.plaintext';
 const SEND_SESSION_NAMESPACE = 'messages.signal-sends';
 const EXTERNAL_REMOVALS_NAMESPACE = 'messages.signal-removals';
-interface SendSession { channelId: string; peer: Peer; referencedMessageId?: string; session: SignalSessionReference }
+interface SendSession { channelId: string; peer: Peer; referencedMessageId?: string; forwardedFrom?: ForwardedFromRequest; session: SignalSessionReference }
 interface Peer { id: string; publicKey: string }
 
 async function cacheId(channelId: string, peer: Peer, payload: MessageE2eePayload): Promise<string> {
@@ -26,18 +26,19 @@ async function cacheId(channelId: string, peer: Peer, payload: MessageE2eePayloa
 export function createDurableDm(vault: AccountVault, privateKey: Uint8Array, keysApi: DmCipherDependencies['keysApi'],
   uploadAttachment?: EncryptedAttachmentUploader) {
   async function build(transaction: VaultTransaction, nonce: string, channelId: string, peer: Peer, content: string, referencedMessageId?: string,
-    attachments: readonly EncryptedAttachmentDescriptor[] = []): Promise<SendMessageRequest> {
+    attachments: readonly EncryptedAttachmentDescriptor[] = [], forwardedFrom?: ForwardedFromRequest): Promise<SendMessageRequest> {
     // With attachments the encrypted plaintext becomes a versioned body that
     // carries their keys and real metadata; without them it stays the bare text
     // every earlier message used.
     const body = attachments.length ? encodeEncryptedBodyWithinBudget({ text: content, attachments }) : content;
     const cipher = createSignalSessionCipher(transaction, channelId, keysApi);
     const { payload: e2ee, session } = await cipher.encryptDmMessageWithSession(channelId, body, privateKey, peer.publicKey, peer.id);
-    transaction.put(SEND_SESSION_NAMESPACE, nonce, { channelId, peer, referencedMessageId, session } satisfies SendSession);
+    transaction.put(SEND_SESSION_NAMESPACE, nonce, { channelId, peer, referencedMessageId, forwardedFrom, session } satisfies SendSession);
     const id = await cacheId(channelId, peer, e2ee);
     transaction.put(PLAINTEXT_NAMESPACE, id, { content: body });
     return { nonce, content: '', e2ee, referenced_message_id: referencedMessageId,
-      ...(attachments.length ? { attachment_ids: attachments.map(attachment => attachment.id) } : {}) };
+      ...(attachments.length ? { attachment_ids: attachments.map(attachment => attachment.id) } : {}),
+      ...(forwardedFrom ? { forwarded_from: forwardedFrom } : {}) };
   }
   async function restoreFollowers(transaction: VaultTransaction, channelId: string, session: SignalSessionReference, excludedId?: string) {
     await retireSignalSendingSession(transaction, session);
@@ -137,7 +138,7 @@ export function createDurableDm(vault: AccountVault, privateKey: Uint8Array, key
       if (intent.intent.attachmentIds?.length) throw new Error('An encrypted conversation cannot reference a plaintext upload.');
       await reconcileExternalRemovals(transaction, intent.channelId, intent.intent.encryption.peer);
       const attachments = await collectUploadedDescriptors(transaction, intent.id);
-      return build(transaction, intent.nonce, intent.channelId, intent.intent.encryption.peer, intent.draft.content, intent.intent.referencedMessageId, attachments);
+      return build(transaction, intent.nonce, intent.channelId, intent.intent.encryption.peer, intent.draft.content, intent.intent.referencedMessageId, attachments, intent.intent.forwardedFrom);
     },
     async prepare(channelId: string, peer: Peer, content: string, referencedMessageId?: string) {
       return prepareDurableSend(vault, channelId, content, (transaction, nonce) => build(transaction, nonce, channelId, peer, content, referencedMessageId));
@@ -154,7 +155,7 @@ export function createDurableDm(vault: AccountVault, privateKey: Uint8Array, key
       await rekeyStagedAttachments(transaction, original.id, nonce);
       return { ...metadata, id: nonce, nonce, draft: { content }, revision: crypto.randomUUID(),
         status: 'pending', attempts: 0, error: null, nextAttemptAt: original.retryAfterAt ?? 0,
-        intent: { encryption: { kind: 'dm', peer: binding.peer }, referencedMessageId: binding.referencedMessageId } };
+        intent: { encryption: { kind: 'dm', peer: binding.peer }, referencedMessageId: binding.referencedMessageId, forwardedFrom: binding.forwardedFrom } };
     },
     async prepareEdit(transaction: VaultTransaction, original: DurableSend, messageId: string, editNonce: string, content: string): Promise<PreparedDeliveryEdit> {
       const binding = await transaction.get<SendSession>(SEND_SESSION_NAMESPACE, original.nonce);

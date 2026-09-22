@@ -1,7 +1,7 @@
 import { useCurrentAccountScope } from '../../../hooks/useCurrentUser';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
-import { Bookmark, Check, CheckCheck, Hash, Inbox, Loader2, MessageSquare, Trash2 } from 'lucide-react';
+import { Bookmark, Check, CheckCheck, Clock, Hash, Inbox, Loader2, MessageSquare, Trash2 } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import type { Message, ReadState } from '../../../types';
 import { useFocusTrap } from '../../../hooks/useFocusTrap';
@@ -12,9 +12,13 @@ import { useSavedMessageStore } from '../../../stores/savedMessageStore';
 import { useServerListStore } from '../../../stores/serverListStore';
 import { channelApi } from '../../../api/channels';
 import { relativeTime } from '../../../lib/formatters';
+import { messagePreviewText } from '../../../lib/markdown';
+import { fetchGuildRoles } from '../../../lib/permissionDataCache';
 import { RollingNumber } from '../../../lib/motion';
 import { cn } from '../../../lib/utils';
 import { TopBarOverlay } from './TopBarOverlay';
+import { RemindersPane } from './RemindersPane';
+import { useReminderStore } from '../../../stores/reminderStore';
 
 interface UnreadItem {
   state: ReadState;
@@ -35,14 +39,16 @@ interface InboxOverlayProps {
   error?: string | null;
 }
 
-type InboxTab = 'mentions' | 'unread' | 'saved';
+type InboxTab = 'mentions' | 'unread' | 'saved' | 'reminders';
 const EMPTY_SAVED_ITEMS: ReturnType<typeof useSavedMessageStore.getState>['items'] = [];
 
-function messagePreview(message: Message | null | undefined): string {
+function messagePreview(message: Message | null | undefined, roleNames?: ReadonlyMap<string, string>): string {
   if (message === undefined) return 'Loading latest message…';
   if (message === null) return 'Preview unavailable';
-  const content = message.content?.trim();
+  // Plain words, as every other preview: a role mention reads "@Design".
+  const content = message.e2ee ? '' : messagePreviewText(message.content ?? '', undefined, roleNames);
   if (content) return content;
+  if (message.forwarded_from?.content) return `Forwarded: ${messagePreviewText(message.forwarded_from.content, undefined, roleNames)}`;
   if (message.poll?.question) return `Poll: ${message.poll.question}`;
   if (message.attachments[0]?.filename) return `Attachment: ${message.attachments[0].filename}`;
   if (message.e2ee) return 'Encrypted message';
@@ -64,8 +70,32 @@ export function InboxOverlay({ open, onClose, unreadItems, allChannels, error }:
   const savedItems = useSavedMessageStore((state) => state.serverId === serverScope ? state.items : EMPTY_SAVED_ITEMS);
   const savedLoading = useSavedMessageStore((state) => state.serverId === serverScope && state.loading);
   const savedError = useSavedMessageStore((state) => state.serverId === serverScope ? state.error : null);
+  const reminderCount = useReminderStore((state) => state.serverId === serverScope ? state.items.length : 0);
 
   useFocusTrap(dialogRef as RefObject<HTMLDivElement | null>, open, onClose);
+
+  // Role names for the servers these previews come from.
+  const [roleNames, setRoleNames] = useState<ReadonlyMap<string, string>>(() => new Map());
+  const previewGuildIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const channel of allChannels) if (channel.guild_id) ids.add(channel.guild_id);
+    return [...ids].sort().join(',');
+  }, [allChannels]);
+  useEffect(() => {
+    if (!open || !previewGuildIds) return;
+    let cancelled = false;
+    void Promise.all(previewGuildIds.split(',').map((guildId) => fetchGuildRoles(guildId)))
+      .then((lists) => {
+        if (cancelled) return;
+        setRoleNames(new Map(lists.flat().map((role) => [role.id, role.name])));
+      })
+      .catch((err) => {
+        if (!cancelled) toast.error(`Role names in these previews could not load: ${extractApiError(err)}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, previewGuildIds]);
 
   const mentionItems = useMemo(
     () => unreadItems.filter(({ state }) => state.mention_count > 0),
@@ -171,11 +201,12 @@ export function InboxOverlay({ open, onClose, unreadItems, allChannels, error }:
       panelClassName="max-h-[min(82dvh,42rem)] w-full max-w-2xl"
       bodyClassName="p-0"
     >
-      <div className="sticky top-0 z-[1] flex items-center gap-1 border-b border-border-subtle bg-bg-floating px-3 py-2">
+      <div className="sticky top-0 z-[1] flex items-center gap-1 overflow-x-auto border-b border-border-subtle bg-bg-floating px-3 py-2">
         {([
           ['mentions', 'Mentions', mentionCount],
           ['unread', 'Unread', unreadItems.length],
           ['saved', 'Saved', savedItems.length],
+          ['reminders', 'Reminders', reminderCount],
         ] as const).map(([value, label, count]) => (
           <button
             key={value}
@@ -184,7 +215,7 @@ export function InboxOverlay({ open, onClose, unreadItems, allChannels, error }:
             aria-selected={tab === value}
             onClick={() => setTab(value)}
             className={cn(
-              'inline-flex h-8 items-center gap-1.5 rounded-chip px-3 text-label font-semibold outline-none transition-colors focus-visible:shadow-[var(--focus-ring)]',
+              'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-chip px-3 text-label font-semibold outline-none transition-colors focus-visible:shadow-[var(--focus-ring)]',
               tab === value
                 ? 'bg-accent-tint text-accent-primary'
                 : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
@@ -221,6 +252,11 @@ export function InboxOverlay({ open, onClose, unreadItems, allChannels, error }:
         <div role="alert" className="m-3 rounded-well border border-accent-danger/30 bg-danger-tint px-4 py-3 text-label text-accent-danger">
           {error}
         </div>
+      ) : tab === 'reminders' ? (
+        <RemindersPane
+          onOpen={(item) => goToChannel(item.channel.id, item.message.id, item.channel.guild_id)}
+          empty={<EmptyState icon={Clock} title="No reminders" body="Choose Remind me on a message and it will come back here when it is due." />}
+        />
       ) : tab === 'saved' ? (
         savedLoading && savedItems.length === 0 ? (
           <div className="flex items-center justify-center gap-2 px-5 py-12 text-label text-text-muted">
@@ -246,7 +282,7 @@ export function InboxOverlay({ open, onClose, unreadItems, allChannels, error }:
                     <span className="ml-auto shrink-0">{relativeTime(item.saved_at)}</span>
                   </span>
                   <span className="mt-1 block line-clamp-2 text-label leading-5 text-text-secondary">
-                    {messagePreview(item.message)}
+                    {messagePreview(item.message, roleNames)}
                   </span>
                 </button>
                 <button
@@ -301,7 +337,7 @@ export function InboxOverlay({ open, onClose, unreadItems, allChannels, error }:
                         {authorName(preview)}
                       </span>
                     )}
-                    <span className="block truncate text-label text-text-muted">{messagePreview(preview)}</span>
+                    <span className="block truncate text-label text-text-muted">{messagePreview(preview, roleNames)}</span>
                   </span>
                 </button>
                 <button
