@@ -7,6 +7,9 @@ export interface User {
   avatar_hash?: string | null;
   public_key?: string | null;
   banner?: string;
+  banner_hash?: string | null;
+  /** Profile accent as `0xRRGGBB`. */
+  accent_color?: number | null;
   bio?: string | null;
   pronouns?: string | null;
   linked_accounts?: Array<{ label: string; url: string }>;

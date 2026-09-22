@@ -498,9 +498,11 @@ describe('readHubWelcome', () => {
     expect(readHubWelcome({ description: 'A workshop' }).welcome).toBe('A workshop');
   });
 
-  it('refuses a banner that is not a picture it can prove is safe', () => {
+  it('uses the uploaded server banner and ignores a data URL stored on the hub', () => {
     expect(readHubWelcome({ banner_hash: 'javascript:alert(1)' }).bannerSrc).toBeNull();
-    expect(readHubWelcome({ banner_hash: 42 as unknown as string }).bannerSrc).toBeNull();
+    expect(readHubWelcome({ banner_hash: 'data:image/png;base64,aaaa' }).bannerSrc).toBeNull();
+    expect(readHubWelcome(null, 'javascript:alert(1)').bannerSrc).toBeNull();
+    expect(readHubWelcome(null, '/api/v1/guilds/1/banner').bannerSrc).toBe('/api/v1/guilds/1/banner');
   });
 
   it('keeps only the channel ids that are strings', () => {

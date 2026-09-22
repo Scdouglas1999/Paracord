@@ -73,7 +73,7 @@ let posts: string[] = [];
 
 /** A complete `GET /users/@me` body, so the real response contract accepts it. */
 const currentUser = {
-  avatar_hash: null, banner_hash: null, bio: null, bot: false,
+  avatar_hash: null, banner_hash: null, accent_color: null, bio: null, bot: false,
   created_at: '2026-01-01T00:00:00Z', discriminator: 0, display_name: null,
   email: 'owner@example.test', email_verified: true, flags: 0,
   has_public_key: false, id: scope.userId, linked_accounts: [], pronouns: null,

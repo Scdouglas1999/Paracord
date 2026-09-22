@@ -1891,7 +1891,7 @@ pub async fn get_stickers_for_message_ids(
         )));
     }
     let sql = format!(
-        "SELECT ms.message_id AS message_id, s.id, s.guild_id, s.name, s.description, s.format_type,
+        "SELECT ms.message_id AS message_id, s.id, s.guild_id, s.name, s.description, s.tags, s.format_type,
                 s.asset_key, s.asset_content_type, s.creator_id, s.created_at
          FROM message_stickers ms
          INNER JOIN stickers s ON s.id = ms.sticker_id

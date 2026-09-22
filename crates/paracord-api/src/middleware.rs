@@ -116,7 +116,14 @@ pub(crate) fn is_ticket_authenticated_resource(method: &Method, path: &str) -> b
     }
     // User avatar GETs — same ticket auth as emoji/sticker images for <img> tags.
     if let Some(rest) = path.strip_prefix("/api/v1/users/") {
-        if let Some((id, "avatar")) = rest.split_once('/') {
+        if let Some((id, tail)) = rest.split_once('/') {
+            if !id.is_empty() && !id.contains('/') && (tail == "avatar" || tail == "banner") {
+                return true;
+            }
+        }
+    }
+    if let Some(rest) = path.strip_prefix("/api/v1/guilds/") {
+        if let Some((id, "banner")) = rest.split_once('/') {
             if !id.is_empty() && !id.contains('/') {
                 return true;
             }

@@ -29,6 +29,9 @@ import { RECEDE_MARK, walkIntoRoom } from '../../../lib/motion';
 import { BuildingNotFound } from '../../guild/BuildingNotFound';
 import { InviteModal } from '../../guild/InviteModal';
 import { Plate } from '../../ui';
+import { ResourceImage } from '../../ui/ResourceImage';
+import { useDownloadTicket } from '../../../hooks/useDownloadTicket';
+import { resolveBannerUrl } from '../../../lib/userAvatar';
 import { ContextMenu, useContextMenu } from '../../ui/ContextMenu';
 import { AroundNowWell } from './AroundNowWell';
 import { EventCard } from './EventCard';
@@ -150,6 +153,7 @@ export function Lobby({ guildId }: LobbyProps) {
   const { isChannelUnread, channelMentionCounts } = useUnreadCounts(mutedGuildKeys);
   const { joinChannel } = useVoice();
   const openGuildSettings = useUIStore((state) => state.openGuildSettings);
+  const setContextPanelMode = useUIStore((state) => state.setContextPanelMode);
   const [showInvite, setShowInvite] = useState(false);
   /**
    * The room menu, the same one the Buildings column opens (§7.1).
@@ -197,7 +201,13 @@ export function Lobby({ guildId }: LobbyProps) {
 
   // What the building's operator wrote about it: one welcome line, a thin
   // banner, and the rooms they chose to put first (§7.3, `hubWelcome.ts`).
-  const hub = useMemo(() => readHubWelcome(guild?.hub_settings), [guild?.hub_settings]);
+  const hub = useMemo(
+    () => readHubWelcome(guild?.hub_settings, guild?.banner_hash),
+    [guild?.hub_settings, guild?.banner_hash],
+  );
+  const downloadTicket = useDownloadTicket();
+  // The ticket is not read here; it re-resolves the URL once it is minted.
+  const bannerUrl = useMemo(() => resolveBannerUrl(hub.bannerSrc), [hub.bannerSrc, downloadTicket]);
 
   const rooms = useMemo(() => building?.rooms ?? NO_ROOMS, [building]);
   const featuredIds = hub.featuredChannelIds;
@@ -368,13 +378,13 @@ export function Lobby({ guildId }: LobbyProps) {
         {/* The building's own picture, as a band and nothing more: no gradient,
             no text over it, no hero (§6.1, §6.2). It is 64px tall so the rooms
             below stay on screen. */}
-        {hub.bannerSrc && (
-          <img
-            src={hub.bannerSrc}
+        {bannerUrl && (
+          <ResourceImage
+            src={bannerUrl}
             alt=""
             draggable={false}
             className={
-              '-mx-4 -mt-5 h-16 w-full shrink-0 object-cover sm:-mx-6 sm:-mt-[22px] '
+              '-mx-4 -mt-5 h-16 w-[calc(100%+2rem)] max-w-none shrink-0 object-cover sm:-mx-6 sm:-mt-[22px] sm:w-[calc(100%+3rem)] '
               + 'rounded-t-[var(--radius-plate)]'
             }
           />
@@ -388,6 +398,7 @@ export function Lobby({ guildId }: LobbyProps) {
           welcome={hub.welcome}
           onInvite={inviteChannelId ? () => setShowInvite(true) : undefined}
           onSettings={canManage ? () => openGuildSettings(guildId) : undefined}
+          onMedia={() => setContextPanelMode('media')}
         />
 
         <LiveNowStrip guildId={guildId} />

@@ -162,6 +162,7 @@ export function AppShell() {
     || (contextPanelMode === 'pins' && Boolean(channelId))
     || (contextPanelMode === 'threads' && Boolean(guildId && channelId))
     || (contextPanelMode === 'economy' && Boolean(guildId))
+    || (contextPanelMode === 'media' && Boolean(guildId || channelId))
     || (contextPanelMode === 'recipients' && isGroupDmContext);
 
   useEffect(() => {

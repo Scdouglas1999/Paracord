@@ -14,7 +14,7 @@ export function guildDetailFixture(overrides: Partial<GuildDetail> = {}): GuildD
 }
 
 export function guildSummaryFixture(overrides: Partial<GuildSummary> = {}): GuildSummary {
-  const { banner_hash: _banner, system_channel_id: _system, vanity_url_code: _vanity,
+  const { system_channel_id: _system, vanity_url_code: _vanity,
     feature_flags: _flags, ...summary } = guildDetailFixture();
   return { ...summary, ...overrides };
 }

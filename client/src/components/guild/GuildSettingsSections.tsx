@@ -19,6 +19,9 @@ import type { BotApplication, GuildBotEntry } from '../../api/bots';
 import type { ApplyModerationTemplateRequest, ModerationTemplate } from '../../api/moderationTemplates';
 import { ACTION_TYPE_LABELS } from '../../api/moderationTemplates';
 import { Button, Chip, EmptyState, IconButton, Input, Select, Textarea } from '../ui';
+import { BannerEditor } from '../user/BannerEditor';
+import { guildApi } from '../../api/guilds';
+import { clearAuthenticatedImageCache } from '../../lib/authenticatedImage';
 import { useDownloadTicket } from '../../hooks/useDownloadTicket';
 import { CustomEmojiImage } from '../ui/ResourceImage';
 import { cn } from '../../lib/utils';
@@ -108,6 +111,7 @@ interface OverviewSectionProps {
   onShowDeleteDialog: () => void;
   onHideDeleteDialog: () => void;
   onDeleteGuild: () => void;
+  onBannerHashChange?: (hash: string | null) => void;
 }
 
 export function OverviewSection({
@@ -141,6 +145,7 @@ export function OverviewSection({
   onShowDeleteDialog,
   onHideDeleteDialog,
   onDeleteGuild,
+  onBannerHashChange = () => {},
 }: OverviewSectionProps) {
   const isOwner = guild && authUserId && guild.owner_id === authUserId;
   // A readout that counts things says "1 Role", not "1 Roles". The strip was
@@ -170,6 +175,26 @@ export function OverviewSection({
           </div>
         }
       />
+
+      {guild && (
+        <BannerEditor
+          label="Server banner"
+          bannerHash={guild.banner_hash}
+          outputWidth={1920}
+          outputHeight={640}
+          hint="Shown across the top of the server home. Saved right away as a 1920 by 640 image; PNG, JPEG, GIF, or WebP up to 8 MB."
+          onUpload={async (file) => {
+            const { data } = await guildApi.uploadBanner(guild.id, file);
+            clearAuthenticatedImageCache();
+            onBannerHashChange(data.banner_hash ?? null);
+          }}
+          onRemove={async () => {
+            await guildApi.deleteBanner(guild.id);
+            clearAuthenticatedImageCache();
+            onBannerHashChange(null);
+          }}
+        />
+      )}
 
       {/* Identity */}
       <section className="flex flex-col gap-6 border-t border-border-subtle pt-6 sm:flex-row sm:gap-8">

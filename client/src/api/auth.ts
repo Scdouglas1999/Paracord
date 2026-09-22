@@ -59,6 +59,18 @@ export const authApi = {
     responseContract(getApi().get('/users/@me'), isCurrentUser, 'CurrentUser'),
   updateMe: async (data: UpdateMeRequest) =>
     responseContract(getApi().patch('/users/@me', data), isUpdatedCurrentUser, 'UpdatedCurrentUser'),
+  uploadBanner: async (file: File) => {
+    const form = new FormData();
+    form.append('banner', file);
+    return responseContract(
+      getApi().post('/users/@me/banner', form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      }),
+      isUpdatedCurrentUser,
+      'UpdatedCurrentUser',
+    );
+  },
+  deleteBanner: async () => getApi().delete('/users/@me/banner'),
   uploadAvatar: async (file: File) => {
     const form = new FormData();
     form.append('avatar', file);

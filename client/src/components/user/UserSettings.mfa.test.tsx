@@ -131,7 +131,7 @@ vi.mock('../../lib/security', () => ({
   safeExternalUrl: vi.fn((value: string) => value),
 }));
 
-vi.mock('../../lib/userAvatar', () => ({ resolveUserAvatarUrl: vi.fn(() => null) }));
+vi.mock('../../lib/userAvatar', () => ({ resolveUserAvatarUrl: vi.fn(() => null), resolveBannerUrl: vi.fn(() => null) }));
 vi.mock('../../lib/displayName', () => ({ displayName: vi.fn((user: { username?: string } | null) => user?.username ?? '') }));
 vi.mock('../../lib/keyboardShortcuts', () => ({ formatShortcut: vi.fn((value: string) => value) }));
 

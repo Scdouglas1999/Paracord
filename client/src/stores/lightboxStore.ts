@@ -6,10 +6,27 @@ import { registerSessionReset } from './sessionReset';
 // object URLs. A blob: string in untrusted message metadata grants no access.
 const resolvedObjectImages = new WeakMap<LightboxImage, string>();
 
-export function createResolvedLightboxImage(src: string, filename: string): LightboxImage {
-  const image = Object.freeze({ src, alt: filename, filename });
+export function createResolvedLightboxImage(
+  src: string,
+  filename: string,
+  kind: 'image' | 'video' = 'image',
+): LightboxImage {
+  const image = Object.freeze({ src, alt: filename, filename, kind });
   if (src.startsWith('blob:')) resolvedObjectImages.set(image, src);
   return image;
+}
+
+/**
+ * An entry whose bytes are fetched only when the viewer reaches it. The gallery
+ * steps through far more files than one message holds; fetching them all on
+ * the first click would download every video in the set.
+ */
+export function createDeferredLightboxImage(
+  load: () => Promise<string>,
+  filename: string,
+  kind: 'image' | 'video' = 'image',
+): LightboxImage {
+  return Object.freeze({ src: '', alt: filename, filename, kind, load });
 }
 
 export function lightboxImageSource(image: LightboxImage): string | null {
@@ -20,6 +37,9 @@ export interface LightboxImage {
   src: string;
   alt: string;
   filename: string;
+  kind?: 'image' | 'video';
+  /** Present on deferred entries: resolves the source (a blob: or ticketed URL) on demand. */
+  load?: () => Promise<string>;
 }
 
 interface LightboxState {
