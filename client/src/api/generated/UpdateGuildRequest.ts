@@ -19,7 +19,6 @@ export interface GuildBotConfig {
   [k: string]: unknown | undefined;
 }
 export interface HubSettings {
-  banner_hash?: string | null;
   description?: string | null;
   pinned_channels?: string[] | null;
   welcome_text?: string | null;

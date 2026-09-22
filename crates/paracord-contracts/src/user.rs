@@ -14,6 +14,8 @@ pub struct UserCore {
     pub avatar_hash: Option<String>,
     pub banner_hash: Option<String>,
     pub bio: Option<String>,
+    /// Profile accent as `0xRRGGBB`, or null when the member has not chosen one.
+    pub accent_color: Option<i32>,
     pub flags: i32,
     pub bot: bool,
     pub system: bool,
@@ -129,6 +131,17 @@ pub struct UpdateMeRequest {
     /// Legacy data-URL avatars are still accepted for backward compatibility,
     /// but clients should prefer `POST /users/@me/avatar`.
     pub avatar_hash: Option<String>,
+    /// Profile accent as `0xRRGGBB`. `null` clears it. Omit the field to leave
+    /// the stored colour unchanged.
+    #[serde(default, deserialize_with = "deserialize_clearable_i32")]
+    pub accent_color: Option<Option<i32>>,
+}
+
+fn deserialize_clearable_i32<'de, D>(deserializer: D) -> Result<Option<Option<i32>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Some(Option::<i32>::deserialize(deserializer)?))
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]

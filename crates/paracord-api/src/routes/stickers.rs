@@ -6,6 +6,7 @@ use axum::{
 };
 use paracord_core::AppState;
 use paracord_models::permissions::Permissions;
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::error::ApiError;
@@ -14,6 +15,8 @@ use crate::middleware::AuthUser;
 const MAX_STICKER_NAME_LEN: usize = 64;
 const MAX_STICKER_DESCRIPTION_LEN: usize = 200;
 const MAX_STICKER_IMAGE_SIZE: usize = 1024 * 1024; // 1MB
+const MAX_STICKER_TAGS: usize = 10;
+const MAX_STICKER_TAG_LEN: usize = 30;
 
 /// Stickers per space. Sticker assets go through the storage backend but are
 /// not attachments, so the per-guild storage accounting never sees them and
@@ -22,12 +25,56 @@ const MAX_STICKER_IMAGE_SIZE: usize = 1024 * 1024; // 1MB
 /// stickers, in the same range as the emoji cap.
 const MAX_STICKERS_PER_GUILD: usize = 60;
 
+fn sticker_tags(stored: &str) -> Vec<String> {
+    stored
+        .split(',')
+        .map(str::trim)
+        .filter(|tag| !tag.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn normalize_sticker_tags(
+    raw: impl IntoIterator<Item = impl AsRef<str>>,
+) -> Result<String, ApiError> {
+    let mut tags = Vec::new();
+    for tag in raw {
+        let tag = tag.as_ref().trim();
+        if tag.is_empty() {
+            continue;
+        }
+        if tag.len() > MAX_STICKER_TAG_LEN
+            || !tag
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == ' ' || c == '_' || c == '-')
+        {
+            return Err(ApiError::BadRequest(
+                "Each sticker tag must be 1-30 characters of letters, digits, spaces, _ or -"
+                    .into(),
+            ));
+        }
+        if !tags
+            .iter()
+            .any(|existing: &String| existing.eq_ignore_ascii_case(tag))
+        {
+            tags.push(tag.to_string());
+        }
+    }
+    if tags.len() > MAX_STICKER_TAGS {
+        return Err(ApiError::BadRequest(format!(
+            "A sticker can have at most {MAX_STICKER_TAGS} tags"
+        )));
+    }
+    Ok(tags.join(","))
+}
+
 fn sticker_to_json(sticker: &paracord_db::stickers::StickerRow) -> Value {
     json!({
         "id": sticker.id.to_string(),
         "guild_id": sticker.guild_id.to_string(),
         "name": sticker.name,
         "description": sticker.description,
+        "tags": sticker_tags(&sticker.tags),
         "format_type": sticker.format_type,
         "creator_id": sticker.creator_id.map(|id| id.to_string()),
         "image_url": sticker.asset_key.as_ref().map(|_| format!("/api/v1/guilds/{}/stickers/{}/image", sticker.guild_id, sticker.id)),
@@ -88,12 +135,13 @@ pub async fn create_sticker(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     if existing.len() >= MAX_STICKERS_PER_GUILD {
         return Err(ApiError::Conflict(format!(
-            "This space already has the maximum of {MAX_STICKERS_PER_GUILD} stickers"
+            "This server already has the maximum of {MAX_STICKERS_PER_GUILD} stickers"
         )));
     }
 
     let mut name: Option<String> = None;
     let mut description: Option<String> = None;
+    let mut tags_field: Option<String> = None;
     let mut image_data: Option<Vec<u8>> = None;
     let mut content_type: Option<String> = None;
 
@@ -113,6 +161,14 @@ pub async fn create_sticker(
             }
             "description" => {
                 description = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| ApiError::BadRequest(e.to_string()))?,
+                );
+            }
+            "tags" => {
+                tags_field = Some(
                     field
                         .text()
                         .await
@@ -163,12 +219,20 @@ pub async fn create_sticker(
         ));
     }
 
+    let tags = normalize_sticker_tags(tags_field.as_deref().unwrap_or("").split(','))?;
+
     let content_type = content_type.unwrap_or_else(|| "application/octet-stream".to_string());
-    let (format_type, ext, valid_signature) = match content_type.as_str() {
-        "image/png" => (
+    let declared = content_type
+        .split(';')
+        .next()
+        .unwrap_or(content_type.as_str())
+        .trim();
+    let (format_type, ext, valid_signature, stored_type) = match declared {
+        "image/png" | "image/apng" => (
             1_i16,
             "png",
             image_data.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]),
+            "image/png",
         ),
         "image/webp" => (
             1_i16,
@@ -176,15 +240,17 @@ pub async fn create_sticker(
             image_data.starts_with(b"RIFF")
                 && image_data.len() >= 12
                 && &image_data[8..12] == b"WEBP",
+            "image/webp",
         ),
         "image/gif" => (
             2_i16,
             "gif",
             image_data.starts_with(b"GIF87a") || image_data.starts_with(b"GIF89a"),
+            "image/gif",
         ),
         _ => {
             return Err(ApiError::BadRequest(
-                "Only PNG, WEBP, and GIF sticker uploads are supported".into(),
+                "Only PNG, APNG, WebP, and GIF sticker uploads are supported".into(),
             ))
         }
     };
@@ -208,9 +274,10 @@ pub async fn create_sticker(
         guild_id,
         &name,
         description.as_deref(),
+        &tags,
         format_type,
         Some(asset_key.as_str()),
-        Some(content_type.as_str()),
+        Some(stored_type),
         Some(auth.user_id),
     )
     .await
@@ -227,6 +294,57 @@ pub async fn create_sticker(
     );
 
     Ok((StatusCode::CREATED, Json(payload)))
+}
+
+#[derive(Deserialize)]
+pub struct UpdateStickerRequest {
+    pub name: Option<String>,
+    pub tags: Option<Vec<String>>,
+}
+
+pub async fn update_sticker(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((guild_id, sticker_id)): Path<(i64, i64)>,
+    Json(body): Json<UpdateStickerRequest>,
+) -> Result<Json<Value>, ApiError> {
+    ensure_manage_stickers(&state, guild_id, auth.user_id).await?;
+    let sticker = paracord_db::stickers::get_sticker(&state.db, sticker_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    if sticker.guild_id != guild_id {
+        return Err(ApiError::NotFound);
+    }
+    let name = match body.name {
+        Some(name) => {
+            let name = name.trim().to_string();
+            if name.is_empty() || name.len() > MAX_STICKER_NAME_LEN {
+                return Err(ApiError::BadRequest(
+                    "Sticker name must be 1-64 characters".into(),
+                ));
+            }
+            name
+        }
+        None => sticker.name.clone(),
+    };
+    let tags = match body.tags {
+        Some(tags) => normalize_sticker_tags(tags)?,
+        None => sticker.tags.clone(),
+    };
+    let updated = paracord_db::stickers::update_sticker(&state.db, sticker_id, &name, &tags)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let payload = sticker_to_json(&updated);
+    state.event_bus.dispatch(
+        "GUILD_STICKERS_UPDATE",
+        json!({
+            "guild_id": guild_id.to_string(),
+            "sticker": payload,
+        }),
+        Some(guild_id),
+    );
+    Ok(Json(payload))
 }
 
 pub async fn delete_sticker(

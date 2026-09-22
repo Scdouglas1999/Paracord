@@ -1,6 +1,6 @@
-import { act, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
-import { createResolvedLightboxImage, useLightboxStore } from '../../stores/lightboxStore';
+import { act, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createDeferredLightboxImage, createResolvedLightboxImage, useLightboxStore } from '../../stores/lightboxStore';
 import { ImageLightbox } from './ImageLightbox';
 import { resetSessionStores } from '../../stores/sessionReset';
 
@@ -53,5 +53,28 @@ describe('ImageLightbox', () => {
     act(() => useLightboxStore.getState().open([createResolvedLightboxImage('blob:http://localhost/private', 'private.png')], 0));
     await act(() => resetSessionStores());
     expect(useLightboxStore.getState()).toMatchObject({ isOpen: false, images: [] });
+  });
+
+  it('fetches a deferred entry only when the viewer reaches it', async () => {
+    const first = vi.fn(async () => '/api/v1/attachments/1');
+    const second = vi.fn(async () => '/api/v1/attachments/2');
+    render(<ImageLightbox />);
+    act(() => useLightboxStore.getState().open([
+      createDeferredLightboxImage(first, 'one.png'),
+      createDeferredLightboxImage(second, 'two.png'),
+    ], 0));
+    expect(await screen.findByAltText('one.png')).toHaveAttribute('src', '/api/v1/attachments/1');
+    expect(second).not.toHaveBeenCalled();
+    act(() => useLightboxStore.getState().next());
+    expect(await screen.findByAltText('two.png')).toHaveAttribute('src', '/api/v1/attachments/2');
+    expect(first).toHaveBeenCalledTimes(1);
+  });
+
+  it('says so when a deferred entry cannot be loaded', async () => {
+    render(<ImageLightbox />);
+    act(() => useLightboxStore.getState().open([
+      createDeferredLightboxImage(async () => { throw new Error('gone'); }, 'lost.png'),
+    ], 0));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Could not load lost.png'));
   });
 });

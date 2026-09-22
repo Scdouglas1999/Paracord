@@ -20,6 +20,7 @@ use url::Url;
 
 use crate::error::ApiError;
 use crate::middleware::AuthUser;
+use crate::routes::banners::{self, BannerOwner};
 use crate::routes::security;
 
 const MAX_DISPLAY_NAME_LEN: usize = 64;
@@ -259,10 +260,44 @@ fn user_core(user: &paracord_db::users::UserRow) -> UserCore {
         avatar_hash: user.avatar_hash.clone(),
         banner_hash: user.banner_hash.clone(),
         bio: user.bio.clone(),
+        accent_color: user.accent_color,
         flags: user.flags,
         bot: paracord_core::is_bot(user.flags),
         system: false,
         created_at: user.created_at.to_rfc3339(),
+    }
+}
+
+fn profile_update_event(user: &paracord_db::users::UserRow) -> Value {
+    json!({
+        "user": {
+            "id": user.id.to_string(),
+            "username": &user.username,
+            "display_name": &user.display_name,
+            "discriminator": user.discriminator,
+            "avatar_hash": &user.avatar_hash,
+            "banner_hash": &user.banner_hash,
+            "bio": &user.bio,
+            "accent_color": user.accent_color,
+            "flags": user.flags,
+            "bot": paracord_core::is_bot(user.flags),
+            "system": false,
+            "created_at": user.created_at.to_rfc3339(),
+        }
+    })
+}
+
+async fn fanout_profile_update(state: &AppState, user: &paracord_db::users::UserRow) {
+    let update_event = profile_update_event(user);
+    state
+        .event_bus
+        .dispatch_to_users("USER_UPDATE", update_event.clone(), vec![user.id]);
+    if let Ok(guilds) = paracord_db::guilds::get_user_guilds(&state.db, user.id.into()).await {
+        for guild in guilds {
+            state
+                .event_bus
+                .dispatch("USER_UPDATE", update_event.clone(), Some(guild.id));
+        }
     }
 }
 
@@ -432,31 +467,7 @@ pub async fn upload_avatar(
     )
     .await?;
 
-    let update_event = json!({
-        "user": {
-            "id": updated.id.to_string(),
-            "username": &updated.username,
-            "display_name": &updated.display_name,
-            "discriminator": updated.discriminator,
-            "avatar_hash": &updated.avatar_hash,
-            "banner_hash": &updated.banner_hash,
-            "bio": &updated.bio,
-            "flags": updated.flags,
-            "bot": paracord_core::is_bot(updated.flags),
-            "system": false,
-            "created_at": updated.created_at.to_rfc3339(),
-        }
-    });
-    state
-        .event_bus
-        .dispatch_to_users("USER_UPDATE", update_event.clone(), vec![auth.user_id]);
-    if let Ok(guilds) = paracord_db::guilds::get_user_guilds(&state.db, auth.user_id.into()).await {
-        for guild in guilds {
-            state
-                .event_bus
-                .dispatch("USER_UPDATE", update_event.clone(), Some(guild.id));
-        }
-    }
+    fanout_profile_update(&state, &updated).await;
 
     Ok(Json(UpdatedCurrentUser {
         core: user_core(&updated),
@@ -521,6 +532,62 @@ pub async fn get_user_avatar(
         .into_response())
 }
 
+pub async fn upload_banner(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    mut multipart: Multipart,
+) -> Result<Json<UpdatedCurrentUser>, ApiError> {
+    let (image, content_type) = banners::read_banner_upload(&mut multipart).await?;
+    let banner_hash = banners::store_banner(
+        &state.config.storage_path,
+        BannerOwner::User,
+        auth.user_id,
+        &image,
+        content_type.as_deref(),
+    )
+    .await?;
+    let updated =
+        paracord_db::users::set_user_banner_hash(&state.db, auth.user_id, Some(&banner_hash))
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    fanout_profile_update(&state, &updated).await;
+
+    Ok(Json(UpdatedCurrentUser {
+        core: user_core(&updated),
+        email: updated.email.clone(),
+    }))
+}
+
+pub async fn delete_banner(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    banners::remove_banner_files(&state.config.storage_path, BannerOwner::User, auth.user_id).await;
+    let updated = paracord_db::users::set_user_banner_hash(&state.db, auth.user_id, None)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    fanout_profile_update(&state, &updated).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn get_user_banner(
+    State(state): State<AppState>,
+    _auth: AuthUser,
+    Path(user_id): Path<i64>,
+) -> Result<axum::response::Response, ApiError> {
+    let user = paracord_db::users::get_user_by_id(&state.db, user_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    banners::serve_banner(
+        &state.config.storage_path,
+        BannerOwner::User,
+        user_id,
+        user.banner_hash.as_deref(),
+    )
+    .await
+}
+
 pub async fn update_me(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -568,8 +635,15 @@ pub async fn update_me(
             ));
         }
     }
+    if let Some(Some(color)) = body.accent_color {
+        if !(0..=0x00FF_FFFF).contains(&color) {
+            return Err(ApiError::BadRequest(
+                "accent_color must be an integer from 0 to 16777215".into(),
+            ));
+        }
+    }
 
-    let updated = paracord_core::user::update_profile(
+    let mut updated = paracord_core::user::update_profile(
         &state.db,
         auth.user_id,
         body.display_name.as_deref(),
@@ -578,31 +652,13 @@ pub async fn update_me(
     )
     .await?;
 
-    let update_event = json!({
-        "user": {
-            "id": updated.id.to_string(),
-            "username": &updated.username,
-            "display_name": &updated.display_name,
-            "discriminator": updated.discriminator,
-            "avatar_hash": &updated.avatar_hash,
-            "banner_hash": &updated.banner_hash,
-            "bio": &updated.bio,
-            "flags": updated.flags,
-            "bot": paracord_core::is_bot(updated.flags),
-            "system": false,
-            "created_at": updated.created_at.to_rfc3339(),
-        }
-    });
-    state
-        .event_bus
-        .dispatch_to_users("USER_UPDATE", update_event.clone(), vec![auth.user_id]);
-    if let Ok(guilds) = paracord_db::guilds::get_user_guilds(&state.db, auth.user_id.into()).await {
-        for guild in guilds {
-            state
-                .event_bus
-                .dispatch("USER_UPDATE", update_event.clone(), Some(guild.id));
-        }
+    if let Some(accent) = body.accent_color {
+        updated = paracord_db::users::set_user_accent_color(&state.db, auth.user_id, accent)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     }
+
+    fanout_profile_update(&state, &updated).await;
 
     Ok(Json(UpdatedCurrentUser {
         core: user_core(&updated),
@@ -1058,6 +1114,7 @@ pub async fn get_user_profile(
                     core: UserCore {
                         banner_hash: None,
                         bio: None,
+                        accent_color: None,
                         ..user_core(&user)
                     },
                     pronouns: None,

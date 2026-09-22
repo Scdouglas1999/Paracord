@@ -2,7 +2,7 @@ import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ChangeEvent, ReactNode } from 'react';
-import { Shield, ShieldAlert, Users, Hash, Link, Gavel, ScrollText, RefreshCw, Smile, Calendar, Bot, HardDrive, LayoutTemplate, MessageSquare, TrendingUp, Puzzle } from 'lucide-react';
+import { Shield, ShieldAlert, Users, Hash, Link, Gavel, ScrollText, RefreshCw, Smile, Sticker, Calendar, Bot, HardDrive, LayoutTemplate, MessageSquare, TrendingUp, Puzzle } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router';
 import { guildApi } from '../../api/guilds';
 import { inviteApi } from '../../api/invites';
@@ -25,6 +25,7 @@ import { EventList } from './EventList';
 import { ChannelManager } from './ChannelManager';
 import { FileStorageSection } from './FileStorageSection';
 import { ServerHubSettings } from './ServerHubSettings';
+import { StickersSection } from './StickersSection';
 import { BotStoreSection } from './BotStoreSection';
 import { OnboardingSettingsSection } from './OnboardingSettingsSection';
 import { EconomySettingsSection } from './EconomySettingsSection';
@@ -61,7 +62,7 @@ interface GuildSettingsProps {
   initialChannelId?: string | null;
 }
 
-type SettingsSection = 'overview' | 'server-hub' | 'bot-store' | 'roles' | 'members' | 'channels' | 'invites' | 'emojis' | 'webhooks' | 'bots' | 'events' | 'onboarding' | 'bans' | 'reports' | 'audit-log' | 'file-storage' | 'mod-templates' | 'automod' | 'economy' | 'sports';
+type SettingsSection = 'overview' | 'server-hub' | 'bot-store' | 'roles' | 'members' | 'channels' | 'invites' | 'emojis' | 'stickers' | 'webhooks' | 'bots' | 'events' | 'onboarding' | 'bans' | 'reports' | 'audit-log' | 'file-storage' | 'mod-templates' | 'automod' | 'economy' | 'sports';
 
 import { DEFAULT_ROLE_COLOR } from '../../lib/colors';
 
@@ -86,6 +87,7 @@ const NAV_ITEMS: { id: SettingsSection; label: string; icon: ReactNode; group: N
   { id: 'server-hub', label: 'Server hub', icon: <LayoutTemplate size={16} />, group: 'The server' },
   { id: 'channels', label: 'Channels', icon: <Hash size={16} />, group: 'The server' },
   { id: 'emojis', label: 'Emojis', icon: <Smile size={16} />, group: 'The server' },
+  { id: 'stickers', label: 'Stickers', icon: <Sticker size={16} />, group: 'The server' },
   { id: 'events', label: 'Events', icon: <Calendar size={16} />, group: 'The server' },
   { id: 'sports', label: 'Add-ons', icon: <Puzzle size={16} />, group: 'The server' },
   { id: 'file-storage', label: 'File storage', icon: <HardDrive size={16} />, group: 'The server' },
@@ -124,6 +126,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
   const navigate = useNavigate();
   const guildScope = useCurrentAccountScope();
   const leaveGuild = useGuildStore((s) => s.leaveGuild);
+  const updateGuildData = useGuildStore((s) => s.updateGuildData);
   const deleteGuild = useGuildStore((s) => s.deleteGuild);
   const authUser = useCurrentUser();
   const { permissions, isAdmin } = usePermissions(guildId);
@@ -448,6 +451,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
         case 'invites':
           return canCreateInvite || canManageRoleSettings;
         case 'emojis':
+        case 'stickers':
           return canManageEmojis || canManageRoleSettings;
         case 'webhooks':
           return canManageWebhooks || canManageRoleSettings;
@@ -515,6 +519,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
       requested === 'channels' ||
       requested === 'invites' ||
       requested === 'emojis' ||
+      requested === 'stickers' ||
       requested === 'webhooks' ||
       requested === 'bots' ||
       requested === 'events' ||
@@ -1180,6 +1185,10 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
             onShowDeleteDialog={() => { setShowDeleteGuildDialog(true); setDeleteGuildConfirmName(''); }}
             onHideDeleteDialog={() => { setShowDeleteGuildDialog(false); setDeleteGuildConfirmName(''); }}
             onDeleteGuild={() => void handleDeleteGuild()}
+            onBannerHashChange={(bannerHash) => {
+              setGuild((prev) => (prev ? { ...prev, banner_hash: bannerHash } : prev));
+              if (guildScope) updateGuildData(guildId, { banner_hash: bannerHash }, guildScope);
+            }}
           />
         )}
 
@@ -1267,6 +1276,10 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
             onCreateInvite={() => void createInvite()}
             onRevokeInvite={(code) => void revokeInvite(code)}
           />
+        )}
+
+        {activeSection === 'stickers' && (
+          <StickersSection guildId={guildId} canManage={canManageEmojis} />
         )}
 
         {activeSection === 'emojis' && (

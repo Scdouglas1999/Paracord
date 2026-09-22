@@ -8,6 +8,8 @@ pub struct StickerRow {
     pub guild_id: i64,
     pub name: String,
     pub description: Option<String>,
+    /// Comma-separated tags, or empty when the sticker has none.
+    pub tags: String,
     pub format_type: i16,
     pub asset_key: Option<String>,
     pub asset_content_type: Option<String>,
@@ -23,6 +25,9 @@ impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for StickerRow {
             guild_id: row.try_get("guild_id")?,
             name: row.try_get("name")?,
             description: row.try_get("description")?,
+            tags: row
+                .try_get::<Option<String>, _>("tags")?
+                .unwrap_or_default(),
             format_type: row.try_get("format_type")?,
             asset_key: row.try_get("asset_key")?,
             asset_content_type: row.try_get("asset_content_type")?,
@@ -38,6 +43,7 @@ pub async fn create_sticker(
     guild_id: i64,
     name: &str,
     description: Option<&str>,
+    tags: &str,
     format_type: i16,
     asset_key: Option<&str>,
     asset_content_type: Option<&str>,
@@ -45,16 +51,17 @@ pub async fn create_sticker(
 ) -> Result<StickerRow, DbError> {
     let row = sqlx::query_as::<_, StickerRow>(
         "INSERT INTO stickers (
-            id, guild_id, name, description, format_type, asset_key, asset_content_type, creator_id
+            id, guild_id, name, description, tags, format_type, asset_key, asset_content_type, creator_id
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         RETURNING id, guild_id, name, description, format_type, asset_key, asset_content_type,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING id, guild_id, name, description, tags, format_type, asset_key, asset_content_type,
                    creator_id, created_at",
     )
     .bind(id)
     .bind(guild_id)
     .bind(name)
     .bind(description)
+    .bind(tags)
     .bind(format_type)
     .bind(asset_key)
     .bind(asset_content_type)
@@ -66,7 +73,7 @@ pub async fn create_sticker(
 
 pub async fn list_stickers(pool: &DbPool, guild_id: i64) -> Result<Vec<StickerRow>, DbError> {
     let rows = sqlx::query_as::<_, StickerRow>(
-        "SELECT id, guild_id, name, description, format_type, asset_key, asset_content_type,
+        "SELECT id, guild_id, name, description, tags, format_type, asset_key, asset_content_type,
                 creator_id, created_at
          FROM stickers
          WHERE guild_id = $1
@@ -80,13 +87,34 @@ pub async fn list_stickers(pool: &DbPool, guild_id: i64) -> Result<Vec<StickerRo
 
 pub async fn get_sticker(pool: &DbPool, sticker_id: i64) -> Result<Option<StickerRow>, DbError> {
     let row = sqlx::query_as::<_, StickerRow>(
-        "SELECT id, guild_id, name, description, format_type, asset_key, asset_content_type,
+        "SELECT id, guild_id, name, description, tags, format_type, asset_key, asset_content_type,
                 creator_id, created_at
          FROM stickers
          WHERE id = $1",
     )
     .bind(sticker_id)
     .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn update_sticker(
+    pool: &DbPool,
+    sticker_id: i64,
+    name: &str,
+    tags: &str,
+) -> Result<StickerRow, DbError> {
+    let row = sqlx::query_as::<_, StickerRow>(
+        "UPDATE stickers
+         SET name = $2, tags = $3
+         WHERE id = $1
+         RETURNING id, guild_id, name, description, tags, format_type, asset_key, asset_content_type,
+                   creator_id, created_at",
+    )
+    .bind(sticker_id)
+    .bind(name)
+    .bind(tags)
+    .fetch_one(pool)
     .await?;
     Ok(row)
 }
@@ -126,7 +154,7 @@ pub async fn list_message_stickers(
     message_id: i64,
 ) -> Result<Vec<StickerRow>, DbError> {
     let rows = sqlx::query_as::<_, StickerRow>(
-        "SELECT s.id, s.guild_id, s.name, s.description, s.format_type, s.asset_key, s.asset_content_type,
+        "SELECT s.id, s.guild_id, s.name, s.description, s.tags, s.format_type, s.asset_key, s.asset_content_type,
                 s.creator_id, s.created_at
          FROM message_stickers ms
          INNER JOIN stickers s ON s.id = ms.sticker_id

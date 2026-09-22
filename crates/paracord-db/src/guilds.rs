@@ -302,6 +302,25 @@ pub fn parse_allowed_role_ids_typed(raw: &str) -> Vec<RoleId> {
         .collect()
 }
 
+/// Set or clear the server banner path. `None` clears the column.
+pub async fn set_guild_banner_hash(
+    pool: &DbPool,
+    id: i64,
+    banner_hash: Option<&str>,
+) -> Result<SpaceRow, DbError> {
+    let row = sqlx::query_as::<_, SpaceRow>(
+        "UPDATE spaces SET banner_hash = $2, updated_at = $3
+         WHERE id = $1
+         RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, discovery_tags, created_at, hub_settings, bot_settings",
+    )
+    .bind(id)
+    .bind(banner_hash)
+    .bind(datetime_to_db_text(Utc::now()))
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
 /// Set or clear the vanity URL code for a guild. Pass `None` to clear it.
 /// Core implementation using newtype ID.
 pub async fn update_vanity_url(

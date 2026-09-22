@@ -52,6 +52,7 @@ export interface Sticker {
   guild_id: string;
   name: string;
   description?: string | null;
+  tags?: string[];
   format_type: number;
   creator_id?: string | null;
   image_url?: string | null;
@@ -158,11 +159,12 @@ export function createGuildApi(getApi: () => RestClient) {
     listStickers: async (guildId: string) => getApi().get<Sticker[]>(`/guilds/${guildId}/stickers`),
     createSticker: async (
       guildId: string,
-      payload: { name: string; description?: string; file: File },
+      payload: { name: string; description?: string; tags?: string; file: File },
     ) => {
       const formData = new FormData();
       formData.append('name', payload.name);
       if (payload.description) formData.append('description', payload.description);
+      if (payload.tags) formData.append('tags', payload.tags);
       formData.append('image', payload.file);
       // Without an explicit multipart content type axios re-encodes the
       // FormData as JSON (the client's declared default), which loses the
@@ -173,6 +175,19 @@ export function createGuildApi(getApi: () => RestClient) {
     },
     deleteSticker: async (guildId: string, stickerId: string) =>
       getApi().delete(`/guilds/${guildId}/stickers/${stickerId}`),
+    updateSticker: async (
+      guildId: string,
+      stickerId: string,
+      payload: { name?: string; tags?: string[] },
+    ) => getApi().patch<Sticker>(`/guilds/${guildId}/stickers/${stickerId}`, payload),
+    uploadBanner: async (guildId: string, file: File) => {
+      const formData = new FormData();
+      formData.append('banner', file);
+      return getApi().post<{ banner_hash?: string | null }>(`/guilds/${guildId}/banner`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+    },
+    deleteBanner: async (guildId: string) => getApi().delete(`/guilds/${guildId}/banner`),
   };
 }
 

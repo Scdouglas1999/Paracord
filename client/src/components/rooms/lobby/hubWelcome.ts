@@ -1,4 +1,4 @@
-import { safeStoredImageDataUrl } from '../../../lib/security';
+import { safeClientResourceUrl } from '../../../lib/security';
 import type { HubSettings } from '../../../types';
 
 /**
@@ -26,7 +26,10 @@ import type { HubSettings } from '../../../types';
 export interface HubWelcome {
   /** The operator's sentence, trimmed. Empty when they wrote none. */
   welcome: string;
-  /** A banner safe to paint, or null. */
+  /**
+   * The server banner's API path (`guilds.banner_hash`, uploaded in Server
+   * settings → Overview), or null. The caller resolves it for `<img>`.
+   */
   bannerSrc: string | null;
   /** Channel ids the operator pinned, in the order they pinned them. */
   featuredChannelIds: readonly string[];
@@ -39,21 +42,28 @@ function trimmed(value: unknown): string {
 }
 
 /**
- * Read `hub_settings` into the three things the Lobby can show.
+ * Read `hub_settings` and the server banner into the three things the Lobby
+ * can show. The hub no longer carries a banner of its own; the band's picture
+ * is the uploaded server banner, a same-server path and nothing else.
  *
  * `welcome_text` is the operator's greeting and `description` is the building's
  * blurb; §7.3's header has room for one sentence, so the greeting wins and the
  * description is the fallback. Both are collapsed to a single line — the header
  * is one band deep and a pasted paragraph must not push the rooms off screen.
  */
-export function readHubWelcome(settings: HubSettings | null | undefined): HubWelcome {
-  if (!settings) return EMPTY;
-  const welcome = oneLine(trimmed(settings.welcome_text) || trimmed(settings.description));
-  const banner = settings.banner_hash;
-  const bannerSrc = typeof banner === 'string' ? safeStoredImageDataUrl(banner) : null;
-  const featuredChannelIds = Array.isArray(settings.pinned_channels)
+export function readHubWelcome(
+  settings: HubSettings | null | undefined,
+  bannerHash?: string | null,
+): HubWelcome {
+  const welcome = settings
+    ? oneLine(trimmed(settings.welcome_text) || trimmed(settings.description))
+    : '';
+  const featuredChannelIds = settings && Array.isArray(settings.pinned_channels)
     ? settings.pinned_channels.filter((id): id is string => typeof id === 'string')
     : [];
+  if (!settings && !bannerHash) return EMPTY;
+  const safe = typeof bannerHash === 'string' ? safeClientResourceUrl(bannerHash) : null;
+  const bannerSrc = safe && safe.startsWith('/api/') ? safe : null;
   return { welcome, bannerSrc, featuredChannelIds };
 }
 

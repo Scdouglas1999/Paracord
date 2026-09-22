@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Settings, UserPlus } from 'lucide-react';
+import { Image as ImageIcon, Settings, UserPlus } from 'lucide-react';
 
 import { Button, IconButton } from '../../ui';
 import { getIdentityColor } from '../../../lib/colors';
@@ -25,6 +25,8 @@ export interface LobbyHeaderProps {
   onInvite?: () => void;
   /** Space settings — permission-gated by the caller. */
   onSettings?: () => void;
+  /** Opens the server media gallery. */
+  onMedia?: () => void;
 }
 
 /**
@@ -39,7 +41,7 @@ export interface LobbyHeaderProps {
  * words are still there, the band is still one line deep.
  */
 export const LobbyHeader = React.forwardRef<HTMLElement, LobbyHeaderProps>(function LobbyHeader(
-  { guildId, name, iconSrc, summary, welcome, onInvite, onSettings },
+  { guildId, name, iconSrc, summary, welcome, onInvite, onSettings, onMedia },
   ref,
 ) {
   const written = welcome?.trim() ?? '';
@@ -82,6 +84,14 @@ export const LobbyHeader = React.forwardRef<HTMLElement, LobbyHeaderProps>(funct
             <UserPlus size={16} aria-hidden />
             <span className="hidden sm:inline" aria-hidden>
               Invite
+            </span>
+          </Button>
+        )}
+        {onMedia && (
+          <Button variant="ghost" size="md" onClick={onMedia} aria-label="Media">
+            <ImageIcon size={16} aria-hidden />
+            <span className="hidden sm:inline" aria-hidden>
+              Media
             </span>
           </Button>
         )}

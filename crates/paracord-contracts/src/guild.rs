@@ -11,6 +11,9 @@ pub struct GuildSummary {
     pub name: String,
     pub description: Option<String>,
     pub icon_hash: Option<String>,
+    /// `/api/v1/guilds/{id}/banner?v=…` once a banner is uploaded, otherwise null.
+    /// The version changes with every upload.
+    pub banner_hash: Option<String>,
     pub owner_id: String,
     #[schemars(range(min = 0, max = 4294967295u64))]
     pub member_count: u32,
@@ -27,7 +30,6 @@ pub struct GuildSummary {
 pub struct GuildDetail {
     #[serde(flatten)]
     pub summary: GuildSummary,
-    pub banner_hash: Option<String>,
     pub system_channel_id: Option<String>,
     pub vanity_url_code: Option<String>,
     /// The persisted feature bitset; it is not an array of feature names.
@@ -90,8 +92,6 @@ pub struct TransferOwnershipRequest {
 pub struct HubSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub banner_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pinned_channels: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]

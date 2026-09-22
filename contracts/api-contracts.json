@@ -152,6 +152,14 @@
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "description": "`GET /users/@me`: the authenticated account, including credential metadata.",
       "properties": {
+        "accent_color": {
+          "description": "Profile accent as `0xRRGGBB`, or null when the member has not chosen one.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "avatar_hash": {
           "type": [
             "string",
@@ -236,6 +244,7 @@
         "avatar_hash",
         "banner_hash",
         "bio",
+        "accent_color",
         "flags",
         "bot",
         "system",
@@ -275,12 +284,6 @@
         "HubSettings": {
           "additionalProperties": true,
           "properties": {
-            "banner_hash": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
             "description": {
               "type": [
                 "string",
@@ -317,6 +320,7 @@
           "type": "array"
         },
         "banner_hash": {
+          "description": "`/api/v1/guilds/{id}/banner?v=…` once a banner is uploaded, otherwise null.\nThe version changes with every upload.",
           "type": [
             "string",
             "null"
@@ -405,6 +409,7 @@
         "name",
         "description",
         "icon_hash",
+        "banner_hash",
         "owner_id",
         "member_count",
         "created_at",
@@ -413,7 +418,6 @@
         "discovery_tags",
         "hub_settings",
         "bot_settings",
-        "banner_hash",
         "system_channel_id",
         "vanity_url_code",
         "feature_flags"
@@ -648,12 +652,6 @@
         "HubSettings": {
           "additionalProperties": true,
           "properties": {
-            "banner_hash": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
             "description": {
               "type": [
                 "string",
@@ -688,6 +686,13 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "banner_hash": {
+          "description": "`/api/v1/guilds/{id}/banner?v=…` once a banner is uploaded, otherwise null.\nThe version changes with every upload.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "bot_settings": {
           "additionalProperties": {
@@ -753,6 +758,7 @@
         "name",
         "description",
         "icon_hash",
+        "banner_hash",
         "owner_id",
         "member_count",
         "created_at",
@@ -787,6 +793,13 @@
                 "type": "string"
               },
               "type": "array"
+            },
+            "banner_hash": {
+              "description": "`/api/v1/guilds/{id}/banner?v=…` once a banner is uploaded, otherwise null.\nThe version changes with every upload.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "bot_settings": {
               "additionalProperties": {
@@ -852,6 +865,7 @@
             "name",
             "description",
             "icon_hash",
+            "banner_hash",
             "owner_id",
             "member_count",
             "created_at",
@@ -874,12 +888,6 @@
         "HubSettings": {
           "additionalProperties": true,
           "properties": {
-            "banner_hash": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
             "description": {
               "type": [
                 "string",
@@ -1209,6 +1217,14 @@
         "PublicUser": {
           "description": "The user object embedded in the public profile response.",
           "properties": {
+            "accent_color": {
+              "description": "Profile accent as `0xRRGGBB`, or null when the member has not chosen one.",
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "avatar_hash": {
               "type": [
                 "string",
@@ -1277,6 +1293,7 @@
             "avatar_hash",
             "banner_hash",
             "bio",
+            "accent_color",
             "flags",
             "bot",
             "system",
@@ -1505,12 +1522,6 @@
         "HubSettings": {
           "additionalProperties": true,
           "properties": {
-            "banner_hash": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
             "description": {
               "type": [
                 "string",
@@ -1608,6 +1619,15 @@
       "$id": "urn:paracord:contract:UpdateMeRequest",
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
+        "accent_color": {
+          "default": null,
+          "description": "Profile accent as `0xRRGGBB`. `null` clears it. Omit the field to leave\nthe stored colour unchanged.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "avatar_hash": {
           "description": "Legacy data-URL avatars are still accepted for backward compatibility,\nbut clients should prefer `POST /users/@me/avatar`.",
           "type": [
@@ -1688,6 +1708,14 @@
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "description": "`PATCH /users/@me` and `POST /users/@me/avatar`: the updated account fields.\nSettings-derived extras (pronouns, linked accounts) and key metadata are\nonly returned by `GET /users/@me`.",
       "properties": {
+        "accent_color": {
+          "description": "Profile accent as `0xRRGGBB`, or null when the member has not chosen one.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "avatar_hash": {
           "type": [
             "string",
@@ -1747,6 +1775,7 @@
         "avatar_hash",
         "banner_hash",
         "bio",
+        "accent_color",
         "flags",
         "bot",
         "system",

@@ -27,6 +27,7 @@ import {
   TrendingUp,
   Settings,
   Users,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router';
 import { extractApiError } from '../../api/client';
@@ -514,6 +515,7 @@ function OwnedTopBar({
     // the panel still opens (§6.5, §7.6). A 1:1 DM's "list" is the one person
     // already named in the header strip.
     ...(isGroupDm ? [{ label: 'People in this message', icon: <Users size={17} />, action: panelToggle('recipients') }] : []),
+    ...(!isDM ? [{ label: 'Media', icon: <ImageIcon size={17} />, action: panelToggle('media') }] : []),
     ...(!isDM ? [{ label: 'Server leaderboard', icon: <TrendingUp size={17} />, action: panelToggle('economy') }] : []),
     ...(canOpenSpaceSettings && resolvedGuildId ? [{ label: 'Server settings', icon: <Settings size={17} />, action: openSpaceSettings }] : []),
     { label: '', action: () => {}, divider: true },
@@ -524,6 +526,7 @@ function OwnedTopBar({
     pins: { label: 'Pinned messages', icon: Pin, onClose: panelToggle('pins') },
     threads: { label: 'Threads', icon: MessagesSquare, onClose: panelToggle('threads') },
     economy: { label: 'Server leaderboard', icon: TrendingUp, onClose: panelToggle('economy') },
+    media: { label: 'Media', icon: ImageIcon, onClose: panelToggle('media') },
     recipients: { label: 'People in this message', icon: Users, onClose: panelToggle('recipients') },
   };
   const activeSurface: ActiveHeaderSurface | undefined = showSummary

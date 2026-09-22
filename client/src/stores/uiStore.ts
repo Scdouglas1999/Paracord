@@ -55,7 +55,7 @@ const clampTint = (tint: number): number => {
  * All readers select `contextPanelMode` directly — the wave-2 mirrored
  * per-panel booleans were retired in the cleanup wave (layout-spec §8 step 15).
  */
-export type ContextPanelMode = 'recipients' | 'threads' | 'pins' | 'search' | 'economy' | null;
+export type ContextPanelMode = 'recipients' | 'threads' | 'pins' | 'search' | 'economy' | 'media' | null;
 
 /**
  * Resizable unified-sidebar width bounds (layout-spec §5/§6). These mirror the

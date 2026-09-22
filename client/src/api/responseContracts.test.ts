@@ -52,7 +52,7 @@ describe('Rust-derived wire validation', () => {
   });
 
   it('distinguishes summary lists, full detail and optional request fields', () => {
-    const { banner_hash: _banner, system_channel_id: _system, vanity_url_code: _vanity, feature_flags: _flags, ...summary } = guild;
+    const { system_channel_id: _system, vanity_url_code: _vanity, feature_flags: _flags, ...summary } = guild;
     expect(isGuildSummaryList([summary])).toBe(true);
     expect(isGuildDetail(summary)).toBe(false);
     expect(isCreateGuildRequest({ name: 'Server' })).toBe(true);

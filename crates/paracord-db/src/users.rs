@@ -508,6 +508,42 @@ pub async fn update_user(
     update_user_typed(pool, UserId::new(id), display_name, bio, avatar_hash).await
 }
 
+const USER_RETURNING: &str = "RETURNING id, username, discriminator, email, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key, email_verified";
+
+/// Set or clear the profile banner path. `None` clears the column.
+pub async fn set_user_banner_hash(
+    pool: &DbPool,
+    id: i64,
+    banner_hash: Option<&str>,
+) -> Result<UserRow, DbError> {
+    let row = sqlx::query_as::<_, UserRow>(&format!(
+        "UPDATE users SET banner_hash = $2, updated_at = $3 WHERE id = $1 {USER_RETURNING}"
+    ))
+    .bind(id)
+    .bind(banner_hash)
+    .bind(datetime_to_db_text(Utc::now()))
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
+/// Set or clear the profile accent (`0xRRGGBB`). `None` clears the column.
+pub async fn set_user_accent_color(
+    pool: &DbPool,
+    id: i64,
+    accent_color: Option<i32>,
+) -> Result<UserRow, DbError> {
+    let row = sqlx::query_as::<_, UserRow>(&format!(
+        "UPDATE users SET accent_color = $2, updated_at = $3 WHERE id = $1 {USER_RETURNING}"
+    ))
+    .bind(id)
+    .bind(accent_color)
+    .bind(datetime_to_db_text(Utc::now()))
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
 /// Core implementation using newtype ID.
 pub async fn get_user_settings_typed(
     pool: &DbPool,

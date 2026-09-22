@@ -74,6 +74,7 @@ export interface Sticker {
   guild_id: string;
   name: string;
   description?: string | null;
+  tags?: string[];
   format_type: number;
   creator_id?: string | null;
   image_url?: string | null;

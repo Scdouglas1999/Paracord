@@ -7,6 +7,10 @@
  * only returned by `GET /users/@me`.
  */
 export interface UpdatedCurrentUser {
+  /**
+   * Profile accent as `0xRRGGBB`, or null when the member has not chosen one.
+   */
+  accent_color: number | null;
   avatar_hash: string | null;
   banner_hash: string | null;
   bio: string | null;

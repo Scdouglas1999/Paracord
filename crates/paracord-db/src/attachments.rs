@@ -305,6 +305,201 @@ pub async fn get_unlinked_attachments_older_than(
     Ok(rows)
 }
 
+/// Which attachment kinds a gallery page should include.
+#[derive(Debug, Clone, Copy)]
+pub struct GalleryKindFilter {
+    pub image: bool,
+    pub video: bool,
+    pub file: bool,
+}
+
+impl GalleryKindFilter {
+    pub fn all() -> Self {
+        Self {
+            image: true,
+            video: true,
+            file: true,
+        }
+    }
+}
+
+/// One posted attachment, joined to the message that published it and its author.
+#[derive(Debug, Clone)]
+pub struct PostedAttachment {
+    pub id: i64,
+    pub message_id: i64,
+    pub channel_id: i64,
+    pub filename: String,
+    pub content_type: Option<String>,
+    pub size: i32,
+    pub url: String,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    pub created_at: DateTime<Utc>,
+    pub author_id: i64,
+    pub author_username: String,
+    pub author_display_name: Option<String>,
+    pub author_avatar_hash: Option<String>,
+}
+
+/// A message that may contain posted URLs, for the links gallery.
+#[derive(Debug, Clone)]
+pub struct LinkCandidate {
+    pub id: i64,
+    pub channel_id: i64,
+    pub content: String,
+    pub embeds: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub author_id: i64,
+    pub author_username: String,
+    pub author_display_name: Option<String>,
+    pub author_avatar_hash: Option<String>,
+}
+
+const MAX_GALLERY_CHANNELS: usize = 500;
+
+fn ensure_channel_list(channel_ids: &[i64]) -> Result<(), DbError> {
+    if channel_ids.is_empty() {
+        return Ok(());
+    }
+    if channel_ids.len() > MAX_GALLERY_CHANNELS {
+        return Err(DbError::Sqlx(sqlx::Error::Protocol(format!(
+            "too many channels in a gallery query ({})",
+            channel_ids.len()
+        ))));
+    }
+    Ok(())
+}
+
+/// Posted attachments in `channel_ids`, newest snowflake first.
+///
+/// Pending uploads (no message yet) are excluded. `before_id` is an exclusive
+/// cursor. An empty channel list returns an empty page.
+pub async fn list_posted_attachments(
+    pool: &DbPool,
+    channel_ids: &[i64],
+    before_id: Option<i64>,
+    limit: i64,
+    kinds: GalleryKindFilter,
+) -> Result<Vec<PostedAttachment>, DbError> {
+    ensure_channel_list(channel_ids)?;
+    if channel_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let in_list = crate::messages::build_placeholders(1, channel_ids.len());
+    let before_idx = channel_ids.len() + 1;
+    let image_idx = channel_ids.len() + 2;
+    let video_idx = channel_ids.len() + 3;
+    let file_idx = channel_ids.len() + 4;
+    let limit_idx = channel_ids.len() + 5;
+    let sql = format!(
+        "SELECT a.id, a.message_id, m.channel_id, a.filename, a.content_type, a.size, a.url,
+                a.width, a.height, m.created_at,
+                u.id AS author_id, u.username AS author_username,
+                u.display_name AS author_display_name, u.avatar_hash AS author_avatar_hash
+         FROM attachments a
+         INNER JOIN messages m ON m.id = a.message_id
+         INNER JOIN users u ON u.id = m.author_id
+         WHERE m.channel_id IN ({in_list})
+           AND a.message_id IS NOT NULL
+           AND (${before_idx} IS NULL OR a.id < ${before_idx})
+           AND (
+             (${image_idx} = TRUE AND lower(COALESCE(a.content_type, '')) LIKE 'image/%')
+             OR (${video_idx} = TRUE AND lower(COALESCE(a.content_type, '')) LIKE 'video/%')
+             OR (${file_idx} = TRUE
+                 AND lower(COALESCE(a.content_type, '')) NOT LIKE 'image/%'
+                 AND lower(COALESCE(a.content_type, '')) NOT LIKE 'video/%')
+           )
+         ORDER BY a.id DESC
+         LIMIT ${limit_idx}"
+    );
+    let mut query = sqlx::query(&sql);
+    for id in channel_ids {
+        query = query.bind(*id);
+    }
+    query = query
+        .bind(before_id)
+        .bind(kinds.image)
+        .bind(kinds.video)
+        .bind(kinds.file)
+        .bind(limit);
+    let rows = query.fetch_all(pool).await?;
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let created_raw: String = row.try_get("created_at")?;
+        out.push(PostedAttachment {
+            id: row.try_get("id")?,
+            message_id: row.try_get("message_id")?,
+            channel_id: row.try_get("channel_id")?,
+            filename: row.try_get("filename")?,
+            content_type: row.try_get("content_type")?,
+            size: row.try_get("size")?,
+            url: row.try_get("url")?,
+            width: row.try_get("width")?,
+            height: row.try_get("height")?,
+            created_at: datetime_from_db_text(&created_raw)?,
+            author_id: row.try_get("author_id")?,
+            author_username: row.try_get("author_username")?,
+            author_display_name: row.try_get("author_display_name")?,
+            author_avatar_hash: row.try_get("author_avatar_hash")?,
+        });
+    }
+    Ok(out)
+}
+
+/// Messages in `channel_ids` whose text contains an http(s) URL, newest first.
+///
+/// End-to-end encrypted rows are skipped: their content is ciphertext.
+pub async fn list_link_candidates(
+    pool: &DbPool,
+    channel_ids: &[i64],
+    before_id: Option<i64>,
+    limit: i64,
+) -> Result<Vec<LinkCandidate>, DbError> {
+    ensure_channel_list(channel_ids)?;
+    if channel_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let in_list = crate::messages::build_placeholders(1, channel_ids.len());
+    let before_idx = channel_ids.len() + 1;
+    let limit_idx = channel_ids.len() + 2;
+    let sql = format!(
+        "SELECT m.id, m.channel_id, m.content, m.embeds, m.created_at,
+                u.id AS author_id, u.username AS author_username,
+                u.display_name AS author_display_name, u.avatar_hash AS author_avatar_hash
+         FROM messages m
+         INNER JOIN users u ON u.id = m.author_id
+         WHERE m.channel_id IN ({in_list})
+           AND m.e2ee_header IS NULL
+           AND (m.content LIKE '%http://%' OR m.content LIKE '%https://%')
+           AND (${before_idx} IS NULL OR m.id < ${before_idx})
+         ORDER BY m.id DESC
+         LIMIT ${limit_idx}"
+    );
+    let mut query = sqlx::query(&sql);
+    for id in channel_ids {
+        query = query.bind(*id);
+    }
+    query = query.bind(before_id).bind(limit);
+    let rows = query.fetch_all(pool).await?;
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let created_raw: String = row.try_get("created_at")?;
+        out.push(LinkCandidate {
+            id: row.try_get("id")?,
+            channel_id: row.try_get("channel_id")?,
+            content: row.try_get("content")?,
+            embeds: row.try_get("embeds")?,
+            created_at: datetime_from_db_text(&created_raw)?,
+            author_id: row.try_get("author_id")?,
+            author_username: row.try_get("author_username")?,
+            author_display_name: row.try_get("author_display_name")?,
+            author_avatar_hash: row.try_get("author_avatar_hash")?,
+        });
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -35,3 +35,13 @@ export function resolveUserAvatarUrl(value: string | null | undefined): string |
   if (!ticket && !isTauri() && resourceNeedsDownloadTicket(resolved)) return null;
   return safeClientResourceUrl(resolved);
 }
+
+/**
+ * A profile or server banner (`/api/v1/users/{id}/banner`,
+ * `/api/v1/guilds/{id}/banner`). Same rules as an avatar: a server path only,
+ * never a remote URL, with the download ticket a browser `<img>` needs.
+ */
+export function resolveBannerUrl(value: string | null | undefined): string | null {
+  if (value?.startsWith('data:')) return null;
+  return resolveUserAvatarUrl(value);
+}

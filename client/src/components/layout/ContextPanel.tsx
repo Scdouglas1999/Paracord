@@ -14,6 +14,7 @@ import { ThreadPanel } from '../message/ThreadPanel';
 import { PinnedMessagesOverlay } from './overlays/PinnedMessagesOverlay';
 import { SearchOverlay } from './overlays/SearchOverlay';
 import { GuildEconomyPanel } from '../guild/GuildEconomyPanel';
+import { MediaGalleryPanel } from '../media/MediaGalleryPanel';
 
 /**
  * Descriptor for the active thread surface. Supplied by the ChatView or derived
@@ -268,6 +269,18 @@ export function ContextPanel({
 
   // Panel-native query surfaces bring their own chrome; their close button is
   // wired to clear the shared panel mode.
+  if (shown === 'media') {
+    return (
+      <MediaGalleryPanel
+        guildId={guildId}
+        channelId={channelId}
+        onClose={close}
+        panelRef={asideRef}
+        onKeyDown={onAsideKeyDown}
+      />
+    );
+  }
+
   if (shown === 'pins') {
     return (
       <PinnedMessagesOverlay
