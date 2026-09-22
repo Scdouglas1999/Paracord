@@ -26,6 +26,8 @@
               "team": {
                 "id": "1",
                 "abbreviation": "ATL",
+                "color": "a71930",
+                "alternateColor": "000000",
                 "displayName": "Atlanta Falcons",
                 "shortDisplayName": "Falcons",
                 "name": "Falcons",

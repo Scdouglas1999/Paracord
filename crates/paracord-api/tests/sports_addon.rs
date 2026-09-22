@@ -45,6 +45,8 @@ const NFL_BOARD: &str = r#"{
               "abbreviation": "KC",
               "displayName": "Kansas City Chiefs",
               "shortDisplayName": "Chiefs",
+              "color": "E31837",
+              "alternateColor": "FFB612",
               "logo": "https://a.espncdn.com/i/teamlogos/nfl/500/kc.png"
             }
           },
@@ -788,6 +790,9 @@ async fn enabled_board_uses_the_fake_feed_and_keeps_a_failed_league() -> anyhow:
         "https://a.espncdn.com/i/teamlogos/nfl/500/kc.png"
     );
     assert_eq!(body["games"][0]["away"]["logo"], "");
+    assert_eq!(body["games"][0]["home"]["color"], "e31837");
+    assert_eq!(body["games"][0]["home"]["alt_color"], "ffb612");
+    assert!(body["games"][0]["away"]["color"].is_null());
     assert_eq!(body["games"][0]["home"]["possession"], true);
     assert_eq!(body["games"][1]["id"], "200");
     assert_eq!(body["games"][1]["state"], "pre");

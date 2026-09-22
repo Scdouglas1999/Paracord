@@ -8,6 +8,8 @@
               "team": {
                 "id": "12",
                 "abbreviation": "KC",
+                "color": "e31837",
+                "alternateColor": "ffb612",
                 "displayName": "Kansas City Chiefs",
                 "shortDisplayName": "Chiefs",
                 "logos": [{ "href": "https://a.espncdn.com/i/teamlogos/nfl/500/kc.png" }]

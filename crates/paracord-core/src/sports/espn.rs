@@ -355,6 +355,8 @@ fn parse_roster_team(entry: &Value) -> Option<RosterTeam> {
         name,
         short_name,
         logo,
+        color: hex_color(info, "color"),
+        alt_color: hex_color(info, "alternateColor"),
     })
 }
 
@@ -381,6 +383,8 @@ fn parse_team(competitor: &Value, possession_id: Option<&str>) -> Team {
         team.logo = str_field(info, "logo")
             .map(|logo| sanitize_logo(&logo))
             .unwrap_or_default();
+        team.color = hex_color(info, "color");
+        team.alt_color = hex_color(info, "alternateColor");
     }
     team.possession = possession_id.is_some_and(|id| id == team.id);
     team
@@ -489,9 +493,26 @@ pub(crate) fn bool_field(value: &Value, name: &str) -> bool {
     matches!(value.get(name), Some(Value::Bool(true)))
 }
 
+/// A team colour as lowercase `rrggbb`. ESPN sends bare hex strings; a leading
+/// '#' is tolerated and stripped. Anything else — a colour name, the wrong
+/// number of digits, a non-hex digit, a number instead of a string — is no
+/// colour at all, so the field reads null rather than something unusable.
+pub(crate) fn hex_color(value: &Value, name: &str) -> Option<String> {
+    let Some(Value::String(raw)) = value.get(name) else {
+        return None;
+    };
+    let raw = raw.trim();
+    let digits = raw.strip_prefix('#').unwrap_or(raw);
+    if digits.len() == 6 && digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Some(digits.to_ascii_lowercase())
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::super::models::format_rfc3339;
+    use super::super::models::{format_rfc3339, Game};
     use super::parse;
 
     const NFL: &str = include_str!("fixtures/nfl_scoreboard.json");
@@ -523,6 +544,10 @@ mod tests {
         let pct = game.home_win_pct.expect("home win pct");
         assert!((pct - 0.31).abs() < 1e-9);
         assert_eq!(game.broadcasts, ["FOX", "NFL+"]);
+        assert_eq!(game.home.color.as_deref(), Some("a71930"));
+        assert_eq!(game.home.alt_color.as_deref(), Some("000000"));
+        assert!(game.away.color.is_none(), "the feed sent CAR no colour");
+        assert!(game.away.alt_color.is_none());
         assert_eq!(game.home.logo, "");
         assert_eq!(format_rfc3339(game.start), "2026-09-20T17:00:00Z");
     }
@@ -538,6 +563,8 @@ mod tests {
         );
         assert_eq!(game.last_play_score, 1);
         assert_eq!(game.away.short_name, "Liverpool");
+        assert_eq!(game.away.color.as_deref(), Some("d00027"));
+        assert_eq!(game.away.alt_color.as_deref(), Some("ffffff"));
     }
 
     #[test]
@@ -584,6 +611,13 @@ mod tests {
             teams[1].logo,
             "https://a.espncdn.com/i/teamlogos/nfl/500/kc.png"
         );
+        assert_eq!(teams[1].color.as_deref(), Some("e31837"));
+        assert_eq!(teams[1].alt_color.as_deref(), Some("ffb612"));
+        assert!(teams[0].color.is_none(), "the feed sent BUF no colour");
+        assert!(teams[0].alt_color.is_none());
+        let wire = serde_json::to_value(&teams[1]).unwrap();
+        assert_eq!(wire["color"], "e31837");
+        assert_eq!(wire["alt_color"], "ffb612");
     }
 
     #[test]
@@ -630,6 +664,89 @@ mod tests {
         assert_eq!(value["state"], "pre");
         assert_eq!(value["home"]["score"], 13);
         assert_eq!(value["away"]["score"], 7);
+    }
+
+    /// One board game whose home team carries the two raw colour values
+    /// verbatim; `color` and `alt` are JSON literals, not strings.
+    fn game_with_colors(color: &str, alt: &str) -> Game {
+        let raw = format!(
+            r#"{{ "events": [{{ "id": "1", "competitions": [{{ "competitors": [
+              {{ "homeAway": "home", "team": {{ "id": "12", "abbreviation": "KC", "color": {color}, "alternateColor": {alt} }} }},
+              {{ "homeAway": "away", "team": {{ "id": "2", "abbreviation": "BUF" }} }}
+            ] }}] }}] }}"#
+        );
+        parse(&raw, "football/nfl").unwrap().pop().unwrap()
+    }
+
+    #[test]
+    fn a_colour_that_is_not_six_hex_digits_is_null() {
+        for raw in [
+            r#""red""#,
+            r#""12345""#,
+            r#""1234567""#,
+            r##""#gggggg""##,
+            r##""#12345""##,
+            r#""12 456""#,
+            r#""""#,
+            r##""#""##,
+            "123456",
+            "0",
+            "true",
+            "null",
+            r#"["e31837"]"#,
+            r#"{ "hex": "e31837" }"#,
+        ] {
+            let game = game_with_colors(raw, raw);
+            assert!(game.home.color.is_none(), "color from {raw}");
+            assert!(game.home.alt_color.is_none(), "alt_color from {raw}");
+        }
+    }
+
+    #[test]
+    fn a_hash_is_stripped_and_hex_is_lowercased() {
+        let game = game_with_colors(r##""#E31837""##, r#""FFB612""#);
+        assert_eq!(game.home.color.as_deref(), Some("e31837"));
+        assert_eq!(game.home.alt_color.as_deref(), Some("ffb612"));
+    }
+
+    #[test]
+    fn a_missing_colour_field_is_null() {
+        let game = parse(
+            r#"{ "events": [{ "id": "1", "competitions": [{ "competitors": [
+              { "homeAway": "home", "team": { "id": "12", "abbreviation": "KC" } }
+            ] }] }] }"#,
+            "football/nfl",
+        )
+        .unwrap()
+        .pop()
+        .unwrap();
+        assert!(game.home.color.is_none());
+        assert!(game.home.alt_color.is_none());
+    }
+
+    #[test]
+    fn the_wire_names_are_color_and_alt_color() {
+        let game = game_with_colors(r#""e31837""#, r#""ffb612""#);
+        let value = serde_json::to_value(&game).unwrap();
+        assert_eq!(value["home"]["color"], "e31837");
+        assert_eq!(value["home"]["alt_color"], "ffb612");
+        assert!(value["away"]["color"].is_null());
+        assert!(value["away"]["alt_color"].is_null());
+        // serde_json keeps an object's keys sorted, so this is the set of
+        // colour keys a team carries, not their order.
+        let keys: Vec<&str> = value["home"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .filter(|key| key.contains("col"))
+            .collect();
+        assert_eq!(keys, ["alt_color", "color"]);
+        let wire = serde_json::to_string(&game).unwrap();
+        assert!(wire.contains(r#""color":"e31837""#));
+        assert!(wire.contains(r#""alt_color":"ffb612""#));
+        assert!(!wire.contains("alternateColor"));
+        assert!(!wire.contains("colour"));
     }
 
     #[test]

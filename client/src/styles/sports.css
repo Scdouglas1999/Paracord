@@ -211,10 +211,21 @@
 }
 
 .pc-sports-club {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
+  padding-bottom: 6px;
+}
+
+.pc-sports-team-bar {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 3px;
+  border-radius: var(--radius-full);
 }
 
 .pc-sports-club.is-away { justify-self: end; }
@@ -388,7 +399,18 @@
   perspective-origin: center top;
   overflow: hidden;
   border-radius: var(--radius-card);
-  background: var(--sports-turf);
+  background: var(--sports-stadium);
+}
+
+.pc-sports-field-stage:not(.is-ballpark)::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 8%;
+  left: 8%;
+  height: 34%;
+  background: radial-gradient(ellipse at center top, var(--sports-stadium-glow), transparent 72%);
+  pointer-events: none;
 }
 
 @container sports-detail (min-width: 860px) {
@@ -399,32 +421,71 @@
 
 .pc-sports-field-plane {
   position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
+  top: 34px;
+  left: 2%;
+  width: 96%;
   transform-origin: center top;
-  transform: rotateX(18deg) scale(0.92);
+  transform: rotateX(18deg) scale(0.9);
+  transform-style: preserve-3d;
 }
+
+/*
+ * The posts stand on the end lines at midfield width. Their base sits on the
+ * turf and the drawing is tilted back by the plane's own angle, so in 3D they
+ * are vertical: the same trick as a card standing on a table.
+ */
+.pc-sports-goalpost {
+  position: absolute;
+  bottom: 50%;
+  width: 7%;
+  height: 42%;
+  transform-origin: center bottom;
+  transform: rotateX(-18deg);
+  filter: drop-shadow(0 1px 1px var(--sports-stadium));
+  pointer-events: none;
+}
+
+.pc-sports-goalpost.is-left { left: -2.4%; }
+.pc-sports-goalpost.is-right { right: -2.4%; }
 
 .pc-sports-field-stage[data-flat='true'] {
   aspect-ratio: 1200 / 533;
 }
 
 .pc-sports-field-stage[data-flat='true'] .pc-sports-field-plane {
+  top: 0;
+  left: 0;
+  width: 100%;
   transform: none;
   height: 100%;
+}
+
+/* Seen from straight above, a post is only its crossbar: keep the flat view honest. */
+.pc-sports-field-stage[data-flat='true'] .pc-sports-goalpost {
+  display: none;
 }
 
 .pc-sports-field-stage.is-ballpark {
   aspect-ratio: 1.15 / 1;
 }
 
+.pc-sports-field-stage.is-ballpark {
+  background: var(--sports-turf);
+}
+
 .pc-sports-field-stage.is-ballpark .pc-sports-field-plane {
+  top: 0;
+  left: 0;
+  width: 100%;
   transform: rotateX(42deg) scale(0.92);
 }
 
 .pc-sports-field-stage.is-ballpark[data-flat='true'] {
   aspect-ratio: 1 / 1;
+}
+
+.pc-sports-field-stage.is-ballpark[data-flat='true'] .pc-sports-field-plane {
+  transform: none;
 }
 
 .pc-sports-baseball {
@@ -442,49 +503,156 @@
 
 .pc-sports-zone-row {
   display: grid;
-  grid-template-columns: minmax(0, 340px) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 300px) minmax(0, 1fr);
   gap: var(--space-3);
   align-items: start;
 }
 
 .pc-sports-zone {
-  width: min(100%, 340px);
+  width: min(100%, 300px);
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
 }
 
-.pc-sports-zone svg {
+.pc-sports-zone svg,
+.pc-sports-zone-frame > svg {
   aspect-ratio: 4 / 5;
   height: auto;
 }
 
-.pc-sports-pitch-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  margin: 0;
+.pc-sports-zone-frame {
+  position: relative;
+  width: 100%;
+}
+
+.pc-sports-pitch-hits {
+  position: absolute;
+  inset: 0;
+}
+
+.pc-sports-pitch-hit {
+  position: absolute;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  margin-top: -16px;
+  margin-left: -16px;
+  place-items: center;
   padding: 0;
-  list-style: none;
+  border: 0;
+  background: transparent;
+  color: var(--sports-pitch-ink);
+}
+
+.pc-sports-pitch-chip,
+.pc-sports-pitch-tip {
+  position: absolute;
+  left: 28px;
+  padding: 1px 5px;
+  border-radius: var(--radius-chip);
+  background: var(--sports-bug);
+  color: var(--sports-chalk);
+  font-size: var(--text-meta);
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.pc-sports-pitch-chip { top: 2px; }
+
+.pc-sports-pitch-tip {
+  bottom: 100%;
+  margin-bottom: 2px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.pc-sports-pitch-hit:hover .pc-sports-pitch-tip,
+.pc-sports-pitch-hit:focus-visible .pc-sports-pitch-tip {
+  opacity: 1;
+}
+
+.pc-sports-pitch-halo {
+  filter: blur(3px);
+  opacity: 0.4;
+}
+
+.pc-sports-pitch-list {
+  width: 100%;
+  border-collapse: collapse;
   color: var(--text-secondary);
   font-size: var(--text-meta);
 }
 
-.pc-sports-pitch-list li {
-  display: grid;
-  grid-template-columns: 1.25rem minmax(0, 1fr) auto auto;
-  gap: 0.4rem;
-  align-items: baseline;
+.pc-sports-pitch-list td {
+  padding: 0.2rem 0.3rem;
+  vertical-align: middle;
 }
 
-.pc-sports-pitch-list li.is-fresh {
+.pc-sports-pitch-list td:nth-child(2) {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.pc-sports-pitch-list tr.is-fresh {
   color: var(--text-primary);
   font-weight: 600;
+}
+
+.pc-sports-pitch-list tr.is-hot {
+  background: var(--bg-mod-strong);
+  color: var(--text-primary);
+}
+
+.pc-sports-pitch-dot {
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
 }
 
 .pc-sports-scorebug {
   letter-spacing: 0.01em;
 }
+
+.pc-sports-bug {
+  position: absolute;
+  z-index: 2;
+  top: var(--space-2);
+  left: var(--space-2);
+  display: flex;
+  max-width: calc(100% - 1rem);
+  align-items: center;
+  gap: var(--space-2);
+  padding: 3px 8px;
+  border-radius: var(--radius-chip);
+  background: var(--sports-bug);
+  color: var(--sports-chalk);
+  font-size: var(--text-meta);
+  line-height: 1.2;
+}
+
+.pc-sports-inning,
+.pc-sports-piprow {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.pc-sports-pip {
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid var(--sports-chalk);
+  border-radius: var(--radius-full);
+  background: transparent;
+}
+
+.pc-sports-pip[data-shape='square'] { border-radius: 1px; }
+
+.pc-sports-pip.is-on { background: var(--sports-chalk); }
 
 .pc-sports-headshot {
   display: inline-flex;
@@ -530,6 +698,19 @@
   .pc-sports-zone-row {
     grid-template-columns: minmax(0, 1fr);
   }
+
+  .pc-sports-field-stage:not(.is-ballpark) {
+    aspect-ratio: 2.05 / 1;
+  }
+
+  .pc-sports-field-stage:not(.is-ballpark) .pc-sports-field-plane {
+    top: 28px;
+    transform: rotateX(12deg) scale(0.94);
+  }
+
+  .pc-sports-goalpost {
+    transform: rotateX(-12deg);
+  }
 }
 
 .pc-sports-field-overlay {
@@ -562,25 +743,36 @@
 
 .pc-sports-football {
   position: absolute;
-  left: -7px;
-  top: -11px;
-  width: 14px;
-  height: 22px;
+  left: -8px;
+  top: -12px;
+  width: 16px;
+  height: 24px;
   border-radius: 50%;
-  background: var(--sports-chalk);
+  background: var(--sports-leather);
   box-shadow: var(--sports-ball-shadow);
+}
+
+.pc-sports-football::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 3px;
+  width: 1px;
+  height: 18px;
+  transform: translateX(-50%);
+  background: var(--sports-chalk);
 }
 
 .pc-sports-football::after {
   content: "";
   position: absolute;
   left: 50%;
-  top: 4px;
+  top: 6px;
   width: 1px;
-  height: 14px;
+  height: 12px;
   transform: translateX(-50%);
-  background: var(--sports-lace);
-  box-shadow: -2.5px 0 0 var(--sports-lace), 2.5px 0 0 var(--sports-lace);
+  background: transparent;
+  box-shadow: -3px 0 0 var(--sports-chalk), 3px 0 0 var(--sports-chalk);
 }
 
 .pc-sports-football.is-pulse {
@@ -609,6 +801,9 @@
   position: absolute;
   left: 0;
   top: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   transform: translate(-50%, -150%);
   padding: 1px 6px;
   border-radius: var(--radius-chip);
@@ -617,6 +812,12 @@
   color: var(--text-primary);
   font-size: var(--text-meta);
   white-space: nowrap;
+}
+
+.pc-sports-runner-name .pc-sports-headshot,
+.pc-sports-runner-name .pc-sports-headshot img {
+  width: 16px;
+  height: 16px;
 }
 
 .pc-sports-pitch-in {
@@ -640,6 +841,18 @@
   animation: pc-sports-hit 900ms var(--ease-out) forwards;
 }
 
+.pc-sports-ripple {
+  transform-box: fill-box;
+  transform-origin: center;
+  opacity: 0.75;
+  animation: pc-sports-ripple 800ms var(--ease-out);
+}
+
+@keyframes pc-sports-ripple {
+  from { transform: scale(0.45); opacity: 0.9; }
+  to { transform: scale(1.7); opacity: 0; }
+}
+
 @keyframes pc-sports-hit {
   0% { transform: translate3d(calc(var(--x0) * 100cqw), calc(var(--y0) * 100cqh), 0); opacity: 1; }
   50% { transform: translate3d(calc(var(--x1) * 100cqw), calc(var(--y1) * 100cqh), 0); opacity: 1; }
@@ -660,6 +873,7 @@
   .pc-sports-ball-dot,
   .pc-sports-football,
   .pc-sports-pitch-in,
+  .pc-sports-ripple,
   .pc-sports-hitball,
   .pc-sports-row:hover,
   .pc-sports-card:hover {
@@ -674,5 +888,8 @@
     transform: translate3d(calc(var(--nx, var(--x2)) * 100cqw), calc(var(--ny, var(--y2)) * 100cqh), 0);
   }
 
+  .pc-sports-football::before,
   .pc-sports-football::after { transform: translateX(-50%); }
+
+  .pc-sports-ripple { opacity: 0.75; }
 }

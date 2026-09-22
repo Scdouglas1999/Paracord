@@ -807,6 +807,10 @@ mod tests {
         assert_eq!(game.home.score, Some(33));
         assert_eq!(game.away.abbr, "IND");
         assert_eq!(game.away.score, Some(30));
+        assert_eq!(game.home.color.as_deref(), Some("e31837"));
+        assert_eq!(game.home.alt_color.as_deref(), Some("ffb612"));
+        assert_eq!(game.away.color.as_deref(), Some("003b75"));
+        assert_eq!(game.away.alt_color.as_deref(), Some("ffffff"));
         assert_eq!(game.broadcasts, ["NBC"]);
         assert_eq!(game.detail, "Final/OT");
         let football = detail.football.as_ref().unwrap();
@@ -875,6 +879,10 @@ mod tests {
         assert_eq!(detail.game.away.abbr, "PHI");
         assert_eq!(detail.game.home.abbr, "NYM");
         assert_eq!(detail.game.detail, "Final");
+        assert_eq!(detail.game.home.color.as_deref(), Some("002d72"));
+        assert_eq!(detail.game.home.alt_color.as_deref(), Some("ff5910"));
+        assert_eq!(detail.game.away.color.as_deref(), Some("e81828"));
+        assert_eq!(detail.game.away.alt_color.as_deref(), Some("003278"));
         let baseball = detail.baseball.as_ref().unwrap();
         assert!(baseball.balls.is_none());
         assert!(baseball.inning.is_none());

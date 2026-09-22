@@ -1272,8 +1272,8 @@
    clear the turf. The logo chip stays light so a dark mark does not vanish.
    ============================================================================= */
 :root {
-  --sports-turf: oklch(0.42 0.09 150);
-  --sports-turf-alt: oklch(0.36 0.078 148);
+  --sports-turf: oklch(0.46 0.1 150);
+  --sports-turf-alt: oklch(0.31 0.065 148);
   --sports-infield: oklch(0.40 0.085 152);
   --sports-chalk: oklch(0.97 0.012 155);
   --sports-dirt: oklch(0.50 0.072 68);
@@ -1293,12 +1293,19 @@
   --sports-pitch-ink: oklch(0.985 0.004 95);
   --sports-los: oklch(0.97 0.012 155);
   --sports-first-down: oklch(0.82 0.08 90);
+  --sports-stadium: oklch(0.18 0.02 150);
+  --sports-stadium-glow: oklch(0.78 0.03 95 / 0.45);
+  --sports-bug: oklch(0.2 0.02 260 / 0.92);
+  --sports-sideline: oklch(0.3 0.055 148);
+  --sports-pylon: oklch(0.64 0.13 55);
+  --sports-leather: oklch(0.42 0.07 55);
+  --sports-ink: oklch(0.16 0.02 260);
 }
 
 [data-theme='paper'],
 [data-theme='light'] {
-  --sports-turf: oklch(0.45 0.1 148);
-  --sports-turf-alt: oklch(0.39 0.088 146);
+  --sports-turf: oklch(0.48 0.105 148);
+  --sports-turf-alt: oklch(0.33 0.075 146);
   --sports-infield: oklch(0.43 0.095 150);
   --sports-chalk: oklch(0.98 0.008 155);
   --sports-dirt: oklch(0.55 0.08 70);

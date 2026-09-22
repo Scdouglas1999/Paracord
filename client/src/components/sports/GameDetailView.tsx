@@ -23,7 +23,9 @@ import {
   ordinal,
   pitchAnnouncement,
   redZoneYards,
+  situationBugText,
   stepIndex,
+  teamPaint,
   winProbabilityText,
   yardSpot,
 } from './gamecast';
@@ -152,7 +154,7 @@ function DetailBody({
         <p className="text-body text-text-secondary">This game did not include a field.</p>
       )}
       {detail.kind === 'baseball' && detail.baseball && (
-        <BaseballBody detail={detail} />
+        <BaseballBody detail={detail} hideScores={hideScores} />
       )}
       {detail.kind === 'baseball' && !detail.baseball && (
         <p className="text-body text-text-secondary">This game did not include a field.</p>
@@ -184,7 +186,7 @@ function Scoreboard({ game, hideScores }: { game: SportsGame; hideScores: boolea
   const homeDim = loser === 'home';
   return (
     <div className="pc-sports-scoreboard">
-      <Club team={game.away} side="away" />
+      <Club team={game.away} other={game.home} side="away" />
       <p className={awayDim ? 'pc-sports-bigscore pc-mono is-dim' : 'pc-sports-bigscore pc-mono'}>
         {hideScores ? '–' : (game.away.score ?? '–')}
       </p>
@@ -196,12 +198,21 @@ function Scoreboard({ game, hideScores }: { game: SportsGame; hideScores: boolea
       <p className={homeDim ? 'pc-sports-bigscore pc-mono is-dim' : 'pc-sports-bigscore pc-mono'}>
         {hideScores ? '–' : (game.home.score ?? '–')}
       </p>
-      <Club team={game.home} side="home" />
+      <Club team={game.home} other={game.away} side="home" />
     </div>
   );
 }
 
-function Club({ team, side }: { team: SportsGame['home']; side: 'home' | 'away' }) {
+function Club({
+  team,
+  other,
+  side,
+}: {
+  team: SportsGame['home'];
+  other: SportsGame['home'];
+  side: 'home' | 'away';
+}) {
+  const paint = teamPaint(team, other);
   return (
     <div className={side === 'home' ? 'pc-sports-club is-home' : 'pc-sports-club is-away'}>
       {side === 'away' && <TeamMark team={team} size="lg" />}
@@ -210,6 +221,7 @@ function Club({ team, side }: { team: SportsGame['home']; side: 'home' | 'away' 
         {team.record && <p className="pc-mono text-meta text-text-faint">{team.record}</p>}
       </div>
       {side === 'home' && <TeamMark team={team} size="lg" />}
+      <span className="pc-sports-team-bar" style={{ background: paint.fill }} aria-hidden />
     </div>
   );
 }
@@ -424,10 +436,8 @@ function FootballBody({
         <FootballField
           yards={yards}
           possessionTeamId={possessionId}
-          homeId={game.home.id}
-          awayId={game.away.id}
-          homeAbbr={game.home.abbr}
-          awayAbbr={game.away.abbr}
+          home={game.home}
+          away={game.away}
           distance={live ? distance : null}
           redZone={live && redZone}
           live={live}
@@ -436,6 +446,17 @@ function FootballBody({
           label={label || gameAriaLabel(game, hideScores)}
           notice={live ? notice : null}
           flat={flat}
+          bugText={situationBugText({
+            state: game.state,
+            downText,
+            spot,
+            clock: game.clock,
+            awayAbbr: game.away.abbr,
+            homeAbbr: game.home.abbr,
+            awayScore: game.away.score,
+            homeScore: game.home.score,
+            hideScores,
+          })}
         />
         {drive && (
           <div className="flex flex-wrap gap-2">
@@ -542,7 +563,7 @@ function FootballBody({
   );
 }
 
-function BaseballBody({ detail }: { detail: GameDetail }) {
+function BaseballBody({ detail, hideScores }: { detail: GameDetail; hideScores: boolean }) {
   const baseball = detail.baseball;
   const [atBatId, setAtBatId] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState('');
@@ -574,7 +595,7 @@ function BaseballBody({ detail }: { detail: GameDetail }) {
         </Button>
       </div>
       {baseball && (
-        <BaseballPanels baseball={baseball} game={detail.game} selectedId={atBatId} onSelect={setAtBatId} flat={flat} />
+        <BaseballPanels baseball={baseball} game={detail.game} selectedId={atBatId} onSelect={setAtBatId} flat={flat} hideScores={hideScores} />
       )}
     </div>
   );

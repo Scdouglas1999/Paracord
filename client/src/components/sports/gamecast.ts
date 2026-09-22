@@ -148,45 +148,83 @@ export function strikeZoneOrDefault(
   return { left, right, top, bottom };
 }
 
+export interface CatcherLayout {
+  /** Called-strike box: as wide as the plate, 1.3× as tall, just above it. */
+  zone: { x: number; y: number; width: number; height: number };
+  plate: { cx: number; top: number; width: number; height: number };
+  boxes: { y: number; width: number; height: number; left: number; right: number };
+  catcher: { x: number; y: number; width: number; height: number };
+  /** Stance height. Feet sit on the box baseline. */
+  batterHeight: number;
+}
+
 /**
- * Window drawn around a strike zone so the zone fills the panel and a gutter
- * remains on each side for the batter. Pitches outside the window still map;
- * they simply land near the edge.
+ * Catcher's view. The zone is the point of the panel, so it takes ~40% of the
+ * width and floats above a plate of the same width near the bottom. The
+ * batter's boxes sit either side, outside the zone, and the batter is a faint
+ * figure in one of them — under half the panel tall, so the pitches stay the
+ * hero and a pitch high out of the zone still has room above.
  */
-export function pitchFrame(zone: { left: number; right: number; top: number; bottom: number }): {
-  minX: number;
-  maxX: number;
-  minY: number;
-  maxY: number;
-} {
-  const width = Math.max(8, zone.right - zone.left);
-  const height = Math.max(8, zone.bottom - zone.top);
+export function catcherLayout(): CatcherLayout {
+  const plateWidth = Math.round(ZONE_VIEW.width * 0.42);
+  const plateHeight = 22;
+  const zoneWidth = plateWidth;
+  const zoneHeight = Math.round(zoneWidth * 1.3);
+  const batterHeight = Math.round(ZONE_VIEW.height * 0.47);
+  const plateBottom = ZONE_VIEW.height - 39;
+  const plateTop = plateBottom - plateHeight;
+  const zoneX = (ZONE_VIEW.width - zoneWidth) / 2;
+  const boxWidth = 36;
+  const gap = 8;
+  const boxHeight = 52;
+  const zoneLift = 14;
   return {
-    minX: zone.left - width * 0.18,
-    maxX: zone.right + width * 0.18,
-    minY: zone.top - height * 0.22,
-    maxY: zone.bottom + height * 0.4,
+    zone: {
+      x: zoneX,
+      y: plateTop - zoneLift - zoneHeight,
+      width: zoneWidth,
+      height: zoneHeight,
+    },
+    plate: { cx: ZONE_VIEW.width / 2, top: plateTop, width: plateWidth, height: plateHeight },
+    boxes: {
+      y: plateBottom - boxHeight,
+      width: boxWidth,
+      height: boxHeight,
+      left: zoneX - gap - boxWidth,
+      right: zoneX + zoneWidth + gap,
+    },
+    catcher: {
+      x: ZONE_VIEW.width / 2 - 18,
+      y: plateBottom + 6,
+      width: 36,
+      height: 22,
+    },
+    batterHeight,
   };
 }
 
-/** A pitch inside a frame, with side gutters left open for the batter. */
+/**
+ * Map a pitch so the called-strike bounds land on the zone rectangle.
+ * A pitch that would leave the panel is held at the edge.
+ */
 export function pitchInFrame(
   x: number,
   y: number,
-  frame: { minX: number; maxX: number; minY: number; maxY: number },
-): { x: number; y: number } {
-  const gutter = 36;
-  const innerW = ZONE_VIEW.width - gutter * 2;
-  const innerH = ZONE_VIEW.height - 28;
-  const spanX = frame.maxX - frame.minX || 1;
-  const spanY = frame.maxY - frame.minY || 1;
-  // A pitch in the dirt or a foot outside is still a pitch: it is held at the
-  // panel's edge, a marker's radius in, rather than drawn where nobody can see it.
+  zone: { left: number; right: number; top: number; bottom: number },
+): { x: number; y: number; held: boolean } {
+  const rect = catcherLayout().zone;
+  const spanX = zone.right - zone.left || 1;
+  const spanY = zone.bottom - zone.top || 1;
+  const rawX = rect.x + ((x - zone.left) / spanX) * rect.width;
+  const rawY = rect.y + ((y - zone.top) / spanY) * rect.height;
   const edge = 11;
   const hold = (value: number, size: number) => Math.min(size - edge, Math.max(edge, value));
+  const hx = hold(rawX, ZONE_VIEW.width);
+  const hy = hold(rawY, ZONE_VIEW.height);
   return {
-    x: hold(gutter + ((x - frame.minX) / spanX) * innerW, ZONE_VIEW.width),
-    y: hold(12 + ((y - frame.minY) / spanY) * innerH, ZONE_VIEW.height),
+    x: hx,
+    y: hy,
+    held: Math.abs(hx - rawX) > 0.5 || Math.abs(hy - rawY) > 0.5,
   };
 }
 
@@ -428,6 +466,107 @@ export function baseballScorebug(opts: {
 
 export function detailInterval(state: string | undefined): number {
   return state === 'in' ? LIVE_DETAIL_MS : QUIET_DETAIL_MS;
+}
+
+const HEX = /^[0-9a-f]{6}$/;
+/** Primaries closer than this (0–441) are treated as the same paint. */
+export const TEAM_COLOR_CLOSE = 48;
+
+export interface TeamPaint {
+  fill: string;
+  ink: string;
+}
+
+interface Rgb { r: number; g: number; b: number; hex: string }
+
+function parseTeamHex(value: string | null | undefined): Rgb | null {
+  if (!value) return null;
+  const hex = value.trim().toLowerCase();
+  if (!HEX.test(hex)) return null;
+  return {
+    hex,
+    r: Number.parseInt(hex.slice(0, 2), 16),
+    g: Number.parseInt(hex.slice(2, 4), 16),
+    b: Number.parseInt(hex.slice(4, 6), 16),
+  };
+}
+
+function channelLinear(channel: number): number {
+  const c = channel / 255;
+  return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+}
+
+/** WCAG relative luminance, 0–1. */
+export function relativeLuminance(rgb: { r: number; g: number; b: number }): number {
+  return 0.2126 * channelLinear(rgb.r) + 0.7152 * channelLinear(rgb.g) + 0.0722 * channelLinear(rgb.b);
+}
+
+function rgbDistance(a: Rgb, b: Rgb): number {
+  return Math.hypot(a.r - b.r, a.g - b.g, a.b - b.b);
+}
+
+function cssHex(hex: string): string {
+  return String.fromCharCode(35) + hex;
+}
+
+/**
+ * Paint for a team color that arrived as data. Ink is chalk on a dark fill
+ * and the dark on-light ink on a light fill. When the other team's primary
+ * is nearly the same, the alternate colour is used if it separates them.
+ * A missing colour falls back to the neutral end-zone token.
+ */
+export function teamPaint(
+  team: { color?: string | null; alt_color?: string | null } | null | undefined,
+  other?: { color?: string | null; alt_color?: string | null } | null,
+): TeamPaint {
+  const primary = parseTeamHex(team?.color);
+  const alt = parseTeamHex(team?.alt_color);
+  const otherPrimary = parseTeamHex(other?.color);
+  let chosen = primary;
+  if (primary && otherPrimary && rgbDistance(primary, otherPrimary) < TEAM_COLOR_CLOSE) {
+    if (alt && rgbDistance(alt, otherPrimary) >= TEAM_COLOR_CLOSE) chosen = alt;
+  }
+  if (!chosen) return { fill: 'var(--sports-endzone)', ink: 'var(--sports-chalk)' };
+  const ink = relativeLuminance(chosen) > 0.179 ? 'var(--sports-ink)' : 'var(--sports-chalk)';
+  return { fill: cssHex(chosen.hex), ink };
+}
+
+export type PitchShapeName = 'circle' | 'square' | 'diamond' | 'triangle' | 'star' | 'ring';
+
+/** Result colour plus a shape, so the mark still reads without the colour. */
+export function pitchMark(result: string | null | undefined): { fill: string; shape: PitchShapeName } {
+  switch (result) {
+    case 'ball': return { fill: 'var(--sports-pitch-ball)', shape: 'circle' };
+    case 'strike-looking': return { fill: 'var(--sports-pitch-looking)', shape: 'square' };
+    case 'strike-swinging': return { fill: 'var(--sports-pitch-swinging)', shape: 'diamond' };
+    case 'foul': return { fill: 'var(--sports-pitch-foul)', shape: 'triangle' };
+    case 'in-play': return { fill: 'var(--sports-pitch-inplay)', shape: 'star' };
+    default: return { fill: 'var(--sports-pitch-other)', shape: 'ring' };
+  }
+}
+
+/** The broadcast bug. A finished game names the score; it does not invent a down. */
+export function situationBugText(opts: {
+  state: string;
+  downText?: string | null;
+  spot?: string | null;
+  clock?: string | null;
+  awayAbbr?: string | null;
+  homeAbbr?: string | null;
+  awayScore?: number | null;
+  homeScore?: number | null;
+  hideScores?: boolean;
+}): string {
+  if (opts.state === 'post') {
+    if (opts.hideScores) return 'Final. Scores hidden';
+    if (!opts.awayAbbr || !opts.homeAbbr) return 'Final';
+    const awayScore = opts.awayScore == null ? '–' : String(opts.awayScore);
+    const homeScore = opts.homeScore == null ? '–' : String(opts.homeScore);
+    return `Final. ${opts.awayAbbr} ${awayScore}, ${opts.homeAbbr} ${homeScore}`;
+  }
+  if (opts.state !== 'in') return 'Not started';
+  const parts = [opts.downText?.trim(), opts.spot ? `Ball on ${opts.spot}` : null, opts.clock?.trim()].filter(Boolean);
+  return parts.join(' · ') || 'In progress';
 }
 
 export function footballFieldLabel(opts: {

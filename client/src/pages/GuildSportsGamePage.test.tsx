@@ -286,8 +286,8 @@ describe('GuildSportsGamePage', () => {
           league: 'MLB',
           league_path: 'baseball/mlb',
           detail: 'Top 7th',
-          home: team({ id: 'bos', abbr: 'BOS', name: 'Boston Red Sox', short_name: 'Red Sox', score: 2 }),
-          away: team({ id: 'bal', abbr: 'BAL', name: 'Baltimore Orioles', short_name: 'Orioles', score: 3 }),
+          home: team({ id: 'bos', abbr: 'BOS', name: 'Boston Red Sox', short_name: 'Red Sox', score: 2, color: '0c2340' }),
+          away: team({ id: 'bal', abbr: 'BAL', name: 'Baltimore Orioles', short_name: 'Orioles', score: 3, color: 'df4601' }),
         }),
         baseball: {
           inning: 7,
@@ -297,7 +297,7 @@ describe('GuildSportsGamePage', () => {
           outs: 1,
           bases: {
             first: null,
-            second: { id: 's', name: 'Smith', short_name: 'Smith', headshot: '' },
+            second: { id: 's', name: 'John Smith', short_name: 'Smith', headshot: 'https://a.espncdn.com/i/headshots/mlb/players/full/123.png' },
             third: null,
           },
           pitcher: null,
@@ -332,6 +332,12 @@ describe('GuildSportsGamePage', () => {
     expect(screen.getByText('Swinging strike')).toBeInTheDocument();
     expect(screen.getByText('In play')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Lee/ })).toHaveAttribute('aria-pressed', 'true');
+    const diamond = screen.getByRole('img', { name: /Smith on second/ });
+    const fills = [...diamond.querySelectorAll('rect')].map((node) => node.getAttribute('fill') ?? '');
+    expect(fills.some((fill) => fill.toLowerCase().endsWith('df4601'))).toBe(true);
+    const chip = document.querySelector('.pc-sports-runner-name');
+    expect(chip?.textContent).toContain('Smith');
+    expect(chip?.querySelector('img')?.getAttribute('src')).toContain('espncdn.com');
   });
 
   it('opens a finished football game on the last scoring drive', async () => {

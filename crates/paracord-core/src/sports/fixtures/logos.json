@@ -9,6 +9,8 @@
               "homeAway": "home",
               "team": {
                 "id": "1",
+                "color": "e31837",
+                "alternateColor": "ffb612",
                 "logo": "https://a.espncdn.com/i/teamlogos/nfl/500/kc.png"
               }
             },

@@ -297,6 +297,8 @@ const checks = [
   { fg: '--sports-chalk', bg: '--sports-turf', min: 4.5 },
   { fg: '--sports-chalk', bg: '--sports-turf-alt', min: 4.5 },
   { fg: '--sports-chalk', bg: '--sports-endzone', min: 4.5 },
+  { fg: '--sports-chalk', bg: '--sports-bug', over: '--sports-stadium', min: 4.5 },
+  { fg: '--sports-chalk', bg: '--sports-stadium', min: 4.5 },
   { fg: '--sports-pitch-ink', bg: '--sports-pitch-ball', min: 4.5 },
   { fg: '--sports-pitch-ink', bg: '--sports-pitch-looking', min: 4.5 },
   { fg: '--sports-pitch-ink', bg: '--sports-pitch-swinging', min: 4.5 },

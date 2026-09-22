@@ -47,6 +47,8 @@
               "team": {
                 "id": "364",
                 "abbreviation": "LIV",
+                "color": "d00027",
+                "alternateColor": "ffffff",
                 "displayName": "Liverpool"
               }
             }

@@ -56,6 +56,8 @@ export interface SportsRosterTeam {
   name: string;
   short_name: string;
   logo: string;
+  color?: string | null;
+  alt_color?: string | null;
 }
 
 export interface SportsRoster {
@@ -81,6 +83,9 @@ export interface SportsTeam {
   record: string | null;
   possession: boolean;
   winner: boolean;
+  /** Feed color, lowercase rrggbb, or null when the feed has none. */
+  color?: string | null;
+  alt_color?: string | null;
 }
 
 export interface SportsGame {

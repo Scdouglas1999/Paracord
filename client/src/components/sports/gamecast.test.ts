@@ -6,6 +6,7 @@ import {
   ZONE_VIEW,
   baseballFieldLabel,
   baseballScorebug,
+  catcherLayout,
   diffRunners,
   fieldPoint,
   firstDownYard,
@@ -14,10 +15,12 @@ import {
   hitToField,
   losingSide,
   openingDriveId,
-  pitchFrame,
   pitchInFrame,
   pitchAnnouncement,
   pitchLabel,
+  pitchMark,
+  situationBugText,
+  teamPaint,
   pitchToZone,
   playStroke,
   redZoneYards,
@@ -191,23 +194,39 @@ describe('labels', () => {
     expect(topLeft.y).toBeLessThan(bottomRight.y);
     expect(topLeft.x).toBeGreaterThan(0);
     expect(bottomRight.x).toBeLessThan(ZONE_VIEW.width);
-    const framed = pitchFrame(DEFAULT_STRIKE_ZONE);
-    const boxLeft = pitchInFrame(DEFAULT_STRIKE_ZONE.left, DEFAULT_STRIKE_ZONE.top, framed);
-    const boxRight = pitchInFrame(DEFAULT_STRIKE_ZONE.right, DEFAULT_STRIKE_ZONE.bottom, framed);
-    expect(boxRight.x - boxLeft.x).toBeGreaterThan(ZONE_VIEW.width * 0.3);
-    expect(boxLeft.x).toBeGreaterThan(28);
-    expect(boxRight.x).toBeLessThan(ZONE_VIEW.width - 28);
+    const layout = catcherLayout();
+    // The zone is the hero: about 40% of the width, taller than wide.
+    expect(layout.zone.width / ZONE_VIEW.width).toBeCloseTo(0.42, 1);
+    expect(layout.zone.height / layout.zone.width).toBeCloseTo(1.3, 1);
+    expect(layout.zone.x).toBeCloseTo((ZONE_VIEW.width - layout.zone.width) / 2);
+    expect(layout.plate.width).toBeCloseTo(layout.zone.width);
+    expect(layout.zone.y + layout.zone.height).toBeLessThan(layout.plate.top);
+    expect(layout.zone.y).toBeGreaterThan(60); // room for a pitch high out of the zone
+    expect(layout.boxes.left + layout.boxes.width).toBeLessThanOrEqual(layout.zone.x);
+    expect(layout.boxes.right).toBeGreaterThanOrEqual(layout.zone.x + layout.zone.width);
+    // The batter is a bystander, under half the panel tall.
+    expect(layout.batterHeight / ZONE_VIEW.height).toBeLessThan(0.5);
+    expect(layout.batterHeight / ZONE_VIEW.height).toBeGreaterThan(0.35);
+    const boxLeft = pitchInFrame(DEFAULT_STRIKE_ZONE.left, DEFAULT_STRIKE_ZONE.top, DEFAULT_STRIKE_ZONE);
+    const boxRight = pitchInFrame(DEFAULT_STRIKE_ZONE.right, DEFAULT_STRIKE_ZONE.bottom, DEFAULT_STRIKE_ZONE);
+    expect(boxLeft.x).toBeCloseTo(layout.zone.x);
+    expect(boxLeft.y).toBeCloseTo(layout.zone.y);
+    expect(boxRight.x).toBeCloseTo(layout.zone.x + layout.zone.width);
+    expect(boxRight.y).toBeCloseTo(layout.zone.y + layout.zone.height);
+    expect(boxLeft.held).toBe(false);
   });
 
   it('keeps a pitch far outside the zone on the panel, at its edge', () => {
-    const framed = pitchFrame(DEFAULT_STRIKE_ZONE);
-    // Real pitches: 32 is a foot outside, 252 is in the dirt.
-    const wide = pitchInFrame(32, 184, framed);
-    const dirt = pitchInFrame(120, 252, framed);
+    const wide = pitchInFrame(32, 184, DEFAULT_STRIKE_ZONE);
+    const dirt = pitchInFrame(120, 252, DEFAULT_STRIKE_ZONE);
     expect(wide.x).toBeGreaterThanOrEqual(11);
     expect(dirt.y).toBeLessThanOrEqual(ZONE_VIEW.height - 11);
-    const inside = pitchInFrame(120, 170, framed);
+    const inside = pitchInFrame(120, 170, DEFAULT_STRIKE_ZONE);
     expect(inside.x).toBeGreaterThan(wide.x);
+    const off = pitchInFrame(-400, 900, DEFAULT_STRIKE_ZONE);
+    expect(off.held).toBe(true);
+    expect(off.x).toBeGreaterThanOrEqual(11);
+    expect(off.y).toBeLessThanOrEqual(ZONE_VIEW.height - 11);
   });
 
   it('opens a finished game on the last scoring drive', () => {
@@ -258,5 +277,71 @@ describe('labels', () => {
     expect(stepIndex(0, 4, -1)).toBe(0);
     expect(stepIndex(1, 4, 1)).toBe(2);
     expect(stepIndex(3, 4, 1)).toBe(3);
+  });
+});
+
+describe('team paint', () => {
+  it('picks chalk on a dark fill and dark ink on a light fill', () => {
+    const dark = teamPaint({ color: '0c2340', alt_color: null });
+    const light = teamPaint({ color: 'ffd000', alt_color: null });
+    expect(dark.fill.endsWith('0c2340')).toBe(true);
+    expect(dark.ink).toBe('var(--sports-chalk)');
+    expect(light.fill.endsWith('ffd000')).toBe(true);
+    expect(light.ink).toBe('var(--sports-ink)');
+  });
+
+  it('uses the alternate color when the two primaries are nearly the same', () => {
+    const other = { color: 'aa0000', alt_color: null };
+    const painted = teamPaint({ color: 'b40000', alt_color: '0022aa' }, other);
+    expect(painted.fill.endsWith('0022aa')).toBe(true);
+    expect(painted.ink).toBe('var(--sports-chalk)');
+  });
+
+  it('keeps the primary when the alternate is just as close', () => {
+    const other = { color: 'aa0000', alt_color: null };
+    const painted = teamPaint({ color: 'b20000', alt_color: 'ae1010' }, other);
+    expect(painted.fill.endsWith('b20000')).toBe(true);
+  });
+
+  it('falls back to the neutral end zone when the color is missing', () => {
+    expect(teamPaint(null)).toEqual({ fill: 'var(--sports-endzone)', ink: 'var(--sports-chalk)' });
+    expect(teamPaint({ color: null, alt_color: null })).toEqual({
+      fill: 'var(--sports-endzone)',
+      ink: 'var(--sports-chalk)',
+    });
+    expect(teamPaint({ color: 'nope', alt_color: null }).fill).toBe('var(--sports-endzone)');
+  });
+});
+
+describe('pitch marks', () => {
+  it('pairs each result with a shape as well as a color', () => {
+    expect(pitchMark('ball')).toEqual({ fill: 'var(--sports-pitch-ball)', shape: 'circle' });
+    expect(pitchMark('strike-looking').shape).toBe('square');
+    expect(pitchMark('strike-swinging').shape).toBe('diamond');
+    expect(pitchMark('foul').shape).toBe('triangle');
+    expect(pitchMark('in-play').shape).toBe('star');
+    expect(pitchMark('other').shape).toBe('ring');
+    expect(pitchMark(null).fill).toBe('var(--sports-pitch-other)');
+  });
+});
+
+describe('situation bug', () => {
+  it('reads the down while a game is on and the score when it is over', () => {
+    expect(situationBugText({
+      state: 'in',
+      downText: '2nd and 7',
+      spot: 'the IND 14',
+      clock: '8:42',
+    })).toBe('2nd and 7 · Ball on the IND 14 · 8:42');
+    expect(situationBugText({
+      state: 'post',
+      awayAbbr: 'IND',
+      homeAbbr: 'KC',
+      awayScore: 30,
+      homeScore: 33,
+    })).toBe('Final. IND 30, KC 33');
+    expect(situationBugText({ state: 'post', hideScores: true, awayAbbr: 'IND', homeAbbr: 'KC' })).toBe('Final. Scores hidden');
+    expect(situationBugText({ state: 'post' })).toBe('Final');
+    expect(situationBugText({ state: 'pre' })).toBe('Not started');
   });
 });

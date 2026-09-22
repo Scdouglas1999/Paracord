@@ -232,6 +232,10 @@ pub struct RosterTeam {
     pub name: String,
     pub short_name: String,
     pub logo: String,
+    /// Primary team colour as lowercase `rrggbb`, or null when the feed has none.
+    pub color: Option<String>,
+    /// Secondary team colour as lowercase `rrggbb`, or null when the feed has none.
+    pub alt_color: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -247,6 +251,10 @@ pub struct Team {
     pub name: String,
     pub short_name: String,
     pub logo: String,
+    /// Primary team colour as lowercase `rrggbb`, or null when the feed has none.
+    pub color: Option<String>,
+    /// Secondary team colour as lowercase `rrggbb`, or null when the feed has none.
+    pub alt_color: Option<String>,
     pub score: Option<i32>,
     pub record: Option<String>,
     pub possession: bool,
@@ -418,6 +426,8 @@ mod tests {
         }
         assert!(value["home"]["score"].is_null());
         assert!(value["home"]["record"].is_null());
+        assert!(value["home"]["color"].is_null());
+        assert!(value["home"]["alt_color"].is_null());
         assert_eq!(value["state"], "pre");
         assert_eq!(value["favorite"], false);
         assert_eq!(value["broadcasts"], serde_json::json!([]));
