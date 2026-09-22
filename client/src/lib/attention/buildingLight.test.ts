@@ -114,7 +114,7 @@ describe('server light', () => {
     expect(building.readingCount).toBe(2);
     expect(building.lightsOn).toBe(5);
     expect(building.memberCount).toBe(61);
-    expect(building.caption).toBe('1 call live · 2 reading');
+    expect(building.caption).toBe('3 in voice · 2 here');
     expect(building.key).toBe(JSON.stringify(['a', 'viewer', 'g1']));
   });
 
@@ -138,7 +138,7 @@ describe('server light', () => {
       members: [],
     });
     expect(building.brightestRoom).toBeNull();
-    expect(building.caption).toBe('Dark · nobody in');
+    expect(building.caption).toBe('Nobody in voice');
   });
 });
 
@@ -181,7 +181,7 @@ describe('around now', () => {
     expect(sentence).toBe(
       // Names inside a clause are alphabetical, so the sentence is stable
       // between ticks rather than reshuffling with the typing order.
-      'Mara, Priya and Ren are in Shop floor · Aisha and Tomas are reading build-log · Devon is away',
+      'Mara, Priya and Ren are in Shop floor · Aisha and Tomas are in #build-log · Devon is away',
     );
   });
 
@@ -212,12 +212,12 @@ describe('around now', () => {
     expect(sentence.split(' · ')).toHaveLength(2);
   });
 
-  it('stays in the metaphor when nothing is lit', () => {
+  it('says plainly that nobody is online', () => {
     expect(aroundNowSentence({ rooms: [], people: [] })).toBe(
-      "Nobody's lights are on right now",
+      'Nobody is online right now',
     );
-    expect(aroundNowSentence({ rooms: [], people: [], empty: 'Every server is dark' })).toBe(
-      'Every server is dark',
+    expect(aroundNowSentence({ rooms: [], people: [], empty: 'Nobody is around' })).toBe(
+      'Nobody is around',
     );
   });
 });

@@ -13,7 +13,7 @@ describe('personLight', () => {
     expect(person({ status: 'idle' })).toMatchObject({ level: 'dim', dim: true, label: 'Away' });
     expect(person({ status: 'dnd' })).toMatchObject({ level: 'dim', dnd: true });
     expect(person({ status: 'offline' })).toMatchObject({ level: 'off', lit: false, dim: true });
-    expect(person({ status: undefined })).toMatchObject({ level: 'off', label: 'Lights off' });
+    expect(person({ status: undefined })).toMatchObject({ level: 'off', label: 'Offline' });
   });
 
   it('breathes only when somebody is actually talking in a room', () => {
@@ -28,10 +28,10 @@ describe('personLight', () => {
     expect(person({ inRoom: true, speaking: true, roomName: 'Shop floor' }).label).toBe(
       'Speaking in Shop floor',
     );
-    expect(person({ status: 'online' }).label).toBe('Lights on');
+    expect(person({ status: 'online' }).label).toBe('Online');
   });
 
-  it('counts lights on', () => {
+  it('counts who is online', () => {
     const people = [
       person({ userId: '1', status: 'online' }),
       person({ userId: '2', status: 'idle' }),

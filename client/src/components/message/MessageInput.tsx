@@ -49,7 +49,6 @@ import { formatFileSize, toDatetimeLocalValue } from '../../lib/formatters';
 import { toast } from '../../stores/toastStore';
 import { extractApiError } from '../../api/client';
 import { displayName } from '../../lib/displayName';
-import { useConversationReaders, useSelfUser } from './messageLight';
 
 const EmojiPicker = lazy(() =>
   import('../ui/EmojiPicker').then((m) => ({ default: m.EmojiPicker })),
@@ -68,10 +67,11 @@ interface MessageInputProps {
   replyingTo?: { id: string; author: string; content: string } | null;
   onCancelReply?: () => void;
   /**
-   * What `channelName` names. A one-to-one DM is a person, everything else is a
-   * room — it only changes the preposition, never the behaviour.
+   * What `channelName` names: a server channel ("Message #general"), a group
+   * DM or a person ("Message Mara"). It only changes the words, never the
+   * behaviour.
    */
-  conversationKind?: 'room' | 'person';
+  conversationKind?: 'channel' | 'group' | 'person';
   /**
    * WP3 (spec §7.2, §8), additive: `ribbon` is the composer inside the Stage's
    * chat ribbon — 42px instead of 50, a short "Say something" that fits the
@@ -127,41 +127,27 @@ const POLL_DURATION_OPTIONS = [
 ];
 
 /**
- * The composer's invitation (docs/lantern-stage-spec.md §7.4, §6.9).
- *
- * It names the people who will actually read this — "Say something to the 5
- * people reading" — and falls back to the room when nobody else is here. Never
- * "Message #channel": a room is people, and the copy says so.
- *
- * `readingOthers` excludes you. You are always reading the room you have open,
- * so counting yourself would mean the fallback never appeared and a room you
- * are alone in would invite you to talk to yourself.
+ * The composer's placeholder: "Message #general", "Message Mara"
+ * (docs/server-home-spec.md, "Plain words").
  */
 export function composerPlaceholder(
-  readingOthers: number,
   name?: string | null,
-  kind: 'room' | 'person' = 'room',
+  kind: 'channel' | 'group' | 'person' = 'channel',
   compact = false,
 ): string {
-  // A phone's composer is about 230px of text. The full invitation needs nearly
-  // 300, and a placeholder cannot wrap, so it arrived cut off mid-phrase — "Say
-  // something to the 1". The short form still names who is there; a channel's
-  // name is dropped because there is no telling how long one is.
-  if (compact) {
-    if (readingOthers > 0) {
-      return readingOthers === 1 ? 'Say something to 1 person' : `Say something to ${readingOthers} people`;
-    }
-    return 'Say something';
-  }
-  if (readingOthers > 0) {
-    return readingOthers === 1
-      ? 'Say something to the 1 person reading'
-      : `Say something to the ${readingOthers} people reading`;
-  }
-  if (!name) return 'Say something here';
-  // You say something *in* a room and *to* a person.
-  return kind === 'person' ? `Say something to ${name}` : `Say something in ${name}`;
+  if (!name) return GENERIC_PLACEHOLDER;
+  const full = kind === 'channel' ? `Message #${name}` : `Message ${name}`;
+  // A phone's composer is about 230px of text and a placeholder cannot wrap,
+  // so a long name would arrive cut off mid-word. There is no telling how long
+  // a name is, so past what fits the short form drops it.
+  if (compact && full.length > COMPACT_PLACEHOLDER_MAX) return GENERIC_PLACEHOLDER;
+  return full;
 }
+
+const GENERIC_PLACEHOLDER = 'Write a message';
+
+/** What fits a phone's composer at the body size, with room to spare. */
+const COMPACT_PLACEHOLDER_MAX = 26;
 
 function canPreviewImageFile(file: File): boolean {
   return isAllowedImageMimeType(file.type);
@@ -366,7 +352,7 @@ export function MessageInput(props: MessageInputProps) {
   return <OwnedMessageInput key={memberScopeKey(scope, props.channelId)} {...props} scope={scope} messageStore={messageStore} />;
 }
 
-function OwnedMessageInput({ channelId, guildId, channelName, conversationKind = 'room', replyingTo, onCancelReply, variant = 'default', narrow = false, scope, messageStore }: MessageInputProps & {
+function OwnedMessageInput({ channelId, guildId, channelName, conversationKind = 'channel', replyingTo, onCancelReply, variant = 'default', narrow = false, scope, messageStore }: MessageInputProps & {
   scope: AccountScope;
   messageStore: ReturnType<typeof useCurrentMessageStoreApi>;
 }) {
@@ -442,17 +428,8 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
   const canCreatePoll = actions.poll.allowed;
   const canSendMessages = actions.send.allowed;
   const canAttachFiles = actions.attach.allowed;
-  // §7.4 / §6.9: the composer names who is actually going to read this. The
-  // count is the people the room can tell are here, minus you — "nobody is
-  // reading" has to mean nobody *else*, or the fallback copy never appears.
-  const readers = useConversationReaders(guildId, channelId, scope);
-  const self = useSelfUser();
-  // Narrow enough that the full invitation cannot fit on one line.
+  // Narrow enough that a long channel name cannot fit the placeholder.
   const phoneWidth = useMobile(520);
-  const readingOthers = useMemo(
-    () => readers.filter((person) => person.userId !== self?.id).length,
-    [readers, self?.id],
-  );
   /**
    * A blocker is worth reading only if it lasts.
    *
@@ -1709,14 +1686,14 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
                       // it arrived ellipsised mid-word — "Say something to the
                       // roor" on the Stage, "Say something in Bra" in a thread.
                       'Say something'
-                    : composerPlaceholder(readingOthers, channelName, conversationKind, phoneWidth)
+                    : composerPlaceholder(channelName, conversationKind, phoneWidth)
           }
           rows={1}
           maxLength={MAX_MESSAGE_LENGTH}
           disabled={showPollComposer}
           data-composer-input=""
-          // The invitation names the people who will read it (§7.4), which on a
-          // phone is longer than the composer is wide. Clipping the PLACEHOLDER
+          // A placeholder with a long channel name can be wider than a phone's
+          // composer. Clipping the PLACEHOLDER
           // to one line keeps the composer at its §3 height; a real draft still
           // wraps and grows, which is what a draft should do.
           className={

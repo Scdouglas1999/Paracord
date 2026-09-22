@@ -686,19 +686,19 @@ function OwnedTopBar({
             <HereNowStrip
               hereNow={dm.hereNow}
               everyone={dm.people}
-              context={`reading ${dm.name}`}
+              context={`in ${dm.name}`}
               className="hidden md:block"
               caption={
                 <>
                   <RollingNumber
                     className="font-semibold text-text-primary"
                     value={dm.hereNow.here}
-                    format={(count) => `${count} reading`}
+                    format={(count) => `${count} here`}
                   />
                   {' · '}
                   <RollingNumber
                     value={dm.hereNow.lightsOn}
-                    format={(count) => `${count} lights on`}
+                    format={(count) => `${count} online`}
                     announce={false}
                   />
                 </>
@@ -707,25 +707,24 @@ function OwnedTopBar({
           )
         ) : (
           !isVoice && (
-            // §7.4: a text room's strip says what being there means — "5
-            // reading · 19 lights on" — not the Stage's "N here".
+            // §7.4: a text channel's strip — "5 here · 19 online".
             <HereNowStrip
               hereNow={hereNow}
-              context={`reading ${channelName ?? 'this channel'}`}
+              context={`in ${channelName ?? 'this channel'}`}
               className="hidden md:block"
               caption={
-                // §5.1 "numbers re-roll": these two change when somebody starts
-                // or stops reading the room, which is a thing a person did.
+                // §5.1 "numbers re-roll": these two change when somebody comes
+                // into the channel or leaves it, which is a thing a person did.
                 <>
                   <RollingNumber
                     className="font-semibold text-text-primary"
                     value={hereNow.here}
-                    format={(count) => `${count} reading`}
+                    format={(count) => `${count} here`}
                   />
                   {' · '}
                   <RollingNumber
                     value={hereNow.lightsOn}
-                    format={(count) => `${count} lights on`}
+                    format={(count) => `${count} online`}
                     announce={false}
                   />
                 </>

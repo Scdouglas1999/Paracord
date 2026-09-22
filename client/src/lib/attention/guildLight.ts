@@ -97,7 +97,7 @@ export interface GuildLightInput {
   litHistory?: LitHistory;
   /**
    * Whether this building's channels AND members have arrived. A building you
-   * are not currently in must not claim "0 in · Dark · nobody in" because
+   * are not currently in must not claim "0 online · Nobody in voice" because
    * nobody has fetched it yet.
    */
   rosterKnown?: boolean;

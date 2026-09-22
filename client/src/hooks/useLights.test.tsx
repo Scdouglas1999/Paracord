@@ -133,7 +133,7 @@ describe('useBuildingLight', () => {
     ]);
     expect(result.current?.lightsOn).toBe(2);
     expect(result.current?.memberCount).toBe(61);
-    expect(result.current?.caption).toBe('Dark · nobody in');
+    expect(result.current?.caption).toBe('Nobody in voice');
   });
 
   it('is null for a guild this account does not have', () => {
@@ -153,14 +153,14 @@ describe('useBuildingLight', () => {
     rerender();
     expect(result.current?.roomsLit).toBe(1);
     expect(result.current?.windows[0].state).toBe('on');
-    expect(result.current?.caption).toBe('1 call live');
+    expect(result.current?.caption).toBe('1 in voice');
 
     act(() => {
       useVoiceStore.setState({ channelParticipants: new Map() });
     });
     rerender();
     expect(result.current?.roomsLit).toBe(0);
-    // The room remembers that it WAS lit, for "last lit …".
+    // The room remembers that it WAS lit, for "last active …".
     expect(result.current?.rooms.find((room) => room.channelId === 'v1')?.lastLitMs).not.toBeNull();
   });
 
@@ -172,7 +172,7 @@ describe('useBuildingLight', () => {
     rerender();
     const room = result.current?.rooms.find((entry) => entry.channelId === 't1');
     expect(room?.level).toBe('amber');
-    expect(room?.caption).toBe('1 reading');
+    expect(room?.caption).toBe('1 here');
   });
 
   it('will not light a room for somebody who is away', () => {
@@ -218,13 +218,13 @@ describe('useRoomLight and useHereNow', () => {
     const { result } = renderHook(() => useHereNow(GUILD, 'v1'));
     expect(result.current.here).toBe(1);
     expect(result.current.lightsOn).toBe(2);
-    expect(result.current.caption).toBe('1 here · 2 lights on');
+    expect(result.current.caption).toBe('1 here · 2 online');
   });
 
   it('reports an empty room without pretending anybody is there', () => {
     const { result } = renderHook(() => useHereNow(GUILD, 'v2'));
     expect(result.current.people).toEqual([]);
-    expect(result.current.caption).toBe('0 here · 2 lights on');
+    expect(result.current.caption).toBe('0 here · 2 online');
   });
 });
 
@@ -249,7 +249,7 @@ describe('useServerLights across servers', () => {
     ]);
   });
 
-  it('sums lights on across every server', () => {
+  it('sums who is online across every server', () => {
     const { result } = renderHook(() => {
       const buildings = useBuildingLights();
       return useLightsOnAcrossBuildings(buildings);
@@ -271,7 +271,7 @@ describe('useServerLights across servers', () => {
     // The title bar counts mara and priya; the well one line below it must not
     // answer "Nobody's lights are on right now".
     const { result } = renderHook(() => useAroundNow(useBuildingLights()));
-    expect(result.current).toBe('mara and priya have their lights on · ren is away');
+    expect(result.current).toBe('mara and priya are online · ren is away');
   });
 
   it('stays in the metaphor when nothing is lit', () => {
@@ -286,14 +286,14 @@ describe('useServerLights across servers', () => {
       );
     });
     const { result } = renderHook(() =>
-      useAroundNow(useBuildingLights(), 3, 'Every server is dark'),
+      useAroundNow(useBuildingLights(), 3, 'Nobody is around'),
     );
-    expect(result.current).toBe('Every server is dark');
+    expect(result.current).toBe('Nobody is around');
   });
 
   it('says it has not looked rather than claiming a server is empty', () => {
     // Harbour Lights is a building you are not standing in: nobody has fetched
-    // its rooms or its members. "0 in · Dark · nobody in" would be two claims
+    // its rooms or its members. "0 online · Nobody in voice" would be two claims
     // and both would be false.
     act(() => {
       useGuildStore.getState().setGuilds(

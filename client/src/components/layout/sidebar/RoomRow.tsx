@@ -14,10 +14,10 @@ import { LIT_MARK, WINDOW_MARK, roomSharedName } from '../../../lib/motion';
  *
  *   lit voice room  → a live thumbnail row (64px thumb, LIVE dot, occupant
  *                     stack, name + "you're here" / "3 talking")
- *   dark voice room → a plain nav row with a dark window dot; "Dark · nobody in"
+ *   dark voice room → a plain nav row with a dark window dot; "Empty"
  *                     is always in the DOM and appears on hover / focus
  *   text room       → a plain nav row with an amber (lit) or dark window dot and
- *                     "5 reading" trailing
+ *                     "5 here" trailing
  *
  * Presentational: the light is decided by `lib/attention` and handed in as a
  * {@link RoomLight}; these components never derive one. Every light carries its
@@ -64,7 +64,7 @@ function WindowDot({ room }: { room: RoomLight }) {
 
 /**
  * The trailing half of a quiet row: a mention chip outranks the room's own
- * caption. A dark voice room keeps "Dark · nobody in" in the DOM at all times
+ * caption. A dark voice room keeps "Empty" in the DOM at all times
  * and shows it on hover or focus (§7.1) — the words are never the hover's
  * secret.
  */

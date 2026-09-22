@@ -10,7 +10,7 @@ export interface BuildingPlateProps extends Omit<React.HTMLAttributes<HTMLElemen
   building: BuildingLight;
   /** 10×13 windows in the sidebar (default), 12×16 on Home (§3). */
   scale?: 'sidebar' | 'home';
-  /** Override the caption — Home's plate says "24 in · 2 rooms lit". */
+  /** Override the caption — Home's plate says "24 online · 4 in voice". */
   caption?: string;
   /** Extra chrome inside the plate (the building's mark and name on Home). */
   children?: React.ReactNode;
@@ -50,7 +50,7 @@ export const BuildingPlate = React.forwardRef<HTMLElement, BuildingPlateProps>(
             the line, so a six-room building on a 390px phone kept its row
             rather than wrapping, and the grid inside — which is `shrink-0`,
             because half a window is not a window — spilled straight through
-            the "1 in · quiet" caption beside it. Growing from the map's own
+            the "1 online · quiet" caption beside it. Growing from the map's own
             width instead keeps the sidebar's right-aligned caption (there is
             room to grow into) and, where there is not, makes the building NAME
             give way, which is the half a reader can afford to lose. */}

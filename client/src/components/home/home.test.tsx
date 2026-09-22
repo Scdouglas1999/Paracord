@@ -115,24 +115,24 @@ describe('the words Home adds', () => {
     expect(roomActivityLine(voice({ occupants: [{ person: MARA }, { person: PRIYA }] }))).toBe(
       'Mara and Priya are in here',
     );
-    expect(roomActivityLine(voice({ occupants: [] }))).toBe("Dark · nobody's in");
+    expect(roomActivityLine(voice({ occupants: [] }))).toBe('Nobody in voice');
   });
 
   it('never contradicts itself about a server with people but no lit room', () => {
-    expect(buildingMetaCaption(litBuilding())).toMatch(/^3 in · 1 call live/);
+    expect(buildingMetaCaption(litBuilding())).toMatch(/^3 online · \d+ in voice/);
     expect(buildingMetaCaption({ lightsOn: 6, roomsLit: 0, readingCount: 0, caption: 'x' })).toBe(
-      '6 in · quiet',
+      '6 online · quiet',
     );
     expect(
-      buildingMetaCaption({ lightsOn: 0, roomsLit: 0, readingCount: 0, caption: 'Dark · nobody in' }),
-    ).toBe('Dark · nobody in');
+      buildingMetaCaption({ lightsOn: 0, roomsLit: 0, readingCount: 0, caption: 'Nobody in voice' }),
+    ).toBe('Nobody in voice');
   });
 
   it('adds the mentions that are for you to a text room line', () => {
     const reading = text({ typingUserIds: ['2', '3'] });
-    expect(textRoomCaption(reading, 0)).toBe('2 reading');
-    expect(textRoomCaption(reading, 1)).toBe('2 reading · 1 mention for you');
-    expect(textRoomCaption(reading, 3)).toBe('2 reading · 3 mentions for you');
+    expect(textRoomCaption(reading, 0)).toBe('2 here');
+    expect(textRoomCaption(reading, 1)).toBe('2 here · 1 mention for you');
+    expect(textRoomCaption(reading, 3)).toBe('2 here · 3 mentions for you');
   });
 });
 
@@ -204,7 +204,7 @@ describe('a lit server card', () => {
     render(
       <HomeBuildingCard building={lit} mentions={new Map([[reading.key, 1]])} {...on} />,
     );
-    expect(screen.getByText('2 reading · 1 mention for you')).toBeInTheDocument();
+    expect(screen.getByText('2 here · 1 mention for you')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: /build-log/ }));
     expect(on.onOpenRoom).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'Kestrel Robotics' }),
@@ -218,7 +218,7 @@ describe('a lit server card', () => {
     );
     // Two rooms in the map, plus the 8px dot on the text-room line.
     expect(container.querySelectorAll('.pc-window.is-large')).toHaveLength(2);
-    expect(screen.getByText(/2 of 2 channels lit/)).toBeInTheDocument();
+    expect(screen.getByText(/2 of 2 channels active/)).toBeInTheDocument();
   });
 
 });
@@ -228,7 +228,7 @@ describe('a quiet server row', () => {
     const handle = handlers();
     render(<HomeBuildingCard building={quietBuilding()} mentions={new Map()} {...handle} />);
     const row = screen.getByRole('group', { name: 'Saltmarsh Sailing' });
-    expect(within(row).getByText('1 reading')).toBeInTheDocument();
+    expect(within(row).getByText('1 here')).toBeInTheDocument();
     expect(within(row).getByText('build-log')).toBeInTheDocument();
     expect(within(row).queryByText(/LIVE/)).not.toBeInTheDocument();
     expect(within(row).queryByRole('button', { name: 'Join voice' })).not.toBeInTheDocument();
@@ -251,7 +251,7 @@ describe('a quiet server row', () => {
     });
     render(<HomeBuildingCard building={dark} mentions={new Map()} {...handlers()} />);
     const row = screen.getByRole('group', { name: 'Empty Hall' });
-    expect(within(row).getByText('Quiet for now')).toBeInTheDocument();
+    expect(within(row).getByText('Nobody online')).toBeInTheDocument();
     expect(within(row).queryByText('build-log')).not.toBeInTheDocument();
   });
 });
@@ -266,12 +266,12 @@ describe('Around now', () => {
       />,
     );
     expect(screen.getByText('Mara, Priya and Ren are in Shop floor')).toBeInTheDocument();
-    expect(screen.getByText('+27 lights on')).toBeInTheDocument();
+    expect(screen.getByText('+27 online')).toBeInTheDocument();
   });
 
   it('drops the overflow count when every lit person is already on screen', () => {
     render(<HomeAroundNow people={[MARA, DEVON]} sentence="Devon is away" lightsOn={1} />);
-    expect(screen.queryByText(/lights on/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/online/)).not.toBeInTheDocument();
   });
 });
 

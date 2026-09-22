@@ -138,9 +138,9 @@ export interface RoomLight {
   readers: RoomReader[];
   readingCount: number;
 
-  /** When the room was last lit (ms), for "last lit 2 h ago". */
+  /** When the room was last lit (ms), for "last active 2 h ago". */
   lastLitMs: number | null;
-  /** The DOM text equivalent — "3 talking", "5 reading", "Dark · nobody in". */
+  /** The DOM text equivalent — "3 talking", "5 here", "Empty". */
   caption: string;
   thumbnail: RoomThumbnailState;
 }
@@ -191,12 +191,12 @@ export interface BuildingLight {
 
   /** Ordering key — brightest building first (§7.1, §7.5). Higher is brighter. */
   brightness: number;
-  /** "2 rooms lit · 3 reading", "1 reading", "Dark · nobody in". */
+  /** "4 in voice · 3 here", "1 here", "Nobody in voice". */
   caption: string;
   /**
    * Do we actually know what is in this building? A building whose rooms and
    * members have not been fetched has no light to report, and must say so
-   * rather than assert an empty map, "0 in" and "Dark · nobody in" — all three
+   * rather than assert an empty map, "0 online" and "Nobody in voice" — all three
    * of which are claims, and all three of which would be false.
    */
   rosterKnown: boolean;

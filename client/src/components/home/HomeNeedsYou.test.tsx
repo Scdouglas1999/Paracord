@@ -97,7 +97,7 @@ describe('the reason a row is here', () => {
     expect(needsYouReason(entry('build-log'), null)).toBe('New in build-log');
     expect(
       needsYouReason(entry('Shop floor', { unread: false, hasVoiceActivity: true }), null),
-    ).toBe('Shop floor lit up');
+    ).toBe('Activity in Shop floor');
   });
 });
 

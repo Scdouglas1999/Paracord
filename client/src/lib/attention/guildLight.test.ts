@@ -109,7 +109,7 @@ describe('guildLight — the store seam', () => {
     expect(room.talkingCount).toBe(1);
     expect(room.screenSharer?.person.name).toBe('priya');
     expect(building.roomsLit).toBe(1);
-    expect(building.caption).toBe('1 call live');
+    expect(building.caption).toBe('2 in voice');
   });
 
   it('refuses a voice state belonging to another server', () => {
@@ -165,7 +165,7 @@ describe('guildLight — the store seam', () => {
     expect(later.rooms.find((room) => room.channelId === 'v1')!.durationMs).toBe(90_000);
   });
 
-  it('counts only the members whose lights are on', () => {
+  it('counts only the members who are online', () => {
     const building = guildLight(
       input({ getStatus: (userId) => (userId === '1' ? 'online' : 'offline') }),
     );

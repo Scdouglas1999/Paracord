@@ -258,7 +258,7 @@ describe('Around now', () => {
     usePresenceStore.getState().reset();
     renderLobby();
     const well = screen.getByRole('region', { name: 'Around now' });
-    expect(within(well).getByText("Nobody's lights are on right now")).toBeInTheDocument();
+    expect(within(well).getByText('Nobody is online right now')).toBeInTheDocument();
   });
 });
 
@@ -272,7 +272,7 @@ describe('the rooms grid', () => {
     const rooms = screen.getByRole('region', { name: 'Voice channels' });
     await waitFor(() => expect(within(rooms).getByText('LIVE')).toBeInTheDocument());
     expect(within(rooms).getByRole('button', { name: 'Join Shop floor' })).toBeInTheDocument();
-    expect(within(rooms).getByText(/Dark · nobody's in/)).toBeInTheDocument();
+    expect(within(rooms).getByText(/Nobody in voice/)).toBeInTheDocument();
     expect(within(rooms).getByRole('button', { name: 'Open Lounge' })).toBeInTheDocument();
   });
 
@@ -400,6 +400,6 @@ describe('text rooms', () => {
     });
     renderLobby();
     const list = screen.getByRole('region', { name: 'Text channels' });
-    await waitFor(() => expect(within(list).getByText('2 reading')).toBeInTheDocument());
+    await waitFor(() => expect(within(list).getByText('2 here')).toBeInTheDocument());
   });
 });

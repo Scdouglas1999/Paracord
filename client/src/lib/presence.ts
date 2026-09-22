@@ -1,8 +1,8 @@
 /**
  * Presence as light (docs/lantern-stage-spec.md §1.5).
  *
- * People who have the app open have their **lights on**: their avatar carries a
- * rim of warm light. Away or offline avatars are matte. There are no
+ * People who have the app open are **online**: their avatar carries a rim of
+ * warm light. The light is the styling; the label says "Online", plainly. Away or offline avatars are matte. There are no
  * status-colour dots anywhere in the product — the old `--color-status-*`
  * tokens are deleted.
  *
@@ -55,7 +55,7 @@ const MATTE: Omit<PresenceLight, 'label'> = {
 export function presenceLight(status: PresenceStatus | null | undefined): PresenceLight {
   switch (status) {
     case 'online':
-      return { ...LIT, label: 'Lights on' };
+      return { ...LIT, label: 'Online' };
     case 'streaming':
       return { ...LIT, live: true, label: 'Live in a voice channel' };
     case 'idle':
@@ -63,7 +63,7 @@ export function presenceLight(status: PresenceStatus | null | undefined): Presen
     case 'dnd':
       return { ...MATTE, dnd: true, label: 'Do not disturb' };
     default:
-      return { ...MATTE, label: 'Lights off' };
+      return { ...MATTE, label: 'Offline' };
   }
 }
 

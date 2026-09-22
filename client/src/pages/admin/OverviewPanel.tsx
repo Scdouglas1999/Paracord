@@ -217,7 +217,7 @@ function HealthBody({ health }: { health: HealthReport }) {
         <Stat label="Messages sent" value={counts.messages} />
         <Stat label="Registered users" value={counts.users} />
         <Stat label="Servers" value={counts.guilds} />
-        <Stat label="Lights on now" value={counts.online_users} />
+        <Stat label="Online now" value={counts.online_users} />
       </Well>
 
       {/* Deployment facts — rows parted by hairlines, never tiled cards (§6.8). */}

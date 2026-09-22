@@ -229,7 +229,7 @@ describe('UnifiedSidebar', () => {
   it('pins the account plate to the bottom with its light in words', () => {
     renderSidebar();
     expect(
-      screen.getByRole('button', { name: /sam\.douglas — Lights on\. Open account menu/ }),
+      screen.getByRole('button', { name: /sam\.douglas — Online\. Open account menu/ }),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Open user settings' })).toBeInTheDocument();
   });

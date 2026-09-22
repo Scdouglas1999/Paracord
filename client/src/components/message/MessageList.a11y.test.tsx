@@ -359,7 +359,7 @@ describe('MessageList keyboard accessibility and error state', () => {
 
     const banner = await screen.findByRole('alert');
     expect(banner).toHaveTextContent('Failed to load messages.');
-    expect(screen.queryByText('general is dark')).toBeNull();
+    expect(screen.queryByText('Nothing in general yet')).toBeNull();
 
     const retry = screen.getByRole('button', { name: /retry/i });
     fireEvent.click(retry);
@@ -377,13 +377,13 @@ describe('MessageList keyboard accessibility and error state', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('general is dark')).toBeInTheDocument();
+    expect(await screen.findByText('Nothing in general yet')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('does not tell an empty thread it is a dark room', async () => {
-    // A thread is not a room (§7.1): it never "is dark" and nothing in it
-    // "lights up". An empty one is a thread nobody has replied in yet.
+    // A thread is not a channel (§7.1): it never says "Nothing in … yet". An
+    // empty one is a thread nobody has replied in yet.
     mocks.useMessagesReturn.messages = [];
     mocks.useMessagesReturn.error = null;
 
@@ -396,7 +396,7 @@ describe('MessageList keyboard accessibility and error state', () => {
     expect(await screen.findByText('No replies yet')).toBeInTheDocument();
     expect(screen.getByText('Nobody has replied in this thread yet. Say the first thing.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Send the first reply/ })).toBeInTheDocument();
-    expect(screen.queryByText(/is dark/)).toBeNull();
+    expect(screen.queryByText(/^Nothing in /)).toBeNull();
   });
 
   it('marks a re-entered channel read even when the cached message count is unchanged', async () => {

@@ -35,14 +35,14 @@ export const OFF: Omit<PersonLight, 'userId' | 'name' | 'avatar'> = {
   live: false,
   roomName: null,
   avatarClass: '',
-  label: 'Lights off',
+  label: 'Offline',
 };
 
 export const EMPTY_HERE_NOW: HereNow = {
   people: [],
   here: 0,
   lightsOn: 0,
-  caption: '0 here · 0 lights on',
+  caption: '0 here · 0 online',
 };
 
 /** A person with their lights off — a stub row, never an assertion of presence. */
@@ -55,7 +55,6 @@ export function stubPerson(
 /* ---- components/message/messageLight ------------------------------------ */
 export const useAuthorLights = () => stubPerson;
 export const useRoomLitEvents = () => [];
-export const useConversationReaders = () => [];
 export const useSelfUser = () => null;
 export const useDmLight = () => ({
   room: null,
@@ -66,7 +65,7 @@ export const useDmLight = () => ({
   name: 'this conversation',
 });
 export const isReading = () => false;
-export const peerLightSentence = (peer: PersonLight) => `${peer.name} · lights off`;
+export const peerLightSentence = (peer: PersonLight) => `${peer.name} · offline`;
 export const dmRoomName = () => 'this conversation';
 export const ROOM_EVENT_TTL_MS = 600_000;
 export const MAX_ROOM_EVENTS = 2;
@@ -79,7 +78,7 @@ export const useBuildingLight = () => null;
 export const useBuildingLights = () => [];
 export const useBuildingPeople = () => [];
 export const useLightsOnAcrossBuildings = () => 0;
-export const useAroundNow = () => 'Nobody’s lights are on right now';
+export const useAroundNow = () => 'Nobody is online right now';
 export const useOnAir = () => null;
 export const useLightClock = () => 0;
 export const useWindowIsVisible = () => true;

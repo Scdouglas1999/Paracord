@@ -11,7 +11,7 @@ import { LitAvatar } from './LitAvatar';
 
 export interface HereNowStripProps extends Omit<React.HTMLAttributes<HTMLDivElement>, 'children'> {
   hereNow: HereNow;
-  /** What "here" means on this surface — "in Shop floor", "reading build-log". */
+  /** What "here" means on this surface — "in Shop floor", "in build-log". */
   context?: string;
   /** Every person in the building, for the sheet. Defaults to the people here. */
   everyone?: readonly PersonLight[];
@@ -20,10 +20,9 @@ export interface HereNowStripProps extends Omit<React.HTMLAttributes<HTMLDivElem
   /**
    * Override the strip's sentence.
    *
-   * The default is "4 here · 20 lights on" (§7.2). A **text** room says what
-   * being there means — "5 reading · 19 lights on" (§7.4) — so the surface that
-   * knows the verb supplies it. Whatever is passed is the light's DOM text
-   * equivalent (§9), so it still has to say the count in words.
+   * The default is "4 here · 20 online" (§7.2). A surface that needs other
+   * words supplies them. Whatever is passed is the light's DOM text equivalent
+   * (§9), so it still has to say the count in words.
    */
   caption?: React.ReactNode;
   /** The room these faces are in — a motion mark, so a rim knows its window. */
@@ -35,7 +34,7 @@ export interface HereNowStripProps extends Omit<React.HTMLAttributes<HTMLDivElem
  * (docs/lantern-stage-spec.md §6.5, §7.2, §7.4, §8).
  *
  * A well, an avatar stack of at most five lit faces, and the sentence
- * "4 here · 20 lights on". Clicking it opens the people sheet — **the only
+ * "4 here · 20 online". Clicking it opens the people sheet — **the only
  * place in the product where a full list of people lives**. There is no docked
  * member list anywhere.
  */
@@ -78,7 +77,7 @@ export const HereNowStrip = React.forwardRef<HTMLDivElement, HereNowStripProps>(
             <span className="min-w-0 truncate text-label text-text-body">
               {caption ?? (
                 // §5.1 "numbers re-roll": both counts change when somebody
-                // walks into the room or turns their lights on, so both flip.
+                // walks into the room or comes online, so both flip.
                 <>
                   <RollingNumber
                     className="font-semibold text-text-primary"
@@ -88,7 +87,7 @@ export const HereNowStrip = React.forwardRef<HTMLDivElement, HereNowStripProps>(
                   {' · '}
                   <RollingNumber
                     value={hereNow.lightsOn}
-                    format={(count) => `${count} lights on`}
+                    format={(count) => `${count} online`}
                     announce={false}
                   />
                 </>
@@ -120,7 +119,7 @@ export const HereNowStrip = React.forwardRef<HTMLDivElement, HereNowStripProps>(
             ))}
             {people.length === 0 && (
               <li className="px-2 py-1.5 text-meta text-text-faint">
-                Nobody is in here yet — say something and the channel lights up.
+                Nobody is here yet.
               </li>
             )}
           </ul>

@@ -351,7 +351,7 @@ function OwnedDMPage() {
         <MessageInput
           channelId={channelId}
           channelName={recipientName}
-          conversationKind={isGroupDM ? 'room' : 'person'}
+          conversationKind={isGroupDM ? 'group' : 'person'}
           replyingTo={replyingTo}
           onCancelReply={() => setReplyingTo(null)}
         />

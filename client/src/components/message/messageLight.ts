@@ -31,7 +31,6 @@ import { usePresenceStore } from '../../stores/presenceStore';
 import { useTypingStore } from '../../stores/typingStore';
 import { useCurrentMessageStore } from '../../hooks/useMessageStore';
 import {
-  useHereNow,
   useLightClock,
   useRoomLights,
   useWindowIsVisible,
@@ -315,37 +314,15 @@ export function isReading(room: RoomLight | null, userId: string | undefined): b
 }
 
 /**
- * "Ren · lights on · reading this" (§7.6).
+ * "Ren · online · here now" (§7.6).
  *
  * The third clause is only added when the room can actually tell the peer is
  * here — a fresh channel-bound signal, by WP1's definition. Presence alone is
- * "lights on" and says so.
+ * "online" and says so.
  */
 export function peerLightSentence(peer: PersonLight, reading: boolean): string {
   const state = peer.label.toLocaleLowerCase();
-  return reading ? `${peer.name} · ${state} · reading this` : `${peer.name} · ${state}`;
-}
-
-/**
- * The people this conversation can tell are here right now — whoever the
- * surface is (§7.4, §7.6).
- *
- * A guild text room asks the building (`useHereNow`); a DM has no building, so
- * it is lit as a text room in its own right. Both go through WP1's definition
- * of "reading", so the composer's "Say something to the 5 people reading" means
- * the same thing in both places.
- */
-export function useConversationReaders(
-  guildId: string | null | undefined,
-  channelId: string | undefined,
-  scope: AccountScope | null,
-): PersonLight[] {
-  const hereNow = useHereNow(guildId, channelId);
-  const dm = useDmLight(guildId ? undefined : channelId, scope);
-  return useMemo(
-    () => (guildId ? hereNow.people : dm.hereNow.people),
-    [dm.hereNow.people, guildId, hereNow.people],
-  );
+  return reading ? `${peer.name} · ${state} · here now` : `${peer.name} · ${state}`;
 }
 
 /* ---------------------------------------------------------------------------
@@ -358,7 +335,7 @@ export interface RoomLitEvent {
   channelId: string;
   guildId: string | null;
   roomName: string;
-  /** "Shop floor lit up". */
+  /** "Shop floor is live". */
   headline: string;
   /** "Mara, Priya and Ren are in there now". */
   detail: string;
@@ -434,7 +411,7 @@ export function useRoomLitEvents(guildId: string | null | undefined): RoomLitEve
         channelId: room.channelId,
         guildId: room.guildId,
         roomName: room.name,
-        headline: `${room.name} lit up`,
+        headline: `${room.name} is live`,
         detail: occupantSentence(room),
         atMs,
       });

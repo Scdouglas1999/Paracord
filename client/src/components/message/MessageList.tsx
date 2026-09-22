@@ -3459,16 +3459,14 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                   ? 'Waiting on everyone’s encryption'
                   : emptyThread
                   ? 'No replies yet'
-                  : activeChannel?.name ? `${activeChannel.name} is dark` : 'Nobody has said anything here yet'}
+                  : activeChannel?.name ? `Nothing in ${activeChannel.name} yet` : 'Nobody has said anything here yet'}
               </h3>
               <p className="mt-1 max-w-md text-body text-text-body">
                 {emptyGroupDm
                   ? groupEnrollmentReason(groupPending)
                   : emptyThread
                   ? 'Nobody has replied in this thread yet. Say the first thing.'
-                  : activeChannel?.name
-                  ? `Nobody has posted in ${activeChannel.name} yet. Say something and the channel lights up.`
-                  : 'Say something and the channel lights up.'}
+                  : 'Nobody has posted here yet. Be the first to say something.'}
               </p>
             </div>
             {/* Never offer the one action this conversation is going to refuse. */}

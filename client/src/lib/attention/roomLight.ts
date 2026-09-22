@@ -50,6 +50,7 @@ import { entityScopeKey, type AccountScope } from '../serverScope';
 import { snowflakeToMs } from './conversationModel';
 import {
   darkRoomCaption,
+  quietTextCaption,
   readingCaption,
   talkingCaption,
 } from './lightCaptions';
@@ -92,7 +93,7 @@ export interface TextRoomLightInput {
   selfUserId?: string | null;
   /** This client has the channel selected AND the window is visible. */
   selfIsViewing?: boolean;
-  /** When the room was last amber, for "last lit 2 h ago". */
+  /** When the room was last amber. */
   lastLitMs?: number | null;
   nowMs: number;
 }
@@ -167,8 +168,8 @@ export function textRoomLight(input: TextRoomLightInput): RoomLight {
     readers,
     readingCount: readers.length,
     lastLitMs: lit ? input.nowMs : (input.lastLitMs ?? null),
-    caption: lit ? readingCaption(readers.length) : darkRoomCaption('row'),
-    thumbnail: { live: false, reason: 'no-publisher', label: darkRoomCaption('row') },
+    caption: lit ? readingCaption(readers.length) : quietTextCaption(),
+    thumbnail: { live: false, reason: 'no-publisher', label: quietTextCaption() },
   };
 }
 
@@ -261,7 +262,7 @@ export function voiceRoomLight(input: VoiceRoomLightInput): RoomLight {
   };
 }
 
-/** "you're here" · "3 talking" · "2 in" · "Dark · nobody in" (§7.1). */
+/** "you're here" · "3 talking" · "2 in" · "Empty" (§7.1). */
 export function voiceRoomCaption(
   occupantCount: number,
   talkingCount: number,

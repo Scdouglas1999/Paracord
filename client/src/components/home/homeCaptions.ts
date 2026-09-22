@@ -13,11 +13,12 @@ import {
   darkRoomCaption,
   litMembersCaption,
   nameList,
+  quietTextCaption,
   readingCaption,
   type RoomLight,
 } from '../../lib/attention/light';
 
-/** "1 mention for you" / "3 mentions for you" (§7.5, the lit building's text rooms). */
+/** "1 mention for you" / "3 mentions for you" (§7.5, a server's text channels). */
 export function mentionCaption(count: number): string {
   const n = Math.max(0, Math.trunc(count));
   return `${n} mention${n === 1 ? '' : 's'} for you`;
@@ -47,12 +48,11 @@ export function roomActivityLine(room: RoomLight): string {
 }
 
 /**
- * A building's meta on Home: "24 in · 2 rooms lit", "6 in · quiet".
+ * A server's meta on Home: "24 online · 4 in voice", "6 online · quiet".
  *
  * `building.caption` is WP1's canonical phrasing and is reused verbatim when
- * something is lit. The one phrase Home adds is the middle state the reference
- * render names — people are in the building but no room is lit — because
- * "24 in · Dark · nobody in" contradicts itself.
+ * somebody is in a channel. The one phrase Home adds is the middle state —
+ * people are online but in no channel — where "quiet" says so in one word.
  */
 export function buildingMetaCaption(building: {
   lightsOn: number;
@@ -67,9 +67,9 @@ export function buildingMetaCaption(building: {
   return `${litMembersCaption(building.lightsOn)} · ${lit ? building.caption : 'quiet'}`;
 }
 
-/** A lit text room's line inside a building card: "5 reading · 1 mention for you". */
+/** A text channel's line inside a server card: "5 here · 1 mention for you". */
 export function textRoomCaption(room: RoomLight, mentionCount = 0): string {
-  const reading = room.lit ? readingCaption(room.readingCount) : darkRoomCaption('row');
+  const reading = room.lit ? readingCaption(room.readingCount) : quietTextCaption();
   return mentionCount > 0 ? `${reading} · ${mentionCaption(mentionCount)}` : reading;
 }
 

@@ -305,7 +305,7 @@ export function useBuildingLights(): BuildingLight[] {
 }
 
 /**
- * "+17 lights on" across every building (§7.3).
+ * "+17 online" across every building (§7.3).
  *
  * Counted **per person, not per building**: somebody who is in three of your
  * buildings on one server is one person with their lights on, and summing the
@@ -338,7 +338,7 @@ export function useAroundNow(
   return useMemo(() => {
     const rooms = buildings.flatMap((building) => building.rooms);
     // Everybody the buildings can see — not just the people already standing in
-    // a room — so the sentence can say "away" and can say "has their lights on"
+    // a room — so the sentence can say "away" and can say "is online"
     // instead of denying a light the title bar is counting.
     const byId = new Map<string, PersonLight>();
     for (const building of buildings) {
@@ -358,7 +358,7 @@ export interface HereNow {
   here: number;
   /** How many people in the building have their lights on. */
   lightsOn: number;
-  /** "4 here · 20 lights on" — the DOM text equivalent (§9). */
+  /** "4 here · 20 online" — the DOM text equivalent (§9). */
   caption: string;
 }
 

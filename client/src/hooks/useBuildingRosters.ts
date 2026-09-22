@@ -1,11 +1,11 @@
 /**
  * Load every building's rooms and members, once (docs/lantern-stage-spec.md §7.1).
  *
- * The Buildings column draws a window map, a "24 in" count and a room list for
+ * The Buildings column draws a window map, a "24 online" count and a room list for
  * **every** building you belong to, not just the one you are standing in — so
  * every building's roster has to be in hand wherever you are. Before this hook
  * only Home fetched them, and the moment you walked into one building the
- * others collapsed to "0 in · Dark · nobody in" with no rooms: a building full
+ * others collapsed to "0 online · Nobody in voice" with no rooms: a building full
  * of people reading as dead, which is the one thing the light must never do.
  *
  * Both store fetches de-duplicate an in-flight request and both record a

@@ -23,10 +23,9 @@ import { UserProfilePopup } from '../components/user/UserProfile';
 type FriendsTab = 'online' | 'all' | 'requests' | 'blocked';
 
 /**
- * The words for a person's light live in `lib/presence` and nowhere else
- * (docs/lantern-stage-spec.md §1.5, §6.9). This page used to keep its own copy
- * of them — "Online", "Offline" — which is the exact vocabulary the kill-list
- * names, two hundred pixels from an account plate saying "Lights on".
+ * The words for a person's presence live in `lib/presence` and nowhere else
+ * (docs/lantern-stage-spec.md §1.5, §6.9). A page that keeps its own copy of
+ * them drifts from the account plate two hundred pixels away.
  */
 
 // Icon action button (lantern-stage-spec §8). Revealed on row hover AND
@@ -271,7 +270,7 @@ export function FriendsPage() {
   };
 
   const filterTabs: { id: FriendsTab; label: string; count: number }[] = [
-    { id: 'online', label: 'Lights on', count: onlineCount },
+    { id: 'online', label: 'Online', count: onlineCount },
     { id: 'all', label: 'All', count: friends.length },
     { id: 'requests', label: 'Requests', count: requestCount },
     { id: 'blocked', label: 'Blocked', count: blocked.length },
@@ -293,13 +292,13 @@ export function FriendsPage() {
     );
   }, [friendListSource, searchQuery]);
 
-  const sectionLabel = activeTab === 'all' ? 'All' : activeTab === 'blocked' ? 'Blocked' : 'Lights on';
+  const sectionLabel = activeTab === 'all' ? 'All' : activeTab === 'blocked' ? 'Blocked' : 'Online';
   const searchPlaceholder =
     activeTab === 'all'
       ? 'Search your friends'
       : activeTab === 'blocked'
         ? 'Search blocked people'
-        : 'Search who has their lights on';
+        : 'Search who is online';
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-bg-plate">
@@ -646,8 +645,8 @@ function FriendsEmptyState({
       return (
         <EmptyState
           icon={<UserRoundPlus size={20} />}
-          title="Nobody has their lights on right now"
-          description="None of your friends have their lights on — they'll show up here the moment one of them does. In the meantime, add a few more people with the Add friend button up top."
+          title="None of your friends are online"
+          description="They'll show up here the moment one of them is. In the meantime, add a few more people with the Add friend button up top."
           action={
             <Button size="sm" onClick={onAdd}>
               Add a friend

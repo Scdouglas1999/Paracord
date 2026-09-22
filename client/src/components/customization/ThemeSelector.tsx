@@ -25,7 +25,7 @@ interface ThemeOption {
  */
 const THEME_OPTIONS: ThemeOption[] = [
   { id: 'dark', label: 'Night', hint: 'Dusk-blue ground, warm plates', icon: <Moon size={16} /> },
-  { id: 'light', label: 'Daylight', hint: 'Warm paper; lit channels read as ink', icon: <Sun size={16} /> },
+  { id: 'light', label: 'Daylight', hint: 'Warm paper; live channels read as ink', icon: <Sun size={16} /> },
   { id: 'amoled', label: 'AMOLED', hint: 'A true-black street for OLED panels', icon: <Monitor size={16} /> },
   { id: 'high-contrast', label: 'High contrast', hint: 'Thicker rims, two text steps', icon: <Eye size={16} /> },
 ];
