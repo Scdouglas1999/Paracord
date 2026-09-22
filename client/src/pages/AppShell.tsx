@@ -62,7 +62,6 @@ export function AppShell() {
   const voiceConnected = useVoiceStore((s) => s.connected);
   const voiceChannelId = useVoiceStore((s) => s.channelId);
   const location = useLocation();
-  const navigate = useNavigate();
   const { guildId, channelId } = useParams();
   const activeChannel = useCurrentChannelStore((s) => (channelId ? s.channelsById[channelId] : undefined));
 
