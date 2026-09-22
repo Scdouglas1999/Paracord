@@ -132,6 +132,15 @@ html[data-theme='paper'][data-native-underlay] body::after {
   box-shadow: inset 0 0 0 1.5px var(--accent-primary);
 }
 
+/* The message a link or a search result jumped to. A bubble paints its own
+   fill over the row tint, so it takes the accent rim and a soft halo instead;
+   the halo fades with the highlight when the attribute is removed. */
+[data-message-style='bubbles'] .pc-message-row[data-jump] {
+  box-shadow:
+    inset 0 0 0 1.5px var(--accent-primary),
+    0 0 0 4px var(--accent-tint-strong);
+}
+
 /* A row's hover actions sit on its top-right corner, which on a full-width row
    is empty space. A bubble is as wide as its words, so the same spot is the
    header line — the toolbar covered the author, the time and the "edited" link

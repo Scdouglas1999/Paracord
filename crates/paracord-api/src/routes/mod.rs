@@ -15,6 +15,7 @@ pub mod emojis;
 pub mod events;
 pub mod federation;
 pub mod files;
+pub mod guild_search;
 pub mod guilds;
 pub mod interactions;
 pub mod invites;

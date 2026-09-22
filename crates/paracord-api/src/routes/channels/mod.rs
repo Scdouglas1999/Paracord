@@ -101,7 +101,7 @@ const MAX_FORUM_SEARCH_POSTS: usize = 250;
 
 use paracord_util::validation::{contains_dangerous_markup, validate_visible_label};
 
-fn parse_optional_datetime_param(
+pub(crate) fn parse_optional_datetime_param(
     raw: Option<&str>,
     end_of_day_for_date_only: bool,
 ) -> Result<Option<DateTime<Utc>>, ApiError> {

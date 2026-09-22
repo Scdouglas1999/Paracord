@@ -427,6 +427,40 @@
   animation: pc-sheet-out var(--duration-fast) var(--ease-in) forwards;
 }
 
+/* Message search: result rows fade up 4px over 180ms, the first eight
+   staggered by the light step. The phone sheet rises on the plain ease-out,
+   not the spring, so a full-screen surface does not overshoot. */
+@keyframes pc-search-row {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 4px, 0);
+  }
+}
+
+.pc-search-row {
+  animation: pc-search-row var(--duration-roll) var(--ease-out) backwards;
+}
+
+:root[data-motion='reduced'] .pc-search-row {
+  animation: none;
+}
+
+.pc-search-sheet-in {
+  animation: pc-sheet-in var(--duration-slow) var(--ease-out) backwards;
+}
+
+/* A matched word in a search result. */
+.pc-search-mark {
+  border-radius: 3px;
+  background: var(--accent-tint);
+  color: var(--text-primary);
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+}
+
+
 /* A status banner pinned to the top edge drops in rather than rising — the
    directional variant of the same recipe (spring-settle in, ease-in out). */
 .pc-banner-in {

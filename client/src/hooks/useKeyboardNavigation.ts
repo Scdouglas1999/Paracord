@@ -85,12 +85,13 @@ export function useKeyboardNavigation() {
         return;
       }
 
-      // -- Mod+F: open channel message search --
+      // -- Mod+F: open message search for this channel or this server --
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f') {
         if (!isEditing) {
-          e.preventDefault();
           const channelId = getAccountChannelView(scope).selectedChannelId;
-          if (channelId) {
+          const currentGuildId = guildId || selectedGuildId;
+          if (channelId || currentGuildId) {
+            e.preventDefault();
             useUIStore.getState().setContextPanelMode('search');
           }
           return;

@@ -2496,6 +2496,7 @@ function OwnedMessageList({
         data-own={isOwnMessage || undefined}
         data-grouped={isGrouped || undefined}
         data-mentions-me={mentionsMe || undefined}
+        data-jump={jumpHighlightId === msg.id || undefined}
         style={{
           marginTop: isGrouped ? '2px' : replyDepth > 0 ? '0.5rem' : '10px',
           paddingLeft: replyIndent > 0 ? `${16 + replyIndent}px` : undefined,

@@ -45,9 +45,9 @@ vi.mock('./overlays/PinnedMessagesOverlay', () => ({
     ) : null,
 }));
 vi.mock('./overlays/SearchOverlay', () => ({
-  SearchOverlay: (props: { open: boolean; onClose: () => void; presentation?: string }) =>
+  SearchOverlay: (props: { open: boolean; onClose: () => void; guildId?: string | null; channelId?: string }) =>
     props.open ? (
-      <button type="button" data-testid="surface-search" data-presentation={props.presentation} onClick={props.onClose}>
+      <button type="button" data-testid="surface-search" data-guild={props.guildId ?? ''} data-channel={props.channelId ?? ''} onClick={props.onClose}>
         search
       </button>
     ) : null,
@@ -68,7 +68,6 @@ const baseProps = {
   guildId: 'guild-1',
   channelId: 'chan-1',
   channelName: 'general',
-  allChannels: [{ id: 'chan-1', guild_id: 'guild-1', name: 'general' }],
   pins: [],
   onPinsChange: vi.fn(),
   activeThread: {
@@ -162,7 +161,9 @@ describe('ContextPanel', () => {
   it('renders the search surface', () => {
     setMode('search');
     render(<ContextPanel {...baseProps} />);
-    expect(screen.getByTestId('surface-search')).toHaveAttribute('data-presentation', 'panel');
+    const surface = screen.getByTestId('surface-search');
+    expect(surface).toHaveAttribute('data-guild', baseProps.guildId ?? '');
+    expect(surface).toHaveAttribute('data-channel', baseProps.channelId ?? '');
   });
 
   it('renders nothing for economy without a guild', () => {

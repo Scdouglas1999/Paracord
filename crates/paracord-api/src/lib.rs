@@ -358,6 +358,10 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
                 .patch(routes::guilds::update_channel_positions),
         )
         .route(
+            "/api/v1/guilds/{guild_id}/messages/search",
+            get(routes::guild_search::search_guild_messages),
+        )
+        .route(
             "/api/v1/guilds/{guild_id}/channels/visible",
             get(routes::channels::get_visible_channels),
         )

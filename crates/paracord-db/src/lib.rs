@@ -27,6 +27,7 @@ pub mod interaction_tokens;
 pub mod invites;
 pub mod members;
 pub mod message_recovery;
+pub mod message_search;
 pub mod messages;
 pub mod mfa;
 pub mod migrate_export;
