@@ -389,6 +389,18 @@
   --grain: none;
   --bubble-mix: 0.2;
   --bubble-own-mix: 0.3;
+  /* The generated server cover (styles/server-home.css): the lightness of its
+     ground, its deep end and its soft lights. The hue and chroma are the
+     server's own, set per server; only these steps belong to the theme. */
+  --cover-l-ground: 17%;
+  --cover-l-deep: 29%;
+  --cover-l-mid: 56%;
+  --cover-l-light: 74%;
+  --cover-a-light: 0.58;
+  --cover-c-scale: 1;
+  /* A fine, colourless tooth over the made cover, so its gradients never band. */
+  --cover-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
+  --cover-grain-opacity: 0.09;
 
   /* ---- §1.1 Surfaces — Night's ramp, in the base hue ----------------------- */
   /* The street: app base behind everything. */
@@ -686,6 +698,13 @@
   --street-scrim: transparent;
   --plate-fill: var(--bg-plate);
   --grain: none;
+  --cover-l-ground: 95%;
+  --cover-l-deep: 86%;
+  --cover-l-mid: 78%;
+  --cover-l-light: 82%;
+  --cover-a-light: 0.55;
+  --cover-c-scale: 0.7;
+  --cover-grain-opacity: 0.06;
 
   --bg-base: oklch(93.5% calc(0.028 * var(--ui-chroma)) var(--ui-hue-street));
   --bg-plate: oklch(97.4% calc(0.011 * var(--ui-chroma)) var(--ui-hue));

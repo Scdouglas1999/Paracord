@@ -479,6 +479,10 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
             get(routes::gallery::list_guild_attachments),
         )
         .route(
+            "/api/v1/guilds/{guild_id}/feed",
+            get(routes::server_feed::get_server_feed),
+        )
+        .route(
             "/api/v1/guilds/{guild_id}/stickers/{sticker_id}/image",
             get(routes::stickers::get_sticker_image),
         )

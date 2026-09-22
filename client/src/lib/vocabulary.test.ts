@@ -232,8 +232,6 @@ const DARK_ALLOWED = [/not light is dark, matte/];
  * (feat/server-home) replaces every file in this directory with its own copy
  * in plain words. Delete this list when that branch lands.
  */
-const PLAIN_WORDS_PENDING = ['/components/rooms/lobby/'];
-
 function sweep(
   rule: RegExp,
   allowed: readonly RegExp[],
@@ -329,19 +327,19 @@ describe('the host you run is an instance', () => {
 
 describe('presence and activity are plain words', () => {
   it('never says "lights on" or "lights off"', () => {
-    expect(sweep(LIGHTS_ON, [], PLAIN_WORDS_PENDING)).toEqual([]);
+    expect(sweep(LIGHTS_ON, [])).toEqual([]);
   });
 
   it('never says "reading" to mean somebody is here', () => {
-    expect(sweep(READING, [], PLAIN_WORDS_PENDING)).toEqual([]);
+    expect(sweep(READING, [])).toEqual([]);
   });
 
   it('never says a channel is lit, or was', () => {
-    expect(sweep(LIT, [], PLAIN_WORDS_PENDING)).toEqual([]);
+    expect(sweep(LIT, [])).toEqual([]);
   });
 
   it('never says "Dark ·" or that a channel "is dark"', () => {
-    expect(sweep(DARK, DARK_ALLOWED, PLAIN_WORDS_PENDING)).toEqual([]);
+    expect(sweep(DARK, DARK_ALLOWED)).toEqual([]);
   });
 
   it('catches "reading" as presence and leaves the verb alone', () => {

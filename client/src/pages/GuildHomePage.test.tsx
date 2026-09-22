@@ -9,20 +9,20 @@ import { scopeGuild, useGuildStore } from '../stores/guildStore';
 import { useMemberStore } from '../stores/memberStore';
 import { usePresenceStore } from '../stores/presenceStore';
 import { useServerListStore } from '../stores/serverListStore';
+import { useSportsStore } from '../stores/sportsStore';
 import { useTypingStore } from '../stores/typingStore';
 import { useUIStore } from '../stores/uiStore';
 import { useVoiceStore } from '../stores/voiceStore';
 import { roomLitHistory } from '../lib/attention/light';
 import { LOCAL_SERVER_ID, entityScopeKey } from '../lib/serverScope';
-import { ChannelType, Permissions, type Channel, type Member, type VoiceState } from '../types';
+import { ChannelType, type Channel, type Member, type VoiceState } from '../types';
+import type { FeedItem } from '../api/serverFeed';
 
 /**
- * The Lobby, end to end (docs/lantern-stage-spec.md §7.3).
+ * The server home page, end to end (docs/server-home-spec.md).
  *
- * The light is derived from the **real** stores — seeded exactly the way WP1's
- * `useLights.test.tsx` seeds them — so these assertions exercise the same
- * derivation the running app uses. Only the three things that reach the network
- * or the media engine are mocked: permissions, unread counts, and the calendar.
+ * Presence and voice come from the real stores, seeded the way the running app
+ * fills them; only what reaches the network or the media engine is mocked.
  */
 
 const SERVER = LOCAL_SERVER_ID;
@@ -31,24 +31,23 @@ const GUILD = 'g1';
 
 const api = vi.hoisted(() => ({
   events: [] as unknown[],
+  feed: [] as unknown[],
+  feedError: null as string | null,
+  gallery: [] as unknown[],
+  leaderboard: [] as unknown[],
   get: vi.fn(),
   put: vi.fn(),
   delete: vi.fn(),
+  post: vi.fn(),
 }));
 const gates = vi.hoisted(() => ({
   permissions: 0n,
   isAdmin: false,
-  unread: new Set<string>(),
-  mentions: new Map<string, number>(),
   joinChannel: vi.fn(),
 }));
 
 vi.mock('../api/activeClient', () => ({
-  getApi: () => ({
-    get: api.get,
-    put: api.put,
-    delete: api.delete,
-  }),
+  getApi: () => ({ get: api.get, put: api.put, delete: api.delete, post: api.post }),
 }));
 
 vi.mock('../hooks/usePermissions', () => ({
@@ -61,28 +60,16 @@ vi.mock('../hooks/usePermissions', () => ({
   }),
 }));
 
-vi.mock('../hooks/useUnreadCounts', () => ({
-  useUnreadCounts: () => ({
-    isChannelUnread: gates.unread,
-    channelMentionCounts: gates.mentions,
-  }),
-}));
-
 vi.mock('../hooks/useMutedGuilds', () => ({
-  useMutedGuilds: () => ({ mutedGuildKeys: [] as string[], saving: false }),
+  useMutedGuilds: () => ({ mutedGuildKeys: [] as string[], saving: {}, isMuted: () => false, toggleMute: vi.fn() }),
 }));
 
 vi.mock('../hooks/useVoice', () => ({
   useVoice: () => ({ joinChannel: gates.joinChannel }),
 }));
 
-// InviteModal reaches into the API and the clipboard on mount.
 vi.mock('../components/guild/InviteModal', () => ({
   InviteModal: () => <div data-testid="invite-modal" />,
-}));
-
-vi.mock('../api/files', () => ({
-  fileApi: { resolveAttachmentObjectUrl: vi.fn(async () => 'blob:lobby-test') },
 }));
 
 // ---- fixtures --------------------------------------------------------------
@@ -91,11 +78,11 @@ function chan(over: Partial<Channel> & { id: string; type: ChannelType }): Chann
   return { position: 0, nsfw: false, created_at: '', guild_id: GUILD, ...over } as Channel;
 }
 
-function member(id: string, username: string): Member {
+function member(id: string, username: string, joinedAt = '2020-01-01T00:00:00Z'): Member {
   return {
     user: { id, username, discriminator: 0, bot: false, system: false, flags: 0, created_at: '' },
     roles: [],
-    joined_at: '',
+    joined_at: joinedAt,
     deaf: false,
     mute: false,
   } as unknown as Member;
@@ -116,13 +103,45 @@ function voiceState(over: Partial<VoiceState> & { user_id: string }): VoiceState
   };
 }
 
+const author = { id: '1', username: 'mara', display_name: 'Mara', avatar_hash: null };
+
+function feedMessage(id: string, over: Record<string, unknown> = {}, reason = 'attachment'): FeedItem {
+  return {
+    type: 'message',
+    id: `m:${id}`,
+    key: id,
+    at: new Date().toISOString(),
+    channel_id: 't1',
+    channel_name: 'build-log',
+    channel_type: 0,
+    reason,
+    message: {
+      id,
+      channel_id: 't1',
+      author,
+      content: 'the new bracket fits',
+      attachments: [],
+      reactions: [],
+      pinned: false,
+      ...over,
+    },
+  } as unknown as FeedItem;
+}
+
 function seed(): void {
   useAuthStore.setState({ user: { id: 'viewer', username: 'viewer' } as never, token: 'token' });
   useServerListStore.setState({ servers: [], activeServerId: null });
   useGuildStore.setState({
     guilds: [
       scopeGuild(
-        { id: GUILD, name: 'Kestrel Robotics', owner_id: 'owner', member_count: 61, created_at: '' },
+        {
+          id: GUILD,
+          name: 'Kestrel Robotics',
+          description: 'We build small robots on Saturdays.',
+          owner_id: 'owner',
+          member_count: 61,
+          created_at: '',
+        },
         SCOPE,
       ),
     ],
@@ -133,7 +152,7 @@ function seed(): void {
       chan({ id: 'v1', type: ChannelType.Voice, name: 'Shop floor', position: 0 }),
       chan({ id: 'v2', type: ChannelType.Voice, name: 'Lounge', position: 1 }),
       chan({ id: 't1', type: ChannelType.Text, name: 'build-log', position: 2 }),
-      chan({ id: 't2', type: ChannelType.Text, name: 'firmware', position: 3 }),
+      chan({ id: 'a1', type: ChannelType.Announcement, name: 'news', position: 3 }),
     ],
     SCOPE,
   );
@@ -141,7 +160,7 @@ function seed(): void {
     members: new Map([
       [
         entityScopeKey(SCOPE, GUILD),
-        [member('1', 'mara'), member('2', 'priya'), member('3', 'ren')],
+        [member('1', 'mara'), member('2', 'priya'), member('3', 'ren', new Date().toISOString())],
       ],
     ]),
   });
@@ -164,36 +183,58 @@ function seed(): void {
   useTypingStore.setState({ typingByChannel: {} });
 }
 
-function light(channelId: string, states: VoiceState[]): void {
-  act(() => {
-    useVoiceStore.setState({ channelParticipants: new Map([[channelId, states]]) });
-  });
+function setHub(hub: Record<string, unknown>) {
+  const guild = useGuildStore.getState().guilds[0];
+  useGuildStore.setState({ guilds: [{ ...guild, hub_settings: hub } as never] });
 }
 
 function LocationProbe() {
-  return <div data-testid="pathname">{useLocation().pathname}</div>;
+  const location = useLocation();
+  return <div data-testid="pathname">{`${location.pathname}${location.hash}`}</div>;
 }
 
-function renderLobby() {
+function renderHome() {
   return render(
     <MemoryRouter initialEntries={[`/app/guilds/${GUILD}`]}>
       <LocationProbe />
       <Routes>
         <Route path="/app/guilds/:guildId" element={<GuildHomePage />} />
+        <Route path="/app/guilds/:guildId/channels/:channelId" element={<div>channel</div>} />
       </Routes>
     </MemoryRouter>,
   );
 }
 
+let plateWidth = 1200;
+const realRect = HTMLElement.prototype.getBoundingClientRect;
+
 beforeEach(() => {
+  plateWidth = 1200;
+  HTMLElement.prototype.getBoundingClientRect = function rect(this: HTMLElement) {
+    return { width: plateWidth, height: 800, top: 0, left: 0, right: plateWidth, bottom: 800, x: 0, y: 0, toJSON() {} } as DOMRect;
+  };
   api.events = [];
-  api.get.mockImplementation(async () => ({ data: api.events }));
+  api.feed = [];
+  api.feedError = null;
+  api.gallery = [];
+  api.leaderboard = [];
+  api.get.mockImplementation(async (url: string) => {
+    if (url.startsWith(`/guilds/${GUILD}/feed`)) {
+      if (api.feedError) throw Object.assign(new Error(api.feedError), { response: { data: { message: api.feedError } } });
+      return { data: { items: api.feed, next_cursor: null } };
+    }
+    if (url === `/guilds/${GUILD}/events`) return { data: api.events };
+    if (url.startsWith(`/guilds/${GUILD}/attachments`)) return { data: { items: api.gallery, next_before: null } };
+    if (url.startsWith(`/guilds/${GUILD}/economy/leaderboard`)) return { data: { entries: api.leaderboard } };
+    if (url === `/guilds/${GUILD}/sports`) return { data: { enabled: false } };
+    if (url.endsWith('/pins')) return { data: [] };
+    return { data: {} };
+  });
   api.put.mockResolvedValue({ data: {} });
   api.delete.mockResolvedValue({ data: {} });
+  api.post.mockResolvedValue({ data: {} });
   gates.permissions = 0n;
   gates.isAdmin = false;
-  gates.unread = new Set();
-  gates.mentions = new Map();
   gates.joinChannel = vi.fn();
   roomLitHistory.clear();
   useGuildStore.getState().reset();
@@ -201,205 +242,190 @@ beforeEach(() => {
   useMemberStore.getState().reset();
   usePresenceStore.getState().reset();
   useTypingStore.getState().reset();
-  useUIStore.setState({ guildSettingsId: null, guildSettingsInitialSection: null });
+  useSportsStore.getState().reset();
+  useUIStore.setState({ guildSettingsId: null, guildSettingsInitialSection: null, contextPanelMode: null });
   seed();
 });
 
 afterEach(() => {
   cleanup();
+  HTMLElement.prototype.getBoundingClientRect = realRect;
   roomLitHistory.clear();
 });
 
-// ---- the header ------------------------------------------------------------
-
-describe('the Lobby header', () => {
-  it('names the server and counts its lights in one line', async () => {
-    light('v1', [voiceState({ user_id: '1' })]);
-    renderLobby();
-
-    expect(screen.getByRole('heading', { name: 'Kestrel Robotics' })).toBeInTheDocument();
-    await waitFor(() =>
-      expect(
-        screen.getByText('2 of 61 have their lights on · 1 call live'),
-      ).toBeInTheDocument(),
-    );
+describe('the head', () => {
+  it('names the server, says what it is and who is online', async () => {
+    renderHome();
+    expect(screen.getByRole('heading', { level: 1, name: 'Kestrel Robotics' })).toBeInTheDocument();
+    expect(screen.getByText('We build small robots on Saturdays.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /2 online · \d+ members?\. Show members/ })).toBeInTheDocument();
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith(expect.stringMatching(/^\/guilds\/g1\/feed/)));
   });
 
-  it('hides server settings without the permission, and opens them with it', () => {
-    const { unmount } = renderLobby();
-    expect(screen.queryByRole('button', { name: 'Server settings' })).not.toBeInTheDocument();
-    unmount();
+  it('opens the server media view', () => {
+    renderHome();
+    fireEvent.click(screen.getByRole('button', { name: 'Media' }));
+    expect(useUIStore.getState().contextPanelMode).toBe('media');
+  });
 
+  it('offers the settings gear only to somebody who may manage the server', () => {
+    renderHome();
+    expect(screen.queryByRole('button', { name: 'Server settings' })).not.toBeInTheDocument();
+    cleanup();
     gates.isAdmin = true;
-    renderLobby();
+    renderHome();
     fireEvent.click(screen.getByRole('button', { name: 'Server settings' }));
     expect(useUIStore.getState().guildSettingsId).toBe(GUILD);
   });
+});
 
-  it('offers invite when there is a room to invite somebody into', () => {
-    renderLobby();
-    fireEvent.click(screen.getByRole('button', { name: 'Invite people' }));
-    expect(screen.getByTestId('invite-modal')).toBeInTheDocument();
+describe('live now', () => {
+  it('is one line of voice channels when nobody is in voice', () => {
+    renderHome();
+    const line = screen.getByRole('region', { name: 'Voice channels' });
+    expect(within(line).getByRole('button', { name: 'Join Shop floor' })).toBeInTheDocument();
+    expect(within(line).getByText('Nobody in voice')).toBeInTheDocument();
+    expect(screen.queryByText('Live now')).not.toBeInTheDocument();
+  });
+
+  it('shows a call with people in it as a live card that joins', async () => {
+    act(() => {
+      useVoiceStore.setState({
+        channelParticipants: new Map([['v1', [voiceState({ user_id: '1' }), voiceState({ user_id: '2' })]]]),
+      });
+    });
+    renderHome();
+    expect(screen.getByRole('heading', { name: 'Live now' })).toBeInTheDocument();
+    const card = screen.getByRole('article', { name: 'Shop floor, live' });
+    expect(within(card).getByText(/2 people in voice/)).toBeInTheDocument();
+    fireEvent.click(within(card).getByRole('button', { name: 'Join Shop floor' }));
+    await waitFor(() => expect(gates.joinChannel).toHaveBeenCalledWith('v1', GUILD));
+    expect(screen.getByTestId('pathname')).toHaveTextContent('/app/guilds/g1/channels/v1');
   });
 });
 
-// ---- around now ------------------------------------------------------------
-
-describe('Around now', () => {
-  it('names who is where rather than saying the room is quiet', async () => {
-    light('v1', [voiceState({ user_id: '1', username: 'mara' })]);
-    renderLobby();
-    const well = screen.getByRole('region', { name: 'Around now' });
-    await waitFor(() => expect(within(well).getByText(/are in|is in/)).toBeInTheDocument());
-    expect(well.textContent).not.toMatch(/No data|It's quiet/i);
-  });
-
-  it('says nobody is on rather than showing an empty strip', () => {
-    usePresenceStore.getState().reset();
-    renderLobby();
-    const well = screen.getByRole('region', { name: 'Around now' });
-    expect(within(well).getByText('Nobody is online right now')).toBeInTheDocument();
-  });
-});
-
-// ---- the rooms grid --------------------------------------------------------
-
-describe('the rooms grid', () => {
-  it('draws a lit card for an occupied room and a matte one for an empty room', async () => {
-    light('v1', [voiceState({ user_id: '1', username: 'mara' })]);
-    renderLobby();
-
-    const rooms = screen.getByRole('region', { name: 'Voice channels' });
-    await waitFor(() => expect(within(rooms).getByText('LIVE')).toBeInTheDocument());
-    expect(within(rooms).getByRole('button', { name: 'Join Shop floor' })).toBeInTheDocument();
-    expect(within(rooms).getByText(/Nobody in voice/)).toBeInTheDocument();
-    expect(within(rooms).getByRole('button', { name: 'Open Lounge' })).toBeInTheDocument();
-  });
-
-  it('puts the lit room before the dark one', async () => {
-    light('v2', [voiceState({ user_id: '1', username: 'mara' })]);
-    renderLobby();
-    const rooms = screen.getByRole('region', { name: 'Voice channels' });
-    await waitFor(() => expect(within(rooms).getByText('LIVE')).toBeInTheDocument());
-    const names = within(rooms)
-      .getAllByRole('heading', { level: 3 })
-      .map((heading) => heading.textContent);
-    expect(names).toEqual(['Lounge', 'Shop floor']);
-  });
-
-  it('joins a room when the lights go on', () => {
-    renderLobby();
-    fireEvent.click(screen.getByRole('button', { name: 'Open Lounge' }));
-    expect(gates.joinChannel).toHaveBeenCalledWith('v2', GUILD);
-  });
-
-  it('omits the add tile for somebody who cannot open a room', () => {
-    renderLobby();
-    expect(screen.queryByRole('button', { name: 'Add a voice channel' })).not.toBeInTheDocument();
-  });
-
-  it('offers the add tile to somebody who can, and sends them where rooms are made', () => {
-    gates.permissions = Permissions.MANAGE_CHANNELS;
-    renderLobby();
-    fireEvent.click(screen.getByRole('button', { name: 'Add a voice channel' }));
-    expect(useUIStore.getState().guildSettingsId).toBe(GUILD);
-    expect(useUIStore.getState().guildSettingsInitialSection).toBe('channels');
-  });
-});
-
-// ---- coming up and the media strip ----------------------------------------
-
-describe('Coming up', () => {
-  it('is omitted entirely when the calendar is empty', async () => {
-    renderLobby();
-    await waitFor(() => expect(api.get).toHaveBeenCalled());
-    expect(screen.queryByRole('region', { name: 'Coming up' })).not.toBeInTheDocument();
-  });
-
-  it('shows the next event, where it is, and lets the reader say they are going', async () => {
-    api.events = [
+describe('the feed', () => {
+  it('shows what people made, and never an empty claim while loading', async () => {
+    api.feed = [
+      feedMessage('10', {
+        content: 'Lunch vote',
+        poll: {
+          id: 'p1',
+          message_id: '10',
+          channel_id: 't1',
+          question: 'Lunch vote',
+          allow_multiselect: false,
+          created_at: '',
+          options: [{ id: 'o1', text: 'Soup', position: 0, vote_count: 2, voted: false }],
+          total_votes: 2,
+        },
+      }, 'poll'),
       {
-        id: 'e1',
-        name: 'Thermal test — driver v3',
-        scheduled_start: new Date(Date.now() + 3_600_000).toISOString(),
-        status: 1,
-        channel_id: 'v1',
-        creator_id: '2',
-        user_count: 6,
-        user_rsvp: false,
+        type: 'forum_post',
+        id: 'f:20',
+        key: '20',
+        at: new Date().toISOString(),
+        channel_id: 'forum',
+        channel_name: 'help',
+        thread_id: '20',
+        title: 'Servo jitters at idle',
+        author,
+        excerpt: 'Any ideas?',
+        reply_count: 3,
+        last_reply_at: new Date().toISOString(),
+        last_reply_author: { id: '2', username: 'priya', display_name: 'Priya', avatar_hash: null },
+        participants: [author],
+      },
+      {
+        type: 'members_joined',
+        id: 'j:2026-09-22',
+        key: '5',
+        at: new Date().toISOString(),
+        day: '2026-09-22',
+        users: [
+          { id: '7', username: 'yara', display_name: 'Yara', avatar_hash: null },
+          { id: '8', username: 'ken', display_name: 'Ken', avatar_hash: null },
+        ],
+        total: 3,
       },
     ];
-    renderLobby();
-
-    const card = await screen.findByRole('region', { name: 'Coming up' });
-    expect(within(card).getByText('Thermal test — driver v3')).toBeInTheDocument();
-    expect(within(card).getByText(/Shop floor/).textContent).toContain('6 going');
-    // The header picks up the same event, so the two never disagree.
-    expect(screen.getByText(/Thermal test — driver v3 at /)).toBeInTheDocument();
-
-    fireEvent.click(within(card).getByRole('button', { name: "I'm going" }));
-    await waitFor(() =>
-      expect(api.put).toHaveBeenCalledWith(`/guilds/${GUILD}/events/e1/rsvp`),
-    );
-    await screen.findByRole('button', { name: "You're going" });
+    renderHome();
+    expect(await screen.findByText('Servo jitters at idle')).toBeInTheDocument();
+    // The poll's question is said once, by the poll.
+    expect(screen.getAllByText('Lunch vote')).toHaveLength(1);
+    expect(screen.getByText(/3 replies · last from Priya/)).toBeInTheDocument();
+    expect(screen.getByText('Yara and 2 others joined')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Say hi to Yara' })).toBeInTheDocument();
   });
 
-  it('stays quiet when the calendar cannot be read', async () => {
-    api.get.mockRejectedValue(new Error('offline'));
-    renderLobby();
-    await waitFor(() => expect(api.get).toHaveBeenCalled());
+  it('opens a message where it was posted', async () => {
+    api.feed = [feedMessage('10')];
+    renderHome();
+    fireEvent.click(await screen.findByRole('button', { name: 'Open in build-log' }));
+    expect(screen.getByTestId('pathname')).toHaveTextContent('/app/guilds/g1/channels/t1#msg-10');
+  });
+
+  it('toggles a reaction in place', async () => {
+    api.feed = [feedMessage('10', { reactions: [{ emoji: '🎉', count: 3, me: false }] }, 'reactions')];
+    renderHome();
+    const chip = await screen.findByRole('button', { name: /🎉/ });
+    fireEvent.click(chip);
+    await waitFor(() =>
+      expect(api.put).toHaveBeenCalledWith(`/channels/t1/messages/10/reactions/${encodeURIComponent('🎉')}/@me`),
+    );
+    expect(await screen.findByText('4')).toBeInTheDocument();
+  });
+
+  it('says so when the feed cannot be loaded', async () => {
+    api.feedError = 'the server is having a moment';
+    renderHome();
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Could not load the latest posts');
+    expect(within(alert).getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+  });
+});
+
+describe('the widget column', () => {
+  const soon = () => new Date(Date.now() + 26 * 60 * 60 * 1000).toISOString();
+
+  it('shows the next events and RSVPs on the first', async () => {
+    api.events = [{ id: 'e1', name: 'Thermal test', scheduled_start: soon(), status: 1, user_count: 2 }];
+    renderHome();
+    const widget = await screen.findByRole('region', { name: 'Coming up' });
+    expect(within(widget).getByText('Thermal test')).toBeInTheDocument();
+    fireEvent.click(within(widget).getByRole('button', { name: "I'm going" }));
+    await waitFor(() => expect(api.put).toHaveBeenCalledWith('/guilds/g1/events/e1/rsvp'));
+    expect(await within(widget).findByRole('button', { name: "You're going" })).toBeInTheDocument();
+  });
+
+  it('leaves out a widget with nothing to show', async () => {
+    renderHome();
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith(expect.stringMatching(/attachments/)));
+    expect(screen.queryByRole('region', { name: 'Media' })).not.toBeInTheDocument();
     expect(screen.queryByRole('region', { name: 'Coming up' })).not.toBeInTheDocument();
   });
-});
 
-describe('the media strip', () => {
-  it('is omitted entirely when no images have been shared in the loaded rooms', () => {
-    renderLobby();
-    expect(screen.queryByRole('region', { name: /Recently in/ })).not.toBeInTheDocument();
-  });
-});
-
-// ---- text rooms ------------------------------------------------------------
-
-describe('text rooms', () => {
-  it('renders them as rows, never as cards, and keeps voice rooms out', () => {
-    renderLobby();
-    const list = screen.getByRole('region', { name: 'Text channels' });
-    expect(within(list).getByText('build-log')).toBeInTheDocument();
-    expect(within(list).getByText('firmware')).toBeInTheDocument();
-    expect(within(list).queryByText('Shop floor')).not.toBeInTheDocument();
+  it('follows the owner’s choice of widgets', async () => {
+    api.events = [{ id: 'e1', name: 'Thermal test', scheduled_start: soon(), status: 1 }];
+    setHub({ widgets: [{ id: 'coming_up', enabled: false }] });
+    renderHome();
+    // New here is on, and Ren joined today.
+    expect(await screen.findByRole('region', { name: 'New here' })).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Coming up' })).not.toBeInTheDocument();
   });
 
-  it('carries the mention chip and opens the room', () => {
-    gates.mentions = new Map([['t1', 1]]);
-    renderLobby();
-    const list = screen.getByRole('region', { name: 'Text channels' });
-    expect(within(list).getByText('1 mention')).toBeInTheDocument();
-
-    // The row and its "…" both name the room; the row is the one that opens it.
-    const [row] = within(list).getAllByRole('button', { name: /build-log/ });
-    fireEvent.click(row);
-    expect(screen.getByTestId('pathname')).toHaveTextContent(
-      `/app/guilds/${GUILD}/channels/t1`,
-    );
-  });
-
-  it('offers the room menu on a text row, which a phone has no other door to', () => {
-    renderLobby();
-    const list = screen.getByRole('region', { name: 'Text channels' });
-    fireEvent.click(within(list).getByRole('button', { name: 'Channel options for build-log' }));
-    expect(screen.getByRole('menu')).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: /Mark channel as read/ })).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: /Copy link to channel/ })).toBeInTheDocument();
-    expect(screen.getAllByRole('menuitemradio')).toHaveLength(4);
-  });
-
-  it('lights a text room amber when somebody is typing in it', async () => {
-    act(() => {
-      useTypingStore.setState({ typingByChannel: { t1: ['1', '2'] } });
-    });
-    renderLobby();
-    const list = screen.getByRole('region', { name: 'Text channels' });
-    await waitFor(() => expect(within(list).getByText('2 here')).toBeInTheDocument());
+  it('on a phone, puts Coming up above the feed and the rest after its fourth post', async () => {
+    plateWidth = 390;
+    api.events = [{ id: 'e1', name: 'Thermal test', scheduled_start: soon(), status: 1 }];
+    api.feed = ['1', '2', '3', '4', '5'].map((id) => feedMessage(id, { content: `post ${id}` }));
+    renderHome();
+    const comingUp = await screen.findByRole('region', { name: 'Coming up' });
+    const latest = screen.getByRole('heading', { name: 'Latest' });
+    expect(comingUp.compareDocumentPosition(latest) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const newHere = await screen.findByRole('region', { name: 'New here' });
+    const fourth = screen.getByText('post 4');
+    const fifth = screen.getByText('post 5');
+    expect(fourth.compareDocumentPosition(newHere) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(newHere.compareDocumentPosition(fifth) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

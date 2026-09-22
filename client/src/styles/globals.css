@@ -5,6 +5,8 @@
 @import "@fontsource/gabarito/500.css";
 @import "@fontsource/gabarito/600.css";
 @import "@fontsource/gabarito/700.css";
+/* The server home page's name is Gabarito 800 (docs/server-home-spec.md). */
+@import "@fontsource/gabarito/800.css";
 /* Meta — JetBrains Mono. */
 @import "@fontsource/jetbrains-mono/400.css";
 @import "@fontsource/jetbrains-mono/500.css";
@@ -51,6 +53,7 @@
 @import './looks.css';
 @import './components.css' layer(components);
 @import './sports.css' layer(components);
+@import './server-home.css' layer(components);
 @import './utilities.css';
 /* Last, and in a layer of its own: the §9 focus ring outranks the utilities, so
    a resting-state `shadow-*` cannot silently delete it. See focus.css. */

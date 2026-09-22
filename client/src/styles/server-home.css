@@ -1,0 +1,305 @@
+/* =============================================================================
+   The server home page (docs/server-home-spec.md).
+
+   The recipes the page's components share: the cover, the live glow, the card
+   lift, the photo hover and the section entrance. Colours are tokens (the
+   cover's lightness steps are `--cover-*` in tokens.css; its hue arrives as a
+   number from `serverCover.ts`). Imported into `@layer components`, so a
+   utility at the call site still wins.
+
+   Reduced motion is the `data-motion` switch (utilities.css) plus the block at
+   the end of this file, which takes the hover transforms and the breathing
+   glow away too — the global switch only shortens durations.
+   ============================================================================= */
+
+/* ---- Cover ------------------------------------------------------------------ */
+
+.pc-home-cover {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  border-radius: var(--radius-plate) var(--radius-plate) 0 0;
+  background: var(--bg-well);
+}
+
+/* The picture fades into the plate, so the head below can sit across it. */
+.pc-home-cover::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    transparent 38%,
+    color-mix(in oklch, var(--bg-plate) 55%, transparent) 72%,
+    var(--bg-plate) 100%
+  );
+}
+
+.pc-home-cover > img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* A server with no banner: three soft lights over a ground, all made of the
+   server's own hue. Positions, sizes and the lights' hue shifts are set inline
+   by `coverStyle()`; everything that is a colour is assembled here. */
+.pc-home-cover-made {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(
+      ellipse var(--cover-r1) 150% at var(--cover-x1) var(--cover-y1),
+      oklch(var(--cover-l-light) calc(var(--cover-chroma) * 1.35 * var(--cover-c-scale)) var(--cover-h1) / var(--cover-a-light)) 0%,
+      transparent 100%
+    ),
+    radial-gradient(
+      ellipse var(--cover-r2) 130% at var(--cover-x2) var(--cover-y2),
+      oklch(var(--cover-l-light) calc(var(--cover-chroma) * 1.2 * var(--cover-c-scale)) var(--cover-h2) / calc(var(--cover-a-light) * 0.8)) 0%,
+      transparent 100%
+    ),
+    radial-gradient(
+      ellipse var(--cover-r3) 120% at var(--cover-x3) var(--cover-y3),
+      oklch(var(--cover-l-mid) calc(var(--cover-chroma) * 1.2 * var(--cover-c-scale)) var(--cover-h3) / var(--cover-a-light)) 0%,
+      transparent 100%
+    ),
+    linear-gradient(
+      var(--cover-angle),
+      oklch(var(--cover-l-deep) calc(var(--cover-chroma) * 0.85 * var(--cover-c-scale)) var(--cover-hue)) 0%,
+      oklch(var(--cover-l-ground) calc(var(--cover-chroma) * 0.45 * var(--cover-c-scale)) calc(var(--cover-hue) + 18)) 100%
+    );
+}
+
+.pc-home-cover-made::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: var(--cover-grain);
+  opacity: var(--cover-grain-opacity);
+  mix-blend-mode: soft-light;
+}
+
+/* ---- Head ------------------------------------------------------------------- */
+
+/* The mark sits across the cover's edge, so it carries a collar of plate. */
+.pc-home-mark {
+  box-shadow:
+    0 0 0 4px var(--bg-plate),
+    0 10px 24px color-mix(in oklch, var(--bg-base) 55%, transparent);
+}
+
+.pc-home-name {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 2.125rem; /* 34px */
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+}
+
+/* ---- Sections ------------------------------------------------------------- */
+
+@keyframes pc-home-enter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 8px, 0) scale(0.99);
+  }
+}
+
+/* Rest state is the visible one: the keyframe only declares where a section
+   comes FROM, and `backwards` holds it there for its stagger delay. */
+.pc-home-enter {
+  animation: pc-home-enter 420ms var(--ease-out) backwards;
+  animation-delay: calc(var(--enter-index, 0) * 40ms);
+  transform-origin: 50% 0;
+}
+
+.pc-home-heading {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.0625rem; /* 17px */
+  line-height: 1.2;
+  letter-spacing: -0.005em;
+  color: var(--text-primary);
+}
+
+/* ---- Cards ------------------------------------------------------------------ */
+
+.pc-home-card {
+  position: relative;
+  background: var(--bg-raised);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-raised), 0 0 0 1px var(--border-subtle);
+  transition:
+    transform var(--duration-slow) var(--ease-out),
+    box-shadow var(--duration-slow) var(--ease-out);
+}
+
+.pc-home-card:hover {
+  transform: translate3d(0, -2px, 0);
+  box-shadow: var(--shadow-lifted), 0 0 0 1px var(--border-strong);
+}
+
+/* A widget: quieter than a feed card, it is furniture. */
+.pc-home-widget {
+  background: color-mix(in oklch, var(--bg-raised) 55%, var(--bg-plate));
+  border-radius: var(--radius-card);
+  box-shadow: 0 0 0 1px var(--border-subtle);
+}
+
+/* ---- Live ------------------------------------------------------------------- */
+
+@keyframes pc-home-glow {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px color-mix(in oklch, var(--light-amber) 38%, transparent),
+      0 0 22px color-mix(in oklch, var(--light-amber) 10%, transparent),
+      var(--shadow-raised);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px color-mix(in oklch, var(--light-amber) 58%, transparent),
+      0 0 34px color-mix(in oklch, var(--light-amber) 20%, transparent),
+      var(--shadow-raised);
+  }
+}
+
+.pc-home-live {
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(120% 90% at 0% 0%, color-mix(in oklch, var(--light-amber) 9%, transparent), transparent 70%),
+    var(--bg-raised);
+  border-radius: var(--radius-card);
+  animation: pc-home-glow 2s var(--ease-in-out) infinite;
+}
+
+.pc-home-live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  background: var(--light-amber);
+  box-shadow: var(--glow-window-amber);
+}
+
+/* ---- Photos ----------------------------------------------------------------- */
+
+.pc-home-photo {
+  position: relative;
+  overflow: hidden;
+  display: block;
+  background: var(--bg-well);
+}
+
+.pc-home-photo img,
+.pc-home-photo video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 360ms var(--ease-out);
+}
+
+.pc-home-photo:hover img,
+.pc-home-photo:focus-visible img,
+.pc-home-photo:hover video {
+  transform: scale(1.04);
+}
+
+.pc-home-photo-caption {
+  position: absolute;
+  inset: auto 0 0 0;
+  padding: 18px 10px 7px;
+  color: var(--text-primary);
+  background: linear-gradient(to top, var(--tag-fill), transparent);
+  opacity: 0;
+  transform: translate3d(0, 4px, 0);
+  transition:
+    opacity var(--duration-slow) var(--ease-out),
+    transform var(--duration-slow) var(--ease-out);
+  pointer-events: none;
+}
+
+.pc-home-photo:hover .pc-home-photo-caption,
+.pc-home-photo:focus-visible .pc-home-photo-caption {
+  opacity: 1;
+  transform: none;
+}
+
+/* ---- Text ------------------------------------------------------------------- */
+
+.pc-home-clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--clamp-lines, 6);
+  overflow: hidden;
+}
+
+/* ---- Polls ------------------------------------------------------------------ */
+
+@keyframes pc-home-bar {
+  from {
+    transform: scaleX(0);
+  }
+}
+
+/* The poll card is the timeline's own; on this page its bars grow in. */
+.pc-home-poll button > span.absolute {
+  transform-origin: 0 50%;
+  animation: pc-home-bar 700ms var(--ease-out) backwards;
+  animation-delay: 160ms;
+  transition: width 320ms var(--ease-out);
+}
+
+/* ---- Bars (Most active) ------------------------------------------------------ */
+
+.pc-home-bar {
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: var(--bg-mod-strong);
+  overflow: hidden;
+}
+
+.pc-home-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent-primary);
+  transform-origin: 0 50%;
+  animation: pc-home-bar 700ms var(--ease-out) backwards;
+  animation-delay: 200ms;
+}
+
+/* ---- Settings preview --------------------------------------------------------- */
+
+.pc-home-drag-over {
+  box-shadow: 0 -2px 0 0 var(--accent-primary);
+}
+
+/* ---- Reduced motion ------------------------------------------------------------ */
+
+:root[data-motion='reduced'] .pc-home-enter,
+:root[data-motion='reduced'] .pc-home-live,
+:root[data-motion='reduced'] .pc-home-poll button > span.absolute,
+:root[data-motion='reduced'] .pc-home-bar > span {
+  animation: none !important;
+}
+
+:root[data-motion='reduced'] .pc-home-card,
+:root[data-motion='reduced'] .pc-home-card:hover,
+:root[data-motion='reduced'] .pc-home-photo img,
+:root[data-motion='reduced'] .pc-home-photo video,
+:root[data-motion='reduced'] .pc-home-photo-caption {
+  transform: none !important;
+}
+
+:root[data-motion='reduced'] .pc-home-live {
+  box-shadow:
+    0 0 0 1px color-mix(in oklch, var(--light-amber) 45%, transparent),
+    0 0 26px color-mix(in oklch, var(--light-amber) 14%, transparent),
+    var(--shadow-raised);
+}

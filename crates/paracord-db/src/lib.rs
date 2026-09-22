@@ -47,6 +47,7 @@ pub mod saved_messages;
 pub mod scheduled_events;
 pub mod scheduled_messages;
 pub mod security_events;
+pub mod server_feed;
 pub mod server_settings;
 pub mod sessions;
 pub mod stage_instances;
