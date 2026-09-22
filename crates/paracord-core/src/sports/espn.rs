@@ -202,7 +202,10 @@ fn parse_event(event: &Value, sport: &str, league: &str, league_path: &str) -> O
 
     let mut possession_id = None;
     if let Some(situation) = comp.get("situation").filter(|value| value.is_object()) {
-        possession_id = str_field(situation, "possession");
+        possession_id = loose_id(situation.get("possession").unwrap_or(&Value::Null));
+        game.possession_team_id = possession_id.clone();
+        game.ball_on = ball_on(situation);
+        game.yards_to_endzone = whole_i32(situation, "yardsToEndzone");
         game.down_distance =
             str_field(situation, "downDistanceText").filter(|text| !text.is_empty());
         game.red_zone = bool_field(situation, "isRedZone");
@@ -497,6 +500,38 @@ pub(crate) fn bool_field(value: &Value, name: &str) -> bool {
 /// '#' is tolerated and stripped. Anything else — a colour name, the wrong
 /// number of digits, a non-hex digit, a number instead of a string — is no
 /// colour at all, so the field reads null rather than something unusable.
+/// An id stored as a string, a number, or an object with `id` / `playerId`.
+pub(crate) fn loose_id(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) if !text.is_empty() => Some(text.clone()),
+        Value::Number(number) => Some(number.to_string()),
+        Value::Object(_) => str_field(value, "id")
+            .filter(|id| !id.is_empty())
+            .or_else(|| value.get("athlete").and_then(loose_id))
+            .or_else(|| value.get("team").and_then(loose_id))
+            .or_else(|| str_field(value, "playerId").filter(|id| !id.is_empty())),
+        _ => None,
+    }
+}
+
+/// `yardLine` is only a ball spot when it is a whole number from 0 through 100.
+fn ball_on(situation: &Value) -> Option<i32> {
+    let yards = whole_i32(situation, "yardLine")?;
+    (0..=100).contains(&yards).then_some(yards)
+}
+
+fn whole_i32(value: &Value, name: &str) -> Option<i32> {
+    let number = value.get(name)?.as_f64()?;
+    if number.is_finite()
+        && number.fract() == 0.0
+        && (i32::MIN as f64..=i32::MAX as f64).contains(&number)
+    {
+        Some(number as i32)
+    } else {
+        None
+    }
+}
+
 pub(crate) fn hex_color(value: &Value, name: &str) -> Option<String> {
     let Some(Value::String(raw)) = value.get(name) else {
         return None;
@@ -535,6 +570,13 @@ mod tests {
         assert_eq!(game.home.record.as_deref(), Some("0-1"));
         assert!(game.away.possession);
         assert!(!game.home.possession);
+        assert_eq!(game.possession_team_id.as_deref(), Some("29"));
+        assert!(game.ball_on.is_none());
+        assert!(game.yards_to_endzone.is_none());
+        let wire = serde_json::to_value(game).unwrap();
+        assert!(wire["ball_on"].is_null());
+        assert_eq!(wire["possession_team_id"], "29");
+        assert!(wire["yards_to_endzone"].is_null());
         assert!(game.red_zone);
         assert_eq!(game.down_distance.as_deref(), Some("2nd & 7 at CAR 36"));
         assert_eq!(
@@ -565,6 +607,61 @@ mod tests {
         assert_eq!(game.away.short_name, "Liverpool");
         assert_eq!(game.away.color.as_deref(), Some("d00027"));
         assert_eq!(game.away.alt_color.as_deref(), Some("ffffff"));
+        assert!(game.ball_on.is_none());
+        assert!(game.possession_team_id.is_none());
+        assert!(game.yards_to_endzone.is_none());
+    }
+
+    #[test]
+    fn board_ball_spot_uses_the_situation_yard_line() {
+        // The captured NFL scoreboard (probe/nfl.json) has no competition
+        // situation, and the live summary (probe/nfl-live.json) has none either
+        // — that file's situation was derived from drives. This snippet is the
+        // shape a live scoreboard sends.
+        let game = parse_spot(35, 65, r#"{"id":"12"}"#);
+        assert_eq!(game.ball_on, Some(35));
+        assert_eq!(game.yards_to_endzone, Some(65));
+        assert_eq!(game.possession_team_id.as_deref(), Some("12"));
+        assert!(game.home.possession);
+        let wire = serde_json::to_value(&game).unwrap();
+        assert_eq!(wire["ball_on"], 35);
+        assert_eq!(wire["possession_team_id"], "12");
+        assert_eq!(wire["yards_to_endzone"], 65);
+        assert!(wire.get("yardLine").is_none());
+        assert!(wire.get("yardsToEndzone").is_none());
+
+        assert_eq!(parse_spot(0, 100, r#""11""#).ball_on, Some(0));
+        assert_eq!(parse_spot(100, 0, "11").ball_on, Some(100));
+        assert_eq!(
+            parse_spot(100, 0, "11").possession_team_id.as_deref(),
+            Some("11")
+        );
+        for yard in ["-1", "101", "100.5", r#""35""#] {
+            assert!(
+                parse_spot_raw(yard, "65").ball_on.is_none(),
+                "yardLine {yard} must not become a ball spot"
+            );
+        }
+        assert!(parse_spot_raw("35", "12.5").yards_to_endzone.is_none());
+    }
+
+    fn parse_spot(yard: i32, to_endzone: i32, possession: &str) -> Game {
+        parse_spot_with(&yard.to_string(), &to_endzone.to_string(), possession)
+    }
+
+    fn parse_spot_raw(yard: &str, to_endzone: &str) -> Game {
+        parse_spot_with(yard, to_endzone, r#""12""#)
+    }
+
+    fn parse_spot_with(yard: &str, to_endzone: &str, possession: &str) -> Game {
+        let raw = format!(
+            r#"{{"events":[{{"id":"1","date":"2026-09-22T00:15:00Z","shortName":"A @ H","status":{{"type":{{"state":"in","shortDetail":"1st"}}}},"competitions":[{{"competitors":[{{"homeAway":"home","team":{{"id":"12","abbreviation":"H","displayName":"Home"}}}},{{"homeAway":"away","team":{{"id":"11","abbreviation":"A","displayName":"Away"}}}}],"situation":{{"yardLine":{yard},"yardsToEndzone":{to_endzone},"possession":{possession}}}}}]}}]}}"#
+        );
+        parse(&raw, "football/nfl")
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap()
     }
 
     #[test]

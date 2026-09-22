@@ -14,6 +14,7 @@ import {
   hitArcLift,
   hitToField,
   losingSide,
+  miniFieldBar,
   openingDriveId,
   pitchInFrame,
   pitchAnnouncement,
@@ -21,6 +22,7 @@ import {
   pitchMark,
   situationBugText,
   teamPaint,
+  winAreaFill,
   pitchToZone,
   playStroke,
   redZoneYards,
@@ -310,6 +312,79 @@ describe('team paint', () => {
       ink: 'var(--sports-chalk)',
     });
     expect(teamPaint({ color: 'nope', alt_color: null }).fill).toBe('var(--sports-endzone)');
+  });
+});
+
+describe('mini field bar', () => {
+  const sides = {
+    home: { abbr: 'DAL', possession: false },
+    away: { abbr: 'PHI', possession: true },
+  };
+
+  it('places the ball from the situation line and the first down along the offense', () => {
+    const bar = miniFieldBar({ down_distance: '2nd & 7 at DAL 42', ...sides });
+    expect(bar?.ball).toBe(42);
+    expect(bar?.firstDown).toBe(35);
+    expect(bar?.label).toContain('DAL 42');
+    expect(bar?.label).toContain('First down');
+  });
+
+  it('reads the away yard line from the other end and skips a line with no spot', () => {
+    const bar = miniFieldBar({
+      down_distance: '1st & 10 at PHI 20',
+      home: { abbr: 'DAL', possession: true },
+      away: { abbr: 'PHI', possession: false },
+    });
+    expect(bar?.ball).toBe(80);
+    expect(bar?.firstDown).toBe(90);
+    expect(miniFieldBar({ down_distance: '2nd & 7', ...sides })).toBeNull();
+    expect(miniFieldBar({ down_distance: null, ...sides })).toBeNull();
+  });
+
+  it('prefers ball_on and possession_team_id over the situation text', () => {
+    const bar = miniFieldBar({
+      down_distance: '2nd & 7 at DAL 10',
+      ball_on: 36,
+      possession_team_id: 'phi',
+      yards_to_endzone: null,
+      home: { id: 'dal', abbr: 'DAL', possession: true },
+      away: { id: 'phi', abbr: 'PHI', possession: false },
+    });
+    expect(bar?.ball).toBe(36);
+    expect(bar?.firstDown).toBe(29);
+    expect(bar?.label).toContain('DAL 36');
+  });
+
+  it('uses yards_to_endzone for the first-down line on goal-to-go', () => {
+    const bar = miniFieldBar({
+      down_distance: '1st & Goal at PHI 6',
+      ball_on: 94,
+      possession_team_id: 'dal',
+      yards_to_endzone: 6,
+      home: { id: 'dal', abbr: 'DAL', possession: false },
+      away: { id: 'phi', abbr: 'PHI', possession: false },
+    });
+    expect(bar?.ball).toBe(94);
+    expect(bar?.firstDown).toBe(100);
+  });
+
+  it('reads the text when ball_on is missing or out of range', () => {
+    const bar = miniFieldBar({ down_distance: '2nd & 7 at DAL 42', ball_on: null, ...sides });
+    expect(bar?.ball).toBe(42);
+    expect(miniFieldBar({ down_distance: '2nd & 7 at DAL 42', ball_on: 140, ...sides })?.ball).toBe(42);
+  });
+});
+
+describe('win area', () => {
+  const frame = { width: 200, height: 100, left: 20, top: 10, right: 10, bottom: 10 };
+
+  it('fills each side of the 50 line in that team’s stretch', () => {
+    const area = winAreaFill([{ home_pct: 30 }, { home_pct: 70 }, { home_pct: 40 }], frame);
+    expect(area?.home.length).toBeGreaterThan(0);
+    expect(area?.away.length).toBeGreaterThan(0);
+    expect(area?.end.side).toBe('away');
+    expect(area?.end.pct).toBe(40);
+    expect(winAreaFill([], frame)).toBeNull();
   });
 });
 

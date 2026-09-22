@@ -95,6 +95,157 @@ export function redZoneYards(direction: OffenseDirection): { from: number; to: n
   return direction === 1 ? { from: 80, to: 100 } : { from: 0, to: 20 };
 }
 
+export interface MiniFieldBar {
+  /** Yards from the home goal line. 0 is the home goal line, 100 the away goal line. */
+  ball: number;
+  /** First-down line, or null when the feed did not name possession or a distance. */
+  firstDown: number | null;
+  label: string;
+}
+
+/**
+ * A 100-yard strip for a live football card. Home defends the left.
+ * `ball_on` (yards from the home goal line) wins when it is in range.
+ * The situation line is the spot only when `ball_on` is null.
+ * The first-down line is `ball_on` plus the "& N" in the text, or
+ * `yards_to_endzone` when the text says "& Goal".
+ */
+export function miniFieldBar(game: {
+  down_distance: string | null;
+  ball_on?: number | null;
+  possession_team_id?: string | null;
+  yards_to_endzone?: number | null;
+  home: { id?: string; abbr: string; possession: boolean };
+  away: { id?: string; abbr: string; possession: boolean };
+}): MiniFieldBar | null {
+  const text = game.down_distance?.trim() ?? '';
+  const fed = ballOnYards(game.ball_on);
+  const ball = fed ?? (text ? spotFromSituation(text, game.home.abbr, game.away.abbr) : null);
+  if (ball == null) return null;
+  const direction = offenseDirection(game);
+  let firstDown: number | null = null;
+  if (direction != null) {
+    if (/&\s*goal\b/i.test(text)) {
+      const toGoal = game.yards_to_endzone;
+      firstDown = toGoal != null && Number.isFinite(toGoal) && toGoal >= 0
+        ? firstDownYard(ball, toGoal, direction)
+        : (direction === 1 ? 100 : 0);
+    } else {
+      const yards = text.match(/&\s*(\d+)/);
+      if (yards) firstDown = firstDownYard(ball, Number(yards[1]), direction);
+    }
+  }
+  const spot = yardSpot(ball, game.home.abbr, game.away.abbr);
+  const next = firstDown == null ? '' : ` First down at ${yardSpot(firstDown, game.home.abbr, game.away.abbr)}.`;
+  return { ball, firstDown, label: `Ball on ${spot}.${next}` };
+}
+
+function ballOnYards(value: number | null | undefined): number | null {
+  if (value == null || !Number.isFinite(value) || value < 0 || value > 100) return null;
+  return value;
+}
+
+function offenseDirection(game: {
+  possession_team_id?: string | null;
+  home: { id?: string; possession: boolean };
+  away: { id?: string; possession: boolean };
+}): OffenseDirection | null {
+  const id = game.possession_team_id;
+  if (id) {
+    if (game.away.id && id === game.away.id) return -1;
+    if (game.home.id && id === game.home.id) return 1;
+  }
+  if (game.away.possession && !game.home.possession) return -1;
+  if (game.home.possession && !game.away.possession) return 1;
+  return null;
+}
+
+function spotFromSituation(text: string, homeAbbr: string, awayAbbr: string): number | null {
+  if (/\bmidfield\b/i.test(text) || /\bat\s+(?:the\s+)?50\b/i.test(text)) return 50;
+  const match = text.match(/\bat\s+([A-Za-z]{2,4})\s+(\d{1,2})\b/);
+  if (!match) return null;
+  const yard = Number(match[2]);
+  if (yard > 50) return null;
+  const token = match[1].toUpperCase();
+  if (token === homeAbbr.toUpperCase()) return yard;
+  if (token === awayAbbr.toUpperCase()) return 100 - yard;
+  return null;
+}
+
+export interface WinChartFrame {
+  width: number;
+  height: number;
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+export interface WinAreaFill {
+  /** Area where the home team was ahead of 50. */
+  home: string;
+  /** Area where the away team was ahead of 50. */
+  away: string;
+  end: { x: number; y: number; side: 'home' | 'away' | 'even'; pct: number };
+}
+
+/** The region between the win line and the 50 mark, split by who was ahead. */
+export function winAreaFill(
+  points: readonly { home_pct: number }[],
+  frame: WinChartFrame,
+): WinAreaFill | null {
+  if (points.length === 0) return null;
+  const plotW = frame.width - frame.left - frame.right;
+  const plotH = frame.height - frame.top - frame.bottom;
+  const yOf = (pct: number) => frame.top + (1 - Math.min(100, Math.max(0, pct)) / 100) * plotH;
+  const xOf = (index: number) => (
+    points.length === 1 ? frame.left + plotW / 2 : frame.left + (index / (points.length - 1)) * plotW
+  );
+  const mid = yOf(50);
+  const home: string[] = [];
+  const away: string[] = [];
+  const add = (side: 'home' | 'away', ax: number, ay: number, bx: number, by: number) => {
+    const path = `M${round1(ax)} ${round1(ay)} L${round1(bx)} ${round1(by)} L${round1(bx)} ${round1(mid)} L${round1(ax)} ${round1(mid)} Z`;
+    (side === 'home' ? home : away).push(path);
+  };
+  const sideOf = (pct: number) => (pct > 50 ? 1 : pct < 50 ? -1 : 0);
+  if (points.length === 1) {
+    const side = sideOf(points[0].home_pct);
+    if (side !== 0) add(side > 0 ? 'home' : 'away', xOf(0) - 1, yOf(points[0].home_pct), xOf(0) + 1, yOf(points[0].home_pct));
+  } else {
+    for (let index = 0; index < points.length - 1; index += 1) {
+      const a = points[index].home_pct;
+      const b = points[index + 1].home_pct;
+      const ax = xOf(index);
+      const bx = xOf(index + 1);
+      const ay = yOf(a);
+      const by = yOf(b);
+      const aSide = sideOf(a);
+      const bSide = sideOf(b);
+      if (aSide === 0 && bSide === 0) continue;
+      if (aSide === bSide || aSide === 0 || bSide === 0) {
+        add((aSide || bSide) > 0 ? 'home' : 'away', ax, ay, bx, by);
+        continue;
+      }
+      const t = (50 - a) / (b - a);
+      const cx = ax + t * (bx - ax);
+      add(aSide > 0 ? 'home' : 'away', ax, ay, cx, mid);
+      add(bSide > 0 ? 'home' : 'away', cx, mid, bx, by);
+    }
+  }
+  const last = points[points.length - 1].home_pct;
+  const side = last > 50 ? 'home' : last < 50 ? 'away' : 'even';
+  return {
+    home: home.join(' '),
+    away: away.join(' '),
+    end: { x: xOf(points.length - 1), y: yOf(last), side, pct: Math.round(last) },
+  };
+}
+
+function round1(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
 export function yardSpot(ballOn: number, homeAbbr: string, awayAbbr: string): string {
   const y = clamp(Math.round(ballOn), 0, 100);
   if (y === 50) return 'midfield';

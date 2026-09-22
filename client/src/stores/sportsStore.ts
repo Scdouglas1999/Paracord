@@ -10,8 +10,8 @@ export interface GuildSportsEntry {
   settingsError: string | null;
   board: SportsBoard | null;
   boardError: string | null;
-  /** Game id -> when the score flash ends, and what to announce. */
-  flashes: Record<string, { until: number; message: string }>;
+  /** Game id -> when the score flash ends, what to announce, and who scored. */
+  flashes: Record<string, { until: number; message: string; side: 'home' | 'away' | null }>;
 }
 
 interface SportsStore {
@@ -37,16 +37,16 @@ function blank(): GuildSportsEntry {
 }
 
 function mergeFlashes(
-  existing: Record<string, { until: number; message: string }>,
+  existing: GuildSportsEntry['flashes'],
   changes: readonly ScoreChange[],
   now: number,
-): Record<string, { until: number; message: string }> {
-  const next: Record<string, { until: number; message: string }> = {};
+): GuildSportsEntry['flashes'] {
+  const next: GuildSportsEntry['flashes'] = {};
   for (const [id, flash] of Object.entries(existing)) {
     if (flash.until > now) next[id] = flash;
   }
   const until = now + SCORE_FLASH_MS;
-  for (const change of changes) next[change.id] = { until, message: change.message };
+  for (const change of changes) next[change.id] = { until, message: change.message, side: change.side };
   return next;
 }
 

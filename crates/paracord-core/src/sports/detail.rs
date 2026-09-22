@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use super::espn::{self, bool_field, dbl_field, int_field, sanitize_logo, str_field};
+use super::espn::{self, bool_field, dbl_field, int_field, loose_id, sanitize_logo, str_field};
 use super::models::{
     AtBat, Athlete, BaseballDetail, Bases, FootballDetail, FootballDrive, FootballPlay, GameDetail,
     Hit, Pitch, ScoringPlay, StrikeZone, WinPoint,
@@ -748,19 +748,6 @@ fn resolve(id: &str, index: &HashMap<String, Athlete>) -> Athlete {
         short_name: String::new(),
         headshot: String::new(),
     })
-}
-
-fn loose_id(value: &Value) -> Option<String> {
-    match value {
-        Value::String(text) if !text.is_empty() => Some(text.clone()),
-        Value::Number(number) => Some(number.to_string()),
-        Value::Object(_) => str_field(value, "id")
-            .filter(|id| !id.is_empty())
-            .or_else(|| value.get("athlete").and_then(loose_id))
-            .or_else(|| value.get("team").and_then(loose_id))
-            .or_else(|| str_field(value, "playerId").filter(|id| !id.is_empty())),
-        _ => None,
-    }
 }
 
 fn str_field_value(value: &Value) -> Option<String> {

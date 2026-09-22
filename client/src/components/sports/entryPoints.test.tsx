@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router';
@@ -62,6 +62,9 @@ function liveGame(id: string, heat: number): SportsGame {
     last_play_type: null,
     last_play_score: null,
     down_distance: null,
+    ball_on: null,
+    possession_team_id: null,
+    yards_to_endzone: null,
     red_zone: false,
     balls: null,
     strikes: null,
@@ -206,7 +209,8 @@ describe('sports entry points', () => {
     );
     expect(await screen.findByRole('heading', { name: 'Live now' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'All games' })).toHaveAttribute('href', '/app/guilds/g1/sports');
-    expect(screen.getByText('2 live')).toBeInTheDocument();
+    const liveChip = screen.getByText('2 live');
+    expect(liveChip.querySelector('.pc-sports-live')).not.toBeNull();
     expect(sportsApi.getSettings).toHaveBeenCalledTimes(1);
     expect(sportsApi.getBoard).toHaveBeenCalledTimes(1);
   });
@@ -238,7 +242,10 @@ describe('sports entry points', () => {
       </MemoryRouter>,
     );
     expect(await screen.findByRole('heading', { name: 'Live now' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Heat50 at Heat50-home, 1st quarter' })).toBeInTheDocument();
+    const lead = screen.getByRole('link', { name: 'Heat50 at Heat50-home, 1st quarter' });
+    expect(within(lead).getByText('Heat50 at Heat50-home')).toBeInTheDocument();
+    expect(lead.querySelector('.pc-sports-live')).not.toBeNull();
+    expect(lead.querySelector('.pc-sports-strip-line')).not.toBeNull();
     expect(screen.getByRole('link', { name: /Heat40/ })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Heat30/ })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Heat20/ })).toBeInTheDocument();

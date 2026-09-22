@@ -106,6 +106,12 @@ export interface SportsGame {
   last_play_type: string | null;
   last_play_score: number | null;
   down_distance: string | null;
+  /** Yards from the home goal line, 0..100. Null when the feed has no spot. */
+  ball_on: number | null;
+  /** Team id of the side with the ball, or null. */
+  possession_team_id: string | null;
+  /** Yards from the ball to the goal the offense is attacking, or null. */
+  yards_to_endzone: number | null;
   red_zone: boolean | null;
   balls: number | null;
   strikes: number | null;

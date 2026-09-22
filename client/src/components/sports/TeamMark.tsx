@@ -17,11 +17,11 @@ export function espnImage(url: string | null | undefined): string | null {
   }
 }
 
-export function TeamMark({ team, size = 'md' }: { team: SportsTeam; size?: 'md' | 'lg' }) {
+export function TeamMark({ team, size = 'md' }: { team: SportsTeam; size?: 'md' | 'lg' | 'xl' }) {
   const [failed, setFailed] = useState(false);
   const logo = espnImage(team.logo) && !failed ? team.logo.trim() : '';
   return (
-    <span className={cn('pc-sports-logo-chip', size === 'lg' && 'is-lg')} aria-hidden>
+    <span className={cn('pc-sports-logo-chip', size === 'lg' && 'is-lg', size === 'xl' && 'is-xl')} aria-hidden>
       {logo ? (
         <img
           src={logo}

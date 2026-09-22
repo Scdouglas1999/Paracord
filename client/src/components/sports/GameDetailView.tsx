@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState, type CSSProperties } from 'react';
 import { Link } from 'react-router';
 import type { FootballDetail, GameDetail, SportsGame } from '../../api/sports';
 import { Button, Plate, Switch } from '../ui';
@@ -26,6 +26,7 @@ import {
   situationBugText,
   stepIndex,
   teamPaint,
+  winAreaFill,
   winProbabilityText,
   yardSpot,
 } from './gamecast';
@@ -114,7 +115,16 @@ function DetailBody({
 
   return (
     <>
-      <header className="flex min-w-0 flex-col gap-3">
+      <header
+        className="pc-sports-hero-band"
+        style={{
+          '--pc-away': teamPaint(game.away, game.home).fill,
+          '--pc-home': teamPaint(game.home, game.away).fill,
+        } as CSSProperties}
+      >
+        <span className="pc-sports-wash" aria-hidden />
+        <span className="pc-sports-header-scrim" aria-hidden />
+        <span className="pc-sports-card-face flex min-w-0 flex-col gap-3">
         <div className="flex min-w-0 items-center justify-between gap-3">
           <div className="min-w-0">
             <h1 className="sr-only">{matchup}</h1>
@@ -133,8 +143,8 @@ function DetailBody({
           <WinChart
             points={detail.win_probability}
             caption={chartText}
-            homeAbbr={game.home.abbr}
-            awayAbbr={game.away.abbr}
+            home={game.home}
+            away={game.away}
           />
         )}
         {detail.stale && (
@@ -145,6 +155,7 @@ function DetailBody({
         {error && (
           <p role="status" className="text-label text-text-secondary">{error}</p>
         )}
+        </span>
       </header>
 
       {detail.kind === 'football' && detail.football && (
@@ -191,7 +202,7 @@ function Scoreboard({ game, hideScores }: { game: SportsGame; hideScores: boolea
         {hideScores ? '–' : (game.away.score ?? '–')}
       </p>
       <div className="pc-sports-status">
-        {game.state === 'in' && <span className="pc-live-dot" aria-hidden />}
+        {game.state === 'in' && <span className="pc-live-dot pc-sports-live" aria-hidden />}
         <span className="pc-mono text-label text-text-secondary">{statusLine(game)}</span>
         {hideScores && <span className="text-meta text-text-muted">Scores hidden</span>}
       </div>
@@ -215,12 +226,12 @@ function Club({
   const paint = teamPaint(team, other);
   return (
     <div className={side === 'home' ? 'pc-sports-club is-home' : 'pc-sports-club is-away'}>
-      {side === 'away' && <TeamMark team={team} size="lg" />}
+      {side === 'away' && <TeamMark team={team} size="xl" />}
       <div className={side === 'home' ? 'min-w-0 text-right' : 'min-w-0'}>
         <p className="truncate font-display text-name text-text-primary">{teamLabel(team)}</p>
         {team.record && <p className="pc-mono text-meta text-text-faint">{team.record}</p>}
       </div>
-      {side === 'home' && <TeamMark team={team} size="lg" />}
+      {side === 'home' && <TeamMark team={team} size="xl" />}
       <span className="pc-sports-team-bar" style={{ background: paint.fill }} aria-hidden />
     </div>
   );
@@ -229,36 +240,52 @@ function Club({
 function WinChart({
   points,
   caption,
-  homeAbbr,
-  awayAbbr,
+  home,
+  away,
 }: {
   points: { home_pct: number }[];
   caption: string;
-  homeAbbr: string;
-  awayAbbr: string;
+  home: SportsGame['home'];
+  away: SportsGame['home'];
 }) {
   const width = 640;
-  const height = 88;
-  const left = 28;
-  const right = 8;
-  const top = 14;
-  const bottom = 14;
-  const plotW = width - left - right;
-  const plotH = height - top - bottom;
-  const yOf = (pct: number) => top + (1 - Math.min(100, Math.max(0, pct)) / 100) * plotH;
+  const height = 96;
+  const frame = { width, height, left: 36, right: 8, top: 16, bottom: 16 };
+  const plotW = width - frame.left - frame.right;
+  const plotH = height - frame.top - frame.bottom;
+  const yOf = (pct: number) => frame.top + (1 - Math.min(100, Math.max(0, pct)) / 100) * plotH;
   const coords = points.map((point, index) => {
-    const x = points.length === 1 ? left + plotW / 2 : left + (index / (points.length - 1)) * plotW;
+    const x = points.length === 1 ? frame.left + plotW / 2 : frame.left + (index / (points.length - 1)) * plotW;
     return `${x},${yOf(point.home_pct)}`;
   }).join(' ');
   const mid = yOf(50);
+  const area = winAreaFill(points, frame);
+  const homePaint = teamPaint(home, away);
+  const awayPaint = teamPaint(away, home);
+  const endAbbr = area?.end.side === 'away' ? away.abbr : area?.end.side === 'home' ? home.abbr : '';
+  const endLabel = area ? `${endAbbr} ${area.end.pct}`.trim() : '';
   return (
     <section aria-label="Win probability" className="pc-sports-winpanel">
       <h2 className="text-section text-text-faint">Win probability</h2>
-      <svg viewBox={`0 0 ${width} ${height}`} className="h-20 w-full" role="img" aria-label={caption}>
-        <text x="0" y={top} fill="var(--text-secondary)" fontSize="12" fontFamily="var(--font-display)">{homeAbbr}</text>
-        <text x="0" y={height - 2} fill="var(--text-secondary)" fontSize="12" fontFamily="var(--font-display)">{awayAbbr}</text>
-        <line x1={left} x2={width - right} y1={mid} y2={mid} stroke="var(--border-strong)" strokeDasharray="5 6" />
+      <svg viewBox={`0 0 ${width} ${height}`} className="h-24 w-full" role="img" aria-label={caption}>
+        <text x="0" y={frame.top} fill="var(--text-secondary)" fontSize="11" fontFamily="var(--font-display)">{home.abbr}</text>
+        <text x="0" y={height - 4} fill="var(--text-secondary)" fontSize="11" fontFamily="var(--font-display)">{away.abbr}</text>
+        <line x1={frame.left} x2={width - frame.right} y1={mid} y2={mid} stroke="var(--border-strong)" strokeDasharray="5 6" />
+        {area?.home && <path d={area.home} fill={homePaint.fill} opacity="0.28" />}
+        {area?.away && <path d={area.away} fill={awayPaint.fill} opacity="0.28" />}
         <polyline fill="none" stroke="var(--accent-primary)" strokeWidth="2.5" points={coords} />
+        {area && endLabel && (
+          <text
+            x={Math.min(area.end.x, width - 8)}
+            y={Math.max(12, area.end.y - 6)}
+            textAnchor="end"
+            fill="var(--text-primary)"
+            fontSize="12"
+            fontFamily="var(--font-display)"
+          >
+            {endLabel}
+          </text>
+        )}
       </svg>
       <p className="text-meta text-text-muted">{caption}</p>
     </section>

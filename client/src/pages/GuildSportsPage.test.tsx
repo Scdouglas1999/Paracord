@@ -44,6 +44,9 @@ function game(over: Partial<SportsGame> & Pick<SportsGame, 'id' | 'state'>): Spo
     last_play_type: null,
     last_play_score: null,
     down_distance: null,
+    ball_on: null,
+    possession_team_id: null,
+    yards_to_endzone: null,
     red_zone: false,
     balls: null,
     strikes: null,
@@ -87,9 +90,13 @@ const eagles = game({
   state: 'in',
   detail: '2nd quarter 4:10',
   heat: 90,
-  down_distance: '2nd & 7',
-  away: team({ id: '21', abbr: 'PHI', name: 'Philadelphia Eagles', short_name: 'Eagles', score: 10 }),
-  home: team({ id: '6', abbr: 'DAL', name: 'Dallas Cowboys', short_name: 'Cowboys', score: 7 }),
+  down_distance: '2nd & 7 at DAL 42',
+  away: team({
+    id: '21', abbr: 'PHI', name: 'Philadelphia Eagles', short_name: 'Eagles', score: 10, color: '004c54',
+  }),
+  home: team({
+    id: '6', abbr: 'DAL', name: 'Dallas Cowboys', short_name: 'Cowboys', score: 7, color: '041e42',
+  }),
 });
 
 const baseball = game({
@@ -207,7 +214,11 @@ describe('GuildSportsPage', () => {
     expect(within(live).queryByRole('link', { name: /Chiefs/ })).not.toBeInTheDocument();
     const articles = within(live).getAllByRole('link');
     expect(articles[0]).toHaveClass('is-featured');
+    expect(articles[0].querySelector('.pc-sports-hero')).not.toBeNull();
     expect(articles[0]).toHaveAccessibleName('Open Eagles at Cowboys');
+    expect(articles[0].getAttribute('style')).toContain('004c54');
+    expect(articles[0].getAttribute('style')).toContain('041e42');
+    expect(within(articles[0]).getByRole('img', { name: /Ball on the DAL 42/ })).toBeInTheDocument();
     expect(articles[0]).toHaveAttribute('href', '/app/guilds/g1/sports/football/nfl/eagles');
     expect(articles[1]).toHaveAccessibleName('Open Orioles at Red Sox');
 
@@ -218,11 +229,11 @@ describe('GuildSportsPage', () => {
 
     expect(screen.getByText('Red zone')).toBeInTheDocument();
     expect(screen.queryByText('RED ZONE')).not.toBeInTheDocument();
-    expect(screen.getByText('2nd & 7')).toBeInTheDocument();
+    expect(screen.getByText('2nd & 7 at DAL 42')).toBeInTheDocument();
     expect(screen.getByRole('img', { name: 'Runner on second' })).toBeInTheDocument();
     expect(screen.getByText('1 ball, 2 strikes, 2 outs')).toBeInTheDocument();
     expect(screen.getByText('Chiefs 62% to win')).toBeInTheDocument();
-    expect(screen.getByText('Has the ball')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'has the ball' })).toBeInTheDocument();
 
     expect(screen.getByText('KC')).toBeInTheDocument();
     const img = document.querySelector('img');
@@ -314,10 +325,21 @@ describe('GuildSportsPage', () => {
     expect(screen.getByText('Chiefs 21, Bills 17, 4th quarter 7:58, red zone')).toBeInTheDocument();
   });
 
+  it('illustrates a quiet favorites day', async () => {
+    vi.mocked(sportsApi.getSettings).mockResolvedValue({ data: settings({ default_view: 'favorites' }) } as never);
+    vi.mocked(sportsApi.getBoard).mockResolvedValue({
+      data: fullBoard([{ ...upcoming, favorite: false }]),
+    } as never);
+    renderPage();
+    expect(await screen.findByText('No favorite teams are playing today.')).toBeInTheDocument();
+    expect(document.querySelector('.pc-sports-empty-mark')).not.toBeNull();
+  });
+
   it('says the day is empty only when the scores actually arrived', async () => {
     vi.mocked(sportsApi.getBoard).mockResolvedValue({ data: fullBoard([]) } as never);
     renderPage();
-    expect(await screen.findByText('Nothing scheduled today in the leagues this server follows.')).toBeInTheDocument();
+    expect(await screen.findByText('No games today')).toBeInTheDocument();
+    expect(document.querySelector('.pc-sports-empty-mark')).not.toBeNull();
     expect(screen.queryByText(/couldn't be loaded/)).not.toBeInTheDocument();
   });
 
@@ -380,7 +402,7 @@ describe('GuildSportsPage', () => {
 
     const changed = fullBoard();
     changed.games = changed.games.map((item) => item.id === 'chiefs'
-      ? { ...item, away: { ...item.away, score: 28 } }
+      ? { ...item, away: { ...item.away, score: 28, color: 'e31837' } }
       : item);
     vi.mocked(sportsApi.getBoard).mockResolvedValue({ data: changed } as never);
     await act(async () => {
@@ -389,6 +411,9 @@ describe('GuildSportsPage', () => {
     const scored = screen.getByRole('link', { name: 'Open Chiefs at Bills' });
     expect(scored).toHaveClass('is-flash');
     expect(screen.getByText('Chiefs scored. Chiefs 28, Bills 17.')).toBeInTheDocument();
+    const flashedScore = scored.querySelector('.is-score-flash');
+    expect(flashedScore).toHaveTextContent('28');
+    expect(flashedScore?.getAttribute('style') ?? '').toContain('rgb(227, 24, 55)');
 
     await user.click(screen.getByRole('switch', { name: 'Hide scores' }));
     expect(screen.getByRole('link', { name: 'Open Chiefs at Bills' })).not.toHaveClass('is-flash');

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
-import { ArrowDown, ArrowUp, Plus, Trophy, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, Plus, X } from 'lucide-react';
 import {
   FAVORITE_MAX,
   LEAGUE_MAX,
@@ -330,8 +330,12 @@ export function SportsSettingsSection({ guildId }: { guildId: string }) {
           <li key={addon.id} className="flex min-w-0 flex-col gap-6">
             <Well bare className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-start sm:justify-between">
               <div className="flex min-w-0 gap-3">
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-card)] bg-bg-raised text-text-secondary shadow-[var(--shadow-raised)]">
-                  <Trophy size={18} aria-hidden />
+                <span className="pc-sports-addon-mark" aria-hidden>
+                  <svg viewBox="0 0 28 28" width="28" height="28">
+                    <path d="M4 20 Q14 8 24 20" fill="none" stroke="var(--sports-turf)" strokeWidth="2.4" strokeLinecap="round" />
+                    <circle cx="14" cy="16" r="3.1" fill="var(--sports-leather)" />
+                    <path d="M14 13.4 V18.6 M11.6 16 H16.4" stroke="var(--sports-lace)" strokeWidth="0.7" />
+                  </svg>
                 </span>
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">

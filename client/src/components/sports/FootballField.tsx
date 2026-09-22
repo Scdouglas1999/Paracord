@@ -94,10 +94,14 @@ export function FootballField({
               <feColorMatrix type="saturate" values="0" />
             </filter>
             <linearGradient id={`${uid}-light`} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" stopColor="var(--sports-chalk)" stopOpacity="0.16" />
-              <stop offset="0.55" stopColor="var(--sports-chalk)" stopOpacity="0" />
+              <stop offset="0" stopColor="var(--sports-chalk)" stopOpacity="0.28" />
+              <stop offset="0.42" stopColor="var(--sports-chalk)" stopOpacity="0" />
               <stop offset="1" stopColor="var(--sports-stadium)" stopOpacity="0.28" />
             </linearGradient>
+            <pattern id={`${uid}-crowd`} width="16" height="10" patternUnits="userSpaceOnUse">
+              <circle cx="3" cy="4" r="1.15" fill="var(--sports-chalk)" opacity="0.45" />
+              <circle cx="11" cy="7" r="0.9" fill="var(--sports-chalk)" opacity="0.28" />
+            </pattern>
             <linearGradient id={`${uid}-vignette`} x1="0" y1="0" x2="0" y2="1">
               <stop offset="0" stopColor="var(--sports-stadium)" stopOpacity="0.45" />
               <stop offset="0.35" stopColor="var(--sports-stadium)" stopOpacity="0" />
@@ -117,6 +121,8 @@ export function FootballField({
             />
           ))}
           <rect width={FIELD.width} height="60" fill="var(--sports-sideline)" />
+          <rect width={FIELD.width} height="28" fill="var(--sports-stadium)" />
+          <rect width={FIELD.width} height="28" fill={`url(#${uid}-crowd)`} />
           <rect y={FIELD.height - 60} width={FIELD.width} height="60" fill="var(--sports-sideline)" />
           <EndZone x={0} paint={homePaint} abbr={home.abbr} vignette={`${uid}-vignette`} />
           <EndZone x={FIELD.width - FIELD.endzone} paint={awayPaint} abbr={away.abbr} vignette={`${uid}-vignette`} />
@@ -249,7 +255,7 @@ export function FootballField({
           <Pylons />
           <rect x="6" y="6" width={FIELD.width - 12} height={FIELD.height - 12} fill="none" stroke="var(--sports-chalk)" strokeWidth="2.5" />
           <rect width={FIELD.width} height={FIELD.height} fill={`url(#${uid}-light)`} />
-          <rect width={FIELD.width} height={FIELD.height} filter={`url(#${uid}-grain)`} opacity="0.22" style={{ mixBlendMode: 'overlay' }} />
+          <rect width={FIELD.width} height={FIELD.height} filter={`url(#${uid}-grain)`} opacity="0.32" style={{ mixBlendMode: 'overlay' }} />
         </svg>
         <GoalPost side="left" />
         <GoalPost side="right" />

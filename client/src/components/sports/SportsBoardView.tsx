@@ -158,7 +158,23 @@ export function SportsBoardView({ guildId, serverName }: { guildId: string; serv
 
 function EmptyNote({ text }: { text: string | null }) {
   if (!text) return null;
-  return <p className="text-body text-text-secondary">{text}</p>;
+  const quiet = text === 'No games today' || text === 'No favorite teams are playing today.';
+  return (
+    <div className="pc-sports-empty">
+      {quiet && <EmptyMark />}
+      <p className="text-body text-text-secondary">{text}</p>
+    </div>
+  );
+}
+
+function EmptyMark() {
+  return (
+    <svg className="pc-sports-empty-mark" viewBox="0 0 72 40" width="72" height="40" aria-hidden>
+      <path d="M6 32 Q36 6 66 32" fill="none" stroke="var(--sports-turf)" strokeWidth="3" strokeLinecap="round" />
+      <circle cx="36" cy="22" r="5" fill="var(--sports-leather)" />
+      <path d="M36 18.2 V25.8 M32.4 22 H39.6" stroke="var(--sports-lace)" strokeWidth="0.8" />
+    </svg>
+  );
 }
 
 function emptyCopy(
@@ -174,7 +190,7 @@ function emptyCopy(
     const label = leagues.find((league) => league.path === leaguePath)?.label ?? 'this league';
     return `Nothing scheduled today in ${label}.`;
   }
-  return 'Nothing scheduled today in the leagues this server follows.';
+  return 'No games today';
 }
 
 function GameSection({
@@ -192,7 +208,7 @@ function GameSection({
   title: string;
   games: SportsGame[];
   hideScores: boolean;
-  flashes: Record<string, { until: number; message: string }>;
+  flashes: Record<string, { until: number; message: string; side: 'home' | 'away' | null }>;
   now: Date;
   layout: 'cards' | 'list';
   featuredId: string | null;
@@ -218,6 +234,7 @@ function GameSection({
                 hideScores={hideScores}
                 flashing={flashing}
                 flashMessage={flash?.message}
+                flashSide={flash?.side ?? null}
                 now={now}
                 variant={cards ? 'card' : 'list'}
                 featured={cards && game.id === featuredId}

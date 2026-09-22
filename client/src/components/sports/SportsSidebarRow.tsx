@@ -37,6 +37,7 @@ export function SportsSidebarRow({
       trailing={
         liveCount > 0 ? (
           <Chip size="sm" aria-label={`${liveCount} live`}>
+            <span className="pc-live-dot pc-sports-live" aria-hidden />
             {liveCount} live
           </Chip>
         ) : null

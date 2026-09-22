@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import { Link } from 'react-router';
 import { useSportsPolling, useSportsSettings } from '../../hooks/useSportsBoard';
+import { teamPaint } from './gamecast';
 import {
   HIDE_SCORES_EVENT,
   readHideScores,
@@ -65,25 +66,30 @@ export function LiveNowStrip({ guildId }: { guildId: string }) {
       {pick.games.length > 0 && (
         <ul className="flex min-w-0 flex-col gap-1">
           {pick.games.map((game) => {
+            const live = game.state === 'in';
             const score = hideScores || game.state === 'pre'
               ? null
               : `${game.away.score ?? 0}–${game.home.score ?? 0}`;
+            const away = teamPaint(game.away, game.home);
+            const home = teamPaint(game.home, game.away);
             return (
               <li key={game.id} className="min-w-0">
                 <Link
                   to={href}
                   aria-label={stripAriaLabel(game)}
-                  className="pc-focusable flex min-h-11 min-w-0 items-center gap-2 rounded-[var(--radius-control)] px-1 sm:min-h-[var(--h-nav-row)]"
+                  className="pc-sports-strip-link pc-focusable"
+                  style={{ '--pc-away': away.fill, '--pc-home': home.fill } as CSSProperties}
                 >
+                  {live && <span className="pc-live-dot pc-sports-live" aria-hidden />}
                   <TeamMark team={game.away} />
                   <TeamMark team={game.home} />
                   <span className="min-w-0 truncate text-label text-text-primary">
                     {stripMatchup(game)}
                   </span>
-                  {score && <span className="pc-mono shrink-0 text-meta text-text-secondary">{score}</span>}
-                  <span className="pc-mono ml-auto shrink-0 truncate text-meta text-text-muted">
-                    {statusLine(game)}
+                  <span className="pc-mono ml-auto shrink-0 truncate text-meta text-text-secondary">
+                    {score ?? statusLine(game)}
                   </span>
+                  <span className="pc-sports-strip-line" aria-hidden />
                 </Link>
               </li>
             );

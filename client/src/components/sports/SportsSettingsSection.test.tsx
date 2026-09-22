@@ -78,6 +78,9 @@ const board = {
       last_play_type: null,
       last_play_score: null,
       down_distance: null,
+      ball_on: null,
+      possession_team_id: null,
+      yards_to_endzone: null,
       red_zone: false,
       balls: null,
       strikes: null,
@@ -257,6 +260,7 @@ describe('SportsSettingsSection', () => {
     await user.click(screen.getByRole('button', { name: 'Add to server' }));
     await waitFor(() => expect(sportsApi.updateSettings).toHaveBeenCalledWith('guild-1', { enabled: true }));
     expect(await screen.findByText('Added')).toBeInTheDocument();
+    expect(document.querySelector('.pc-sports-addon-mark svg')).not.toBeNull();
     expect(screen.queryByRole('button', { name: 'Save changes' })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Remove from server' }));

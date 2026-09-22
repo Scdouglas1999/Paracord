@@ -175,6 +175,12 @@ pub struct Game {
     pub last_play_score: i32,
     pub down_distance: Option<String>,
     pub red_zone: bool,
+    /// Yards from the home goal line, 0..=100, or null when the feed has none.
+    pub ball_on: Option<i32>,
+    /// Team id that has the ball, or null when the feed has none.
+    pub possession_team_id: Option<String>,
+    /// Yards from the ball to the goal it is aimed at, or null when the feed has none.
+    pub yards_to_endzone: Option<i32>,
     pub balls: Option<i32>,
     pub strikes: Option<i32>,
     pub outs: Option<i32>,
@@ -209,6 +215,9 @@ impl Default for Game {
             last_play_score: 0,
             down_distance: None,
             red_zone: false,
+            ball_on: None,
+            possession_team_id: None,
+            yards_to_endzone: None,
             balls: None,
             strikes: None,
             outs: None,
@@ -417,6 +426,9 @@ mod tests {
             "last_play",
             "last_play_type",
             "down_distance",
+            "ball_on",
+            "possession_team_id",
+            "yards_to_endzone",
             "balls",
             "strikes",
             "outs",

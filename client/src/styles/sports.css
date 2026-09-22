@@ -29,13 +29,284 @@
 }
 
 .pc-sports-card {
+  position: relative;
   height: 100%;
+  overflow: hidden;
   padding: var(--space-4);
+}
+
+.pc-sports-row {
+  position: relative;
+  overflow: hidden;
+}
+
+.pc-sports-wash {
+  position: absolute;
+  inset: -30% -8%;
+  background: linear-gradient(128deg, var(--pc-away, transparent) 0%, transparent 46%, transparent 58%, var(--pc-home, transparent) 100%);
+  opacity: 0.2;
+  pointer-events: none;
+}
+
+.pc-sports-card.is-featured .pc-sports-wash {
+  inset: -12%;
+  background: linear-gradient(102deg, var(--pc-away, var(--sports-endzone)) 0 44%, var(--pc-home, var(--sports-endzone)) 56% 100%);
+  opacity: 1;
+  animation: pc-sports-drift 40s ease-in-out infinite alternate;
+}
+
+.pc-sports-hero-scrim {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--sports-stadium) 78%, transparent);
+  pointer-events: none;
+}
+
+.pc-sports-card-face {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.pc-sports-teamline {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-2);
+  padding-left: 10px;
+}
+
+.pc-sports-teamline::before {
+  content: '';
+  position: absolute;
+  top: 0.2rem;
+  bottom: 0.2rem;
+  left: 0;
+  width: 3px;
+  border-radius: var(--radius-full);
+  background: var(--pc-edge, var(--sports-endzone));
+}
+
+.pc-sports-teamline {
+  position: relative;
+}
+
+.pc-sports-on-hero { color: var(--sports-chalk); }
+.pc-sports-on-hero-dim { color: color-mix(in srgb, var(--sports-chalk) 68%, transparent); }
+
+.pc-sports-score {
+  font-family: var(--font-display);
+  font-size: var(--text-title);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.pc-sports-hero {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: 100%;
+  min-width: 0;
+}
+
+.pc-sports-hero-band {
+  display: grid;
+  width: 100%;
+  grid-template-columns: max-content auto minmax(0, 1fr) auto max-content;
+  grid-template-areas: "away ascore mid hscore home";
+  align-items: center;
+  column-gap: var(--space-3);
+}
+
+.pc-sports-hero-kicker { display: none; }
+
+.pc-sports-hero-side {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.pc-sports-hero-side.is-away { grid-area: away; }
+.pc-sports-hero-side.is-home {
+  grid-area: home;
+  flex-direction: row-reverse;
+}
+
+.pc-sports-hero-name {
+  flex: none;
+  font-family: var(--font-display);
+  font-size: var(--text-name);
+  font-weight: 700;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.pc-sports-hero-score {
+  font-family: var(--font-display);
+  font-size: 3.5rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 0.9;
+  color: var(--sports-chalk);
+}
+
+.pc-sports-hero-score.is-away { grid-area: ascore; }
+.pc-sports-hero-score.is-home { grid-area: hscore; }
+
+.pc-sports-hero-mid {
+  grid-area: mid;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  text-align: center;
+}
+
+.pc-sports-hero-clock {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.pc-sports-hero-tags {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.375rem;
+}
+
+.pc-sports-hero-foot {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
+  column-gap: var(--space-4);
+  width: 100%;
+  min-width: 0;
+}
+
+.pc-sports-hero-spot {
+  min-width: 0;
+  width: 100%;
+}
+
+.pc-sports-hero-spot .pc-sports-minifield {
+  display: block;
+  width: 100%;
+  height: 18px;
+}
+
+.pc-sports-hero-foot:not(:has(.pc-sports-hero-odds)) .pc-sports-hero-spot {
+  grid-column: 1 / -1;
+}
+
+.pc-sports-hero-odds {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.pc-sports-hero-odds .pc-sports-win {
+  width: 10rem;
+  height: 8px;
+  flex: none;
+}
+
+.pc-sports-hero-play { min-width: 0; }
+
+.pc-sports-minifield,
+.pc-sports-mini-diamond {
+  display: block;
+  flex: none;
+}
+
+.pc-sports-minifield { width: 100%; height: 18px; }
+.pc-sports-mini-diamond { width: 28px; height: 22px; }
+
+.pc-sports-live {
+  animation: pc-sports-pulse 1.5s ease-in-out infinite;
+}
+
+.pc-sports-strip-link {
+  position: relative;
+  display: flex;
+  min-height: 2.75rem;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0.35rem 0.25rem 0.55rem;
+  border-radius: var(--radius-control);
+}
+
+.pc-sports-strip-line {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  left: 4px;
+  height: 2px;
+  border-radius: var(--radius-full);
+  background: linear-gradient(90deg, var(--pc-away, var(--sports-endzone)), var(--pc-home, var(--sports-endzone)));
+}
+
+.pc-sports-hero-band {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-card);
+  padding: var(--space-4);
+}
+
+.pc-sports-hero-band .pc-sports-wash {
+  background: linear-gradient(112deg, var(--pc-away, transparent), var(--pc-home, transparent));
+  opacity: 0.95;
+  animation: none;
+}
+
+.pc-sports-header-scrim {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--pc-away, var(--bg-raised)) 42%, var(--bg-raised)) 0%,
+    var(--bg-raised) 16%,
+    var(--bg-raised) 84%,
+    color-mix(in srgb, var(--pc-home, var(--bg-raised)) 42%, var(--bg-raised)) 100%
+  );
+  pointer-events: none;
+}
+
+.pc-sports-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-4) 0;
+}
+
+.pc-sports-addon-mark {
+  display: flex;
+  height: 40px;
+  width: 40px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-card);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-raised);
 }
 
 .pc-sports-row.is-flash,
 .pc-sports-card.is-flash {
-  background: var(--bg-mod-strong);
+  box-shadow: inset 3px 0 0 var(--pc-flash, var(--bg-mod-strong));
+  background: color-mix(in srgb, var(--pc-flash, var(--bg-mod-strong)) 24%, var(--bg-raised));
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -46,8 +317,35 @@
 }
 
 @keyframes pc-sports-flash {
-  from { background: var(--bg-mod-strong); }
+  from { background: color-mix(in srgb, var(--pc-flash, var(--bg-mod-strong)) 34%, var(--bg-raised)); }
   to { background: var(--bg-raised); }
+}
+
+@keyframes pc-sports-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.72); }
+}
+
+.pc-sports-score.is-score-flash,
+.pc-sports-hero-score.is-score-flash {
+  animation: pc-sports-scoreflash 900ms ease-in-out 4;
+}
+
+@keyframes pc-sports-scoreflash {
+  0%, 100% { opacity: 1; }
+  45% { opacity: 0.2; }
+}
+
+@keyframes pc-sports-drift {
+  from { transform: translate3d(-1.5%, 0, 0); }
+  to { transform: translate3d(1.5%, 0, 0); }
+}
+
+:root[data-motion='reduced'] .pc-sports-live,
+:root[data-motion='reduced'] .pc-sports-card.is-featured .pc-sports-wash,
+:root[data-motion='reduced'] .pc-sports-score.is-score-flash,
+:root[data-motion='reduced'] .pc-sports-hero-score.is-score-flash {
+  animation: none;
 }
 
 @container sports (min-width: 720px) {
@@ -59,7 +357,7 @@
     grid-column: span 2;
   }
 
-  .pc-sports-row {
+  .pc-sports-row > .pc-sports-card-face {
     display: grid;
     grid-template-columns: minmax(8rem, 11rem) minmax(0, 1fr) minmax(0, 1fr);
     align-items: center;
@@ -103,10 +401,10 @@
   height: 30px;
 }
 
-.pc-sports-card.is-featured .pc-sports-logo-chip .pc-sports-mark,
-.pc-sports-card.is-featured .pc-sports-logo-chip .pc-sports-logo {
-  width: 40px;
-  height: 40px;
+.pc-sports-card.is-featured .pc-sports-hero .pc-sports-logo-chip .pc-sports-mark,
+.pc-sports-card.is-featured .pc-sports-hero .pc-sports-logo-chip .pc-sports-logo {
+  width: 72px;
+  height: 72px;
 }
 
 .pc-sports-logo-chip.is-lg .pc-sports-mark,
@@ -115,8 +413,10 @@
   height: 48px;
 }
 
-.pc-sports-card.is-featured .pc-sports-score {
-  font-size: var(--text-heading);
+.pc-sports-logo-chip.is-xl .pc-sports-mark,
+.pc-sports-logo-chip.is-xl .pc-sports-logo {
+  width: 56px;
+  height: 56px;
 }
 
 .pc-sports-logo {
@@ -136,12 +436,108 @@
   line-height: 1;
 }
 
-.pc-sports-ball {
-  width: 6px;
-  height: 6px;
+.pc-sports-has-ball {
+  display: block;
+  width: 10px;
+  height: 10px;
   flex: none;
-  border-radius: var(--radius-full);
-  background: var(--text-primary);
+  color: currentColor;
+}
+
+/* A narrow board keeps the stacked card. The hero band is one tree, restacked. */
+@container sports (max-width: 719px) {
+  .pc-sports-card.is-featured .pc-sports-hero-scrim { display: none; }
+
+  .pc-sports-card.is-featured .pc-sports-wash {
+    inset: -30% -8%;
+    background: linear-gradient(128deg, var(--pc-away, transparent) 0%, transparent 46%, transparent 58%, var(--pc-home, transparent) 100%);
+    opacity: 0.2;
+    animation: none;
+  }
+
+  .pc-sports-hero { gap: var(--space-2); }
+
+  .pc-sports-hero-band {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "kick kick"
+      "away ascore"
+      "home hscore"
+      "mid mid";
+    row-gap: var(--space-2);
+  }
+
+  .pc-sports-hero-kicker {
+    display: flex;
+    grid-area: kick;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  .pc-sports-hero-clock { display: none; }
+
+  .pc-sports-hero-side.is-home {
+    flex-direction: row;
+  }
+
+  .pc-sports-hero-name {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .pc-sports-hero-side {
+    position: relative;
+    gap: var(--space-2);
+    padding-left: 10px;
+  }
+
+  .pc-sports-hero-side::before {
+    content: '';
+    position: absolute;
+    top: 0.2rem;
+    bottom: 0.2rem;
+    left: 0;
+    width: 3px;
+    border-radius: var(--radius-full);
+    background: var(--pc-edge, var(--sports-endzone));
+  }
+
+  .pc-sports-hero-mid,
+  .pc-sports-hero-tags { align-items: flex-start; text-align: left; justify-content: flex-start; }
+
+  .pc-sports-hero-score { font-size: var(--text-title); color: var(--text-primary); }
+
+  .pc-sports-hero .pc-sports-on-hero { color: var(--text-primary); }
+  .pc-sports-hero .pc-sports-on-hero-dim { color: var(--text-muted); }
+
+  .pc-sports-card.is-featured .pc-sports-hero .pc-sports-logo-chip .pc-sports-mark,
+  .pc-sports-card.is-featured .pc-sports-hero .pc-sports-logo-chip .pc-sports-logo {
+    width: 30px;
+    height: 30px;
+  }
+
+  .pc-sports-hero-foot {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: var(--space-2);
+  }
+
+  .pc-sports-hero-spot { width: 100%; min-width: 0; }
+
+  .pc-sports-hero-odds {
+    width: 100%;
+    margin-left: 0;
+    justify-content: stretch;
+  }
+
+  .pc-sports-hero-odds .pc-sports-win {
+    width: auto;
+    height: 4px;
+    flex: 1;
+  }
 }
 
 .pc-sports-diamond {
@@ -181,10 +577,6 @@
 .pc-sports-win > span {
   height: 100%;
   background: var(--bg-mod-strong);
-}
-
-.pc-sports-win > span.is-lead {
-  background: var(--text-primary);
 }
 
 .pc-sports-play {

@@ -357,6 +357,7 @@ function StrikeZone({
           d={`M${plate.cx} ${plate.top} L${plate.cx + half} ${plate.top + plate.height * 0.42} L${plate.cx + half} ${plate.top + plate.height} L${plate.cx - half} ${plate.top + plate.height} L${plate.cx - half} ${plate.top + plate.height * 0.42} Z`}
           fill="var(--sports-chalk)"
         />
+        <Catcher box={catcher} />
         <Batter stance={stance} x={stanceX} feetY={feet} height={layout.batterHeight} />
       </svg>
       <div className="pc-sports-pitch-hits">
@@ -416,20 +417,39 @@ function heatCounts(
   return counts;
 }
 
-/** Feet on the box baseline. Tall enough that the head sits near the top of the panel. The bat reaches the plate. */
+/**
+ * A right-handed stance faces +x (toward the plate). The bat is cocked
+ * behind the helmet, so the body stays in the box and out of the zone.
+ */
 function Batter({ stance, x, feetY, height }: { stance: 'L' | 'R'; x: number; feetY: number; height: number }) {
   const unit = height / 100;
   const face = stance === 'L' ? -unit : unit;
   return (
     <g transform={`translate(${x} ${feetY}) scale(${face} ${-unit})`} fill="var(--text-faint)">
-      <path d="M-4 0 L-6 30 L2 32 L3 2 Z" />
-      <path d="M-1 14 L-4 50 L2 52 L5 16 Z" />
-      <path d="M-6 28 C-6 54 2 62 7 48 L6 26 Z" />
-      <path d="M-2 56 H4 L3 78 H-1 Z" />
-      <circle cx="2" cy="84" r="10" />
-      <path d="M-4 78 H10 L8 84 H-2 Z" />
-      <path d="M2 50 L6 66 L10 62 L6 46 Z" />
-      <path d="M4 46 L14 66 L17 62 L7 42 Z" />
+      <path d="M-1 0 L-5 28 L-1 34 L2 6 Z" />
+      <path d="M1 4 L3 16 L8 22 L10 14 L7 2 L3 0 Z" />
+      <path d="M-3 30 C-5 52 -1 66 4 64 L6 48 C2 40 1 32 2 28 Z" />
+      <path d="M-1 58 L1 76 L-1 78 L-3 60 Z" />
+      <circle cx="1" cy="86" r="8" />
+      <path d="M-3 82 H7 L6 86 H-2 Z" />
+      <path d="M0 64 L-1 74 L-9 94 L-6 97 L2 76 Z" />
+    </g>
+  );
+}
+
+/** A crouched catcher in the box below the plate. Geography, not a tracked player. */
+function Catcher({ box }: { box: { x: number; y: number; width: number; height: number } }) {
+  const unit = box.height / 26;
+  return (
+    <g
+      transform={`translate(${box.x + box.width / 2} ${box.y + box.height - 1}) scale(${unit} ${-unit})`}
+      fill="var(--text-faint)"
+    >
+      <path d="M-8 0 L-10 8 L-4 10 L-2 2 Z" />
+      <path d="M6 0 L8 8 L2 10 L0 2 Z" />
+      <path d="M-6 8 C-8 16 -2 20 0 16 C2 20 8 16 6 8 Z" />
+      <circle cx="0" cy="22" r="4.5" />
+      <path d="M4 12 L12 14 L11 17 L3 15 Z" />
     </g>
   );
 }
@@ -515,8 +535,18 @@ function Diamond({
               <stop offset="0" stopColor={hitFill} stopOpacity="0.05" />
               <stop offset="1" stopColor={hitFill} stopOpacity="0.95" />
             </linearGradient>
+            <pattern id={`${uid}-stands`} width="12" height="8" patternUnits="userSpaceOnUse">
+              <circle cx="2" cy="3" r="0.9" fill="var(--sports-chalk)" opacity="0.4" />
+              <circle cx="8" cy="6" r="0.7" fill="var(--sports-chalk)" opacity="0.25" />
+            </pattern>
+            <filter id={`${uid}-grit`} x="-20%" y="-20%" width="140%" height="140%">
+              <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="2" />
+              <feColorMatrix type="saturate" values="0" />
+            </filter>
           </defs>
           <rect width={GAMEDAY.size} height={GAMEDAY.size} fill="var(--sports-turf)" />
+          <path d="M4 6 H246 V34 Q125 10 4 34 Z" fill="var(--sports-stadium)" opacity="0.88" />
+          <path d="M4 6 H246 V34 Q125 10 4 34 Z" fill={`url(#${uid}-stands)`} />
           <clipPath id={`${uid}-outfield`}>
             <path d="M16 28 L125 198 L234 28 L234 8 L16 8 Z" />
           </clipPath>
@@ -551,6 +581,7 @@ function Diamond({
           <polygon points="22,34 28,40 22,40" fill="var(--sports-chalk)" />
           <polygon points="228,34 222,40 228,40" fill="var(--sports-chalk)" />
           <ellipse cx="125" cy="158" rx="86" ry="58" fill="var(--sports-dirt)" />
+          <ellipse cx="125" cy="158" rx="86" ry="58" filter={`url(#${uid}-grit)`} opacity="0.28" style={{ mixBlendMode: 'overlay' }} />
           <path d="M125 204 L185 145 L125 78 L65 145 Z" fill="var(--sports-infield)" stroke="var(--sports-chalk)" strokeWidth="1.6" />
           {(['first', 'second', 'third'] as const).map((name) => {
             const point = BASE_POINTS[name];
@@ -615,7 +646,7 @@ function Diamond({
                 className="pc-sports-runner"
                 style={{ ['--nx' as string]: point.nx, ['--ny' as string]: point.ny }}
               >
-                <span className="pc-sports-runner-name">
+                <span className="pc-sports-runner-name" style={{ boxShadow: `inset 3px 0 0 ${occupiedFill}, var(--shadow-chip)` }}>
                   {runner.athlete && <AthleteMark athlete={runner.athlete} />}
                   {runner.name}
                 </span>

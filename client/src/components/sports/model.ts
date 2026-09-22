@@ -264,9 +264,11 @@ export function scoreKey(game: SportsGame): string {
 export interface ScoreChange {
   id: string;
   message: string;
+  /** Which side's score went up, when only one side did. */
+  side: 'home' | 'away' | null;
 }
 
-function scoreFlashMessage(previous: SportsGame, next: SportsGame): string {
+function scoreFlashMessage(previous: SportsGame, next: SportsGame): { message: string; side: 'home' | 'away' | null } {
   const awayName = teamLabel(next.away);
   const homeName = teamLabel(next.home);
   const awayWas = previous.away.score ?? 0;
@@ -274,9 +276,9 @@ function scoreFlashMessage(previous: SportsGame, next: SportsGame): string {
   const awayNow = next.away.score ?? 0;
   const homeNow = next.home.score ?? 0;
   const line = `${awayName} ${awayNow}, ${homeName} ${homeNow}`;
-  if (awayNow > awayWas && homeNow <= homeWas) return `${awayName} scored. ${line}.`;
-  if (homeNow > homeWas && awayNow <= awayWas) return `${homeName} scored. ${line}.`;
-  return `Score update. ${line}.`;
+  if (awayNow > awayWas && homeNow <= homeWas) return { message: `${awayName} scored. ${line}.`, side: 'away' };
+  if (homeNow > homeWas && awayNow <= awayWas) return { message: `${homeName} scored. ${line}.`, side: 'home' };
+  return { message: `Score update. ${line}.`, side: null };
 }
 
 /** Score changes since the previous poll. The first load flashes nothing. */
@@ -287,7 +289,8 @@ export function scoreChanges(previous: readonly SportsGame[] | null, next: reado
   for (const game of next) {
     const prev = before.get(game.id);
     if (!prev || scoreKey(prev) === scoreKey(game)) continue;
-    changed.push({ id: game.id, message: scoreFlashMessage(prev, game) });
+    const flash = scoreFlashMessage(prev, game);
+    changed.push({ id: game.id, message: flash.message, side: flash.side });
   }
   return changed;
 }
