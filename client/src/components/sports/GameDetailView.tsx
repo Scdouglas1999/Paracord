@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { cn } from '../../lib/utils';
 import { Link } from 'react-router';
 import type { FootballDetail, GameDetail, SportsGame } from '../../api/sports';
 import { Button, Plate, Switch } from '../ui';
@@ -34,6 +35,11 @@ import {
 import { FootballField, PlayLegend } from './FootballField';
 import { BaseballPanels } from './BaseballPanels';
 import { BoxScorePanel, DriveChart, GameSkeleton, LeadersPanel, LineScoreTable } from './detailPanels';
+import { PitcherCharts } from './PitcherCharts';
+import { PinGameButton } from './ChannelPin';
+import { ScoringTimeline } from './ScoringTimeline';
+import { StageFrame } from './StageFrame';
+import { followedAtBatId, freshPlayId, landscapeStage } from './timeline';
 import { TeamMark } from './TeamMark';
 
 export function GameDetailView({
@@ -51,6 +57,7 @@ export function GameDetailView({
 }) {
   const { detail, error, status, reload } = useGameDetail(guildId, sport, league, eventId);
   const [hideScores, setHideScores] = useState(readHideScores);
+  const landscape = useLandscape();
   const hideId = useId();
 
   useEffect(() => {
@@ -64,7 +71,7 @@ export function GameDetailView({
   }, []);
 
   return (
-    <div className="h-full min-w-0 overflow-x-hidden overflow-y-auto bg-bg-base p-[var(--gutter)]">
+    <div className={cn('pc-sports-page h-full min-w-0 overflow-x-hidden overflow-y-auto bg-bg-base', landscape ? 'is-landscape' : 'p-[var(--gutter)]')}>
       <Plate as="section" aria-label="Game" bare className="pc-sports-detail flex min-w-0 flex-col gap-5 px-4 py-5 sm:px-6">
         <Link to={sportsHref(guildId)} className="pc-focusable w-fit text-meta text-text-link">
           Back to Sports
@@ -81,6 +88,7 @@ export function GameDetailView({
             detail={detail}
             error={error}
             serverName={serverName}
+            guildId={guildId}
             hideScores={hideScores}
             hideId={hideId}
             onHide={(next) => {
@@ -98,6 +106,7 @@ function DetailBody({
   detail,
   error,
   serverName,
+  guildId,
   hideScores,
   hideId,
   onHide,
@@ -105,6 +114,7 @@ function DetailBody({
   detail: GameDetail;
   error: string | null;
   serverName: string;
+  guildId: string;
   hideScores: boolean;
   hideId: string;
   onHide: (next: boolean) => void;
@@ -130,7 +140,8 @@ function DetailBody({
             <h1 className="sr-only">{matchup}</h1>
             {serverName && <p className="truncate text-meta text-text-muted">{serverName}</p>}
           </div>
-          <span className="flex shrink-0 items-center gap-2">
+          <span className="flex shrink-0 flex-wrap items-start justify-end gap-3">
+            <PinGameButton guildId={guildId} game={game} />
             <span id={hideId} className="text-label text-text-secondary">Hide scores</span>
             <Switch checked={hideScores} labelledBy={hideId} onChange={onHide} />
           </span>
@@ -187,14 +198,7 @@ function DetailBody({
       {!hideScores && detail.kind !== 'football' && (detail.scoring_plays?.length ?? 0) > 0 && (
         <section aria-label="Scoring plays" className="flex flex-col gap-2">
           <h2 className="text-section text-text-faint">Scoring plays</h2>
-          <ul className="flex flex-col gap-2">
-            {detail.scoring_plays.map((play, index) => (
-              <li key={`${play.text}-${index}`} className="text-label text-text-secondary">
-                <span>{play.text}</span>
-                {play.clock && <span className="pc-mono ml-2 text-meta text-text-faint">{play.clock}</span>}
-              </li>
-            ))}
-          </ul>
+          <ScoringTimeline plays={detail.scoring_plays} game={game} sport={detail.kind} hideScores={hideScores} />
         </section>
       )}
     </>
@@ -321,6 +325,8 @@ function FootballBody({
 }) {
   const drives = football.drives ?? [];
   const liveDrive = drives[drives.length - 1] ?? null;
+  const liveCount = liveDrive?.plays.length ?? 0;
+  const liveDriveId = liveDrive?.id ?? '';
   const live = game.state === 'in';
   const [driveId, setDriveId] = useState<string | null>(() => openingDriveId(drives, game.state));
   const [playIndex, setPlayIndex] = useState(() => {
@@ -336,9 +342,13 @@ function FootballBody({
   const tabId = useId();
   const playsBodyRef = useRef<HTMLDivElement>(null);
   const currentPlayRef = useRef<HTMLButtonElement>(null);
+  const playScroll = useRef(0);
+  const scrollDrive = useRef<string | null>(null);
   const [announcement, setAnnouncement] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
   const [seenPlay, setSeenPlay] = useState<string | null>(null);
+  const [freshId, setFreshId] = useState<string | null>(null);
+  const seenPlayIds = useRef<Set<string> | null>(null);
   const [seenPossession, setSeenPossession] = useState<string | null>(null);
   const scoredPlay = useRef<string | null>(null);
 
@@ -370,6 +380,28 @@ function FootballBody({
     return () => window.clearTimeout(timer);
   }, [play?.id, play?.type, play?.scoring, hideScores]);
 
+  const driveKey = drive?.id ?? '';
+  if (scrollDrive.current !== driveKey) {
+    scrollDrive.current = driveKey;
+    playScroll.current = 0;
+  }
+
+  useEffect(() => {
+    const scroller = playsBodyRef.current;
+    if (!scroller) return;
+    const onScroll = () => { playScroll.current = scroller.scrollTop; };
+    scroller.addEventListener('scroll', onScroll, { passive: true });
+    return () => scroller.removeEventListener('scroll', onScroll);
+  }, [driveKey]);
+
+  useLayoutEffect(() => {
+    const scroller = playsBodyRef.current;
+    if (!scroller || tab !== 'drive') return;
+    if (scroller.scrollTop === 0 && playScroll.current > 8) {
+      scroller.scrollTop = playScroll.current;
+    }
+  });
+
   useEffect(() => {
     const node = currentPlayRef.current;
     const scroller = playsBodyRef.current;
@@ -386,10 +418,20 @@ function FootballBody({
   }, [playIndex, tab, drive?.id]);
 
   useEffect(() => {
-    if (!following || !liveDrive) return;
-    const last = Math.max(0, liveDrive.plays.length - 1);
-    setPlayIndex(last);
-  }, [following, liveDrive, liveDrive?.plays.length]);
+    if (!following || liveCount === 0) return;
+    setPlayIndex(liveCount - 1);
+  }, [following, liveDriveId, liveCount]);
+
+  useEffect(() => {
+    const next = freshPlayId(seenPlayIds.current, plays.map((item) => item.id));
+    seenPlayIds.current = next.seen;
+    if (!next.fresh) return;
+    setFreshId(next.fresh);
+    const timer = window.setTimeout(() => {
+      setFreshId((current) => (current === next.fresh ? null : current));
+    }, 2000);
+    return () => window.clearTimeout(timer);
+  }, [plays]);
 
   useEffect(() => {
     if (!playing) return;
@@ -473,9 +515,9 @@ function FootballBody({
     <>
       <p className="sr-only" aria-live="polite">{announcement}</p>
       <div className="pc-sports-game">
-      <div className="flex min-w-0 flex-col gap-3">
+      <div className="pc-sports-field-column flex min-w-0 flex-col gap-3">
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-          <p className="flex min-w-0 flex-wrap items-center gap-2 text-label text-text-secondary">
+          <p className="flex min-h-6 min-w-0 flex-1 flex-nowrap items-center gap-2 overflow-hidden text-label text-text-secondary">
             {live ? (
               <>
                 {downText && <span className="pc-mono">{downText}</span>}
@@ -496,6 +538,7 @@ function FootballBody({
             Flat view
           </Button>
         </div>
+        <StageFrame game={game} hideScores={hideScores}>
         <FootballField
           yards={yards}
           possessionTeamId={possessionId}
@@ -505,6 +548,7 @@ function FootballBody({
           redZone={live && redZone}
           live={live}
           plays={plays}
+          driveTeamId={drive?.team_id ?? null}
           playIndex={Math.min(playIndex, Math.max(0, count - 1))}
           label={label || gameAriaLabel(game, hideScores)}
           notice={live ? notice : null}
@@ -527,6 +571,7 @@ function FootballBody({
             hideScores,
           })}
         />
+        </StageFrame>
         {drive && (
           <div className="flex flex-wrap gap-2">
             <Button size="sm" variant="ghost" onClick={() => { setPlaying(false); setManual(true); setPlayIndex((index) => stepIndex(index, count, -1)); }} disabled={playIndex <= 0}>
@@ -570,14 +615,19 @@ function FootballBody({
             <p className="text-label text-text-primary">{drive.description}{drive.result ? ` · ${drive.result}` : ''}</p>
           )}
           <ul className="flex flex-col gap-1">
-            {plays.map((item, index) => (
+            {plays.map((item, index) => {
+              const side = item.team_id === game.away.id ? game.away : item.team_id === game.home.id ? game.home : null;
+              const ink = side ? teamPaint(side, side.id === game.away.id ? game.home : game.away).fill : undefined;
+              const fresh = freshId === item.id;
+              return (
               <li key={item.id}>
                 <button
                   type="button"
                   ref={index === playIndex ? currentPlayRef : undefined}
                   className={index === playIndex
-                    ? 'pc-focusable pc-sports-play-row is-current w-full rounded-[var(--radius-control)] px-2 py-1.5 text-left text-label'
-                    : 'pc-focusable pc-sports-play-row w-full rounded-[var(--radius-control)] px-2 py-1.5 text-left text-label text-text-secondary hover:bg-bg-mod-strong'}
+                    ? `pc-focusable pc-sports-play-row is-current w-full rounded-[var(--radius-control)] px-2 py-1.5 text-left text-label${fresh ? ' is-fresh' : ''}`
+                    : `pc-focusable pc-sports-play-row w-full rounded-[var(--radius-control)] px-2 py-1.5 text-left text-label text-text-secondary hover:bg-bg-mod-strong${fresh ? ' is-fresh' : ''}`}
+                  style={fresh && ink ? { ['--pc-play' as string]: ink } : undefined}
                   aria-current={index === playIndex ? 'step' : undefined}
                   onClick={() => {
                     setPlaying(false);
@@ -589,7 +639,8 @@ function FootballBody({
                   {hideScores && item.scoring ? 'Scoring play hidden' : item.text}
                 </button>
               </li>
-            ))}
+              );
+            })}
           </ul>
         </div>
         <div role="tabpanel" id={`${tabId}-panel-drives`} aria-labelledby={`${tabId}-drives`} hidden={tab !== 'drives'} className="pc-sports-plays-body">
@@ -610,14 +661,7 @@ function FootballBody({
         {!hideScores && (
           <div role="tabpanel" id={`${tabId}-panel-scoring`} aria-labelledby={`${tabId}-scoring`} hidden={tab !== 'scoring'} className="pc-sports-plays-body">
             <section aria-label="Scoring plays">
-              <ul className="flex flex-col gap-2">
-                {scoringPlays.map((item, index) => (
-                  <li key={`${item.text}-${index}`} className="text-label text-text-secondary">
-                    <span>{item.text}</span>
-                    {item.clock && <span className="pc-mono ml-2 text-meta text-text-faint">{item.clock}</span>}
-                  </li>
-                ))}
-              </ul>
+              <ScoringTimeline plays={scoringPlays} game={game} sport="football" hideScores={hideScores} />
             </section>
           </div>
         )}
@@ -634,8 +678,8 @@ function BaseballBody({ detail, hideScores }: { detail: GameDetail; hideScores: 
   const [seen, setSeen] = useState<string | null>(null);
   const [flat, setFlat] = useState(false);
   const atBats = baseball?.at_bats ?? [];
-  const live = atBats[atBats.length - 1] ?? null;
-  const selected = atBats.find((item) => item.id === atBatId) ?? live;
+  const followedId = followedAtBatId(atBats.map((item) => item.id), atBatId);
+  const selected = atBats.find((item) => item.id === followedId) ?? null;
   const pitch = selected?.pitches?.[selected.pitches.length - 1];
   const pitchKey = pitch ? `${selected?.id}:${pitch.n}` : null;
 
@@ -651,7 +695,7 @@ function BaseballBody({ detail, hideScores }: { detail: GameDetail; hideScores: 
   }, [pitchKey, pitch, seen]);
 
   return (
-    <div className="flex min-w-0 flex-col gap-3">
+    <div className="pc-sports-baseball-wrap flex min-w-0 flex-col gap-3">
       <p className="sr-only" aria-live="polite">{announcement}</p>
       <div className="flex justify-end">
         <Button size="sm" variant={flat ? 'primary' : 'ghost'} aria-pressed={flat} onClick={() => setFlat((value) => !value)}>
@@ -659,20 +703,34 @@ function BaseballBody({ detail, hideScores }: { detail: GameDetail; hideScores: 
         </Button>
       </div>
       {baseball && (
-        <BaseballPanels
-          baseball={baseball}
-          game={detail.game}
-          selectedId={atBatId}
-          onSelect={setAtBatId}
-          flat={flat}
-          hideScores={hideScores}
-          leaders={detail.leaders ?? []}
-          probables={detail.probables ?? []}
-          box={detail.box}
-        />
+        <>
+          <BaseballPanels
+            baseball={baseball}
+            game={detail.game}
+            selectedId={atBatId}
+            onSelect={setAtBatId}
+            flat={flat}
+            hideScores={hideScores}
+            leaders={detail.leaders ?? []}
+            probables={detail.probables ?? []}
+            box={detail.box}
+          />
+          <PitcherCharts atBats={atBats} />
+        </>
       )}
     </div>
   );
+}
+
+function useLandscape(): boolean {
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    const read = () => setOn(landscapeStage(window.innerWidth, window.innerHeight));
+    read();
+    window.addEventListener('resize', read);
+    return () => window.removeEventListener('resize', read);
+  }, []);
+  return on;
 }
 
 function abbrFor(id: string | null | undefined, game: SportsGame): string | null {

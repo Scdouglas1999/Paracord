@@ -186,7 +186,7 @@ describe('GuildSportsGamePage', () => {
     expect(await screen.findByRole('heading', { name: 'Chiefs at Colts' })).toBeInTheDocument();
     expect(sportsApi.getGame).toHaveBeenCalledWith('g1', 'football', 'nfl', '401872945');
     expect(screen.getByRole('link', { name: 'Back to Sports' })).toHaveAttribute('href', '/app/guilds/g1/sports');
-    expect(screen.getByText('27')).toBeInTheDocument();
+    expect(document.querySelectorAll('.pc-sports-bigscore')[1]).toHaveTextContent('27');
     expect(screen.getByText('On CBS')).toBeInTheDocument();
     expect(screen.getByRole('img', { name: /Ball on the IND 14/ })).toBeInTheDocument();
     expect(screen.getByText('Colts win probability started at 77% and is now 41%.')).toBeInTheDocument();
@@ -269,7 +269,8 @@ describe('GuildSportsGamePage', () => {
   it('hides the score, the chart and the scoring plays together', async () => {
     const user = userEvent.setup();
     renderGame();
-    await screen.findByText('27');
+    await screen.findByText('2nd quarter 6:12');
+    expect(document.querySelectorAll('.pc-sports-bigscore')[1]).toHaveTextContent('27');
     await user.click(screen.getByRole('switch', { name: 'Hide scores' }));
     expect(screen.getByText('Scores hidden')).toBeInTheDocument();
     expect(screen.queryByText('27')).not.toBeInTheDocument();

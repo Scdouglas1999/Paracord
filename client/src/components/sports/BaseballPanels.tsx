@@ -1,6 +1,8 @@
 import { useEffect, useId, useRef, useState } from 'react';
+import { prefersReducedMotion } from '../../lib/motion/reducedMotion';
 import type { AtBat, BaseballDetail, BoxScore, GameLeader, GameProbable, Pitch, PitchResult, SportsAthlete, SportsGame, SportsTeam } from '../../api/sports';
 import { BoxScorePanel, LeadersPanel, MatchupPair, StartingPitchers } from './detailPanels';
+import { StageFrame } from './StageFrame';
 import { AthleteMark } from './TeamMark';
 import {
   BASE_POINTS,
@@ -91,6 +93,23 @@ export function BaseballPanels({
 }) {
   const atBats = baseball.at_bats ?? [];
   const selected = atBats.find((atBat) => atBat.id === selectedId) ?? atBats[atBats.length - 1] ?? null;
+  const atBatListRef = useRef<HTMLUListElement>(null);
+  const liveAtBatRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (selectedId) return;
+    const node = liveAtBatRef.current;
+    const scroller = atBatListRef.current;
+    if (!node || !scroller) return;
+    const box = node.getBoundingClientRect();
+    const frame = scroller.getBoundingClientRect();
+    if (box.height === 0 || frame.height === 0) return;
+    if (box.top >= frame.top && box.bottom <= frame.bottom) return;
+    const delta = box.top < frame.top ? box.top - frame.top : box.bottom - frame.bottom;
+    scroller.scrollTo({
+      top: scroller.scrollTop + delta,
+      behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+    });
+  }, [selectedId, selected?.id, atBats.length]);
   const pitches = (selected?.pitches ?? []).filter((pitch) => pitch.x != null && pitch.y != null);
   const newest = pitches[pitches.length - 1];
   const zone = strikeZoneOrDefault(baseball.strike_zone);
@@ -127,7 +146,7 @@ export function BaseballPanels({
   const showBox = Boolean(box) && !hideScores;
 
   return (
-    <div className="flex min-w-0 flex-col gap-4">
+    <div className="pc-sports-baseball-root flex min-w-0 flex-col gap-4">
       <p className="pc-sports-scorebug pc-mono text-label text-text-secondary">{status}</p>
       {game.state === 'pre' && <StartingPitchers probables={probables} game={game} />}
       {game.state !== 'pre' && (
@@ -181,6 +200,7 @@ export function BaseballPanels({
             ))}
           </ul>
         </div>
+        <StageFrame game={game} hideScores={hideScores}>
         <Diamond
           baseball={baseball}
           game={game}
@@ -193,6 +213,7 @@ export function BaseballPanels({
           hideScores={hideScores}
           status={status}
         />
+        </StageFrame>
       </div>
       {!hideScores && <LeadersPanel leaders={leaders} game={game} />}
       <div className="flex min-w-0 flex-col gap-1">
@@ -205,12 +226,15 @@ export function BaseballPanels({
         {sheet === 'box' && showBox && box ? (
           <BoxScorePanel box={box} game={game} />
         ) : (
-        <ul className="flex max-h-64 flex-col gap-1 overflow-y-auto">
+        <ul ref={atBatListRef} className="flex max-h-64 flex-col gap-1 overflow-y-auto">
           {atBats.map((atBat) => (
             <li key={atBat.id}>
               <button
                 type="button"
-                className="pc-focusable flex w-full items-center gap-2 rounded-[var(--radius-control)] px-2 py-1.5 text-left text-label text-text-secondary hover:bg-bg-mod-strong"
+                ref={!selectedId && selected?.id === atBat.id ? liveAtBatRef : undefined}
+                className={selected?.id === atBat.id
+                  ? 'pc-focusable pc-sports-play-row is-current flex w-full items-center gap-2 rounded-[var(--radius-control)] px-2 py-1.5 text-left text-label'
+                  : 'pc-focusable flex w-full items-center gap-2 rounded-[var(--radius-control)] px-2 py-1.5 text-left text-label text-text-secondary hover:bg-bg-mod-strong'}
                 aria-pressed={selected?.id === atBat.id}
                 onClick={() => onSelect(atBat.id)}
               >
@@ -540,7 +564,7 @@ function Diamond({
   return (
     <div className="pc-sports-field-stage is-ballpark" data-flat={flat ? 'true' : 'false'}>
       <div className="pc-sports-field-plane">
-        <svg viewBox={`0 0 ${GAMEDAY.size} ${GAMEDAY.size}`} className="block h-auto w-full" role="img" aria-label={label}>
+        <svg viewBox={`0 0 ${GAMEDAY.size} ${GAMEDAY.size}`} className="pc-sports-field-svg" role="img" aria-label={label}>
           <defs>
             <linearGradient id={`${uid}-trail`} x1={GAMEDAY.plateX} y1={GAMEDAY.plateY} x2={landing?.x ?? GAMEDAY.plateX} y2={landing?.y ?? GAMEDAY.plateY} gradientUnits="userSpaceOnUse">
               <stop offset="0" stopColor={hitFill} stopOpacity="0.05" />
@@ -715,21 +739,76 @@ function ParkBug({
   status: string;
 }) {
   const live = game.state === 'in';
-  const score = hideScores ? null : `${game.away.abbr} ${game.away.score ?? '–'}  ${game.home.abbr} ${game.home.score ?? '–'}`;
+  const awayPaint = teamPaint(game.away, game.home);
+  const homePaint = teamPaint(game.home, game.away);
+  const count = baseball.balls != null && baseball.strikes != null
+    ? `${baseball.balls}-${baseball.strikes}`
+    : null;
+  const outs = baseball.outs == null ? null : Math.max(0, Math.min(3, baseball.outs));
+  const scoreWords = hideScores
+    ? 'Scores hidden'
+    : `${game.away.name || game.away.abbr} ${game.away.score ?? 0}, ${game.home.name || game.home.abbr} ${game.home.score ?? 0}`;
+  const label = live
+    ? [baseballScorebug({
+      state: game.state,
+      detail: game.detail,
+      half: baseball.half,
+      inning: baseball.inning,
+      balls: baseball.balls,
+      strikes: baseball.strikes,
+      outs: baseball.outs,
+    }), scoreWords].filter(Boolean).join('. ')
+    : (hideScores ? `Scores hidden. ${status}` : `${scoreWords}. ${status}`);
   return (
-    <div className="pc-sports-bug" aria-hidden>
+    <div className="pc-sports-bug" role="img" aria-label={label}>
       {live ? (
         <>
           <InningMark half={baseball.half} inning={baseball.inning} />
-          {baseball.balls != null && <PipRow label="B" filled={baseball.balls} total={3} />}
-          {baseball.strikes != null && <PipRow label="S" filled={baseball.strikes} total={2} />}
-          {baseball.outs != null && <PipRow label="Out" filled={baseball.outs} total={3} square />}
-          {score && <span className="pc-mono">{score}</span>}
+          {count && (
+            <>
+              <span className="pc-sports-bug-sep" aria-hidden>·</span>
+              <span className="pc-mono" aria-hidden>{count}</span>
+            </>
+          )}
+          {outs != null && (
+            <>
+              <span className="pc-sports-bug-sep" aria-hidden>·</span>
+              <span className="pc-sports-outs" aria-hidden>
+                {Array.from({ length: 3 }, (_, index) => (
+                  <span key={index} className={index < outs ? 'pc-sports-out is-on' : 'pc-sports-out'} />
+                ))}
+              </span>
+            </>
+          )}
+          {!hideScores && (
+            <>
+              <span className="pc-sports-bug-sep" aria-hidden>·</span>
+              <BugScore game={game} away={plateColor(awayPaint)} home={plateColor(homePaint)} />
+            </>
+          )}
         </>
       ) : (
-        <span className="pc-mono">{score && game.state === 'post' ? `${status}  ${score}` : status}</span>
+        <span className="pc-mono">{hideScores ? status : `${status}  ${game.away.abbr} ${game.away.score ?? '–'} · ${game.home.abbr} ${game.home.score ?? '–'}`}</span>
       )}
     </div>
+  );
+}
+
+/** Team colour on the dark plate. A dark fill is mixed toward chalk so the letters still read. */
+function plateColor(paint: { fill: string; ink: string }): string {
+  if (paint.ink !== 'var(--sports-chalk)') return paint.fill;
+  return `color-mix(in srgb, ${paint.fill} 42%, var(--sports-chalk))`;
+}
+
+function BugScore({ game, away, home }: { game: SportsGame; away: string; home: string }) {
+  return (
+    <span className="inline-flex items-center gap-1" aria-hidden>
+      <span style={{ color: away }}>{game.away.abbr}</span>
+      <span className="pc-mono">{game.away.score ?? '–'}</span>
+      <span className="pc-sports-bug-sep">·</span>
+      <span style={{ color: home }}>{game.home.abbr}</span>
+      <span className="pc-mono">{game.home.score ?? '–'}</span>
+    </span>
   );
 }
 
@@ -742,28 +821,6 @@ function InningMark({ half, inning }: { half: 'top' | 'bottom' | null; inning: n
         <polygon points={down ? '1,1 7,1 4,7' : '1,7 7,7 4,1'} fill="currentColor" />
       </svg>
       <span className="pc-mono">{inning}</span>
-    </span>
-  );
-}
-
-function PipRow({
-  label,
-  filled,
-  total,
-  square,
-}: {
-  label: string;
-  filled: number;
-  total: number;
-  square?: boolean;
-}) {
-  const on = Math.max(0, Math.min(total, filled));
-  return (
-    <span className="pc-sports-piprow">
-      <span>{label}</span>
-      {Array.from({ length: total }, (_, index) => (
-        <span key={index} className={index < on ? 'pc-sports-pip is-on' : 'pc-sports-pip'} data-shape={square ? 'square' : 'round'} />
-      ))}
     </span>
   );
 }

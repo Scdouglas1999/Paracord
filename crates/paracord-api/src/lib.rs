@@ -395,6 +395,10 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
             get(routes::sports::get_board),
         )
         .route(
+            "/api/v1/guilds/{guild_id}/sports/pins/{channel_id}",
+            put(routes::sports::put_pin).delete(routes::sports::delete_pin),
+        )
+        .route(
             "/api/v1/guilds/{guild_id}/sports/games/{sport}/{league}/{event_id}",
             get(routes::sports::get_game),
         )

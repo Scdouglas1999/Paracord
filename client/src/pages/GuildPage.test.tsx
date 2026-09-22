@@ -45,6 +45,18 @@ vi.mock('../hooks/usePermissions', () => ({
   usePermissions: () => ({ permissions: 0n, isAdmin: false }),
 }));
 
+vi.mock('../api/sports', async () => {
+  const actual = await vi.importActual<typeof import('../api/sports')>('../api/sports');
+  return {
+    ...actual,
+    sportsApi: {
+      ...actual.sportsApi,
+      getSettings: vi.fn().mockReturnValue(new Promise(() => {})),
+      getBoard: vi.fn().mockReturnValue(new Promise(() => {})),
+    },
+  };
+});
+
 vi.mock('../api/channels', () => ({
   channelApi: { get: vi.fn().mockRejectedValue(new Error('offline')) },
   createChannelApi: () => ({ get: vi.fn().mockRejectedValue(new Error('offline')) }),

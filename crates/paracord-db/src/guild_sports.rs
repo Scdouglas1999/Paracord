@@ -18,6 +18,8 @@ pub struct GuildSportsRow {
     pub show_on_server_page: bool,
     pub default_view: String,
     pub layout: String,
+    /// JSON array of channel pins. `[]` when the server has none.
+    pub channel_pins: String,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -36,6 +38,10 @@ impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for GuildSportsRow {
             show_on_server_page: bool_from_any_row(row, "show_on_server_page")?,
             default_view: row.try_get("default_view")?,
             layout: row.try_get("layout")?,
+            channel_pins: row
+                .try_get::<Option<String>, _>("channel_pins")?
+                .filter(|text| !text.is_empty())
+                .unwrap_or_else(|| "[]".to_string()),
             updated_at: datetime_from_db_text(&updated_at)?,
         })
     }
@@ -43,7 +49,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for GuildSportsRow {
 
 const ROW_COLUMNS: &str =
     "guild_id, CAST(enabled AS INTEGER) AS enabled, leagues, favorite_teams, \
-     CAST(show_on_server_page AS INTEGER) AS show_on_server_page, default_view, layout, updated_at";
+     CAST(show_on_server_page AS INTEGER) AS show_on_server_page, default_view, layout, channel_pins, updated_at";
 
 pub async fn get(pool: &DbPool, guild_id: i64) -> Result<Option<GuildSportsRow>, DbError> {
     let row = sqlx::query_as::<_, GuildSportsRow>(&format!(
@@ -88,6 +94,21 @@ pub async fn upsert(
     .bind(default_view)
     .bind(layout)
     .bind(datetime_to_db_text(Utc::now()))
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn set_channel_pins(
+    pool: &DbPool,
+    guild_id: i64,
+    channel_pins: &str,
+) -> Result<GuildSportsRow, DbError> {
+    let row = sqlx::query_as::<_, GuildSportsRow>(&format!(
+        "UPDATE guild_sports_settings SET channel_pins = $2 WHERE guild_id = $1 RETURNING {ROW_COLUMNS}"
+    ))
+    .bind(guild_id)
+    .bind(channel_pins)
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -140,6 +161,16 @@ mod tests {
         assert_eq!(saved.default_view, "favorites");
         assert_eq!(saved.layout, "list");
         assert_eq!(saved.leagues, r#"["hockey/nhl"]"#);
+        assert_eq!(saved.channel_pins, "[]");
+
+        let pinned = set_channel_pins(&pool, guild_id, r#"[{"channel_id":"1"}]"#)
+            .await
+            .unwrap();
+        assert_eq!(pinned.channel_pins, r#"[{"channel_id":"1"}]"#);
+        assert_eq!(
+            get(&pool, guild_id).await.unwrap().unwrap().channel_pins,
+            pinned.channel_pins
+        );
 
         let again = upsert(
             &pool,

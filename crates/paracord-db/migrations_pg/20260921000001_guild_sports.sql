@@ -10,5 +10,6 @@ CREATE TABLE IF NOT EXISTS guild_sports_settings (
     show_on_server_page BOOLEAN NOT NULL DEFAULT TRUE,
     default_view        TEXT NOT NULL DEFAULT 'all',
     layout              TEXT NOT NULL DEFAULT 'cards',
+    channel_pins        TEXT NOT NULL DEFAULT '[]',
     updated_at          TEXT
 );

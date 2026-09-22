@@ -12,6 +12,7 @@ use paracord_core::sports::{
     FavoriteTeam, DEFAULT_LEAGUE_PATHS,
 };
 use paracord_core::AppState;
+use paracord_db::channels::ChannelRow;
 use paracord_models::permissions::Permissions;
 use serde::Serialize;
 use serde_json::{json, Map, Value};
@@ -32,6 +33,21 @@ const DETAIL_UNAVAILABLE: &str = "This game's detail is unavailable.";
 const LEAGUE_NOT_FOLLOWED: &str = "This server is not following that league.";
 const EVENT_ID: &str = "An event id must be 1 to 20 digits.";
 const LEAGUE_PATH: &str = "A league path must be one sport/league segment using only letters, digits, dots, and hyphens, at most 48 characters.";
+const MAX_PINS: usize = 32;
+const TEXT_CHANNEL: i16 = 0;
+const PIN_FINAL_FOR: chrono::Duration = chrono::Duration::hours(3);
+const NOT_TEXT: &str = "A pin has to be on a text channel.";
+const PIN_MISSING: &str = "Nothing is pinned in that channel.";
+const PIN_CAP: &str = "A server can pin at most 32 games.";
+const GAME_SHAPE: &str = "A pinned game must be sport/league/event_id.";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+struct ChannelPin {
+    channel_id: String,
+    game: String,
+    pinned_by: String,
+    pinned_at: String,
+}
 
 struct StoredSports {
     enabled: bool,
@@ -40,6 +56,8 @@ struct StoredSports {
     show_on_server_page: bool,
     default_view: String,
     layout: String,
+    pins: Vec<ChannelPin>,
+    stored: bool,
     updated_at: DateTime<Utc>,
 }
 
@@ -55,6 +73,8 @@ impl StoredSports {
             show_on_server_page: true,
             default_view: "all".to_string(),
             layout: "cards".to_string(),
+            pins: Vec::new(),
+            stored: false,
             updated_at: DateTime::<Utc>::UNIX_EPOCH,
         }
     }
@@ -66,6 +86,7 @@ impl StoredSports {
         let favorites = serde_json::from_str(&row.favorite_teams).map_err(|err| {
             ApiError::Internal(anyhow::anyhow!("invalid stored sports favorites: {err}"))
         })?;
+        let pins = serde_json::from_str(&row.channel_pins).unwrap_or_default();
         Ok(Self {
             enabled: row.enabled,
             leagues,
@@ -73,6 +94,8 @@ impl StoredSports {
             show_on_server_page: row.show_on_server_page,
             default_view: row.default_view,
             layout: row.layout,
+            pins,
+            stored: true,
             updated_at: row.updated_at,
         })
     }
@@ -86,6 +109,7 @@ impl StoredSports {
             show_on_server_page: self.show_on_server_page,
             default_view: self.default_view.clone(),
             layout: self.layout.clone(),
+            channel_pins: self.pins.clone(),
             updated_at: format_rfc3339(self.updated_at),
         }
     }
@@ -100,6 +124,7 @@ pub struct SportsSettingsResponse {
     show_on_server_page: bool,
     default_view: String,
     layout: String,
+    channel_pins: Vec<ChannelPin>,
     updated_at: String,
 }
 
@@ -136,8 +161,77 @@ pub async fn get_settings(
     Path(guild_id): Path<i64>,
 ) -> Result<Json<SportsSettingsResponse>, ApiError> {
     ensure_member(&state, guild_id, auth.user_id).await?;
-    let settings = load_settings(&state, guild_id).await?;
+    let settings = load_pruned(&state, guild_id).await?;
     Ok(Json(settings.to_response(guild_id)))
+}
+
+pub async fn put_pin(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((guild_id, channel_id)): Path<(i64, i64)>,
+    Json(body): Json<Value>,
+) -> Result<Response, ApiError> {
+    ensure_member(&state, guild_id, auth.user_id).await?;
+    let mut settings = load_settings(&state, guild_id).await?;
+    if !settings.enabled {
+        return Ok(addon_disabled());
+    }
+    require_text_channel(&state, guild_id, channel_id).await?;
+    require_pin_permission(&state, guild_id, auth.user_id, channel_id).await?;
+    let (league, event_id) = pin_game(&body)?;
+    if !settings
+        .leagues
+        .iter()
+        .any(|followed| followed.eq_ignore_ascii_case(&league))
+    {
+        return Err(ApiError::BadRequest(LEAGUE_NOT_FOLLOWED.to_string()));
+    }
+    let game = format!("{league}/{event_id}");
+    prune_pins(&mut settings);
+    let channel_key = channel_id.to_string();
+    let pin = ChannelPin {
+        channel_id: channel_key.clone(),
+        game,
+        pinned_by: auth.user_id.to_string(),
+        pinned_at: format_rfc3339(Utc::now()),
+    };
+    if let Some(existing) = settings
+        .pins
+        .iter_mut()
+        .find(|item| item.channel_id == channel_key)
+    {
+        *existing = pin;
+    } else if settings.pins.len() >= MAX_PINS {
+        return Err(ApiError::BadRequest(PIN_CAP.to_string()));
+    } else {
+        settings.pins.push(pin);
+    }
+    save_pins(&state, guild_id, &settings).await?;
+    Ok(Json(settings.to_response(guild_id)).into_response())
+}
+
+pub async fn delete_pin(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((guild_id, channel_id)): Path<(i64, i64)>,
+) -> Result<Response, ApiError> {
+    ensure_member(&state, guild_id, auth.user_id).await?;
+    let mut settings = load_settings(&state, guild_id).await?;
+    if !settings.enabled {
+        return Ok(addon_disabled());
+    }
+    require_text_channel(&state, guild_id, channel_id).await?;
+    require_pin_permission(&state, guild_id, auth.user_id, channel_id).await?;
+    prune_pins(&mut settings);
+    let channel_key = channel_id.to_string();
+    let before = settings.pins.len();
+    settings.pins.retain(|pin| pin.channel_id != channel_key);
+    if settings.pins.len() == before {
+        save_pins(&state, guild_id, &settings).await?;
+        return Ok(pin_missing());
+    }
+    save_pins(&state, guild_id, &settings).await?;
+    Ok(Json(settings.to_response(guild_id)).into_response())
 }
 
 pub async fn put_settings(
@@ -302,6 +396,154 @@ async fn load_settings(state: &AppState, guild_id: i64) -> Result<StoredSports, 
         Some(row) => StoredSports::from_row(row),
         None => Ok(StoredSports::defaults()),
     }
+}
+
+async fn load_pruned(state: &AppState, guild_id: i64) -> Result<StoredSports, ApiError> {
+    let mut settings = load_settings(state, guild_id).await?;
+    let before = settings.pins.clone();
+    prune_pins(&mut settings);
+    if settings.stored && settings.pins != before {
+        save_pins(state, guild_id, &settings).await?;
+    }
+    Ok(settings)
+}
+
+fn prune_pins(settings: &mut StoredSports) {
+    let now = Utc::now();
+    let leagues = settings.leagues.clone();
+    settings
+        .pins
+        .retain(|pin| pin_still_current(pin, &leagues, now));
+}
+
+fn pin_still_current(pin: &ChannelPin, leagues: &[String], now: DateTime<Utc>) -> bool {
+    let Some((league, event_id)) = split_pin_game(&pin.game) else {
+        return false;
+    };
+    if !leagues
+        .iter()
+        .any(|followed| followed.eq_ignore_ascii_case(&league))
+    {
+        return false;
+    }
+    let Some(cached) = scoreboard().cached_league(&league) else {
+        return true;
+    };
+    if !cached.reliable {
+        return true;
+    }
+    match cached.games.iter().find(|game| game.id == event_id) {
+        None => false,
+        Some(game) => !game.state.eq_ignore_ascii_case("post") || now - game.start <= PIN_FINAL_FOR,
+    }
+}
+
+fn split_pin_game(game: &str) -> Option<(String, String)> {
+    let game = game.trim();
+    let mut parts: Vec<&str> = game.split('/').collect();
+    if parts.len() < 3 {
+        return None;
+    }
+    let event_id = parts.pop()?;
+    let league = parts.join("/");
+    if !is_valid_league_path(&league) || !is_valid_event_id(event_id) {
+        return None;
+    }
+    Some((league.to_ascii_lowercase(), event_id.to_string()))
+}
+
+fn pin_game(body: &Value) -> Result<(String, String), ApiError> {
+    let game = body
+        .get("game")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|game| !game.is_empty())
+        .ok_or_else(|| ApiError::BadRequest(GAME_SHAPE.to_string()))?;
+    let mut parts: Vec<&str> = game.split('/').collect();
+    if parts.len() < 3 {
+        return Err(ApiError::BadRequest(GAME_SHAPE.to_string()));
+    }
+    let event_id = parts.pop().unwrap_or("");
+    let league = parts.join("/");
+    if !is_valid_league_path(&league) {
+        return Err(ApiError::BadRequest(LEAGUE_PATH.to_string()));
+    }
+    if !is_valid_event_id(event_id) {
+        return Err(ApiError::BadRequest(EVENT_ID.to_string()));
+    }
+    Ok((league.to_ascii_lowercase(), event_id.to_string()))
+}
+
+async fn save_pins(
+    state: &AppState,
+    guild_id: i64,
+    settings: &StoredSports,
+) -> Result<(), ApiError> {
+    let pins = serde_json::to_string(&settings.pins)
+        .map_err(|err| ApiError::Internal(anyhow::anyhow!(err)))?;
+    paracord_db::guild_sports::set_channel_pins(&state.db, guild_id, &pins).await?;
+    Ok(())
+}
+
+async fn require_text_channel(
+    state: &AppState,
+    guild_id: i64,
+    channel_id: i64,
+) -> Result<ChannelRow, ApiError> {
+    let channel = paracord_db::channels::get_channel(&state.db, channel_id)
+        .await?
+        .filter(|channel| channel.space_id == Some(guild_id))
+        .ok_or(ApiError::NotFound)?;
+    if channel.channel_type != TEXT_CHANNEL {
+        return Err(ApiError::BadRequest(NOT_TEXT.to_string()));
+    }
+    Ok(channel)
+}
+
+async fn require_pin_permission(
+    state: &AppState,
+    guild_id: i64,
+    user_id: i64,
+    channel_id: i64,
+) -> Result<(), ApiError> {
+    let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    let channel_perms = paracord_core::permissions::compute_channel_permissions(
+        &state.db,
+        guild_id,
+        channel_id,
+        guild.owner_id,
+        user_id,
+    )
+    .await?;
+    if channel_perms.contains(Permissions::MANAGE_CHANNELS)
+        || channel_perms.contains(Permissions::MANAGE_GUILD)
+    {
+        return Ok(());
+    }
+    let guild_perms = paracord_core::permissions::compute_guild_permissions(
+        &state.db,
+        guild_id,
+        guild.owner_id,
+        user_id,
+    )
+    .await?;
+    paracord_core::permissions::require_permission(guild_perms, Permissions::MANAGE_GUILD)?;
+    Ok(())
+}
+
+fn pin_missing() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({
+            "code": "NOT_FOUND",
+            "message": PIN_MISSING,
+            "error": PIN_MISSING,
+            "details": Value::Null,
+        })),
+    )
+        .into_response()
 }
 
 async fn ensure_member(state: &AppState, guild_id: i64, user_id: i64) -> Result<(), ApiError> {

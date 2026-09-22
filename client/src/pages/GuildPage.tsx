@@ -18,7 +18,7 @@ import { GuildWelcomeScreen } from '../components/guild/GuildWelcomeScreen';
 import { GuildOnboardingGate } from '../components/guild/GuildOnboardingGate';
 import { createChannelApi } from '../api/channels';
 import { usePermissions } from '../hooks/usePermissions';
-import { Permissions, hasPermission } from '../types';
+import { ChannelType, Permissions, hasPermission } from '../types';
 import {
   getVersionedStorageItem,
   setVersionedStorageItem,
@@ -26,7 +26,7 @@ import {
 import { GuildLoadingScreen, ChannelNotFoundScreen, ChannelLoadErrorScreen } from './guild/GuildStateScreens';
 import { VoiceStageChannel } from './guild/VoiceStageChannel';
 import { TextChannelView } from './guild/TextChannelView';
-
+import { ChannelAmbient } from '../components/sports/ChannelPin';
 export function GuildPage() {
   const { guildId, channelId } = useParams();
   const navigate = useNavigate();
@@ -188,6 +188,9 @@ export function GuildPage() {
       <div className="flex h-full min-h-0 flex-col bg-bg-base p-[var(--gutter)]">
         <div className="pc-plate flex min-h-0 flex-1 flex-col overflow-hidden">
           {header}
+          {guildId && channelId && channel?.type === ChannelType.Text && (
+            <ChannelAmbient guildId={guildId} channelId={channelId} />
+          )}
           {entryChrome}
           <TextChannelView
             guildId={guildId}

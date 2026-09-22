@@ -307,10 +307,10 @@ fn lineup_athlete(
     role: &str,
     athletes: &HashMap<String, Athlete>,
 ) -> Option<Athlete> {
-    if let Some(value) = situation.get(key) {
-        if let Some(athlete) = person(Some(value), athletes) {
-            return Some(athlete);
-        }
+    // A present null means the base or the batter's box is empty. Falling
+    // through would put the previous at-bat's batter back up.
+    if situation.get(key).is_some() {
+        return person(situation.get(key), athletes);
     }
     let play = play?;
     let parts = play.get("participants")?.as_array()?;

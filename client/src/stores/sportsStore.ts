@@ -19,6 +19,7 @@ interface SportsStore {
   ensureSettings: (guildId: string) => Promise<void>;
   refreshBoard: (guildId: string) => Promise<void>;
   adoptSettings: (settings: SportsSettings) => void;
+  refreshSettings: (guildId: string) => Promise<void>;
   adoptBoard: (guildId: string, board: SportsBoard) => void;
   reset: () => void;
 }
@@ -184,6 +185,16 @@ export const useSportsStore = create<SportsStore>((set, get) => ({
         },
       },
     }));
+  },
+
+  refreshSettings: async (guildId) => {
+    if (!guildId) return;
+    try {
+      const res = await sportsApi.getSettings(guildId);
+      get().adoptSettings(res.data);
+    } catch {
+      // Keep the pins already on screen. The next poll tries again.
+    }
   },
 
   adoptBoard: (guildId, board) => {

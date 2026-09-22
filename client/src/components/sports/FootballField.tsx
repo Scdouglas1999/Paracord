@@ -41,6 +41,7 @@ export function FootballField({
   redZone,
   live,
   plays,
+  driveTeamId = null,
   playIndex,
   label,
   notice,
@@ -58,6 +59,8 @@ export function FootballField({
   redZone: boolean;
   live: boolean;
   plays: FootballPlay[];
+  /** The drive these plays belong to. Other teams' earlier plays (a kickoff) stay off the turf. */
+  driveTeamId?: string | null;
   playIndex: number;
   label: string;
   notice: string | null;
@@ -91,7 +94,8 @@ export function FootballField({
       <div className="pc-sports-field-plane">
         <svg
           viewBox={`0 0 ${FIELD.width} ${FIELD.height}`}
-          className="block h-auto w-full"
+          preserveAspectRatio="none"
+          className="pc-sports-field-svg"
           role="img"
           aria-label={label || 'Football field'}
         >
@@ -196,26 +200,29 @@ export function FootballField({
           <YardNumbers />
           {shown.map((play, index) => {
             if (play.start_yard == null || play.end_yard == null) return null;
-            const style = playStroke(play.type);
             const current = index === shown.length - 1;
+            if (!current && driveTeamId && play.team_id && play.team_id !== driveTeamId) return null;
+            const style = playStroke(play.type);
             const paint = paintFor(play.team_id);
             const x1 = yardsToFieldX(play.start_yard);
             const x2 = yardsToFieldX(play.end_yard);
-            const fade = shown.length <= 1 ? 1 : 0.28 + (0.72 * index) / (shown.length - 1);
-            const lane = CHAIN_Y + (index % 2 === 0 ? -11 : 11);
+            const fade = current || shown.length <= 1 ? 1 : 0.45;
+            const lane = CHAIN_Y;
             const arc = current && style === 'dashed' ? passArc(x1, lane, x2) : null;
             return (
               <g key={play.id} opacity={fade}>
-                <line
-                  x1={x1}
-                  x2={x2}
-                  y1={lane}
-                  y2={lane}
-                  stroke={paint.fill}
-                  strokeWidth="16"
-                  strokeLinecap="round"
-                  opacity="0.35"
-                />
+                {current && (
+                  <line
+                    x1={x1}
+                    x2={x2}
+                    y1={lane}
+                    y2={lane}
+                    stroke={paint.fill}
+                    strokeWidth="14"
+                    strokeLinecap="round"
+                    opacity="0.28"
+                  />
+                )}
                 {arc ? (
                   <path
                     d={arc.d}
@@ -323,7 +330,7 @@ export function FootballField({
 
 function BallMarker({ shown, placedX }: { shown: FootballPlay[]; placedX: number }) {
   const last = shown[shown.length - 1];
-  const lane = shown.length === 0 ? CHAIN_Y : CHAIN_Y + ((shown.length - 1) % 2 === 0 ? -11 : 11);
+  const lane = CHAIN_Y;
   const flight = last && playStroke(last.type) === 'dashed' && last.start_yard != null && last.end_yard != null
     ? passArc(yardsToFieldX(last.start_yard), lane, yardsToFieldX(last.end_yard))
     : null;

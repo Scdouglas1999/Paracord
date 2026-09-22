@@ -276,6 +276,10 @@ async fn main() -> Result<()> {
     }
 
     let config = config::Config::load(&args.config)?;
+    if let Some(replay) = config.sports_replay.clone() {
+        paracord_core::sports::install_sports_replay(replay.games, replay.speed, replay.start)
+            .await;
+    }
     if config.tls.acme.enabled && !config.tls.enabled {
         tracing::warn!(
             "tls.acme.enabled is true while tls.enabled is false; ACME automation will be inactive"

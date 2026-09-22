@@ -37,7 +37,17 @@ export interface SportsSettings {
   default_view: SportsDefaultView;
   /** Absent on a server that has not stored the field yet. Cards is the default. */
   layout?: SportsLayout;
+  /** Live game pinned above a text channel. Absent until the server stores one. */
+  channel_pins?: ChannelPin[];
   updated_at: string;
+}
+
+export interface ChannelPin {
+  channel_id: string;
+  /** `sport/league/event_id`, joined to a board game by league path and id. */
+  game: string;
+  pinned_by: string;
+  pinned_at: string;
 }
 
 /** Every field optional. `guild_id` and `updated_at` are not writable. */
@@ -344,6 +354,10 @@ export function createSportsApi(getApi: () => RestClient) {
       if (message) return Promise.reject(new Error(message));
       return getApi().get<SportsRoster>(`/sports/leagues/${leaguePath.trim()}/teams`);
     },
+    pinGame: (guildId: string, channelId: string, game: string) =>
+      getApi().put<SportsSettings>(`/guilds/${guildId}/sports/pins/${channelId}`, { game }),
+    unpinGame: (guildId: string, channelId: string) =>
+      getApi().delete<SportsSettings>(`/guilds/${guildId}/sports/pins/${channelId}`),
     getGame: (guildId: string, sport: string, league: string, eventId: string) => {
       const message = leaguePathError(`${sport}/${league}`);
       if (message) return Promise.reject(new Error(message));

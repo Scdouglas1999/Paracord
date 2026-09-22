@@ -8,6 +8,7 @@ mod detail;
 mod espn;
 mod heat;
 mod models;
+mod replay;
 mod service;
 
 pub use models::{
@@ -17,7 +18,8 @@ pub use models::{
     LineScoreTeam, Pitch, Probable, RosterTeam, ScoringPlay, SportsBoard, StrikeZone, Team,
     WinPoint, LEAGUE_CATALOG,
 };
+pub use replay::{parse_replay_games, parse_replay_start, ReplayGame};
 pub use service::{
-    is_valid_event_id, is_valid_league_path, parse_leagues, scoreboard, scoreboard_url, FeedError,
-    ScoreFeed, ScoreboardService, DEFAULT_LEAGUE_PATHS,
+    install_sports_replay, is_valid_event_id, is_valid_league_path, parse_leagues, scoreboard,
+    scoreboard_url, FeedError, ScoreFeed, ScoreboardService, DEFAULT_LEAGUE_PATHS,
 };

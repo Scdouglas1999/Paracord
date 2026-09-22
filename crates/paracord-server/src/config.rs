@@ -72,6 +72,18 @@ pub struct Config {
     /// SETUP-3 wiring: read `config.first_run` after `Config::load(...)` returns.
     #[serde(skip)]
     pub first_run: bool,
+    /// Set from `PARACORD_SPORTS_REPLAY`. Never written to the config file.
+    #[serde(skip)]
+    pub sports_replay: Option<SportsReplaySettings>,
+}
+
+/// Games to replay and how many game-seconds pass per real second.
+#[derive(Debug, Clone)]
+pub struct SportsReplaySettings {
+    pub games: Vec<paracord_core::sports::ReplayGame>,
+    pub speed: f64,
+    /// Virtual wallclock at process start. None begins before the first play.
+    pub start: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1561,6 +1573,50 @@ impl Config {
         if let Ok(value) = std::env::var("PARACORD_AI_TIMEOUT_SECONDS") {
             if let Ok(parsed) = value.parse::<u64>() {
                 config.ai.timeout_seconds = parsed.clamp(5, 120);
+            }
+        }
+
+        if let Ok(value) = std::env::var("PARACORD_SPORTS_REPLAY") {
+            let spec = value.trim();
+            if !spec.is_empty() {
+                let games = paracord_core::sports::parse_replay_games(spec);
+                if games.is_empty() {
+                    tracing::warn!(
+                        "PARACORD_SPORTS_REPLAY is set but has no valid games; sports replay is off."
+                    );
+                } else {
+                    let speed = match std::env::var("PARACORD_SPORTS_REPLAY_SPEED") {
+                        Ok(raw) => match raw.trim().parse::<f64>() {
+                            Ok(speed) if speed.is_finite() && speed > 0.0 => speed,
+                            _ => {
+                                tracing::warn!(
+                                    "PARACORD_SPORTS_REPLAY_SPEED must be a positive number; using 6."
+                                );
+                                6.0
+                            }
+                        },
+                        Err(_) => 6.0,
+                    };
+                    let start = match std::env::var("PARACORD_SPORTS_REPLAY_START") {
+                        Ok(raw) if !raw.trim().is_empty() => {
+                            match paracord_core::sports::parse_replay_start(&raw) {
+                                Some(start) => Some(start),
+                                None => {
+                                    tracing::warn!(
+                                        "PARACORD_SPORTS_REPLAY_START must be an RFC3339 time; starting at the first play."
+                                    );
+                                    None
+                                }
+                            }
+                        }
+                        _ => None,
+                    };
+                    config.sports_replay = Some(SportsReplaySettings {
+                        games,
+                        speed,
+                        start,
+                    });
+                }
             }
         }
 

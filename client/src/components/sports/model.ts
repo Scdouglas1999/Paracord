@@ -81,6 +81,14 @@ export function statusLine(game: SportsGame, now = new Date()): string {
   return game.state === 'post' ? 'Final' : '';
 }
 
+/** One phone line. "8:25 - 1st" becomes "8:25 1st" so the clock cannot wrap on the dash. */
+export function pinOneLine(game: SportsGame, hideScores: boolean): string {
+  const away = hideScores ? '–' : String(game.away.score ?? '–');
+  const home = hideScores ? '–' : String(game.home.score ?? '–');
+  const when = statusLine(game).replace(/\s+[–-]\s+/g, ' ');
+  return `${game.away.abbr} ${away} · ${when} · ${home} ${game.home.abbr}`;
+}
+
 function joinLabels(labels: string[]): string {
   if (labels.length <= 1) return labels[0] ?? '';
   if (labels.length === 2) return `${labels[0]} and ${labels[1]}`;

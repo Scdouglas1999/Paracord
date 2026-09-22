@@ -288,6 +288,10 @@ fn game_path(guild_id: i64, sport: &str, league: &str, event_id: &str) -> String
     format!("/api/v1/guilds/{guild_id}/sports/games/{sport}/{league}/{event_id}")
 }
 
+fn pin_path(guild_id: i64, channel_id: i64) -> String {
+    format!("/api/v1/guilds/{guild_id}/sports/pins/{channel_id}")
+}
+
 #[tokio::test]
 async fn defaults_for_a_server_with_no_row() -> anyhow::Result<()> {
     let ctx = TestContext::new().await?;
@@ -308,6 +312,7 @@ async fn defaults_for_a_server_with_no_row() -> anyhow::Result<()> {
     assert_eq!(body["show_on_server_page"], true);
     assert_eq!(body["default_view"], "all");
     assert_eq!(body["layout"], "cards");
+    assert_eq!(body["channel_pins"], json!([]));
     assert_eq!(body["updated_at"], "1970-01-01T00:00:00Z");
     Ok(())
 }
@@ -328,6 +333,8 @@ async fn non_member_is_refused_and_any_signed_in_user_can_list_leagues() -> anyh
             Method::GET,
             game_path(guild_id, "football", "nfl", "401872945"),
         ),
+        (Method::PUT, pin_path(guild_id, 1)),
+        (Method::DELETE, pin_path(guild_id, 1)),
     ] {
         let body = (method == Method::PUT).then_some(json!({ "enabled": true }));
         let (status, payload) = ctx.request(method.clone(), &path, body, &outsider).await?;
@@ -1030,4 +1037,304 @@ fn first_object_after(body: &str, marker: &str) -> String {
         }
     }
     panic!("unclosed game object");
+}
+
+async fn enable_sports(ctx: &TestContext, guild_id: i64) -> anyhow::Result<()> {
+    let (status, body) = ctx
+        .request(
+            Method::PUT,
+            &settings_path(guild_id),
+            Some(json!({ "enabled": true })),
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    Ok(())
+}
+
+async fn text_channel(ctx: &TestContext, guild_id: i64, id: i64, name: &str) -> anyhow::Result<()> {
+    paracord_db::channels::create_channel(&ctx.db, id, guild_id, name, 0, 0, None, None).await?;
+    Ok(())
+}
+
+fn message_has(body: &Value, text: &str) -> bool {
+    body["message"]
+        .as_str()
+        .is_some_and(|message| message.contains(text))
+}
+
+#[tokio::test]
+async fn channel_pins_reject_the_wrong_caller_channel_and_league() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let guild_id = ctx.create_guild("Sports Pins").await?;
+    let channel_id = 88001;
+    text_channel(&ctx, guild_id, channel_id, "general").await?;
+
+    let request = build_json_request(
+        Method::PUT,
+        &pin_path(guild_id, channel_id),
+        Some(json!({ "game": "football/nfl/100" })),
+        None,
+    )?;
+    let (status, body) = dispatch_json(&ctx.app, request).await?;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+
+    let (status, body) = ctx
+        .request(
+            Method::PUT,
+            &pin_path(guild_id, channel_id),
+            Some(json!({ "game": "football/nfl/100" })),
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(
+        body["message"],
+        "The sports add-on is not turned on for this server."
+    );
+
+    enable_sports(&ctx, guild_id).await?;
+    let member =
+        create_authenticated_user_token(&ctx.db, &ctx.jwt_secret, "pinmember", "MemberPass123!")
+            .await?;
+    let member_id = ctx.user_id(&member).await?;
+    paracord_db::members::add_member(&ctx.db, member_id, guild_id).await?;
+    let (status, body) = ctx
+        .request(
+            Method::PUT,
+            &pin_path(guild_id, channel_id),
+            Some(json!({ "game": "football/nfl/100" })),
+            &member,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    let other = ctx.create_guild("Sports Other").await?;
+    let foreign = 88002;
+    text_channel(&ctx, other, foreign, "elsewhere").await?;
+    let (status, body) = ctx
+        .request(
+            Method::PUT,
+            &pin_path(guild_id, foreign),
+            Some(json!({ "game": "football/nfl/100" })),
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    let voice = 88003;
+    paracord_db::channels::create_channel(&ctx.db, voice, guild_id, "Voice", 2, 1, None, None)
+        .await?;
+    let (status, body) = ctx
+        .request(
+            Method::PUT,
+            &pin_path(guild_id, voice),
+            Some(json!({ "game": "football/nfl/100" })),
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        message_has(&body, "A pin has to be on a text channel."),
+        "{body}"
+    );
+
+    let (status, _) = ctx
+        .request(
+            Method::PUT,
+            &settings_path(guild_id),
+            Some(json!({ "leagues": ["football/nfl"] })),
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = ctx
+        .request(
+            Method::PUT,
+            &pin_path(guild_id, channel_id),
+            Some(json!({ "game": "baseball/mlb/401817017" })),
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(message_has(&body, "not following that league."), "{body}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn channel_pins_round_trip_replace_delete_and_cap() -> anyhow::Result<()> {
+    let _gate = feed_gate().lock().await;
+    scoreboard().set_feed_for_tests(Arc::new(ScriptedFeed));
+    let ctx = TestContext::new().await?;
+    let guild_id = ctx.create_guild("Sports Pin Round").await?;
+    enable_sports(&ctx, guild_id).await?;
+    let channel_id = 88101;
+    text_channel(&ctx, guild_id, channel_id, "scores").await?;
+
+    let (status, body) = ctx
+        .request(
+            Method::PUT,
+            &pin_path(guild_id, channel_id),
+            Some(json!({ "game": "football/nfl/401872945" })),
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["channel_pins"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        body["channel_pins"][0]["channel_id"],
+        channel_id.to_string()
+    );
+    assert_eq!(body["channel_pins"][0]["game"], "football/nfl/401872945");
+    assert_eq!(
+        body["channel_pins"][0]["pinned_by"],
+        ctx.user_id(&ctx.owner_token).await?.to_string()
+    );
+    assert!(body["channel_pins"][0]["pinned_at"]
+        .as_str()
+        .unwrap()
+        .ends_with('Z'));
+
+    let (status, listed) = ctx
+        .request(
+            Method::GET,
+            &settings_path(guild_id),
+            None,
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(listed["channel_pins"], body["channel_pins"]);
+
+    let (status, replaced) = ctx
+        .request(
+            Method::PUT,
+            &pin_path(guild_id, channel_id),
+            Some(json!({ "game": "baseball/mlb/401817017" })),
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{replaced}");
+    assert_eq!(replaced["channel_pins"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        replaced["channel_pins"][0]["game"],
+        "baseball/mlb/401817017"
+    );
+
+    let (status, cleared) = ctx
+        .request(
+            Method::DELETE,
+            &pin_path(guild_id, channel_id),
+            None,
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{cleared}");
+    assert_eq!(cleared["channel_pins"], json!([]));
+
+    let (status, missing) = ctx
+        .request(
+            Method::DELETE,
+            &pin_path(guild_id, channel_id),
+            None,
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{missing}");
+    assert_eq!(missing["message"], "Nothing is pinned in that channel.");
+
+    for index in 1..=32 {
+        let id = 88200 + index;
+        text_channel(&ctx, guild_id, id, &format!("pin-{index}")).await?;
+        let (status, body) = ctx
+            .request(
+                Method::PUT,
+                &pin_path(guild_id, id),
+                Some(json!({ "game": format!("football/nfl/{index}") })),
+                &ctx.owner_token,
+            )
+            .await?;
+        assert_eq!(status, StatusCode::OK, "{index} {body}");
+    }
+    let extra = 88300;
+    text_channel(&ctx, guild_id, extra, "one-more").await?;
+    let (status, body) = ctx
+        .request(
+            Method::PUT,
+            &pin_path(guild_id, extra),
+            Some(json!({ "game": "football/nfl/33" })),
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(message_has(&body, "at most 32 games"), "{body}");
+    let (status, listed) = ctx
+        .request(
+            Method::GET,
+            &settings_path(guild_id),
+            None,
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(listed["channel_pins"].as_array().unwrap().len(), 32);
+    Ok(())
+}
+
+#[tokio::test]
+async fn channel_pins_drop_finals_and_games_missing_from_todays_board() -> anyhow::Result<()> {
+    let _gate = feed_gate().lock().await;
+    scoreboard().set_feed_for_tests(Arc::new(ScriptedFeed));
+    let ctx = TestContext::new().await?;
+    let guild_id = ctx.create_guild("Sports Pin Prune").await?;
+    enable_sports(&ctx, guild_id).await?;
+    let (status, board) = ctx
+        .request(Method::GET, &board_path(guild_id), None, &ctx.owner_token)
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{board}");
+
+    let pins = [
+        (88401, "football/nfl/100"),
+        (88402, "football/nfl/200"),
+        (88403, "football/nfl/300"),
+        (88404, "football/nfl/999"),
+        (88405, "baseball/mlb/401817017"),
+    ];
+    for (channel_id, game) in pins {
+        text_channel(&ctx, guild_id, channel_id, &format!("c{channel_id}")).await?;
+        let (status, body) = ctx
+            .request(
+                Method::PUT,
+                &pin_path(guild_id, channel_id),
+                Some(json!({ "game": game })),
+                &ctx.owner_token,
+            )
+            .await?;
+        assert_eq!(status, StatusCode::OK, "{game} {body}");
+    }
+
+    let (status, listed) = ctx
+        .request(
+            Method::GET,
+            &settings_path(guild_id),
+            None,
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let games: Vec<&str> = listed["channel_pins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|pin| pin["game"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        games,
+        vec![
+            "football/nfl/100",
+            "football/nfl/200",
+            "baseball/mlb/401817017",
+        ]
+    );
+    Ok(())
 }

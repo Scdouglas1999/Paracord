@@ -212,9 +212,9 @@ fn parse_event(event: &Value, sport: &str, league: &str, league_path: &str) -> O
         game.balls = int_field(situation, "balls");
         game.strikes = int_field(situation, "strikes");
         game.outs = int_field(situation, "outs");
-        game.on_first = bool_field(situation, "onFirst");
-        game.on_second = bool_field(situation, "onSecond");
-        game.on_third = bool_field(situation, "onThird");
+        game.on_first = base_occupied(situation, "onFirst");
+        game.on_second = base_occupied(situation, "onSecond");
+        game.on_third = base_occupied(situation, "onThird");
 
         if let Some(last_play) = situation.get("lastPlay").filter(|value| value.is_object()) {
             game.last_play = str_field(last_play, "text").map(|text| text.trim().to_string());
@@ -494,6 +494,16 @@ pub(crate) fn dbl_field(value: &Value, name: &str) -> Option<f64> {
 
 pub(crate) fn bool_field(value: &Value, name: &str) -> bool {
     matches!(value.get(name), Some(Value::Bool(true)))
+}
+
+/// A base is occupied when the feed says `true` or names the runner.
+fn base_occupied(situation: &Value, name: &str) -> bool {
+    match situation.get(name) {
+        Some(Value::Bool(flag)) => *flag,
+        Some(Value::Object(runner)) => !runner.is_empty(),
+        Some(Value::String(id)) => !id.is_empty(),
+        _ => false,
+    }
 }
 
 /// A team colour as lowercase `rrggbb`. ESPN sends bare hex strings; a leading

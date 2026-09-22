@@ -18,6 +18,7 @@ use super::heat;
 use super::models::{
     league_label, BoardLeague, FavoriteTeam, Game, GameDetail, LeagueTeams, RosterTeam, SportsBoard,
 };
+use super::replay::{self, ReplayGame};
 
 pub const DEFAULT_LEAGUE_PATHS: [&str; 2] = ["football/nfl", "baseball/mlb"];
 
@@ -173,16 +174,50 @@ pub struct RosterUnavailable;
 #[derive(Debug)]
 pub struct DetailUnavailable;
 
+pub(crate) fn production_feed() -> Result<Arc<dyn ScoreFeed>, FeedError> {
+    Ok(Arc::new(EspnFeed::new()?))
+}
+
+/// Fetch the listed games once, then serve them time-sliced. Logged by the caller.
+pub async fn install_sports_replay(
+    games: Vec<ReplayGame>,
+    speed: f64,
+    start: Option<chrono::DateTime<chrono::Utc>>,
+) {
+    let inner = match production_feed() {
+        Ok(feed) => feed,
+        Err(error) => {
+            tracing::warn!(
+                "Sports replay is off: the scoreboard client did not start ({}).",
+                error.board_message()
+            );
+            return;
+        }
+    };
+    let feed = Arc::new(replay::ReplayFeed::load(inner, games, speed, Utc::now(), start).await);
+    feed.spawn_clock();
+    let message = feed.announcement();
+    scoreboard().use_feed(feed);
+    tracing::info!("{message}");
+}
+
 /// The process-wide board. One cache serves every guild on this instance.
 pub fn scoreboard() -> &'static ScoreboardService {
     static CELL: OnceLock<ScoreboardService> = OnceLock::new();
     CELL.get_or_init(ScoreboardService::production)
 }
 
+/// A league board already in the cache, without starting a refresh.
+pub struct CachedLeague {
+    pub games: Vec<Game>,
+    /// False when the only cached result is an error and there are no games.
+    pub reliable: bool,
+}
+
 impl ScoreboardService {
     fn production() -> Self {
-        let feed: Arc<dyn ScoreFeed> = match EspnFeed::new() {
-            Ok(feed) => Arc::new(feed),
+        let feed = match production_feed() {
+            Ok(feed) => feed,
             Err(error) => Arc::new(FailingFeed { error }),
         };
         Self::with_feed(feed)
@@ -211,6 +246,21 @@ impl ScoreboardService {
         lock(&self.rosters).clear();
         lock(&self.details).clear();
         lock(&self.detail_flights).clear();
+    }
+
+    /// Swap the process-wide feed. Startup uses this for the replay feed.
+    pub fn use_feed(&self, feed: Arc<dyn ScoreFeed>) {
+        *write_lock(&self.feed) = feed;
+    }
+
+    /// Games from the last refresh of `league`, if that refresh has happened.
+    pub fn cached_league(&self, league: &str) -> Option<CachedLeague> {
+        let cache = lock(&self.cache);
+        let entry = cache.peek(&cache_key(league))?;
+        Some(CachedLeague {
+            reliable: entry.error.is_none() || !entry.games.is_empty(),
+            games: entry.games.clone(),
+        })
     }
 
     pub async fn board(&self, leagues: &[String], favorites: &[FavoriteTeam]) -> SportsBoard {

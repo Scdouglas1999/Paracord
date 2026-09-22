@@ -1,0 +1,234 @@
+import { useEffect, useState } from 'react';
+import { Link } from 'react-router';
+import type { ChannelPin, SportsGame } from '../../api/sports';
+import { sportsApi } from '../../api/sports';
+import { useGuildChannels } from '../../hooks/useChannels';
+import { usePermissions } from '../../hooks/usePermissions';
+import { useSportsPolling, useSportsSettings } from '../../hooks/useSportsBoard';
+import { ChannelType, Permissions, hasPermission } from '../../types';
+import { useSportsStore } from '../../stores/sportsStore';
+import { miniFieldBar, teamPaint } from './gamecast';
+import { HIDE_SCORES_EVENT, LIVE_POLL_MS, QUIET_POLL_MS, gameAriaLabel, gameHref, pinOneLine, readHideScores, runnersLabel, statusLine } from './model';
+import { latestPlayText, pinGameKey } from './timeline';
+import { TeamMark } from './TeamMark';
+
+function canManage(permissions: bigint, isAdmin: boolean): boolean {
+  return isAdmin
+    || hasPermission(permissions, Permissions.MANAGE_CHANNELS)
+    || hasPermission(permissions, Permissions.MANAGE_GUILD);
+}
+
+export function PinGameButton({
+  guildId,
+  game,
+}: {
+  guildId: string;
+  game: SportsGame;
+}) {
+  const { permissions, isAdmin, isLoading } = usePermissions(guildId || null);
+  const channels = useGuildChannels(guildId);
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const allowed = !isLoading && canManage(permissions, isAdmin);
+  if (!allowed) return null;
+  const text = channels.filter((channel) => (channel.type ?? channel.channel_type) === ChannelType.Text);
+  const key = pinGameKey(game);
+  const pin = async (channelId: string) => {
+    setError(null);
+    try {
+      const res = await sportsApi.pinGame(guildId, channelId, key);
+      useSportsStore.getState().adoptSettings(res.data);
+      setOpen(false);
+    } catch {
+      setError('That channel could not be pinned.');
+    }
+  };
+  return (
+    <div className="flex flex-col items-end">
+      <button
+        type="button"
+        className="pc-focusable text-label text-text-secondary"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        Pin to a channel
+      </button>
+      {open && (
+        <ul className="pc-sports-pin-picker" aria-label="Text channels">
+          {text.length === 0 && <li className="text-meta text-text-muted">No text channels</li>}
+          {text.map((channel) => (
+            <li key={channel.id}>
+              <button type="button" className="pc-focusable w-full truncate text-left text-label" onClick={() => { void pin(channel.id); }}>
+                #{channel.name || 'channel'}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {error && <p role="status" className="text-meta text-text-secondary">{error}</p>}
+    </div>
+  );
+}
+
+export function ChannelAmbient({
+  guildId,
+  channelId,
+}: {
+  guildId: string;
+  channelId: string;
+}) {
+  const { settings, board } = useSportsSettings(guildId);
+  const { permissions, isAdmin, isLoading } = usePermissions(guildId || null);
+  const pins = settings?.channel_pins ?? [];
+  const pin = pins.find((item) => item.channel_id === channelId) ?? null;
+  const game = pin ? matchPin(pin, board?.games ?? []) : null;
+  useSportsPolling(guildId, Boolean(pin && settings?.enabled), 'page');
+  useEffect(() => {
+    if (!pin || !settings?.enabled) return;
+    const wait = game?.state === 'in' ? LIVE_POLL_MS : QUIET_POLL_MS;
+    const timer = window.setInterval(() => {
+      void useSportsStore.getState().refreshSettings(guildId);
+    }, wait);
+    return () => window.clearInterval(timer);
+  }, [pin, settings?.enabled, game?.state, guildId]);
+  if (!settings?.enabled || !pin || !game) return null;
+  return (
+    <AmbientStrip
+      guildId={guildId}
+      game={game}
+      canUnpin={!isLoading && canManage(permissions, isAdmin)}
+      onUnpin={async () => {
+        const res = await sportsApi.unpinGame(guildId, channelId);
+        useSportsStore.getState().adoptSettings(res.data);
+      }}
+    />
+  );
+}
+
+function matchPin(pin: ChannelPin, games: SportsGame[]): SportsGame | null {
+  return games.find((game) => pinGameKey(game) === pin.game) ?? null;
+}
+
+/** The board often omits last_play during a replay. The game detail still has the sentence. */
+function useBoardPlay(guildId: string, game: SportsGame): string | null {
+  const boardPlay = game.last_play?.trim() || null;
+  const [extra, setExtra] = useState<string | null>(null);
+  useEffect(() => {
+    if (boardPlay) return;
+    const parts = game.league_path.split('/');
+    if (parts.length !== 2) return;
+    let cancelled = false;
+    const load = () => {
+      void sportsApi.getGame(guildId, parts[0], parts[1], game.id).then((res) => {
+        if (cancelled) return;
+        const text = latestPlayText(res.data);
+        if (text) setExtra(text);
+      }).catch(() => {});
+    };
+    load();
+    if (game.state !== 'in') return () => { cancelled = true; };
+    const timer = window.setInterval(load, LIVE_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [boardPlay, guildId, game.league_path, game.id, game.state]);
+  return boardPlay || extra;
+}
+
+export function AmbientStrip({
+  guildId,
+  game,
+  canUnpin,
+  onUnpin,
+}: {
+  guildId: string;
+  game: SportsGame;
+  canUnpin: boolean;
+  onUnpin: () => void;
+}) {
+  const [hideScores, setHideScores] = useState(readHideScores);
+  useEffect(() => {
+    const sync = () => setHideScores(readHideScores());
+    window.addEventListener(HIDE_SCORES_EVENT, sync);
+    return () => window.removeEventListener(HIDE_SCORES_EVENT, sync);
+  }, []);
+  const away = teamPaint(game.away, game.home).fill;
+  const home = teamPaint(game.home, game.away).fill;
+  const field = !hideScores && game.sport === 'football' ? miniFieldBar(game) : null;
+  const awayScore = hideScores ? '–' : (game.away.score ?? '–');
+  const homeScore = hideScores ? '–' : (game.home.score ?? '–');
+  const playText = useBoardPlay(guildId, game);
+  return (
+    <section
+      className="pc-sports-pin"
+      style={{ ['--pc-away' as string]: away, ['--pc-home' as string]: home }}
+      aria-label={`Pinned game. ${gameAriaLabel(game, hideScores)}`}
+    >
+      <div className="pc-sports-pin-main">
+        <span className="pc-sports-pin-label text-meta text-text-faint">Pinned game</span>
+        <span className="pc-sports-pin-score pc-sports-pin-wide">
+          <TeamMark team={game.away} />
+          <span className="text-label text-text-primary">{game.away.abbr}</span>
+          <span className="pc-mono text-label text-text-primary">{awayScore}</span>
+          <span className="pc-mono text-meta text-text-secondary">{statusLine(game)}</span>
+          <span className="pc-mono text-label text-text-primary">{homeScore}</span>
+          <span className="text-label text-text-primary">{game.home.abbr}</span>
+          <TeamMark team={game.home} />
+        </span>
+        <span className="pc-sports-pin-compact pc-mono">{pinOneLine(game, hideScores)}</span>
+        <Link to={gameHref(guildId, game)} className="pc-focusable shrink-0 text-label text-text-link">Open</Link>
+        {canUnpin && (
+          <button type="button" className="pc-focusable pc-sports-unpin" aria-label="Unpin" onClick={onUnpin}>
+            ×
+          </button>
+        )}
+      </div>
+      {!hideScores && (
+        <div className="pc-sports-pin-more">
+          {field && <PinField field={field} away={away} home={home} />}
+          {game.sport === 'baseball' && <PinDiamond game={game} />}
+          {playText && <p className="truncate text-meta text-text-faint">{playText}</p>}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function PinField({
+  field,
+  away,
+  home,
+}: {
+  field: NonNullable<ReturnType<typeof miniFieldBar>>;
+  away: string;
+  home: string;
+}) {
+  const x = (yards: number) => 10 + (Math.min(100, Math.max(0, yards)) / 100) * 100;
+  return (
+    <svg viewBox="0 0 120 18" preserveAspectRatio="none" className="pc-sports-minifield" role="img" aria-label={field.label}>
+      <rect width="120" height="18" rx="2" fill="var(--sports-stadium)" />
+      <rect x="10" y="2" width="100" height="14" fill="var(--sports-turf)" />
+      <rect x="0" y="2" width="10" height="14" fill={home} />
+      <rect x="110" y="2" width="10" height="14" fill={away} />
+      <circle cx={x(field.ball)} cy="9" r="2.4" fill="var(--sports-leather)" />
+    </svg>
+  );
+}
+
+function PinDiamond({ game }: { game: SportsGame }) {
+  const detail = game.detail.toLowerCase();
+  const batting = detail.includes('bot') ? game.home : detail.includes('top') ? game.away : null;
+  const other = batting?.id === game.home.id ? game.away : game.home;
+  const fill = batting ? teamPaint(batting, other).fill : 'var(--text-faint)';
+  const base = (on: boolean | null, points: string) => (
+    <polygon points={points} fill={on ? fill : 'none'} stroke={on ? fill : 'var(--text-faint)'} strokeWidth="1.2" />
+  );
+  return (
+    <svg viewBox="0 0 28 22" className="pc-sports-mini-diamond" role="img" aria-label={runnersLabel(game)}>
+      {base(game.on_second, '14,2 18,6 14,10 10,6')}
+      {base(game.on_third, '6,10 10,14 6,18 2,14')}
+      {base(game.on_first, '22,10 26,14 22,18 18,14')}
+    </svg>
+  );
+}
