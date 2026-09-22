@@ -44,7 +44,7 @@ describe('uiStore', () => {
   // A look is a theme as far as this store is concerned: one string, stored and
   // persisted exactly like the other four (lib/themes.ts).
   it('sets a look like any other theme', () => {
-    for (const look of ['dusk', 'paper', 'voices'] as const) {
+    for (const look of ['dusk', 'paper', 'slate', 'voices'] as const) {
       useUIStore.getState().setTheme(look);
       expect(useUIStore.getState().theme).toBe(look);
     }

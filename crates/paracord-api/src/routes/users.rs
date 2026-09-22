@@ -34,7 +34,7 @@ const MAX_SETTINGS_THEME_LEN: usize = 32;
 /// default (`DEFAULT_THEME` in `client/src/lib/themes.ts`) must say the same
 /// thing: the client adopts this value on first sign-in, so a disagreement
 /// would flip a fresh install's look the moment it signed in.
-const DEFAULT_THEME: &str = "voices";
+const DEFAULT_THEME: &str = "slate";
 const MAX_SETTINGS_LOCALE_LEN: usize = 10;
 const MAX_CUSTOM_STATUS_LEN: usize = 128;
 const MAX_AVATAR_IMAGE_SIZE: usize = 2 * 1024 * 1024;

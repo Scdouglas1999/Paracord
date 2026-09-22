@@ -1699,7 +1699,8 @@ export default function DesignTokensPage() {
             <ThemePreview theme="high-contrast" label="High contrast" />
             <ThemePreview theme="dusk" label="Dusk sky — a look" />
             <ThemePreview theme="paper" label="Paper & ink — a look" />
-            <ThemePreview theme="voices" label="Voices — a look" />
+            <ThemePreview theme="slate" label="Slate — the default look" />
+            <ThemePreview theme="voices" label="Aubergine — a look" />
           </div>
         </Section>
       </div>

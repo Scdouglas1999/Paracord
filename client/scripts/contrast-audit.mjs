@@ -245,10 +245,11 @@ const themeBlocks = {
   daylight,
   amoled: extractBlocks("[data-theme='amoled']"),
   'high-contrast': extractBlocks("[data-theme='high-contrast']"),
-  // The looks (§1.8). Dusk sky and Voices stand on Night's set, Paper & ink on
+  // The looks (§1.8). Dusk sky, Slate and Aubergine stand on Night's set, Paper & ink on
   // Daylight's — the same inheritance the selectors in tokens.css give them.
   'dusk sky': extractBlocks("[data-theme='dusk']"),
-  voices: extractBlocks("[data-theme='voices']"),
+  slate: extractBlocks("[data-theme='slate']"),
+  aubergine: extractBlocks("[data-theme='voices']"),
   'paper & ink': { ...daylight, ...extractBlocks("[data-theme='paper']") },
 };
 

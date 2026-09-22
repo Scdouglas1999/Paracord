@@ -24,7 +24,7 @@ interface ThemeOption {
  * `lib/themes.ts` is the list of ids; this is what they are called.
  */
 const THEME_OPTIONS: ThemeOption[] = [
-  { id: 'dark', label: 'Night', hint: 'The default — lit windows after dark', icon: <Moon size={16} /> },
+  { id: 'dark', label: 'Night', hint: 'Dusk-blue ground, warm plates', icon: <Moon size={16} /> },
   { id: 'light', label: 'Daylight', hint: 'Warm paper; lit channels read as ink', icon: <Sun size={16} /> },
   { id: 'amoled', label: 'AMOLED', hint: 'A true-black street for OLED panels', icon: <Monitor size={16} /> },
   { id: 'high-contrast', label: 'High contrast', hint: 'Thicker rims, two text steps', icon: <Eye size={16} /> },
@@ -44,9 +44,15 @@ const LOOK_OPTIONS: ThemeOption[] = [
     icon: <Newspaper size={16} />,
   },
   {
+    id: 'slate',
+    label: 'Slate',
+    hint: 'The default: cool charcoal, every message in its author’s colour',
+    icon: <MessagesSquare size={16} />,
+  },
+  {
     id: 'voices',
-    label: 'Voices',
-    hint: 'Every message wears its author’s colour',
+    label: 'Aubergine',
+    hint: 'A plum ground, every message in its author’s colour',
     icon: <MessagesSquare size={16} />,
   },
 ];

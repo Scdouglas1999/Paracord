@@ -192,7 +192,7 @@ TEXT, VOICE, CATEGORY, ANNOUNCEMENT, FORUM = 0, 2, 4, 5, 7
 def mkchan(name, ctype, parent=None):
     body = {"name": name, "channel_type": ctype}
     if parent:
-        body["parent_id"] = int(parent)
+        body["parent_id"] = str(parent)
     return str(req("POST", f"/guilds/{GID}/channels", token=OT, json=body)["id"])
 
 

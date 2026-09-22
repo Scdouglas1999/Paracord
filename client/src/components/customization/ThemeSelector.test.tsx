@@ -34,7 +34,7 @@ const swatch = () => screen.getByRole('button', { name: 'Set accent Emerald' });
 const hueSlider = () => screen.getByRole('slider');
 
 describe('ThemeSelector', () => {
-  it('offers the four themes and the three looks', () => {
+  it('offers the four themes and the four looks', () => {
     render(<ThemeSelector />);
 
     for (const name of [/Night/, /Daylight/, /AMOLED/, /High contrast/]) {
@@ -42,7 +42,8 @@ describe('ThemeSelector', () => {
     }
     expect(screen.getByRole('button', { name: /Dusk sky/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Paper & ink/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Voices/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /cool charcoal/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Aubergine/ })).toBeInTheDocument();
   });
 
   it('labels the looks as their own group, in sentence case, and says what one is', () => {
@@ -60,7 +61,8 @@ describe('ThemeSelector', () => {
   it.each([
     ['Dusk sky', 'dusk'],
     ['Paper & ink', 'paper'],
-    ['Voices', 'voices'],
+    ['cool charcoal', 'slate'],
+    ['Aubergine', 'voices'],
   ] as Array<[string, ThemeId]>)('stores %s as %s and reports it', (label, id) => {
     const onThemeChange = vi.fn();
     render(<ThemeSelector onThemeChange={onThemeChange} />);
@@ -74,7 +76,7 @@ describe('ThemeSelector', () => {
   it('marks the chosen look as selected', () => {
     render(<ThemeSelector currentTheme="voices" />);
 
-    expect(screen.getByRole('button', { name: /Voices/ })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: /Aubergine/ })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('button', { name: /Night/ })).toHaveAttribute('aria-pressed', 'false');
   });
 
