@@ -956,6 +956,7 @@ async fn main() -> Result<()> {
     spawn_federation_delivery_worker(state.clone(), shutdown_notify.clone());
     spawn_federation_moderation_worker(state.clone(), shutdown_notify.clone());
     spawn_scheduled_message_worker(state.clone(), shutdown_notify.clone());
+    spawn_sports_announce_worker(state.clone(), shutdown_notify.clone());
     spawn_disappearing_message_worker(state.clone(), shutdown_notify.clone());
     spawn_scheduled_event_worker(state.clone(), shutdown_notify.clone());
     spawn_member_index_reconcile_worker(state.clone(), shutdown_notify.clone());
@@ -2142,6 +2143,24 @@ fn parse_scheduled_dm_e2ee(
         ciphertext,
         header,
     }))
+}
+
+fn spawn_sports_announce_worker(
+    state: paracord_core::AppState,
+    shutdown: Arc<tokio::sync::Notify>,
+) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = shutdown.notified() => break,
+                _ = interval.tick() => {
+                    paracord_api::routes::sports_announce::announce_due(&state).await;
+                }
+            }
+        }
+    });
 }
 
 fn spawn_scheduled_message_worker(

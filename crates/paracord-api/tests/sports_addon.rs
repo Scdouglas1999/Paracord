@@ -142,6 +142,53 @@ const NFL_BOARD: &str = r#"{
   ]
 }"#;
 
+const LIVE_SCORE: &str = r#"{
+  "header": {
+    "id": "100",
+    "competitions": [{
+      "id": "100",
+      "date": "2026-09-22T17:00:00Z",
+      "status": {
+        "period": 2,
+        "displayClock": "8:41",
+        "type": { "state": "in", "shortDetail": "8:41 - 2nd" }
+      },
+      "competitors": [
+        {
+          "homeAway": "home",
+          "score": "14",
+          "team": {
+            "id": "12",
+            "abbreviation": "KC",
+            "displayName": "Kansas City Chiefs",
+            "shortDisplayName": "Chiefs"
+          }
+        },
+        {
+          "homeAway": "away",
+          "score": "7",
+          "team": {
+            "id": "11",
+            "abbreviation": "IND",
+            "displayName": "Indianapolis Colts",
+            "shortDisplayName": "Colts"
+          }
+        }
+      ]
+    }]
+  },
+  "scoringPlays": [{
+    "id": "9001",
+    "text": "K.Walker 4 yd run",
+    "type": { "text": "Rushing Touchdown" },
+    "team": { "id": "12" },
+    "period": { "number": 2, "displayValue": "2nd" },
+    "clock": { "displayValue": "8:41" },
+    "homeScore": 14,
+    "awayScore": 7
+  }]
+}"#;
+
 const NFL_TEAMS: &str = r#"{
   "sports": [{
     "leagues": [{
@@ -194,7 +241,9 @@ impl ScoreFeed for ScriptedFeed {
         let league = league.to_ascii_lowercase();
         let event_id = event_id.to_string();
         Box::pin(async move {
-            if league == "football/nfl" && event_id == "401872945" {
+            if league == "football/nfl" && event_id == "100" {
+                Ok(LIVE_SCORE.to_string())
+            } else if league == "football/nfl" && event_id == "401872945" {
                 Ok(
                     include_str!("../../paracord-core/src/sports/fixtures/nfl_summary.json")
                         .to_string(),
@@ -1336,5 +1385,118 @@ async fn channel_pins_drop_finals_and_games_missing_from_todays_board() -> anyho
             "baseball/mlb/401817017",
         ]
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_scoreboard_date_is_a_day_near_today() -> anyhow::Result<()> {
+    let _gate = feed_gate().lock().await;
+    scoreboard().set_feed_for_tests(Arc::new(ScriptedFeed));
+    let ctx = TestContext::new().await?;
+    let guild_id = ctx.create_guild("Sports Dates").await?;
+    enable_sports(&ctx, guild_id).await?;
+
+    let today = chrono::Utc::now().date_naive();
+    let too_old = (today - chrono::Duration::days(15))
+        .format("%Y%m%d")
+        .to_string();
+    for date in ["yesterday", "20261340", too_old.as_str()] {
+        let (status, body) = ctx
+            .request(
+                Method::GET,
+                &format!("{}?date={date}", board_path(guild_id)),
+                None,
+                &ctx.owner_token,
+            )
+            .await?;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{date} {body}");
+        assert!(message_has(&body, "YYYYMMDD"), "{body}");
+    }
+
+    let past = today - chrono::Duration::days(2);
+    let (status, dated) = ctx
+        .request(
+            Method::GET,
+            &format!("{}?date={}", board_path(guild_id), past.format("%Y%m%d")),
+            None,
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{dated}");
+    assert_eq!(dated["date"], past.format("%Y-%m-%d").to_string());
+
+    let (status, current) = ctx
+        .request(Method::GET, &board_path(guild_id), None, &ctx.owner_token)
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{current}");
+    assert_eq!(current["date"], today.format("%Y-%m-%d").to_string());
+    assert!(current["games"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|game| game["id"] == "100"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_pinned_channel_gets_one_score_line_and_a_second_pass_is_quiet() -> anyhow::Result<()> {
+    let _gate = feed_gate().lock().await;
+    scoreboard().set_feed_for_tests(Arc::new(ScriptedFeed));
+    let ctx = TestContext::new().await?;
+    let guild_id = ctx.create_guild("Sports Announce").await?;
+    enable_sports(&ctx, guild_id).await?;
+    let channel_id = 88601;
+    text_channel(&ctx, guild_id, channel_id, "general").await?;
+    let (status, pin) = ctx
+        .request(
+            Method::PUT,
+            &pin_path(guild_id, channel_id),
+            Some(json!({ "game": "football/nfl/100" })),
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{pin}");
+    assert_eq!(pin["channel_pins"][0]["announce"], true);
+
+    let (status, board) = ctx
+        .request(Method::GET, &board_path(guild_id), None, &ctx.owner_token)
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{board}");
+
+    paracord_api::routes::sports_announce::announce_due(&ctx._test_app.state).await;
+    let messages_path = format!("/api/v1/channels/{channel_id}/messages");
+    let (status, messages) = ctx
+        .request(Method::GET, &messages_path, None, &ctx.owner_token)
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{messages}");
+    let rows = messages.as_array().context("message list")?;
+    assert_eq!(rows.len(), 1, "{messages}");
+    assert_eq!(rows[0]["author"]["bot"], true);
+    assert_eq!(rows[0]["author"]["username"], "Sports");
+    assert_eq!(rows[0]["author"]["display_name"], "Sports");
+    assert_eq!(rows[0]["type"], 0);
+    assert_eq!(
+        rows[0]["content"],
+        "Touchdown — Chiefs 14, Colts 7 · 8:41 2nd · K.Walker 4 yd run"
+    );
+
+    let (status, settings) = ctx
+        .request(
+            Method::GET,
+            &settings_path(guild_id),
+            None,
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{settings}");
+    assert_eq!(settings["channel_pins"][0]["announced_through"], "9001");
+    assert_eq!(settings["channel_pins"][0]["announced_final"], false);
+
+    paracord_api::routes::sports_announce::announce_due(&ctx._test_app.state).await;
+    let (status, again) = ctx
+        .request(Method::GET, &messages_path, None, &ctx.owner_token)
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again.as_array().context("message list")?.len(), 1);
     Ok(())
 }

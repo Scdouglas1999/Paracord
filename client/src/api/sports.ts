@@ -138,6 +138,8 @@ export interface SportsGame {
 
 export interface SportsBoard {
   fetched_at: string;
+  /** Set when the board was asked for a day. YYYY-MM-DD. */
+  date?: string;
   leagues: SportsBoardLeague[];
   games: SportsGame[];
 }
@@ -347,8 +349,10 @@ export function createSportsApi(getApi: () => RestClient) {
       getApi().get<SportsSettings>(`/guilds/${guildId}/sports`),
     updateSettings: (guildId: string, body: SportsSettingsUpdate) =>
       getApi().put<SportsSettings>(`/guilds/${guildId}/sports`, body),
-    getBoard: (guildId: string) =>
-      getApi().get<SportsBoard>(`/guilds/${guildId}/sports/board`),
+    getBoard: (guildId: string, date?: string) => {
+      const query = date ? `?date=${encodeURIComponent(date)}` : '';
+      return getApi().get<SportsBoard>(`/guilds/${guildId}/sports/board${query}`);
+    },
     listTeams: (leaguePath: string) => {
       const message = leaguePathError(leaguePath);
       if (message) return Promise.reject(new Error(message));

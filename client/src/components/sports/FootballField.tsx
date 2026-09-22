@@ -109,18 +109,18 @@ export function FootballField({
               <stop offset="0.42" stopColor="var(--sports-chalk)" stopOpacity="0" />
               <stop offset="1" stopColor="var(--sports-stadium)" stopOpacity="0.28" />
             </linearGradient>
-            <pattern id={`${uid}-crowd`} width="16" height="10" patternUnits="userSpaceOnUse">
-              <circle cx="3" cy="4" r="1.15" fill="var(--sports-chalk)" opacity="0.45" />
-              <circle cx="11" cy="7" r="0.9" fill="var(--sports-chalk)" opacity="0.28" />
+            <pattern id={`${uid}-seats`} width="22" height="12" patternUnits="userSpaceOnUse">
+              <circle cx="4" cy="3.2" r="2.4" fill="var(--sports-chalk)" opacity="0.38" />
+              <circle cx="15" cy="8" r="1.8" fill="var(--sports-chalk)" opacity="0.22" />
             </pattern>
-            <linearGradient id={`${uid}-tiers`} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" stopColor="var(--sports-chalk)" stopOpacity="0.22" />
-              <stop offset="1" stopColor="var(--sports-stadium)" stopOpacity="0" />
+            <linearGradient id={`${uid}-tierlight`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stopColor="var(--sports-chalk)" stopOpacity="0.26" />
+              <stop offset="0.55" stopColor="var(--sports-chalk)" stopOpacity="0" />
             </linearGradient>
-            <filter id={`${uid}-crowdnoise`} x="0" y="0" width="100%" height="100%">
-              <feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="2" seed="7" />
-              <feColorMatrix type="saturate" values="0" />
-            </filter>
+            <radialGradient id={`${uid}-tower`} cx="50%" cy="42%" r="50%">
+              <stop offset="0" stopColor="var(--sports-stadium-glow)" />
+              <stop offset="1" stopColor="var(--sports-stadium-glow)" stopOpacity="0" />
+            </radialGradient>
             <linearGradient id={`${uid}-vignette`} x1="0" y1="0" x2="0" y2="1">
               <stop offset="0" stopColor="var(--sports-stadium)" stopOpacity="0.45" />
               <stop offset="0.35" stopColor="var(--sports-stadium)" stopOpacity="0" />
@@ -139,15 +139,20 @@ export function FootballField({
               fill={index % 2 === 0 ? 'var(--sports-turf-alt)' : 'var(--sports-turf)'}
             />
           ))}
-          <g aria-hidden>
-            <rect width={FIELD.width} height="20" fill="var(--sports-stadium)" opacity="0.42" />
-            <rect y="20" width={FIELD.width} height="20" fill="var(--sports-stadium)" opacity="0.68" />
-            <rect y="40" width={FIELD.width} height="20" fill="var(--sports-stadium)" />
-            <rect width={FIELD.width} height="60" fill={`url(#${uid}-tiers)`} />
-            <rect width={FIELD.width} height="60" fill={`url(#${uid}-crowd)`} />
-            <rect width={FIELD.width} height="60" filter={`url(#${uid}-crowdnoise)`} opacity="0.28" />
-            <circle cx="52" cy="16" r="26" fill="var(--sports-chalk)" opacity="0.28" />
-            <circle cx={FIELD.width - 52} cy="16" r="26" fill="var(--sports-chalk)" opacity="0.28" />
+          <g data-stands="football" aria-hidden>
+            {[0, 1, 2].map((tier) => {
+              const y = tier * 34;
+              return (
+                <g key={tier}>
+                  <rect x="0" y={y} width={FIELD.width} height="30" fill="var(--sports-stadium)" opacity={0.55 + tier * 0.18} />
+                  <rect x="0" y={y} width={FIELD.width} height="30" fill={`url(#${uid}-tierlight)`} />
+                  <rect x="0" y={y} width={FIELD.width} height="30" fill={`url(#${uid}-seats)`} />
+                  <line x1="0" x2={FIELD.width} y1={y + 30} y2={y + 30} stroke="var(--sports-ink)" strokeWidth="4" />
+                </g>
+              );
+            })}
+            <circle cx="78" cy="36" r="48" fill={`url(#${uid}-tower)`} />
+            <circle cx={FIELD.width - 78} cy="36" r="48" fill={`url(#${uid}-tower)`} />
           </g>
           <rect y={FIELD.height - 60} width={FIELD.width} height="60" fill="var(--sports-sideline)" />
           <EndZone x={0} paint={homePaint} abbr={home.abbr} vignette={`${uid}-vignette`} pulse={scoreSide === 'left'} pulseFill={scorePaint} />
@@ -155,9 +160,9 @@ export function FootballField({
           {zone && (
             <rect
               x={yardsToFieldX(zone.from)}
-              y={60}
+              y={102}
               width={yardsToFieldX(zone.to) - yardsToFieldX(zone.from)}
-              height={FIELD.height - 120}
+              height={FIELD.height - 162}
               fill={defended.fill}
               opacity="0.34"
             />
@@ -172,7 +177,7 @@ export function FootballField({
                 <line
                   x1={x}
                   x2={x}
-                  y1={60}
+                  y1={102}
                   y2={FIELD.height - 60}
                   stroke="var(--sports-chalk)"
                   strokeWidth={heavy ? 2.4 : 1}
@@ -190,7 +195,7 @@ export function FootballField({
                 key={yard}
                 x1={x}
                 x2={x}
-                y1={8}
+                y1={102}
                 y2={FIELD.height - 8}
                 stroke="var(--sports-chalk)"
                 strokeWidth="5"
@@ -370,17 +375,18 @@ function EndZone({
 }) {
   return (
     <g>
-      <rect x={x} width={FIELD.endzone} height={FIELD.height} fill="var(--sports-turf)" />
+      <rect x={x} y={102} width={FIELD.endzone} height={FIELD.height - 102} fill="var(--sports-turf)" />
       <rect
         x={x}
+        y={102}
         width={FIELD.endzone}
-        height={FIELD.height}
+        height={FIELD.height - 102}
         fill={pulse && pulseFill ? pulseFill : paint.fill}
         opacity="0.78"
         className={pulse ? 'pc-sports-endzone-pulse' : undefined}
       />
-      <rect x={x} width={FIELD.endzone} height={FIELD.height} fill={`url(#${vignette})`} />
-      <rect x={x + 3} y="3" width={FIELD.endzone - 6} height={FIELD.height - 6} fill="none" stroke="var(--sports-chalk)" strokeWidth="1.5" />
+      <rect x={x} y={102} width={FIELD.endzone} height={FIELD.height - 102} fill={`url(#${vignette})`} />
+      <rect x={x + 3} y={106} width={FIELD.endzone - 6} height={FIELD.height - 110} fill="none" stroke="var(--sports-chalk)" strokeWidth="1.5" />
       <text
         x={x + FIELD.endzone / 2}
         y={FIELD.height / 2}
@@ -424,9 +430,9 @@ function GoalPost({ side }: { side: 'left' | 'right' }) {
 
 function Pylons() {
   const posts = [
-    [yardsToFieldX(0) + 6, 62],
+    [yardsToFieldX(0) + 6, 108],
     [yardsToFieldX(0) + 6, FIELD.height - 86],
-    [yardsToFieldX(100) - 16, 62],
+    [yardsToFieldX(100) - 16, 108],
     [yardsToFieldX(100) - 16, FIELD.height - 86],
   ];
   return (
@@ -448,7 +454,7 @@ function YardNumbers() {
         const toward = yard < 50 ? -1 : yard > 50 ? 1 : 0;
         return (
           <g key={yard} fill="var(--sports-chalk)" fontSize="28" fontFamily="var(--font-display)">
-            <text x={x} y={96} textAnchor="middle">{number}</text>
+            <text x={x} y={132} textAnchor="middle">{number}</text>
             {toward !== 0 && <Arrow x={x + toward * 26} y={78} dir={toward} />}
             <text x={x} y={FIELD.height - 72} textAnchor="middle">{number}</text>
             {toward !== 0 && <Arrow x={x + toward * 26} y={FIELD.height - 96} dir={toward} />}

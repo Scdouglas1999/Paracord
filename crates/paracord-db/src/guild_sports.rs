@@ -99,6 +99,17 @@ pub async fn upsert(
     Ok(row)
 }
 
+/// Enabled servers that have at least one channel pin.
+pub async fn list_enabled_with_pins(pool: &DbPool) -> Result<Vec<GuildSportsRow>, DbError> {
+    let rows = sqlx::query_as::<_, GuildSportsRow>(&format!(
+        "SELECT {ROW_COLUMNS} FROM guild_sports_settings WHERE enabled = $1 AND channel_pins <> '[]'"
+    ))
+    .bind(true)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 pub async fn set_channel_pins(
     pool: &DbPool,
     guild_id: i64,
@@ -190,5 +201,23 @@ mod tests {
         assert_eq!(again.layout, "cards");
         assert_eq!(again.favorite_teams, "[]");
         assert_eq!(get(&pool, guild_id).await.unwrap().unwrap(), again);
+    }
+
+    #[tokio::test]
+    async fn list_enabled_with_pins_skips_off_and_empty() {
+        let (pool, guild_id) = seeded().await;
+        assert!(list_enabled_with_pins(&pool).await.unwrap().is_empty());
+        upsert(&pool, guild_id, true, "[]", "[]", true, "all", "cards")
+            .await
+            .unwrap();
+        assert!(list_enabled_with_pins(&pool).await.unwrap().is_empty());
+        set_channel_pins(&pool, guild_id, r#"[{"channel_id":"1"}]"#)
+            .await
+            .unwrap();
+        assert_eq!(list_enabled_with_pins(&pool).await.unwrap().len(), 1);
+        upsert(&pool, guild_id, false, "[]", "[]", true, "all", "cards")
+            .await
+            .unwrap();
+        assert!(list_enabled_with_pins(&pool).await.unwrap().is_empty());
     }
 }

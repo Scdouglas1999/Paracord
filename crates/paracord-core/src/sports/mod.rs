@@ -4,6 +4,7 @@
 //! Guild settings decide which leagues a server shows; heat and favorites are
 //! applied when a member asks for the board.
 
+mod announce;
 mod detail;
 mod espn;
 mod heat;
@@ -11,6 +12,7 @@ mod models;
 mod replay;
 mod service;
 
+pub use announce::{plan_score_updates, AnnounceCursor, ScoreKind, ScoreSnapshot, ScoreUpdate};
 pub use models::{
     format_rfc3339, league_catalog, league_label, AtBat, Athlete, BaseballDetail, Bases,
     BoardLeague, BoxRow, BoxScore, BoxTable, FavoriteTeam, FootballDetail, FootballDrive,

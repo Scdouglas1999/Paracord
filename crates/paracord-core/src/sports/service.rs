@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::task::Poll;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 
 use super::detail;
 use super::espn;
@@ -73,6 +73,12 @@ pub trait ScoreFeed: Send + Sync {
                 "this feed has no game summary".to_string(),
             ))
         })
+    }
+
+    /// Scoreboard for one day. `None` is today. A past or future day is `YYYYMMDD`.
+    fn fetch_dated<'a>(&'a self, league: &'a str, date: Option<&'a str>) -> FeedFut<'a> {
+        let _ = date;
+        self.fetch(league)
     }
 }
 
@@ -212,6 +218,8 @@ pub struct CachedLeague {
     pub games: Vec<Game>,
     /// False when the only cached result is an error and there are no games.
     pub reliable: bool,
+    /// False when this entry is older than its own TTL, so a refresh is allowed.
+    pub fresh: bool,
 }
 
 impl ScoreboardService {
@@ -253,24 +261,39 @@ impl ScoreboardService {
         *write_lock(&self.feed) = feed;
     }
 
-    /// Games from the last refresh of `league`, if that refresh has happened.
+    /// Games from the last refresh of today's `league`, if that refresh has happened.
     pub fn cached_league(&self, league: &str) -> Option<CachedLeague> {
+        let now = self.now();
         let cache = lock(&self.cache);
         let entry = cache.peek(&cache_key(league))?;
         Some(CachedLeague {
             reliable: entry.error.is_none() || !entry.games.is_empty(),
             games: entry.games.clone(),
+            fresh: !expired(entry.fetched_at, entry.ttl, now),
         })
     }
 
     pub async fn board(&self, leagues: &[String], favorites: &[FavoriteTeam]) -> SportsBoard {
-        self.refresh_stale(leagues).await;
+        self.board_on(leagues, favorites, None).await
+    }
+
+    /// `requested` of `None`, or a day equal to today, is today's board.
+    /// Any other day is cached on its own and refreshed at the idle TTL only.
+    pub async fn board_on(
+        &self,
+        leagues: &[String],
+        favorites: &[FavoriteTeam],
+        requested: Option<NaiveDate>,
+    ) -> SportsBoard {
+        let day = self.other_day(requested);
+        self.refresh_stale(leagues, day).await;
         let now = self.now();
+        let shown = day.unwrap_or_else(|| now.date_naive());
         let mut cache = lock(&self.cache);
         let mut games = Vec::new();
         let mut statuses = Vec::with_capacity(leagues.len());
         for path in leagues {
-            let key = cache_key(path);
+            let key = board_cache_key(path, day);
             cache.touch(&key);
             let entry = cache.peek(&key);
             statuses.push(BoardLeague {
@@ -295,9 +318,14 @@ impl ScoreboardService {
         sort_games(&mut games);
         SportsBoard {
             fetched_at: now,
+            date: shown.format("%Y-%m-%d").to_string(),
             leagues: statuses,
             games,
         }
+    }
+
+    fn other_day(&self, requested: Option<NaiveDate>) -> Option<NaiveDate> {
+        requested.filter(|day| *day != self.now().date_naive())
     }
 
     /// Sorted roster for one league. A failed refresh keeps the last good list.
@@ -499,8 +527,8 @@ impl ScoreboardService {
         }
     }
 
-    async fn refresh_stale(&self, leagues: &[String]) {
-        if !self.any_stale(leagues) {
+    async fn refresh_stale(&self, leagues: &[String], day: Option<NaiveDate>) {
+        if !self.any_stale(leagues, day) {
             return;
         }
         let _guard = self.refresh.lock().await;
@@ -509,14 +537,14 @@ impl ScoreboardService {
             let cache = lock(&self.cache);
             leagues
                 .iter()
-                .filter(|league| is_stale(cache.peek(&cache_key(league)), now))
+                .filter(|league| is_stale(cache.peek(&board_cache_key(league, day)), now))
                 .cloned()
                 .collect()
         };
         let mut flights: Vec<Pin<Box<dyn Future<Output = ()> + Send>>> = stale
             .into_iter()
             .map(|league| {
-                Box::pin(self.refresh_one(league)) as Pin<Box<dyn Future<Output = ()> + Send>>
+                Box::pin(self.refresh_one(league, day)) as Pin<Box<dyn Future<Output = ()> + Send>>
             })
             .collect();
         std::future::poll_fn(|cx| {
@@ -539,20 +567,25 @@ impl ScoreboardService {
         .await;
     }
 
-    async fn refresh_one(&self, league: String) {
+    async fn refresh_one(&self, league: String, day: Option<NaiveDate>) {
         let now = self.now();
         if !is_valid_league_path(&league) {
-            self.remember_failure(&league, now, "invalid league path".to_string());
+            self.remember_failure(&league, day, now, "invalid league path".to_string());
             return;
         }
         let feed = read_lock(&self.feed).clone();
-        let fetched = feed.fetch(&league).await;
+        let date = day.map(|day| day.format("%Y%m%d").to_string());
+        let fetched = feed.fetch_dated(&league, date.as_deref()).await;
         match fetched {
             Ok(body) => match espn::parse(&body, &league) {
                 Ok(games) => {
-                    let ttl = ttl_for(&games, now);
+                    let ttl = if day.is_some() {
+                        IDLE_TTL
+                    } else {
+                        ttl_for(&games, now)
+                    };
                     lock(&self.cache).insert(
-                        cache_key(&league),
+                        board_cache_key(&league, day),
                         LeagueCache {
                             games,
                             fetched_at: now,
@@ -563,40 +596,47 @@ impl ScoreboardService {
                 }
                 Err(message) => {
                     tracing::warn!(league = %league, %message, "sports scoreboard parse failed");
-                    self.remember_failure(&league, now, message);
+                    self.remember_failure(&league, day, now, message);
                 }
             },
             Err(error) => {
                 let message = error.board_message();
                 tracing::warn!(league = %league, %message, "sports scoreboard refresh failed");
-                self.remember_failure(&league, now, message);
+                self.remember_failure(&league, day, now, message);
             }
         }
     }
 
-    fn remember_failure(&self, league: &str, now: DateTime<Utc>, message: String) {
-        let key = cache_key(league);
+    fn remember_failure(
+        &self,
+        league: &str,
+        day: Option<NaiveDate>,
+        now: DateTime<Utc>,
+        message: String,
+    ) {
+        let key = board_cache_key(league, day);
         let games = lock(&self.cache)
             .peek(&key)
             .map(|entry| entry.games.clone())
             .unwrap_or_default();
+        let ttl = if day.is_some() { IDLE_TTL } else { ERROR_TTL };
         lock(&self.cache).insert(
             key,
             LeagueCache {
                 games,
                 fetched_at: now,
-                ttl: ERROR_TTL,
+                ttl,
                 error: Some(message),
             },
         );
     }
 
-    fn any_stale(&self, leagues: &[String]) -> bool {
+    fn any_stale(&self, leagues: &[String], day: Option<NaiveDate>) -> bool {
         let now = self.now();
         let cache = lock(&self.cache);
         leagues
             .iter()
-            .any(|league| is_stale(cache.peek(&cache_key(league)), now))
+            .any(|league| is_stale(cache.peek(&board_cache_key(league, day)), now))
     }
 
     fn now(&self) -> DateTime<Utc> {
@@ -616,6 +656,14 @@ impl ScoreboardService {
     fn cached_ttl(&self, league: &str) -> Option<Duration> {
         lock(&self.cache)
             .peek(&cache_key(league))
+            .map(|entry| entry.ttl)
+    }
+
+    #[cfg(test)]
+    fn cached_ttl_on(&self, league: &str, day: Option<NaiveDate>) -> Option<Duration> {
+        let day = self.other_day(day);
+        lock(&self.cache)
+            .peek(&board_cache_key(league, day))
             .map(|entry| entry.ttl)
     }
 
@@ -692,6 +740,14 @@ fn expired(fetched_at: DateTime<Utc>, ttl: Duration, now: DateTime<Utc>) -> bool
 
 fn cache_key(league: &str) -> String {
     league.to_ascii_lowercase()
+}
+
+fn board_cache_key(league: &str, day: Option<NaiveDate>) -> String {
+    let league = cache_key(league);
+    match day {
+        Some(day) => format!("{league}|{}", day.format("%Y%m%d")),
+        None => league,
+    }
 }
 
 fn detail_key(league: &str, event_id: &str) -> String {
@@ -780,14 +836,26 @@ pub fn summary_url(host: &str, league: &str, event_id: &str) -> Option<String> {
 }
 
 pub fn scoreboard_url(host: &str, league: &str) -> String {
+    scoreboard_url_dated(host, league, None)
+}
+
+fn scoreboard_url_dated(host: &str, league: &str, date: Option<&str>) -> String {
     let lower = league.to_ascii_lowercase();
-    let query = if lower.ends_with("/college-football") {
-        "?groups=80&limit=300"
+    let mut query = if lower.ends_with("/college-football") {
+        "?groups=80&limit=300".to_string()
     } else if lower.ends_with("college-basketball") {
-        "?groups=50&limit=300"
+        "?groups=50&limit=300".to_string()
     } else {
-        ""
+        String::new()
     };
+    if let Some(date) = date {
+        if query.is_empty() {
+            query = format!("?dates={date}");
+        } else {
+            query.push_str("&dates=");
+            query.push_str(date);
+        }
+    }
     format!("https://{host}/apis/site/v2/sports/{league}/scoreboard{query}")
 }
 
@@ -815,9 +883,14 @@ impl EspnFeed {
 
 impl ScoreFeed for EspnFeed {
     fn fetch<'a>(&'a self, league: &'a str) -> FeedFut<'a> {
+        self.fetch_dated(league, None)
+    }
+
+    fn fetch_dated<'a>(&'a self, league: &'a str, date: Option<&'a str>) -> FeedFut<'a> {
         let league = league.to_string();
+        let date = date.map(str::to_string);
         let client = self.client.clone();
-        Box::pin(async move { fetch_league(&client, &league).await })
+        Box::pin(async move { fetch_league(&client, &league, date.as_deref()).await })
     }
 
     fn fetch_teams<'a>(&'a self, league: &'a str) -> FeedFut<'a> {
@@ -834,13 +907,17 @@ impl ScoreFeed for EspnFeed {
     }
 }
 
-async fn fetch_league(client: &reqwest::Client, league: &str) -> Result<String, FeedError> {
+async fn fetch_league(
+    client: &reqwest::Client,
+    league: &str,
+    date: Option<&str>,
+) -> Result<String, FeedError> {
     if !is_valid_league_path(league) {
         return Err(FeedError::Other("invalid league path".to_string()));
     }
     fetch_on_hosts(
         client,
-        |host| Some(scoreboard_url(host, league)),
+        |host| Some(scoreboard_url_dated(host, league, date)),
         MAX_BODY_BYTES,
         "scoreboard response exceeded 4 MiB",
         "no scoreboard host answered",
@@ -996,16 +1073,16 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
-    use chrono::{DateTime, TimeZone, Utc};
+    use chrono::{DateTime, NaiveDate, TimeZone, Utc};
     use tokio::sync::watch;
 
     use super::super::models::FavoriteTeam;
     use super::{
         is_valid_event_id, is_valid_league_path, parse_leagues, request_url_is_allowed,
-        scoreboard_url, summary_url, teams_url, user_agent, FeedError, ScoreFeed,
-        ScoreboardService, CACHE_CAP, DEFAULT_LEAGUE_PATHS, DETAIL_LIVE_TTL, DETAIL_POST_TTL,
-        DETAIL_PRE_TTL, ERROR_TTL, HOSTS, IDLE_TTL, LIVE_TTL, MAX_BODY_BYTES, REQUEST_TIMEOUT,
-        ROSTER_ERROR_TTL, ROSTER_TTL, SOON_TTL, SUMMARY_MAX_BODY_BYTES,
+        scoreboard_url, scoreboard_url_dated, summary_url, teams_url, user_agent, FeedError,
+        ScoreFeed, ScoreboardService, CACHE_CAP, DEFAULT_LEAGUE_PATHS, DETAIL_LIVE_TTL,
+        DETAIL_POST_TTL, DETAIL_PRE_TTL, ERROR_TTL, HOSTS, IDLE_TTL, LIVE_TTL, MAX_BODY_BYTES,
+        REQUEST_TIMEOUT, ROSTER_ERROR_TTL, ROSTER_TTL, SOON_TTL, SUMMARY_MAX_BODY_BYTES,
     };
 
     fn at(hour: u32, minute: u32) -> DateTime<Utc> {
@@ -1079,6 +1156,46 @@ mod tests {
             self.seen.fetch_add(1, Ordering::SeqCst);
             self.inner.fetch(league)
         }
+    }
+
+    #[tokio::test]
+    async fn a_day_other_than_today_stays_at_the_idle_ttl() {
+        let seen = Arc::new(AtomicUsize::new(0));
+        let service = ScoreboardService::with_feed(Arc::new(CountWrap {
+            inner: Arc::new(CountingFeed {
+                body: Mutex::new(Ok(board_with(&event("1", "in", "2026-09-20T20:00:00Z")))),
+                calls: AtomicUsize::new(0),
+            }),
+            seen: seen.clone(),
+        }));
+        let start = at(20, 0);
+        service.set_now(start);
+        let leagues = vec!["football/nfl".to_string()];
+        let past = NaiveDate::from_ymd_opt(2026, 9, 18).unwrap();
+        let today = NaiveDate::from_ymd_opt(2026, 9, 20).unwrap();
+
+        let dated = service.board_on(&leagues, &[], Some(past)).await;
+        assert_eq!(dated.date, "2026-09-18");
+        assert_eq!(seen.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            service.cached_ttl_on("football/nfl", Some(past)),
+            Some(IDLE_TTL)
+        );
+
+        service.set_now(start + chrono::Duration::seconds(12));
+        service.board_on(&leagues, &[], Some(past)).await;
+        assert_eq!(seen.load(Ordering::SeqCst), 1);
+
+        let current = service.board_on(&leagues, &[], Some(today)).await;
+        assert_eq!(current.date, "2026-09-20");
+        assert_eq!(seen.load(Ordering::SeqCst), 2);
+        assert_eq!(service.cached_ttl("football/nfl"), Some(LIVE_TTL));
+
+        service.set_now(start + chrono::Duration::seconds(24));
+        service.board(&leagues, &[]).await;
+        assert_eq!(seen.load(Ordering::SeqCst), 3);
+        service.board_on(&leagues, &[], Some(past)).await;
+        assert_eq!(seen.load(Ordering::SeqCst), 3);
     }
 
     #[tokio::test]
@@ -1324,6 +1441,10 @@ mod tests {
             "https://site.web.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard"
         );
         assert_eq!(
+            scoreboard_url_dated("site.web.api.espn.com", "football/nfl", Some("20260918")),
+            "https://site.web.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates=20260918"
+        );
+        assert_eq!(
             teams_url("site.web.api.espn.com", "football/nfl"),
             "https://site.web.api.espn.com/apis/site/v2/sports/football/nfl/teams?limit=1000"
         );
@@ -1333,6 +1454,10 @@ mod tests {
     fn college_boards_ask_for_every_game_not_just_ranked_teams() {
         assert!(scoreboard_url("h", "football/college-football")
             .ends_with("/football/college-football/scoreboard?groups=80&limit=300"));
+        assert!(
+            scoreboard_url_dated("h", "football/college-football", Some("20260918"))
+                .ends_with("?groups=80&limit=300&dates=20260918")
+        );
         assert!(scoreboard_url("h", "basketball/mens-college-basketball")
             .ends_with("/basketball/mens-college-basketball/scoreboard?groups=50&limit=300"));
         assert!(scoreboard_url("h", "basketball/womens-college-basketball")

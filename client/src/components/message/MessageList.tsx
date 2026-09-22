@@ -5,7 +5,7 @@ import { useRef, useEffect, useMemo, useState, useReducer, useCallback, type CSS
 import { createPortal } from 'react-dom';
 import { captureScopedOperation, type OperationContext } from '../../lib/operationContext';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { AlertTriangle, ArrowDown, Smile, Reply, MoreHorizontal, Hash, Check, X as XIcon, Pencil, Pin, PinOff, Copy, Clipboard, Trash2, MessageSquare, Send, Eye, Loader2, Bookmark, BookmarkCheck } from 'lucide-react';
+import { AlertTriangle, ArrowDown, Smile, Reply, MoreHorizontal, Hash, Check, X as XIcon, Pencil, Pin, PinOff, Copy, Clipboard, Trash2, MessageSquare, Send, Eye, Loader2, Bookmark, BookmarkCheck, Trophy } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { useMessages } from '../../hooks/useMessages';
 import { useTypingStore } from '../../stores/typingStore';
@@ -62,6 +62,9 @@ import {
 import { useAuthorLights, useRoomLitEvents, type RoomLitEvent } from './messageLight';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { GitHubEventEmbed, isGitHubWebhookMessage } from './GitHubEventEmbed';
+import { ScoreUpdateCard } from '../sports/ScoreUpdateCard';
+import { isSportsScoreAuthor, parseScoreUpdate, resolveScoreSides, scoreUpdateGame, scoreUpdateHref } from '../sports/scoreUpdate';
+import { useSportsStore } from '../../stores/sportsStore';
 import { PollMessageCard } from './PollMessageCard';
 import { EphemeralMessage } from './EphemeralMessage';
 import { MessageComponents } from './MessageComponents';
@@ -670,6 +673,9 @@ function OwnedMessageList({
   const typingUsers = useTypingStore((s) => s.typingByChannel[channelId] ?? EMPTY_TYPING);
   const me = useCurrentUser()?.id;
   const activeGuildId = activeChannel?.guild_id || null;
+  const pinnedSportsGame = useSportsStore((state) =>
+    scoreUpdateGame(activeGuildId ? state.byGuild[activeGuildId] : undefined, channelId),
+  );
   const originServerId = useGuild(activeChannel?.guild_id)?.scope.serverId ?? null;
   const activeServerId = useServerListStore((state) => state.activeServerId);
   const savedServerScope = activeServerId ?? '__local__';
@@ -2439,6 +2445,8 @@ function OwnedMessageList({
     const linkedThreads = linkedThreadsByStarterMessageId[msg.id] ?? [];
     const authorGuildMember = activeGuildMemberById.get(msg.author.id);
     const authorName = displayName(msg.author, authorGuildMember?.nick);
+    const scoreUpdate = isSportsScoreAuthor(msg.author) ? parseScoreUpdate(msg.content || '') : null;
+    const scoreSides = scoreUpdate ? resolveScoreSides(pinnedSportsGame, scoreUpdate) : null;
     const authorRoleColor = authorGuildMember ? getHighestRoleColor(authorGuildMember.roles ?? [], guildRoles) : undefined;
     // §1.5: a person is a rim of light, not a coloured dot. The author's light
     // also carries "in Shop floor" when they are in a room right now (§7.4).
@@ -2536,6 +2544,11 @@ function OwnedMessageList({
             </span>
           </div>
         ) : (
+          scoreUpdate ? (
+            <span className={cn('pc-sports-trophy', ribbon && 'is-ribbon')} aria-hidden>
+              <Trophy size={ribbon ? 14 : 16} />
+            </span>
+          ) : (
           <button
             type="button"
             aria-label={`Open profile for ${authorName}`}
@@ -2547,6 +2560,7 @@ function OwnedMessageList({
           >
             <LitAvatar person={authorPerson} size={ribbon ? 28 : 36} hideLabel />
           </button>
+          )
         )}
 
         {bulkDeleteMode && canManageMessages && (
@@ -2705,6 +2719,13 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                   <div className="h-3.5 w-3/4 pc-skeleton rounded-[var(--radius-window)] bg-bg-mod-subtle" />
                   <div className="h-3.5 w-1/2 pc-skeleton rounded-[var(--radius-window)] bg-bg-mod-subtle" />
                 </div>
+              ) : !msg.poll && scoreUpdate && scoreSides ? (
+                <ScoreUpdateCard
+                  update={scoreUpdate}
+                  lead={scoreSides.lead}
+                  other={scoreSides.other}
+                  href={scoreUpdateHref(activeGuildId || '', pinnedSportsGame)}
+                />
               ) : !msg.poll ? (
                 <div className={cn('mt-0.5 break-words text-body text-text-body', ribbon && 'text-ribbon')}>
                   {getCachedParsedMarkdown(

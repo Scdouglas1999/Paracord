@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes } from 'react-router';
 import { sportsApi, type SportsBoard, type SportsGame, type SportsSettings, type SportsTeam } from '../api/sports';
 import { GuildSportsPage } from './GuildSportsPage';
 import { useSportsStore } from '../stores/sportsStore';
+import { boardDay } from '../components/sports/boardDate';
 
 vi.mock('../hooks/useGuilds', () => ({
   useGuild: () => ({ id: 'g1', name: 'Kestrel Robotics' }),
@@ -162,9 +163,9 @@ function settings(over: Partial<SportsSettings> = {}): SportsSettings {
   };
 }
 
-function renderPage() {
+function renderPage(entry = '/app/guilds/g1/sports') {
   return render(
-    <MemoryRouter initialEntries={['/app/guilds/g1/sports']}>
+    <MemoryRouter initialEntries={[entry]}>
       <Routes>
         <Route path="/app/guilds/:guildId/sports" element={<GuildSportsPage />} />
       </Routes>
@@ -417,5 +418,40 @@ describe('GuildSportsPage', () => {
 
     await user.click(screen.getByRole('switch', { name: 'Hide scores' }));
     expect(screen.getByRole('link', { name: 'Open Chiefs at Bills' })).not.toHaveClass('is-flash');
+  });
+
+  it('asks for yesterday and names that day', async () => {
+    const user = userEvent.setup();
+    const yesterday = boardDay(-1);
+    vi.mocked(sportsApi.getBoard).mockImplementation(async (_guild, date) => {
+      if (date) return { data: { ...fullBoard([]), date: yesterday.iso } } as never;
+      return { data: fullBoard() } as never;
+    });
+    renderPage();
+    await screen.findByRole('heading', { name: 'Sports' });
+    await user.click(screen.getByRole('button', { name: 'Yesterday' }));
+    expect(await screen.findByRole('heading', { name: 'Sports · Yesterday' })).toBeInTheDocument();
+    expect(sportsApi.getBoard).toHaveBeenCalledWith('g1', yesterday.compact);
+    expect(screen.getByText('No games yesterday')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Open Chiefs at Bills' })).not.toBeInTheDocument();
+  });
+
+  it('opens a deep-linked day and keeps an out-of-range link on today', async () => {
+    const day = boardDay(-2);
+    vi.mocked(sportsApi.getBoard).mockImplementation(async (_guild, date) => {
+      if (date) return { data: fullBoard([]) } as never;
+      return { data: fullBoard() } as never;
+    });
+    renderPage(`/app/guilds/g1/sports?date=${day.iso}`);
+    expect(await screen.findByRole('heading', { name: `Sports · ${day.label}` })).toBeInTheDocument();
+    expect(sportsApi.getBoard).toHaveBeenCalledWith('g1', day.compact);
+    expect(screen.getByText(`No games on ${day.label}`)).toBeInTheDocument();
+
+    cleanup();
+    useSportsStore.getState().reset();
+    vi.mocked(sportsApi.getBoard).mockClear();
+    renderPage('/app/guilds/g1/sports?date=2020-01-01');
+    expect(await screen.findByRole('heading', { name: 'Sports' })).toBeInTheDocument();
+    expect(sportsApi.getBoard).not.toHaveBeenCalledWith('g1', '20200101');
   });
 });

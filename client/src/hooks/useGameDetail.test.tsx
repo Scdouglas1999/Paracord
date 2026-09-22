@@ -2,7 +2,7 @@ import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import { sportsApi, type GameDetail } from '../api/sports';
-import { useGameDetail } from './useGameDetail';
+import { resetGameDetailWatchers, useGameDetail } from './useGameDetail';
 
 vi.mock('../api/sports', async () => {
   const actual = await vi.importActual<typeof import('../api/sports')>('../api/sports');
@@ -65,6 +65,12 @@ function Harness() {
   return null;
 }
 
+function TwoViews() {
+  useGameDetail('g1', 'football', 'nfl', '401872945');
+  useGameDetail('g1', 'football', 'nfl', '401872945');
+  return null;
+}
+
 async function settle() {
   for (let i = 0; i < 8; i += 1) {
     await act(async () => {
@@ -82,6 +88,7 @@ describe('useGameDetail', () => {
 
   afterEach(() => {
     cleanup();
+    resetGameDetailWatchers();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -102,6 +109,18 @@ describe('useGameDetail', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(60_000);
     });
+    expect(sportsApi.getGame).toHaveBeenCalledTimes(2);
+  });
+
+  it('shares one poll when the game page and the pin are both open', async () => {
+    render(<TwoViews />);
+    await settle();
+    expect(sportsApi.getGame).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    await settle();
     expect(sportsApi.getGame).toHaveBeenCalledTimes(2);
   });
 

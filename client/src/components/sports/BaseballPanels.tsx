@@ -489,7 +489,7 @@ function BatterBox({
   );
 }
 
-function Diamond({
+export function Diamond({
   baseball,
   game,
   hit,
@@ -570,32 +570,52 @@ function Diamond({
               <stop offset="0" stopColor={hitFill} stopOpacity="0.05" />
               <stop offset="1" stopColor={hitFill} stopOpacity="0.95" />
             </linearGradient>
-            <pattern id={`${uid}-stands`} width="12" height="8" patternUnits="userSpaceOnUse">
-              <circle cx="2" cy="3" r="0.9" fill="var(--sports-chalk)" opacity="0.4" />
-              <circle cx="8" cy="6" r="0.7" fill="var(--sports-chalk)" opacity="0.25" />
+            <pattern id={`${uid}-seats`} width="8" height="4.5" patternUnits="userSpaceOnUse">
+              <circle cx="1.6" cy="1.3" r="0.85" fill="var(--sports-chalk)" opacity="0.4" />
+              <circle cx="5.4" cy="3.1" r="0.65" fill="var(--sports-chalk)" opacity="0.24" />
             </pattern>
+            <linearGradient id={`${uid}-tierlight`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stopColor="var(--sports-chalk)" stopOpacity="0.24" />
+              <stop offset="0.6" stopColor="var(--sports-chalk)" stopOpacity="0" />
+            </linearGradient>
+            <radialGradient id={`${uid}-tower`} cx="50%" cy="42%" r="50%">
+              <stop offset="0" stopColor="var(--sports-stadium-glow)" />
+              <stop offset="1" stopColor="var(--sports-stadium-glow)" stopOpacity="0" />
+            </radialGradient>
             <filter id={`${uid}-grit`} x="-20%" y="-20%" width="140%" height="140%">
               <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="2" />
               <feColorMatrix type="saturate" values="0" />
             </filter>
-            <linearGradient id={`${uid}-tiers`} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" stopColor="var(--sports-chalk)" stopOpacity="0.2" />
-              <stop offset="1" stopColor="var(--sports-stadium)" stopOpacity="0" />
-            </linearGradient>
-            <filter id={`${uid}-crowdnoise`} x="0" y="0" width="100%" height="100%">
-              <feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="2" seed="7" />
-              <feColorMatrix type="saturate" values="0" />
-            </filter>
           </defs>
           <rect width={GAMEDAY.size} height={GAMEDAY.size} fill="var(--sports-turf)" />
-          <path d="M4 2 H246 V18 Q125 4 4 18 Z" fill="var(--sports-stadium)" opacity="0.5" />
-          <path d="M4 8 H246 V26 Q125 8 4 26 Z" fill="var(--sports-stadium)" opacity="0.72" />
-          <path d="M4 14 H246 V36 Q125 12 4 36 Z" fill="var(--sports-stadium)" opacity="0.9" />
-          <path d="M4 2 H246 V36 Q125 8 4 36 Z" fill={`url(#${uid}-tiers)`} />
-          <path d="M4 2 H246 V36 Q125 8 4 36 Z" fill={`url(#${uid}-stands)`} />
-          <path d="M4 2 H246 V36 Q125 8 4 36 Z" filter={`url(#${uid}-crowdnoise)`} opacity="0.22" />
-          <circle cx="22" cy="10" r="8" fill="var(--sports-chalk)" opacity="0.2" />
-          <circle cx="228" cy="10" r="8" fill="var(--sports-chalk)" opacity="0.2" />
+          <g data-stands="ballpark" aria-hidden>
+            {[
+              'M4 64 C4 8 40 2 125 2 C210 2 246 8 246 64 L234 64 C234 18 200 12 125 12 C50 12 16 18 16 64 Z',
+              'M16 64 C16 18 50 12 125 12 C200 12 234 18 234 64 L222 64 C222 28 186 22 125 22 C64 22 28 28 28 64 Z',
+              'M28 64 C28 28 64 22 125 22 C186 22 222 28 222 64 L210 64 C210 38 172 32 125 32 C78 32 40 38 40 64 Z',
+            ].map((d) => (
+              <path key={d} d={d} fill="var(--sports-stadium)" />
+            ))}
+            {[
+              'M4 64 C4 8 40 2 125 2 C210 2 246 8 246 64 L234 64 C234 18 200 12 125 12 C50 12 16 18 16 64 Z',
+              'M16 64 C16 18 50 12 125 12 C200 12 234 18 234 64 L222 64 C222 28 186 22 125 22 C64 22 28 28 28 64 Z',
+              'M28 64 C28 28 64 22 125 22 C186 22 222 28 222 64 L210 64 C210 38 172 32 125 32 C78 32 40 38 40 64 Z',
+            ].map((d) => (
+              <path key={`light-${d}`} d={d} fill={`url(#${uid}-tierlight)`} />
+            ))}
+            {[
+              'M4 64 C4 8 40 2 125 2 C210 2 246 8 246 64 L234 64 C234 18 200 12 125 12 C50 12 16 18 16 64 Z',
+              'M16 64 C16 18 50 12 125 12 C200 12 234 18 234 64 L222 64 C222 28 186 22 125 22 C64 22 28 28 28 64 Z',
+              'M28 64 C28 28 64 22 125 22 C186 22 222 28 222 64 L210 64 C210 38 172 32 125 32 C78 32 40 38 40 64 Z',
+            ].map((d) => (
+              <path key={`seats-${d}`} d={d} fill={`url(#${uid}-seats)`} />
+            ))}
+            <path d="M16 64 C16 18 50 12 125 12 C200 12 234 18 234 64" fill="none" stroke="var(--sports-ink)" strokeWidth="1.4" />
+            <path d="M28 64 C28 28 64 22 125 22 C186 22 222 28 222 64" fill="none" stroke="var(--sports-ink)" strokeWidth="1.4" />
+            <path d="M40 64 C40 38 78 32 125 32 C172 32 210 38 210 64" fill="none" stroke="var(--sports-ink)" strokeWidth="1.4" />
+            <circle cx="22" cy="16" r="14" fill={`url(#${uid}-tower)`} />
+            <circle cx="228" cy="16" r="14" fill={`url(#${uid}-tower)`} />
+          </g>
           <clipPath id={`${uid}-outfield`}>
             <path d="M16 28 L125 198 L234 28 L234 8 L16 8 Z" />
           </clipPath>

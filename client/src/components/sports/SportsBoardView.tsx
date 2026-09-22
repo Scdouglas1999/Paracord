@@ -1,14 +1,17 @@
 import { useEffect, useId, useState, type ReactNode } from 'react';
-import type { SportsDefaultView, SportsGame } from '../../api/sports';
-import { asDefaultView, asLayout } from '../../api/sports';
+import { useSearchParams } from 'react-router';
+import type { SportsBoard, SportsDefaultView, SportsGame } from '../../api/sports';
+import { asDefaultView, asLayout, sportsApi } from '../../api/sports';
 import { useSportsPolling, useSportsSettings } from '../../hooks/useSportsBoard';
 import { useSportsStore } from '../../stores/sportsStore';
 import { Button, Chip, Plate, Switch } from '../ui';
+import { boardDay, boardDayFromParam, emptyDayPhrase, sportsTitle, type BoardDay } from './boardDate';
 import {
   countStates,
   groupGames,
   hottestLiveId,
   HIDE_SCORES_EVENT,
+  QUIET_POLL_MS,
   leagueFailureCopy,
   readHideScores,
   writeHideScores,
@@ -19,11 +22,41 @@ export function SportsBoardView({ guildId, serverName }: { guildId: string; serv
   const { settings, status, error, board, boardError, flashes } = useSportsSettings(guildId);
   const enabled = settings?.enabled === true;
   useSportsPolling(guildId, enabled);
+  const [search, setSearch] = useSearchParams();
+  const day = boardDayFromParam(search.get('date'));
+  const viewingToday = day.offset === 0;
+  const [dated, setDated] = useState<{ iso: string; board: SportsBoard | null; error: string | null } | null>(null);
+  const [datedAttempt, setDatedAttempt] = useState(0);
 
   const [hideScores, setHideScores] = useState(readHideScores);
   const [viewChoice, setViewChoice] = useState<SportsDefaultView | null>(null);
   const [leaguePath, setLeaguePath] = useState<string | null>(null);
   const hideId = useId();
+
+  useEffect(() => {
+    if (!enabled || viewingToday || !guildId) return;
+    let stopped = false;
+    const load = () => {
+      if (document.hidden) return;
+      void sportsApi.getBoard(guildId, day.compact).then((res) => {
+        if (!stopped) setDated({ iso: day.iso, board: res.data, error: null });
+      }).catch(() => {
+        if (!stopped) {
+          setDated({
+            iso: day.iso,
+            board: null,
+            error: "Scores couldn't be loaded. Try again in a moment.",
+          });
+        }
+      });
+    };
+    load();
+    const timer = window.setInterval(load, QUIET_POLL_MS);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [enabled, viewingToday, guildId, day.iso, day.compact, datedAttempt]);
 
   useEffect(() => {
     const sync = () => setHideScores(readHideScores());
@@ -37,10 +70,17 @@ export function SportsBoardView({ guildId, serverName }: { guildId: string; serv
 
   const view = viewChoice ?? asDefaultView(settings?.default_view);
   const now = new Date();
+  const title = sportsTitle(day);
+  const pickDay = (next: BoardDay) => {
+    const params = new URLSearchParams(search);
+    if (next.offset === 0) params.delete('date');
+    else params.set('date', next.iso);
+    setSearch(params, { replace: true });
+  };
 
   if (!guildId || status === 'idle' || status === 'loading') {
     return (
-      <Page serverName={serverName}>
+      <Page serverName={serverName} title={title}>
         <p role="status" className="text-label text-text-secondary">Loading scores…</p>
       </Page>
     );
@@ -48,7 +88,7 @@ export function SportsBoardView({ guildId, serverName }: { guildId: string; serv
 
   if (status === 'error') {
     return (
-      <Page serverName={serverName}>
+      <Page serverName={serverName} title={title}>
         <StatusNote
           message={error || "Sports settings couldn't be loaded."}
           onRetry={() => void useSportsStore.getState().ensureSettings(guildId)}
@@ -59,22 +99,25 @@ export function SportsBoardView({ guildId, serverName }: { guildId: string; serv
 
   if (!enabled) {
     return (
-      <Page serverName={serverName}>
+      <Page serverName={serverName} title="Sports">
         <p className="text-body text-text-secondary">Sports is turned off for this server.</p>
       </Page>
     );
   }
 
-  if (!board && !boardError) {
+  const shownBoard = viewingToday ? board : (dated?.iso === day.iso ? dated.board : null);
+  const shownError = viewingToday ? boardError : (dated?.iso === day.iso ? dated.error : null);
+  if (!shownBoard && !shownError) {
     return (
-      <Page serverName={serverName}>
+      <Page serverName={serverName} title={title}>
+        <DateBar day={day} onPick={pickDay} />
         <p role="status" className="text-label text-text-secondary">Loading scores…</p>
       </Page>
     );
   }
 
-  const games = board?.games ?? [];
-  const leagues = board?.leagues ?? [];
+  const games = shownBoard?.games ?? [];
+  const leagues = shownBoard?.leagues ?? (board?.leagues ?? []);
   const leagueGames = leaguePath ? games.filter((game) => game.league_path === leaguePath) : games;
   const counts = countStates(leagueGames);
   const grouped = groupGames(games, { leaguePath, view, hideScores });
@@ -84,11 +127,13 @@ export function SportsBoardView({ guildId, serverName }: { guildId: string; serv
   const favoriteTeamKeys = new Set(
     (settings?.favorite_teams ?? []).map((team) => `${team.league}:${team.team_id}`),
   );
-  const failure = board && !boardError ? leagueFailureCopy(leagues, games) : null;
+  const failure = shownBoard && !shownError ? leagueFailureCopy(leagues, games) : null;
   const nothing = shown.length === 0;
+  const phrase = emptyDayPhrase(day);
 
   return (
-    <Page serverName={serverName}>
+    <Page serverName={serverName} title={title}>
+      <DateBar day={day} onPick={pickDay} />
       <div
         role="group"
         aria-label="Filters"
@@ -132,10 +177,16 @@ export function SportsBoardView({ guildId, serverName }: { guildId: string; serv
         </span>
       </div>
 
-      {boardError && (
+      {shownError && (
         <StatusNote
-          message={boardError}
-          onRetry={() => void useSportsStore.getState().refreshBoard(guildId)}
+          message={shownError}
+          onRetry={() => {
+            if (viewingToday) void useSportsStore.getState().refreshBoard(guildId);
+            else {
+              setDated(null);
+              setDatedAttempt((n) => n + 1);
+            }
+          }}
         />
       )}
       {failure && (
@@ -143,7 +194,7 @@ export function SportsBoardView({ guildId, serverName }: { guildId: string; serv
       )}
 
       {nothing ? (
-        <EmptyNote text={emptyCopy(view, leaguePath, leagues, Boolean(failure || boardError))} />
+        <EmptyNote text={emptyCopy(view, leaguePath, leagues, Boolean(failure || shownError), phrase)} />
       ) : (
         <div className="pc-sports-board flex flex-col gap-6" data-layout={layout}>
           <GameSection guildId={guildId} title="Your teams" games={grouped.yours} hideScores={hideScores} flashes={flashes} now={now} layout={layout} featuredId={featuredId} favoriteTeamKeys={favoriteTeamKeys} />
@@ -156,9 +207,45 @@ export function SportsBoardView({ guildId, serverName }: { guildId: string; serv
   );
 }
 
+function DateBar({ day, onPick }: { day: BoardDay; onPick: (day: BoardDay) => void }) {
+  const today = boardDay(0);
+  const min = boardDay(-14).iso;
+  const max = boardDay(14).iso;
+  return (
+    <div role="group" aria-label="Date" className="flex flex-wrap items-center gap-2">
+      {([-1, 0, 1] as const).map((offset) => {
+        const choice = boardDay(offset);
+        return (
+          <Chip
+            key={choice.label}
+            as="button"
+            aria-pressed={day.offset === offset}
+            onClick={() => onPick(choice)}
+          >
+            {choice.label}
+          </Chip>
+        );
+      })}
+      <input
+        type="date"
+        className="pc-sports-date pc-focusable"
+        aria-label="Date"
+        min={min}
+        max={max}
+        value={day.offset === 0 ? today.iso : day.iso}
+        onChange={(event) => {
+          const next = boardDayFromParam(event.target.value);
+          if (event.target.value && next.offset === 0 && event.target.value !== today.iso) return;
+          onPick(next);
+        }}
+      />
+    </div>
+  );
+}
+
 function EmptyNote({ text }: { text: string | null }) {
   if (!text) return null;
-  const quiet = text === 'No games today' || text === 'No favorite teams are playing today.';
+  const quiet = text.startsWith('No games') || text.startsWith('No favorite teams');
   return (
     <div className="pc-sports-empty">
       {quiet && <EmptyMark />}
@@ -182,15 +269,16 @@ function emptyCopy(
   leaguePath: string | null,
   leagues: { path: string; label: string }[],
   failed: boolean,
+  phrase: string,
 ): string | null {
   if (failed) return null;
   if (view === 'live') return 'Nothing is live right now.';
-  if (view === 'favorites') return 'No favorite teams are playing today.';
+  if (view === 'favorites') return `No favorite teams are playing ${phrase}.`;
   if (leaguePath) {
     const label = leagues.find((league) => league.path === leaguePath)?.label ?? 'this league';
-    return `Nothing scheduled today in ${label}.`;
+    return `Nothing scheduled ${phrase} in ${label}.`;
   }
-  return 'No games today';
+  return `No games ${phrase}`;
 }
 
 function GameSection({
@@ -208,7 +296,7 @@ function GameSection({
   title: string;
   games: SportsGame[];
   hideScores: boolean;
-  flashes: Record<string, { until: number; message: string; side: 'home' | 'away' | null }>;
+  flashes: Record<string, { until: number; message: string; side: 'home' | 'away' | null; chip: string | null }>;
   now: Date;
   layout: 'cards' | 'list';
   featuredId: string | null;
@@ -281,12 +369,12 @@ function StatusNote({ message, onRetry }: { message: string; onRetry: () => void
   );
 }
 
-function Page({ serverName, children }: { serverName: string; children: ReactNode }) {
+function Page({ serverName, title = 'Sports', children }: { serverName: string; title?: string; children: ReactNode }) {
   return (
     <div className="h-full min-w-0 overflow-x-hidden overflow-y-auto bg-bg-base p-[var(--gutter)]">
       <Plate as="section" aria-label="Sports" bare className="flex min-w-0 flex-col gap-5 px-4 py-5 sm:px-6">
         <header className="flex min-w-0 flex-col gap-1">
-          <h1 className="font-display text-heading text-text-primary">Sports</h1>
+          <h1 className="font-display text-heading text-text-primary">{title}</h1>
           {serverName && <p className="truncate text-meta text-text-muted">{serverName}</p>}
         </header>
         {children}

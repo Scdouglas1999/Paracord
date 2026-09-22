@@ -5,12 +5,37 @@ import { sportsApi } from '../../api/sports';
 import { useGuildChannels } from '../../hooks/useChannels';
 import { usePermissions } from '../../hooks/usePermissions';
 import { useSportsPolling, useSportsSettings } from '../../hooks/useSportsBoard';
+import { useReducedMotion } from '../../lib/motion/reducedMotion';
 import { ChannelType, Permissions, hasPermission } from '../../types';
 import { useSportsStore } from '../../stores/sportsStore';
+import { GameNight } from './GameNight';
 import { miniFieldBar, teamPaint } from './gamecast';
 import { HIDE_SCORES_EVENT, LIVE_POLL_MS, QUIET_POLL_MS, gameAriaLabel, gameHref, pinOneLine, readHideScores, runnersLabel, statusLine } from './model';
 import { latestPlayText, pinGameKey } from './timeline';
 import { TeamMark } from './TeamMark';
+
+const NIGHT_KEY = 'paracord.sports.game-night';
+
+function readNight(channelId: string): boolean {
+  try {
+    const raw = localStorage.getItem(NIGHT_KEY);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return parsed[channelId] === true;
+  } catch {
+    return false;
+  }
+}
+
+function writeNight(channelId: string, open: boolean) {
+  try {
+    const raw = localStorage.getItem(NIGHT_KEY);
+    const parsed = raw ? JSON.parse(raw) as Record<string, unknown> : {};
+    localStorage.setItem(NIGHT_KEY, JSON.stringify({ ...parsed, [channelId]: open }));
+  } catch {
+    // A blocked store still toggles for this visit.
+  }
+}
 
 function canManage(permissions: bigint, isAdmin: boolean): boolean {
   return isAdmin
@@ -95,6 +120,7 @@ export function ChannelAmbient({
   return (
     <AmbientStrip
       guildId={guildId}
+      channelId={channelId}
       game={game}
       canUnpin={!isLoading && canManage(permissions, isAdmin)}
       onUnpin={async () => {
@@ -138,31 +164,55 @@ function useBoardPlay(guildId: string, game: SportsGame): string | null {
 
 export function AmbientStrip({
   guildId,
+  channelId,
   game,
   canUnpin,
   onUnpin,
 }: {
   guildId: string;
+  channelId: string;
   game: SportsGame;
   canUnpin: boolean;
   onUnpin: () => void;
 }) {
   const [hideScores, setHideScores] = useState(readHideScores);
+  const stageable = game.sport === 'football' || game.sport === 'baseball';
+  const [open, setOpen] = useState(() => stageable && readNight(channelId));
+  const reduced = useReducedMotion();
+  const flash = useSportsStore((state) => state.byGuild[guildId]?.flashes[game.id]);
+  const [burst, setBurst] = useState<NonNullable<typeof flash> | null>(flash ?? null);
   useEffect(() => {
     const sync = () => setHideScores(readHideScores());
     window.addEventListener(HIDE_SCORES_EVENT, sync);
     return () => window.removeEventListener(HIDE_SCORES_EVENT, sync);
   }, []);
-  const away = teamPaint(game.away, game.home).fill;
-  const home = teamPaint(game.home, game.away).fill;
+  useEffect(() => {
+    if (open || !flash || flash.until <= Date.now()) {
+      setBurst(null);
+      return;
+    }
+    setBurst(flash);
+    const timer = window.setTimeout(() => setBurst(null), Math.max(0, flash.until - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [open, flash]);
+  const awayPaint = teamPaint(game.away, game.home);
+  const homePaint = teamPaint(game.home, game.away);
+  const away = awayPaint.fill;
+  const home = homePaint.fill;
+  const scorePaint = burst?.side === 'away' ? awayPaint : burst?.side === 'home' ? homePaint : null;
   const field = !hideScores && game.sport === 'football' ? miniFieldBar(game) : null;
   const awayScore = hideScores ? '–' : (game.away.score ?? '–');
   const homeScore = hideScores ? '–' : (game.home.score ?? '–');
   const playText = useBoardPlay(guildId, game);
+  const flashing = Boolean(burst) && !reduced && !hideScores;
   return (
     <section
-      className="pc-sports-pin"
-      style={{ ['--pc-away' as string]: away, ['--pc-home' as string]: home }}
+      className={`pc-sports-pin${open ? ' is-open' : ''}${flashing ? ' is-score' : ''}`}
+      style={{
+        ['--pc-away' as string]: away,
+        ['--pc-home' as string]: home,
+        ['--pc-score' as string]: scorePaint?.fill,
+      }}
       aria-label={`Pinned game. ${gameAriaLabel(game, hideScores)}`}
     >
       <div className="pc-sports-pin-main">
@@ -177,6 +227,28 @@ export function AmbientStrip({
           <TeamMark team={game.home} />
         </span>
         <span className="pc-sports-pin-compact pc-mono">{pinOneLine(game, hideScores)}</span>
+        {burst?.chip && !hideScores && (
+          <span className="pc-sports-pin-chip" style={{ background: scorePaint?.fill, color: scorePaint?.ink }}>{burst.chip}</span>
+        )}
+        {stageable && (
+          <button
+            type="button"
+            className="pc-focusable pc-sports-pin-chevron"
+            aria-expanded={open}
+            aria-label={open ? 'Collapse the game' : 'Expand the game'}
+            onClick={() => {
+              setOpen((value) => {
+                const next = !value;
+                writeNight(channelId, next);
+                return next;
+              });
+            }}
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden>
+              <path d={open ? 'M2 8 L6 4 L10 8' : 'M2 4 L6 8 L10 4'} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+            </svg>
+          </button>
+        )}
         <Link to={gameHref(guildId, game)} className="pc-focusable shrink-0 text-label text-text-link">Open</Link>
         {canUnpin && (
           <button type="button" className="pc-focusable pc-sports-unpin" aria-label="Unpin" onClick={onUnpin}>
@@ -184,7 +256,8 @@ export function AmbientStrip({
           </button>
         )}
       </div>
-      {!hideScores && (
+      {open && <GameNight guildId={guildId} game={game} hideScores={hideScores} />}
+      {!open && !hideScores && (
         <div className="pc-sports-pin-more">
           {field && <PinField field={field} away={away} home={home} />}
           {game.sport === 'baseball' && <PinDiamond game={game} />}

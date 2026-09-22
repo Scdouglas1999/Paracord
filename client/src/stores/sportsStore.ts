@@ -11,7 +11,7 @@ export interface GuildSportsEntry {
   board: SportsBoard | null;
   boardError: string | null;
   /** Game id -> when the score flash ends, what to announce, and who scored. */
-  flashes: Record<string, { until: number; message: string; side: 'home' | 'away' | null }>;
+  flashes: Record<string, { until: number; message: string; side: 'home' | 'away' | null; chip: string | null }>;
 }
 
 interface SportsStore {
@@ -47,7 +47,9 @@ function mergeFlashes(
     if (flash.until > now) next[id] = flash;
   }
   const until = now + SCORE_FLASH_MS;
-  for (const change of changes) next[change.id] = { until, message: change.message, side: change.side };
+  for (const change of changes) {
+    next[change.id] = { until, message: change.message, side: change.side, chip: change.chip };
+  }
   return next;
 }
 

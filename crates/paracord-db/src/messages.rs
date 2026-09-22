@@ -2265,6 +2265,25 @@ pub async fn get_polls_for_message_ids(
     Ok(result)
 }
 
+/// True when a recent message in the channel is end-to-end encrypted.
+///
+/// Guild text channels store the words themselves. A direct message or a group
+/// conversation stores ciphertext, and the newest row is enough to tell them apart.
+pub async fn channel_has_ciphertext(pool: &DbPool, channel_id: i64) -> Result<bool, DbError> {
+    let row = sqlx::query(
+        "SELECT flags, e2ee_header FROM messages WHERE channel_id = $1 ORDER BY id DESC LIMIT 1",
+    )
+    .bind(channel_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some(row) = row else {
+        return Ok(false);
+    };
+    let flags: i32 = row.try_get("flags")?;
+    let header: Option<String> = row.try_get("e2ee_header")?;
+    Ok(flags & 1 != 0 || header.is_some())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

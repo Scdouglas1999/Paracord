@@ -142,6 +142,8 @@ pub struct FavoriteTeam {
 pub struct SportsBoard {
     #[serde(serialize_with = "serialize_timestamp")]
     pub fetched_at: DateTime<Utc>,
+    /// The day this board is for, `YYYY-MM-DD`. Omitted query means today.
+    pub date: String,
     pub leagues: Vec<BoardLeague>,
     pub games: Vec<Game>,
 }
@@ -300,8 +302,14 @@ pub struct WinPoint {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ScoringPlay {
+    pub id: String,
     pub text: String,
+    /// Feed type text, such as "Rushing Touchdown". Empty when the feed has none.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub type_text: String,
     pub period: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub period_label: Option<String>,
     pub clock: Option<String>,
     pub team_id: String,
     pub home_score: Option<i32>,

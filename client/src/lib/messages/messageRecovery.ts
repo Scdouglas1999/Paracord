@@ -35,6 +35,7 @@ const revision = (value: unknown): string => {
   if (typeof value !== 'string' || !/^(0|[1-9][0-9]*)$/.test(value) || BigInt(value) > 9223372036854775807n) throw new Error('Invalid message recovery revision.');
   return value;
 };
+const SYSTEM_ACCOUNT_ID = /^-[1-9][0-9]*$/;
 const id = (value: unknown): string => {
   const result = revision(value); if (result === '0') throw new Error('Invalid message recovery ID.'); return result;
 };
@@ -42,7 +43,10 @@ function validateMessage(value: unknown, channelId: string, messageId: string, a
   const message = record(value);
   if (message.id !== messageId || message.channel_id !== channelId) throw new Error('Message recovery returned a foreign message.');
   const authorId = record(message.author).id;
-  if (!archived && authorId === '-1') { /* Deleted accounts are a current public projection only. */ }
+  // Deleted accounts and the instance's own system accounts (Auto-Moderator,
+  // Sports) carry negative ids: a current public projection, never a ratchet
+  // sender, so nothing about them is bound to an encryption session.
+  if (!archived && typeof authorId === 'string' && SYSTEM_ACCOUNT_ID.test(authorId)) { }
   else if (archived || message.e2ee != null || typeof authorId !== 'string' || !authorId.startsWith('anon:')) id(authorId);
   else {
     const anonymous = record(message.anonymous);

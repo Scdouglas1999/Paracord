@@ -20,6 +20,7 @@ describe('sports api', () => {
     await api.listLeagues();
     await api.getSettings('99');
     await api.getBoard('99');
+    await api.getBoard('99', '20260920');
     await api.listTeams('football/nfl');
     await api.getGame('99', 'football', 'nfl', '401872945');
     await api.updateSettings('99', { enabled: true, default_view: 'live', layout: 'cards' });
@@ -28,6 +29,7 @@ describe('sports api', () => {
       { method: 'GET', url: '/sports/leagues' },
       { method: 'GET', url: '/guilds/99/sports' },
       { method: 'GET', url: '/guilds/99/sports/board' },
+      { method: 'GET', url: '/guilds/99/sports/board?date=20260920' },
       { method: 'GET', url: '/sports/leagues/football/nfl/teams' },
       { method: 'GET', url: '/guilds/99/sports/games/football/nfl/401872945' },
       { method: 'PUT', url: '/guilds/99/sports', data: { enabled: true, default_view: 'live', layout: 'cards' } },

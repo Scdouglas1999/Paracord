@@ -218,6 +218,8 @@ context** (HTTPS), and browser voice uses **WebTransport**, which requires TLS.
 
 ## Next steps
 
+- A scoreboard for a server, including pinning a game to a channel:
+  [Sports](sports.md).
 - Production hardening, reverse-proxy TLS, PUBLIC_URL, PostgreSQL, and backups:
   [docs/deployment.md](deployment.md).
 - Full Docker configuration reference: [docs/docker-setup.md](docker-setup.md).

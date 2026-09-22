@@ -60,6 +60,12 @@ describe('owned authoritative recovery contract', () => {
   });
 });
 describe('durable fixed-fence recovery', () => {
+  it('accepts a message from an instance system account, such as the Sports add-on posting a score', () => {
+    const current = present(); if (current.state !== 'present') throw new Error('fixture');
+    current.message = { ...current.message, e2ee: null, content: 'Touchdown — Chiefs 14, Colts 7', author: { ...current.message.author, id: '-7', username: 'Sports', bot: true } };
+    expect(readRecoveryPage(page({ states: [current] }), request, epoch)).toBeTruthy();
+  });
+
   it('resumes the original fence after a later page fails', async () => {
     const vault = memoryVault(); const lifetime = controller(); const fetchPage = vi.fn().mockResolvedValueOnce(page({ through: '2', complete: false, projection_head: '2' })).mockRejectedValueOnce(new Error('network lost'));
     await expect(recoverChannelMessages({ vault, lifetime, channelId: '10', knownIds: [], fetchPage })).rejects.toThrow('network lost');

@@ -208,7 +208,8 @@ the server can and cannot see in each case.
 welcome screens and member onboarding. Bans, reports, moderation templates and audit logs.
 Events, custom emoji, storage limits, and a community economy if you want one. Automatic
 moderation covers keywords, patterns, links, invites, mention floods and spam, with block,
-timeout and moderator-alert actions ([AutoMod](docs/automod.md) has the details). There's
+timeout and moderator-alert actions ([AutoMod](docs/automod.md) has the details). A
+server can follow games and post the score into a channel ([Sports](docs/sports.md)). There's
 also a health page that reports backups, database size, transport security and capacity, and
 says what to fix.
 
@@ -414,6 +415,7 @@ cannot read the relocation sections a modern linker emits.
 | Guide | Covers |
 |---|---|
 | [Getting Started](docs/getting-started.md) | first run, the setup link, invites, media choices |
+| [Sports](docs/sports.md) | a scoreboard for a server, and score updates in a channel |
 | [Friends outside your network](docs/port-forwarding.md) | what to change on the router, and how to check it |
 | [Deployment](docs/deployment.md) | a domain name, TLS at a proxy, PostgreSQL, backups |
 | [Docker Setup](docs/docker-setup.md) | compose services, volumes, reverse proxy |

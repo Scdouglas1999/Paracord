@@ -274,6 +274,27 @@ export interface ScoreChange {
   message: string;
   /** Which side's score went up, when only one side did. */
   side: 'home' | 'away' | null;
+  /** Short chip for the pinned strip. Null when the play is not one of the four calls. */
+  chip: string | null;
+}
+
+/**
+ * The four calls the pinned strip names. Anything else (an extra point, a
+ * safety) still flashes the strip, with no chip.
+ */
+export function scoreChip(previous: SportsGame, next: SportsGame): string | null {
+  const awayUp = (next.away.score ?? 0) - (previous.away.score ?? 0);
+  const homeUp = (next.home.score ?? 0) - (previous.home.score ?? 0);
+  if (awayUp <= 0 && homeUp <= 0) return null;
+  const hay = `${next.last_play_type ?? ''} ${next.last_play ?? ''}`.toLowerCase();
+  const points = next.last_play_score != null && next.last_play_score > 0
+    ? next.last_play_score
+    : Math.max(awayUp, homeUp);
+  const baseball = next.sport === 'baseball' || next.league_path.startsWith('baseball');
+  if (baseball) return hay.includes('home run') ? 'Home run' : 'Run scores';
+  if (hay.includes('field goal') || points === 3) return 'Field goal';
+  if (hay.includes('touchdown') || points >= 6) return 'Touchdown';
+  return null;
 }
 
 function scoreFlashMessage(previous: SportsGame, next: SportsGame): { message: string; side: 'home' | 'away' | null } {
@@ -298,7 +319,7 @@ export function scoreChanges(previous: readonly SportsGame[] | null, next: reado
     const prev = before.get(game.id);
     if (!prev || scoreKey(prev) === scoreKey(game)) continue;
     const flash = scoreFlashMessage(prev, game);
-    changed.push({ id: game.id, message: flash.message, side: flash.side });
+    changed.push({ id: game.id, message: flash.message, side: flash.side, chip: scoreChip(prev, game) });
   }
   return changed;
 }

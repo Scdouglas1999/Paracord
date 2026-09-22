@@ -1,12 +1,12 @@
 //! Sports add-on: per-server league list and the shared scoreboard.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use paracord_core::sports::{
     format_rfc3339, is_valid_event_id, is_valid_league_path, league_catalog, scoreboard,
     FavoriteTeam, DEFAULT_LEAGUE_PATHS,
@@ -14,7 +14,7 @@ use paracord_core::sports::{
 use paracord_core::AppState;
 use paracord_db::channels::ChannelRow;
 use paracord_models::permissions::Permissions;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::HashSet;
 
@@ -40,13 +40,30 @@ const NOT_TEXT: &str = "A pin has to be on a text channel.";
 const PIN_MISSING: &str = "Nothing is pinned in that channel.";
 const PIN_CAP: &str = "A server can pin at most 32 games.";
 const GAME_SHAPE: &str = "A pinned game must be sport/league/event_id.";
+const DATE_WINDOW: &str = "A scoreboard date is YYYYMMDD, from 14 days ago through 14 days ahead.";
+
+fn default_announce() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
-struct ChannelPin {
-    channel_id: String,
-    game: String,
-    pinned_by: String,
-    pinned_at: String,
+pub(crate) struct ChannelPin {
+    pub(crate) channel_id: String,
+    pub(crate) game: String,
+    pub(crate) pinned_by: String,
+    pub(crate) pinned_at: String,
+    #[serde(default = "default_announce")]
+    pub(crate) announce: bool,
+    #[serde(default)]
+    pub(crate) announced_through: Option<String>,
+    #[serde(default)]
+    pub(crate) announced_final: bool,
+    #[serde(default)]
+    pub(crate) announced_halftime: bool,
+    #[serde(default)]
+    pub(crate) announced_regulation: bool,
+    #[serde(default)]
+    pub(crate) announce_blocked: Option<String>,
 }
 
 struct StoredSports {
@@ -189,11 +206,24 @@ pub async fn put_pin(
     let game = format!("{league}/{event_id}");
     prune_pins(&mut settings);
     let channel_key = channel_id.to_string();
+    let previous = settings
+        .pins
+        .iter()
+        .find(|item| item.channel_id == channel_key)
+        .cloned();
+    let announce = pin_announce(&body, previous.as_ref().map(|pin| pin.announce))?;
+    let carried = previous.as_ref().filter(|pin| pin.game == game);
     let pin = ChannelPin {
         channel_id: channel_key.clone(),
         game,
         pinned_by: auth.user_id.to_string(),
         pinned_at: format_rfc3339(Utc::now()),
+        announce,
+        announced_through: carried.and_then(|pin| pin.announced_through.clone()),
+        announced_final: carried.is_some_and(|pin| pin.announced_final),
+        announced_halftime: carried.is_some_and(|pin| pin.announced_halftime),
+        announced_regulation: carried.is_some_and(|pin| pin.announced_regulation),
+        announce_blocked: carried.and_then(|pin| pin.announce_blocked.clone()),
     };
     if let Some(existing) = settings
         .pins
@@ -303,20 +333,41 @@ pub async fn put_settings(
     Ok(Json(saved.to_response(guild_id)))
 }
 
+#[derive(Debug, Deserialize, Default)]
+pub struct BoardQuery {
+    date: Option<String>,
+}
+
 pub async fn get_board(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(guild_id): Path<i64>,
+    Query(query): Query<BoardQuery>,
 ) -> Result<Response, ApiError> {
     ensure_member(&state, guild_id, auth.user_id).await?;
     let settings = load_settings(&state, guild_id).await?;
     if !settings.enabled {
         return Ok(addon_disabled());
     }
+    let day = parse_board_date(query.date.as_deref())?;
     let board = scoreboard()
-        .board(&settings.leagues, &settings.favorites)
+        .board_on(&settings.leagues, &settings.favorites, day)
         .await;
     Ok(Json(board).into_response())
+}
+
+fn parse_board_date(raw: Option<&str>) -> Result<Option<NaiveDate>, ApiError> {
+    let Some(raw) = raw.map(str::trim).filter(|text| !text.is_empty()) else {
+        return Ok(None);
+    };
+    let day = NaiveDate::parse_from_str(raw, "%Y%m%d")
+        .map_err(|_| ApiError::BadRequest(DATE_WINDOW.to_string()))?;
+    let today = Utc::now().date_naive();
+    let delta = (day - today).num_days();
+    if !(-14..=14).contains(&delta) {
+        return Err(ApiError::BadRequest(DATE_WINDOW.to_string()));
+    }
+    Ok(Some(day))
 }
 
 pub async fn get_game(
@@ -438,7 +489,7 @@ fn pin_still_current(pin: &ChannelPin, leagues: &[String], now: DateTime<Utc>) -
     }
 }
 
-fn split_pin_game(game: &str) -> Option<(String, String)> {
+pub(crate) fn split_pin_game(game: &str) -> Option<(String, String)> {
     let game = game.trim();
     let mut parts: Vec<&str> = game.split('/').collect();
     if parts.len() < 3 {
@@ -450,6 +501,16 @@ fn split_pin_game(game: &str) -> Option<(String, String)> {
         return None;
     }
     Some((league.to_ascii_lowercase(), event_id.to_string()))
+}
+
+fn pin_announce(body: &Value, previous: Option<bool>) -> Result<bool, ApiError> {
+    match body.get("announce") {
+        None | Some(Value::Null) => Ok(previous.unwrap_or(true)),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(ApiError::BadRequest(
+            "announce must be true or false.".to_string(),
+        )),
+    }
 }
 
 fn pin_game(body: &Value) -> Result<(String, String), ApiError> {
@@ -770,4 +831,21 @@ fn validate_settings(settings: &StoredSports) -> Result<(), ApiError> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_pin_without_announce_fields_stays_on() {
+        let pin: ChannelPin = serde_json::from_str(
+            r#"{"channel_id":"1","game":"football/nfl/100","pinned_by":"2","pinned_at":"2026-09-22T00:00:00Z"}"#,
+        )
+        .expect("pin");
+        assert!(pin.announce);
+        assert!(!pin.announced_final);
+        assert!(pin.announced_through.is_none());
+        assert!(pin.announce_blocked.is_none());
+    }
 }

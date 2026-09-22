@@ -608,19 +608,24 @@ fn win_probability(root: &Value) -> Vec<WinPoint> {
 
 fn scoring_plays(root: &Value) -> Vec<ScoringPlay> {
     if let Some(items) = root.get("scoringPlays").and_then(Value::as_array) {
-        return items.iter().filter_map(scoring_play).collect();
+        return items
+            .iter()
+            .enumerate()
+            .filter_map(|(index, play)| scoring_play(play, index))
+            .collect();
     }
     let Some(plays) = root.get("plays").and_then(Value::as_array) else {
         return Vec::new();
     };
     plays
         .iter()
-        .filter(|play| bool_field(play, "scoringPlay"))
-        .filter_map(scoring_play)
+        .enumerate()
+        .filter(|(_, play)| bool_field(play, "scoringPlay"))
+        .filter_map(|(index, play)| scoring_play(play, index))
         .collect()
 }
 
-fn scoring_play(play: &Value) -> Option<ScoringPlay> {
+fn scoring_play(play: &Value, index: usize) -> Option<ScoringPlay> {
     if !play.is_object() {
         return None;
     }
@@ -629,11 +634,21 @@ fn scoring_play(play: &Value) -> Option<ScoringPlay> {
     if text.is_empty() && team_id.is_empty() {
         return None;
     }
+    let type_text = play
+        .get("type")
+        .and_then(|kind| str_field(kind, "text").or_else(|| str_field(kind, "abbreviation")))
+        .unwrap_or_default();
     Some(ScoringPlay {
+        id: play_identity(play, index),
         text,
+        type_text,
         period: play
             .get("period")
             .and_then(|period| int_field(period, "number")),
+        period_label: play
+            .get("period")
+            .and_then(|period| str_field(period, "displayValue"))
+            .filter(|text| !text.is_empty()),
         clock: play
             .get("clock")
             .and_then(|clock| str_field(clock, "displayValue"))
@@ -642,6 +657,19 @@ fn scoring_play(play: &Value) -> Option<ScoringPlay> {
         home_score: score_field(play, "homeScore"),
         away_score: score_field(play, "awayScore"),
     })
+}
+
+fn play_identity(play: &Value, index: usize) -> String {
+    if let Some(text) = str_field(play, "id").filter(|id| !id.is_empty()) {
+        return text;
+    }
+    if let Some(number) = play.get("id").and_then(Value::as_i64) {
+        return number.to_string();
+    }
+    if let Some(number) = play.get("id").and_then(Value::as_u64) {
+        return number.to_string();
+    }
+    format!("score-{index}")
 }
 
 fn score_field(value: &Value, name: &str) -> Option<i32> {

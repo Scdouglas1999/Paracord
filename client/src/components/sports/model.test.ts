@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SportsGame, SportsTeam } from '../../api/sports';
-import { groupGames, hottestLiveId, sentenceCaseTag, stripAriaLabel, stripMatchup } from './model';
+import { groupGames, hottestLiveId, scoreChip, sentenceCaseTag, stripAriaLabel, stripMatchup } from './model';
 
 function team(short: string, score: number | null = 0): SportsTeam {
   return {
@@ -80,6 +80,39 @@ describe('board grouping', () => {
   it('features the hottest live game and nothing when nothing is live', () => {
     expect(hottestLiveId([favorite, hotter, upcoming])).toBe('hot');
     expect(hottestLiveId([upcoming, done])).toBeNull();
+  });
+});
+
+describe('score chips', () => {
+  const before = game({ id: 'g', state: 'in' });
+  it('names a touchdown, a field goal, a home run, and a run', () => {
+    const td = game({
+      id: 'g', state: 'in', last_play_type: 'Passing Touchdown', last_play_score: 6,
+      away: { ...before.away, score: 6 },
+    });
+    expect(scoreChip(before, td)).toBe('Touchdown');
+    const fg = game({
+      id: 'g', state: 'in', last_play_type: 'Field Goal Good', last_play_score: 3,
+      home: { ...before.home, score: 3 },
+    });
+    expect(scoreChip(before, fg)).toBe('Field goal');
+    const hr = game({
+      id: 'g', state: 'in', sport: 'baseball', league_path: 'baseball/mlb',
+      last_play_type: 'Home Run', last_play_score: 1,
+      away: { ...before.away, score: 1 },
+    });
+    expect(scoreChip(before, hr)).toBe('Home run');
+    const run = game({
+      id: 'g', state: 'in', sport: 'baseball', league_path: 'baseball/mlb',
+      last_play_type: 'Single', last_play_score: 1,
+      home: { ...before.home, score: 1 },
+    });
+    expect(scoreChip(before, run)).toBe('Run scores');
+    const pat = game({
+      id: 'g', state: 'in', last_play_type: 'Extra Point', last_play_score: 1,
+      away: { ...td.away, score: 7 },
+    });
+    expect(scoreChip(td, pat)).toBeNull();
   });
 });
 

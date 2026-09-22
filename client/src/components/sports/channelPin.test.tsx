@@ -3,6 +3,8 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { sportsApi, type SportsGame, type SportsSettings } from '../../api/sports';
+import { resetGameDetailWatchers } from '../../hooks/useGameDetail';
+import { configureMotion, resetMotionSwitchForTests } from '../../lib/motion/reducedMotion';
 import { useSportsStore } from '../../stores/sportsStore';
 import { ChannelAmbient, AmbientStrip, PinGameButton } from './ChannelPin';
 import { ScoringTimeline } from './ScoringTimeline';
@@ -18,7 +20,21 @@ vi.mock('../../api/sports', async () => {
       unpinGame: vi.fn(),
       getSettings: vi.fn(),
       getBoard: vi.fn(),
-      getGame: vi.fn(),
+      getGame: vi.fn(async () => ({ data: {
+        fetched_at: '', stale: false, kind: 'football', win_probability: [], scoring_plays: [],
+        line_score: null, leaders: [], probables: [], box: null,
+        game: {
+          id: '401872945', sport: 'football', league: 'NFL', league_path: 'football/nfl', name: 'Game',
+          start: '2026-09-21T20:00:00.000Z', state: 'in', detail: '2nd 6:12', period: 2, clock: '6:12',
+          clock_seconds: 372, home: { id: '11', abbr: 'IND', name: 'IND', short_name: 'IND', logo: '', score: 27, record: null, possession: false, winner: false },
+          away: { id: '12', abbr: 'KC', name: 'KC', short_name: 'KC', logo: '', score: 24, record: null, possession: true, winner: false },
+          last_play: 'Taylor scores', last_play_type: null, last_play_score: null, down_distance: '2nd & 6',
+          ball_on: 40, possession_team_id: '12', yards_to_endzone: 40, red_zone: false,
+          balls: null, strikes: null, outs: null, on_first: null, on_second: null, on_third: null,
+          home_win_pct: null, broadcasts: [], heat: 0, tags: [], favorite: false,
+        },
+        football: { possession_team_id: '12', ball_on: 40, down: 2, distance: 6, yards_to_endzone: 40, down_distance_text: '2nd & 6', red_zone: false, drives: [] },
+      } })),
     },
   };
 });
@@ -97,7 +113,7 @@ describe('ambient strip', () => {
     const onUnpin = vi.fn();
     render(
       <MemoryRouter>
-        <AmbientStrip guildId="g1" game={game()} canUnpin onUnpin={onUnpin} />
+        <AmbientStrip guildId="g1" channelId="c1" game={game()} canUnpin onUnpin={onUnpin} />
       </MemoryRouter>,
     );
     expect(screen.getByRole('region', { name: /Pinned game/ })).toHaveTextContent('KC');
@@ -114,7 +130,7 @@ describe('ambient strip', () => {
     } as never);
     render(
       <MemoryRouter>
-        <AmbientStrip guildId="g1" game={game({ last_play: null })} canUnpin={false} onUnpin={vi.fn()} />
+        <AmbientStrip guildId="g1" channelId="c1" game={game({ last_play: null })} canUnpin={false} onUnpin={vi.fn()} />
       </MemoryRouter>,
     );
     expect(await screen.findByText('Mahomes pass complete.')).toBeInTheDocument();
@@ -123,7 +139,7 @@ describe('ambient strip', () => {
   it('hides the unpin control without permission', () => {
     render(
       <MemoryRouter>
-        <AmbientStrip guildId="g1" game={game()} canUnpin={false} onUnpin={vi.fn()} />
+        <AmbientStrip guildId="g1" channelId="c1" game={game()} canUnpin={false} onUnpin={vi.fn()} />
       </MemoryRouter>,
     );
     expect(screen.queryByRole('button', { name: 'Unpin' })).not.toBeInTheDocument();
@@ -154,6 +170,93 @@ describe('ambient strip', () => {
       </MemoryRouter>,
     );
     expect(screen.queryByText('Pinned game')).not.toBeInTheDocument();
+  });
+
+  it('remembers an expanded game night for this viewer', async () => {
+    const user = userEvent.setup();
+    localStorage.clear();
+    const ui = (
+      <MemoryRouter>
+        <AmbientStrip guildId="g1" channelId="c1" game={game()} canUnpin={false} onUnpin={vi.fn()} />
+      </MemoryRouter>
+    );
+    const view = render(ui);
+    expect(document.querySelector('.pc-sports-pin-stage')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Expand the game' }));
+    expect(document.querySelector('.pc-sports-pin-stage .pc-sports-field-svg')).not.toBeNull();
+    expect(screen.getByRole('region', { name: /Pinned game/ })).toHaveClass('is-open');
+    expect(localStorage.getItem('paracord.sports.game-night')).toContain('"c1":true');
+    view.unmount();
+    resetGameDetailWatchers();
+    render(ui);
+    expect(screen.getByRole('button', { name: 'Collapse the game' })).toBeInTheDocument();
+    expect(document.querySelector('.pc-sports-pin-stage')).not.toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Collapse the game' }));
+    expect(document.querySelector('.pc-sports-pin-stage')).toBeNull();
+    expect(localStorage.getItem('paracord.sports.game-night')).toContain('"c1":false');
+    resetGameDetailWatchers();
+  });
+
+  it('flashes the collapsed strip when the next poll scores', async () => {
+    useSportsStore.getState().adoptSettings(settings([]));
+    const quiet = game({
+      away: { ...game().away, score: 0 },
+      home: { ...game().home, score: 0 },
+      last_play_type: null,
+    });
+    const scored = game({
+      away: { ...game().away, score: 7 },
+      home: { ...game().home, score: 0 },
+      last_play_type: 'Passing Touchdown',
+      last_play: 'Jones touchdown',
+      last_play_score: 6,
+    });
+    let phase = quiet;
+    vi.mocked(sportsApi.getBoard).mockImplementation(async () => ({ data: { fetched_at: '', leagues: [], games: [phase] } } as never));
+    await act(async () => {
+      await useSportsStore.getState().refreshBoard('g1');
+    });
+    render(
+      <MemoryRouter>
+        <AmbientStrip guildId="g1" channelId="c1" game={quiet} canUnpin={false} onUnpin={vi.fn()} />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByText('Touchdown')).not.toBeInTheDocument();
+    phase = scored;
+    await act(async () => {
+      await useSportsStore.getState().refreshBoard('g1');
+    });
+    expect(screen.getByText('Touchdown')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: /Pinned game/ })).toHaveClass('is-score');
+  });
+
+  it('keeps the chip and skips the colour flash when motion is reduced', async () => {
+    configureMotion('reduced');
+    useSportsStore.getState().adoptSettings(settings([]));
+    const quiet = game({ away: { ...game().away, score: 0 }, home: { ...game().home, score: 0 } });
+    const scored = game({
+      away: { ...game().away, score: 3 },
+      home: { ...game().home, score: 0 },
+      last_play_type: 'Field Goal Good',
+      last_play_score: 3,
+    });
+    let phase = quiet;
+    vi.mocked(sportsApi.getBoard).mockImplementation(async () => ({ data: { fetched_at: '', leagues: [], games: [phase] } } as never));
+    await act(async () => {
+      await useSportsStore.getState().refreshBoard('g1');
+    });
+    render(
+      <MemoryRouter>
+        <AmbientStrip guildId="g1" channelId="c1" game={quiet} canUnpin={false} onUnpin={vi.fn()} />
+      </MemoryRouter>,
+    );
+    phase = scored;
+    await act(async () => {
+      await useSportsStore.getState().refreshBoard('g1');
+    });
+    expect(screen.getByText('Field goal')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: /Pinned game/ })).not.toHaveClass('is-score');
+    resetMotionSwitchForTests();
   });
 });
 

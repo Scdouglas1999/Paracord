@@ -1207,6 +1207,13 @@ impl ScoreFeed for ReplayFeed {
         })
     }
 
+    fn fetch_dated<'a>(&'a self, league: &'a str, date: Option<&'a str>) -> FeedFut<'a> {
+        if date.is_some() {
+            return self.inner.fetch_dated(league, date);
+        }
+        self.fetch(league)
+    }
+
     fn fetch_teams<'a>(&'a self, league: &'a str) -> FeedFut<'a> {
         self.inner.fetch_teams(league)
     }
@@ -1860,6 +1867,53 @@ mod tests {
                 crate::sports::format_rfc3339(start + chrono::Duration::seconds(480))
             )
         );
+    }
+
+    #[tokio::test]
+    async fn a_dated_board_is_not_overlaid() {
+        struct Plain;
+
+        impl ScoreFeed for Plain {
+            fn fetch<'a>(&'a self, _league: &'a str) -> FeedFut<'a> {
+                Box::pin(async {
+                    Ok(
+                        r#"{"events":[{"id":"8","competitions":[{"competitors":[{"homeAway":"home","score":"99"},{"homeAway":"away","score":"1"}]}]}]}"#
+                            .to_string(),
+                    )
+                })
+            }
+        }
+
+        let summary = serde_json::json!({
+            "header": {
+                "competitions": [{
+                    "status": { "type": { "state": "in", "shortDetail": "1:00 - 1st" } },
+                    "competitors": [
+                        { "homeAway": "home", "score": "7" },
+                        { "homeAway": "away", "score": "0" }
+                    ]
+                }]
+            }
+        });
+        let feed = ReplayFeed {
+            inner: Arc::new(Plain),
+            games: vec![LoadedGame {
+                league: "football/nfl".to_string(),
+                event_id: "8".to_string(),
+                summary,
+            }],
+            missed: Vec::new(),
+            started_at: Utc::now(),
+            speed: 1.0,
+            start_at: None,
+        };
+        let dated = feed
+            .fetch_dated("football/nfl", Some("20260901"))
+            .await
+            .expect("dated board");
+        assert!(dated.contains("\"99\""), "{dated}");
+        let live = feed.fetch("football/nfl").await.expect("today's board");
+        assert!(!live.contains("\"99\""), "{live}");
     }
 
     struct IdleFeed;
