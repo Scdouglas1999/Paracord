@@ -244,7 +244,7 @@ export function ImageLightbox() {
           )
         ) : currentImage.kind === 'video' ? (
           // The same player as a message's video, so a gallery video can take captions too.
-          <div className="pc-tag px-3 py-2">
+          <div className="rounded-[var(--radius-card)] bg-bg-raised p-2 shadow-[var(--shadow-lifted)]">
             <MediaPreview
               key={safeImageSrc}
               src={safeImageSrc}
