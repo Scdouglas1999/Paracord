@@ -378,7 +378,7 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
         </div>
         <p id={`${hueSliderId}-hint`} className="mt-3 max-w-prose text-meta leading-relaxed text-text-faint">
           The base color is every surface, hairline, wash and grey the app paints — nothing else
-          moves with it. The light that shows who is in a channel, the emerald that means an action
+          moves with it. The glow that shows who is in a channel, the emerald that means an action
           you can take, warnings and danger, and the color a person or a server wears all stay
           exactly where they are. Every setting keeps the same contrast, because only the hue
           changes and never the lightness. High contrast takes it in the chrome only — the two
