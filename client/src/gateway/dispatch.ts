@@ -28,6 +28,7 @@ import {
 } from '../lib/features/messageNotifications';
 import { useNotificationPreferenceStore } from '../stores/notificationPreferenceStore';
 import { accountScopeKey } from '../lib/serverScope';
+import { isScoreEvent, scoreAlertText, shouldAlert } from '../components/sports/scoreAlerts';
 import type { Channel, Guild, Member, Message, Poll, Presence, User, VoiceState } from '../types';
 import type { Component } from '../types/components';
 import { InteractionCallbackType } from '../types/interactions';
@@ -330,6 +331,20 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
         return getAccountMessagingRuntime(memberScope).ingestEncryptedMessage(message);
       }
       break;
+    case GatewayEvents.SPORTS_SCORE: {
+      // A score in a favorite team's game, sent by a server with alerts on.
+      if (!isScoreEvent(data)) break;
+      const preferenceKey = memberScope ? accountScopeKey(memberScope) : null;
+      const serverSetting = preferenceKey
+        ? useNotificationPreferenceStore.getState().byAccount[preferenceKey]?.[data.guild_id]
+        : undefined;
+      const serverMuted = effectiveNotificationLevel(undefined, serverSetting) === 2;
+      if (shouldAlert(data, { serverMuted })) {
+        const { title, body } = scoreAlertText(data);
+        void sendNotification(title, body);
+      }
+      break;
+    }
     case GatewayEvents.MESSAGE_MENTION:
       // The server targets actual recipients. Replayed events only refresh an
       // authoritative count; message text never grants mention permission.

@@ -1,7 +1,7 @@
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sportsApi, type SportsGame, type SportsSettings } from '../../api/sports';
 import { resetGameDetailWatchers } from '../../hooks/useGameDetail';
 import { configureMotion, resetMotionSwitchForTests } from '../../lib/motion/reducedMotion';
@@ -98,7 +98,127 @@ describe('pin picker', () => {
     render(<PinGameButton guildId="g1" game={game()} />);
     await user.click(screen.getByRole('button', { name: 'Pin to a channel' }));
     await user.click(screen.getByRole('button', { name: '#general' }));
-    expect(sportsApi.pinGame).toHaveBeenCalledWith('g1', 'c1', 'football/nfl/401872945');
+    expect(sportsApi.pinGame).toHaveBeenCalledWith('g1', 'c1', 'football/nfl/401872945', { unpin_at_final: false });
+  });
+
+  it('can pin a game until its final', async () => {
+    mockPerms.isAdmin = true;
+    vi.mocked(sportsApi.pinGame).mockResolvedValue({ data: settings([]) } as never);
+    const user = userEvent.setup();
+    render(<PinGameButton guildId="g1" game={game()} />);
+    await user.click(screen.getByRole('button', { name: 'Pin to a channel' }));
+    const until = screen.getByRole('switch', { name: 'Unpin at the final' });
+    expect(until).toHaveAttribute('aria-checked', 'false');
+    await user.click(until);
+    await user.click(screen.getByRole('button', { name: '#general' }));
+    expect(sportsApi.pinGame).toHaveBeenCalledWith('g1', 'c1', 'football/nfl/401872945', { unpin_at_final: true });
+  });
+});
+
+describe('a phone turned on its side', () => {
+  const realMatch = window.matchMedia;
+  const realOrientation = Object.getOwnPropertyDescriptor(window.screen, 'orientation');
+  let orientationType = 'portrait-primary';
+
+  function turn(type: 'portrait-primary' | 'landscape-primary', width: number, height: number) {
+    orientationType = type;
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: height });
+    act(() => {
+      window.dispatchEvent(new Event('resize'));
+    });
+  }
+
+  beforeEach(() => {
+    useSportsStore.getState().reset();
+    resetGameDetailWatchers();
+    mockPerms.isAdmin = true;
+    window.matchMedia = ((query: string) => ({
+      matches: query === '(pointer: coarse)',
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    })) as unknown as typeof window.matchMedia;
+    Object.defineProperty(window.screen, 'orientation', {
+      configurable: true,
+      get: () => ({ type: orientationType, addEventListener: () => {}, removeEventListener: () => {} }),
+    });
+    turn('portrait-primary', 390, 844);
+  });
+
+  afterEach(() => {
+    window.matchMedia = realMatch;
+    if (realOrientation) Object.defineProperty(window.screen, 'orientation', realOrientation);
+    else Reflect.deleteProperty(window.screen, 'orientation');
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 768 });
+  });
+
+  it('fills the screen with the live field, and stays closed once closed until turned again', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <AmbientStrip guildId="g1" channelId="c1" game={game()} untilFinal canUnpin onUnpin={() => {}} />
+      </MemoryRouter>,
+    );
+    expect(screen.getByText('Pinned until the final')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    turn('landscape-primary', 844, 390);
+    const stage = await screen.findByRole('dialog', { name: /Pinned game/ });
+    expect(stage.querySelector('.pc-sports-pin-stage')).not.toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Back to the chat' }));
+
+    await user.click(screen.getByRole('button', { name: 'Back to the chat' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    turn('landscape-primary', 840, 386);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    turn('portrait-primary', 390, 844);
+    turn('landscape-primary', 844, 390);
+    expect(await screen.findByRole('dialog', { name: /Pinned game/ })).toBeInTheDocument();
+    turn('portrait-primary', 390, 844);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('leaves a game that is not live, and someone typing, where they are', () => {
+    const { unmount } = render(
+      <MemoryRouter>
+        <AmbientStrip guildId="g1" channelId="c1" game={game({ state: 'post', detail: 'Final' })} canUnpin={false} onUnpin={() => {}} />
+      </MemoryRouter>,
+    );
+    turn('landscape-primary', 844, 390);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    unmount();
+
+    turn('portrait-primary', 390, 844);
+    const input = document.createElement('textarea');
+    document.body.appendChild(input);
+    input.focus();
+    render(
+      <MemoryRouter>
+        <AmbientStrip guildId="g1" channelId="c1" game={game()} canUnpin={false} onUnpin={() => {}} />
+      </MemoryRouter>,
+    );
+    turn('landscape-primary', 844, 390);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    input.remove();
+  });
+
+  it('is not a desktop window dragged short', () => {
+    window.matchMedia = ((query: string) => ({
+      matches: false,
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    })) as unknown as typeof window.matchMedia;
+    render(
+      <MemoryRouter>
+        <AmbientStrip guildId="g1" channelId="c1" game={game()} canUnpin={false} onUnpin={() => {}} />
+      </MemoryRouter>,
+    );
+    turn('landscape-primary', 1200, 420);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 });
 

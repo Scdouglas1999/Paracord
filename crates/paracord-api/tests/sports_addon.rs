@@ -258,6 +258,68 @@ impl ScoreFeed for ScriptedFeed {
             }
         })
     }
+
+    fn fetch_standings<'a>(
+        &'a self,
+        league: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<String, FeedError>> + Send + 'a>> {
+        let league = league.to_ascii_lowercase();
+        Box::pin(async move {
+            if league == "football/nfl" {
+                Ok(
+                    include_str!("../../paracord-core/src/sports/fixtures/nfl_standings.json")
+                        .to_string(),
+                )
+            } else {
+                Err(FeedError::TimedOut)
+            }
+        })
+    }
+}
+
+/// The same night a little later: the Chiefs have scored again.
+struct LaterFeed;
+
+fn later_summary() -> String {
+    let mut summary: Value = serde_json::from_str(LIVE_SCORE).expect("summary");
+    summary["header"]["competitions"][0]["competitors"][0]["score"] = json!("21");
+    summary["header"]["competitions"][0]["status"]["type"]["shortDetail"] = json!("2:10 - 2nd");
+    let plays = summary["scoringPlays"].as_array_mut().expect("plays");
+    plays.push(json!({
+        "id": "9002",
+        "text": "P.Mahomes 12 yd pass to T.Kelce",
+        "type": { "text": "Passing Touchdown" },
+        "team": { "id": "12" },
+        "period": { "number": 2, "displayValue": "2nd" },
+        "clock": { "displayValue": "2:10" },
+        "homeScore": 21,
+        "awayScore": 7
+    }));
+    summary.to_string()
+}
+
+impl ScoreFeed for LaterFeed {
+    fn fetch<'a>(
+        &'a self,
+        league: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<String, FeedError>> + Send + 'a>> {
+        ScriptedFeed.fetch(league)
+    }
+
+    fn fetch_summary<'a>(
+        &'a self,
+        league: &'a str,
+        event_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<String, FeedError>> + Send + 'a>> {
+        let wanted = league.eq_ignore_ascii_case("football/nfl") && event_id == "100";
+        Box::pin(async move {
+            if wanted {
+                Ok(later_summary())
+            } else {
+                Err(FeedError::TimedOut)
+            }
+        })
+    }
 }
 
 fn feed_gate() -> &'static tokio::sync::Mutex<()> {
@@ -335,6 +397,10 @@ fn board_path(guild_id: i64) -> String {
 
 fn game_path(guild_id: i64, sport: &str, league: &str, event_id: &str) -> String {
     format!("/api/v1/guilds/{guild_id}/sports/games/{sport}/{league}/{event_id}")
+}
+
+fn standings_path(guild_id: i64, league: &str) -> String {
+    format!("/api/v1/guilds/{guild_id}/sports/standings/{league}")
 }
 
 fn pin_path(guild_id: i64, channel_id: i64) -> String {
@@ -1498,5 +1564,262 @@ async fn a_pinned_channel_gets_one_score_line_and_a_second_pass_is_quiet() -> an
         .await?;
     assert_eq!(status, StatusCode::OK, "{again}");
     assert_eq!(again.as_array().context("message list")?.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn score_alerts_round_trip_and_reject_a_non_boolean() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let guild_id = ctx.create_guild("Sports Alerts Setting").await?;
+    let (status, fresh) = ctx
+        .request(
+            Method::GET,
+            &settings_path(guild_id),
+            None,
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{fresh}");
+    assert_eq!(fresh["score_alerts"], false);
+
+    let (status, saved) = ctx
+        .request(
+            Method::PUT,
+            &settings_path(guild_id),
+            Some(json!({ "enabled": true, "score_alerts": true })),
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["score_alerts"], true);
+
+    let (status, kept) = ctx
+        .request(
+            Method::PUT,
+            &settings_path(guild_id),
+            Some(json!({ "layout": "list" })),
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{kept}");
+    assert_eq!(kept["score_alerts"], true);
+
+    let (status, refused) = ctx
+        .request(
+            Method::PUT,
+            &settings_path(guild_id),
+            Some(json!({ "score_alerts": "yes" })),
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert!(message_has(&refused, "score_alerts"), "{refused}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_pin_remembers_unpin_at_final_until_told_otherwise() -> anyhow::Result<()> {
+    let _gate = feed_gate().lock().await;
+    scoreboard().set_feed_for_tests(Arc::new(ScriptedFeed));
+    let ctx = TestContext::new().await?;
+    let guild_id = ctx.create_guild("Sports Unpin Final").await?;
+    enable_sports(&ctx, guild_id).await?;
+    let channel_id = 88701;
+    text_channel(&ctx, guild_id, channel_id, "general").await?;
+
+    let (status, pinned) = ctx
+        .request(
+            Method::PUT,
+            &pin_path(guild_id, channel_id),
+            Some(json!({ "game": "football/nfl/100" })),
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{pinned}");
+    assert_eq!(pinned["channel_pins"][0]["unpin_at_final"], false);
+
+    let (status, on) = ctx
+        .request(
+            Method::PUT,
+            &pin_path(guild_id, channel_id),
+            Some(json!({ "game": "football/nfl/100", "unpin_at_final": true })),
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{on}");
+    assert_eq!(on["channel_pins"][0]["unpin_at_final"], true);
+
+    let (status, still) = ctx
+        .request(
+            Method::PUT,
+            &pin_path(guild_id, channel_id),
+            Some(json!({ "game": "football/nfl/100" })),
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{still}");
+    assert_eq!(still["channel_pins"][0]["unpin_at_final"], true);
+
+    let (status, refused) = ctx
+        .request(
+            Method::PUT,
+            &pin_path(guild_id, channel_id),
+            Some(json!({ "game": "football/nfl/100", "unpin_at_final": 1 })),
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn standings_come_from_the_fake_feed_with_favorites_marked() -> anyhow::Result<()> {
+    let _gate = feed_gate().lock().await;
+    scoreboard().set_feed_for_tests(Arc::new(ScriptedFeed));
+    let ctx = TestContext::new().await?;
+    let guild_id = ctx.create_guild("Sports Standings").await?;
+
+    let (status, off) = ctx
+        .request(
+            Method::GET,
+            &standings_path(guild_id, "football/nfl"),
+            None,
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{off}");
+
+    let (status, body) = ctx
+        .request(
+            Method::PUT,
+            &settings_path(guild_id),
+            Some(json!({
+                "enabled": true,
+                "favorite_teams": [{ "league": "football/nfl", "team_id": "2", "abbr": "BUF", "name": "Bills" }]
+            })),
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (status, table) = ctx
+        .request(
+            Method::GET,
+            &standings_path(guild_id, "football/nfl"),
+            None,
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{table}");
+    assert_eq!(table["league"], "football/nfl");
+    assert_eq!(table["label"], "NFL");
+    assert_eq!(table["stale"], false);
+    assert_eq!(table["columns"][0]["label"], "W");
+    let groups = table["groups"].as_array().context("groups")?;
+    assert_eq!(groups.len(), 8);
+    assert_eq!(groups[0]["name"], "AFC East");
+    assert_eq!(groups[0]["parent"], "American Football Conference");
+    let favorites: Vec<&str> = groups
+        .iter()
+        .flat_map(|group| group["rows"].as_array().unwrap())
+        .filter(|row| row["favorite"] == true)
+        .map(|row| row["team"]["abbr"].as_str().unwrap())
+        .collect();
+    assert_eq!(favorites, ["BUF"]);
+
+    let (status, failed) = ctx
+        .request(
+            Method::GET,
+            &standings_path(guild_id, "baseball/mlb"),
+            None,
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{failed}");
+    assert!(message_has(&failed, "Standings"), "{failed}");
+
+    let (status, unfollowed) = ctx
+        .request(
+            Method::GET,
+            &standings_path(guild_id, "hockey/nhl"),
+            None,
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{unfollowed}");
+
+    let (status, outsider) = ctx
+        .request(
+            Method::GET,
+            &standings_path(guild_id, "football/nfl"),
+            None,
+            &create_authenticated_user_token(
+                &ctx.db,
+                &ctx.jwt_secret,
+                "outsider",
+                "OutsiderPass123!",
+            )
+            .await?,
+        )
+        .await?;
+    assert!(status.is_client_error(), "{outsider}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_favorite_teams_score_reaches_its_server_once() -> anyhow::Result<()> {
+    let _gate = feed_gate().lock().await;
+    scoreboard().set_feed_for_tests(Arc::new(ScriptedFeed));
+    let ctx = TestContext::new().await?;
+    let chiefs =
+        json!([{ "league": "football/nfl", "team_id": "12", "abbr": "KC", "name": "Chiefs" }]);
+    let alerting = ctx.create_guild("Sports Alerts On").await?;
+    let quiet = ctx.create_guild("Sports Alerts Off").await?;
+    for (guild_id, alerts) in [(alerting, true), (quiet, false)] {
+        let (status, body) = ctx
+            .request(
+                Method::PUT,
+                &settings_path(guild_id),
+                Some(json!({ "enabled": true, "favorite_teams": chiefs, "score_alerts": alerts })),
+                &ctx.owner_token,
+            )
+            .await?;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+
+    let mut events = ctx._test_app.event_bus.subscribe_system();
+    let drain =
+        |events: &mut tokio::sync::broadcast::Receiver<paracord_core::events::ServerEvent>| {
+            let mut seen = Vec::new();
+            while let Ok(event) = events.try_recv() {
+                if event.event_type == "SPORTS_SCORE" {
+                    seen.push(event);
+                }
+            }
+            seen
+        };
+
+    // First sight of a game already under way: no replay of earlier scores.
+    paracord_api::routes::sports_alerts::alert_due(&ctx._test_app.state).await;
+    paracord_api::routes::sports_alerts::alert_due(&ctx._test_app.state).await;
+    assert!(drain(&mut events).is_empty());
+
+    scoreboard().set_feed_for_tests(Arc::new(LaterFeed));
+    paracord_api::routes::sports_alerts::alert_due(&ctx._test_app.state).await;
+    let sent = drain(&mut events);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].guild_id, Some(alerting));
+    let payload = &*sent[0].payload;
+    assert_eq!(payload["kind"], "score");
+    assert_eq!(payload["game"], "football/nfl/100");
+    assert_eq!(payload["team_id"], "12");
+    assert_eq!(payload["favorite_team_ids"], json!(["12"]));
+    assert_eq!(
+        payload["content"],
+        "Touchdown — Chiefs 21, Colts 7 · 2:10 2nd · P.Mahomes 12 yd pass to T.Kelce"
+    );
+
+    paracord_api::routes::sports_alerts::alert_due(&ctx._test_app.state).await;
+    assert!(drain(&mut events).is_empty());
     Ok(())
 }

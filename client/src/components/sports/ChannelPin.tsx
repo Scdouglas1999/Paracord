@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link } from 'react-router';
 import type { ChannelPin, SportsGame } from '../../api/sports';
 import { sportsApi } from '../../api/sports';
@@ -13,6 +14,8 @@ import { miniFieldBar, teamPaint } from './gamecast';
 import { HIDE_SCORES_EVENT, LIVE_POLL_MS, QUIET_POLL_MS, gameAriaLabel, gameHref, pinOneLine, readHideScores, runnersLabel, statusLine } from './model';
 import { latestPlayText, pinGameKey } from './timeline';
 import { TeamMark } from './TeamMark';
+import { Switch } from '../ui';
+import { editingText, useSidewaysPhone } from './sideways';
 
 const NIGHT_KEY = 'paracord.sports.game-night';
 
@@ -53,7 +56,9 @@ export function PinGameButton({
   const { permissions, isAdmin, isLoading } = usePermissions(guildId || null);
   const channels = useGuildChannels(guildId);
   const [open, setOpen] = useState(false);
+  const [untilFinal, setUntilFinal] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const untilFinalId = useId();
   const allowed = !isLoading && canManage(permissions, isAdmin);
   if (!allowed) return null;
   const text = channels.filter((channel) => (channel.type ?? channel.channel_type) === ChannelType.Text);
@@ -61,7 +66,7 @@ export function PinGameButton({
   const pin = async (channelId: string) => {
     setError(null);
     try {
-      const res = await sportsApi.pinGame(guildId, channelId, key);
+      const res = await sportsApi.pinGame(guildId, channelId, key, { unpin_at_final: untilFinal });
       useSportsStore.getState().adoptSettings(res.data);
       setOpen(false);
     } catch {
@@ -80,6 +85,10 @@ export function PinGameButton({
       </button>
       {open && (
         <ul className="pc-sports-pin-picker" aria-label="Text channels">
+          <li className="pc-sports-pin-until">
+            <span id={untilFinalId} className="text-meta text-text-secondary">Unpin at the final</span>
+            <Switch size="sm" checked={untilFinal} labelledBy={untilFinalId} onChange={setUntilFinal} />
+          </li>
           {text.length === 0 && <li className="text-meta text-text-muted">No text channels</li>}
           {text.map((channel) => (
             <li key={channel.id}>
@@ -122,6 +131,7 @@ export function ChannelAmbient({
       guildId={guildId}
       channelId={channelId}
       game={game}
+      untilFinal={pin.unpin_at_final === true}
       canUnpin={!isLoading && canManage(permissions, isAdmin)}
       onUnpin={async () => {
         const res = await sportsApi.unpinGame(guildId, channelId);
@@ -166,18 +176,27 @@ export function AmbientStrip({
   guildId,
   channelId,
   game,
+  untilFinal = false,
   canUnpin,
   onUnpin,
 }: {
   guildId: string;
   channelId: string;
   game: SportsGame;
+  untilFinal?: boolean;
   canUnpin: boolean;
   onUnpin: () => void;
 }) {
   const [hideScores, setHideScores] = useState(readHideScores);
   const stageable = game.sport === 'football' || game.sport === 'baseball';
   const [open, setOpen] = useState(() => stageable && readNight(channelId));
+  const [turned, setTurned] = useState(false);
+  const live = game.state === 'in';
+  // Opens on the turn itself, so closing it stays closed until the phone is turned back.
+  useSidewaysPhone((sideways) => {
+    if (!sideways) setTurned(false);
+    else if (stageable && live && !editingText()) setTurned(true);
+  });
   const reduced = useReducedMotion();
   const flash = useSportsStore((state) => state.byGuild[guildId]?.flashes[game.id]);
   const [burst, setBurst] = useState<NonNullable<typeof flash> | null>(flash ?? null);
@@ -216,7 +235,7 @@ export function AmbientStrip({
       aria-label={`Pinned game. ${gameAriaLabel(game, hideScores)}`}
     >
       <div className="pc-sports-pin-main">
-        <span className="pc-sports-pin-label text-meta text-text-faint">Pinned game</span>
+        <span className="pc-sports-pin-label text-meta text-text-faint">{untilFinal ? 'Pinned until the final' : 'Pinned game'}</span>
         <span className="pc-sports-pin-score pc-sports-pin-wide">
           <TeamMark team={game.away} />
           <span className="text-label text-text-primary">{game.away.abbr}</span>
@@ -257,6 +276,14 @@ export function AmbientStrip({
         )}
       </div>
       {open && <GameNight guildId={guildId} game={game} hideScores={hideScores} />}
+      {turned && (
+        <SidewaysStage
+          guildId={guildId}
+          game={game}
+          hideScores={hideScores}
+          onClose={() => setTurned(false)}
+        />
+      )}
       {!open && !hideScores && (
         <div className="pc-sports-pin-more">
           {field && <PinField field={field} away={away} home={home} />}
@@ -265,6 +292,47 @@ export function AmbientStrip({
         </div>
       )}
     </section>
+  );
+}
+
+/** The pinned game filling a phone turned on its side. The chat is one tap away. */
+function SidewaysStage({
+  guildId,
+  game,
+  hideScores,
+  onClose,
+}: {
+  guildId: string;
+  game: SportsGame;
+  hideScores: boolean;
+  onClose: () => void;
+}) {
+  const closeRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeRef.current?.focus({ preventScroll: true });
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      previous?.focus({ preventScroll: true });
+    };
+  }, [onClose]);
+  return createPortal(
+    <div
+      className="pc-sports-sideways"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Pinned game. ${gameAriaLabel(game, hideScores)}`}
+    >
+      <GameNight guildId={guildId} game={game} hideScores={hideScores} />
+      <button ref={closeRef} type="button" className="pc-focusable pc-sports-sideways-close" onClick={onClose}>
+        Back to the chat
+      </button>
+    </div>,
+    document.body,
   );
 }
 

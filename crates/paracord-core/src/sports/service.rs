@@ -19,6 +19,7 @@ use super::models::{
     league_label, BoardLeague, FavoriteTeam, Game, GameDetail, LeagueTeams, RosterTeam, SportsBoard,
 };
 use super::replay::{self, ReplayGame};
+use super::standings::{self, LeagueStandings, ParsedStandings};
 
 pub const DEFAULT_LEAGUE_PATHS: [&str; 2] = ["football/nfl", "baseball/mlb"];
 
@@ -37,6 +38,8 @@ const CACHE_CAP: usize = 64;
 const ROSTER_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const ROSTER_ERROR_TTL: Duration = Duration::from_secs(30 * 60);
 const MAX_PARSED_LEAGUES: usize = 16;
+const STANDINGS_TTL: Duration = Duration::from_secs(10 * 60);
+const STANDINGS_ERROR_TTL: Duration = Duration::from_secs(60);
 
 pub type FeedFut<'a> = Pin<Box<dyn Future<Output = Result<String, FeedError>> + Send + 'a>>;
 
@@ -75,6 +78,11 @@ pub trait ScoreFeed: Send + Sync {
         })
     }
 
+    /// League standings JSON. Feeds that only serve scoreboards leave this as a failure.
+    fn fetch_standings<'a>(&'a self, _league: &'a str) -> FeedFut<'a> {
+        Box::pin(async { Err(FeedError::Other("this feed has no standings".to_string())) })
+    }
+
     /// Scoreboard for one day. `None` is today. A past or future day is `YYYYMMDD`.
     fn fetch_dated<'a>(&'a self, league: &'a str, date: Option<&'a str>) -> FeedFut<'a> {
         let _ = date;
@@ -90,6 +98,8 @@ pub struct ScoreboardService {
     roster_refresh: tokio::sync::Mutex<()>,
     details: Mutex<LruMap<DetailEntry>>,
     detail_flights: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    standings: Mutex<HashMap<String, StandingsCache>>,
+    standings_refresh: tokio::sync::Mutex<()>,
     #[cfg(test)]
     clock: Mutex<Option<DateTime<Utc>>>,
 }
@@ -164,6 +174,15 @@ struct RosterCache {
     error: Option<String>,
 }
 
+struct StandingsCache {
+    table: Option<ParsedStandings>,
+    /// When `table` was fetched. The entry's own clock is `fetched_at`.
+    table_at: DateTime<Utc>,
+    fetched_at: DateTime<Utc>,
+    ttl: Duration,
+    error: Option<String>,
+}
+
 #[derive(Clone)]
 struct DetailEntry {
     detail: Option<GameDetail>,
@@ -179,6 +198,10 @@ pub struct RosterUnavailable;
 /// No successful game detail is cached for this event.
 #[derive(Debug)]
 pub struct DetailUnavailable;
+
+/// No successful standings table is cached for this league.
+#[derive(Debug)]
+pub struct StandingsUnavailable;
 
 pub(crate) fn production_feed() -> Result<Arc<dyn ScoreFeed>, FeedError> {
     Ok(Arc::new(EspnFeed::new()?))
@@ -240,6 +263,8 @@ impl ScoreboardService {
             roster_refresh: tokio::sync::Mutex::new(()),
             details: Mutex::new(LruMap::new(CACHE_CAP)),
             detail_flights: Mutex::new(HashMap::new()),
+            standings: Mutex::new(HashMap::new()),
+            standings_refresh: tokio::sync::Mutex::new(()),
             #[cfg(test)]
             clock: Mutex::new(None),
         }
@@ -254,6 +279,7 @@ impl ScoreboardService {
         lock(&self.rosters).clear();
         lock(&self.details).clear();
         lock(&self.detail_flights).clear();
+        lock(&self.standings).clear();
     }
 
     /// Swap the process-wide feed. Startup uses this for the replay feed.
@@ -347,6 +373,107 @@ impl ScoreboardService {
             league,
             teams: entry.teams.clone(),
         })
+    }
+
+    /// One league's table. A failed refresh keeps the last good table and marks
+    /// it stale. `Err` means nothing successful has been cached yet.
+    pub async fn standings(
+        &self,
+        league: &str,
+        favorites: &[FavoriteTeam],
+    ) -> Result<LeagueStandings, StandingsUnavailable> {
+        let league = league.trim().to_ascii_lowercase();
+        if !is_valid_league_path(&league) {
+            return Err(StandingsUnavailable);
+        }
+        self.refresh_standings(&league).await;
+        let cache = lock(&self.standings);
+        let entry = cache.get(&cache_key(&league)).ok_or(StandingsUnavailable)?;
+        let table = entry.table.clone().ok_or(StandingsUnavailable)?;
+        let mut groups = table.groups;
+        for group in &mut groups {
+            for row in &mut group.rows {
+                row.favorite = favorites.iter().any(|team| {
+                    team.league.eq_ignore_ascii_case(&league) && team.team_id == row.team.id
+                });
+            }
+        }
+        Ok(LeagueStandings {
+            label: league_label(&league),
+            league,
+            season: table.season,
+            fetched_at: super::models::format_rfc3339(entry.table_at),
+            stale: entry.error.is_some(),
+            columns: table.columns,
+            groups,
+        })
+    }
+
+    async fn refresh_standings(&self, league: &str) {
+        if !self.standings_is_stale(league) {
+            return;
+        }
+        let _guard = self.standings_refresh.lock().await;
+        if !self.standings_is_stale(league) {
+            return;
+        }
+        let now = self.now();
+        let feed = read_lock(&self.feed).clone();
+        let outcome = match feed.fetch_standings(league).await {
+            Ok(body) => standings::parse_standings(&body, league),
+            Err(error) => Err(error.board_message()),
+        };
+        let mut cache = lock(&self.standings);
+        let key = cache_key(league);
+        match outcome {
+            Ok(table) => {
+                cache.insert(
+                    key,
+                    StandingsCache {
+                        table: Some(table),
+                        table_at: now,
+                        fetched_at: now,
+                        ttl: STANDINGS_TTL,
+                        error: None,
+                    },
+                );
+            }
+            Err(message) => {
+                tracing::warn!(league = %league, %message, "sports standings refresh failed");
+                let (table, table_at) = cache
+                    .get(&key)
+                    .map(|entry| (entry.table.clone(), entry.table_at))
+                    .unwrap_or((None, now));
+                cache.insert(
+                    key,
+                    StandingsCache {
+                        table,
+                        table_at,
+                        fetched_at: now,
+                        ttl: STANDINGS_ERROR_TTL,
+                        error: Some(message),
+                    },
+                );
+            }
+        }
+        if cache.len() > CACHE_CAP {
+            let oldest = cache
+                .iter()
+                .min_by_key(|(_, entry)| entry.fetched_at)
+                .map(|(key, _)| key.clone());
+            if let Some(oldest) = oldest {
+                cache.remove(&oldest);
+            }
+        }
+    }
+
+    fn standings_is_stale(&self, league: &str) -> bool {
+        let now = self.now();
+        let cache = lock(&self.standings);
+        match cache.get(&cache_key(league)) {
+            Some(entry) => expired(entry.fetched_at, entry.ttl, now),
+            None => true,
+        }
     }
 
     /// One game's field. A failed refresh keeps the last good detail and marks
@@ -905,6 +1032,12 @@ impl ScoreFeed for EspnFeed {
         let client = self.client.clone();
         Box::pin(async move { fetch_summary_body(&client, &league, &event_id).await })
     }
+
+    fn fetch_standings<'a>(&'a self, league: &'a str) -> FeedFut<'a> {
+        let league = league.to_string();
+        let client = self.client.clone();
+        Box::pin(async move { fetch_standings_body(&client, &league).await })
+    }
 }
 
 async fn fetch_league(
@@ -935,6 +1068,20 @@ async fn fetch_teams_body(client: &reqwest::Client, league: &str) -> Result<Stri
         MAX_BODY_BYTES,
         "scoreboard response exceeded 4 MiB",
         "no teams host answered",
+    )
+    .await
+}
+
+async fn fetch_standings_body(client: &reqwest::Client, league: &str) -> Result<String, FeedError> {
+    if !is_valid_league_path(league) {
+        return Err(FeedError::Other("invalid league path".to_string()));
+    }
+    fetch_on_hosts(
+        client,
+        |host| Some(standings::standings_url(host, league)),
+        SUMMARY_MAX_BODY_BYTES,
+        "standings response exceeded 8 MiB",
+        "no standings host answered",
     )
     .await
 }
@@ -1544,6 +1691,82 @@ mod tests {
                 .clone();
             Box::pin(async move { body })
         }
+    }
+
+    struct StandingsScript {
+        script: Arc<Mutex<Result<String, FeedError>>>,
+        seen: Arc<AtomicUsize>,
+    }
+
+    impl ScoreFeed for StandingsScript {
+        fn fetch<'a>(&'a self, _league: &'a str) -> super::FeedFut<'a> {
+            Box::pin(async { Err(FeedError::Other("scoreboard unused".to_string())) })
+        }
+
+        fn fetch_standings<'a>(&'a self, _league: &'a str) -> super::FeedFut<'a> {
+            self.seen.fetch_add(1, Ordering::SeqCst);
+            let body = self
+                .script
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone();
+            Box::pin(async move { body })
+        }
+    }
+
+    #[tokio::test]
+    async fn standings_mark_favorites_cache_and_keep_the_last_good_table() {
+        let seen = Arc::new(AtomicUsize::new(0));
+        let script = Arc::new(Mutex::new(Ok(
+            include_str!("fixtures/nfl_standings.json").to_string()
+        )));
+        let service = ScoreboardService::with_feed(Arc::new(StandingsScript {
+            script: script.clone(),
+            seen: seen.clone(),
+        }));
+        let bills = FavoriteTeam {
+            league: "football/nfl".to_string(),
+            team_id: "2".to_string(),
+            abbr: "BUF".to_string(),
+            name: "Bills".to_string(),
+        };
+        let start = at(20, 0);
+        service.set_now(start);
+        let table = service
+            .standings("Football/NFL", std::slice::from_ref(&bills))
+            .await
+            .unwrap();
+        assert_eq!(table.league, "football/nfl");
+        assert_eq!(table.label, "NFL");
+        assert!(!table.stale);
+        let marked: Vec<&str> = table
+            .groups
+            .iter()
+            .flat_map(|group| &group.rows)
+            .filter(|row| row.favorite)
+            .map(|row| row.team.abbr.as_str())
+            .collect();
+        assert_eq!(marked, ["BUF"]);
+        assert_eq!(seen.load(Ordering::SeqCst), 1);
+
+        service.set_now(start + chrono::Duration::minutes(9));
+        service.standings("football/nfl", &[]).await.unwrap();
+        assert_eq!(seen.load(Ordering::SeqCst), 1);
+
+        *script.lock().unwrap() = Err(FeedError::TimedOut);
+        service.set_now(start + chrono::Duration::minutes(10));
+        let kept = service.standings("football/nfl", &[]).await.unwrap();
+        assert!(kept.stale);
+        assert_eq!(kept.groups.len(), 8);
+        assert_eq!(kept.fetched_at, super::super::models::format_rfc3339(start));
+        assert_eq!(seen.load(Ordering::SeqCst), 2);
+
+        let cold = ScoreboardService::with_feed(Arc::new(StandingsScript {
+            script: Arc::new(Mutex::new(Err(FeedError::TimedOut))),
+            seen: Arc::new(AtomicUsize::new(0)),
+        }));
+        assert!(cold.standings("football/nfl", &[]).await.is_err());
+        assert!(cold.standings("not a path", &[]).await.is_err());
     }
 
     fn roster_service(

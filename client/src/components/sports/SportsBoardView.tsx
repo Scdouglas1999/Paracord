@@ -17,6 +17,8 @@ import {
   writeHideScores,
 } from './model';
 import { GameRow } from './GameRow';
+import { readScoreAlertsOn, SCORE_ALERTS_EVENT, writeScoreAlertsOn } from './scoreAlerts';
+import { StandingsView } from './StandingsView';
 
 export function SportsBoardView({ guildId, serverName }: { guildId: string; serverName: string }) {
   const { settings, status, error, board, boardError, flashes } = useSportsSettings(guildId);
@@ -32,9 +34,23 @@ export function SportsBoardView({ guildId, serverName }: { guildId: string; serv
   const [viewChoice, setViewChoice] = useState<SportsDefaultView | null>(null);
   const [leaguePath, setLeaguePath] = useState<string | null>(null);
   const hideId = useId();
+  const alertsId = useId();
+  const [alertsOn, setAlertsOn] = useState(() => readScoreAlertsOn(guildId));
+  const tab = search.get('tab') === 'standings' ? 'standings' : 'scores';
 
   useEffect(() => {
-    if (!enabled || viewingToday || !guildId) return;
+    const sync = () => setAlertsOn(readScoreAlertsOn(guildId));
+    sync();
+    window.addEventListener(SCORE_ALERTS_EVENT, sync);
+    window.addEventListener('storage', sync);
+    return () => {
+      window.removeEventListener(SCORE_ALERTS_EVENT, sync);
+      window.removeEventListener('storage', sync);
+    };
+  }, [guildId]);
+
+  useEffect(() => {
+    if (!enabled || viewingToday || !guildId || tab === 'standings') return;
     let stopped = false;
     const load = () => {
       if (document.hidden) return;
@@ -56,7 +72,7 @@ export function SportsBoardView({ guildId, serverName }: { guildId: string; serv
       stopped = true;
       window.clearInterval(timer);
     };
-  }, [enabled, viewingToday, guildId, day.iso, day.compact, datedAttempt]);
+  }, [enabled, viewingToday, guildId, day.iso, day.compact, datedAttempt, tab]);
 
   useEffect(() => {
     const sync = () => setHideScores(readHideScores());
@@ -71,6 +87,12 @@ export function SportsBoardView({ guildId, serverName }: { guildId: string; serv
   const view = viewChoice ?? asDefaultView(settings?.default_view);
   const now = new Date();
   const title = sportsTitle(day);
+  const pickTab = (next: 'scores' | 'standings') => {
+    const params = new URLSearchParams(search);
+    if (next === 'scores') params.delete('tab');
+    else params.set('tab', next);
+    setSearch(params, { replace: true });
+  };
   const pickDay = (next: BoardDay) => {
     const params = new URLSearchParams(search);
     if (next.offset === 0) params.delete('date');
@@ -105,11 +127,44 @@ export function SportsBoardView({ guildId, serverName }: { guildId: string; serv
     );
   }
 
+  const followed = settings?.leagues ?? [];
+  const labelFor = (path: string) => board?.leagues.find((league) => league.path === path)?.label
+    ?? (path.split('/')[1] ?? path).toUpperCase();
+  const tabs = <SportsTabs tab={tab} onPick={pickTab} />;
+  const alertsSwitch = settings?.score_alerts ? (
+    <span className="flex items-center gap-2">
+      <span id={alertsId} className="text-label text-text-secondary">Score alerts</span>
+      <Switch
+        checked={alertsOn}
+        labelledBy={alertsId}
+        onChange={(next) => {
+          setAlertsOn(next);
+          writeScoreAlertsOn(guildId, next);
+        }}
+      />
+    </span>
+  ) : null;
+
+  if (tab === 'standings') {
+    return (
+      <Page serverName={serverName} title="Standings">
+        {tabs}
+        <StandingsView
+          guildId={guildId}
+          leagues={followed}
+          labelFor={labelFor}
+          initialLeague={leaguePath ?? followed.find((path) => (settings?.favorite_teams ?? []).some((team) => team.league === path)) ?? null}
+        />
+      </Page>
+    );
+  }
+
   const shownBoard = viewingToday ? board : (dated?.iso === day.iso ? dated.board : null);
   const shownError = viewingToday ? boardError : (dated?.iso === day.iso ? dated.error : null);
   if (!shownBoard && !shownError) {
     return (
       <Page serverName={serverName} title={title}>
+        {tabs}
         <DateBar day={day} onPick={pickDay} />
         <p role="status" className="text-label text-text-secondary">Loading scores…</p>
       </Page>
@@ -133,6 +188,7 @@ export function SportsBoardView({ guildId, serverName }: { guildId: string; serv
 
   return (
     <Page serverName={serverName} title={title}>
+      {tabs}
       <DateBar day={day} onPick={pickDay} />
       <div
         role="group"
@@ -164,7 +220,9 @@ export function SportsBoardView({ guildId, serverName }: { guildId: string; serv
         <FilterChip pressed={view === 'favorites'} label="Favorites" onClick={() => setViewChoice('favorites')}>
           Favorites
         </FilterChip>
-        <span className="ml-auto flex items-center gap-2">
+        <span className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-2">
+          {alertsSwitch}
+          <span className="flex items-center gap-2">
           <span id={hideId} className="text-label text-text-secondary">Hide scores</span>
           <Switch
             checked={hideScores}
@@ -174,6 +232,7 @@ export function SportsBoardView({ guildId, serverName }: { guildId: string; serv
               writeHideScores(next);
             }}
           />
+          </span>
         </span>
       </div>
 
@@ -204,6 +263,19 @@ export function SportsBoardView({ guildId, serverName }: { guildId: string; serv
         </div>
       )}
     </Page>
+  );
+}
+
+function SportsTabs({ tab, onPick }: { tab: 'scores' | 'standings'; onPick: (tab: 'scores' | 'standings') => void }) {
+  return (
+    <div role="group" aria-label="Sports view" className="pc-sports-tabs">
+      <button type="button" className="pc-focusable" aria-pressed={tab === 'scores'} onClick={() => onPick('scores')}>
+        Scores
+      </button>
+      <button type="button" className="pc-focusable" aria-pressed={tab === 'standings'} onClick={() => onPick('standings')}>
+        Standings
+      </button>
+    </div>
   );
 }
 

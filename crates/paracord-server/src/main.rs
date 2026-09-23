@@ -2189,6 +2189,7 @@ fn spawn_sports_announce_worker(
                 _ = shutdown.notified() => break,
                 _ = interval.tick() => {
                     paracord_api::routes::sports_announce::announce_due(&state).await;
+                    paracord_api::routes::sports_alerts::alert_due(&state).await;
                 }
             }
         }

@@ -20,6 +20,7 @@ vi.mock('../api/sports', async () => {
       getBoard: vi.fn(),
       listLeagues: vi.fn(),
       updateSettings: vi.fn(),
+      getStandings: vi.fn(),
     },
   };
 });
@@ -324,6 +325,48 @@ describe('GuildSportsPage', () => {
     await screen.findByText('Chiefs and Bills, 4th quarter 7:58, scores hidden');
     await user.click(screen.getByRole('switch', { name: 'Hide scores' }));
     expect(screen.getByText('Chiefs 21, Bills 17, 4th quarter 7:58, red zone')).toBeInTheDocument();
+  });
+
+  it('offers score alerts only when the server sends them, and remembers the choice here', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByRole('link', { name: 'Open Chiefs at Bills' });
+    expect(screen.queryByRole('switch', { name: 'Score alerts' })).not.toBeInTheDocument();
+
+    cleanup();
+    useSportsStore.getState().reset();
+    vi.mocked(sportsApi.getSettings).mockResolvedValue({ data: settings({ score_alerts: true }) } as never);
+    renderPage();
+    const alerts = await screen.findByRole('switch', { name: 'Score alerts' });
+    expect(alerts).toHaveAttribute('aria-checked', 'true');
+    await user.click(alerts);
+    expect(alerts).toHaveAttribute('aria-checked', 'false');
+    expect(JSON.parse(localStorage.getItem('paracord.sports.alerts-off') ?? '{}')).toEqual({ g1: true });
+  });
+
+  it('switches to the standings of a league with a favorite and back to scores', async () => {
+    vi.mocked(sportsApi.getStandings).mockResolvedValue({
+      data: {
+        league: 'football/nfl', label: 'NFL', season: '2026', fetched_at: '', stale: false,
+        columns: [{ key: 'wins', label: 'W', title: 'Wins' }],
+        groups: [{
+          name: 'AFC West', parent: 'American Football Conference',
+          rows: [{ team: { id: '12', abbr: 'KC', name: 'Kansas City Chiefs', short_name: 'Chiefs', logo: '' }, values: ['2'], seed: 1, clincher: null, favorite: true }],
+        }],
+      },
+    } as never);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByRole('link', { name: 'Open Chiefs at Bills' });
+    await user.click(screen.getByRole('button', { name: 'Standings' }));
+    expect(await screen.findByRole('heading', { level: 1, name: 'Standings' })).toBeInTheDocument();
+    expect(await screen.findByRole('region', { name: 'AFC West' })).toBeInTheDocument();
+    expect(sportsApi.getStandings).toHaveBeenCalledWith('g1', 'football/nfl');
+    expect(screen.getByRole('button', { name: 'NFL' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByRole('group', { name: 'Date' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Scores' }));
+    expect(await screen.findByRole('link', { name: 'Open Chiefs at Bills' })).toBeInTheDocument();
   });
 
   it('illustrates a quiet favorites day', async () => {

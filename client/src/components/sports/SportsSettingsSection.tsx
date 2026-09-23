@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
+import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import { ArrowDown, ArrowUp, Plus, X } from 'lucide-react';
 import {
   FAVORITE_MAX,
@@ -39,6 +39,7 @@ function draftKey(draft: {
   leagues: string[];
   favorites: SportsFavoriteTeam[];
   showOnPage: boolean;
+  scoreAlerts: boolean;
   defaultView: SportsDefaultView;
   layout: SportsLayout;
 }): string {
@@ -66,6 +67,7 @@ export function SportsSettingsSection({ guildId }: { guildId: string }) {
   const [leagues, setLeagues] = useState<string[]>([]);
   const [favorites, setFavorites] = useState<SportsFavoriteTeam[]>([]);
   const [showOnPage, setShowOnPage] = useState(true);
+  const [scoreAlerts, setScoreAlerts] = useState(false);
   const [defaultView, setDefaultView] = useState<SportsDefaultView>('all');
   const [layout, setLayout] = useState<SportsLayout>('cards');
   const [customOpen, setCustomOpen] = useState(false);
@@ -77,6 +79,30 @@ export function SportsSettingsSection({ guildId }: { guildId: string }) {
   const [rosters, setRosters] = useState<Record<string, SportsRosterTeam[]>>({});
   const [rosterErrors, setRosterErrors] = useState<Record<string, string>>({});
   const [rosterLoading, setRosterLoading] = useState<string | null>(null);
+
+  const applySettings = useCallback((settings: SportsSettings) => {
+    const nextLeagues = settings.leagues ?? [];
+    const nextFavorites = settings.favorite_teams ?? [];
+    const nextShow = settings.show_on_server_page;
+    const nextAlerts = settings.score_alerts === true;
+    const nextView = asDefaultView(settings.default_view);
+    const nextLayout = asLayout(settings.layout);
+    setEnabled(settings.enabled);
+    setLeagues(nextLeagues);
+    setFavorites(nextFavorites);
+    setShowOnPage(nextShow);
+    setScoreAlerts(nextAlerts);
+    setDefaultView(nextView);
+    setLayout(nextLayout);
+    setBaseline(draftKey({
+      leagues: nextLeagues,
+      favorites: nextFavorites,
+      showOnPage: nextShow,
+      scoreAlerts: nextAlerts,
+      defaultView: nextView,
+      layout: nextLayout,
+    }));
+  }, []);
 
   useEffect(() => {
     const gate = { cancelled: false };
@@ -108,33 +134,14 @@ export function SportsSettingsSection({ guildId }: { guildId: string }) {
     return () => {
       gate.cancelled = true;
     };
-  }, [guildId]);
+  }, [guildId, applySettings]);
 
-  const applySettings = (settings: SportsSettings) => {
-    const nextLeagues = settings.leagues ?? [];
-    const nextFavorites = settings.favorite_teams ?? [];
-    const nextShow = settings.show_on_server_page;
-    const nextView = asDefaultView(settings.default_view);
-    const nextLayout = asLayout(settings.layout);
-    setEnabled(settings.enabled);
-    setLeagues(nextLeagues);
-    setFavorites(nextFavorites);
-    setShowOnPage(nextShow);
-    setDefaultView(nextView);
-    setLayout(nextLayout);
-    setBaseline(draftKey({
-      leagues: nextLeagues,
-      favorites: nextFavorites,
-      showOnPage: nextShow,
-      defaultView: nextView,
-      layout: nextLayout,
-    }));
-  };
 
   const dirty = baseline != null && baseline !== draftKey({
     leagues,
     favorites,
     showOnPage,
+    scoreAlerts,
     defaultView,
     layout,
   });
@@ -289,6 +296,7 @@ export function SportsSettingsSection({ guildId }: { guildId: string }) {
     const body: SportsSettingsUpdate = {
       enabled: true,
       show_on_server_page: showOnPage,
+      score_alerts: scoreAlerts,
       default_view: defaultView,
       layout,
       favorite_teams: favorites,
@@ -398,6 +406,8 @@ export function SportsSettingsSection({ guildId }: { guildId: string }) {
                 addFavorite={addFavorite}
                 showOnPage={showOnPage}
                 setShowOnPage={setShowOnPage}
+                scoreAlerts={scoreAlerts}
+                setScoreAlerts={setScoreAlerts}
                 defaultView={defaultView}
                 setDefaultView={setDefaultView}
                 layout={layout}
@@ -447,6 +457,8 @@ function SportsConfig(props: {
   addFavorite: (team: SportsFavoriteTeam) => void;
   showOnPage: boolean;
   setShowOnPage: (value: boolean) => void;
+  scoreAlerts: boolean;
+  setScoreAlerts: (value: boolean) => void;
   defaultView: SportsDefaultView;
   setDefaultView: (value: SportsDefaultView) => void;
   layout: SportsLayout;
@@ -456,7 +468,7 @@ function SportsConfig(props: {
     leagues, labelFor, move, removeLeague, remaining, addLeague, catalogError,
     customOpen, setCustomOpen, customPath, setCustomPath, setCustomError, customError, addCustom, favorites, setFavorites,
     openLeague, openPicker, rosterQuery, setRosterQuery, rosters, rosterErrors, rosterLoading,
-    favoriteKeys, addFavorite, showOnPage, setShowOnPage, defaultView, setDefaultView, layout, setLayout,
+    favoriteKeys, addFavorite, showOnPage, setShowOnPage, scoreAlerts, setScoreAlerts, defaultView, setDefaultView, layout, setLayout,
   } = props;
 
   return (
@@ -644,6 +656,15 @@ function SportsConfig(props: {
         description="A short list on the front page. When nothing is live, it shows the next games to start."
         checked={showOnPage}
         onChange={setShowOnPage}
+      />
+
+      <ToggleRow
+        label="Tell members when a favorite team scores"
+        description={favorites.length === 0
+          ? 'Pick a favorite team first. Members get a notification for each score in its games and for the final.'
+          : 'Members get a notification for each score in a favorite team\'s game and for the final. Each person can turn it off on the Sports page. The server checks those leagues every few minutes, even when nobody has Sports open.'}
+        checked={scoreAlerts}
+        onChange={setScoreAlerts}
       />
 
       <label className="flex max-w-xs flex-col">

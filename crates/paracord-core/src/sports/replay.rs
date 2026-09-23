@@ -1218,6 +1218,10 @@ impl ScoreFeed for ReplayFeed {
         self.inner.fetch_teams(league)
     }
 
+    fn fetch_standings<'a>(&'a self, league: &'a str) -> FeedFut<'a> {
+        self.inner.fetch_standings(league)
+    }
+
     fn fetch_summary<'a>(&'a self, league: &'a str, event_id: &'a str) -> FeedFut<'a> {
         let league_key = league.to_ascii_lowercase();
         if let Some(game) = self
