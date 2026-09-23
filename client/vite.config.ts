@@ -28,8 +28,11 @@ export default defineConfig(({ mode }) => {
           name: "Paracord",
           short_name: "Paracord",
           description: "A decentralized, self-hostable chat platform",
-          theme_color: "#0a0c10",
-          background_color: "#0a0c10",
+          // The Slate ground: the default theme's --bg-base, which is also the
+          // loading screen's ground (index.html), so the OS launch splash, the
+          // loading screen and the app are one colour.
+          theme_color: "#070c10",
+          background_color: "#070c10",
           icons: [
             { src: "pwa-64x64.png", sizes: "64x64", type: "image/png" },
             { src: "pwa-192x192.png", sizes: "192x192", type: "image/png" },
