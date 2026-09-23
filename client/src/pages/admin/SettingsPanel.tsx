@@ -154,7 +154,10 @@ export function SettingsPanel() {
           <h3 className="pc-display text-heading text-text-primary">Network</h3>
           {router && (
             <p className="text-label text-text-secondary">
-              Right now: <span className="font-semibold text-text-primary">{reachLabel(router.running && !router.loopback_bind)}</span>
+              Right now:{' '}
+              <span className="font-semibold text-text-primary">
+                {router.loopback_bind ? 'Only reachable from this computer' : reachLabel(router.running)}
+              </span>
             </p>
           )}
           <ToggleRow

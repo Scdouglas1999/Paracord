@@ -146,7 +146,7 @@ export function reachNote(reach: ShareReach, asksRouter?: boolean): string {
   switch (reach) {
     case 'local_network':
       if (asksRouter === false) {
-        return `Right now this only works for people on the same network (the same Wi-Fi) as the server: it is set up to be reachable on your home network only. To let friends elsewhere join, whoever runs the server can turn on “${ROUTER_SETTING_LABEL}” in Admin → Settings and restart it.`;
+        return `Right now this only works for people on the same network (the same Wi-Fi) as the server. For friends elsewhere, the owner can turn on “${ROUTER_SETTING_LABEL}” in Admin → Settings and restart the server.`;
       }
       return 'Right now this only works for people on the same network (the same Wi-Fi) as the server. For friends elsewhere, the router needs a port opened: see “Friends outside your network” in the Paracord docs.';
     case 'this_computer':

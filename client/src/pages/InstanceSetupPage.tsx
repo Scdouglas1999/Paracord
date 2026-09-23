@@ -748,7 +748,7 @@ export function InstanceSetupPage() {
                   />
                 </div>
                 {reachExplanation(routerForwarding) && (
-                  <div className="pc-well mt-4 flex flex-col gap-1 px-4 py-3">
+                  <div className="pc-well flex flex-col gap-1 px-4 py-3">
                     <span className="text-meta text-text-faint">How this server was installed</span>
                     <span className="text-label font-semibold text-text-primary">
                       {reachLabel(Boolean(routerForwarding))}
