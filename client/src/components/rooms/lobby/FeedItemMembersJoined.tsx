@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { memo, useMemo } from 'react';
 import { MessageCircle } from 'lucide-react';
 
 import { AvatarStack } from '../../light';
@@ -20,7 +20,7 @@ export interface FeedItemMembersJoinedProps {
  * The people who joined on one day, as one line. "Say hi" opens a direct
  * message with the first person it names.
  */
-export function FeedItemMembersJoined({ item, when, onSayHi, viewerId }: FeedItemMembersJoinedProps) {
+export const FeedItemMembersJoined = memo(function FeedItemMembersJoined({ item, when, onSayHi, viewerId }: FeedItemMembersJoinedProps) {
   const people = useMemo(
     () =>
       item.users.map((user) =>
@@ -49,4 +49,4 @@ export function FeedItemMembersJoined({ item, when, onSayHi, viewerId }: FeedIte
       )}
     </article>
   );
-}
+});

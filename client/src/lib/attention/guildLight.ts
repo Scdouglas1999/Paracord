@@ -169,6 +169,15 @@ function channelNameLookup(channels: readonly LightChannel[]): (id: string) => s
   return (id) => names.get(id) ?? null;
 }
 
+/**
+ * The channels whose loaded messages {@link guildRooms} reads: the text rooms
+ * (the "authored" reading term). Voice rooms, categories and threads never read
+ * a timeline, so a message in one of them cannot change the building's light.
+ */
+export function readsMessages(channel: LightChannel): boolean {
+  return channel.type !== ChannelType.Category && !isThread(channel.type) && !isVoice(channel.type);
+}
+
 /** Every room of the building, as light. */
 export function guildRooms(input: GuildLightInput, people: readonly PersonLight[]): RoomLight[] {
   const history = input.litHistory ?? roomLitHistory;

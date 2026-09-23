@@ -1,5 +1,5 @@
 vi.mock('../lib/messages/accountMessagingRuntime', async () => (await import('../test/messagingRuntimeMock')).messagingRuntimeMock);
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock leaf side-effect modules so dispatch stays unit-scoped.
 vi.mock('../lib/features/notifications', () => ({
@@ -21,6 +21,7 @@ vi.mock('../stores/channelStore', async (importOriginal) => ({
 
 import { getTestMessagingRuntime } from '../test/messagingRuntimeMock';
 import { dispatchGatewayEvent, resolveEmojiKey } from './dispatch';
+import { loadValidators } from '../api/contractValidators';
 import { useReadStateStore } from '../stores/readStateStore';
 import { GatewayEvents } from './events';
 import { useMemberStore } from '../stores/memberStore';
@@ -74,6 +75,11 @@ describe('resolveEmojiKey', () => {
 });
 
 describe('dispatch READY normalization', () => {
+  // A connection verifies its account through a validated response before its
+  // gateway can deliver READY, which is what loads the validators in the app.
+  beforeAll(async () => {
+    await loadValidators();
+  });
   const readyCore = { id: 'g1', owner_id: 'owner-1', name: 'Updated', member_count: 0, icon_hash: null, created_at: '2026-01-01T00:00:00Z' };
   it('adds a guild with a valid owner_id', () => {
     useAuthStore.setState({ user: { id: 'viewer', username: 'viewer' } as User });

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Track, RoomEvent } from 'livekit-client';
+import { livekit } from '../stores/voice/livekitRuntime';
 import { useAuthStore } from '../stores/authStore';
 import { useVoiceStore } from '../stores/voiceStore';
 import { displayName } from '../lib/displayName';
@@ -67,7 +67,7 @@ export function useWebcamTiles(): WebcamTile[] {
 
       for (const pub of room.localParticipant.videoTrackPublications.values()) {
         if (
-          pub.source === Track.Source.Camera &&
+          pub.source === livekit().Track.Source.Camera &&
           !pub.isMuted &&
           pub.track &&
           pub.track.mediaStreamTrack?.readyState !== 'ended'
@@ -83,7 +83,7 @@ export function useWebcamTiles(): WebcamTile[] {
 
       for (const participant of room.remoteParticipants.values()) {
         for (const pub of participant.videoTrackPublications.values()) {
-          if (pub.source === Track.Source.Camera) {
+          if (pub.source === livekit().Track.Source.Camera) {
             if (!pub.isSubscribed) {
               pub.setSubscribed(true);
             }
@@ -104,6 +104,7 @@ export function useWebcamTiles(): WebcamTile[] {
 
     recompute();
 
+    const { RoomEvent } = livekit();
     room.on(RoomEvent.TrackSubscribed, recompute);
     room.on(RoomEvent.TrackUnsubscribed, recompute);
     room.on(RoomEvent.TrackPublished, recompute);

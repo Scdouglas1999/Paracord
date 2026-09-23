@@ -20,7 +20,8 @@
  *     when a room lit up — which is a module record, not a store field.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 
 import { useAuthStore } from '../stores/authStore';
 import { useChannelStore } from '../stores/channelStore';
@@ -44,7 +45,13 @@ import {
   type PersonLight,
   type RoomLight,
 } from '../lib/attention/light';
-import { guildLight, type LightChannel, type LightMessage } from '../lib/attention/guildLight';
+import {
+  guildLight,
+  readsMessages,
+  type LightChannel,
+  type LightMessage,
+} from '../lib/attention/guildLight';
+import type { MessageState } from '../stores/messageStore';
 import type { Member } from '../types';
 import { useAvailableGuilds } from './useGuilds';
 import { useCurrentAccountScope } from './useCurrentUser';
@@ -62,18 +69,90 @@ const NO_PEOPLE: PersonLight[] = [];
 const NO_MESSAGES: Record<string, LightMessage[]> = {};
 
 /**
+ * One ticker per interval, shared by every clock that asks for it.
+ *
+ * Each light hook used to keep its own `setInterval`: the sidebar, the header,
+ * the timeline and the on-air pill each woke up on their own schedule, so a
+ * second of a call cost one React render pass per clock. Subscribers of one
+ * ticker are told in the same task, so React renders them together. The timer
+ * runs only while somebody is subscribed.
+ */
+interface LightTicker {
+  now: number;
+  listeners: Set<() => void>;
+  timer: ReturnType<typeof setInterval> | null;
+}
+
+const lightTickers = new Map<number, LightTicker>();
+
+function lightTicker(intervalMs: number): LightTicker {
+  let ticker = lightTickers.get(intervalMs);
+  if (!ticker) {
+    ticker = { now: Date.now(), listeners: new Set(), timer: null };
+    lightTickers.set(intervalMs, ticker);
+  }
+  return ticker;
+}
+
+function subscribeLightTicker(intervalMs: number, listener: () => void): () => void {
+  const ticker = lightTicker(intervalMs);
+  ticker.listeners.add(listener);
+  if (ticker.timer === null) {
+    ticker.now = Date.now();
+    ticker.timer = setInterval(() => {
+      ticker.now = Date.now();
+      for (const notify of ticker.listeners) notify();
+    }, intervalMs);
+  }
+  return () => {
+    ticker.listeners.delete(listener);
+    if (ticker.listeners.size === 0 && ticker.timer !== null) {
+      clearInterval(ticker.timer);
+      ticker.timer = null;
+    }
+  };
+}
+
+const idleSubscribe = () => () => {};
+
+/**
+ * The ticker's time. While nobody holds the ticker it does not run, so a clock
+ * that mounts then would read whenever it last ticked; it is brought forward
+ * first, never by less than a whole interval, so two reads in one render agree.
+ */
+function readLightTicker(intervalMs: number): number {
+  const ticker = lightTicker(intervalMs);
+  if (ticker.timer === null) {
+    const now = Date.now();
+    if (now - ticker.now >= intervalMs) ticker.now = now;
+  }
+  return ticker.now;
+}
+
+/**
  * A 1 Hz clock so a call duration counts up without every light selector
- * re-running on an animation frame. Idle when nothing on screen needs it.
+ * re-running on an animation frame. Idle when nothing on screen needs it: an
+ * inactive clock holds the time it last showed.
  */
 export function useLightClock(active: boolean, intervalMs = CLOCK_INTERVAL_MS): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!active) return;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), intervalMs);
-    return () => clearInterval(timer);
-  }, [active, intervalMs]);
-  return now;
+  const subscribe = useCallback(
+    (listener: () => void) => subscribeLightTicker(intervalMs, listener),
+    [intervalMs],
+  );
+  const live = useSyncExternalStore(
+    active ? subscribe : idleSubscribe,
+    () => readLightTicker(intervalMs),
+  );
+  // While idle the clock holds the time it last showed: when it mounted, or
+  // its last tick before it went idle. It is only written when the clock goes
+  // idle, so a tick costs one render, not two.
+  const [held, setHeld] = useState(() => Date.now());
+  const [wasActive, setWasActive] = useState(active);
+  if (wasActive !== active) {
+    setWasActive(active);
+    if (!active) setHeld(live);
+  }
+  return active ? live : held;
 }
 
 /**
@@ -101,8 +180,23 @@ export function useWindowIsVisible(): boolean {
   return visible;
 }
 
-/** The store slices every light hook needs, subscribed once. */
-function useLightSources() {
+/** The text rooms among these channels — the timelines a light reads. */
+function messageChannelIds(channelLists: readonly (readonly LightChannel[])[]): string[] {
+  const ids: string[] = [];
+  for (const channels of channelLists) {
+    for (const channel of channels) if (readsMessages(channel)) ids.push(channel.id);
+  }
+  return ids;
+}
+
+/**
+ * The store slices every light hook needs, subscribed once.
+ *
+ * `messageChannels` are the text rooms the caller lights. Only their timelines
+ * are subscribed: a message in a DM, a thread or another server's channel
+ * cannot change this light, and used to re-render every light on screen.
+ */
+function useLightSources(messageChannels: readonly string[]) {
   const presences = usePresenceStore((state) => state.presences);
   const channelParticipants = useVoiceStore((state) => state.channelParticipants);
   const speakingUsers = useVoiceStore((state) => state.speakingUsers);
@@ -112,10 +206,18 @@ function useLightSources() {
   // account's loaded timelines only. Background accounts fall back to the
   // typing term, which is exactly what `roomLight.ts` promises: an unloaded
   // channel contributes nothing rather than a guess.
-  const messages = useCurrentMessageStore((state) => state.messages) as Record<
-    string,
-    LightMessage[]
-  >;
+  const selectMessages = useCallback(
+    (state: MessageState) => {
+      const picked: Record<string, LightMessage[]> = {};
+      for (const id of messageChannels) {
+        const loaded = state.messages[id];
+        if (loaded) picked[id] = loaded as LightMessage[];
+      }
+      return picked;
+    },
+    [messageChannels],
+  );
+  const messages = useCurrentMessageStore(useShallow(selectMessages));
   const messagesScope = useCurrentAccountScope();
   const messagesScopeKey = messagesScope ? accountScopeKey(messagesScope) : null;
   const selectedChannel = useChannelStore((state) => state.selectedChannel);
@@ -189,7 +291,8 @@ export function useBuildingLight(guildId: string | null | undefined): BuildingLi
     scope && guildId ? state.members.get(entityScopeKey(scope, guildId)) : undefined,
   );
   const rosterKnown = useRosterKnown(scope && guildId ? entityScopeKey(scope, guildId) : null);
-  const sources = useLightSources();
+  const messageChannels = useMemo(() => messageChannelIds(channels ? [channels] : []), [channels]);
+  const sources = useLightSources(messageChannels);
 
   return useMemo(() => {
     if (!scope || !guildId || !guild) return null;
@@ -266,7 +369,11 @@ export function useBuildingLights(): BuildingLight[] {
   const channelsLoaded = useChannelStore((state) => state.guildChannelsLoaded);
   const members = useMemberStore((state) => state.members);
   const membersLoaded = useMemberStore((state) => state.membersLoaded);
-  const sources = useLightSources();
+  const messageChannels = useMemo(
+    () => messageChannelIds(guilds.map((guild) => channelsByGuild[guild.key] ?? NO_CHANNELS)),
+    [guilds, channelsByGuild],
+  );
+  const sources = useLightSources(messageChannels);
 
   return useMemo(() => {
     void sources.presences;

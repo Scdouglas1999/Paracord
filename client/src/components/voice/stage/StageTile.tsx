@@ -85,7 +85,7 @@ export const StageTile = React.forwardRef<HTMLDivElement, StageTileProps>(functi
       ref={ref}
       {...(userId ? { [SPEAKING_MARK]: userId } : null)}
       className={cn(
-        'group/tile relative isolate overflow-hidden rounded-[var(--radius-card)] bg-bg-well',
+        'group/tile relative isolate rounded-[var(--radius-card)] bg-bg-well',
         speaking ? 'pc-speaking' : 'shadow-[var(--shadow-tile)]',
         dominant && 'h-full w-full',
         className,
@@ -93,56 +93,62 @@ export const StageTile = React.forwardRef<HTMLDivElement, StageTileProps>(functi
       style={style}
       {...props}
     >
-      {children}
+      {/* The tile's content is clipped to its corners one level in, not on the
+          tile itself: the speaking ring breathes on layers just outside the
+          tile's edge (`.pc-speaking`), and a tile that clipped its overflow
+          would clip its own ring away. */}
+      <div className="absolute inset-0 overflow-hidden rounded-[inherit]">
+        {children}
 
-      {!live && (
-        <div className="absolute inset-0 flex items-center justify-center">
-          {/* Light is never the only cue (§9), and neither is its absence. */}
-          <span className="sr-only">{name}&rsquo;s camera is off</span>
-          {person ? (
-            <LitAvatar person={person} size={avatarSize} hideLabel />
-          ) : (
-            <span
-              className="pc-display pc-lit flex items-center justify-center rounded-full font-bold text-text-on-light"
-              style={{
-                width: avatarSize,
-                height: avatarSize,
-                fontSize: Math.max(9, Math.round(avatarSize * 0.34)),
-                background: getIdentityColor(name),
-              }}
-              aria-hidden
-            >
-              {avatarInitials(name)}
-            </span>
-          )}
-        </div>
-      )}
+        {!live && (
+          <div className="absolute inset-0 flex items-center justify-center">
+            {/* Light is never the only cue (§9), and neither is its absence. */}
+            <span className="sr-only">{name}&rsquo;s camera is off</span>
+            {person ? (
+              <LitAvatar person={person} size={avatarSize} hideLabel />
+            ) : (
+              <span
+                className="pc-display pc-lit flex items-center justify-center rounded-full font-bold text-text-on-light"
+                style={{
+                  width: avatarSize,
+                  height: avatarSize,
+                  fontSize: Math.max(9, Math.round(avatarSize * 0.34)),
+                  background: getIdentityColor(name),
+                }}
+                aria-hidden
+              >
+                {avatarInitials(name)}
+              </span>
+            )}
+          </div>
+        )}
 
-      {badge && (
-        <span className="pc-mono absolute left-2.5 top-2.5 text-meta text-text-faint">{badge}</span>
-      )}
+        {badge && (
+          <span className="pc-mono absolute left-2.5 top-2.5 text-meta text-text-faint">{badge}</span>
+        )}
 
-      {readout && (
-        <span className="pc-tag pc-mono absolute right-2.5 top-2.5 inline-flex h-6 items-center px-2 text-[11.5px] text-text-secondary">
-          {readout}
+        {readout && (
+          <span className="pc-tag pc-mono absolute right-2.5 top-2.5 inline-flex h-6 items-center px-2 text-[11.5px] text-text-secondary">
+            {readout}
+          </span>
+        )}
+
+        {actions && (
+          <div className="absolute right-2.5 top-2.5 z-10 flex items-center gap-1.5">{actions}</div>
+        )}
+
+        <span className="pc-tag absolute bottom-2.5 left-2.5 z-10 inline-flex h-6 max-w-[calc(100%-1.25rem)] items-center gap-1.5 px-2 text-meta font-medium">
+          {sharing ? (
+            <MonitorUp size={13} className="shrink-0" aria-hidden />
+          ) : muted ? (
+            <MicOff size={13} className="shrink-0 text-accent-danger" aria-hidden />
+          ) : speaking ? (
+            <Mic size={13} className="shrink-0 text-light-white" aria-hidden />
+          ) : null}
+          <span className="truncate">{name}</span>
+          {state && <span className="shrink-0 text-text-secondary">· {state}</span>}
         </span>
-      )}
-
-      {actions && (
-        <div className="absolute right-2.5 top-2.5 z-10 flex items-center gap-1.5">{actions}</div>
-      )}
-
-      <span className="pc-tag absolute bottom-2.5 left-2.5 z-10 inline-flex h-6 max-w-[calc(100%-1.25rem)] items-center gap-1.5 px-2 text-meta font-medium">
-        {sharing ? (
-          <MonitorUp size={13} className="shrink-0" aria-hidden />
-        ) : muted ? (
-          <MicOff size={13} className="shrink-0 text-accent-danger" aria-hidden />
-        ) : speaking ? (
-          <Mic size={13} className="shrink-0 text-light-white" aria-hidden />
-        ) : null}
-        <span className="truncate">{name}</span>
-        {state && <span className="shrink-0 text-text-secondary">· {state}</span>}
-      </span>
+      </div>
     </div>
   );
 });

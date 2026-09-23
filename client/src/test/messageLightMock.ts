@@ -55,6 +55,22 @@ export function stubPerson(
 /* ---- components/message/messageLight ------------------------------------ */
 export const useAuthorLights = () => stubPerson;
 export const useRoomLitEvents = () => [];
+const NO_EVENTS: never[] = [];
+export const createTimelineLightStore = () => ({
+  subscribe: () => () => {},
+  resolver: () => stubPerson,
+  events: () => NO_EVENTS,
+});
+export const TimelineLightSource = () => null;
+export const useTimelineAuthorLight = (_store: unknown, author: { id: string; name?: string; avatar?: string | null }) =>
+  stubPerson(author);
+export const TimelineAuthor = ({
+  author,
+  children,
+}: {
+  author: { id: string; name?: string; avatar?: string | null };
+  children: (person: PersonLight) => unknown;
+}) => children(stubPerson(author));
 export const useSelfUser = () => null;
 export const useDmLight = () => ({
   room: null,

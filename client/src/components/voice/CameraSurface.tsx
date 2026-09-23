@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Track, RoomEvent, type RemoteTrackPublication } from 'livekit-client';
+import type { RemoteTrackPublication } from 'livekit-client';
+import { livekit } from '../../stores/voice/livekitRuntime';
 
 import { useVoiceStore } from '../../stores/voiceStore';
 import { cn } from '../../lib/utils';
@@ -80,7 +81,7 @@ export function CameraSurface({
       let mediaTrack: MediaStreamTrack | null = null;
 
       if (isLocal) {
-        const pub = room.localParticipant.getTrackPublication(Track.Source.Camera);
+        const pub = room.localParticipant.getTrackPublication(livekit().Track.Source.Camera);
         const track = pub?.track;
         if (track && track.mediaStreamTrack && !pub?.isMuted) {
           mediaTrack = track.mediaStreamTrack;
@@ -100,7 +101,7 @@ export function CameraSurface({
         }
         let cameraTrack: RemoteTrackPublication | null = null;
         for (const pub of participant.videoTrackPublications.values()) {
-          if (pub.source === Track.Source.Camera && !pub.isMuted && pub.track) {
+          if (pub.source === livekit().Track.Source.Camera && !pub.isMuted && pub.track) {
             cameraTrack = pub;
             break;
           }
@@ -129,6 +130,7 @@ export function CameraSurface({
 
     attachTrack();
 
+    const { RoomEvent } = livekit();
     room.on(RoomEvent.TrackSubscribed, attachTrack);
     room.on(RoomEvent.TrackUnsubscribed, attachTrack);
     room.on(RoomEvent.LocalTrackPublished, attachTrack);

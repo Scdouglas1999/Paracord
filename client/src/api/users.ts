@@ -1,6 +1,6 @@
 import { getApi } from './activeClient';
 import { responseContract } from './responseContracts';
-import { isPublicUserProfile } from './generated/validators';
+import { isPublicUserProfile } from './contractValidators';
 
 export const userApi = {
   getProfile: async (userId: string) =>

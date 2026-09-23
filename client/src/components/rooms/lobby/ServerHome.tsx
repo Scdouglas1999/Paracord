@@ -260,28 +260,48 @@ export function ServerHome({ guildId }: ServerHomeProps) {
     [navigate, scope],
   );
 
+  // Stable, so the memoised feed and widgets are not redrawn by every render
+  // of the home (which re-renders whenever anybody speaks or comes online).
+  const sayHiLater = useCallback((user: FeedUser) => void sayHi(user), [sayHi]);
+  const rsvp = useCallback((eventId: string) => void toggleRsvp(eventId), [toggleRsvp]);
+  const openCalendar = useCallback(() => setShowCalendar(true), []);
+  const openMedia = useCallback(() => setContextPanelMode('media'), [setContextPanelMode]);
+  const openLeaderboard = useCallback(() => setContextPanelMode('economy'), [setContextPanelMode]);
+
   const reference = useMemo(() => (scope ? { id: guildId, scope } : null), [guildId, scope]);
   const muted = reference ? isMuted(reference) : false;
 
   const widgetIds = useMemo(() => enabledWidgets(guild?.hub_settings), [guild?.hub_settings]);
-  const widgetContext: WidgetContext = {
-    guildId,
-    nowMs,
-    viewerId,
-    events,
-    eventsError,
-    members,
-    announcementChannels,
-    mentionNames,
-    liveGameShown,
-    channelName,
-    onRsvp: (eventId) => void toggleRsvp(eventId),
-    onCalendar: () => setShowCalendar(true),
-    onOpenMedia: () => setContextPanelMode('media'),
-    onOpenLeaderboard: () => setContextPanelMode('economy'),
-    onOpenMessage: openMessage,
-    onSayHi: (user) => void sayHi(user),
-  };
+  const widgetContext: WidgetContext = useMemo(
+    () => ({
+      guildId,
+      nowMs,
+      viewerId,
+      events,
+      eventsError,
+      members,
+      announcementChannels,
+      mentionNames,
+      liveGameShown,
+      channelName,
+      onRsvp: rsvp,
+      onCalendar: openCalendar,
+      onOpenMedia: openMedia,
+      onOpenLeaderboard: openLeaderboard,
+      onOpenMessage: openMessage,
+      onSayHi: sayHiLater,
+    }),
+    [guildId, nowMs, viewerId, events, eventsError, members, announcementChannels, mentionNames,
+      liveGameShown, channelName, rsvp, openCalendar, openMedia, openLeaderboard, openMessage, sayHiLater],
+  );
+  const phoneRest = useMemo(
+    () => (phone ? widgetIds.filter((id) => id !== 'coming_up') : []),
+    [phone, widgetIds],
+  );
+  const interleave = useMemo(
+    () => (phone && phoneRest.length > 0 ? <WidgetStack ids={phoneRest} context={widgetContext} /> : undefined),
+    [phone, phoneRest, widgetContext],
+  );
 
   if (!guild && denied) return <BuildingNotFound onGoHome={() => navigate('/app')} />;
   if (!guild) {
@@ -299,7 +319,6 @@ export function ServerHome({ guildId }: ServerHomeProps) {
     || null;
 
   const phoneFirst = phone && widgetIds.includes('coming_up');
-  const phoneRest = phone ? widgetIds.filter((id) => id !== 'coming_up') : [];
 
   return (
     <div className="h-full overflow-hidden bg-bg-base p-[var(--gutter)]">
@@ -378,10 +397,10 @@ export function ServerHome({ guildId }: ServerHomeProps) {
                 mentionNames={mentionNames}
                 viewerId={viewerId}
                 nowMs={nowMs}
-                interleave={phone && phoneRest.length > 0 ? <WidgetStack ids={phoneRest} context={widgetContext} /> : undefined}
+                interleave={interleave}
                 onOpenMessage={openMessage}
                 onOpenChannel={openChannel}
-                onSayHi={(user) => void sayHi(user)}
+                onSayHi={sayHiLater}
                 compact={phone}
               />
             </Enter>

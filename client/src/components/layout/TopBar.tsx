@@ -580,15 +580,17 @@ function OwnedTopBar({
             {dm.peer ? (
               <LitAvatar person={dm.peer} size={32} hideLabel className="chat-header-avatar" />
             ) : (
-              <span
-                ref={roomWindowRef}
-                className={cn(
-                  'pc-window h-2.5 w-2.5 shrink-0',
-                  roomIsLit && 'is-reading',
-                  roomWriting && 'is-writing',
-                )}
-                aria-hidden
-              />
+              <span className={cn('pc-window-breath shrink-0', roomWriting && 'is-writing')} aria-hidden>
+                <span
+                  ref={roomWindowRef}
+                  className={cn(
+                    'pc-window h-2.5 w-2.5 shrink-0',
+                    roomIsLit && 'is-reading',
+                    roomWriting && 'is-writing',
+                  )}
+                  aria-hidden
+                />
+              </span>
             )}
             <div className="flex min-w-0 flex-col">
               <span className="chat-header-dm-name pc-display truncate text-[20px] font-bold leading-tight tracking-[-0.01em] text-text-primary">
@@ -611,15 +613,17 @@ function OwnedTopBar({
             {/* The room's own window: amber when people are reading it, white
                 when it is a voice room with people in it, dark when nobody is
                 there. The counts beside it are the words that go with it. */}
-            <span
-              ref={roomWindowRef}
-              className={cn(
-                'pc-window h-2.5 w-2.5 shrink-0',
-                roomIsLit && (roomIsVoice ? 'is-talking' : 'is-reading'),
-                roomWriting && 'is-writing',
-              )}
-              aria-hidden
-            />
+            <span className={cn('pc-window-breath shrink-0', roomWriting && 'is-writing')} aria-hidden>
+              <span
+                ref={roomWindowRef}
+                className={cn(
+                  'pc-window h-2.5 w-2.5 shrink-0',
+                  roomIsLit && (roomIsVoice ? 'is-talking' : 'is-reading'),
+                  roomWriting && 'is-writing',
+                )}
+                aria-hidden
+              />
+            </span>
             <div className="flex min-w-0 flex-col">
               {resolvedGuildId ? (
                 <ChannelSwitcher

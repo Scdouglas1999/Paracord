@@ -5,7 +5,7 @@ import {
   isGuildInviteList,
   isInviteAcceptResponse,
   isInvitePreview,
-} from './generated/validators';
+} from './contractValidators';
 import type { AcceptInviteRequest } from './generated/AcceptInviteRequest';
 import type { CreateInviteRequest } from './generated/CreateInviteRequest';
 import type { RestClient } from './restClient';

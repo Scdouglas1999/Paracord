@@ -1,5 +1,5 @@
 import { getAccountChannelView } from '../lib/channelView';
-import { isReadyGuildCore } from '../api/generated/validators';
+import { isReadyGuildCore } from '../api/contractValidators';
 import { entityScopeKey } from '../lib/serverScope';
 import { useGuildStore } from '../stores/guildStore';
 import { refreshGuildChannelVisibility, useChannelStore } from '../stores/channelStore';

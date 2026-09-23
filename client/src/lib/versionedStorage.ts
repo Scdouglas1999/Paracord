@@ -40,6 +40,15 @@ export function getVersionedStorageItem(
   return migrateLegacyValue(base, legacyBases);
 }
 
+/**
+ * The versioned value as stored, without the legacy migration read. For hot
+ * paths that only need to know whether a value changed since they last read it.
+ */
+export function peekVersionedStorageItem(base: string): string | null {
+  if (!canUseStorage()) return null;
+  return window.localStorage.getItem(versionedKey(base));
+}
+
 export function setVersionedStorageItem(base: string, value: string): void {
   if (!canUseStorage()) return;
   window.localStorage.setItem(versionedKey(base), value);

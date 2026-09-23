@@ -10,7 +10,7 @@ import {
   isCurrentUser,
   isUpdatedCurrentUser,
   isUserSettingsResponse,
-} from './generated/validators';
+} from './contractValidators';
 import type { UpdateMeRequest } from './generated/UpdateMeRequest';
 import type { UpdateSettingsRequest } from './generated/UpdateSettingsRequest';
 import type { LoginRequest, LoginResponse, RegisterRequest } from '../types';

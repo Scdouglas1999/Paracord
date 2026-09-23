@@ -9,6 +9,7 @@
  */
 import {
   getVersionedStorageItem,
+  peekVersionedStorageItem,
   removeVersionedStorageItem,
   setVersionedStorageItem,
 } from '../versionedStorage';
@@ -100,21 +101,35 @@ export function clearStoredServerUrl(): void {
   removeVersionedStorageItem(SERVER_URL_KEY, ['server-url']);
 }
 
+const RUNTIME_SESSION_KEY = 'paracord:api-base-url-session';
+const RUNTIME_LEGACY_KEY = 'paracord:api-base-url';
+
+/**
+ * The legacy persisted override is removed once per page, not per lookup.
+ * `resolveApiBaseUrl` runs for every avatar, emoji and attachment URL a render
+ * builds; two storage writes each time were most of what it cost.
+ */
+let runtimeLegacyCleared = false;
+
+function clearRuntimeLegacyOverride(alsoSession: boolean): void {
+  if (runtimeLegacyCleared) return;
+  runtimeLegacyCleared = true;
+  try {
+    window.localStorage.removeItem(RUNTIME_LEGACY_KEY);
+    if (alsoSession) window.sessionStorage.removeItem(RUNTIME_SESSION_KEY);
+  } catch {
+    // Ignore storage failures and fall back to non-override resolution.
+  }
+}
+
 function getRuntimeApiBaseUrl(): string | null {
   if (typeof window === 'undefined') {
     return null;
   }
   const allowRuntimeOverride = import.meta.env.DEV || import.meta.env.VITE_ENABLE_API_BASE_OVERRIDE === 'true';
-  const sessionKey = 'paracord:api-base-url-session';
-  const legacyKey = 'paracord:api-base-url';
   if (!allowRuntimeOverride) {
     // Remove legacy persisted override in production-safe builds.
-    try {
-      window.localStorage.removeItem(legacyKey);
-      window.sessionStorage.removeItem(sessionKey);
-    } catch {
-      // Ignore storage failures and fall back to non-override resolution.
-    }
+    clearRuntimeLegacyOverride(true);
     return null;
   }
 
@@ -122,7 +137,7 @@ function getRuntimeApiBaseUrl(): string | null {
     const url = new URL(window.location.href);
     const fromQuery = url.searchParams.get('api_base');
     if (fromQuery && /^https?:\/\//i.test(fromQuery)) {
-      const existing = window.sessionStorage.getItem(sessionKey);
+      const existing = window.sessionStorage.getItem(RUNTIME_SESSION_KEY);
       if (existing === fromQuery) {
         return fromQuery;
       }
@@ -133,18 +148,40 @@ function getRuntimeApiBaseUrl(): string | null {
       if (!confirmed) {
         return null;
       }
-      window.sessionStorage.setItem(sessionKey, fromQuery);
+      window.sessionStorage.setItem(RUNTIME_SESSION_KEY, fromQuery);
       return fromQuery;
     }
-    const fromSession = window.sessionStorage.getItem(sessionKey);
+    const fromSession = window.sessionStorage.getItem(RUNTIME_SESSION_KEY);
     if (fromSession && /^https?:\/\//i.test(fromSession)) {
       return fromSession;
     }
-    window.localStorage.removeItem(legacyKey);
+    clearRuntimeLegacyOverride(false);
   } catch {
     // Ignore malformed URL edge cases and fall back to env/default.
   }
   return null;
+}
+
+/**
+ * The last answer, and the stored value it was built from.
+ *
+ * The stored server URL is the only input that changes while a production
+ * page runs (the connect screen writes it, another tab can too), so a lookup
+ * reads that one key and reuses the answer while it is unchanged — no parse,
+ * no normalisation, no write. The first lookup also migrates a value still
+ * under the legacy key, which nothing writes any more. The runtime override
+ * is a development affordance that reads the page URL; it is not cached, so
+ * `?api_base=` keeps working as it did.
+ */
+let cachedStored: string | null = null;
+let cachedBase: string | null = null;
+
+function storedServerUrlRaw(): string | null {
+  try {
+    return peekVersionedStorageItem(SERVER_URL_KEY);
+  } catch {
+    return null;
+  }
 }
 
 export function resolveApiBaseUrl(): string {
@@ -156,13 +193,13 @@ export function resolveApiBaseUrl(): string {
   if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL;
 
   // 3. Stored server URL from connect screen.
+  if (cachedBase !== null && storedServerUrlRaw() === cachedStored) return cachedBase;
   const serverUrl = getStoredServerUrl();
-  if (serverUrl) {
-    return `${serverUrl.replace(/\/+$/, '')}/api/v1`;
-  }
-
   // 4. Relative path (same origin / Vite dev proxy)
-  return '/api/v1';
+  const base = serverUrl ? `${serverUrl.replace(/\/+$/, '')}/api/v1` : '/api/v1';
+  cachedStored = storedServerUrlRaw();
+  cachedBase = base;
+  return base;
 }
 
 /** @deprecated Use resolveApiBaseUrl() for dynamic resolution instead. */
@@ -211,13 +248,22 @@ export function resolveServerRootUrl(path: string): string {
 }
 
 /** Origin of an API base URL; a relative base means "same origin as the page". */
+const originByBase = new Map<string, string | null>();
+
 function originOfApiBase(base: string): string | null {
   if (base.startsWith('http')) {
+    // A handful of servers at most, and asked for every resource URL.
+    const known = originByBase.get(base);
+    if (known !== undefined) return known;
+    let origin: string | null;
     try {
-      return new URL(base).origin;
+      origin = new URL(base).origin;
     } catch {
-      return null;
+      origin = null;
     }
+    if (originByBase.size >= 32) originByBase.clear();
+    originByBase.set(base, origin);
+    return origin;
   }
   if (typeof window === 'undefined') return null;
   if (!/^https?:$/.test(window.location.protocol)) return null;
@@ -246,13 +292,22 @@ export function resolveApiOrigin(): string | null {
  * a resource URL) has to follow the *active* server, otherwise a ticket minted
  * at one server is attached to a URL served by another.
  */
+let activeUrlSeen: string | null = null;
+let activeBaseSeen = '';
+
 function resolveActiveServerBaseUrl(): string {
   const { servers, activeServerId } = useServerListStore.getState();
   const activeUrl = activeServerId
     ? servers.find((s) => s.id === activeServerId)?.url?.trim()
     : undefined;
   if (activeUrl) {
-    return `${normalizeServerBaseUrl(activeUrl)}/api/v1`;
+    // Every resource URL a render builds comes through here; the URL parse in
+    // the normalisation is paid once per server switch, not once per avatar.
+    if (activeUrl !== activeUrlSeen) {
+      activeBaseSeen = `${normalizeServerBaseUrl(activeUrl)}/api/v1`;
+      activeUrlSeen = activeUrl;
+    }
+    return activeBaseSeen;
   }
   // No active entry (bootstrap, or the LOCAL-only connection) — the home
   // server is the active one.

@@ -1,7 +1,7 @@
 import { useCurrentChannelStore, useChannelActions } from '../../hooks/useChannels';
 import { entityScopeKey as memberScopeKey, type AccountScope } from '../../lib/serverScope';
 import { useCurrentUser, useCurrentAccountScope } from '../../hooks/useCurrentUser';
-import { memo, useRef, useEffect, useMemo, useState, useReducer, useCallback, type CSSProperties, type MouseEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { memo, useRef, useEffect, useLayoutEffect, useMemo, useState, useReducer, useCallback, useSyncExternalStore, type CSSProperties, type MouseEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { captureScopedOperation, type OperationContext } from '../../lib/operationContext';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -61,7 +61,7 @@ import {
   ThreadRow,
   TIMELINE_GUTTER,
 } from './TimelineParts';
-import { useAuthorLights, useRoomLitEvents, type RoomLitEvent } from './messageLight';
+import { TimelineAuthor, TimelineLightSource, createTimelineLightStore, type RoomLitEvent } from './messageLight';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { GitHubEventEmbed, isGitHubWebhookMessage } from './GitHubEventEmbed';
 import { ScoreUpdateCard } from '../sports/ScoreUpdateCard';
@@ -162,7 +162,7 @@ const ReactionRow = memo(function ReactionRow({
 
 /**
  * Three dots breathing while somebody types (§5.1 "speaking is a breath", and
- * the same curve): `pc-breathe` timing, 200ms apart, still under reduced
+ * the same curve): the speaking ring's timing, 200ms apart, still under reduced
  * motion. They are `aria-hidden` — the sentence beside them already says it.
  */
 function TypingDots() {
@@ -174,7 +174,47 @@ function TypingDots() {
     </span>
   );
 }
+/**
+ * A message row that redraws only when something it draws changed.
+ *
+ * The row is written inline in the list (it reads a great deal of the list's
+ * state), so rather than threading all of it through props the caller names
+ * what the row depends on in `deps` and hands over the drawing as `render`.
+ * `render` is called only when a dependency changed; its event handlers must
+ * therefore never close over list state directly — they go through
+ * {@link useForwardedActions}.
+ */
+const MessageRowMemo = memo(
+  function MessageRowMemo({ render }: { deps: readonly unknown[]; render: () => ReactNode }) {
+    return render();
+  },
+  (previous, next) =>
+    previous.deps.length === next.deps.length
+    && previous.deps.every((value, index) => Object.is(value, next.deps[index])),
+);
+
+/**
+ * Stable stand-ins for the list's handlers: the returned object never changes,
+ * and each of its functions calls the handler from the latest render.
+ */
+function useForwardedActions<T extends Record<string, (...args: never[]) => unknown>>(actions: T): T {
+  const latest = useRef(actions);
+  // Handlers only run in events, after the render that made them committed.
+  useLayoutEffect(() => {
+    latest.current = actions;
+  });
+  const [forwarded] = useState(() => {
+    const out: Record<string, (...args: unknown[]) => unknown> = {};
+    for (const key of Object.keys(actions)) {
+      out[key] = (...args: unknown[]) => (latest.current[key] as (...forwardedArgs: unknown[]) => unknown)(...args);
+    }
+    return out as unknown as T;
+  });
+  return forwarded;
+}
+
 const EMPTY_CHANNELS: Channel[] = [];
+const NO_THREADS: Channel[] = [];
 const EMPTY_MEMBERS: Member[] = [];
 const EMPTY_SAVED_IDS = new Set<string>();
 const EMPTY_REMINDERS: ReturnType<typeof useReminderStore.getState>['items'] = [];
@@ -909,9 +949,11 @@ function OwnedMessageList({
   const activeTyping = typingUsers.filter((id) => id !== me);
   // §7.4: a timeline row is a person, so every author carries their light, and
   // the meta says "in Shop floor" when they are in a room right now. Both come
-  // from WP1 — this file never decides who is lit.
-  const authorLight = useAuthorLights(activeGuildId, channelServerId);
-  const roomLitEvents = useRoomLitEvents(activeGuildId);
+  // from WP1 — this file never decides who is lit. The light is read through a
+  // store that `TimelineLightSource` fills, never subscribed here: somebody
+  // speaking or coming online re-renders that author's rows, not the timeline.
+  const [lightStore] = useState(createTimelineLightStore);
+  const roomLitEvents = useSyncExternalStore(lightStore.subscribe, lightStore.events);
   // §5.1: the inline event is a door like any other, so walking through it is
   // the same journey — the line you clicked becomes the Stage's dominant tile.
   const joinLitRoom = useCallback(
@@ -2469,6 +2511,31 @@ function OwnedMessageList({
     onContextMenu(e, buildMessageContextMenuItems(msg, { x: e.clientX, y: e.clientY }));
   };
 
+  const rowActions = useForwardedActions({
+    handleMessageRowKeyDown,
+    handleMessageContextMenu,
+    openAuthorProfile,
+    toggleBulkSelection,
+    scrollToMessage,
+    openEditHistory,
+    handleEditKeyDown,
+    saveEditMessage,
+    cancelEditing,
+    downloadAttachment,
+    deleteAttachment,
+    openLinkedThread,
+    openReactionPicker,
+    reply: (message: Message) => onReply?.(message),
+    togglePin,
+    openCreateThreadDialog,
+    startEditingMessage,
+    deanonymizeMessage,
+    openRemind,
+    toggleSavedMessage,
+    openReportDialog,
+    requestDelete,
+  });
+
   // Render a single virtual row
   const renderRow = (row: VirtualRow) => {
     if (row.type === 'date-separator') {
@@ -2542,7 +2609,7 @@ function OwnedMessageList({
     const canDeleteMessage = isOwnMessage || canManageMessages;
     const canPinMessage = canPinInChannel;
     const forwardBlocked = forwardBlockedFor(msg);
-    const linkedThreads = linkedThreadsByStarterMessageId[msg.id] ?? [];
+    const linkedThreads = linkedThreadsByStarterMessageId[msg.id] ?? NO_THREADS;
     const authorGuildMember = activeGuildMemberById.get(msg.author.id);
     const authorName = displayName(msg.author, authorGuildMember?.nick);
     const bubbleText = messageBubbleText(msg);
@@ -2551,11 +2618,11 @@ function OwnedMessageList({
     const authorRoleColor = authorGuildMember ? getHighestRoleColor(authorGuildMember.roles ?? [], guildRoles) : undefined;
     // §1.5: a person is a rim of light, not a coloured dot. The author's light
     // also carries "in Shop floor" when they are in a room right now (§7.4).
-    const authorPerson = authorLight({
+    const author = {
       id: msg.author.id,
       name: authorName,
       avatar: msg.author.avatar_hash ?? msg.author.avatar ?? null,
-    });
+    };
     // A message that pings the reader gets the mention-line treatment (§7):
     // a persistent emerald tint plus a 2px accent left border, hover-independent.
     const mentionsMe = messageMentionsUser(msg, me);
@@ -2572,7 +2639,31 @@ function OwnedMessageList({
           ? 'var(--accent-tint)'
           : 'transparent';
 
+    const hasAttachments = Boolean(msg.attachments?.length);
+    // Everything the row below reads from the list, and nothing else: while
+    // these are unchanged the row keeps what it drew last time (hovering a
+    // row, typing, a message arriving further up do not redraw the timeline).
+    // Its handlers go through `rowActions`, which always calls the current
+    // ones, so a row that did not redraw never acts on a stale list.
+    const rowDeps = [
+      row.message, isGrouped, replyDepth, replyParentId, row.messageIndex, messages.length,
+      replyParentMessage, replyParentId ? deletedMessageIds.has(replyParentId) : false,
+      me, canManageMessages, canPinInChannel, canAddReactions, canCreateThreads, canVoteInPolls,
+      Boolean(onReply), activeGuildId, channelId, ribbon, isCoarsePointer, lowBandwidthMode,
+      downloadTicket, bulkDeleteMode, bulkDeleteMode && selectedMessageIds.includes(msg.id),
+      authorGuildMember, activeGuildMemberById, guildRoles, mentionMap, roleNameMap, handleMentionClick,
+      toggleReactionFromRow,
+      scoreUpdate ? pinnedSportsGame : null, linkedThreads, pendingReminderIds.has(msg.id),
+      savedIds.has(msg.id), decryptingIds.has(msg.id), deanonymizedById[msg.id], deanonymizingId === msg.id,
+      isActiveRow, jumpHighlightId === msg.id, activeRowMessageId === msg.id, menuMessageId === msg.id,
+      editingMessageId === msg.id, editingMessageId === msg.id ? editContent : null,
+      editingMessageId === msg.id ? editSaving : false,
+      hasAttachments ? attachmentBusyId : null, hasAttachments ? downloadProgress : null,
+      fromRoom, scope, lightStore,
+    ];
+
     return (
+      <MessageRowMemo deps={rowDeps} render={() => (
       <div
         id={`msg-${msg.id}`}
         role="article"
@@ -2607,7 +2698,7 @@ function OwnedMessageList({
         } as CSSProperties}
         onMouseEnter={() => setHoveredMessageId(msg.id)}
         onMouseLeave={() => setHoveredMessageId(null)}
-        onKeyDown={(e) => handleMessageRowKeyDown(e, msg.id)}
+        onKeyDown={(e) => rowActions.handleMessageRowKeyDown(e, msg.id)}
         onFocus={() => {
           setFocusedMessageId(msg.id);
           setActiveRowId(msg.id);
@@ -2617,7 +2708,7 @@ function OwnedMessageList({
             setFocusedMessageId((curr) => (curr === msg.id ? null : curr));
           }
         }}
-        onContextMenu={(e) => handleMessageContextMenu(e, msg)}
+        onContextMenu={(e) => rowActions.handleMessageContextMenu(e, msg)}
       >
         {replyDepth > 0 && (
           <div className="pointer-events-none absolute inset-y-0 left-0">
@@ -2658,9 +2749,11 @@ function OwnedMessageList({
               'relative flex h-9 w-9 flex-shrink-0 rounded-full border-0 p-0 transition-transform duration-[140ms] ease-[var(--ease-out)] active:scale-95 focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]',
               ribbon && 'h-7 w-7',
             )}
-            onClick={(e) => openAuthorProfile(e, msg)}
+            onClick={(e) => rowActions.openAuthorProfile(e, msg)}
           >
-            <LitAvatar person={authorPerson} size={ribbon ? 28 : 36} hideLabel />
+            <TimelineAuthor store={lightStore} author={author}>
+              {(person) => <LitAvatar person={person} size={ribbon ? 28 : 36} hideLabel />}
+            </TimelineAuthor>
           </button>
           )
         )}
@@ -2671,7 +2764,7 @@ function OwnedMessageList({
               type="checkbox"
               className="mt-1 h-4 w-4 accent-accent-danger"
               checked={selectedMessageIds.includes(msg.id)}
-              onChange={() => toggleBulkSelection(msg.id)}
+              onChange={() => rowActions.toggleBulkSelection(msg.id)}
               aria-label={`Select message ${msg.id} for bulk delete`}
             />
           </div>
@@ -2695,7 +2788,7 @@ function OwnedMessageList({
                     ? 'This message was deleted'
                     : 'Message not loaded'
               }
-              onJump={() => scrollToMessage(replyParentId)}
+              onJump={() => rowActions.scrollToMessage(replyParentId)}
             />
           )}
           {!isGrouped && (
@@ -2709,7 +2802,7 @@ function OwnedMessageList({
                    theme, so this clears AA on paper as well as on the dark. */
                 style={{ color: authorRoleColor ?? getIdentityInk(msg.author.id) }}
                 aria-label={`Open profile for ${authorName}`}
-                onClick={(e) => openAuthorProfile(e, msg)}
+                onClick={(e) => rowActions.openAuthorProfile(e, msg)}
               >
                 {authorName}
               </button>
@@ -2732,18 +2825,22 @@ function OwnedMessageList({
                   <span className="sr-only">Reminder set</span>
                 </span>
               )}
-              <AuthorMeta
-                person={authorPerson}
-                timestamp={timelineTime(getTimestamp(msg))}
-                title={formatTimestamp(getTimestamp(msg))}
-              />
+              <TimelineAuthor store={lightStore} author={author}>
+                {(person) => (
+                  <AuthorMeta
+                    person={person}
+                    timestamp={timelineTime(getTimestamp(msg))}
+                    title={formatTimestamp(getTimestamp(msg))}
+                  />
+                )}
+              </TimelineAuthor>
               {(msg.edited_timestamp || msg.edited_at) && (
                 <button
                   type="button"
                   className="rounded-[var(--radius-window)] text-left text-[11px] text-text-faint hover:underline focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                   title={`Edited: ${formatTimestamp(msg.edited_timestamp || msg.edited_at || '')}`}
                   aria-label={`Show edit history for message ${msg.id}`}
-                  onClick={(e) => openEditHistory(e, msg.id)}
+                  onClick={(e) => rowActions.openEditHistory(e, msg.id)}
                 >
                   (edited)
                 </button>
@@ -2767,7 +2864,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                 style={{ minHeight: '2.5rem', maxHeight: '50vh' }}
                 value={editContent}
                 onChange={(e) => setEditContent(e.target.value)}
-                onKeyDown={handleEditKeyDown}
+                onKeyDown={rowActions.handleEditKeyDown}
                 rows={1}
                 ref={(el) => {
                   if (el) {
@@ -2785,14 +2882,14 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
               />
               <div className="mt-1.5 flex items-center gap-2">
                 <button
-                  onClick={() => void saveEditMessage()}
+                  onClick={() => void rowActions.saveEditMessage()}
                   disabled={editSaving}
                   className="inline-flex items-center gap-1 rounded-chip px-2 py-1 text-meta font-semibold text-accent-primary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-tint focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
                 >
                   <Check size={13} /> {editSaving ? 'Saving…' : 'Save'}
                 </button>
                 <button
-                  onClick={cancelEditing}
+                  onClick={rowActions.cancelEditing}
                   className="inline-flex items-center gap-1 rounded-chip px-2 py-1 text-meta font-semibold text-text-muted transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                 >
                   <XIcon size={13} /> Cancel
@@ -2863,7 +2960,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                       style={{ color: 'var(--text-muted)' }}
                       title={`Edited: ${formatTimestamp(msg.edited_timestamp || msg.edited_at || '')}`}
                       aria-label={`Show edit history for message ${msg.id}`}
-                      onClick={(e) => openEditHistory(e, msg.id)}
+                      onClick={(e) => rowActions.openEditHistory(e, msg.id)}
                     >
                       (edited)
                     </button>
@@ -2919,14 +3016,17 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
           {linkedThreads.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5">
               {linkedThreads.map((thread) => (
-                <ThreadRow
-                  key={thread.id}
-                  name={thread.name || 'Thread'}
-                  meta={threadMetaFor(thread)}
-                  people={[authorPerson]}
-                  archived={Boolean(thread.thread_metadata?.archived)}
-                  onOpen={() => openLinkedThread(thread.id)}
-                />
+                <TimelineAuthor key={thread.id} store={lightStore} author={author}>
+                  {(person) => (
+                    <ThreadRow
+                      name={thread.name || 'Thread'}
+                      meta={threadMetaFor(thread)}
+                      people={[person]}
+                      archived={Boolean(thread.thread_metadata?.archived)}
+                      onOpen={() => rowActions.openLinkedThread(thread.id)}
+                    />
+                  )}
+                </TimelineAuthor>
               ))}
             </div>
           )}
@@ -3015,7 +3115,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => void downloadAttachment(att.id, att.filename)}
+                          onClick={() => void rowActions.downloadAttachment(att.id, att.filename)}
                           disabled={attachmentBusyId === att.id}
                         >
                           {attachmentBusyId === att.id
@@ -3028,7 +3128,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                           <Button
                             variant="danger"
                             size="sm"
-                            onClick={() => void deleteAttachment(msg.id, att.id)}
+                            onClick={() => void rowActions.deleteAttachment(msg.id, att.id)}
                             disabled={attachmentBusyId === att.id}
                           >
                             {attachmentBusyId === att.id ? 'Deleting…' : 'Delete'}
@@ -3096,7 +3196,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                             <Button
                               variant="ghost"
                               size="sm"
-                              onClick={() => void downloadAttachment(att.id, att.filename)}
+                              onClick={() => void rowActions.downloadAttachment(att.id, att.filename)}
                               disabled={attachmentBusyId === att.id}
                             >
                               {attachmentBusyId === att.id ? (downloadProgress != null ? `${downloadProgress}%` : 'Downloading…') : 'Download'}
@@ -3105,7 +3205,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                               <Button
                                 variant="danger"
                                 size="sm"
-                                onClick={() => void deleteAttachment(msg.id, att.id)}
+                                onClick={() => void rowActions.deleteAttachment(msg.id, att.id)}
                                 disabled={attachmentBusyId === att.id}
                               >
                                 {attachmentBusyId === att.id ? 'Deleting…' : 'Delete'}
@@ -3140,7 +3240,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                     <button
                       type="button"
                       className="pc-focusable max-w-[20rem] truncate rounded-[var(--radius-chip)] text-left font-medium text-text-link transition-colors hover:underline"
-                      onClick={() => void downloadAttachment(att.id, att.filename)}
+                      onClick={() => void rowActions.downloadAttachment(att.id, att.filename)}
                       disabled={attachmentBusyId === att.id}
                     >
                       {att.filename}
@@ -3151,7 +3251,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => void downloadAttachment(att.id, att.filename)}
+                        onClick={() => void rowActions.downloadAttachment(att.id, att.filename)}
                         disabled={attachmentBusyId === att.id}
                       >
                         {attachmentBusyId === att.id ? (downloadProgress != null ? `${downloadProgress}%` : 'Downloading…') : 'Download'}
@@ -3160,7 +3260,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                         <Button
                           variant="danger"
                           size="sm"
-                          onClick={() => void deleteAttachment(msg.id, att.id)}
+                          onClick={() => void rowActions.deleteAttachment(msg.id, att.id)}
                           disabled={attachmentBusyId === att.id}
                         >
                           {attachmentBusyId === att.id ? 'Deleting…' : 'Delete'}
@@ -3194,11 +3294,11 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
         {(hoveredMessageId === msg.id || focusedMessageId === msg.id) && !isCoarsePointer && (
           <div className="pc-message-actions pc-hover-in pc-floating absolute -top-3.5 right-4 flex items-center gap-0.5 overflow-hidden p-0.5 sm:right-8">
             {canAddReactions && (
-              <button className="hover-action-btn rounded-chip" title="Add reaction" aria-label="Add reaction" onClick={(e) => openReactionPicker(e, msg.id)}>
+              <button className="hover-action-btn rounded-chip" title="Add reaction" aria-label="Add reaction" onClick={(e) => rowActions.openReactionPicker(e, msg.id)}>
                 <Smile size={16} />
               </button>
             )}
-            <button className="hover-action-btn rounded-chip" title="Reply" aria-label="Reply" onClick={() => onReply?.(msg)}>
+            <button className="hover-action-btn rounded-chip" title="Reply" aria-label="Reply" onClick={() => rowActions.reply(msg)}>
               <Reply size={16} />
             </button>
             {(
@@ -3280,7 +3380,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                 className="context-menu-item w-full text-left"
                 onClick={(e) => {
                   setMenuMessageId(null);
-                  openReactionPicker(e, msg.id);
+                  rowActions.openReactionPicker(e, msg.id);
                 }}
               >
                 Add reaction
@@ -3292,7 +3392,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                 disabled={Boolean(deanonymizedById[msg.id]) || deanonymizingId === msg.id}
                 onClick={() => {
                   setMenuMessageId(null);
-                  void deanonymizeMessage(msg);
+                  void rowActions.deanonymizeMessage(msg);
                 }}
               >
                 {deanonymizingId === msg.id ? (
@@ -3309,7 +3409,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                 className="context-menu-item w-full text-left"
                 onClick={() => {
                   setMenuMessageId(null);
-                  onReply(msg);
+                  rowActions.reply(msg);
                 }}
               >
                 Reply
@@ -3318,13 +3418,13 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
             {canCreateThreads && (
               <button
                 className="context-menu-item w-full text-left"
-                onClick={() => openCreateThreadDialog(msg)}
+                onClick={() => rowActions.openCreateThreadDialog(msg)}
               >
                 Create thread
               </button>
             )}
             {canEditMessage && (
-              <button className="context-menu-item w-full text-left" onClick={() => startEditingMessage(msg)}>
+              <button className="context-menu-item w-full text-left" onClick={() => rowActions.startEditingMessage(msg)}>
                 Edit
               </button>
             )}
@@ -3333,7 +3433,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                 className="context-menu-item w-full text-left"
                 onClick={async () => {
                   setMenuMessageId(null);
-                  await togglePin(msg);
+                  await rowActions.togglePin(msg);
                 }}
               >
                 {msg.pinned ? 'Unpin' : 'Pin'}
@@ -3341,7 +3441,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
             )}
             <button
               className="context-menu-item w-full text-left"
-              onClick={(event) => openRemind(msg, event.clientX, event.clientY)}
+              onClick={(event) => rowActions.openRemind(msg, event.clientX, event.clientY)}
             >
               <span className="flex items-center gap-2 whitespace-nowrap">
                 <Clock size={14} />
@@ -3366,7 +3466,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
             </button>
             <button
               className="context-menu-item w-full text-left"
-              onClick={() => void toggleSavedMessage(msg)}
+              onClick={() => void rowActions.toggleSavedMessage(msg)}
             >
               {/* `.context-menu-item` sets `display:block`, which beats the
                   `flex` utility — and preflight makes every icon a block — so
@@ -3378,18 +3478,19 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
               </span>
             </button>
             {activeGuildId && msg.author.id !== me && (
-              <button className="context-menu-item w-full text-left" onClick={() => openReportDialog(msg)}>
+              <button className="context-menu-item w-full text-left" onClick={() => rowActions.openReportDialog(msg)}>
                 Report
               </button>
             )}
             {canDeleteMessage && (
-              <button className="context-menu-item danger w-full text-left" onClick={() => requestDelete(msg.id)}>
+              <button className="context-menu-item danger w-full text-left" onClick={() => rowActions.requestDelete(msg.id)}>
                 Delete
               </button>
             )}
           </div>
         )}
       </div>
+      )} />
     );
   };
 
@@ -3397,6 +3498,8 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
 
   return (
     <div className="relative flex-1 overflow-hidden">
+      {/* First, so the rows rendered after it in the same pass read its light. */}
+      <TimelineLightSource guildId={activeGuildId} serverId={channelServerId} store={lightStore} />
       <div ref={actionAnchor} className="pointer-events-none fixed h-px w-px" aria-hidden />
       {remindTarget && (
         <RemindMeMenu

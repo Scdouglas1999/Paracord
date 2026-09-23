@@ -12,6 +12,7 @@ import { useUnifiedConversations } from '../../../hooks/useUnifiedConversations'
 import { useVoice } from '../../../hooks/useVoice';
 import { personLight, type BuildingLight, type RoomLight } from '../../../lib/attention/light';
 import { hasDirectAttention } from '../../../lib/attention/scoreConversation';
+import { arrangeAs, orderOf, othersOrderSignature, type HeldOrder } from '../../../lib/attention/steadyOrder';
 import { activateGuild } from '../../../lib/guildNavigation';
 import { markGuildRead } from '../../../lib/guildActions';
 import { canAccessGuildSettingsSync } from '../../../lib/guildSettingsAccess';
@@ -67,7 +68,7 @@ export function UnifiedSidebar() {
   // Every building's rooms and members, not just the open one — the column
   // draws them all, so it is the column's job to have them (§7.1).
   useBuildingRosters();
-  const buildings = useBuildingLights();
+  const buildings = useSteadyBuildingOrder(useBuildingLights());
   const { mutedGuildKeys, toggleMute, saving } = useMutedGuilds();
   const { needsYou, recent, pinned, requests } = useUnifiedConversations(mutedGuildKeys);
 
@@ -405,6 +406,28 @@ export function UnifiedSidebar() {
       />
       {showCreateGuild && <CreateGuildModal onClose={() => setShowCreateGuild(false)} />}
     </>
+  );
+}
+
+/**
+ * The column's order, held still against the viewer's own moves
+ * (`lib/attention/steadyOrder.ts`). Opening a channel makes you one of its
+ * readers, and that used to lift the row you had just clicked out from under
+ * your pointer. The order you see now changes only when somebody else changes
+ * it; that change brings your own part of the order along with it.
+ */
+function useSteadyBuildingOrder(buildings: readonly BuildingLight[]): readonly BuildingLight[] {
+  const signature = useMemo(() => othersOrderSignature(buildings), [buildings]);
+  const [held, setHeld] = useState<{ signature: string; order: HeldOrder }>(() => ({
+    signature,
+    order: orderOf(buildings),
+  }));
+  // Somebody else changed the order: take the whole of it, yours included.
+  const genuine = held.signature !== signature;
+  if (genuine) setHeld({ signature, order: orderOf(buildings) });
+  return useMemo(
+    () => (genuine ? buildings : arrangeAs(buildings, held.order)),
+    [buildings, genuine, held],
   );
 }
 

@@ -1,7 +1,7 @@
 ﻿import { type AxiosInstance } from 'axios';
 import { apiErrorStatus, createApiClient } from '../api/client';
 import { responseContract } from '../api/responseContracts';
-import { isCurrentUser } from '../api/generated/validators';
+import { isCurrentUser } from '../api/contractValidators';
 import { useServerListStore, type ServerEntry } from '../stores/serverListStore';
 import { useAccountStore } from '../stores/accountStore';
 import { useUIStore } from '../stores/uiStore';

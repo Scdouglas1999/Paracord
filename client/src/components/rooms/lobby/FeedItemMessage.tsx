@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { PollMessageCard } from '../../message/PollMessageCard';
 import { ReactionChip } from '../../message/ReactionPeople';
@@ -41,7 +41,7 @@ function isReaction(value: unknown): value is Reaction {
  * the text is the timeline's markdown, a poll votes in place, a reaction chip
  * toggles your reaction, and a picture opens the lightbox.
  */
-export function FeedItemMessage({
+export const FeedItemMessage = memo(function FeedItemMessage({
   item,
   guildId,
   when,
@@ -103,7 +103,7 @@ export function FeedItemMessage({
       </div>
     </article>
   );
-}
+});
 
 /** Six lines, then "Show more" — only when the text actually runs over. */
 function ClampedText({ children }: { children: React.ReactNode }) {

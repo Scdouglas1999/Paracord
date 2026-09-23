@@ -112,7 +112,8 @@
   scroll-behavior: auto !important;
 }
 
-:root[data-motion='reduced'] .voice-connected-pulse {
+:root[data-motion='reduced'] .voice-connected-pulse::before,
+:root[data-motion='reduced'] .voice-connected-pulse::after {
   animation: none !important;
 }
 

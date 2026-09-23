@@ -1441,10 +1441,12 @@ function MotionSection() {
           }}
         >
           <span className="flex items-center gap-4">
-            <span
-              className={cn('pc-window is-reading h-[26px] w-[20px]', writing && 'is-writing')}
-              aria-hidden
-            />
+            <span className={cn('pc-window-breath', writing && 'is-writing')} aria-hidden>
+              <span
+                className={cn('pc-window is-reading h-[26px] w-[20px]', writing && 'is-writing')}
+                aria-hidden
+              />
+            </span>
             <span className="pc-typing-dots" aria-hidden>
               <span />
               <span />

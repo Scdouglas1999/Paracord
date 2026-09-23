@@ -1,7 +1,8 @@
-import { Fragment, useEffect, useRef, type ReactNode, type RefObject } from 'react';
+import { Fragment, memo, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 
 import { Button } from '../../ui';
 import type { FeedItem, FeedUser } from '../../../api/serverFeed';
+import type { Reaction } from '../../../types';
 import { FeedItemForumPost } from './FeedItemForumPost';
 import { FeedItemMembersJoined } from './FeedItemMembersJoined';
 import { FeedItemMessage } from './FeedItemMessage';
@@ -27,11 +28,21 @@ export interface ServerFeedProps {
 /** Items before the phone's widget block. */
 const INTERLEAVE_AFTER = 4;
 
+/** One card's handlers, made once per item and kept for as long as it is shown. */
+interface ItemHandlers {
+  open: () => void;
+  toggleReaction: (reaction: Reaction) => void;
+}
+
 /**
  * "Latest": what people made across every channel the viewer can read, newest
  * first, a page at a time as the reader reaches the end.
+ *
+ * Memoised, and so is every card: the home around it re-renders whenever
+ * somebody speaks or comes online, and none of that changes a post. A card
+ * redraws when its own item, its "when" or its settings change.
  */
-export function ServerFeed({
+export const ServerFeed = memo(function ServerFeed({
   guildId,
   feed,
   scrollRoot,
@@ -46,6 +57,36 @@ export function ServerFeed({
 }: ServerFeedProps) {
   const sentinel = useRef<HTMLDivElement>(null);
   const { items, loading, loadingMore, error, done, loadMore, retry } = feed;
+
+  // The cards keep their handlers across renders so they can skip them; each
+  // handler reads the latest item and callbacks when it is actually used.
+  const latest = useRef({ items, onOpenMessage, onOpenChannel, toggleReaction: feed.toggleReaction });
+  latest.current = { items, onOpenMessage, onOpenChannel, toggleReaction: feed.toggleReaction };
+  const [handlers] = useState(() => new Map<string, ItemHandlers>());
+  const handlersFor = (id: string): ItemHandlers => {
+    let entry = handlers.get(id);
+    if (!entry) {
+      const current = () => {
+        const item = latest.current.items.find((candidate) => candidate.id === id);
+        if (!item) throw new Error(`ServerFeed: card ${id} is no longer in the feed`);
+        return item;
+      };
+      entry = {
+        open: () => {
+          const item = current();
+          if (item.type === 'message') latest.current.onOpenMessage(item.channel_id, item.message.id);
+          else if (item.type === 'forum_post') latest.current.onOpenChannel(item.thread_id);
+        },
+        toggleReaction: (reaction) => {
+          const item = current();
+          if (item.type !== 'message') throw new Error(`ServerFeed: card ${id} has no reactions`);
+          latest.current.toggleReaction(item, reaction);
+        },
+      };
+      handlers.set(id, entry);
+    }
+    return entry;
+  };
 
   useEffect(() => {
     const node = sentinel.current;
@@ -70,8 +111,8 @@ export function ServerFeed({
             guildId={guildId}
             when={when}
             mentionNames={mentionNames}
-            onOpen={() => onOpenMessage(item.channel_id, item.message.id)}
-            onToggleReaction={(reaction) => feed.toggleReaction(item, reaction)}
+            onOpen={handlersFor(item.id).open}
+            onToggleReaction={handlersFor(item.id).toggleReaction}
             compact={compact}
           />
         );
@@ -82,7 +123,7 @@ export function ServerFeed({
             when={when}
             nowMs={nowMs}
             compact={compact}
-            onOpen={() => onOpenChannel(item.thread_id)}
+            onOpen={handlersFor(item.id).open}
           />
         );
       case 'members_joined':
@@ -138,4 +179,4 @@ export function ServerFeed({
       )}
     </section>
   );
-}
+});

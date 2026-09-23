@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { channelApi } from '../../../api/channels';
 import { extractApiError } from '../../../api/client';
@@ -123,5 +123,10 @@ export function useServerFeed(guildId: string): ServerFeed {
     });
   }, []);
 
-  return { items, loading, loadingMore, error, done, loadMore, retry, toggleReaction };
+  // One object per state, so a memoised feed does not redraw because the page
+  // around it did.
+  return useMemo(
+    () => ({ items, loading, loadingMore, error, done, loadMore, retry, toggleReaction }),
+    [items, loading, loadingMore, error, done, loadMore, retry, toggleReaction],
+  );
 }

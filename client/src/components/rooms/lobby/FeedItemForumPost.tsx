@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { memo, useMemo } from 'react';
 
 import { AvatarStack } from '../../light';
 import type { FeedForumPostItem } from '../../../api/serverFeed';
@@ -22,7 +22,7 @@ export interface FeedItemForumPostProps {
  * A forum post: its title, the start of what was asked, how many replies it
  * has, who answered last and who has joined in. The whole card opens the post.
  */
-export function FeedItemForumPost({ item, when, nowMs, onOpen, compact = false }: FeedItemForumPostProps) {
+export const FeedItemForumPost = memo(function FeedItemForumPost({ item, when, nowMs, onOpen, compact = false }: FeedItemForumPostProps) {
   const participants = useMemo(
     () =>
       item.participants.map((user) =>
@@ -76,4 +76,4 @@ export function FeedItemForumPost({ item, when, nowMs, onOpen, compact = false }
       </div>
     </article>
   );
-}
+});
