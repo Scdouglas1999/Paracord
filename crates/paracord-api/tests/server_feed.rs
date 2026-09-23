@@ -473,6 +473,65 @@ async fn forum_posts_carry_title_replies_and_participants() -> anyhow::Result<()
     Ok(())
 }
 
+/// A reply in an anonymous thread is credited to its alias in the thread, so the
+/// feed card must never name who wrote it: not as the last reply, not among the
+/// participants.
+#[tokio::test]
+async fn forum_cards_keep_anonymous_replies_anonymous() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let guild_id = ctx.create_guild("Anon Forum Guild").await?;
+    let forum = ctx.create_channel(&guild_id, "confessions", 7).await?;
+    let (ada_token, ada_id) = ctx.add_member("anonada", &guild_id).await?;
+    let (ben_token, ben_id) = ctx.add_member("anonben", &guild_id).await?;
+
+    let (status, post) = ctx
+        .request(
+            Method::POST,
+            &format!("/api/v1/channels/{forum}/forum/posts"),
+            Some(json!({ "name": "Say it here", "content": "No names." })),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::CREATED, "forum post: {post}");
+    let thread_id = post["id"].as_str().context("post id")?.to_string();
+    let (status, features) = ctx
+        .request(
+            Method::PATCH,
+            &format!("/api/v1/channels/{thread_id}/features"),
+            Some(json!({ "anonymous_posting_enabled": true })),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "features: {features}");
+    ctx.post_as(&ada_token, &thread_id, "it was me").await?;
+    ctx.post_as(&ben_token, &thread_id, "no, me").await?;
+
+    let page = ctx.feed(&guild_id, "limit=50").await?;
+    let card = items(&page)
+        .into_iter()
+        .find(|item| item["type"] == "forum_post" && item["thread_id"] == thread_id)
+        .context("forum post item")?;
+    let text = card.to_string();
+    for real in [
+        ada_id.to_string(),
+        ben_id.to_string(),
+        "anonada".into(),
+        "anonben".into(),
+    ] {
+        assert!(!text.contains(&real), "card names {real}: {card}");
+    }
+    let last = card["last_reply_author"]["id"]
+        .as_str()
+        .context("last reply")?;
+    assert!(last.starts_with("anon:"), "{card}");
+    let anonymous = card["participants"]
+        .as_array()
+        .context("participants")?
+        .iter()
+        .filter(|p| p["id"].as_str().is_some_and(|id| id.starts_with("anon:")))
+        .count();
+    assert_eq!(anonymous, 2, "{card}");
+    Ok(())
+}
+
 #[tokio::test]
 async fn cursor_pages_without_duplicates_or_gaps() -> anyhow::Result<()> {
     let ctx = TestContext::new().await?;

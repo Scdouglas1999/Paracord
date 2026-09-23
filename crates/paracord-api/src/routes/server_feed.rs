@@ -539,15 +539,62 @@ async fn forum_posts_json(
             .into_iter()
             .map(|message| (message.channel_id, message))
             .collect();
-    let mut participants: HashMap<i64, Vec<i64>> = HashMap::new();
+    // (author id, the message that makes them a participant)
+    let mut participants: HashMap<i64, Vec<(i64, i64)>> = HashMap::new();
     for row in paracord_db::server_feed::thread_participants(&state.db, &thread_ids)
         .await
         .map_err(internal)?
     {
         let list = participants.entry(row.thread_id).or_default();
         if list.len() < MAX_PARTICIPANTS {
-            list.push(row.author_id);
+            list.push((row.author_id, row.last_message_id));
         }
+    }
+
+    // A post in an anonymous channel, or a webhook post, is stored under a real
+    // user id. The thread shows the alias or the webhook, so the card must too,
+    // or the feed would name who wrote an anonymous post.
+    let mut masked_ids: Vec<i64> = first
+        .values()
+        .chain(last.values())
+        .map(|m| m.id)
+        .chain(
+            participants
+                .values()
+                .flatten()
+                .map(|(_, message_id)| *message_id),
+        )
+        .collect();
+    masked_ids.sort_unstable();
+    masked_ids.dedup();
+    let mut masks: HashMap<i64, Value> = HashMap::new();
+    for row in paracord_db::messages::get_anonymous_messages_for_message_ids(&state.db, &masked_ids)
+        .await
+        .map_err(internal)?
+    {
+        masks.insert(
+            row.message_id,
+            json!({
+                "id": format!("anon:{}:{}", row.channel_id, row.alias),
+                "username": row.alias,
+                "display_name": null,
+                "avatar_hash": null,
+            }),
+        );
+    }
+    for (message_id, webhook_id, name) in
+        paracord_db::webhooks::get_webhooks_for_message_ids(&state.db, &masked_ids)
+            .await
+            .map_err(internal)?
+    {
+        masks.entry(message_id).or_insert_with(|| {
+            json!({
+                "id": webhook_id.to_string(),
+                "username": name,
+                "display_name": null,
+                "avatar_hash": null,
+            })
+        });
     }
 
     let mut user_ids: Vec<i64> = posts
@@ -555,7 +602,12 @@ async fn forum_posts_json(
         .filter_map(|post| post.owner_id)
         .chain(first.values().map(|m| m.author_id))
         .chain(last.values().map(|m| m.author_id))
-        .chain(participants.values().flatten().copied())
+        .chain(
+            participants
+                .values()
+                .flatten()
+                .map(|(author_id, _)| *author_id),
+        )
         .collect();
     user_ids.sort_unstable();
     user_ids.dedup();
@@ -580,7 +632,31 @@ async fn forum_posts_json(
         let latest = last
             .get(&post.id)
             .filter(|message| replies > 0 && opening.is_none_or(|o| o.id != message.id));
-        let author_id = post.owner_id.or(opening.map(|m| m.author_id));
+        let author = match opening.and_then(|m| masks.get(&m.id)) {
+            Some(mask) => Some(mask.clone()),
+            None => post.owner_id.or(opening.map(|m| m.author_id)).map(person),
+        };
+        let last_reply_author = latest.map(|m| {
+            masks
+                .get(&m.id)
+                .cloned()
+                .unwrap_or_else(|| person(m.author_id))
+        });
+        let mut seen = std::collections::HashSet::new();
+        let people: Vec<Value> = participants
+            .get(&post.id)
+            .map(|list| {
+                list.iter()
+                    .map(|(author_id, message_id)| {
+                        masks
+                            .get(message_id)
+                            .cloned()
+                            .unwrap_or_else(|| person(*author_id))
+                    })
+                    .filter(|p| seen.insert(p["id"].as_str().unwrap_or_default().to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
         let forum = post.parent_id.and_then(|id| by_id.get(&id));
         out.insert(
             post.id,
@@ -595,15 +671,12 @@ async fn forum_posts_json(
                     .unwrap_or_else(|| "forum".to_string()),
                 "thread_id": post.id.to_string(),
                 "title": post.name.clone().unwrap_or_default(),
-                "author": author_id.map(person),
+                "author": author,
                 "excerpt": excerpt(opening),
                 "reply_count": replies,
                 "last_reply_at": latest.map(|m| m.created_at.to_rfc3339()),
-                "last_reply_author": latest.map(|m| person(m.author_id)),
-                "participants": participants
-                    .get(&post.id)
-                    .map(|ids| ids.iter().map(|id| person(*id)).collect::<Vec<_>>())
-                    .unwrap_or_default(),
+                "last_reply_author": last_reply_author,
+                "participants": people,
             }),
         );
     }
