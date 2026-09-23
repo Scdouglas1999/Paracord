@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { Link } from 'react-router';
 import { Check, Hash, Lock, Search, X } from 'lucide-react';
 import { extractApiError } from '../../api/client';
 import { fileApi } from '../../api/files';
@@ -8,6 +9,7 @@ import { MAX_FILE_SIZE } from '../../lib/constants';
 import { composeDmForwardBody } from '../../lib/forwardedMessage';
 import { entityScopeKey, type AccountScope } from '../../lib/serverScope';
 import { displayName } from '../../lib/displayName';
+import { useAccountStore } from '../../stores/accountStore';
 import { confirm } from '../../stores/confirmStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { useInstanceStore } from '../../stores/instanceStore';
@@ -73,7 +75,9 @@ export function ForwardPicker({
   const [selected, setSelected] = useState<ForwardTarget[]>([]);
   const [note, setNote] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [needsUnlock, setNeedsUnlock] = useState(false);
   const [sending, setSending] = useState(false);
+  const unlocked = useAccountStore((state) => state.isUnlocked);
 
   const allTargets = useMemo(() => {
     const rows: ForwardTarget[] = [];
@@ -150,6 +154,15 @@ export function ForwardPicker({
       setError('This message has no text to forward.');
       return;
     }
+    // A direct message or group is sealed on this device. With the identity
+    // locked (every page load locks it) the send can only fail, so say how to
+    // open it before anything goes out.
+    if (selected.some((target) => target.encrypted) && !useAccountStore.getState().isUnlocked) {
+      setNeedsUnlock(true);
+      setError('Unlock encryption on this device to forward into a direct message or group.');
+      return;
+    }
+    setNeedsUnlock(false);
     const publicTargets = selected.filter((target) => !target.encrypted);
     if (sourceEncrypted && publicTargets.length > 0) {
       const names = publicTargets.map((target) => target.label).join(', ');
@@ -307,6 +320,15 @@ export function ForwardPicker({
         {error && (
           <p role="alert" className="rounded-[var(--radius-well)] bg-danger-well px-3.5 py-2.5 text-label font-medium leading-relaxed text-accent-danger shadow-[var(--shadow-well)]">
             {error}
+            {needsUnlock && !unlocked && (
+              <Link
+                className="ml-2 underline"
+                to={`/unlock?${new URLSearchParams({ returnTo: window.location.pathname + window.location.search })}`}
+                onClick={onClose}
+              >
+                Unlock encryption
+              </Link>
+            )}
           </p>
         )}
         <div className="flex items-center justify-end gap-2">
