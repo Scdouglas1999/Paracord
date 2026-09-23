@@ -5,6 +5,7 @@ import {
   callDuration,
   darkRoomCaption,
   lastLitCaption,
+  quietTextCaption,
   readingCaption,
   talkingCaption,
   type RoomLight,
@@ -20,8 +21,8 @@ export interface LightCaptionProps extends React.HTMLAttributes<HTMLSpanElement>
  * (docs/lantern-stage-spec.md §6.9, §9).
  *
  * Every lit thing renders one of these, because light is never the only cue.
- * Copy is specific and in the metaphor — "3 talking", "5 reading",
- * "Dark · nobody in", "last lit 2 h ago". The strings themselves come from
+ * Copy is specific and plain — "3 talking", "5 here", "Empty",
+ * "last active 2 h ago". The strings themselves come from
  * `lib/attention/lightCaptions.ts`; this is only the ink.
  */
 export const LightCaption = React.forwardRef<HTMLSpanElement, LightCaptionProps>(
@@ -39,9 +40,9 @@ export const LightCaption = React.forwardRef<HTMLSpanElement, LightCaptionProps>
 );
 
 export interface RoomCaptionOptions {
-  /** A sidebar row says "Dark · nobody in"; a Lobby card says "nobody's in". */
+  /** A sidebar row says "Empty"; a card says "Nobody in voice". */
   surface?: 'row' | 'card';
-  /** Append "last lit 2 h ago" to a dark room. */
+  /** Append "last active 2 h ago" to an empty voice channel. */
   withLastLit?: boolean;
   nowMs?: number;
 }
@@ -51,7 +52,7 @@ export interface RoomCaptionOptions {
  *
  * `RoomLight.caption` is already the canonical short form; this adds the
  * surface-specific wording the contract spells differently in §7.1 and §7.3,
- * and the optional "last lit" tail a dark Lobby card carries.
+ * and the optional "last active" tail an empty voice card carries.
  */
 export function roomCaptionFor(room: RoomLight, options: RoomCaptionOptions = {}): string {
   const { surface = 'row', withLastLit = false, nowMs = Date.now() } = options;
@@ -64,6 +65,7 @@ export function roomCaptionFor(room: RoomLight, options: RoomCaptionOptions = {}
           : room.caption
       : readingCaption(room.readingCount);
   }
+  if (room.kind !== 'voice') return quietTextCaption();
   const dark = darkRoomCaption(surface);
   return withLastLit ? `${dark} · ${lastLitCaption(room.lastLitMs, nowMs)}` : dark;
 }

@@ -1,6 +1,6 @@
 import { getApi } from './activeClient';
 import { responseContract } from './responseContracts';
-import { isGuildEmoji, isGuildEmojiList } from './generated/validators';
+import { isGuildEmoji, isGuildEmojiList } from './contractValidators';
 import { buildGuildEmojiImageUrl } from '../lib/customEmoji';
 
 const MAX_EMOJI_UPLOAD_BYTES = 256 * 1024;

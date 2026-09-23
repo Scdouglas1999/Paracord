@@ -67,6 +67,13 @@
   box-shadow: var(--shadow-floating);
 }
 
+/* A card that floats over the page without a scrim (a profile card) carries
+   text of its own, so the page must not read through it. The floating colour
+   laid over the opaque plate: the same shade, with nothing ghosting behind. */
+.pc-dialog-opaque {
+  background: linear-gradient(var(--bg-floating), var(--bg-floating)), var(--bg-plate);
+}
+
 /* §3: on a phone, plates round up. */
 @media (max-width: 640px) {
   .pc-dialog {
@@ -114,8 +121,19 @@
    is substituted where it is declared, so a recipe composed on `:root` would
    read the root's level and never the level of the person this ring belongs to.
    Every element without one inherits the inert value `tokens.css` declares
-   (`.voice-connected-pulse` borrows these keyframes and has no level of its
-   own), so the layer costs nothing where nobody is speaking. */
+   (`.voice-connected-pulse` borrows these layers and has no level of its
+   own), so the layer costs nothing where nobody is speaking.
+
+   The breath is two still rings crossfading, never an animated box-shadow.
+   Animating the shadow itself repaints the blurred glow on every frame of the
+   1.6 s cycle for as long as somebody talks — on the Linux desktop webview
+   (WebKitGTK, shared-memory frames) that is a full repaint of every speaking
+   face, forever. Opacity on a layer is composited, not painted. `::before` is
+   the resting ring and `::after` the peak, so the ring rests and peaks exactly
+   where the old keyframes did; in between it blends rather than tweens the blur
+   radius. The element's own shadow stays off while the layers draw it, so the
+   element must be positioned and must not clip its overflow (a clipped box
+   would clip the rings with it). */
 .pc-speaking {
   --voice-gain: calc(1 + 0.15 * var(--voice-level));
   --ring-lit-voice: 0 0 0 var(--ring-edge)
@@ -130,22 +148,65 @@
       rgba(var(--light-ring-rgb), min(1, calc(var(--ring-a-peak-edge) * var(--voice-gain)))),
     0 0 var(--ring-glow-speaking)
       rgba(var(--light-ring-rgb), min(1, calc(var(--ring-a-speaking-glow) * var(--voice-gain))));
-  box-shadow: var(--ring-speaking-voice);
-  animation: pc-breathe var(--duration-breathe) var(--ease-in-out) infinite;
+  position: relative;
+  box-shadow: none;
 }
 
 /* The two ends of the breath, each at whatever the voice is doing to the ring
-   right now. The fallbacks are for `.voice-connected-pulse`, which borrows
-   these keyframes for the on-air dot and has no voice of its own — at
-   `--voice-level: 0` the two are the same value anyway. */
-@keyframes pc-breathe {
-  0%,
-  100% {
-    box-shadow: var(--ring-lit-voice, var(--ring-lit));
-  }
+   right now. The fallbacks are for the dots that borrow the breath
+   (`.voice-connected-pulse`, `.pc-live-dot.is-speaking`), which have no voice of
+   their own — at `--voice-level: 0` the two are the same value anyway. */
+.pc-speaking::before,
+.pc-speaking::after,
+.pc-live-dot.is-speaking::before,
+.pc-live-dot.is-speaking::after,
+.voice-connected-pulse::before,
+.voice-connected-pulse::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  animation: var(--duration-breathe) var(--ease-in-out) infinite;
+}
+
+.pc-speaking::before,
+.pc-live-dot.is-speaking::before,
+.voice-connected-pulse::before {
+  box-shadow: var(--ring-lit-voice, var(--ring-lit));
+  animation-name: pc-breathe-rest;
+}
+
+.pc-speaking::after,
+.pc-live-dot.is-speaking::after,
+.voice-connected-pulse::after {
+  box-shadow: var(--ring-peak-voice, var(--ring-speaking-peak));
+  opacity: 0;
+  animation-name: pc-breathe-peak;
+}
+
+@keyframes pc-breathe-rest {
   50% {
-    box-shadow: var(--ring-peak-voice, var(--ring-speaking-peak));
+    opacity: 0;
   }
+}
+
+@keyframes pc-breathe-peak {
+  50% {
+    opacity: 1;
+  }
+}
+
+/* A `LitAvatar`'s face while its ring breathes. The face clips its picture to
+   the circle, so it cannot carry the breathing layers itself — the avatar's
+   frame (`.pc-speaking` on the square around it) does. The face keeps the
+   resting ring as its own shadow, clipped out of sight, so that when the
+   person stops talking and the face goes back to `.pc-lit` the shadow is
+   already where it lands and `.pc-dimming` has nothing to fade in. The face is
+   square by construction, so the circle is its border-radius. */
+.pc-speaking-face {
+  box-shadow: var(--ring-lit);
+  clip-path: circle(50%);
 }
 
 /* Away / offline: matte, no rim (§1.5). */
@@ -213,25 +274,54 @@
 /* Somebody is writing in the room: the amber window breathes at half
    amplitude — the speaking ring's breath, softened onto the window that
    carries it (§5.1). The pulse is the same --duration-breathe curve; typing
-   is a form of presence, so the window is lit while it runs. */
+   is a form of presence, so the window is lit while it runs.
+
+   Like the speaking ring, the breath is two still glows crossfading in
+   opacity rather than an animated box-shadow, so the browser composites it
+   instead of repainting the glow on every frame. The glows are the layers of
+   the window's frame (`.pc-window-breath`, a wrapper exactly the window's
+   size), not of the window: the window keeps its own reading glow the whole
+   time, clipped out of sight while the frame breathes, so when the writing
+   stops the glow it lands on is already there and its warm-up transition has
+   nothing to fade in. */
 .pc-window.is-writing {
   background: var(--light-amber);
-  animation: pc-window-breathe var(--duration-breathe) var(--ease-in-out) infinite;
 }
 
-@keyframes pc-window-breathe {
-  0%,
-  100% {
-    box-shadow: var(--glow-window-amber);
-  }
-
-  50% {
-    box-shadow: var(--glow-window-amber-breathe);
-  }
+:root:not([data-motion='reduced']) .pc-window.is-writing {
+  clip-path: inset(0 round var(--radius-window));
 }
 
-:root[data-motion='reduced'] .pc-window.is-writing {
-  animation: none;
+.pc-window-breath {
+  position: relative;
+  display: inline-flex;
+  border-radius: var(--radius-window);
+}
+
+.pc-window-breath.is-writing::before,
+.pc-window-breath.is-writing::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  animation: var(--duration-breathe) var(--ease-in-out) infinite;
+}
+
+.pc-window-breath.is-writing::before {
+  box-shadow: var(--glow-window-amber);
+  animation-name: pc-breathe-rest;
+}
+
+.pc-window-breath.is-writing::after {
+  box-shadow: var(--glow-window-amber-breathe);
+  opacity: 0;
+  animation-name: pc-breathe-peak;
+}
+
+:root[data-motion='reduced'] .pc-window-breath.is-writing::before,
+:root[data-motion='reduced'] .pc-window-breath.is-writing::after {
+  display: none;
 }
 
 /* The one permitted radial (§1.2): a lamp inside a lit building/room card, one
@@ -427,6 +517,40 @@
   animation: pc-sheet-out var(--duration-fast) var(--ease-in) forwards;
 }
 
+/* Message search: result rows fade up 4px over 180ms, the first eight
+   staggered by the light step. The phone sheet rises on the plain ease-out,
+   not the spring, so a full-screen surface does not overshoot. */
+@keyframes pc-search-row {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 4px, 0);
+  }
+}
+
+.pc-search-row {
+  animation: pc-search-row var(--duration-roll) var(--ease-out) backwards;
+}
+
+:root[data-motion='reduced'] .pc-search-row {
+  animation: none;
+}
+
+.pc-search-sheet-in {
+  animation: pc-sheet-in var(--duration-slow) var(--ease-out) backwards;
+}
+
+/* A matched word in a search result. */
+.pc-search-mark {
+  border-radius: 3px;
+  background: var(--accent-tint);
+  color: var(--text-primary);
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+}
+
+
 /* A status banner pinned to the top edge drops in rather than rising — the
    directional variant of the same recipe (spring-settle in, ease-in out). */
 .pc-banner-in {
@@ -551,7 +675,7 @@
   animation: none;
 }
 
-/* Three dots breathing while somebody types — the pc-breathe timing
+/* Three dots breathing while somebody types — the speaking ring's timing
    (--duration-breathe, --ease-in-out), 200ms apart. */
 @keyframes pc-dot-breathe {
   0%,
@@ -596,8 +720,14 @@
 
 /* The on-air pill's live dot breathes only while somebody is actually
    speaking — never as decoration (§5.1, §6.7). */
+/* The breath is the speaking ring's two still layers (see `.pc-speaking`); the
+   dot's own glow is off while they draw it. */
 .pc-live-dot.is-speaking {
-  animation: pc-breathe var(--duration-breathe) var(--ease-in-out) infinite;
+  position: relative;
+}
+
+:root:not([data-motion='reduced']) .pc-live-dot.is-speaking {
+  box-shadow: none;
 }
 
 /* Reduced motion is the `data-motion` attribute, never a media query — see the
@@ -611,10 +741,29 @@
 }
 
 :root[data-motion='reduced'] .pc-speaking {
-  animation: none;
   /* The resting ring, with no voice in it: the level driver does not run under
      reduced motion either (`lib/motion/voiceLevel.ts`). */
   box-shadow: var(--ring-speaking);
+}
+
+/* Still, the face carries its own speaking ring again, exactly as it did
+   before the breath moved to its frame, and the frame none. */
+:root[data-motion='reduced'] .pc-speaking-face {
+  box-shadow: var(--ring-speaking);
+  clip-path: none;
+}
+
+:root[data-motion='reduced'] .pc-speaking:has(> .pc-speaking-face) {
+  box-shadow: none;
+}
+
+:root[data-motion='reduced'] .pc-speaking::before,
+:root[data-motion='reduced'] .pc-speaking::after,
+:root[data-motion='reduced'] .pc-live-dot.is-speaking::before,
+:root[data-motion='reduced'] .pc-live-dot.is-speaking::after,
+:root[data-motion='reduced'] .voice-connected-pulse::before,
+:root[data-motion='reduced'] .voice-connected-pulse::after {
+  display: none;
 }
 
 /* -----------------------------------------------------------------------------

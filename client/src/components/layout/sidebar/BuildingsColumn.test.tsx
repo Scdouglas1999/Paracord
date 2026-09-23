@@ -155,13 +155,13 @@ describe('BuildingsColumn', () => {
     renderColumn();
     const section = screen.getByRole('group', { name: 'Kestrel Robotics' });
 
-    // "Kestrel Robotics · 24 in" — sentence case, the count in the meta ink.
+    // "Kestrel Robotics · 24 online" — sentence case, the count in the meta ink.
     expect(within(section).getByText('Kestrel Robotics')).toBeInTheDocument();
-    expect(within(section).getByText('3 in')).toBeInTheDocument();
+    expect(within(section).getByText('3 online')).toBeInTheDocument();
 
     // The plate is the Lobby link and says what the building is doing.
     const plate = within(section).getByRole('option', { name: /lobby/ });
-    expect(plate).toHaveAccessibleName(/1 call live · 3 reading/);
+    expect(plate).toHaveAccessibleName(/\d+ in voice · 3 here/);
     fireEvent.click(plate);
     expect(handlers.onOpenLobby).toHaveBeenCalledWith(expect.objectContaining({ guildId: 'g1' }));
   });
@@ -178,7 +178,7 @@ describe('BuildingsColumn', () => {
 
     const dark = within(section).getByRole('option', { name: /Lounge/ });
     expect(dark).toHaveTextContent('Lounge');
-    expect(dark).toHaveAccessibleName(/Dark · nobody in/);
+    expect(dark).toHaveAccessibleName(/Empty/);
 
     fireEvent.click(dark);
     // The row also hands back the element it was clicked on: §5.1's shared
@@ -190,13 +190,13 @@ describe('BuildingsColumn', () => {
     );
   });
 
-  it('renders text rooms with their reading count, and a mention chip when one is waiting', () => {
+  it('renders text rooms with who is here, and a mention chip when one is waiting', () => {
     renderColumn({
       attention: new Map([[QUIET_TEXT.key, { unread: true, mentionCount: 4 }]]),
     });
     const section = screen.getByRole('group', { name: 'Kestrel Robotics' });
 
-    expect(within(section).getByRole('option', { name: /build-log/ })).toHaveTextContent('3 reading');
+    expect(within(section).getByRole('option', { name: /build-log/ })).toHaveTextContent('3 here');
     const quiet = within(section).getByRole('option', { name: /firmware/ });
     expect(within(quiet).getByLabelText('4 mentions')).toHaveTextContent('4');
   });

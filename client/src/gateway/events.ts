@@ -1,4 +1,7 @@
 export const GatewayEvents = {
+  // Sports add-on: a score in a favorite team's game
+  SPORTS_SCORE: 'SPORTS_SCORE',
+
   // Connection lifecycle
   READY: 'READY',
   RESUMED: 'RESUMED',
@@ -27,6 +30,7 @@ export const GatewayEvents = {
   MESSAGE_DELETE_BULK: 'MESSAGE_DELETE_BULK',
   MESSAGE_REACTION_ADD: 'MESSAGE_REACTION_ADD',
   MESSAGE_REACTION_REMOVE: 'MESSAGE_REACTION_REMOVE',
+  REMINDER_FIRED: 'REMINDER_FIRED',
   POLL_VOTE_ADD: 'POLL_VOTE_ADD',
   POLL_VOTE_REMOVE: 'POLL_VOTE_REMOVE',
 

@@ -189,25 +189,57 @@ const GUILD_ALLOWED = [
   /guild invalid created_at/,
 ];
 
-/**
- * Presence is light (§1.5), and §6.9 names "Online" as a thing the product
- * never says. The words live in `lib/presence` — "Lights on", "Away", "Lights
- * off" — and a surface that writes its own is a surface that will drift.
+/*
+ * Presence and activity are said in plain words (2026-09-22: "Styling yes,
+ * terminology is kind of silly"). The light STYLING stays — a live thing may
+ * glow — but the copy says online, here, live and empty, never the metaphor
+ * (docs/server-home-spec.md, "Plain words").
  */
-const PRESENCE = /(^|[^A-Za-z-])(Online|Offline)(?![A-Za-z-])/;
 
-/** Where the banned presence words are still the right ones. */
-const PRESENCE_ALLOWED = [
-  /^offline$/i, // a status id on the wire, not a label
-  /offline-first/i,
-];
+/** "Lights on", "has their lights on", "Lights off" — the status is Online. */
+const LIGHTS_ON = /(^|[^A-Za-z])lights? (on|off)(?![A-Za-z])/i;
 
+/**
+ * "reading" as a presence word: "5 reading", "the 3 people reading", "Mara is
+ * reading #general", "reading this". A count or a name that was interpolated in
+ * front of it leaves a leading hole (`${count} reading` sweeps as " reading").
+ * "Reading the last few hours…" or "Error reading a file" is the verb, and none
+ * of these shapes catch it.
+ */
+const READING = new RegExp(
+  [
+    /(^|[^A-Za-z])(\d+|people|person|are|is|was|were)\s+reading(?![A-Za-z])/i.source,
+    /^\s+reading(?![A-Za-z])/.source,
+    /(^|[^A-Za-z])reading (this|now)(?![A-Za-z])/i.source,
+  ].join('|'),
+  'i',
+);
+
+/**
+ * A channel or a call is live, active or empty, never "lit": "never lit",
+ * "last lit", "lit up", "2 channels lit".
+ */
+const LIT = /(^|[^A-Za-z])(never lit|last lit|lit up|lights up|(channels?|rooms?|calls?) lit)(?![A-Za-z])/i;
+
+/** "Dark · nobody in", "general is dark" — an empty channel is empty. */
+const DARK = /(^|[^A-Za-z])(Dark ·|is dark(?![A-Za-z]))/;
+
+/** The design-token page describing the styling itself, where dark is a colour. */
+const DARK_ALLOWED = [/not light is dark, matte/];
+
+/**
+ * Files the plain-words sweep does not read yet: the server home rewrite
+ * (feat/server-home) replaces every file in this directory with its own copy
+ * in plain words. Delete this list when that branch lands.
+ */
 function sweep(
   rule: RegExp,
   allowed: readonly RegExp[],
+  skip: readonly string[] = [],
 ): string[] {
   const offenders: string[] = [];
   for (const file of sourceFiles(SRC)) {
+    if (skip.some((part) => file.includes(part))) continue;
     const source = withoutComments(readFileSync(file, 'utf8'));
     for (const value of readableStrings(source)) {
       if (!rule.test(value)) continue;
@@ -293,8 +325,49 @@ describe('the host you run is an instance', () => {
   });
 });
 
-describe('presence is light, not a status word', () => {
-  it('never says "Online" or "Offline" at a person', () => {
-    expect(sweep(PRESENCE, PRESENCE_ALLOWED)).toEqual([]);
+describe('presence and activity are plain words', () => {
+  it('never says "lights on" or "lights off"', () => {
+    expect(sweep(LIGHTS_ON, [])).toEqual([]);
+  });
+
+  it('never says "reading" to mean somebody is here', () => {
+    expect(sweep(READING, [])).toEqual([]);
+  });
+
+  it('never says a channel is lit, or was', () => {
+    expect(sweep(LIT, [])).toEqual([]);
+  });
+
+  it('never says "Dark ·" or that a channel "is dark"', () => {
+    expect(sweep(DARK, DARK_ALLOWED)).toEqual([]);
+  });
+
+  it('catches "reading" as presence and leaves the verb alone', () => {
+    for (const presence of [
+      '5 reading',
+      ' reading', // `${count} reading`, after its hole is swept out
+      'Say something to the 3 people reading',
+      'Say something to the 1 person reading',
+      'Mara and Ren are reading build-log',
+      'Ren · lights on · reading this',
+    ]) {
+      expect(READING.test(presence), presence).toBe(true);
+    }
+    for (const verb of [
+      'Reading the last few hours…',
+      'loading/reading a file',
+      'Error reading file',
+      'Failed while reading the backup',
+      'reading', // a bare token: a chip tone, a class suffix
+    ]) {
+      expect(READING.test(verb), verb).toBe(false);
+    }
+  });
+
+  it('calls the status you set on yourself Online, and invisible stays invisible', () => {
+    const plate = copyOf('components/layout/sidebar/AccountPlate.tsx');
+    expect(plate).toContain('Online');
+    expect(plate).toContain('Invisible');
+    expect(copyOf('lib/presence.ts')).toContain('Online');
   });
 });

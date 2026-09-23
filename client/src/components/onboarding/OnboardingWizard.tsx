@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { Server, Shield, Users, Globe, ArrowRight, ArrowLeft } from 'lucide-react';
+import { Server, Shield, Users, ArrowRight, ArrowLeft } from 'lucide-react';
 import {
   getVersionedStorageItem,
   setVersionedStorageItem,
 } from '../../lib/versionedStorage';
+import { AppMark } from '../brand/AppMark';
 import { Button } from '../ui/Button';
 import { Divider } from '../ui/Divider';
 import { AUTH_FORM, AuthCanvas, AuthCard, AuthScroll } from '../../pages/authScaffold';
@@ -51,7 +52,8 @@ const STEPS = [
   {
     title: 'Welcome to Paracord',
     subtitle: 'A self-hosted, decentralized place for your people',
-    icon: Globe,
+    // The welcome is the app introducing itself, so it wears the app's mark.
+    icon: null,
     content: (
       <>
         <p className="text-body text-text-secondary">
@@ -168,12 +170,16 @@ export function OnboardingWizard({ onComplete, onTryDemo }: OnboardingWizardProp
 
           {/* Header */}
           <div>
-            <div
-              className="pc-well mb-4 flex h-12 w-12 items-center justify-center text-text-secondary short-window:hidden"
-              aria-hidden
-            >
-              <Icon size={24} />
-            </div>
+            {Icon ? (
+              <div
+                className="pc-well mb-4 flex h-12 w-12 items-center justify-center text-text-secondary short-window:hidden"
+                aria-hidden
+              >
+                <Icon size={24} />
+              </div>
+            ) : (
+              <AppMark size={48} className="mb-3 short-window:hidden" />
+            )}
             <h1 className="pc-display text-title text-text-primary">{current.title}</h1>
             {/* The step's one-line gloss is what a short window gives up: the
                 title carries the meaning, and the content below it does not. */}

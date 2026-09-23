@@ -49,4 +49,26 @@ describe('GuildWelcomeScreen', () => {
     expect(screen.queryByAltText('Launch Server')).not.toBeInTheDocument();
     expect(screen.getByText('L')).toBeInTheDocument();
   });
+
+  it('lists channels to explore, not the threads inside them', () => {
+    const withThread: Channel[] = [
+      ...channels,
+      {
+        id: 'thread-1',
+        type: 6,
+        channel_type: 6,
+        guild_id: 'guild-1',
+        parent_id: 'channel-1',
+        name: 'resume ordering follow-ups',
+        position: 0,
+        nsfw: false,
+        created_at: '2026-05-17T00:00:00Z',
+      },
+    ];
+    render(<GuildWelcomeScreen guild={buildGuild(null)} channels={withThread} onDismiss={() => undefined} />);
+
+    expect(screen.getByText('general')).toBeInTheDocument();
+    expect(screen.queryByText('resume ordering follow-ups')).not.toBeInTheDocument();
+    expect(screen.queryByText('Other')).not.toBeInTheDocument();
+  });
 });

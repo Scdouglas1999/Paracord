@@ -138,7 +138,10 @@ pub fn plan_score_updates(
     let mut next = previous.clone();
     let mut messages = Vec::new();
     let start = match previous.through.as_deref() {
-        None => 0,
+        // First sight of this pin. A game pinned while it is under way gets
+        // its latest score, which says where the game stands, rather than
+        // every score so far posted at once.
+        None => detail.plays.len().saturating_sub(1),
         Some(id) => match detail.plays.iter().position(|play| play.id == id) {
             Some(index) => index + 1,
             None => detail.plays.len(),
@@ -387,6 +390,18 @@ mod tests {
     }
 
     #[test]
+    fn a_game_pinned_while_under_way_posts_only_its_latest_score() {
+        let mut detail = snap("in", "3:58 - 2nd", 2, 14, 10);
+        detail.plays.push(touchdown("1", 0, 7));
+        detail.plays.push(touchdown("2", 7, 7));
+        detail.plays.push(touchdown("3", 14, 10));
+        let (lines, cursor) = plan_score_updates(&AnnounceCursor::default(), &detail);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].play_id.as_deref(), Some("3"));
+        assert_eq!(cursor.through.as_deref(), Some("3"));
+    }
+
+    #[test]
     fn a_later_scoring_play_is_the_only_new_line() {
         let mut detail = snap("in", "3:12 - 3rd", 3, 21, 7);
         detail.plays.push(touchdown("1", 7, 0));
@@ -416,8 +431,10 @@ mod tests {
     fn a_missing_play_id_does_not_replay_the_list() {
         let mut detail = snap("in", "8:41 - 2nd", 2, 14, 7);
         detail.plays.push(touchdown("9001", 14, 7));
-        let mut cursor = AnnounceCursor::default();
-        cursor.through = Some("gone".to_string());
+        let cursor = AnnounceCursor {
+            through: Some("gone".to_string()),
+            ..AnnounceCursor::default()
+        };
         let (lines, next) = plan_score_updates(&cursor, &detail);
         assert!(lines.is_empty());
         assert_eq!(next.through.as_deref(), Some("gone"));
@@ -497,11 +514,15 @@ mod tests {
     fn announce_off_and_an_encrypted_channel_post_nothing() {
         let mut detail = snap("in", "8:41 - 2nd", 2, 14, 7);
         detail.plays.push(touchdown("9001", 14, 7));
-        let mut off = AnnounceCursor::default();
-        off.announce = false;
+        let off = AnnounceCursor {
+            announce: false,
+            ..AnnounceCursor::default()
+        };
         assert!(plan_score_updates(&off, &detail).0.is_empty());
-        let mut blocked = AnnounceCursor::default();
-        blocked.blocked = Some("encrypted".to_string());
+        let blocked = AnnounceCursor {
+            blocked: Some("encrypted".to_string()),
+            ..AnnounceCursor::default()
+        };
         let (lines, cursor) = plan_score_updates(&blocked, &detail);
         assert!(lines.is_empty());
         assert_eq!(cursor.blocked.as_deref(), Some("encrypted"));

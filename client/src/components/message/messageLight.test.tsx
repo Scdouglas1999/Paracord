@@ -67,7 +67,7 @@ function voiceRoom(overrides: Partial<RoomLight> = {}): RoomLight {
   };
 }
 
-const darkRoom = () => voiceRoom({ lit: false, level: 'dark', occupants: [], caption: 'Dark · nobody in' });
+const darkRoom = () => voiceRoom({ lit: false, level: 'dark', occupants: [], caption: 'Empty' });
 
 describe('useRoomLitEvents (§7.4)', () => {
   beforeEach(() => {
@@ -91,7 +91,7 @@ describe('useRoomLitEvents (§7.4)', () => {
     rerender();
 
     expect(result.current).toHaveLength(1);
-    expect(result.current[0].headline).toBe('Shop floor lit up');
+    expect(result.current[0].headline).toBe('Shop floor is live');
     expect(result.current[0].detail).toBe('Mara, Priya and Ren are in there now');
     expect(result.current[0].channelId).toBe('voice-1');
   });
@@ -127,7 +127,7 @@ describe('useRoomLitEvents (§7.4)', () => {
     const { result, rerender } = renderHook(() => useRoomLitEvents('guild-1'));
     act(() => {
       rooms.current = [
-        voiceRoom({ kind: 'text', level: 'amber', occupants: [], readingCount: 2, caption: '2 reading' }),
+        voiceRoom({ kind: 'text', level: 'amber', occupants: [], readingCount: 2, caption: '2 here' }),
       ];
     });
     rerender();
@@ -150,20 +150,20 @@ describe('useRoomLitEvents (§7.4)', () => {
 });
 
 /**
- * The DM header's sentence (§7.6). "reading this" is only ever added when the
- * room can actually tell the peer is here — presence alone is "lights on" and
+ * The DM header's sentence (§7.6). "here now" is only ever added when the
+ * room can actually tell the peer is here — presence alone is "online" and
  * says exactly that.
  */
 describe('peerLightSentence (§7.6)', () => {
-  it('says the peer, their light, and whether they are reading this', () => {
+  it('says the peer, their status, and whether they are here now', () => {
     const peer = personLight({ userId: 'ren', name: 'Ren', status: 'online' });
-    expect(peerLightSentence(peer, true)).toBe('Ren · lights on · reading this');
-    expect(peerLightSentence(peer, false)).toBe('Ren · lights on');
+    expect(peerLightSentence(peer, true)).toBe('Ren · online · here now');
+    expect(peerLightSentence(peer, false)).toBe('Ren · online');
   });
 
   it('never claims somebody is reading when their lights are off', () => {
     const peer = personLight({ userId: 'ren', name: 'Ren', status: 'offline' });
-    expect(peerLightSentence(peer, false)).toBe('Ren · lights off');
+    expect(peerLightSentence(peer, false)).toBe('Ren · offline');
   });
 
   it('says away rather than pretending a dim person is here', () => {

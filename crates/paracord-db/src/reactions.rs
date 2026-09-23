@@ -93,18 +93,107 @@ pub async fn add_reaction(
         }
     }
 
+    // Milliseconds, so two reactions in the same second still come back in the
+    // order they were added. The column default is whole seconds; writing the
+    // stamp here is what the "who reacted" list orders by.
+    let created_at = Utc::now().format("%Y-%m-%d %H:%M:%S%.3f").to_string();
     sqlx::query(
-        "INSERT INTO reactions (message_id, user_id, emoji_name, emoji_id)
-         VALUES ($1, $2, $3, $4)
+        "INSERT INTO reactions (message_id, user_id, emoji_name, emoji_id, created_at)
+         VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (message_id, user_id, emoji_name) DO NOTHING",
     )
     .bind(message_id)
     .bind(user_id)
     .bind(emoji_name)
     .bind(emoji_id)
+    .bind(created_at)
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// One person who reacted, in the order reactions were added.
+#[derive(Debug, Clone)]
+pub struct ReactionUser {
+    pub id: i64,
+    pub username: String,
+    pub display_name: Option<String>,
+    pub avatar_hash: Option<String>,
+}
+
+/// People who reacted with `emoji_name`, oldest first.
+///
+/// `after_user_id` is the last user the caller already has. `NotFound` means
+/// that user has not reacted with this emoji, so the cursor cannot continue.
+pub async fn list_reaction_users(
+    pool: &DbPool,
+    message_id: i64,
+    emoji_name: &str,
+    limit: i64,
+    after_user_id: Option<i64>,
+) -> Result<Vec<ReactionUser>, DbError> {
+    let limit = limit.clamp(1, 100);
+    let cursor: Option<(String, i64)> = if let Some(user_id) = after_user_id {
+        let row = sqlx::query(
+            "SELECT created_at, user_id FROM reactions
+             WHERE message_id = $1 AND emoji_name = $2 AND user_id = $3",
+        )
+        .bind(message_id)
+        .bind(emoji_name)
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?;
+        let Some(row) = row else {
+            return Err(DbError::NotFound);
+        };
+        let created_at: String = row.try_get("created_at")?;
+        Some((created_at, user_id))
+    } else {
+        None
+    };
+
+    let rows = if let Some((created_at, user_id)) = cursor {
+        sqlx::query(
+            "SELECT u.id, u.username, u.display_name, u.avatar_hash
+             FROM reactions r
+             INNER JOIN users u ON u.id = r.user_id
+             WHERE r.message_id = $1 AND r.emoji_name = $2
+               AND (r.created_at > $3 OR (r.created_at = $3 AND r.user_id > $4))
+             ORDER BY r.created_at ASC, r.user_id ASC
+             LIMIT $5",
+        )
+        .bind(message_id)
+        .bind(emoji_name)
+        .bind(created_at)
+        .bind(user_id)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?
+    } else {
+        sqlx::query(
+            "SELECT u.id, u.username, u.display_name, u.avatar_hash
+             FROM reactions r
+             INNER JOIN users u ON u.id = r.user_id
+             WHERE r.message_id = $1 AND r.emoji_name = $2
+             ORDER BY r.created_at ASC, r.user_id ASC
+             LIMIT $3",
+        )
+        .bind(message_id)
+        .bind(emoji_name)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?
+    };
+    rows.iter()
+        .map(|row| {
+            Ok(ReactionUser {
+                id: row.try_get("id")?,
+                username: row.try_get("username")?,
+                display_name: row.try_get("display_name")?,
+                avatar_hash: row.try_get("avatar_hash")?,
+            })
+        })
+        .collect()
 }
 
 pub async fn remove_reaction(

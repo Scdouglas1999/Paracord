@@ -1,6 +1,6 @@
 /**
  * When a room lit up, and when it last went dark
- * (docs/lantern-stage-spec.md §7.3 "last lit 2 h ago", §7.2 call duration).
+ * (docs/lantern-stage-spec.md §7.3 "last active 2 h ago", §7.2 call duration).
  *
  * Neither number is on the wire: the gateway sends voice membership, not call
  * start times, and it does not tell a client when a room emptied while the app
@@ -13,7 +13,7 @@
  *     already running when the app opens shows time-we-have-seen-it, which is a
  *     lower bound, never an over-claim.
  *   - `lastLitMs` is null until this client has actually seen the room lit, so
- *     an unseen room reads "never lit", not a fabricated hour.
+ *     an unseen room reads "no calls yet", not a fabricated hour.
  *
  * Pure and injectable — NO store, React or DOM imports, no ambient clock.
  */
@@ -39,7 +39,7 @@ export interface LitHistory {
 /**
  * Rooms are remembered for as long as they are interesting. The cap stops a
  * long session on a large instance from growing this map without bound; the
- * oldest-seen entry goes first, and losing it only costs a "last lit" label.
+ * oldest-seen entry goes first, and losing it only costs a "last active" label.
  */
 export const LIT_HISTORY_MAX_ROOMS = 2_000;
 

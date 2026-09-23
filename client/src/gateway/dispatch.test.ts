@@ -1,5 +1,5 @@
 vi.mock('../lib/messages/accountMessagingRuntime', async () => (await import('../test/messagingRuntimeMock')).messagingRuntimeMock);
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock leaf side-effect modules so dispatch stays unit-scoped.
 vi.mock('../lib/features/notifications', () => ({
@@ -21,6 +21,7 @@ vi.mock('../stores/channelStore', async (importOriginal) => ({
 
 import { getTestMessagingRuntime } from '../test/messagingRuntimeMock';
 import { dispatchGatewayEvent, resolveEmojiKey } from './dispatch';
+import { loadValidators } from '../api/contractValidators';
 import { useReadStateStore } from '../stores/readStateStore';
 import { GatewayEvents } from './events';
 import { useMemberStore } from '../stores/memberStore';
@@ -33,6 +34,9 @@ import { useRelationshipStore } from '../stores/relationshipStore';
 import { useInteractionStore } from '../stores/interactionStore';
 import { InteractionCallbackType, InteractionType } from '../types/interactions';
 import * as notifications from '../lib/features/notifications';
+import { useNotificationPreferenceStore } from '../stores/notificationPreferenceStore';
+import { getServerAccountScope } from '../lib/serverIdentity';
+import { accountScopeKey } from '../lib/serverScope';
 import type { Message, User } from '../types';
 
 const SERVER = '__local__';
@@ -74,6 +78,11 @@ describe('resolveEmojiKey', () => {
 });
 
 describe('dispatch READY normalization', () => {
+  // A connection verifies its account through a validated response before its
+  // gateway can deliver READY, which is what loads the validators in the app.
+  beforeAll(async () => {
+    await loadValidators();
+  });
   const readyCore = { id: 'g1', owner_id: 'owner-1', name: 'Updated', member_count: 0, icon_hash: null, created_at: '2026-01-01T00:00:00Z' };
   it('adds a guild with a valid owner_id', () => {
     useAuthStore.setState({ user: { id: 'viewer', username: 'viewer' } as User });
@@ -186,6 +195,49 @@ describe('dispatch MESSAGE_CREATE notification gating', () => {
   it('does not notify when notifications are disabled', async () => {
     (notifications.isEnabled as ReturnType<typeof vi.fn>).mockReturnValue(false);
     await dispatchGatewayEvent(SERVER, GatewayEvents.MESSAGE_CREATE, { ...baseMessage });
+    expect(notifications.sendNotification).not.toHaveBeenCalled();
+  });
+});
+
+describe('dispatch SPORTS_SCORE', () => {
+  const score = (content: string, guildId = 'g-sports') => ({
+    guild_id: guildId,
+    game: 'football/nfl/100',
+    league_path: 'football/nfl',
+    event_id: '100',
+    kind: 'score',
+    content,
+    team_id: '12',
+    favorite_team_ids: ['12'],
+    home: { id: '12', abbr: 'KC', name: 'Chiefs', score: 21, logo: '' },
+    away: { id: '11', abbr: 'IND', name: 'Colts', score: 7, logo: '' },
+  });
+
+  beforeEach(() => {
+    localStorage.clear();
+    useAuthStore.setState({ user: { id: 'me' } as User });
+    useNotificationPreferenceStore.setState({ byAccount: {} });
+  });
+
+  it('turns a favorite team score into one notification, even from two servers', async () => {
+    await dispatchGatewayEvent(SERVER, GatewayEvents.SPORTS_SCORE, score('Touchdown — Chiefs 21, Colts 7') as never);
+    await dispatchGatewayEvent(SERVER, GatewayEvents.SPORTS_SCORE, score('Touchdown — Chiefs 21, Colts 7', 'g-other') as never);
+    expect(notifications.sendNotification).toHaveBeenCalledTimes(1);
+    expect(notifications.sendNotification).toHaveBeenCalledWith('Chiefs score', 'Touchdown — Chiefs 21, Colts 7');
+  });
+
+  it('stays quiet for a muted server and ignores a malformed event', async () => {
+    const scope = getServerAccountScope(SERVER);
+    expect(scope).toBeTruthy();
+    useNotificationPreferenceStore.setState({
+      byAccount: {
+        [accountScopeKey(scope!)]: {
+          'g-sports': { space_id: 'g-sports', level: 0, muted: true, muted_until: null, muted_now: true, suppress_everyone: false },
+        },
+      },
+    });
+    await dispatchGatewayEvent(SERVER, GatewayEvents.SPORTS_SCORE, score('Field goal — Chiefs 24, Colts 7') as never);
+    await dispatchGatewayEvent(SERVER, GatewayEvents.SPORTS_SCORE, { guild_id: 'g-sports' } as never);
     expect(notifications.sendNotification).not.toHaveBeenCalled();
   });
 });

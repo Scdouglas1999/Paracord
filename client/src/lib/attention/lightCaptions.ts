@@ -2,9 +2,9 @@
  * The words that go with the light (docs/lantern-stage-spec.md §6.9, §9).
  *
  * Light is never the only cue, so every lit thing renders one of these strings
- * somewhere a screen reader can reach. Copy is specific and in the metaphor —
- * "3 talking", "5 reading", "Dark · nobody in", "last lit 2 h ago". Never
- * "No data", "It's quiet here" or "Online".
+ * somewhere a screen reader can reach. The light is styling; the words are
+ * plain (docs/server-home-spec.md, "Plain words") — "3 talking", "5 here",
+ * "Empty", "Nobody in voice", "last active 2 h ago". Never "No data".
  *
  * Pure functions, no imports. One place so two surfaces can never disagree
  * about how a count is worded.
@@ -14,70 +14,82 @@ const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 
-/** "3 talking" / "1 talking". Zero is a dark room — use {@link darkRoomCaption}. */
+/** "3 talking" / "1 talking". Zero is an empty channel — use {@link darkRoomCaption}. */
 export function talkingCaption(count: number): string {
   return `${Math.max(0, Math.trunc(count))} talking`;
 }
 
-/** "5 reading" / "1 reading". */
+/**
+ * "5 here" / "1 here": the people a text channel can tell are in it (see
+ * `roomLight.ts` for exactly who counts).
+ */
 export function readingCaption(count: number): string {
-  return `${Math.max(0, Math.trunc(count))} reading`;
+  return `${Math.max(0, Math.trunc(count))} here`;
 }
 
 /**
- * A room with nobody in it.
+ * A voice channel with nobody in it.
  *
- * The contract spells this two ways and both are correct in place: a sidebar
- * **row** reads "Dark · nobody in" (§7.1) and a Lobby **card** reads
- * "Dark · nobody's in" (§6.9, §7.3). Pick by surface, never by taste.
+ * Two lengths, and both are correct in place: a sidebar **row** has room for
+ * one word, "Empty"; a **card** says what is empty, "Nobody in voice". Pick by
+ * surface, never by taste.
  */
 export function darkRoomCaption(surface: 'row' | 'card' = 'row'): string {
-  return surface === 'card' ? "Dark · nobody's in" : 'Dark · nobody in';
-}
-
-/** "last lit 2 h ago" / "last lit just now" / "never lit". */
-export function lastLitCaption(lastLitMs: number | null, nowMs: number): string {
-  if (lastLitMs == null) return 'never lit';
-  const age = nowMs - lastLitMs;
-  if (age < MINUTE) return 'last lit just now';
-  if (age < HOUR) return `last lit ${Math.floor(age / MINUTE)} min ago`;
-  if (age < DAY) return `last lit ${Math.floor(age / HOUR)} h ago`;
-  return `last lit ${Math.floor(age / DAY)} d ago`;
+  return surface === 'card' ? 'Nobody in voice' : 'Empty';
 }
 
 /**
- * A server's caption: "2 calls live · 3 reading" (§7.1). A server with no lit
- * voice channel but somebody reading reads just "1 reading"; a fully dark
- * server reads "Dark · nobody in".
- *
- * A lit voice channel is "a call", not "a voice channel lit": this caption
- * shares one 276px sidebar row with the window map, and the map takes the
- * first 118px of it whenever a server has eight or more channels. "2 voice
- * channels lit · 3 reading" overruns that row and the plate cuts it mid-word —
- * the count and the noun survive, "reading" does not. "Call" is the product's
- * own word for a lit voice channel everywhere else ("Join the call", the LIVE
- * dot), and it fits.
+ * A text channel nobody is in right now. Not "Empty": its messages are still
+ * there, and "Empty" would say they were not.
  */
-export function buildingCaption(roomsLit: number, readingCount: number): string {
+export function quietTextCaption(): string {
+  return 'Nobody here';
+}
+
+/**
+ * When a voice channel last had somebody in it: "last active 2 h ago" /
+ * "last active just now" / "no calls yet".
+ */
+export function lastLitCaption(lastLitMs: number | null, nowMs: number): string {
+  if (lastLitMs == null) return 'no calls yet';
+  const age = nowMs - lastLitMs;
+  if (age < MINUTE) return 'last active just now';
+  if (age < HOUR) return `last active ${Math.floor(age / MINUTE)} min ago`;
+  if (age < DAY) return `last active ${Math.floor(age / HOUR)} h ago`;
+  return `last active ${Math.floor(age / DAY)} d ago`;
+}
+
+/**
+ * A server's caption, beside its window map: "4 in voice · 3 here" (§7.1). A
+ * server with nobody in voice but somebody in a text channel reads "3 here";
+ * with neither, "Nobody in voice".
+ *
+ * It counts people, not channels, and it leaves out how many are online: the
+ * section label directly above the plate already says "8 online". This caption
+ * shares one 276px sidebar row with the window map, and the map takes the
+ * first 118px of it whenever a server has eight or more channels, so it stays
+ * two short clauses.
+ */
+export function buildingCaption(inVoice: number, readingCount: number): string {
   const parts: string[] = [];
-  if (roomsLit > 0) parts.push(roomsLit === 1 ? '1 call live' : `${roomsLit} calls live`);
+  if (inVoice > 0) parts.push(`${Math.trunc(inVoice)} in voice`);
   if (readingCount > 0) parts.push(readingCaption(readingCount));
-  return parts.length ? parts.join(' · ') : darkRoomCaption('row');
+  return parts.length ? parts.join(' · ') : darkRoomCaption('card');
 }
 
-/** The here-now strip: "4 here · 20 lights on" (§7.2, §7.4). */
+/** The here-now strip: "4 here · 20 online" (§7.2, §7.4). */
 export function hereNowCaption(here: number, lightsOn: number): string {
-  return `${here} here · ${lightsOn} lights on`;
+  return `${here} here · ${lightsOn} online`;
 }
 
-/** The trailing count on an Around-now well: "+17 lights on" (§7.3). */
+/** The trailing count on an Around-now well: "+17 online" (§7.3). */
 export function lightsOnOverflowCaption(count: number): string {
-  return `+${Math.max(0, Math.trunc(count))} lights on`;
+  return `+${Math.max(0, Math.trunc(count))} online`;
 }
 
-/** A building's section meta: "24 in" (§7.1). */
+/** A server's section meta: "24 online" (§7.1). */
 export function litMembersCaption(lightsOn: number): string {
-  return `${Math.max(0, Math.trunc(lightsOn))} in`;
+  return `${Math.max(0, Math.trunc(lightsOn))} online`;
 }
 
 /**

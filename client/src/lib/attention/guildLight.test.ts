@@ -109,7 +109,7 @@ describe('guildLight — the store seam', () => {
     expect(room.talkingCount).toBe(1);
     expect(room.screenSharer?.person.name).toBe('priya');
     expect(building.roomsLit).toBe(1);
-    expect(building.caption).toBe('1 call live');
+    expect(building.caption).toBe('2 in voice');
   });
 
   it('refuses a voice state belonging to another server', () => {
@@ -155,6 +155,19 @@ describe('guildLight — the store seam', () => {
     expect(hidden.rooms.find((room) => room.channelId === 't1')!.readingCount).toBe(0);
   });
 
+  it('counts someone reading a thread as here in the channel that owns it', () => {
+    const base = input();
+    const building = guildLight(
+      input({
+        channels: [...base.channels, { id: 'th1', type: ChannelType.Thread, name: 'follow-ups', position: 5, parent_id: 't1' }],
+        selectedChannelId: 'th1',
+        windowVisible: true,
+      }),
+    );
+    expect(building.rooms.find((room) => room.channelId === 't1')!.readingCount).toBe(1);
+    expect(building.rooms.find((room) => room.channelId === 't2')!.readingCount).toBe(0);
+  });
+
   it('records the call start so a duration counts from what this client saw', () => {
     const history = createLitHistory();
     const participants = new Map([['v1', [voiceState({ user_id: '1' })]]]);
@@ -165,7 +178,7 @@ describe('guildLight — the store seam', () => {
     expect(later.rooms.find((room) => room.channelId === 'v1')!.durationMs).toBe(90_000);
   });
 
-  it('counts only the members whose lights are on', () => {
+  it('counts only the members who are online', () => {
     const building = guildLight(
       input({ getStatus: (userId) => (userId === '1' ? 'online' : 'offline') }),
     );

@@ -25,6 +25,7 @@ export const THEME_IDS = [
   'high-contrast',
   'dusk',
   'paper',
+  'slate',
   'voices',
 ] as const;
 
@@ -35,7 +36,7 @@ export type ThemeId = (typeof THEME_IDS)[number];
  * The server's `DEFAULT_THEME` (crates/paracord-api/src/routes/users.rs) must
  * agree: the client adopts the server's value on first sign-in.
  */
-export const DEFAULT_THEME: ThemeId = 'voices';
+export const DEFAULT_THEME: ThemeId = 'slate';
 
 /**
  * Is this one of ours? The server stores the theme as an opaque string and
@@ -65,17 +66,17 @@ export const LIGHT_THEMES: ReadonlySet<ThemeId> = new Set<ThemeId>(['light', 'pa
  * hue/tint are not applied — `useTheme` removes those inline properties rather
  * than writing them, and Settings shows both controls disabled with the reason.
  */
-export const LOOK_THEMES: ReadonlySet<ThemeId> = new Set<ThemeId>(['dusk', 'paper', 'voices']);
+export const LOOK_THEMES: ReadonlySet<ThemeId> = new Set<ThemeId>(['dusk', 'paper', 'slate', 'voices']);
 
 export type MessageStyle = 'rows' | 'bubbles';
 
 /**
  * How a message is shaped, published as `data-message-style` on <html>.
  *
- * Rows everywhere but Voices, which gives every message its author's colour and
- * needs a bubble to carry it. This is a *shape*, not a density: the compact
+ * Rows everywhere but Slate and Aubergine (id 'voices'), which give every
+ * message its author's colour and need a bubble to carry it. This is a *shape*, not a density: the compact
  * setting is separate and stays server-synced (`data-density`).
  */
 export function messageStyleFor(theme: ThemeId): MessageStyle {
-  return theme === 'voices' ? 'bubbles' : 'rows';
+  return theme === 'slate' || theme === 'voices' ? 'bubbles' : 'rows';
 }

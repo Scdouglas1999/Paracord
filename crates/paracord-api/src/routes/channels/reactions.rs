@@ -196,3 +196,75 @@ pub async fn remove_reaction(
 
     Ok(StatusCode::NO_CONTENT)
 }
+
+#[derive(Deserialize)]
+pub struct ReactionUsersQuery {
+    pub limit: Option<i64>,
+    pub after: Option<String>,
+}
+
+/// People who reacted with this emoji, oldest first.
+pub async fn list_reaction_users(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((channel_id, message_id, emoji)): Path<(i64, i64, String)>,
+    Query(query): Query<ReactionUsersQuery>,
+) -> Result<Json<Value>, ApiError> {
+    if emoji.chars().count() > MAX_REACTION_EMOJI_LEN {
+        return Err(ApiError::BadRequest("emoji is too long".into()));
+    }
+    paracord_util::validation::validate_reaction_emoji(&emoji).map_err(|_| {
+        ApiError::BadRequest(
+            "emoji must be a Unicode emoji or a custom emoji from this space".into(),
+        )
+    })?;
+    let channel = paracord_db::channels::get_channel(&state.db, channel_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    ensure_channel_permissions(
+        &state,
+        &channel,
+        auth.user_id,
+        &[Permissions::VIEW_CHANNEL, Permissions::READ_MESSAGE_HISTORY],
+    )
+    .await?;
+    let message = paracord_db::messages::get_message(&state.db, message_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    if message.channel_id != channel_id {
+        return Err(ApiError::NotFound);
+    }
+
+    let after = match query.after.as_deref() {
+        Some(raw) => Some(
+            raw.parse::<i64>()
+                .map_err(|_| ApiError::BadRequest("Invalid after user id".into()))?,
+        ),
+        None => None,
+    };
+    let limit = query.limit.unwrap_or(100);
+    let users =
+        paracord_db::reactions::list_reaction_users(&state.db, message_id, &emoji, limit, after)
+            .await
+            .map_err(|err| match err {
+                paracord_db::DbError::NotFound => {
+                    ApiError::BadRequest("That reaction cursor is not in this list.".into())
+                }
+                other => ApiError::Internal(anyhow::anyhow!(other.to_string())),
+            })?;
+
+    let body: Vec<Value> = users
+        .into_iter()
+        .map(|user| {
+            json!({
+                "id": user.id.to_string(),
+                "username": user.username,
+                "display_name": user.display_name,
+                "avatar_hash": user.avatar_hash,
+            })
+        })
+        .collect();
+    Ok(Json(Value::Array(body)))
+}

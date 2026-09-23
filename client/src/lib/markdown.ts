@@ -8,6 +8,7 @@ import { parseCustomEmojiToken } from './customEmoji';
 import { CustomEmojiImage } from '../components/ui/ResourceImage';
 import { safeExternalUrl } from './security';
 import CodeBlock from '../components/message/CodeBlock';
+import { RoleMentionChip } from '../components/message/RoleMentionChip';
 
 interface Token {
   type:
@@ -23,13 +24,15 @@ interface Token {
     | 'link'
     | 'br'
     | 'customemoji'
-    | 'mention';
+    | 'mention'
+    | 'rolemention';
   content: string;
   href?: string;
   emojiName?: string;
   emojiId?: string;
   language?: string;
   mentionUserId?: string;
+  mentionRoleId?: string;
 }
 
 
@@ -112,6 +115,16 @@ function tokenizeInline(text: string): Token[] {
             type: 'mention',
             content: remaining.slice(0, closingIndex + 1),
             mentionUserId: userId,
+          });
+          remaining = remaining.slice(closingIndex + 1);
+          continue;
+        }
+        const roleMatch = inner.match(/^@&(\d+)$/);
+        if (roleMatch) {
+          tokens.push({
+            type: 'rolemention',
+            content: remaining.slice(0, closingIndex + 1),
+            mentionRoleId: roleMatch[1],
           });
           remaining = remaining.slice(closingIndex + 1);
           continue;
@@ -346,6 +359,12 @@ function renderInline(text: string, guildId?: string, mentionMap?: Map<string, s
             verticalAlign: 'text-bottom',
             marginInline: '0.05em',
           },
+        });
+      case 'rolemention':
+        return createElement(RoleMentionChip, {
+          key: i,
+          guildId,
+          roleId: token.mentionRoleId ?? '',
         });
       case 'mention': {
         const userId = token.mentionUserId ?? '';
@@ -606,7 +625,11 @@ export function stripMarkdown(text: string): string {
  * their name. `names` is the same id-to-name map the timeline renders mentions
  * with; somebody it does not know is "@someone", never a number.
  */
-export function messagePreviewText(content: string, names?: ReadonlyMap<string, string>): string {
+export function messagePreviewText(
+  content: string,
+  names?: ReadonlyMap<string, string>,
+  roleNames?: ReadonlyMap<string, string>,
+): string {
   return stripMarkdown(
     content
       // A fenced block previews as its code, without the fence or the language tag.
@@ -615,7 +638,7 @@ export function messagePreviewText(content: string, names?: ReadonlyMap<string, 
       .replace(/```[^\s`]*/g, ' '),
   )
     .replace(/<@!?(\d+)>/g, (_match, id: string) => `@${names?.get(id) ?? 'someone'}`)
-    .replace(/<@&\d+>/g, '@role')
+    .replace(/<@&(\d+)>/g, (_match, id: string) => `@${roleNames?.get(id) ?? 'role'}`)
     .replace(/<#\d+>/g, '#channel')
     .replace(/\s+/g, ' ')
     .trim();

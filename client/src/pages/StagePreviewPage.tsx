@@ -59,7 +59,7 @@ const HERE_NOW = {
   people: [MARA, PRIYA, REN, SAM],
   here: 4,
   lightsOn: 20,
-  caption: '4 here · 20 lights on',
+  caption: '4 here · 20 online',
 };
 
 const RIBBON_MESSAGES = [

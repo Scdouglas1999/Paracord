@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 
 import type { StageInstance } from '../../api/stage';
 import type { VoiceState } from '../../types';
-import type { RoomLight } from '../../lib/attention/light';
+import { darkRoomCaption, type RoomLight } from '../../lib/attention/light';
 import { Button, IconButton, Plate, SectionLabel, TextField, Well } from '../../components/ui';
 import { LightCaption, LiveDot, avatarInitials, roomCaptionFor } from '../../components/light';
 import { VoiceConnectionCheckButton } from '../../components/voice/VoiceConnectionCheckButton';
@@ -98,7 +98,7 @@ export function VoiceLobby({
     ? roomCaptionFor(room, { surface: 'card', withLastLit: !room.lit })
     : lit
       ? `${participantCount} in`
-      : "Dark · nobody's in";
+      : darkRoomCaption('card');
 
   const renderParticipant = (p: VoiceState) => (
     <li
@@ -338,8 +338,8 @@ export function VoiceLobby({
           </IconButton>
           <p className="text-label text-text-secondary">
             {isStage
-              ? 'The stage is dark — open it and be the first voice on.'
-              : `${channelName} is dark. Walk in and the window lights up.`}
+              ? 'Nobody is on the stage yet — open it and be the first voice on.'
+              : `Nobody is in ${channelName} yet. Join and start the call.`}
           </p>
         </Well>
       )}

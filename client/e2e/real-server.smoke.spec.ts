@@ -291,7 +291,7 @@ test('real message edits retain readable history after reload', async ({ page, r
     // dismissing whichever is up until neither has appeared for a while.
     await dismissFirstRunOverlays(page);
     const original = 'First version from the real composer';
-    await page.getByPlaceholder('Say something in edit-history', { exact: true }).fill(original);
+    await page.getByPlaceholder('Message #edit-history', { exact: true }).fill(original);
     const creation = page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith(`/channels/${channel.id}/messages`));
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
     const created = await creation; expect(created.status()).toBe(201);

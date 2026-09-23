@@ -279,6 +279,7 @@ describe('messagePreviewText', () => {
     const names = new Map([['360414412240064512', 'Dmitri']]);
     expect(messagePreviewText('<@360414412240064512> dry the filament', names)).toBe('@Dmitri dry the filament');
     expect(messagePreviewText('<@!99> hello <#12> <@&7>')).toBe('@someone hello #channel @role');
+    expect(messagePreviewText('<@&7> review', undefined, new Map([['7', 'Design']]))).toBe('@Design review');
   });
 
   it('is one line of plain words', async () => {

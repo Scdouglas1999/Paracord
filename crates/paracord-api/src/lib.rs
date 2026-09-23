@@ -40,6 +40,7 @@ pub mod secure_tokens;
 
 /// Live counts of the connections this server holds open by design, read by the
 /// shutdown path when its drain deadline expires.
+pub use routes::banners::convert_legacy_hub_banners;
 pub use routes::livekit_proxy::live_voice_signaling_count;
 pub use routes::realtime::live_stream_count;
 
@@ -58,6 +59,8 @@ const DEFAULT_REQUEST_BODY_LIMIT_BYTES: usize = 2 * 1024 * 1024;
 /// the router, which is the safe direction; `resolve_upload_limits` is what
 /// makes lowering the knob actually bound memory.
 const ATTACHMENT_REQUEST_BODY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
+/// 8 MB image plus multipart framing.
+const BANNER_REQUEST_BODY_LIMIT_BYTES: usize = 9 * 1024 * 1024;
 
 /// Wall-clock ceiling on a single HTTP request.
 ///
@@ -261,6 +264,16 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
             get(routes::users::get_user_avatar),
         )
         .route(
+            "/api/v1/users/@me/banner",
+            post(routes::users::upload_banner)
+                .delete(routes::users::delete_banner)
+                .layer(DefaultBodyLimit::max(BANNER_REQUEST_BODY_LIMIT_BYTES)),
+        )
+        .route(
+            "/api/v1/users/{user_id}/banner",
+            get(routes::users::get_user_banner),
+        )
+        .route(
             "/api/v1/users/@me/settings",
             get(routes::users::get_settings).patch(routes::users::update_settings),
         )
@@ -336,6 +349,10 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
             get(routes::channels::list_saved_messages),
         )
         .route(
+            "/api/v1/users/@me/reminders",
+            get(routes::reminders::list_my_reminders),
+        )
+        .route(
             "/api/v1/users/@me/saved-messages/{message_id}",
             put(routes::channels::save_message).delete(routes::channels::remove_saved_message),
         )
@@ -356,6 +373,10 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
             get(routes::guilds::get_channels)
                 .post(routes::channels::create_channel)
                 .patch(routes::guilds::update_channel_positions),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/messages/search",
+            get(routes::guild_search::search_guild_messages),
         )
         .route(
             "/api/v1/guilds/{guild_id}/channels/visible",
@@ -403,6 +424,10 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
             get(routes::sports::get_game),
         )
         .route(
+            "/api/v1/guilds/{guild_id}/sports/standings/{sport}/{league}",
+            get(routes::sports::get_standings),
+        )
+        .route(
             "/api/v1/guilds/{guild_id}/members/@me",
             put(routes::members::join_public_guild).delete(routes::members::leave_guild),
         )
@@ -444,7 +469,22 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
         )
         .route(
             "/api/v1/guilds/{guild_id}/stickers/{sticker_id}",
-            delete(routes::stickers::delete_sticker),
+            patch(routes::stickers::update_sticker).delete(routes::stickers::delete_sticker),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/banner",
+            get(routes::guilds::get_guild_banner)
+                .post(routes::guilds::upload_guild_banner)
+                .delete(routes::guilds::delete_guild_banner)
+                .layer(DefaultBodyLimit::max(BANNER_REQUEST_BODY_LIMIT_BYTES)),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/attachments",
+            get(routes::gallery::list_guild_attachments),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/feed",
+            get(routes::server_feed::get_server_feed),
         )
         .route(
             "/api/v1/guilds/{guild_id}/stickers/{sticker_id}/image",
@@ -671,6 +711,14 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
         .route(
             "/api/v1/channels/{channel_id}/messages/{message_id}/reactions/{emoji}/@me",
             put(routes::channels::add_reaction).delete(routes::channels::remove_reaction),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/messages/{message_id}/reactions/{emoji}",
+            get(routes::channels::list_reaction_users),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/messages/{message_id}/reminder",
+            put(routes::reminders::put_reminder).delete(routes::reminders::delete_reminder),
         )
         .route(
             "/api/v1/channels/{channel_id}/webhooks",
@@ -952,8 +1000,13 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
         // Files
         .route(
             "/api/v1/channels/{channel_id}/attachments",
-            post(routes::files::upload_file)
+            get(routes::gallery::list_channel_attachments)
+                .post(routes::files::upload_file)
                 .layer(DefaultBodyLimit::max(ATTACHMENT_REQUEST_BODY_LIMIT_BYTES)),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/links",
+            get(routes::gallery::list_channel_links),
         )
         .route(
             "/api/v1/attachments/{id}",
@@ -1581,14 +1634,18 @@ pub fn spawn_http_rate_limiter_cleanup(shutdown: Arc<Notify>) {
 /// once a handler has returned, a streaming body (SSE, `download_backup`) runs
 /// to completion on its own, so this list covers handlers that are slow before
 /// they respond, not responses that are slow to drain.
-fn request_timeout_exempt(path: &str) -> bool {
+fn request_timeout_exempt(method: &Method, path: &str) -> bool {
     if path == "/livekit" || path.starts_with("/livekit/") {
         return true;
+    }
+    // The same template also serves the media gallery listing, which is
+    // ordinary server work and stays bounded.
+    if path == "/api/v1/channels/{channel_id}/attachments" {
+        return method == Method::POST;
     }
     matches!(
         path,
         "/api/v2/rt/events"
-            | "/api/v1/channels/{channel_id}/attachments"
             | "/api/v1/channels/{channel_id}/summary"
             | "/api/v1/federated-files/{origin_server}/{attachment_id}"
             | "/api/v1/admin/backup"
@@ -1607,7 +1664,7 @@ async fn request_timeout_middleware(timeout: Duration, req: Request, next: Next)
         .map(axum::extract::MatchedPath::as_str)
         .unwrap_or_else(|| req.uri().path())
         .to_string();
-    if request_timeout_exempt(&path) {
+    if request_timeout_exempt(req.method(), &path) {
         return next.run(req).await;
     }
 
@@ -2060,6 +2117,8 @@ mod embeddable_resource_tests {
     fn every_resource_a_webview_embeds_is_readable_cross_origin() {
         for path in [
             "/api/v1/users/357911791646281728/avatar",
+            "/api/v1/users/357911791646281728/banner",
+            "/api/v1/guilds/1/banner",
             "/api/v1/guilds/1/emojis/2/image",
             "/api/v1/guilds/1/stickers/2/image",
             "/api/v1/attachments/357913100403347456",
@@ -2084,6 +2143,9 @@ mod embeddable_resource_tests {
             (Method::GET, "/api/v1/attachments/1/metadata"),
             (Method::GET, "/api/v1/users/1/avatar/raw"),
             (Method::POST, "/api/v1/users/@me/avatar"),
+            (Method::POST, "/api/v1/users/@me/banner"),
+            (Method::GET, "/api/v1/channels/1/attachments"),
+            (Method::GET, "/api/v1/guilds/1/attachments"),
             (Method::DELETE, "/api/v1/attachments/1"),
         ] {
             assert!(

@@ -125,12 +125,12 @@ describe('WindowMap', () => {
       text({ typingUserIds: ['1'], order: 2 }),
     ];
     const { container } = render(
-      <WindowMap windows={building(rooms).windows} caption="1 call live · 1 reading" />,
+      <WindowMap windows={building(rooms).windows} caption="1 in voice · 1 here" />,
     );
     expect(container.querySelectorAll('.pc-window')).toHaveLength(3);
     expect(container.querySelectorAll('.pc-window.is-talking')).toHaveLength(1);
     expect(container.querySelectorAll('.pc-window.is-reading')).toHaveLength(1);
-    expect(screen.getByText('1 call live · 1 reading')).toBeTruthy();
+    expect(screen.getByText('1 in voice · 1 here')).toBeTruthy();
   });
 
   it('never draws more than eight per row', () => {
@@ -151,7 +151,7 @@ describe('WindowMap', () => {
     );
     const built = building(rooms);
     render(<WindowMap windows={built.windows} overflowCount={built.overflowCount} />);
-    expect(screen.getByText(/0 of 20 channels lit, 4 more not shown/)).toBeTruthy();
+    expect(screen.getByText(/0 of 20 channels active, 4 more not shown/)).toBeTruthy();
   });
 });
 
@@ -177,14 +177,14 @@ describe('BuildingPlate', () => {
 
   it('shows the server caption', () => {
     render(<BuildingPlate building={building([voice({ occupants: [{ person: MARA }] })])} />);
-    expect(screen.getAllByText('1 call live').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('1 in voice').length).toBeGreaterThan(0);
   });
 });
 
 describe('RoomThumbnail', () => {
-  it('says the room is dark rather than drawing a black rectangle', () => {
+  it('says the channel is empty rather than drawing a black rectangle', () => {
     render(<RoomThumbnail room={voice()} />);
-    expect(screen.getByText('Dark · nobody in')).toBeTruthy();
+    expect(screen.getByText('Empty')).toBeTruthy();
   });
 
   it('shows the LIVE dot and the label for a lit room it cannot sample', () => {
@@ -230,13 +230,13 @@ describe('HereNowStrip', () => {
     people: [MARA, PRIYA],
     here: 2,
     lightsOn: 20,
-    caption: '2 here · 20 lights on',
+    caption: '2 here · 20 online',
   };
 
   it('reads as a sentence, not a member list', () => {
     render(<HereNowStrip hereNow={hereNow} context="in Shop floor" />);
     expect(screen.getByText('2 here')).toBeTruthy();
-    expect(screen.getByText(/20 lights on/)).toBeTruthy();
+    expect(screen.getByText(/20 online/)).toBeTruthy();
   });
 
   it('opens the people sheet — the only full list in the product', () => {
@@ -252,10 +252,10 @@ describe('HereNowStrip', () => {
 
   it('invites you to speak rather than saying "No data"', () => {
     render(
-      <HereNowStrip hereNow={{ people: [], here: 0, lightsOn: 0, caption: '0 here · 0 lights on' }} />,
+      <HereNowStrip hereNow={{ people: [], here: 0, lightsOn: 0, caption: '0 here · 0 online' }} />,
     );
     fireEvent.click(screen.getByRole('button'));
-    expect(screen.getByText(/say something and the channel lights up/)).toBeTruthy();
+    expect(screen.getByText('Nobody is here yet.')).toBeTruthy();
   });
 });
 
@@ -336,19 +336,19 @@ describe('LiveDot and LightCaption', () => {
 
   it('words a room for the surface it is on', () => {
     const dark = voice();
-    expect(roomCaptionFor(dark)).toBe('Dark · nobody in');
-    expect(roomCaptionFor(dark, { surface: 'card' })).toBe("Dark · nobody's in");
+    expect(roomCaptionFor(dark)).toBe('Empty');
+    expect(roomCaptionFor(dark, { surface: 'card' })).toBe('Nobody in voice');
     expect(
       roomCaptionFor({ ...dark, lastLitMs: NOW - 7_200_000 }, {
         surface: 'card',
         withLastLit: true,
         nowMs: NOW,
       }),
-    ).toBe("Dark · nobody's in · last lit 2 h ago");
+    ).toBe('Nobody in voice · last active 2 h ago');
     expect(
       roomCaptionFor(voice({ occupants: [{ person: MARA, speaking: true }] })),
     ).toBe('1 talking');
-    expect(roomCaptionFor(text({ typingUserIds: ['1', '2'] }))).toBe('2 reading');
+    expect(roomCaptionFor(text({ typingUserIds: ['1', '2'] }))).toBe('2 here');
   });
 
   it('renders captions in the meta ink', () => {
@@ -376,7 +376,7 @@ describe('no light component hard-codes a colour', () => {
         <RoomThumbnail room={rooms[0]} height={168} />
         <RoomThumbnail room={rooms[1]} />
         <HereNowStrip
-          hereNow={{ people: [MARA, PRIYA], here: 2, lightsOn: 20, caption: '2 here · 20 lights on' }}
+          hereNow={{ people: [MARA, PRIYA], here: 2, lightsOn: 20, caption: '2 here · 20 online' }}
         />
         <OnAirPill
           onAir={{

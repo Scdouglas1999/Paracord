@@ -27,6 +27,7 @@ import {
   TrendingUp,
   Settings,
   Users,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router';
 import { extractApiError } from '../../api/client';
@@ -514,6 +515,7 @@ function OwnedTopBar({
     // the panel still opens (§6.5, §7.6). A 1:1 DM's "list" is the one person
     // already named in the header strip.
     ...(isGroupDm ? [{ label: 'People in this message', icon: <Users size={17} />, action: panelToggle('recipients') }] : []),
+    ...(!isDM ? [{ label: 'Media', icon: <ImageIcon size={17} />, action: panelToggle('media') }] : []),
     ...(!isDM ? [{ label: 'Server leaderboard', icon: <TrendingUp size={17} />, action: panelToggle('economy') }] : []),
     ...(canOpenSpaceSettings && resolvedGuildId ? [{ label: 'Server settings', icon: <Settings size={17} />, action: openSpaceSettings }] : []),
     { label: '', action: () => {}, divider: true },
@@ -524,6 +526,7 @@ function OwnedTopBar({
     pins: { label: 'Pinned messages', icon: Pin, onClose: panelToggle('pins') },
     threads: { label: 'Threads', icon: MessagesSquare, onClose: panelToggle('threads') },
     economy: { label: 'Server leaderboard', icon: TrendingUp, onClose: panelToggle('economy') },
+    media: { label: 'Media', icon: ImageIcon, onClose: panelToggle('media') },
     recipients: { label: 'People in this message', icon: Users, onClose: panelToggle('recipients') },
   };
   const activeSurface: ActiveHeaderSurface | undefined = showSummary
@@ -577,15 +580,17 @@ function OwnedTopBar({
             {dm.peer ? (
               <LitAvatar person={dm.peer} size={32} hideLabel className="chat-header-avatar" />
             ) : (
-              <span
-                ref={roomWindowRef}
-                className={cn(
-                  'pc-window h-2.5 w-2.5 shrink-0',
-                  roomIsLit && 'is-reading',
-                  roomWriting && 'is-writing',
-                )}
-                aria-hidden
-              />
+              <span className={cn('pc-window-breath shrink-0', roomWriting && 'is-writing')} aria-hidden>
+                <span
+                  ref={roomWindowRef}
+                  className={cn(
+                    'pc-window h-2.5 w-2.5 shrink-0',
+                    roomIsLit && 'is-reading',
+                    roomWriting && 'is-writing',
+                  )}
+                  aria-hidden
+                />
+              </span>
             )}
             <div className="flex min-w-0 flex-col">
               <span className="chat-header-dm-name pc-display truncate text-[20px] font-bold leading-tight tracking-[-0.01em] text-text-primary">
@@ -608,15 +613,17 @@ function OwnedTopBar({
             {/* The room's own window: amber when people are reading it, white
                 when it is a voice room with people in it, dark when nobody is
                 there. The counts beside it are the words that go with it. */}
-            <span
-              ref={roomWindowRef}
-              className={cn(
-                'pc-window h-2.5 w-2.5 shrink-0',
-                roomIsLit && (roomIsVoice ? 'is-talking' : 'is-reading'),
-                roomWriting && 'is-writing',
-              )}
-              aria-hidden
-            />
+            <span className={cn('pc-window-breath shrink-0', roomWriting && 'is-writing')} aria-hidden>
+              <span
+                ref={roomWindowRef}
+                className={cn(
+                  'pc-window h-2.5 w-2.5 shrink-0',
+                  roomIsLit && (roomIsVoice ? 'is-talking' : 'is-reading'),
+                  roomWriting && 'is-writing',
+                )}
+                aria-hidden
+              />
+            </span>
             <div className="flex min-w-0 flex-col">
               {resolvedGuildId ? (
                 <ChannelSwitcher
@@ -683,19 +690,19 @@ function OwnedTopBar({
             <HereNowStrip
               hereNow={dm.hereNow}
               everyone={dm.people}
-              context={`reading ${dm.name}`}
+              context={`in ${dm.name}`}
               className="hidden md:block"
               caption={
                 <>
                   <RollingNumber
                     className="font-semibold text-text-primary"
                     value={dm.hereNow.here}
-                    format={(count) => `${count} reading`}
+                    format={(count) => `${count} here`}
                   />
                   {' · '}
                   <RollingNumber
                     value={dm.hereNow.lightsOn}
-                    format={(count) => `${count} lights on`}
+                    format={(count) => `${count} online`}
                     announce={false}
                   />
                 </>
@@ -704,25 +711,24 @@ function OwnedTopBar({
           )
         ) : (
           !isVoice && (
-            // §7.4: a text room's strip says what being there means — "5
-            // reading · 19 lights on" — not the Stage's "N here".
+            // §7.4: a text channel's strip — "5 here · 19 online".
             <HereNowStrip
               hereNow={hereNow}
-              context={`reading ${channelName ?? 'this channel'}`}
+              context={`in ${channelName ?? 'this channel'}`}
               className="hidden md:block"
               caption={
-                // §5.1 "numbers re-roll": these two change when somebody starts
-                // or stops reading the room, which is a thing a person did.
+                // §5.1 "numbers re-roll": these two change when somebody comes
+                // into the channel or leaves it, which is a thing a person did.
                 <>
                   <RollingNumber
                     className="font-semibold text-text-primary"
                     value={hereNow.here}
-                    format={(count) => `${count} reading`}
+                    format={(count) => `${count} here`}
                   />
                   {' · '}
                   <RollingNumber
                     value={hereNow.lightsOn}
-                    format={(count) => `${count} lights on`}
+                    format={(count) => `${count} online`}
                     announce={false}
                   />
                 </>

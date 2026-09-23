@@ -17,7 +17,7 @@ import { SidebarSearch } from './SidebarSearch';
  *
  *   search well (⌘K)
  *   Home · Messages, with their counts
- *   per building, brightest first: "Kestrel Robotics · 24 in", the window-map
+ *   per building, brightest first: "Kestrel Robotics · 24 online", the window-map
  *     plate, then its rooms as rows
  *   Add a building
  *   the footer slot — the account plate, and the call dock while you are in one

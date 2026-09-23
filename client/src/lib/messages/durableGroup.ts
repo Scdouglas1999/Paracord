@@ -1,5 +1,5 @@
 import type { PreparedDeliveryEdit } from './durableEdit';
-import type { Message, MessageE2eePayload, SendMessageRequest } from '../../types';
+import type { ForwardedFromRequest, Message, MessageE2eePayload, SendMessageRequest } from '../../types';
 import type { AccountVault, VaultTransaction } from '../crypto/accountVault';
 import {
   buildSenderKeyEnvelopes,
@@ -35,6 +35,7 @@ interface SendBinding {
   membersVersion?: string;
   epoch: number;
   referencedMessageId?: string;
+  forwardedFrom?: ForwardedFromRequest;
 }
 
 /** The server client this account's group key distribution speaks to. */
@@ -77,6 +78,7 @@ export function createDurableGroup(
     referencedMessageId?: string,
     attachments: readonly EncryptedAttachmentDescriptor[] = [],
     membersVersion?: string,
+    forwardedFrom?: ForwardedFromRequest,
   ): Promise<SendMessageRequest> {
     const local = await ensureLocalSenderKey(transaction, channelId, members, myUserId);
     if (pendingDistribution(local, members, myUserId).length > 0) {
@@ -88,12 +90,13 @@ export function createDurableGroup(
     const body = attachments.length ? encodeEncryptedBodyWithinBudget({ text: content, attachments }) : content;
     const e2ee = await sealGroupMessage(channelId, body, myUserId, privateKey, local);
     transaction.put(SEND_BINDING_NAMESPACE, nonce, {
-      channelId, members: [...members], membersVersion, epoch: local.epoch, referencedMessageId,
+      channelId, members: [...members], membersVersion, epoch: local.epoch, referencedMessageId, forwardedFrom,
     } satisfies SendBinding);
     transaction.put(PLAINTEXT_NAMESPACE, await cacheId(channelId, e2ee), { content: body });
     return {
       nonce, content: '', e2ee, referenced_message_id: referencedMessageId,
       ...(attachments.length ? { attachment_ids: attachments.map(attachment => attachment.id) } : {}),
+      ...(forwardedFrom ? { forwarded_from: forwardedFrom } : {}),
     };
   }
 
@@ -207,7 +210,7 @@ export function createDurableGroup(
       const attachments = await collectUploadedDescriptors(transaction, intent.id);
       const members = live?.members ?? intent.intent.encryption.members;
       return build(transaction, intent.nonce, intent.channelId, members, intent.draft.content,
-        intent.intent.referencedMessageId, attachments, live?.membersVersion);
+        intent.intent.referencedMessageId, attachments, live?.membersVersion, intent.intent.forwardedFrom);
     },
     async prepare(channelId: string, members: GroupMember[], content: string, referencedMessageId?: string, membersVersion?: string | null) {
       await distribute(channelId, members, membersVersion);
@@ -228,7 +231,7 @@ export function createDurableGroup(
       return {
         ...metadata, id: nonce, nonce, draft: { content }, revision: crypto.randomUUID(),
         status: 'pending', attempts: 0, error: null, nextAttemptAt: original.retryAfterAt ?? 0,
-        intent: { encryption: { kind: 'group', members: binding.members }, referencedMessageId: binding.referencedMessageId },
+        intent: { encryption: { kind: 'group', members: binding.members }, referencedMessageId: binding.referencedMessageId, forwardedFrom: binding.forwardedFrom },
       };
     },
     async prepareEdit(transaction: VaultTransaction, original: DurableSend, messageId: string, editNonce: string, content: string): Promise<PreparedDeliveryEdit> {

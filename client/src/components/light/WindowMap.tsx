@@ -11,7 +11,7 @@ export interface WindowMapProps extends Omit<React.HTMLAttributes<HTMLDivElement
   windows: readonly BuildingWindow[];
   /** Rooms that did not fit — folded into the caption, never into a third row. */
   overflowCount?: number;
-  /** "2 rooms lit · 3 reading". Rendered at the end of the map. */
+  /** "4 in voice · 3 here". Rendered at the end of the map. */
   caption?: string;
   /** 10×13 in the sidebar (default), 12×16 on Home (§3). */
   scale?: 'sidebar' | 'home';
@@ -27,8 +27,8 @@ const CELL = {
 /**
  * WindowMap — one window per room (docs/lantern-stage-spec.md §3, §8).
  *
- * White = somebody is talking in there, amber = somebody is reading, dark =
- * empty. Rooms are already ordered by `buildingLight` (voice first, then text
+ * White = somebody is in the voice channel, amber = somebody is in the text
+ * channel, dark = empty. Rooms are already ordered by `buildingLight` (voice first, then text
  * by activity); **at most two rows of eight**, and everything past the
  * sixteenth window collapses into the caption. A window map that scrolls is a
  * chart, not a building.
@@ -88,7 +88,7 @@ export const WindowMap = React.forwardRef<HTMLDivElement, WindowMapProps>(functi
             // "No rooms yet" is a claim, and a building whose rooms have not
             // been fetched has not earned it.
             (caption ?? 'No channels yet')
-          : `${lit.length} of ${windows.length + overflowCount} channels lit${
+          : `${lit.length} of ${windows.length + overflowCount} channels active${
               overflowCount > 0 ? `, ${overflowCount} more not shown` : ''
             }${caption ? `. ${caption}` : ''}`}
       </span>

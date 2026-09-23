@@ -6,7 +6,7 @@ import { useRoomThumbnail } from '../../hooks/useRoomThumbnail';
 import { getIdentityColor } from '../../lib/colors';
 import { guildInitials, resolveGuildIconUrl } from '../../lib/guildIcon';
 import { cn } from '../../lib/utils';
-import type { BuildingLight, RoomLight } from '../../lib/attention/light';
+import { litMembersCaption, type BuildingLight, type RoomLight } from '../../lib/attention/light';
 import { roomActivityLine, textRoomCaption } from './homeCaptions';
 import { activeTextRoom, isLitBuilding, litTextRooms } from './homeModel';
 
@@ -143,7 +143,7 @@ function QuietBuildingRow({ building, mentions, onOpenBuilding, onOpenRoom }: Ho
           <TextRoomLine building={building} room={textRoom} mentions={mentions.get(textRoom.key) ?? 0} onOpenRoom={onOpenRoom} />
         ) : (
           <p className="py-1 text-meta text-text-muted">
-            {building.lightsOn > 0 ? `${building.lightsOn} around` : 'Quiet for now'}
+            {building.lightsOn > 0 ? litMembersCaption(building.lightsOn) : 'Nobody online'}
           </p>
         )}
       </div>

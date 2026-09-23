@@ -3,14 +3,14 @@ import { cn } from '../../lib/utils';
 
 export interface SectionLabelProps extends React.HTMLAttributes<HTMLDivElement> {
   /**
-   * Right-hand meta — "24 in", "2 rooms lit". Kept in the Meta ink so the label
+   * Right-hand meta — "24 online", "4 in voice". Kept in the Meta ink so the label
    * itself stays the louder half.
    */
   meta?: React.ReactNode;
 }
 
 /**
- * SectionLabel — "Kestrel Robotics · 24 in" (spec §2 Section step, §6.8).
+ * SectionLabel — "Kestrel Robotics · 24 online" (spec §2 Section step, §6.8).
  *
  * **Sentence case, never uppercase.** No tracking. It is a quiet signpost, not
  * a heading: if the words need to shout, they belong in a Heading instead.

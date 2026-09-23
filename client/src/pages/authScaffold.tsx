@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { AlertCircle, CheckCircle2 } from 'lucide-react';
+import { AppMark } from '../components/brand/AppMark';
 import { cn } from '../lib/utils';
 
 /**
@@ -14,46 +15,8 @@ import { cn } from '../lib/utils';
  * the building is dark until somebody is in it.
  */
 
-/**
- * The app mark: a solid emerald tile with two interlocking links, a nod to the
- * server-to-server nature of the thing. Solid, because a gradient across a
- * surface is a kill-list item (§6.2) and the emerald already means "Paracord".
- */
-export function AppMark({ size = 44, className }: { size?: number; className?: string }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 44 44"
-      fill="none"
-      role="img"
-      aria-label="Paracord"
-      className={cn('shrink-0', className)}
-    >
-      <rect width="44" height="44" rx="12" fill="var(--accent-primary)" />
-      <rect
-        x="9.5"
-        y="15"
-        width="16"
-        height="14"
-        rx="7"
-        stroke="var(--text-on-accent)"
-        strokeWidth="3"
-        opacity="0.92"
-      />
-      <rect
-        x="18.5"
-        y="15"
-        width="16"
-        height="14"
-        rx="7"
-        stroke="var(--text-on-accent)"
-        strokeWidth="3"
-        opacity="0.55"
-      />
-    </svg>
-  );
-}
+/** The app mark, re-exported for the entry surfaces that import it from here. */
+export { AppMark };
 
 /**
  * Full-page canvas: the street (`--bg-base`), flat and matte.
@@ -200,7 +163,7 @@ export function AuthHeading({
 }) {
   return (
     <div className={cn(align === 'center' && 'flex flex-col items-center text-center')}>
-      {mark && <AppMark size={40} className="mb-4" />}
+      {mark && <AppMark size={48} className="mb-3" />}
       <h1 className="pc-display text-title text-text-primary">{title}</h1>
       {subtitle && (
         <p

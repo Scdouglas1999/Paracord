@@ -23,6 +23,7 @@ use crate::routes::mod_log;
 // other callers are unchanged.
 mod capabilities;
 mod forums;
+mod forwards;
 mod messages;
 mod pins;
 mod polls;
@@ -32,6 +33,7 @@ mod threads;
 
 pub use capabilities::*;
 pub use forums::*;
+pub use forwards::*;
 pub use messages::*;
 pub use pins::*;
 pub use polls::*;
@@ -101,7 +103,7 @@ const MAX_FORUM_SEARCH_POSTS: usize = 250;
 
 use paracord_util::validation::{contains_dangerous_markup, validate_visible_label};
 
-fn parse_optional_datetime_param(
+pub(crate) fn parse_optional_datetime_param(
     raw: Option<&str>,
     end_of_day_for_date_only: bool,
 ) -> Result<Option<DateTime<Utc>>, ApiError> {
@@ -848,6 +850,7 @@ fn build_message_json(
         "anonymous": anonymous_json,
         "expires_at": expires_at,
         "webhook_id": webhook_id.map(|id| id.to_string()),
+        "forwarded_from": forwarded_from_json(msg.forwarded_from.as_deref()),
     })
 }
 

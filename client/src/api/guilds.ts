@@ -1,13 +1,15 @@
 import type { RestClient } from './restClient';
 import type { AxiosRequestConfig } from 'axios';
 import { getApi as getActiveApi } from './activeClient';
-import { responseContract } from './responseContracts';
-import { isGuildDetail, isGuildInvite, isGuildInviteList, isGuildSummaryList, isOwnershipTransferResponse } from './generated/validators';
+import { hasListField, responseContract } from './responseContracts';
+import { isGuildDetail, isGuildInvite, isGuildInviteList, isGuildSummaryList, isOwnershipTransferResponse } from './contractValidators';
 import type { UpdateGuildRequest } from './generated/UpdateGuildRequest';
 import type { CreateInviteRequest } from './generated/CreateInviteRequest';
+import type { GuildSearchParams } from '../lib/search/query';
 import type {
   Channel,
   Member,
+  Message,
   Role,
   Ban,
   AuditLogEntry,
@@ -52,10 +54,44 @@ export interface Sticker {
   guild_id: string;
   name: string;
   description?: string | null;
+  tags?: string[];
   format_type: number;
   creator_id?: string | null;
   image_url?: string | null;
   created_at: string;
+}
+
+export interface GuildMessageSearchHit {
+  message: Message;
+  channel_id: string;
+  channel_name: string;
+  thread_parent_id?: string | null;
+}
+
+export interface GuildMessageSearchResponse {
+  total: number;
+  messages: GuildMessageSearchHit[];
+}
+
+/** `GET /guilds/{id}/messages/search`: the typed filters plus a page. */
+export interface GuildMessageSearchParams extends GuildSearchParams {
+  limit?: number;
+  offset?: number;
+}
+
+function guildMessageSearchQuery(params: GuildMessageSearchParams): string {
+  const query = new URLSearchParams();
+  if (params.q) query.set('q', params.q);
+  if (params.author_id) query.set('author_id', params.author_id);
+  if (params.channel_id) query.set('channel_id', params.channel_id);
+  for (const value of params.has ?? []) query.append('has', value);
+  if (params.mentions) query.set('mentions', params.mentions);
+  if (params.pinned != null) query.set('pinned', params.pinned ? 'true' : 'false');
+  if (params.before) query.set('before', params.before);
+  if (params.after) query.set('after', params.after);
+  if (params.limit != null) query.set('limit', String(params.limit));
+  if (params.offset) query.set('offset', String(params.offset));
+  return query.toString();
 }
 
 export function createGuildApi(getApi: () => RestClient) {
@@ -158,11 +194,12 @@ export function createGuildApi(getApi: () => RestClient) {
     listStickers: async (guildId: string) => getApi().get<Sticker[]>(`/guilds/${guildId}/stickers`),
     createSticker: async (
       guildId: string,
-      payload: { name: string; description?: string; file: File },
+      payload: { name: string; description?: string; tags?: string; file: File },
     ) => {
       const formData = new FormData();
       formData.append('name', payload.name);
       if (payload.description) formData.append('description', payload.description);
+      if (payload.tags) formData.append('tags', payload.tags);
       formData.append('image', payload.file);
       // Without an explicit multipart content type axios re-encodes the
       // FormData as JSON (the client's declared default), which loses the
@@ -173,6 +210,26 @@ export function createGuildApi(getApi: () => RestClient) {
     },
     deleteSticker: async (guildId: string, stickerId: string) =>
       getApi().delete(`/guilds/${guildId}/stickers/${stickerId}`),
+
+    searchMessages: async (guildId: string, params: GuildMessageSearchParams) =>
+      responseContract(
+        getApi().get<unknown>(`/guilds/${guildId}/messages/search?${guildMessageSearchQuery(params)}`),
+        hasListField<GuildMessageSearchResponse>('messages'),
+        'message search',
+      ),
+    updateSticker: async (
+      guildId: string,
+      stickerId: string,
+      payload: { name?: string; tags?: string[] },
+    ) => getApi().patch<Sticker>(`/guilds/${guildId}/stickers/${stickerId}`, payload),
+    uploadBanner: async (guildId: string, file: File) => {
+      const formData = new FormData();
+      formData.append('banner', file);
+      return getApi().post<{ banner_hash?: string | null }>(`/guilds/${guildId}/banner`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+    },
+    deleteBanner: async (guildId: string) => getApi().delete(`/guilds/${guildId}/banner`),
   };
 }
 

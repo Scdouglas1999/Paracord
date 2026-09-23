@@ -5,7 +5,7 @@ import { getAccountChannelView } from '../../lib/channelView';
 import { isGroupDm, pendingGroupMembers, runtimeAttachDecision, runtimeSendDecision } from '../../lib/messages/messagingReadiness';
 import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
 import { entityScopeKey as memberScopeKey, type AccountScope } from '../../lib/serverScope';
-import { useState, useRef, useEffect, useMemo, useCallback, lazy, Suspense } from 'react';
+import { Fragment, useState, useRef, useEffect, useMemo, useCallback, lazy, Suspense } from 'react';
 
 // §5.3: one reduced-motion switch for the whole app — lib/motion is the only
 // JavaScript motion engine; the composer's enter/exit surfaces are CSS.
@@ -39,13 +39,16 @@ import { useCommandStore } from '../../stores/commandStore';
 import { useInteractionStore, type AutocompleteChoice } from '../../stores/interactionStore';
 import { useConversationActions } from '../../hooks/useConversationActions';
 import { captureScopedOperation } from '../../lib/operationContext';
-import type { Message } from '../../types';
+import type { Message, Role } from '../../types';
+import { Permissions, hasPermission } from '../../types';
+import { usePermissions } from '../../hooks/usePermissions';
+import { fetchGuildRoles } from '../../lib/permissionDataCache';
+import { roleColorToHex } from '../../lib/colors';
 import { isAllowedImageMimeType } from '../../lib/security';
 import { formatFileSize, toDatetimeLocalValue } from '../../lib/formatters';
 import { toast } from '../../stores/toastStore';
 import { extractApiError } from '../../api/client';
 import { displayName } from '../../lib/displayName';
-import { useConversationReaders, useSelfUser } from './messageLight';
 
 const EmojiPicker = lazy(() =>
   import('../ui/EmojiPicker').then((m) => ({ default: m.EmojiPicker })),
@@ -64,10 +67,11 @@ interface MessageInputProps {
   replyingTo?: { id: string; author: string; content: string } | null;
   onCancelReply?: () => void;
   /**
-   * What `channelName` names. A one-to-one DM is a person, everything else is a
-   * room — it only changes the preposition, never the behaviour.
+   * What `channelName` names: a server channel ("Message #general"), a group
+   * DM or a person ("Message Mara"). It only changes the words, never the
+   * behaviour.
    */
-  conversationKind?: 'room' | 'person';
+  conversationKind?: 'channel' | 'group' | 'person';
   /**
    * WP3 (spec §7.2, §8), additive: `ribbon` is the composer inside the Stage's
    * chat ribbon — 42px instead of 50, a short "Say something" that fits the
@@ -123,41 +127,27 @@ const POLL_DURATION_OPTIONS = [
 ];
 
 /**
- * The composer's invitation (docs/lantern-stage-spec.md §7.4, §6.9).
- *
- * It names the people who will actually read this — "Say something to the 5
- * people reading" — and falls back to the room when nobody else is here. Never
- * "Message #channel": a room is people, and the copy says so.
- *
- * `readingOthers` excludes you. You are always reading the room you have open,
- * so counting yourself would mean the fallback never appeared and a room you
- * are alone in would invite you to talk to yourself.
+ * The composer's placeholder: "Message #general", "Message Mara"
+ * (docs/server-home-spec.md, "Plain words").
  */
 export function composerPlaceholder(
-  readingOthers: number,
   name?: string | null,
-  kind: 'room' | 'person' = 'room',
+  kind: 'channel' | 'group' | 'person' = 'channel',
   compact = false,
 ): string {
-  // A phone's composer is about 230px of text. The full invitation needs nearly
-  // 300, and a placeholder cannot wrap, so it arrived cut off mid-phrase — "Say
-  // something to the 1". The short form still names who is there; a channel's
-  // name is dropped because there is no telling how long one is.
-  if (compact) {
-    if (readingOthers > 0) {
-      return readingOthers === 1 ? 'Say something to 1 person' : `Say something to ${readingOthers} people`;
-    }
-    return 'Say something';
-  }
-  if (readingOthers > 0) {
-    return readingOthers === 1
-      ? 'Say something to the 1 person reading'
-      : `Say something to the ${readingOthers} people reading`;
-  }
-  if (!name) return 'Say something here';
-  // You say something *in* a room and *to* a person.
-  return kind === 'person' ? `Say something to ${name}` : `Say something in ${name}`;
+  if (!name) return GENERIC_PLACEHOLDER;
+  const full = kind === 'channel' ? `Message #${name}` : `Message ${name}`;
+  // A phone's composer is about 230px of text and a placeholder cannot wrap,
+  // so a long name would arrive cut off mid-word. There is no telling how long
+  // a name is, so past what fits the short form drops it.
+  if (compact && full.length > COMPACT_PLACEHOLDER_MAX) return GENERIC_PLACEHOLDER;
+  return full;
 }
+
+const GENERIC_PLACEHOLDER = 'Write a message';
+
+/** What fits a phone's composer at the body size, with room to spare. */
+const COMPACT_PLACEHOLDER_MAX = 26;
 
 function canPreviewImageFile(file: File): boolean {
   return isAllowedImageMimeType(file.type);
@@ -362,7 +352,7 @@ export function MessageInput(props: MessageInputProps) {
   return <OwnedMessageInput key={memberScopeKey(scope, props.channelId)} {...props} scope={scope} messageStore={messageStore} />;
 }
 
-function OwnedMessageInput({ channelId, guildId, channelName, conversationKind = 'room', replyingTo, onCancelReply, variant = 'default', narrow = false, scope, messageStore }: MessageInputProps & {
+function OwnedMessageInput({ channelId, guildId, channelName, conversationKind = 'channel', replyingTo, onCancelReply, variant = 'default', narrow = false, scope, messageStore }: MessageInputProps & {
   scope: AccountScope;
   messageStore: ReturnType<typeof useCurrentMessageStoreApi>;
 }) {
@@ -438,17 +428,8 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
   const canCreatePoll = actions.poll.allowed;
   const canSendMessages = actions.send.allowed;
   const canAttachFiles = actions.attach.allowed;
-  // §7.4 / §6.9: the composer names who is actually going to read this. The
-  // count is the people the room can tell are here, minus you — "nobody is
-  // reading" has to mean nobody *else*, or the fallback copy never appears.
-  const readers = useConversationReaders(guildId, channelId, scope);
-  const self = useSelfUser();
-  // Narrow enough that the full invitation cannot fit on one line.
+  // Narrow enough that a long channel name cannot fit the placeholder.
   const phoneWidth = useMobile(520);
-  const readingOthers = useMemo(
-    () => readers.filter((person) => person.userId !== self?.id).length,
-    [readers, self?.id],
-  );
   /**
    * A blocker is worth reading only if it lasts.
    *
@@ -503,16 +484,63 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
   const guildMembers = useMemberStore((s) => (guildId ? (memberScope ? s.members.get(memberScopeKey(memberScope, guildId)) : undefined) : undefined));
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
+  const { permissions: mentionPerms } = usePermissions(guildId ?? null);
+  const canMentionRoles = hasPermission(mentionPerms, Permissions.MENTION_EVERYONE);
+  const [composerRoles, setComposerRoles] = useState<Role[]>([]);
+  const [composerRolesError, setComposerRolesError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!guildId) {
+      setComposerRoles([]);
+      setComposerRolesError(null);
+      return;
+    }
+    let cancelled = false;
+    fetchGuildRoles(guildId)
+      .then((roles) => {
+        if (!cancelled) {
+          setComposerRoles(roles);
+          setComposerRolesError(null);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setComposerRolesError(extractApiError(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [guildId]);
+
+  useEffect(() => {
+    if (mentionQuery === null || !guildId || !memberScope || guildMembers) return;
+    void useMemberStore.getState().fetchMembers(guildId, memberScope);
+  }, [mentionQuery, guildId, memberScope, guildMembers]);
+
+  type MentionOption =
+    | { kind: 'member'; id: string; member: NonNullable<typeof guildMembers>[number] }
+    | { kind: 'role'; id: string; role: Role; count: number };
+
   const mentionResults = useMemo(() => {
-    if (mentionQuery === null || !guildId) return [];
+    if (mentionQuery === null || !guildId) return [] as MentionOption[];
     const q = mentionQuery.toLowerCase();
-    return (guildMembers || [])
+    const people: MentionOption[] = (guildMembers || [])
       .filter((m) => {
         const visibleName = displayName(m.user, m.nick).toLowerCase();
         return visibleName.includes(q) || m.user.username.toLowerCase().includes(q);
       })
-      .slice(0, 8);
-  }, [mentionQuery, guildId, guildMembers]);
+      .slice(0, 8)
+      .map((member) => ({ kind: 'member' as const, id: member.user.id, member }));
+    const roles: MentionOption[] = composerRoles
+      // @everyone is its own mention, not a role to pick here.
+      .filter((role) => role.id !== guildId && (role.mentionable || canMentionRoles) && role.name.toLowerCase().includes(q))
+      .slice(0, 5)
+      .map((role) => ({
+        kind: 'role' as const,
+        id: role.id,
+        role,
+        count: guildMembers ? guildMembers.filter((member) => member.roles.includes(role.id)).length : -1,
+      }));
+    return [...people, ...roles];
+  }, [mentionQuery, guildId, guildMembers, composerRoles, canMentionRoles]);
 
   const resizeDraft = useCallback(() => {
     const textarea = textareaRef.current;
@@ -983,14 +1011,14 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
     [content, clearAutocompleteChoices, setContent],
   );
 
-  const insertMention = useCallback((userId: string) => {
+  const insertMention = useCallback((token: string) => {
     const textarea = textareaRef.current;
     if (!textarea) return;
     const before = content.slice(0, textarea.selectionStart);
     const after = content.slice(textarea.selectionStart);
     const mentionStart = before.lastIndexOf('@');
     if (mentionStart === -1) return;
-    const mentionText = `<@${userId}>`;
+    const mentionText = token;
     const newContent = before.slice(0, mentionStart) + mentionText + ' ' + after;
     setContent(newContent);
     setMentionQuery(null);
@@ -1042,7 +1070,8 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
       if (e.key === 'Tab' || e.key === 'Enter') {
         e.preventDefault();
         const selected = mentionResults[mentionIndex];
-        if (selected) insertMention(selected.user.id);
+        if (selected?.kind === 'member') insertMention(`<@${selected.member.user.id}>`);
+        if (selected?.kind === 'role') insertMention(`<@&${selected.role.id}>`);
         return;
       }
     }
@@ -1534,11 +1563,17 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
         )}
 
         {/* @mention autocomplete */}
-        {mentionQuery !== null && mentionResults.length > 0 && (
+        {mentionQuery !== null && (mentionResults.length > 0 || composerRolesError) && (
           <div className="pc-enter pc-floating absolute bottom-full left-2 right-2 z-20 mb-2 max-h-64 overflow-y-auto p-1">
-            {mentionResults.map((member, i) => (
+            {composerRolesError && (
+              <p className="px-2 py-1 text-meta text-accent-danger">{composerRolesError}</p>
+            )}
+            {mentionResults.map((option, i) => (
+              <Fragment key={`${option.kind}-${option.id}`}>
+              {option.kind === 'role' && mentionResults[i - 1]?.kind !== 'role' && (
+                <p className="px-2 pb-1 pt-2 text-section text-text-faint" aria-hidden>Roles</p>
+              )}
               <button
-                key={member.user.id}
                 type="button"
                 className={cn(
                   'pc-focusable flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-2 py-1.5 text-left',
@@ -1549,20 +1584,38 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
                 )}
                 onMouseDown={(e) => {
                   e.preventDefault();
-                  insertMention(member.user.id);
+                  insertMention(option.kind === 'member' ? `<@${option.member.user.id}>` : `<@&${option.role.id}>`);
                 }}
                 onMouseEnter={() => setMentionIndex(i)}
               >
-                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-bg-mod-strong text-meta font-semibold text-text-secondary">
-                  {displayName(member.user, member.nick).charAt(0).toUpperCase()}
-                </span>
-                <span className="min-w-0 flex-1 truncate">
-                  <span className="text-label text-text-primary">{displayName(member.user, member.nick)}</span>
-                  {displayName(member.user, member.nick) !== member.user.username && (
-                    <span className="ml-1.5 text-meta text-text-muted">@{member.user.username}</span>
-                  )}
-                </span>
+                {option.kind === 'member' ? (
+                  <>
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-bg-mod-strong text-meta font-semibold text-text-secondary">
+                      {displayName(option.member.user, option.member.nick).charAt(0).toUpperCase()}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate">
+                      <span className="text-label text-text-primary">{displayName(option.member.user, option.member.nick)}</span>
+                      {displayName(option.member.user, option.member.nick) !== option.member.user.username && (
+                        <span className="ml-1.5 text-meta text-text-muted">@{option.member.user.username}</span>
+                      )}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center" aria-hidden>
+                      <span
+                        className="h-2.5 w-2.5 rounded-full"
+                        style={{ backgroundColor: option.role.color === 0 ? 'var(--text-muted)' : roleColorToHex(option.role.color) }}
+                      />
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-label text-text-primary">@{option.role.name}</span>
+                    <span className="shrink-0 text-meta text-text-muted">
+                      {option.count < 0 ? 'Loading…' : `${option.count} ${option.count === 1 ? 'member' : 'members'}`}
+                    </span>
+                  </>
+                )}
               </button>
+              </Fragment>
             ))}
           </div>
         )}
@@ -1633,14 +1686,14 @@ function OwnedMessageInput({ channelId, guildId, channelName, conversationKind =
                       // it arrived ellipsised mid-word — "Say something to the
                       // roor" on the Stage, "Say something in Bra" in a thread.
                       'Say something'
-                    : composerPlaceholder(readingOthers, channelName, conversationKind, phoneWidth)
+                    : composerPlaceholder(channelName, conversationKind, phoneWidth)
           }
           rows={1}
           maxLength={MAX_MESSAGE_LENGTH}
           disabled={showPollComposer}
           data-composer-input=""
-          // The invitation names the people who will read it (§7.4), which on a
-          // phone is longer than the composer is wide. Clipping the PLACEHOLDER
+          // A placeholder with a long channel name can be wider than a phone's
+          // composer. Clipping the PLACEHOLDER
           // to one line keeps the composer at its §3 height; a real draft still
           // wraps and grows, which is what a draft should do.
           className={

@@ -104,7 +104,7 @@ describe('useTheme', () => {
     expect(inline('--ui-chroma')).toBe(String(BASE_TINT_DEFAULT));
   });
 
-  it.each(['dusk', 'paper', 'voices'] as ThemeId[])(
+  it.each(['dusk', 'paper', 'slate', 'voices'] as ThemeId[])(
     'removes the accent and base-colour properties for the %s look',
     (look) => {
       renderHook(() => useTheme());

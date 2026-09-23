@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Multipart, Path, Query, State},
     http::{HeaderMap, StatusCode},
     Json,
 };
@@ -19,6 +19,7 @@ use std::time::Instant;
 use crate::error::ApiError;
 use crate::middleware::AuthUser;
 use crate::routes::audit;
+use crate::routes::banners::{self, BannerOwner};
 
 const MAX_VANITY_CODE_LEN: usize = 32;
 
@@ -158,6 +159,7 @@ pub(crate) fn guild_summary(
         name: guild.name.clone(),
         description: guild.description.clone(),
         icon_hash: guild.icon_hash.clone(),
+        banner_hash: guild.banner_hash.clone(),
         owner_id: guild.owner_id.to_string(),
         member_count: u32::try_from(member_count)
             .map_err(|_| ApiError::Internal(anyhow::anyhow!("Invalid space member count")))?,
@@ -191,7 +193,6 @@ pub(crate) fn guild_detail(
 ) -> Result<GuildDetail, ApiError> {
     Ok(GuildDetail {
         summary: guild_summary(guild, member_count)?,
-        banner_hash: guild.banner_hash.clone(),
         system_channel_id: guild.system_channel_id.map(|id| id.to_string()),
         vanity_url_code: guild.vanity_url_code.clone(),
         feature_flags: guild.features,
@@ -394,10 +395,23 @@ pub async fn update_guild(
         ));
     }
 
-    let hub_settings_str = body
+    // The home page's widget column (`hub_settings.widgets`): known ids only,
+    // each once, before anything is written.
+    if let Some(widgets) = body
         .hub_settings
         .as_ref()
-        .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "{}".to_string()));
+        .and_then(|hub| hub.extensions.get("widgets"))
+    {
+        crate::routes::server_feed::validate_home_widgets(widgets)?;
+    }
+
+    // The server banner is `spaces.banner_hash`, set through
+    // `POST /guilds/{id}/banner`; the hub no longer carries one of its own.
+    let hub_settings_str = body.hub_settings.as_ref().map(|v| {
+        let mut hub = v.clone();
+        hub.extensions.remove("banner_hash");
+        serde_json::to_string(&hub).unwrap_or_else(|_| "{}".to_string())
+    });
 
     let bot_settings_str = body
         .bot_settings
@@ -1155,4 +1169,94 @@ pub async fn update_vanity_url(
     .await;
 
     Ok(Json(json!({ "code": updated.vanity_url_code })))
+}
+
+async fn guild_detail_response(
+    state: &AppState,
+    guild: &paracord_db::guilds::GuildRow,
+) -> Result<GuildDetail, ApiError> {
+    let member_count = paracord_db::members::get_member_count(&state.db, guild.id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    guild_detail(guild, member_count)
+}
+
+/// Store the new banner, point `banner_hash` at it (or clear it), and tell the
+/// server's members.
+async fn set_guild_banner(
+    state: &AppState,
+    guild_id: i64,
+    actor_id: i64,
+    banner_hash: Option<&str>,
+) -> Result<GuildDetail, ApiError> {
+    let updated = paracord_db::guilds::set_guild_banner_hash(&state.db, guild_id, banner_hash)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let response = guild_detail_response(state, &updated).await?;
+    state.event_bus.dispatch(
+        "GUILD_UPDATE",
+        serde_json::to_value(&response).map_err(|e| ApiError::Internal(e.into()))?,
+        Some(guild_id),
+    );
+    audit::log_action(
+        state,
+        guild_id,
+        actor_id,
+        audit::ACTION_GUILD_UPDATE,
+        Some(guild_id),
+        None,
+        Some(json!({ "banner_hash": updated.banner_hash })),
+    )
+    .await;
+    Ok(response)
+}
+
+pub async fn upload_guild_banner(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(guild_id): Path<i64>,
+    mut multipart: Multipart,
+) -> Result<Json<GuildDetail>, ApiError> {
+    require_manage_guild(&state, guild_id, auth.user_id).await?;
+    let (image, content_type) = banners::read_banner_upload(&mut multipart).await?;
+    let banner_hash = banners::store_banner(
+        &state.config.storage_path,
+        BannerOwner::Guild,
+        guild_id,
+        &image,
+        content_type.as_deref(),
+    )
+    .await?;
+    let response = set_guild_banner(&state, guild_id, auth.user_id, Some(&banner_hash)).await?;
+    Ok(Json(response))
+}
+
+pub async fn delete_guild_banner(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(guild_id): Path<i64>,
+) -> Result<StatusCode, ApiError> {
+    require_manage_guild(&state, guild_id, auth.user_id).await?;
+    banners::remove_banner_files(&state.config.storage_path, BannerOwner::Guild, guild_id).await;
+    set_guild_banner(&state, guild_id, auth.user_id, None).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn get_guild_banner(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(guild_id): Path<i64>,
+) -> Result<axum::response::Response, ApiError> {
+    paracord_core::permissions::ensure_guild_member(&state.db, guild_id, auth.user_id).await?;
+    let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    banners::serve_banner(
+        &state.config.storage_path,
+        BannerOwner::Guild,
+        guild_id,
+        guild.banner_hash.as_deref(),
+    )
+    .await
 }

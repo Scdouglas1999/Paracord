@@ -43,7 +43,7 @@ function actionFor(entry: ConversationEntry): NeedsYouAction {
 }
 
 /**
- * Why this row is here, said in the metaphor.
+ * Why this row is here, in one plain line.
  *
  * The author is named when we know it and it is not you — "You mentioned you"
  * is never a sentence this app says, so a mention whose author resolves to the
@@ -56,7 +56,7 @@ export function needsYouReason(entry: ConversationEntry, authorName: string | nu
   if (entry.isDMUnread) return entry.title;
   if (entry.isThreadReply) return `New replies in ${entry.title}`;
   if (entry.unread) return `New in ${entry.title}`;
-  return `${entry.title} lit up`;
+  return `Activity in ${entry.title}`;
 }
 
 /** §1.5: presence is a rim of light, never a coloured dot. */

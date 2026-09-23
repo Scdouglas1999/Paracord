@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Track } from 'livekit-client';
+import { livekit } from '../stores/voice/livekitRuntime';
 import { useVoiceStore } from '../stores/voiceStore';
 
 /**
@@ -20,13 +20,13 @@ export function useScreenShareSubscriptions(userIds: Set<string> | null): void {
       const shouldSubscribe = userIds.has(participant.identity);
 
       for (const publication of participant.videoTrackPublications.values()) {
-        if (publication.source !== Track.Source.ScreenShare) continue;
+        if (publication.source !== livekit().Track.Source.ScreenShare) continue;
         if (publication.isSubscribed !== shouldSubscribe) {
           publication.setSubscribed(shouldSubscribe);
         }
       }
       for (const publication of participant.audioTrackPublications.values()) {
-        if (publication.source !== Track.Source.ScreenShareAudio) continue;
+        if (publication.source !== livekit().Track.Source.ScreenShareAudio) continue;
         if (publication.isSubscribed !== shouldSubscribe) {
           publication.setSubscribed(shouldSubscribe);
         }
@@ -38,13 +38,13 @@ export function useScreenShareSubscriptions(userIds: Set<string> | null): void {
       if (!room) return;
       for (const participant of room.remoteParticipants.values()) {
         for (const publication of participant.videoTrackPublications.values()) {
-          if (publication.source !== Track.Source.ScreenShare) continue;
+          if (publication.source !== livekit().Track.Source.ScreenShare) continue;
           if (publication.isSubscribed) {
             publication.setSubscribed(false);
           }
         }
         for (const publication of participant.audioTrackPublications.values()) {
-          if (publication.source !== Track.Source.ScreenShareAudio) continue;
+          if (publication.source !== livekit().Track.Source.ScreenShareAudio) continue;
           if (publication.isSubscribed) {
             publication.setSubscribed(false);
           }

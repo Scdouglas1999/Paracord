@@ -2105,10 +2105,30 @@ pub async fn post_command(
                     .update_self_video(channel_id, auth.user_id, self_video)
                     .await;
 
+                // A native call keeps its stream flag in the stored voice
+                // state, not the VoiceManager: a mute while sharing must not
+                // announce that the share stopped.
                 let current_self_stream = state
                     .voice
                     .get_participant_stream_state(channel_id, auth.user_id)
-                    .await;
+                    .await
+                    || (same_channel
+                        && existing_voice_state
+                            .as_ref()
+                            .is_some_and(|voice_state| voice_state.self_stream));
+                // Record the flags, so a later stream start or stop announces
+                // them as they are.
+                paracord_db::voice_states::update_voice_state(
+                    &state.db,
+                    auth.user_id,
+                    Some(guild_id),
+                    self_mute,
+                    self_deaf,
+                    current_self_stream,
+                    self_video,
+                )
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
                 let user = paracord_db::users::get_user_by_id(&state.db, auth.user_id)
                     .await
                     .ok()

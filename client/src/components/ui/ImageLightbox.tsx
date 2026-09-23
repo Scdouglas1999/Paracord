@@ -1,14 +1,51 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { X, ChevronLeft, ChevronRight, Download, ZoomIn, ZoomOut } from 'lucide-react';
-import { lightboxImageSource, useLightboxStore } from '../../stores/lightboxStore';
+import { lightboxImageSource, useLightboxStore, type LightboxImage } from '../../stores/lightboxStore';
+import { extractApiError } from '../../api/client';
+import { safeClientResourceUrl } from '../../lib/security';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { usePresence } from '../../lib/motion';
 import { cn } from '../../lib/utils';
+import { MediaPreview } from '../file/MediaPreview';
 
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 4;
 const ZOOM_STEP = 0.25;
+
+/**
+ * The source of a deferred entry, fetched when it becomes the current one and
+ * released when the viewer moves on or closes.
+ */
+function useDeferredSource(image: LightboxImage | undefined): { src: string | null; error: string | null } {
+  const [state, setState] = useState<{ image: LightboxImage; src: string | null; error: string | null } | null>(null);
+  useEffect(() => {
+    const load = image?.load;
+    if (!image || !load) return;
+    let cancelled = false;
+    let objectUrl: string | null = null;
+    load().then(
+      (resolved) => {
+        const safe = resolved.startsWith('blob:') ? resolved : safeClientResourceUrl(resolved);
+        if (resolved.startsWith('blob:')) objectUrl = resolved;
+        if (cancelled) {
+          if (objectUrl) URL.revokeObjectURL(objectUrl);
+          return;
+        }
+        setState({ image, src: safe, error: safe ? null : 'the file address was refused' });
+      },
+      (err: unknown) => {
+        if (!cancelled) setState({ image, src: null, error: extractApiError(err) });
+      },
+    );
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [image]);
+  if (!state || state.image !== image) return { src: null, error: null };
+  return { src: state.src, error: state.error };
+}
 
 export function ImageLightbox() {
   const isOpen = useLightboxStore((s) => s.isOpen);
@@ -23,7 +60,10 @@ export function ImageLightbox() {
   const { mounted, exiting, scenery } = usePresence(isOpen);
 
   const currentImage = images[currentIndex];
-  const safeImageSrc = currentImage ? lightboxImageSource(currentImage) : null;
+  const deferred = useDeferredSource(currentImage);
+  const safeImageSrc = currentImage
+    ? currentImage.load ? deferred.src : lightboxImageSource(currentImage)
+    : null;
   const hasNext = currentIndex < images.length - 1;
   const hasPrev = currentIndex > 0;
 
@@ -89,7 +129,8 @@ export function ImageLightbox() {
     a.click();
   }, [currentImage, safeImageSrc]);
 
-  if (!mounted || !currentImage || !safeImageSrc) return null;
+  if (!mounted || !currentImage) return null;
+  if (!safeImageSrc && !currentImage.load) return null;
 
   // A control over arbitrary imagery is a name tag (spec §8 `pc-tag`): the tag
   // fill plus the primary ink. That is the system's answer to "ink over a
@@ -109,7 +150,14 @@ export function ImageLightbox() {
       aria-label="Image viewer"
       tabIndex={-1}
       style={{
-        backgroundColor: 'var(--overlay-backdrop)',
+        // The modal scrim, laid three times: a picture needs the page behind
+        // it gone, not dimmed. One layer is 40-45% in the light themes, which
+        // left the page (and its text) reading straight through the viewer.
+        background: [
+          'linear-gradient(var(--overlay-backdrop), var(--overlay-backdrop))',
+          'linear-gradient(var(--overlay-backdrop), var(--overlay-backdrop))',
+          'var(--overlay-backdrop)',
+        ].join(', '),
       }}
       onClick={handleBackdropClick}
       {...scenery}
@@ -193,19 +241,41 @@ export function ImageLightbox() {
         style={{ maxWidth: '90vw', maxHeight: '85vh' }}
         onWheel={handleWheel}
       >
-        <img
-          src={safeImageSrc}
-          alt={currentImage.alt}
-          draggable={false}
-          style={{
-            transform: `scale(${zoom})`,
-            transition: 'transform var(--duration-fast) var(--ease-out)',
-            maxWidth: '90vw',
-            maxHeight: '85vh',
-            objectFit: 'contain',
-            userSelect: 'none',
-          }}
-        />
+        {!safeImageSrc ? (
+          deferred.error ? (
+            <p role="alert" className="pc-tag px-3 py-2 text-label text-accent-danger">
+              Could not load {currentImage.filename}: {deferred.error}
+            </p>
+          ) : (
+            <p className="pc-tag px-3 py-2 text-label">Loading…</p>
+          )
+        ) : currentImage.kind === 'video' ? (
+          // The same player as a message's video, so a gallery video can take captions too.
+          <div className="rounded-[var(--radius-card)] bg-bg-raised p-2 shadow-[var(--shadow-lifted)]">
+            <MediaPreview
+              key={safeImageSrc}
+              src={safeImageSrc}
+              filename={currentImage.filename}
+              kind="video"
+              autoPlay
+              videoStyle={{ maxWidth: '88vw', maxHeight: 'calc(85vh - 4.5rem)' }}
+            />
+          </div>
+        ) : (
+          <img
+            src={safeImageSrc}
+            alt={currentImage.alt}
+            draggable={false}
+            style={{
+              transform: `scale(${zoom})`,
+              transition: 'transform var(--duration-fast) var(--ease-out)',
+              maxWidth: '90vw',
+              maxHeight: '85vh',
+              objectFit: 'contain',
+              userSelect: 'none',
+            }}
+          />
+        )}
       </div>
     </div>,
     document.body,

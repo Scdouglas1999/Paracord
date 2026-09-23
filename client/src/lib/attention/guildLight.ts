@@ -97,7 +97,7 @@ export interface GuildLightInput {
   litHistory?: LitHistory;
   /**
    * Whether this building's channels AND members have arrived. A building you
-   * are not currently in must not claim "0 in · Dark · nobody in" because
+   * are not currently in must not claim "0 online · Nobody in voice" because
    * nobody has fetched it yet.
    */
   rosterKnown?: boolean;
@@ -169,11 +169,24 @@ function channelNameLookup(channels: readonly LightChannel[]): (id: string) => s
   return (id) => names.get(id) ?? null;
 }
 
+/**
+ * The channels whose loaded messages {@link guildRooms} reads: the text rooms
+ * (the "authored" reading term). Voice rooms, categories and threads never read
+ * a timeline, so a message in one of them cannot change the building's light.
+ */
+export function readsMessages(channel: LightChannel): boolean {
+  return channel.type !== ChannelType.Category && !isThread(channel.type) && !isVoice(channel.type);
+}
+
 /** Every room of the building, as light. */
 export function guildRooms(input: GuildLightInput, people: readonly PersonLight[]): RoomLight[] {
   const history = input.litHistory ?? roomLitHistory;
   const peopleById = new Map(people.map((person) => [person.userId, person]));
   const rooms: RoomLight[] = [];
+  // Reading a thread is being in the room that owns it.
+  const selectedRoomId = input.selectedChannelId
+    ? threadParents(input.channels).get(input.selectedChannelId) ?? input.selectedChannelId
+    : null;
 
   for (const channel of input.channels) {
     if (channel.type === ChannelType.Category) continue;
@@ -233,7 +246,7 @@ export function guildRooms(input: GuildLightInput, people: readonly PersonLight[
       recentAuthors: recentAuthorsOf(input.messages, channel.id),
       selfUserId: input.selfUserId ?? null,
       selfIsViewing:
-        Boolean(input.windowVisible) && input.selectedChannelId === channel.id,
+        Boolean(input.windowVisible) && selectedRoomId === channel.id,
       lastLitMs: history.peek(key).lastLitMs,
       nowMs: input.nowMs,
     });

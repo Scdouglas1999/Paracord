@@ -108,7 +108,7 @@ test('a direct-message attachment reaches the recipient without the server ever 
     const dm = await created.json(); const route = `/app/dms/${dm.id}`;
     await setup(bob.page, bob.user.id, route); await setup(alice.page, alice.user.id, route);
 
-    const composer = alice.page.getByRole('textbox', { name: /Say something/ }).last();
+    const composer = alice.page.getByRole('textbox', { name: /^(Message |Write a message$)/ }).last();
     await composer.fill('sending the file now');
     // The attach action is only offered once the encrypted producer can run:
     // unlocked storage, a verified identity and a ready recipient.

@@ -46,12 +46,15 @@ function validateMessage(value: unknown, channelId: string, messageId: string, a
   // Deleted accounts and the instance's own system accounts (Auto-Moderator,
   // Sports) carry negative ids: a current public projection, never a ratchet
   // sender, so nothing about them is bound to an encryption session.
-  if (!archived && typeof authorId === 'string' && SYSTEM_ACCOUNT_ID.test(authorId)) { }
-  else if (archived || message.e2ee != null || typeof authorId !== 'string' || !authorId.startsWith('anon:')) id(authorId);
-  else {
-    const anonymous = record(message.anonymous);
-    if (anonymous.is_anonymous !== true || anonymous.can_deanonymize !== false || typeof anonymous.alias !== 'string' || !anonymous.alias
-      || authorId !== `anon:${channelId}:${anonymous.alias}`) throw new Error('Invalid anonymous message recovery author.');
+  const systemAuthor = !archived && typeof authorId === 'string' && SYSTEM_ACCOUNT_ID.test(authorId);
+  if (!systemAuthor) {
+    if (archived || message.e2ee != null || typeof authorId !== 'string' || !authorId.startsWith('anon:')) {
+      id(authorId);
+    } else {
+      const anonymous = record(message.anonymous);
+      if (anonymous.is_anonymous !== true || anonymous.can_deanonymize !== false || typeof anonymous.alias !== 'string' || !anonymous.alias
+        || authorId !== `anon:${channelId}:${anonymous.alias}`) throw new Error('Invalid anonymous message recovery author.');
+    }
   }
   if (message.content !== null && typeof message.content !== 'string') throw new Error('Invalid message recovery body.');
   if (archived && message.content !== '') throw new Error('Archived recovery envelopes must not carry plaintext.');

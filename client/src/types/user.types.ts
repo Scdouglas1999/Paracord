@@ -7,6 +7,9 @@ export interface User {
   avatar_hash?: string | null;
   public_key?: string | null;
   banner?: string;
+  banner_hash?: string | null;
+  /** Profile accent as `0xRRGGBB`. */
+  accent_color?: number | null;
   bio?: string | null;
   pronouns?: string | null;
   linked_accounts?: Array<{ label: string; url: string }>;
@@ -22,7 +25,7 @@ export interface UserSettings {
   /**
    * Opaque server-stored string. The known values are the ids in
    * `src/lib/themes.ts`: dark/light/amoled/high-contrast, plus the looks
-   * dusk/paper/voices. Anything else collapses to dark on the way in.
+   * dusk/paper/slate/voices. Anything else collapses to dark on the way in.
    */
   theme: string;
   locale: string;

@@ -38,6 +38,7 @@ const user = {
   discriminator: 1,
   avatar_hash: null,
   banner_hash: null,
+  accent_color: null,
   bio: null,
   pronouns: null,
   email: 'ada@example.test',

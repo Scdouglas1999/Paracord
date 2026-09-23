@@ -34,7 +34,7 @@ export const RIM_MARK = 'data-motion-rim';
 export const ROOM_MARK = 'data-motion-room';
 /** A here-now strip / avatar stack: the place a face springs into. */
 export const STRIP_MARK = 'data-motion-strip';
-/** The inline room event in a text timeline ("Shop floor lit up · …"). */
+/** The inline room event in a text timeline ("Shop floor is live · …"). */
 export const EVENT_MARK = 'data-motion-event';
 /** A region that steps back while you walk through it. */
 export const RECEDE_MARK = 'data-motion-recede';

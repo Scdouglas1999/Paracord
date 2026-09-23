@@ -367,6 +367,7 @@
 [data-theme='high-contrast'],
 [data-theme='dusk'],
 [data-theme='voices'],
+[data-theme='slate'],
 :root {
   color-scheme: dark;
 
@@ -388,6 +389,18 @@
   --grain: none;
   --bubble-mix: 0.2;
   --bubble-own-mix: 0.3;
+  /* The generated server cover (styles/server-home.css): the lightness of its
+     ground, its deep end and its soft lights. The hue and chroma are the
+     server's own, set per server; only these steps belong to the theme. */
+  --cover-l-ground: 17%;
+  --cover-l-deep: 29%;
+  --cover-l-mid: 56%;
+  --cover-l-light: 74%;
+  --cover-a-light: 0.58;
+  --cover-c-scale: 1;
+  /* A fine, colourless tooth over the made cover, so its gradients never band. */
+  --cover-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
+  --cover-grain-opacity: 0.09;
 
   /* ---- §1.1 Surfaces — Night's ramp, in the base hue ----------------------- */
   /* The street: app base behind everything. */
@@ -685,6 +698,13 @@
   --street-scrim: transparent;
   --plate-fill: var(--bg-plate);
   --grain: none;
+  --cover-l-ground: 95%;
+  --cover-l-deep: 86%;
+  --cover-l-mid: 78%;
+  --cover-l-light: 82%;
+  --cover-a-light: 0.55;
+  --cover-c-scale: 0.7;
+  --cover-grain-opacity: 0.06;
 
   --bg-base: oklch(93.5% calc(0.028 * var(--ui-chroma)) var(--ui-hue-street));
   --bg-plate: oklch(97.4% calc(0.011 * var(--ui-chroma)) var(--ui-hue));
@@ -1061,7 +1081,62 @@
   --window-dark: #0a0822;
 }
 
-/* ---- Voices: the colour comes from the people --------------------------------
+/* ---- Slate: the default ---------------------------------------------------
+   Voices' look (author-coloured bubbles, amber) on a cool, nearly neutral
+   charcoal. Chosen 2026-09-22 as what a fresh install looks like: the purple
+   ground read as AI-generated. The ground carries little colour of its own on
+   purpose - the people, the banners and anything live bring it. */
+[data-theme='slate'] {
+  --bg-base: oklch(15% 0.013 240);
+  --bg-plate: oklch(19.5% 0.017 240);
+  --bg-raised: oklch(26% 0.021 240);
+  --bg-well: oklch(14.5% 0.013 240);
+  --bg-floating: oklch(22% 0.019 240 / 0.98);
+  --bg-mod-subtle: oklch(90% 0.023 240 / 0.06);
+  --bg-mod-strong: oklch(90% 0.023 240 / 0.13);
+  --bg-selected: oklch(90% 0.023 240 / 0.14);
+  --row-selected: var(--bg-selected);
+  --window-dark: oklch(28% 0.023 240);
+  --overlay-backdrop: oklch(12% 0.011 240 / 0.76);
+
+  --light-amber: #ffd166;
+  --glow-window-amber: 0 0 7px rgba(255, 209, 102, 0.6);
+  --glow-window-amber-breathe: 0 0 10px rgba(255, 209, 102, 0.72);
+  --glow-window-amber-lg: 0 0 9px rgba(255, 209, 102, 0.6);
+
+  --text-primary: oklch(97% 0.005 240);
+  --text-body-ink: oklch(93% 0.008 240);
+  --text-secondary: oklch(83% 0.015 240);
+  --text-muted: oklch(80% 0.017 240);
+  --text-faint: oklch(79% 0.017 240);
+  --text-on-light: oklch(15% 0.013 240);
+  --text-on-accent: #2a1d00;
+  --text-link: #ffdc8a;
+
+  --accent-primary: #ffd166;
+  --accent-primary-hover: #ffdc8a;
+  --accent-primary-active: #f2bd3f;
+  --accent: var(--accent-primary);
+  --accent-success: var(--accent-primary);
+  --accent-primary-rgb: 255, 209, 102;
+  --accent-tint: rgba(255, 209, 102, 0.14);
+  --accent-tint-strong: rgba(255, 209, 102, 0.24);
+  --success-tint: rgba(255, 209, 102, 0.14);
+  --focus-ring-color: var(--accent-primary);
+  --sidebar-active-indicator: var(--accent-primary);
+
+  --border-subtle: oklch(90% 0.023 240 / 0.1);
+  --border-strong: oklch(90% 0.023 240 / 0.2);
+  --scrollbar-auto-thumb: oklch(90% 0.023 240 / 0.18);
+  --scrollbar-auto-thumb-hover: oklch(90% 0.023 240 / 0.32);
+  --thumb-frame-lit: oklch(22% 0.021 240);
+  --tag-fill: oklch(15% 0.013 240 / 0.8);
+
+  --bubble-mix: 0.22;
+  --bubble-own-mix: 0.3;
+}
+
+/* ---- Aubergine (id 'voices'): the colour comes from the people ---------------
    A deep aubergine ground, chosen because all eight identity colours read
    against it, and a timeline of bubbles that each take their author's colour
    (`looks.css`, keyed off `data-message-style='bubbles'`). */

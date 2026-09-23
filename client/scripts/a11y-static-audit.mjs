@@ -79,7 +79,9 @@ function hasDialogRole(openingTag) {
 }
 
 function hasDialogAccessibleName(openingTag) {
-  return /\saria-label\s*=/.test(openingTag) || /\saria-labelledby\s*=/.test(openingTag);
+  return /\saria-label\s*=/.test(openingTag) || /\saria-labelledby\s*=/.test(openingTag) ||
+    // The shared <Popover> primitive renders its `label` prop as the aria-label.
+    /^<Popover\b/.test(openingTag) && /\slabel\s*=/.test(openingTag);
 }
 
 function hasFocusableDialogContainer(openingTag) {

@@ -1,0 +1,103 @@
+import { useEffect, useMemo, useState } from 'react';
+
+import { extractApiError } from '../../../../api/client';
+import { economyApi, type EconomyLeaderboardEntry } from '../../../../api/economy';
+import { displayName } from '../../../../lib/displayName';
+import { FeedAvatar } from '../feedParts';
+import { WidgetCard, WidgetError, WidgetLink } from './WidgetCard';
+
+export interface MostActiveWidgetProps {
+  guildId: string;
+  nowMs: number;
+  onOpenLeaderboard: () => void;
+}
+
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const TOP = 4;
+
+/**
+ * The top four by XP among people who earned some this week. The leaderboard
+ * endpoint ranks all-time XP, so "this week" is the filter: somebody whose
+ * last XP is older than seven days is not shown, however high they rank.
+ */
+export function topThisWeek(entries: readonly EconomyLeaderboardEntry[], nowMs: number): EconomyLeaderboardEntry[] {
+  return entries
+    .filter((entry) => {
+      const at = Date.parse(entry.last_xp_at);
+      return Number.isFinite(at) && nowMs - at <= WEEK_MS && entry.xp > 0;
+    })
+    .slice(0, TOP);
+}
+
+/** "Most active": the XP leaderboard, top four, with bars. */
+export function MostActiveWidget({ guildId, nowMs, onOpenLeaderboard }: MostActiveWidgetProps) {
+  const [entries, setEntries] = useState<EconomyLeaderboardEntry[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setEntries(null);
+    setError(null);
+    economyApi
+      .getLeaderboard(guildId, 25)
+      .then(({ data }) => {
+        if (!cancelled) setEntries(data.entries ?? []);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(extractApiError(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [guildId]);
+
+  const top = useMemo(() => topThisWeek(entries ?? [], nowMs), [entries, nowMs]);
+
+  if (error) {
+    return (
+      <WidgetCard title="Most active">
+        <WidgetError>Could not load the leaderboard: {error}</WidgetError>
+      </WidgetCard>
+    );
+  }
+  if (top.length === 0) return null;
+  const most = Math.max(...top.map((entry) => entry.xp), 1);
+
+  return (
+    <WidgetCard title="Most active" action={<WidgetLink onClick={onOpenLeaderboard}>Leaderboard</WidgetLink>}>
+      <p className="-mt-2 text-meta text-text-muted">This week, by XP</p>
+      <ol className="flex flex-col gap-3">
+        {top.map((entry, index) => (
+          <li key={entry.user.id} className="flex items-center gap-3">
+            <FeedAvatar
+              user={{
+                id: entry.user.id,
+                username: entry.user.username,
+                display_name: entry.user.display_name ?? null,
+                avatar_hash: entry.user.avatar ?? null,
+              }}
+              size={28}
+            />
+            <span className="flex min-w-0 flex-1 flex-col gap-1.5">
+              <span className="flex items-baseline gap-2">
+                <span className="min-w-0 flex-1 truncate text-label text-text-primary">{displayName(entry.user)}</span>
+                <span className="pc-mono shrink-0 text-meta text-text-muted">
+                  {entry.xp.toLocaleString()} XP
+                </span>
+              </span>
+              <span className="pc-home-bar" aria-hidden>
+                <span
+                  style={{
+                    width: `${Math.max(4, Math.round((entry.xp / most) * 100))}%`,
+                    animationDelay: `${200 + index * 60}ms`,
+                    opacity: 1 - index * 0.16,
+                  }}
+                />
+              </span>
+            </span>
+          </li>
+        ))}
+      </ol>
+    </WidgetCard>
+  );
+}

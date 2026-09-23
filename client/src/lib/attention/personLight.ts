@@ -3,8 +3,8 @@
  *
  * `src/lib/presence.ts` owns the status → rim mapping; this module turns that
  * plus the voice state into the {@link PersonLight} the components consume, and
- * counts "lights on" for a building and across all buildings (the "24 in" and
- * "+17 lights on" numbers in §7.1 and §7.3).
+ * counts "lights on" for a building and across all buildings (the "24 online" and
+ * "+17 online" numbers in §7.1 and §7.3).
  *
  * Pure — NO store or React imports. `src/hooks/useLights.ts` supplies the
  * inputs from the stores.

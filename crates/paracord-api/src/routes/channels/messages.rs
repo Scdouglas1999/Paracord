@@ -14,7 +14,7 @@ use serde::Serialize;
 ///
 /// This is therefore a coarse screen for the most obvious injection attempts,
 /// NOT a security boundary, and it is named so no caller mistakes it for one.
-fn message_content_has_dangerous_markup(value: &str) -> bool {
+pub(super) fn message_content_has_dangerous_markup(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
     lower.contains("<script")
         || lower.contains("javascript:")
@@ -76,6 +76,10 @@ pub struct SendMessageRequest {
     pub sticker_ids: Vec<String>,
     pub e2ee: Option<DmE2eePayloadRequest>,
     pub nonce: Option<String>,
+    /// Present when this send is a forward. The server rewrites the stored
+    /// attribution from the source message. Omitted by every other send.
+    #[serde(default)]
+    pub forwarded_from: Option<ForwardedFromRequest>,
 }
 
 #[derive(Deserialize)]
@@ -629,6 +633,7 @@ pub async fn send_message(
         && body.attachment_ids.is_empty()
         && body.sticker_ids.is_empty()
         && body.e2ee.is_none()
+        && body.forwarded_from.is_none()
     {
         return Err(ApiError::BadRequest(
             "Message must include content or attachments".into(),
@@ -834,11 +839,34 @@ pub async fn send_message(
         }
     }
 
+    // Resolve the forward before the row exists so a message the sender cannot
+    // read never lands in the destination.
+    let resolved_forward = if let Some(request) = body.forwarded_from.as_ref() {
+        Some(resolve_forward(&state, auth.user_id, &channel, request).await?)
+    } else {
+        None
+    };
+
     // AutoMod. Scoped to human sends through the REST API — the operator-authored
     // paths (bots, webhooks, scheduled delivery) are deliberately not filtered.
-    // Runs before creation so a blocked message is never persisted.
+    // Runs before creation so a blocked message is never persisted. A forward's
+    // quoted text is posted into this channel too, so this server's rules read
+    // it along with the note.
     let automod = if let Some(guild_id) = channel.guild_id() {
-        run_automod(&state, guild_id, channel_id, auth.user_id, &body.content).await?
+        let forwarded_text = resolved_forward
+            .as_ref()
+            .and_then(|forward| super::forwards::forwarded_content(&forward.json));
+        let checked = match forwarded_text {
+            Some(quoted) if !quoted.trim().is_empty() => format!("{}\n{quoted}", body.content),
+            _ => body.content.clone(),
+        };
+        match run_automod(&state, guild_id, channel_id, auth.user_id, &checked).await {
+            Ok(verdict) => verdict,
+            Err(err) => {
+                discard_forward_copies(&state, resolved_forward.as_ref()).await;
+                return Err(err);
+            }
+        }
     } else {
         paracord_core::automod_enforce::AutomodVerdict::default()
     };
@@ -854,7 +882,7 @@ pub async fn send_message(
             header: payload.header,
         });
 
-    let (msg, mentioned_users) = paracord_core::message::create_message_with_attention(
+    let created = paracord_core::message::create_message_with_attention(
         &state.db,
         msg_id,
         channel_id,
@@ -863,13 +891,54 @@ pub async fn send_message(
         paracord_core::message::CreateMessageOptions {
             message_type: 0,
             reference_id: referenced_message_id,
-            allow_empty_content: !body.attachment_ids.is_empty() || !body.sticker_ids.is_empty(),
+            allow_empty_content: !body.attachment_ids.is_empty()
+                || !body.sticker_ids.is_empty()
+                || resolved_forward.is_some(),
             dm_e2ee,
             nonce,
         },
     )
-    .await?;
+    .await;
+    let (mut msg, mentioned_users) = match created {
+        Ok(created) => created,
+        Err(err) => {
+            // The send was refused (slowmode, a locked thread, a timeout): the
+            // forward's file copies will never be linked.
+            discard_forward_copies(&state, resolved_forward.as_ref()).await;
+            return Err(err.into());
+        }
+    };
     let created_new = !has_nonce || msg.id == msg_id;
+    if let Some(forward) = resolved_forward.as_ref() {
+        if created_new {
+            paracord_db::messages::set_forwarded_from(&state.db, msg.id, &forward.json)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+            msg.forwarded_from = Some(forward.json.clone());
+            for copy in &forward.staged_attachments {
+                let attached = paracord_db::attachments::attach_to_message(
+                    &state.db,
+                    copy.id,
+                    msg.id,
+                    auth.user_id,
+                    channel_id,
+                    now,
+                )
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+                if !attached {
+                    return Err(ApiError::Internal(anyhow::anyhow!(
+                        "forwarded attachment {} could not be linked",
+                        copy.id
+                    )));
+                }
+            }
+        } else {
+            // A retry of a forward that is already stored: its files were
+            // linked the first time, so these copies are surplus.
+            super::forwards::discard_all(&state, &forward.staged_attachments).await;
+        }
+    }
     for attachment in &attachments {
         if attachment.message_id == Some(msg.id) {
             continue;
@@ -1615,6 +1684,15 @@ async fn prepare_automod(
         &state.db, guild_id, channel_id, author_id, content, perms,
     )
     .await?)
+}
+
+async fn discard_forward_copies(
+    state: &AppState,
+    forward: Option<&super::forwards::ResolvedForward>,
+) {
+    if let Some(forward) = forward {
+        super::forwards::discard_all(state, &forward.staged_attachments).await;
+    }
 }
 
 async fn run_automod(

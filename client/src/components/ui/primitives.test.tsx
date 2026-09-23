@@ -156,8 +156,8 @@ describe('Chip', () => {
   it('light tones map to the two light tokens', () => {
     const { rerender } = render(<Chip tone="talking">3 talking</Chip>);
     expect(screen.getByText('3 talking')).toHaveClass('text-light-white');
-    rerender(<Chip tone="reading">5 reading</Chip>);
-    expect(screen.getByText('5 reading')).toHaveClass('text-light-amber');
+    rerender(<Chip tone="reading">5 here</Chip>);
+    expect(screen.getByText('5 here')).toHaveClass('text-light-amber');
   });
 
   it('becomes a real button when asked', () => {
@@ -335,12 +335,12 @@ describe('Popover', () => {
 
 describe('presence is light, never a coloured dot (§1.5)', () => {
   it('maps every status onto a rim, a matte, and a text equivalent', () => {
-    expect(presenceLight('online')).toMatchObject({ lit: true, avatarClass: 'pc-lit', label: 'Lights on' });
+    expect(presenceLight('online')).toMatchObject({ lit: true, avatarClass: 'pc-lit', label: 'Online' });
     expect(presenceLight('streaming')).toMatchObject({ lit: true, live: true });
     expect(presenceLight('idle')).toMatchObject({ dim: true, avatarClass: 'pc-dim', label: 'Away' });
     expect(presenceLight('dnd')).toMatchObject({ dim: true, dnd: true });
-    expect(presenceLight('offline')).toMatchObject({ dim: true, label: 'Lights off' });
-    expect(presenceLight(undefined).label).toBe('Lights off');
+    expect(presenceLight('offline')).toMatchObject({ dim: true, label: 'Offline' });
+    expect(presenceLight(undefined).label).toBe('Offline');
   });
 });
 

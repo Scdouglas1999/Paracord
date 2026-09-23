@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { AppMark } from '../components/brand/AppMark';
 import {
   Bell,
   Hash,
@@ -260,7 +261,7 @@ function LightSection() {
     <Section
       id="light"
       title="Light"
-      blurb="Three lights, three meanings. White is talking or live, amber is reading, emerald is an action you can take — and emerald is not a light. Every glow has a source, and light is state, never style: if a thing glows, a person is there right now."
+      blurb="Three lights, three meanings. White is talking or live, amber is somebody in a text channel, emerald is an action you can take — and emerald is not a light. Every glow has a source, and light is state, never style: if a thing glows, a person is there right now."
     >
       <TokenGrid names={LIGHTS} kind="fill" />
       <Row>
@@ -270,7 +271,7 @@ function LightSection() {
         </div>
         <div className="flex items-center gap-2">
           <span className="pc-window is-reading inline-block h-[13px] w-[10px]" aria-hidden />
-          <span className="text-meta text-text-secondary">Window · reading</span>
+          <span className="text-meta text-text-secondary">Window · somebody here</span>
         </div>
         <div className="flex items-center gap-2">
           <span className="pc-window inline-block h-[13px] w-[10px]" aria-hidden />
@@ -404,7 +405,7 @@ function PrimitivesSection() {
         <Chip>3</Chip>
         <Chip tone="accent">New</Chip>
         <Chip tone="talking">3 talking</Chip>
-        <Chip tone="reading">5 reading</Chip>
+        <Chip tone="reading">5 here</Chip>
         <Chip tone="danger">Failed</Chip>
         <Chip size="sm">2</Chip>
         <Chip as="button" onClick={() => {}}>
@@ -420,7 +421,7 @@ function PrimitivesSection() {
           <NavRow icon={<Home size={16} />} trailing={<Chip size="sm" tone="talking">3</Chip>}>
             Home
           </NavRow>
-          <NavRow icon={<Hash size={16} />} active trailing={<span className="text-meta text-text-faint">5 reading</span>}>
+          <NavRow icon={<Hash size={16} />} active trailing={<span className="text-meta text-text-faint">5 here</span>}>
             build-log
           </NavRow>
           <NavRow icon={<Hash size={16} />} display>
@@ -627,7 +628,7 @@ function ThemePreview({ theme, label }: { theme: string; label: string }) {
               <span className="pc-window is-reading h-[13px] w-[10px]" />
               <span className="pc-window h-[13px] w-[10px]" />
             </div>
-            <span className="text-meta text-text-faint">1 lit · 1 reading</span>
+            <span className="text-meta text-text-faint">1 in voice · 1 here</span>
           </div>
         </Plate>
         <Plate bare className="flex min-w-0 flex-1 flex-col gap-2 p-2.5">
@@ -650,7 +651,7 @@ function ThemePreview({ theme, label }: { theme: string; label: string }) {
           style={{ background: 'var(--color-avatar-3)' }}
           aria-hidden
         />
-        <span className="text-meta text-text-secondary">Mara · lights on</span>
+        <span className="text-meta text-text-secondary">Mara · online</span>
         <Chip size="sm" tone="reading" className="ml-auto">
           5
         </Chip>
@@ -779,7 +780,7 @@ const DEMO_HERE_NOW = {
   people: [DEMO_SPEAKER, DEMO_PRIYA, DEMO_REN, DEMO_TOMAS],
   here: 4,
   lightsOn: 20,
-  caption: '4 here · 20 lights on',
+  caption: '4 here · 20 online',
 };
 
 const DEMO_ON_AIR = {
@@ -828,7 +829,7 @@ function LightComponentsSection() {
           people={[DEMO_MARA, DEMO_PRIYA, DEMO_REN, DEMO_TOMAS, DEMO_AISHA, DEMO_DEVON, DEMO_JO]}
           size={28}
           max={5}
-          context="with their lights on"
+          context="online"
         />
         <AvatarStack people={[DEMO_MARA]} size={18} max={3} context="in Shop floor" />
       </Row>
@@ -1377,7 +1378,7 @@ function MotionSection() {
           onPlay={() => setRolled((value) => value + 1)}
         >
           <span className="pc-display text-title text-text-primary">
-            <RollingNumber value={rolled} format={(count) => `${count} reading`} />
+            <RollingNumber value={rolled} format={(count) => `${count} here`} />
           </span>
         </Recipe>
 
@@ -1441,10 +1442,12 @@ function MotionSection() {
           }}
         >
           <span className="flex items-center gap-4">
-            <span
-              className={cn('pc-window is-reading h-[26px] w-[20px]', writing && 'is-writing')}
-              aria-hidden
-            />
+            <span className={cn('pc-window-breath', writing && 'is-writing')} aria-hidden>
+              <span
+                className={cn('pc-window is-reading h-[26px] w-[20px]', writing && 'is-writing')}
+                aria-hidden
+              />
+            </span>
             <span className="pc-typing-dots" aria-hidden>
               <span />
               <span />
@@ -1595,6 +1598,27 @@ export default function DesignTokensPage() {
         </header>
 
         <Section
+          id="mark"
+          title="Mark"
+          blurb="A hurricane lantern on a braided teal paracord handle. In the app it is the bare drawing, set by its height; at 32 px and below it switches to the simplified drawing with a bolder cord. The Slate tile is only for the operating system's icon. Source: client/brand/mark.html."
+        >
+          <Row>
+            {[16, 24, 32, 40, 48, 64].map((size) => (
+              <figure key={size} className="flex w-16 flex-col items-center gap-2">
+                <div className="flex h-16 items-end">
+                  <AppMark size={size} />
+                </div>
+                <figcaption className="pc-mono text-meta text-text-faint">{size}</figcaption>
+              </figure>
+            ))}
+            <figure className="ml-6 flex flex-col items-center gap-2">
+              <img src="/pwa-192x192.png" width={96} height={96} alt="The app icon on its Slate tile" />
+              <figcaption className="pc-mono text-meta text-text-faint">app icon</figcaption>
+            </figure>
+          </Row>
+        </Section>
+
+        <Section
           id="surfaces"
           title="Surfaces"
           blurb="Three layers only: street → plate → raised or well inside a plate. Never nest a plate in a plate. Depth is a warm 1px top highlight plus a deep shadow, or an inset shadow — never a border."
@@ -1644,7 +1668,7 @@ export default function DesignTokensPage() {
             {TYPE_STEPS.map((step) => (
               <div key={step.cls} className="flex flex-col gap-1">
                 <div className={`${step.cls} text-text-primary`}>
-                  Shop floor — 3 talking, 5 reading
+                  Shop floor — 3 talking, 5 here
                 </div>
                 <div className="text-meta text-text-faint">
                   {step.name} · {step.face} · {step.use}
@@ -1699,7 +1723,8 @@ export default function DesignTokensPage() {
             <ThemePreview theme="high-contrast" label="High contrast" />
             <ThemePreview theme="dusk" label="Dusk sky — a look" />
             <ThemePreview theme="paper" label="Paper & ink — a look" />
-            <ThemePreview theme="voices" label="Voices — a look" />
+            <ThemePreview theme="slate" label="Slate — the default look" />
+            <ThemePreview theme="voices" label="Aubergine — a look" />
           </div>
         </Section>
       </div>

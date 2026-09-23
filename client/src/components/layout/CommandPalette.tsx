@@ -3,10 +3,10 @@ import { guildLandingPath } from '../../lib/guildNavigation';
 import { entityScopeKey } from '../../lib/serverScope';
 import { useAvailableChannels } from '../../hooks/useChannels';
 import { activateGuild } from '../../lib/guildNavigation';
-import { useAvailableGuilds } from '../../hooks/useGuilds';
+import { useAvailableGuilds, useSelectedGuildId } from '../../hooks/useGuilds';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { useNavigate } from 'react-router';
+import { useNavigate, useParams } from 'react-router';
 import { Search, Hash, Volume2, Settings, Home, Shield, MessageCircle, ArrowRight, Bot, UserPlus, Users, MessagesSquare, MessageSquarePlus } from 'lucide-react';
 import { Modal } from '../ui/Modal';
 import { DmPickerModal } from '../message/DmPickerModal';
@@ -39,6 +39,9 @@ export function CommandPalette() {
   const selectGuild = useGuildStore((s) => s.selectGuild);
   const user = useCurrentUser();
   const navigate = useNavigate();
+  const { guildId: routeGuildId } = useParams();
+  const selectedGuildId = useSelectedGuildId();
+  const searchGuildId = routeGuildId ?? selectedGuildId ?? null;
 
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -74,6 +77,24 @@ export function CommandPalette() {
   // Build palette items from all available navigation targets
   const allItems = useMemo((): PaletteItem[] => {
     const items: PaletteItem[] = [];
+
+    if (searchGuildId) {
+      items.push({
+        id: 'search-this-server',
+        label: 'Search this server',
+        sublabel: 'Find messages in this server',
+        icon: <Search size={16} />,
+        action: () => {
+          if (routeGuildId === searchGuildId) {
+            useUIStore.getState().setContextPanelMode('search');
+          } else {
+            navigate(`/app/guilds/${searchGuildId}`, { state: { openSearch: true } });
+          }
+        },
+        category: 'Actions',
+        keywords: 'search server messages find',
+      });
+    }
 
     // Social action commands — everything social reachable from ⌘K (do not
     // duplicate the "Friends" destination with the Home nav item below, which now
@@ -111,7 +132,7 @@ export function CommandPalette() {
     items.push({
       id: 'action-friends',
       label: 'Friends',
-      sublabel: 'Lights on, pending, and blocked',
+      sublabel: 'Online, pending, and blocked',
       icon: <Users size={16} />,
       action: () => navigate('/app/friends'),
       category: 'Actions',
@@ -236,7 +257,7 @@ export function CommandPalette() {
     });
 
     return items;
-  }, [guilds, channelsByGuild, availableChannels, user, navigate, selectGuild, setDmPickerOpen]);
+  }, [guilds, channelsByGuild, availableChannels, user, navigate, selectGuild, setDmPickerOpen, searchGuildId, routeGuildId]);
 
   // Filter items based on query
   const filteredItems = useMemo(() => {

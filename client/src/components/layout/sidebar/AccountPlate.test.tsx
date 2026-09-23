@@ -36,12 +36,12 @@ beforeEach(() => {
 });
 
 describe('accountCaption', () => {
-  it('says the light in words, and what is switched off', () => {
-    expect(accountCaption('online', null, false, false)).toBe('Lights on');
+  it('says the status in words, and what is switched off', () => {
+    expect(accountCaption('online', null, false, false)).toBe('Online');
     expect(accountCaption('idle', null, false, false)).toBe('Away');
-    expect(accountCaption('invisible', null, false, false)).toBe('Lights off');
-    expect(accountCaption('online', null, true, false)).toBe('Lights on · muted');
-    expect(accountCaption('online', null, true, true)).toBe('Lights on · deafened');
+    expect(accountCaption('invisible', null, false, false)).toBe('Invisible');
+    expect(accountCaption('online', null, true, false)).toBe('Online · muted');
+    expect(accountCaption('online', null, true, true)).toBe('Online · deafened');
     expect(accountCaption('online', 'On the bench', false, false)).toBe('On the bench');
   });
 });
@@ -50,7 +50,7 @@ describe('AccountPlate', () => {
   it('shows the name and the light, and opens user settings', () => {
     render(<AccountPlate {...props} />);
     expect(screen.getByText('sam.douglas')).toBeInTheDocument();
-    expect(screen.getByText('Lights on')).toBeInTheDocument();
+    expect(screen.getByText('Online')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Open user settings' }));
     expect(useUIStore.getState().userSettingsOpen).toBe(true);
@@ -61,7 +61,7 @@ describe('AccountPlate', () => {
     fireEvent.click(screen.getByRole('button', { name: /Open account menu/ }));
 
     const menu = screen.getByRole('menu', { name: 'Account' });
-    expect(within(menu).getByRole('menuitemradio', { name: /Lights on/ })).toHaveAttribute(
+    expect(within(menu).getByRole('menuitemradio', { name: /Online/ })).toHaveAttribute(
       'aria-checked',
       'true',
     );

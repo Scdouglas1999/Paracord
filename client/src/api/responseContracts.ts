@@ -1,5 +1,7 @@
 import type { AxiosResponse } from 'axios';
 
+import { loadValidators } from './contractValidators';
+
 /** An incompatible response must not overwrite an already valid projection. */
 export class ApiContractError extends Error {
   readonly code = 'INVALID_SERVER_RESPONSE';
@@ -16,8 +18,19 @@ export async function responseContract<T>(
   validate: (data: unknown) => data is T,
   contract: string,
 ): Promise<AxiosResponse<T>> {
-  const response = await request;
+  // The validators load alongside the request, not in front of it.
+  const [response] = await Promise.all([request, loadValidators()]);
   const data = response.data;
   if (!validate(data)) throw new ApiContractError(contract);
   return { ...response, data };
+}
+
+/**
+ * A guard for list endpoints that have no generated contract yet: the body must
+ * be an object whose `field` is an array. A body without its list is refused at
+ * the boundary instead of leaving `undefined` for every reader to trip over.
+ */
+export function hasListField<T>(field: string): (data: unknown) => data is T {
+  return (data: unknown): data is T =>
+    typeof data === 'object' && data !== null && Array.isArray((data as Record<string, unknown>)[field]);
 }

@@ -60,13 +60,18 @@ export const LitAvatar = React.forwardRef<HTMLSpanElement, LitAvatarProps>(funct
   useDownloadTicket();
   const src = useAuthenticatedImage(resolveUserAvatarUrl(person.avatar));
   const dimension = { width: size, height: size };
+  // A breathing ring cannot live on the face: the face clips its picture to
+  // the circle, and that clip would take the ring's layers with it. While the
+  // person talks the square around the face carries the breath and the face
+  // holds its resting ring out of sight (`.pc-speaking-face`, primitives.css).
+  const speaking = person.avatarClass === 'pc-speaking';
   const face = (
     <span
       // The rim glow lives on this element, so this is the one that blooms and
       // dims — the outer span is the thing that MOVES (§5.1).
       {...{ [RIM_MARK]: '' }}
       className={cn(
-        person.avatarClass,
+        speaking ? 'pc-speaking-face' : person.avatarClass,
         'pc-display pc-dimming relative flex shrink-0 items-center justify-center overflow-hidden rounded-full',
         'font-bold text-text-on-light',
       )}
@@ -93,6 +98,7 @@ export const LitAvatar = React.forwardRef<HTMLSpanElement, LitAvatarProps>(funct
       {...(room ? { [ROOM_MARK]: room } : null)}
       className={cn(
         'relative inline-flex shrink-0 rounded-full',
+        speaking && 'pc-speaking',
         person.dnd && 'pc-dnd',
         className,
       )}

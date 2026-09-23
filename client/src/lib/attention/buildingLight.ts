@@ -114,6 +114,7 @@ export function buildingLight(input: BuildingLightInput): BuildingLight {
   const voiceRooms = rooms.filter((room) => room.kind === 'voice');
   const roomsLit = voiceRooms.filter((room) => room.lit).length;
   const talkingCount = voiceRooms.reduce((sum, room) => sum + room.talkingCount, 0);
+  const inVoice = voiceRooms.reduce((sum, room) => sum + room.occupants.length, 0);
   const readingCount = rooms.reduce((sum, room) => sum + room.readingCount, 0);
   const people = [...new Map(input.members.map((person) => [person.userId, person])).values()];
   const lightsOn = people.filter((person) => person.level === 'on').length;
@@ -148,7 +149,7 @@ export function buildingLight(input: BuildingLightInput): BuildingLight {
     people,
     memberCount: input.memberCount ?? input.members.length,
     brightness: brightnessOf({ talkingCount, roomsLit, readingCount, lightsOn }),
-    caption: rosterKnown ? buildingCaption(roomsLit, readingCount) : UNKNOWN_ROSTER_CAPTION,
+    caption: rosterKnown ? buildingCaption(inVoice, readingCount) : UNKNOWN_ROSTER_CAPTION,
     rosterKnown,
   };
 }
@@ -164,7 +165,7 @@ export function orderBuildingsByBrightness(buildings: readonly BuildingLight[]):
   );
 }
 
-/** How many names the "lights on, but nobody's in a room" clause spells out. */
+/** How many names the "online, but not in a channel" clause spells out. */
 const LIT_ONLY_NAMES = 3;
 
 export interface AroundNowInput {
@@ -181,10 +182,10 @@ export interface AroundNowInput {
 /**
  * The one-sentence "Around now" summary (§7.3, §7.5).
  *
- *   "Mara, Priya and Ren are in Shop floor · Tomas and Aisha are reading
- *    build-log · Devon is away"
+ *   "Mara, Priya and Ren are in Shop floor · Tomas and Aisha are in
+ *    #build-log · Devon is away"
  *
- * Voice clauses come first (loudest first), then reading clauses, then at most
+ * Voice clauses come first (loudest first), then text-channel clauses, then at most
  * one away clause. It is one sentence because it is meant to be read in one
  * glance; everything past `maxClauses` is what the window map is for.
  */
@@ -209,7 +210,7 @@ export function aroundNowSentence(input: AroundNowInput): string {
     const names = nameList(room.readers.map((r) => r.person.name));
     if (!names) continue;
     const verb = room.readers.length === 1 ? 'is' : 'are';
-    clauses.push(`${names} ${verb} reading ${room.name}`);
+    clauses.push(`${names} ${verb} in #${room.name}`);
   }
 
   const busy = new Set<string>();
@@ -218,11 +219,11 @@ export function aroundNowSentence(input: AroundNowInput): string {
     for (const reader of room.readers) busy.add(reader.person.userId);
   }
 
-  // Nobody is in a room and nobody is reading — but people can still have their
-  // lights on, and this well must not deny what the count above it asserts
-  // (§9: the light always has a text equivalent, and two rows never disagree).
-  // Only when there is no room clause: with somebody actually in a room, the
-  // rest of the lit building is what the "+N lights on" tail is for.
+  // Nobody is in a channel — but people can still be online, and this well
+  // must not deny what the count above it asserts (§9: the light always has a
+  // text equivalent, and two rows never disagree). Only when there is no
+  // channel clause: with somebody actually in one, the rest of the server is
+  // what the "+N online" tail is for.
   if (clauses.length === 0) {
     const lit = [
       ...new Map(
@@ -232,7 +233,7 @@ export function aroundNowSentence(input: AroundNowInput): string {
       ).values(),
     ];
     const names = nameList(lit.map((person) => person.name), LIT_ONLY_NAMES);
-    if (names) clauses.push(`${names} ${lit.length === 1 ? 'has' : 'have'} their lights on`);
+    if (names) clauses.push(`${names} ${lit.length === 1 ? 'is' : 'are'} online`);
   }
 
   const away = (input.people ?? []).filter(
@@ -243,6 +244,6 @@ export function aroundNowSentence(input: AroundNowInput): string {
     clauses.push(`${names} ${away.length === 1 ? 'is' : 'are'} away`);
   }
 
-  if (clauses.length === 0) return input.empty ?? "Nobody's lights are on right now";
+  if (clauses.length === 0) return input.empty ?? 'Nobody is online right now';
   return clauses.slice(0, maxClauses).join(' · ');
 }

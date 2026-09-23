@@ -1,6 +1,7 @@
 import { useState, useEffect, lazy, Suspense } from 'react';
 import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router';
-import { AppMark } from './pages/authScaffold';
+import { AppMark } from './components/brand/AppMark';
+import { BrandSplash } from './components/brand/BrandSplash';
 import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
 import { ServerConnectPage } from './pages/ServerConnectPage';
@@ -183,18 +184,18 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
   }, [hasSession, hasFetchedSettings, settingsUnavailable]);
 
   if (!sessionBootstrapComplete || (servers.length > 0 && !tokensHydrated)) {
-    return <BrandedSplash label="Restoring session..." />;
+    return <BrandSplash label="Restoring session..." />;
   }
 
   if (serverStatus === 'loading') {
-    return <BrandedSplash label="Connecting..." />;
+    return <BrandSplash label="Connecting..." />;
   }
 
   // Wait for the first answer, but only while one is still coming. Once the
   // read has failed, the fail-closed default above decides rather than leaving
   // an unreachable instance holding the app on a splash screen forever.
   if (hasSession && !hasFetchedSettings && !settingsUnavailable) {
-    return <BrandedSplash label="Loading account settings..." />;
+    return <BrandSplash label="Loading account settings..." />;
   }
 
   // Optional crypto-auth mode (server-controlled, default false).
@@ -241,11 +242,11 @@ export function AuthRoute({ children }: { children: React.ReactNode }) {
   const hasServerSession = tokensHydrated && hasHydratedServerSession(servers);
 
   if (!sessionBootstrapComplete || (servers.length > 0 && !tokensHydrated)) {
-    return <BrandedSplash label="Restoring session..." />;
+    return <BrandSplash label="Restoring session..." />;
   }
 
   if (serverStatus === 'loading') {
-    return <BrandedSplash label="Connecting..." />;
+    return <BrandSplash label="Connecting..." />;
   }
 
   if (serverStatus === 'needed') {
@@ -258,30 +259,6 @@ export function AuthRoute({ children }: { children: React.ReactNode }) {
   }
 
   return <>{children}</>;
-}
-
-/**
- * Full-viewport branded boot state shown while auth/session resolves. A real
- * loading moment (app mark on the deepest `--bg-base` street, Gabarito
- * wordmark, muted status line) rather than a bare spinner — and it matches the
- * document's first-paint surface so there is no flash while the app hydrates.
- * The mark breathes on `pc-mark-breathe`; the shared reduced-motion rule in
- * utilities.css stills it — no second switch needed here.
- */
-function BrandedSplash({ label }: { label: string }) {
-  return (
-    <div className="flex min-h-screen w-full flex-col items-center justify-center gap-5 bg-bg-base px-6">
-      <div className="pc-mark-breathe">
-        <AppMark size={52} />
-      </div>
-      <div className="flex flex-col items-center gap-1.5">
-        <span className="font-display text-heading text-text-primary">Paracord</span>
-        <p className="text-meta text-text-muted" role="status" aria-live="polite">
-          {label}
-        </p>
-      </div>
-    </div>
-  );
 }
 
 /**
@@ -335,7 +312,7 @@ function DeviceKeySignIn() {
     return () => window.clearTimeout(timer);
   }, []);
 
-  if (!slow) return <BrandedSplash label="Signing in with this device's key..." />;
+  if (!slow) return <BrandSplash label="Signing in with this device's key..." />;
 
   return (
     <div className="flex min-h-screen w-full flex-col items-center justify-center gap-5 bg-bg-base px-6">
@@ -425,7 +402,7 @@ function GuardRedirect({ to }: { to: CryptoAuthRedirect | '/app' }) {
   }, [to, pathname, navigate]);
 
   if (stalled) return <GuardStalled to={to} />;
-  return <BrandedSplash label="Just a moment..." />;
+  return <BrandSplash label="Just a moment..." />;
 }
 
 /**
@@ -502,7 +479,20 @@ export default function App() {
       <Route path="/privacy" element={route(<PrivacyPage />)} />
 
       {/* Main app */}
-      <Route path="/app" element={<ProtectedRoute>{lazyRoute(<AppShell />)}</ProtectedRoute>}>
+      {/* The shell's own chunk loads behind the loading screen's final frame:
+          there is no shell yet for the quiet in-shell fallback to sit in. */}
+      <Route
+        path="/app"
+        element={
+          <ProtectedRoute>
+            <ErrorBoundary>
+              <Suspense fallback={<BrandSplash label="Loading..." />}>
+                <AppShell />
+              </Suspense>
+            </ErrorBoundary>
+          </ProtectedRoute>
+        }
+      >
         <Route index element={lazyRoute(<HomePage />)} />
         <Route path="guilds/:guildId" element={lazyRoute(<GuildHomePage />)} />
         <Route path="guilds/:guildId/settings" element={lazyRoute(<GuildSettingsPage />)} />

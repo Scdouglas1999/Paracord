@@ -23,8 +23,7 @@
 </p>
 
 <p align="center">
-  Current release: <strong>v3.1.1</strong> — <a href="RELEASE_NOTES.md">what changed</a>.
-  The screenshots below are from <strong>3.2</strong>, which is in final testing and out soon.
+  Current release: <strong>v3.2.0</strong> — <a href="RELEASE_NOTES.md">what changed</a>
 </p>
 
 ---

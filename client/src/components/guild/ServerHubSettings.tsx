@@ -1,12 +1,13 @@
-import { useState, ChangeEvent } from 'react';
-import { Upload, X, Hash } from 'lucide-react';
+import { useState } from 'react';
+import { Hash } from 'lucide-react';
 import { Guild, Channel, HubSettings, Role } from '../../types';
-import { isAllowedImageMimeType, isSafeImageDataUrl, safeStoredImageDataUrl } from '../../lib/security';
 import { cn } from '../../lib/utils';
 import { guildApi } from '../../api/guilds';
 import { extractApiError } from '../../api/client';
 import { Button, Divider, Input, Textarea } from '../ui';
 import { SectionHeader, FieldLabel, GroupLabel, ToggleRow } from './SettingsPrimitives';
+import { HomePageSettings } from '../rooms/lobby/widgets/HomePageSettings';
+import { readHomeWidgets, type HomeWidgetSetting } from '../rooms/lobby/widgets/widgetConfig';
 
 type VisibilityMode = 'private' | 'public' | 'roles';
 
@@ -39,6 +40,7 @@ export function ServerHubSettings({ guild, channels, roles = [], onUpdate, setEr
     );
     const [discoveryTags, setDiscoveryTags] = useState((guild.discovery_tags || []).join(', '));
     const [allowedRoleIds, setAllowedRoleIds] = useState<string[]>(guild.allowed_roles || []);
+    const [homeWidgets, setHomeWidgets] = useState<HomeWidgetSetting[]>(() => readHomeWidgets(guild.hub_settings));
 
     const textChannels = channels.filter(c => c.type === 0 || c.channel_type === 0);
     const assignableRoles = roles.filter((role) => role.id !== guild.id);
@@ -63,34 +65,6 @@ export function ServerHubSettings({ guild, channels, roles = [], onUpdate, setEr
         );
     };
 
-    const handleBannerUpload = (e: ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-        if (!isAllowedImageMimeType(file.type)) {
-            setError('Please upload PNG, JPG, GIF, or WEBP.');
-            return;
-        }
-        setError(null);
-        const reader = new FileReader();
-        reader.onload = () => {
-            if (typeof reader.result === 'string') {
-                if (!isSafeImageDataUrl(reader.result)) {
-                    setError('Please upload PNG, JPG, GIF, or WEBP.');
-                    return;
-                }
-                setHubSettings(prev => ({ ...prev, banner_hash: reader.result as string }));
-            }
-        };
-        reader.readAsDataURL(file);
-    };
-
-    const removeBanner = () => {
-        setHubSettings(prev => {
-            const { banner_hash, ...rest } = prev;
-            return rest;
-        });
-    };
-
     const handleSave = async () => {
         if (visibility === 'roles' && allowedRoleIds.length === 0) {
             setError('Pick at least one role when visibility is role-gated.');
@@ -100,7 +74,7 @@ export function ServerHubSettings({ guild, channels, roles = [], onUpdate, setEr
         setError(null);
         try {
             await guildApi.update(guild.id, {
-                hub_settings: hubSettings,
+                hub_settings: { ...hubSettings, widgets: homeWidgets },
                 visibility,
                 discovery_tags: discoveryTags
                     .split(',')
@@ -116,58 +90,17 @@ export function ServerHubSettings({ guild, channels, roles = [], onUpdate, setEr
         }
     };
 
-    const bannerSrc = safeStoredImageDataUrl(hubSettings.banner_hash);
-
     return (
         <div className="flex flex-col gap-8">
             <SectionHeader
                 title="Server hub"
-                description="Design the landing page members see before they join — a banner, a welcome, and the channels you want front and center."
+                description="A welcome and the channels you want front and center. The server banner is set in Overview."
                 action={
                     <Button variant="primary" onClick={handleSave} loading={loading} disabled={loading}>
                         Save changes
                     </Button>
                 }
             />
-
-            <Divider />
-
-            {/* Banner */}
-            <section>
-                <GroupLabel>Hub banner</GroupLabel>
-                <p className="mt-2 text-body leading-relaxed text-text-secondary">
-                    A wide image sets the tone. Aim for 1200×480 — PNG, JPG, or WEBP up to 2 MB.
-                </p>
-                <div className="mt-4">
-                    {bannerSrc ? (
-                        <div className="flex flex-col items-start gap-3">
-                            <div className="pc-well h-44 w-full overflow-hidden p-0">
-                                <img
-                                    src={bannerSrc}
-                                    alt="Hub banner preview"
-                                    className="h-full w-full object-cover"
-                                />
-                            </div>
-                            <Button variant="danger" onClick={removeBanner}>
-                                <X size={16} /> Remove banner
-                            </Button>
-                        </div>
-                    ) : (
-                        <label
-                            className={cn(
-                                'pc-well flex h-36 w-full cursor-pointer flex-col items-center justify-center gap-1.5',
-                                'text-text-muted transition-[box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
-                                'focus-within:shadow-[var(--shadow-well),var(--focus-ring)]',
-                            )}
-                        >
-                            <Upload size={22} aria-hidden />
-                            <span className="text-label text-text-secondary">Upload a banner image</span>
-                            <span className="pc-mono text-meta">PNG, JPG, or WEBP · 2 MB max</span>
-                            <input type="file" className="sr-only" accept="image/*" onChange={handleBannerUpload} />
-                        </label>
-                    )}
-                </div>
-            </section>
 
             <Divider />
 
@@ -194,6 +127,19 @@ export function ServerHubSettings({ guild, channels, roles = [], onUpdate, setEr
                             maxLength={2000}
                         />
                     </label>
+                </div>
+            </section>
+
+            <Divider />
+
+            {/* The server home page's widget column (docs/server-home-spec.md) */}
+            <section>
+                <GroupLabel>Home page</GroupLabel>
+                <p className="mt-2 text-body leading-relaxed text-text-secondary">
+                    The widgets beside the feed on this server&apos;s home page, top to bottom. One with nothing to show stays hidden.
+                </p>
+                <div className="mt-4">
+                    <HomePageSettings widgets={homeWidgets} onChange={setHomeWidgets} />
                 </div>
             </section>
 

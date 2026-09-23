@@ -40,6 +40,7 @@ import { cn } from '../../lib/utils';
 import { asThemeId, DEFAULT_THEME, type ThemeId } from '../../lib/themes';
 import { confirm } from '../../stores/confirmStore';
 import { toast } from '../../stores/toastStore';
+import { AppMark } from '../brand/AppMark';
 import { ErrorBanner } from '../ui/Feedback';
 import { Button } from '../ui/Button';
 import { Input, Textarea, Select } from '../ui/Input';
@@ -71,6 +72,7 @@ import { isAllowedImageMimeType, safeExternalUrl } from '../../lib/security';
 import { resolveUserAvatarUrl } from '../../lib/userAvatar';
 import { ResourceImage } from '../ui/ResourceImage';
 import { clearAuthenticatedImageCache } from '../../lib/authenticatedImage';
+import { BannerEditor } from './BannerEditor';
 import { displayName as resolveDisplayName } from '../../lib/displayName';
 import { getIdentityColor } from '../../lib/colors';
 import { personLight } from '../../lib/attention/light';
@@ -158,6 +160,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
   const [theme, setTheme] = useState<ThemeId>(DEFAULT_THEME);
   const [displayName, setDisplayName] = useState('');
   const [bio, setBio] = useState('');
+  const [accentColor, setAccentColor] = useState<number | null>(null);
   const [pronouns, setPronouns] = useState('');
   const [linkedAccountsInput, setLinkedAccountsInput] = useState('');
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
@@ -285,11 +288,12 @@ export function UserSettings({ onClose }: UserSettingsProps) {
     void fetchSettings();
   }, [fetchSettings]);
 
-  const { id: profile_id, display_name: profile_display_name, bio: profile_bio, pronouns: profile_pronouns, linked_accounts: profile_linked_accounts, email: profile_email, avatar_hash: profile_avatar_hash, avatar: profile_avatar } = user ?? {};
+  const { id: profile_id, display_name: profile_display_name, bio: profile_bio, pronouns: profile_pronouns, linked_accounts: profile_linked_accounts, email: profile_email, avatar_hash: profile_avatar_hash, avatar: profile_avatar, accent_color: profile_accent } = user ?? {};
   useEffect(() => {
     if (profile_id) {
       setDisplayName(profile_display_name || '');
       setBio(profile_bio || '');
+      setAccentColor(typeof profile_accent === 'number' ? profile_accent : null);
       setPronouns(profile_pronouns || '');
       const linked = Array.isArray(profile_linked_accounts)
         ? profile_linked_accounts
@@ -311,7 +315,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
       setAvatarFile(null);
       setAvatarPreview(resolveUserAvatarUrl(profile_avatar_hash || profile_avatar));
     }
-  }, [profile_id, profile_display_name, profile_bio, profile_pronouns, profile_linked_accounts, profile_email, profile_avatar_hash, profile_avatar]);
+  }, [profile_id, profile_display_name, profile_bio, profile_pronouns, profile_linked_accounts, profile_email, profile_avatar_hash, profile_avatar, profile_accent]);
 
   useEffect(() => {
     if (settings) {
@@ -558,6 +562,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
       await updateUser({
         display_name: displayName || undefined,
         bio: bio || undefined,
+        accent_color: accentColor,
       });
       await updateSettings({
         notifications: {
@@ -1058,6 +1063,27 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                     </p>
                   </div>
                 </header>
+                <div className="mb-10">
+                  <BannerEditor
+                    label="Profile banner"
+                    bannerHash={user?.banner_hash}
+                    accentColor={accentColor}
+                    outputWidth={1500}
+                    outputHeight={500}
+                    hint="Shown at the top of your profile card. The banner saves right away as a 1500 by 500 image, up to 8 MB; the accent colour saves with the rest of your profile."
+                    onAccentChange={setAccentColor}
+                    onUpload={async (file) => {
+                      const { data } = await authApi.uploadBanner(file);
+                      clearAuthenticatedImageCache();
+                      useAuthStore.setState({ user: data });
+                    }}
+                    onRemove={async () => {
+                      await authApi.deleteBanner();
+                      clearAuthenticatedImageCache();
+                      await fetchUser();
+                    }}
+                  />
+                </div>
 
                 {/* Public profile */}
                 <section>
@@ -2146,8 +2172,11 @@ export function UserSettings({ onClose }: UserSettingsProps) {
               <div>
                 <SettingsHeader title="About" description="What you're running and who built it." />
                 <section>
-                  <div className="flex items-baseline justify-between gap-4 border-b border-border-subtle pb-4">
-                    <div className="font-display text-title text-text-primary">{APP_NAME}</div>
+                  <div className="flex items-end justify-between gap-4 border-b border-border-subtle pb-4">
+                    <div className="flex items-end gap-3">
+                      <AppMark size={56} />
+                      <div className="font-display text-title text-text-primary">{APP_NAME}</div>
+                    </div>
                     <div className="font-code text-meta text-text-muted">Version {APP_VERSION}</div>
                   </div>
                   <p className="mt-5 max-w-xl text-body text-text-secondary">

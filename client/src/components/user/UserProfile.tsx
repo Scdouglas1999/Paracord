@@ -24,6 +24,10 @@ import {
 import { roleColorToHex } from '../../lib/colors';
 import { parseMarkdown } from '../../lib/markdown';
 import { safeExternalUrl, safeStoredImageDataUrl } from '../../lib/security';
+import { resolveBannerUrl } from '../../lib/userAvatar';
+import { accentCssColor } from './bannerCrop';
+import { ResourceImage } from '../ui/ResourceImage';
+import { useDownloadTicket } from '../../hooks/useDownloadTicket';
 import { presenceLight } from '../../lib/presence';
 import { personLight } from '../../lib/attention/light';
 import { LitAvatar } from '../light';
@@ -300,8 +304,11 @@ function UserProfileCard({
 
   const mutualGuilds = profileData?.mutual_guilds ?? [];
   const mutualFriends = profileData?.mutual_friends ?? [];
-  const bannerHash = profileData?.user?.banner_hash ?? user.banner;
-  const bannerSrc = safeStoredImageDataUrl(bannerHash);
+  const bannerHash = profileData ? profileData.user.banner_hash : user.banner_hash;
+  // Subscribing to the ticket re-renders, and so re-resolves the URL, once it is minted.
+  useDownloadTicket();
+  const bannerSrc = resolveBannerUrl(bannerHash);
+  const accent = accentCssColor(profileData ? profileData.user.accent_color : user.accent_color);
   const bio = profileData?.user?.bio ?? user.bio;
   const pronouns = profileData?.user?.pronouns ?? user.pronouns;
   const linkedAccounts = (
@@ -513,7 +520,7 @@ function UserProfileCard({
           the anchor's side — and slides back out that way on --ease-in. */}
       <div
         className={cn(
-          'pc-dialog fixed z-50 w-[min(21.5rem,calc(100vw-1rem))] overflow-hidden',
+          'pc-dialog pc-dialog-opaque fixed z-50 w-[min(21.5rem,calc(100vw-1rem))] overflow-hidden',
           fitsLeft
             ? exiting ? 'pc-drawer-out-right' : 'pc-drawer-in-right'
             : exiting ? 'pc-drawer-out-left' : 'pc-drawer-in-left',
@@ -526,21 +533,20 @@ function UserProfileCard({
         }}
         {...scenery}
       >
-        {/* Banner — a solid accent-tint strip (or the user's image), never a diagonal gradient wash */}
-        {bannerSrc ? (
+        {/* The banner at the 3:1 its owner cropped it to, fading into the card;
+            without one, a shorter strip of their accent colour. */}
+        <div
+          className={cn('relative shrink-0', bannerSrc ? 'aspect-[3/1]' : 'h-20')}
+          style={{ background: accent ?? 'var(--accent-tint-strong)' }}
+        >
+          {bannerSrc && (
+            <ResourceImage src={bannerSrc} alt="" draggable={false} className="h-full w-full object-cover" />
+          )}
           <div
-            className="h-[76px] shrink-0 bg-cover bg-center"
-            style={{ backgroundImage: `url(${bannerSrc})` }}
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-12"
+            style={{ background: 'linear-gradient(to bottom, transparent, var(--bg-floating))' }}
           />
-        ) : (
-          <div
-            className="h-[60px] shrink-0"
-            style={{
-              background: 'var(--accent-tint-strong)',
-              boxShadow: 'inset 0 -1px 0 var(--border-subtle)',
-            }}
-          />
-        )}
+        </div>
 
         {/* Identity header — avatar overlaps the banner */}
         <div className="px-5 pb-4">

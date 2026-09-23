@@ -9,6 +9,11 @@ export type GuildVisibility = 'private' | 'public' | 'roles';
  */
 export interface GuildSummary {
   allowed_roles: string[];
+  /**
+   * `/api/v1/guilds/{id}/banner?v=…` once a banner is uploaded, otherwise null.
+   * The version changes with every upload.
+   */
+  banner_hash: string | null;
   bot_settings: {
     [k: string]: GuildBotConfig | undefined;
   } | null;
@@ -29,7 +34,6 @@ export interface GuildBotConfig {
   [k: string]: unknown | undefined;
 }
 export interface HubSettings {
-  banner_hash?: string | null;
   description?: string | null;
   pinned_channels?: string[] | null;
   welcome_text?: string | null;

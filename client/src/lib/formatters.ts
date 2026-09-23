@@ -33,10 +33,25 @@ export function toDatetimeLocalValue(input: string | number | Date): string {
 export function wallClock(input: Date | number | string): string {
   const date = input instanceof Date ? input : new Date(input);
   if (Number.isNaN(date.getTime())) return '';
-  return date
-    .toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  return wallClockFormat()
+    .format(date)
     .replace(/\bAM\b/g, 'am')
     .replace(/\bPM\b/g, 'pm');
+}
+
+/**
+ * One formatter for every wall clock on screen.
+ *
+ * `toLocaleTimeString(locale, options)` builds a fresh `Intl.DateTimeFormat`
+ * on every call, and the message list calls this twice per row per render:
+ * profiling a scroll through a 500-message channel put 24% of all JavaScript
+ * time in here. The output is identical — `toLocaleTimeString` is specified
+ * as exactly this formatter.
+ */
+let wallClockFormatter: Intl.DateTimeFormat | null = null;
+function wallClockFormat(): Intl.DateTimeFormat {
+  wallClockFormatter ??= new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
+  return wallClockFormatter;
 }
 
 /**

@@ -22,6 +22,7 @@ import { toast } from './toastStore';
 import { useTypingStore } from './typingStore';
 import { useReadStateStore } from './readStateStore';
 import { useSavedMessageStore } from './savedMessageStore';
+import { useReminderStore } from './reminderStore';
 import { clearUnlockedPrivateKey } from '../lib/accountSession';
 import { resetSessionStores } from './sessionReset';
 
@@ -88,6 +89,7 @@ function clearAuthState(set: (partial: Partial<AuthState>) => void): Promise<voi
   useTypingStore.getState().reset();
   useReadStateStore.getState().reset();
   useSavedMessageStore.getState().reset();
+  useReminderStore.getState().reset();
   // Every store that caches another user's data must be cleared here too.
   // Only the three above were, so logging out and back in as someone else left
   // the previous account's guilds, channels, messages, members and presences

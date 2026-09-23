@@ -54,7 +54,7 @@ export const OnAirPill = React.forwardRef<HTMLButtonElement, OnAirPillProps>(fun
       {...props}
     >
       {/* §5.1 "speaking is a breath", §6.7 "no badge louder than the room":
-          the dot breathes on pc-breathe ONLY while somebody has the floor, and
+          the dot breathes (the speaking ring's breath) ONLY while somebody has the floor, and
           sits at its resting glow the rest of the call. */}
       <span
         className={cn('pc-live-dot shrink-0', onAir.speaking && 'is-speaking')}

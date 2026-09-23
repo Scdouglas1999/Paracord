@@ -190,9 +190,19 @@
 }
 
 /* Someone is in the room and talking (spec §5): the rim breathes between the
-   lit and the speaking ring at ~1.6s. It never bounces and never scales. */
+   lit and the speaking ring at ~1.6s. It never bounces and never scales.
+
+   The breath is the speaking ring's two still layers (`.pc-speaking` in
+   primitives.css), so it is composited rather than repainted. The dot's own
+   shadow and ring come from utilities at the call site and are what reduced
+   motion shows; while the layers draw the breath they have to be off, and a
+   utility outranks this layer, hence `!important`. */
 .voice-connected-pulse {
-  animation: pc-breathe var(--duration-breathe) var(--ease-in-out) infinite;
+  position: relative;
+}
+
+:root:not([data-motion='reduced']) .voice-connected-pulse {
+  box-shadow: none !important;
 }
 
 /* Hover action button (message action bar items) */

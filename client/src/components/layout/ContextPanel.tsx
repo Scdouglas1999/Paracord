@@ -14,6 +14,7 @@ import { ThreadPanel } from '../message/ThreadPanel';
 import { PinnedMessagesOverlay } from './overlays/PinnedMessagesOverlay';
 import { SearchOverlay } from './overlays/SearchOverlay';
 import { GuildEconomyPanel } from '../guild/GuildEconomyPanel';
+import { MediaGalleryPanel } from '../media/MediaGalleryPanel';
 
 /**
  * Descriptor for the active thread surface. Supplied by the ChatView or derived
@@ -32,8 +33,6 @@ export interface ContextPanelProps {
   channelId?: string | null;
   /** Active channel display name — labels the `search` surface. */
   channelName?: string | null;
-  /** Channels available to cross-channel search. */
-  allChannels?: Array<{ id: string; guild_id?: string | null; name?: string | null }>;
   /** Pinned messages (fetched + owned by the ChatView). */
   pins?: Message[];
   onPinsChange?: (pins: Message[]) => void;
@@ -122,7 +121,6 @@ export function ContextPanel({
   guildId,
   channelId,
   channelName,
-  allChannels,
   pins,
   onPinsChange,
   pinsError,
@@ -173,17 +171,6 @@ export function ContextPanel({
         ),
       ),
     [channelsById, threadListParentId],
-  );
-
-  const resolvedAllChannels = useMemo(
-    () =>
-      allChannels
-      ?? Object.values(channelsById).map((c) => ({
-        id: c.id,
-        guild_id: c.guild_id,
-        name: c.name,
-      })),
-    [allChannels, channelsById],
   );
 
   useEffect(() => {
@@ -268,6 +255,18 @@ export function ContextPanel({
 
   // Panel-native query surfaces bring their own chrome; their close button is
   // wired to clear the shared panel mode.
+  if (shown === 'media') {
+    return (
+      <MediaGalleryPanel
+        guildId={guildId}
+        channelId={channelId}
+        onClose={close}
+        panelRef={asideRef}
+        onKeyDown={onAsideKeyDown}
+      />
+    );
+  }
+
   if (shown === 'pins') {
     return (
       <PinnedMessagesOverlay
@@ -288,12 +287,11 @@ export function ContextPanel({
     return (
       <SearchOverlay
         open
-        presentation="panel"
         panelRef={asideRef}
         onClose={close}
+        guildId={guildId}
         channelId={channelId ?? undefined}
         channelName={resolvedChannelName ?? undefined}
-        allChannels={resolvedAllChannels}
       />
     );
   }

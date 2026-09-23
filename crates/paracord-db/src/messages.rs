@@ -26,6 +26,8 @@ pub struct MessageRow {
     pub embeds: Option<String>,
     /// JSON-serialized array of bot/application message components.
     pub components: Option<String>,
+    /// JSON attribution for a forwarded message. Null when this message is not a forward.
+    pub forwarded_from: Option<String>,
 }
 
 impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for MessageRow {
@@ -52,6 +54,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for MessageRow {
             created_at: datetime_from_db_text(&created_at_raw)?,
             embeds: row.try_get("embeds").ok(),
             components: row.try_get("components").ok(),
+            forwarded_from: row.try_get("forwarded_from")?,
         })
     }
 }
@@ -72,7 +75,7 @@ pub async fn get_attention_target(
     };
     let query = format!("SELECT m.id, m.channel_id, m.author_id, m.content, m.nonce, m.delivery_nonce,
         m.message_type, m.flags, m.edited_at, CASE WHEN m.pinned THEN 1 ELSE 0 END AS pinned,
-        m.reference_id, m.e2ee_header, m.created_at, m.embeds, m.components, m.recovery_revision
+        m.reference_id, m.e2ee_header, m.created_at, m.embeds, m.components, m.recovery_revision, m.forwarded_from
         FROM messages m WHERE m.channel_id = $1 AND m.id > $3
         AND m.id > COALESCE((SELECT last_message_id FROM read_states WHERE user_id = $2 AND channel_id = $1), 0)
         {mention_filter} ORDER BY m.id ASC LIMIT 1");
@@ -82,6 +85,20 @@ pub async fn get_attention_target(
         .bind(after)
         .fetch_optional(pool)
         .await?)
+}
+
+/// Store the forward attribution on a message that was just created.
+pub async fn set_forwarded_from(
+    pool: &DbPool,
+    message_id: i64,
+    forwarded_from: &str,
+) -> Result<(), DbError> {
+    sqlx::query("UPDATE messages SET forwarded_from = $2 WHERE id = $1")
+        .bind(message_id)
+        .bind(forwarded_from)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 /// Raw i64 shim kept for API compat.
@@ -268,7 +285,7 @@ async fn create_message_with_delivery_typed(
             }
             let existing = sqlx::query_as::<_, MessageRow>(
                 "SELECT id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags,
-                 edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision
+                 edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision, forwarded_from
                  FROM messages WHERE id = $1 AND channel_id = $2 AND author_id = $3",
             ).bind(previous_id).bind(channel_id).bind(author_id).fetch_optional(&mut *tx).await?;
             tx.commit().await?;
@@ -278,7 +295,7 @@ async fn create_message_with_delivery_typed(
     let mut row = sqlx::query_as::<_, MessageRow>(
         "INSERT INTO messages (id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, reference_id, e2ee_header, components, embeds)
          VALUES ($1, $2, $3, $4, $5, $12, $6, $7, $8, $9, $10, $11)
-         RETURNING id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision",
+         RETURNING id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision, forwarded_from",
     ).bind(id).bind(channel_id).bind(author_id).bind(content).bind(nonce)
         .bind(message_type).bind(flags).bind(reference_id).bind(e2ee_header)
         .bind(components_json).bind(embeds_json).bind(delivery_nonce)
@@ -556,7 +573,7 @@ pub async fn get_message_typed(
     id: MessageId,
 ) -> Result<Option<MessageRow>, DbError> {
     let row = sqlx::query_as::<_, MessageRow>(
-        "SELECT id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision
+        "SELECT id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision, forwarded_from
          FROM messages WHERE id = $1",
     )
     .bind(id)
@@ -585,7 +602,7 @@ pub async fn get_channel_messages_typed(
     let rows = match (before, after) {
         (Some(before_id), _) => {
             sqlx::query_as::<_, MessageRow>(
-                "SELECT id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision
+                "SELECT id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision, forwarded_from
                  FROM messages WHERE channel_id = $1 AND id < $2 ORDER BY id DESC LIMIT $3",
             )
             .bind(channel_id)
@@ -596,7 +613,7 @@ pub async fn get_channel_messages_typed(
         }
         (None, Some(after_id)) => {
             sqlx::query_as::<_, MessageRow>(
-                "SELECT id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision
+                "SELECT id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision, forwarded_from
                  FROM messages WHERE channel_id = $1 AND id > $2 ORDER BY id ASC LIMIT $3",
             )
             .bind(channel_id)
@@ -607,7 +624,7 @@ pub async fn get_channel_messages_typed(
         }
         (None, None) => {
             sqlx::query_as::<_, MessageRow>(
-                "SELECT id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision
+                "SELECT id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision, forwarded_from
                  FROM messages WHERE channel_id = $1 ORDER BY id DESC LIMIT $2",
             )
             .bind(channel_id)
@@ -652,7 +669,7 @@ pub async fn update_message_typed(
     let mut row = sqlx::query_as::<_, MessageRow>(
         "UPDATE messages SET content = $2, edited_at = $3
          WHERE id = $1
-         RETURNING id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision",
+         RETURNING id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision, forwarded_from",
     )
     .bind(id)
     .bind(content)
@@ -828,7 +845,7 @@ pub async fn update_message_authorized_with_receipt(
     let previous = sqlx::query_as::<_, MessageRow>(
         "UPDATE messages SET id = id
          WHERE id = $1 AND channel_id = $2 AND (author_id = $3 OR $4)
-         RETURNING id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision",
+         RETURNING id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision, forwarded_from",
     )
     .bind(id)
     .bind(channel_id)
@@ -878,7 +895,7 @@ pub async fn update_message_authorized_with_receipt(
          WHERE id = $1
            AND channel_id = $2
            AND (author_id = $3 OR $8)
-         RETURNING id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision",
+         RETURNING id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision, forwarded_from",
     )
     .bind(id)
     .bind(channel_id)
@@ -1086,7 +1103,7 @@ pub async fn get_pinned_messages_typed(
     channel_id: ChannelId,
 ) -> Result<Vec<MessageRow>, DbError> {
     let rows = sqlx::query_as::<_, MessageRow>(
-        "SELECT id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision
+        "SELECT id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision, forwarded_from
          FROM messages WHERE channel_id = $1 AND pinned = TRUE ORDER BY id ASC",
     )
     .bind(channel_id)
@@ -1148,7 +1165,7 @@ pub async fn pin_message_typed(
         )));
     }
 
-    let mut row = sqlx::query_as::<_, MessageRow>("UPDATE messages SET pinned = TRUE WHERE id = $1 AND channel_id = $2 RETURNING id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision")
+    let mut row = sqlx::query_as::<_, MessageRow>("UPDATE messages SET pinned = TRUE WHERE id = $1 AND channel_id = $2 RETURNING id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision, forwarded_from")
         .bind(id).bind(channel_id).fetch_one(&mut *tx).await?;
     crate::message_recovery::record_metadata_update(&mut tx, &mut row).await?;
     tx.commit().await?;
@@ -1168,7 +1185,7 @@ pub async fn unpin_message_typed(
 ) -> Result<bool, DbError> {
     let mut tx = pool.begin().await?;
     lock_message_channel(&mut tx, channel_id.get()).await?;
-    let row = sqlx::query_as::<_, MessageRow>("UPDATE messages SET pinned = FALSE WHERE id = $1 AND channel_id = $2 RETURNING id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision")
+    let row = sqlx::query_as::<_, MessageRow>("UPDATE messages SET pinned = FALSE WHERE id = $1 AND channel_id = $2 RETURNING id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision, forwarded_from")
         .bind(id).bind(channel_id).fetch_optional(&mut *tx).await?;
     let changed = row.is_some();
     if let Some(mut row) = row {
@@ -1263,122 +1280,25 @@ pub async fn search_messages_typed(
     after: Option<DateTime<Utc>>,
     before: Option<DateTime<Utc>>,
 ) -> Result<Vec<MessageRow>, DbError> {
-    const MESSAGE_FLAG_DM_E2EE: i32 = 1 << 0;
-    // Defense-in-depth: clamp the bound LIMIT to a positive value so a
-    // negative caller limit can never become an unbounded SQLite read.
-    let limit = limit.clamp(1, 500);
-    let after_text = after.map(datetime_to_db_text);
-    let before_text = before.map(datetime_to_db_text);
-    match crate::active_database_engine() {
-        crate::DatabaseEngine::Postgres => {
-            let rows = sqlx::query_as::<_, MessageRow>(
-                "SELECT id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision
-                 FROM messages
-                 WHERE channel_id = $1
-                   AND search_vector @@ plainto_tsquery('english', $2)
-                   AND ($3 IS NULL OR author_id = $3)
-                   AND ($4 IS NULL OR created_at >= $4)
-                   AND ($5 IS NULL OR created_at <= $5)
-                   AND (flags & $7) = 0
-                 ORDER BY ts_rank(search_vector, plainto_tsquery('english', $2)) DESC
-                 LIMIT $6",
-            )
-            .bind(channel_id)
-            .bind(query)
-            .bind(author_id)
-            .bind(after_text.as_deref())
-            .bind(before_text.as_deref())
-            .bind(limit)
-            .bind(MESSAGE_FLAG_DM_E2EE)
-            .fetch_all(pool)
-            .await?;
-            Ok(rows)
-        }
-        crate::DatabaseEngine::Sqlite => {
-            // Use FTS5 for full-text search, falling back to LIKE if FTS table
-            // is not yet available (e.g. migration hasn't run).
-            let fts_query = sanitize_fts5_query(query);
-            let fts_result = sqlx::query_as::<_, MessageRow>(
-                "SELECT m.id, m.channel_id, m.author_id, m.content, m.nonce, m.delivery_nonce, m.message_type, m.flags, m.edited_at, CASE WHEN m.pinned THEN 1 ELSE 0 END AS pinned, m.reference_id, m.e2ee_header, m.created_at, m.embeds, m.components, m.recovery_revision
-                 FROM messages m
-                 JOIN messages_fts ON messages_fts.rowid = m.id
-                 WHERE messages_fts MATCH $1
-                   AND messages_fts.channel_id = $2
-                   AND ($3 IS NULL OR m.author_id = $3)
-                   AND ($4 IS NULL OR m.created_at >= $4)
-                   AND ($5 IS NULL OR m.created_at <= $5)
-                   AND (m.flags & $7) = 0
-                 ORDER BY rank
-                 LIMIT $6",
-            )
-            .bind(&fts_query)
-            .bind(channel_id)
-            .bind(author_id)
-            .bind(after_text.as_deref())
-            .bind(before_text.as_deref())
-            .bind(limit)
-            .bind(MESSAGE_FLAG_DM_E2EE)
-            .fetch_all(pool)
-            .await;
-
-            match fts_result {
-                Ok(rows) => Ok(rows),
-                Err(err) if is_unusable_fts_index(&err) => {
-                    // The FTS5 index is missing or unusable (for example, a
-                    // stale local database has the pre-standalone FTS shape).
-                    // Degrade to a LIKE scan for search-index failures only;
-                    // unrelated DB errors still propagate.
-                    tracing::warn!(
-                        error = %err,
-                        "messages_fts unavailable; falling back to LIKE search"
-                    );
-                    let escaped = query
-                        .replace('\\', "\\\\")
-                        .replace('%', "\\%")
-                        .replace('_', "\\_");
-                    let pattern = format!("%{}%", escaped);
-                    let rows = sqlx::query_as::<_, MessageRow>(
-                        "SELECT id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision
-                         FROM messages
-                         WHERE channel_id = $1
-                           AND content LIKE $2 ESCAPE '\\'
-                           AND ($3 IS NULL OR author_id = $3)
-                           AND ($4 IS NULL OR created_at >= $4)
-                           AND ($5 IS NULL OR created_at <= $5)
-                           AND (flags & $7) = 0
-                         ORDER BY id DESC
-                         LIMIT $6",
-                    )
-                    .bind(channel_id)
-                    .bind(pattern)
-                    .bind(author_id)
-                    .bind(after_text.as_deref())
-                    .bind(before_text.as_deref())
-                    .bind(limit)
-                    .bind(MESSAGE_FLAG_DM_E2EE)
-                    .fetch_all(pool)
-                    .await?;
-                    Ok(rows)
-                }
-                Err(err) => Err(DbError::from(err)),
-            }
-        }
-    }
-}
-
-/// Returns true when SQLite cannot use the message FTS index. This is kept
-/// narrow to search-index failures so unrelated DB errors still surface.
-fn is_unusable_fts_index(err: &sqlx::Error) -> bool {
-    matches!(err, sqlx::Error::Database(db) if {
-        let msg = db.message().to_ascii_lowercase();
-        (msg.contains("messages_fts")
-            && (msg.contains("no such table")
-                || msg.contains("no such column")
-                || msg.contains("no such module")
-                || msg.contains("malformed")
-                || msg.contains("corrupt")))
-            || msg.contains("unable to use function match")
-    })
+    let ids = [channel_id];
+    let page = crate::message_search::search_messages_page(
+        pool,
+        &crate::message_search::MessageSearch {
+            channel_ids: &ids,
+            query: Some(query),
+            author_id,
+            after,
+            before,
+            pinned: None,
+            mentions_user_id: None,
+            has: &[],
+            limit,
+            offset: 0,
+            order: crate::message_search::MessageSearchOrder::Relevance,
+        },
+    )
+    .await?;
+    Ok(page.messages)
 }
 
 /// Raw i64 shim kept for API compat.
@@ -1403,18 +1323,12 @@ pub async fn search_messages(
     .await
 }
 
-/// Maximum number of channels a single forum-wide search may fan out over.
-/// Forum channels can accumulate many posts (each its own channel); this caps
-/// the IN-list so the query stays bounded. Callers should pre-truncate.
-const MAX_SEARCH_CHANNELS: usize = 500;
-
-/// Full-text search across a *set* of channels in a single ranked query. Used
-/// for forum-wide search, where each forum post is its own channel: instead of
-/// running one search per post, the caller passes every post channel id and
-/// gets back the top `limit` matches ranked by relevance. E2EE DM messages are
-/// excluded. Returns an empty vec when `channel_ids` is empty.
+/// Full-text search across a set of channels in one ranked query.
 ///
-/// Bind layout: channel ids occupy `$1..=$n`; the remaining parameters follow.
+/// Forum search passes every post channel id and takes the top `limit`
+/// matches. The SQL lives in [`crate::message_search`] so guild search can
+/// apply the same filters. E2EE messages are excluded. An empty channel list
+/// returns an empty vec.
 #[allow(clippy::too_many_arguments)]
 pub async fn search_messages_in_channels_typed(
     pool: &DbPool,
@@ -1425,131 +1339,24 @@ pub async fn search_messages_in_channels_typed(
     after: Option<DateTime<Utc>>,
     before: Option<DateTime<Utc>>,
 ) -> Result<Vec<MessageRow>, DbError> {
-    const MESSAGE_FLAG_DM_E2EE: i32 = 1 << 0;
-    if channel_ids.is_empty() {
-        return Ok(Vec::new());
-    }
-    if channel_ids.len() > MAX_SEARCH_CHANNELS {
-        return Err(DbError::Sqlx(sqlx::Error::Protocol(
-            "too many channel ids in forum search".to_string(),
-        )));
-    }
-    let after_text = after.map(datetime_to_db_text);
-    let before_text = before.map(datetime_to_db_text);
-    let n = channel_ids.len();
-    let in_list = build_placeholders(1, n);
-    // Positional params trailing the channel-id IN-list. sqlx honours the
-    // explicit `$N` index, so text order need not match bind order.
-    let p_query = n + 1;
-    let p_author = n + 2;
-    let p_after = n + 3;
-    let p_before = n + 4;
-    let p_limit = n + 5;
-    let p_flag = n + 6;
-
-    match crate::active_database_engine() {
-        crate::DatabaseEngine::Postgres => {
-            let sql = format!(
-                "SELECT id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision
-                 FROM messages
-                 WHERE channel_id IN ({in_list})
-                   AND search_vector @@ plainto_tsquery('english', ${p_query})
-                   AND (${p_author} IS NULL OR author_id = ${p_author})
-                   AND (${p_after} IS NULL OR created_at >= ${p_after})
-                   AND (${p_before} IS NULL OR created_at <= ${p_before})
-                   AND (flags & ${p_flag}) = 0
-                 ORDER BY ts_rank(search_vector, plainto_tsquery('english', ${p_query})) DESC, id DESC
-                 LIMIT ${p_limit}"
-            );
-            let mut q = sqlx::query_as::<_, MessageRow>(&sql);
-            for cid in channel_ids {
-                q = q.bind(*cid);
-            }
-            let rows = q
-                .bind(query)
-                .bind(author_id)
-                .bind(after_text.as_deref())
-                .bind(before_text.as_deref())
-                .bind(limit)
-                .bind(MESSAGE_FLAG_DM_E2EE)
-                .fetch_all(pool)
-                .await?;
-            Ok(rows)
-        }
-        crate::DatabaseEngine::Sqlite => {
-            let fts_query = sanitize_fts5_query(query);
-            let sql = format!(
-                "SELECT m.id, m.channel_id, m.author_id, m.content, m.nonce, m.delivery_nonce, m.message_type, m.flags, m.edited_at, CASE WHEN m.pinned THEN 1 ELSE 0 END AS pinned, m.reference_id, m.e2ee_header, m.created_at, m.embeds, m.components, m.recovery_revision
-                 FROM messages m
-                 JOIN messages_fts ON messages_fts.rowid = m.id
-                 WHERE messages_fts MATCH ${p_query}
-                   AND messages_fts.channel_id IN ({in_list})
-                   AND (${p_author} IS NULL OR m.author_id = ${p_author})
-                   AND (${p_after} IS NULL OR m.created_at >= ${p_after})
-                   AND (${p_before} IS NULL OR m.created_at <= ${p_before})
-                   AND (m.flags & ${p_flag}) = 0
-                 ORDER BY rank, m.id DESC
-                 LIMIT ${p_limit}"
-            );
-            let mut q = sqlx::query_as::<_, MessageRow>(&sql);
-            for cid in channel_ids {
-                q = q.bind(*cid);
-            }
-            let fts_result = q
-                .bind(&fts_query)
-                .bind(author_id)
-                .bind(after_text.as_deref())
-                .bind(before_text.as_deref())
-                .bind(limit)
-                .bind(MESSAGE_FLAG_DM_E2EE)
-                .fetch_all(pool)
-                .await;
-
-            match fts_result {
-                Ok(rows) => Ok(rows),
-                Err(err) if is_unusable_fts_index(&err) => {
-                    // Same degradation as the single-channel search: if the FTS5
-                    // index is missing or unusable, fall back to a LIKE scan.
-                    tracing::warn!(
-                        error = %err,
-                        "messages_fts unavailable; falling back to LIKE search"
-                    );
-                    let escaped = query
-                        .replace('\\', "\\\\")
-                        .replace('%', "\\%")
-                        .replace('_', "\\_");
-                    let pattern = format!("%{}%", escaped);
-                    let sql = format!(
-                        "SELECT id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision
-                         FROM messages
-                         WHERE channel_id IN ({in_list})
-                           AND content LIKE ${p_query} ESCAPE '\\'
-                           AND (${p_author} IS NULL OR author_id = ${p_author})
-                           AND (${p_after} IS NULL OR created_at >= ${p_after})
-                           AND (${p_before} IS NULL OR created_at <= ${p_before})
-                           AND (flags & ${p_flag}) = 0
-                         ORDER BY id DESC
-                         LIMIT ${p_limit}"
-                    );
-                    let mut q = sqlx::query_as::<_, MessageRow>(&sql);
-                    for cid in channel_ids {
-                        q = q.bind(*cid);
-                    }
-                    let rows = q
-                        .bind(pattern)
-                        .bind(author_id)
-                        .bind(after_text.as_deref())
-                        .bind(before_text.as_deref())
-                        .bind(limit)
-                        .bind(MESSAGE_FLAG_DM_E2EE)
-                        .fetch_all(pool)
-                        .await?;
-                    Ok(rows)
-                }
-                Err(err) => Err(DbError::from(err)),
-            }
-        }
-    }
+    let page = crate::message_search::search_messages_page(
+        pool,
+        &crate::message_search::MessageSearch {
+            channel_ids,
+            query: Some(query),
+            author_id,
+            after,
+            before,
+            pinned: None,
+            mentions_user_id: None,
+            has: &[],
+            limit,
+            offset: 0,
+            order: crate::message_search::MessageSearchOrder::Relevance,
+        },
+    )
+    .await?;
+    Ok(page.messages)
 }
 
 /// Raw i64 shim kept for API compat.
@@ -1573,20 +1380,6 @@ pub async fn search_messages_in_channels(
         before,
     )
     .await
-}
-
-/// Sanitize user input for FTS5 MATCH queries. Wraps each word in double quotes
-/// to prevent FTS5 syntax errors from special characters.
-fn sanitize_fts5_query(input: &str) -> String {
-    input
-        .split_whitespace()
-        .filter(|w| !w.is_empty())
-        .map(|word| {
-            let escaped = word.replace('"', "\"\"");
-            format!("\"{}\"", escaped)
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 pub async fn get_message_ids_older_than(
@@ -1661,7 +1454,7 @@ pub async fn list_messages_by_author_typed(
     limit: i64,
 ) -> Result<Vec<MessageRow>, DbError> {
     let rows = sqlx::query_as::<_, MessageRow>(
-        "SELECT id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision
+        "SELECT id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision, forwarded_from
          FROM messages
          WHERE author_id = $1
          ORDER BY id DESC
@@ -1693,7 +1486,7 @@ pub async fn list_messages_for_user_export_typed(
     let rows = sqlx::query_as::<_, MessageRow>(
         "SELECT m.id, m.channel_id, m.author_id, m.content, m.nonce, m.delivery_nonce, m.message_type, m.flags,
                 m.edited_at, CASE WHEN m.pinned THEN 1 ELSE 0 END AS pinned, m.reference_id,
-                m.e2ee_header, m.created_at, m.embeds, m.components, m.recovery_revision
+                m.e2ee_header, m.created_at, m.embeds, m.components, m.recovery_revision, m.forwarded_from
          FROM messages m
          WHERE m.author_id = $1
             OR EXISTS (
@@ -1949,7 +1742,7 @@ async fn update_message_property(
     };
     let mut tx = pool.begin().await?;
     lock_message_channel(&mut tx, existing.channel_id).await?;
-    let sql = format!("UPDATE messages SET {property} = $2 WHERE id = $1 RETURNING id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision");
+    let sql = format!("UPDATE messages SET {property} = $2 WHERE id = $1 RETURNING id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision, forwarded_from");
     if let Some(mut row) = sqlx::query_as::<_, MessageRow>(&sql)
         .bind(id)
         .bind(value)
@@ -2004,7 +1797,7 @@ pub async fn get_message_with_embeds_typed(
     id: MessageId,
 ) -> Result<Option<MessageRow>, DbError> {
     let row = sqlx::query_as::<_, MessageRow>(
-        "SELECT id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision
+        "SELECT id, channel_id, author_id, content, nonce, delivery_nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components, recovery_revision, forwarded_from
          FROM messages WHERE id = $1",
     )
     .bind(id)
@@ -2098,7 +1891,7 @@ pub async fn get_stickers_for_message_ids(
         )));
     }
     let sql = format!(
-        "SELECT ms.message_id AS message_id, s.id, s.guild_id, s.name, s.description, s.format_type,
+        "SELECT ms.message_id AS message_id, s.id, s.guild_id, s.name, s.description, s.tags, s.format_type,
                 s.asset_key, s.asset_content_type, s.creator_id, s.created_at
          FROM message_stickers ms
          INNER JOIN stickers s ON s.id = ms.sticker_id
@@ -2899,6 +2692,109 @@ mod tests {
             .await
             .unwrap();
         assert!(none.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_search_page_filters_without_text_are_newest_first() {
+        let pool = test_pool().await;
+        let (user_id, _, channel_id) = setup_channel(&pool).await;
+        let channel = ChannelId::new(channel_id);
+        create_message_typed(
+            &pool,
+            MessageId::new(9200),
+            channel,
+            UserId::new(user_id),
+            "older note",
+            0,
+            None,
+        )
+        .await
+        .unwrap();
+        create_message_typed(
+            &pool,
+            MessageId::new(9201),
+            channel,
+            UserId::new(user_id),
+            "newer note https://example.com/x",
+            0,
+            None,
+        )
+        .await
+        .unwrap();
+        sqlx::query("UPDATE messages SET created_at = '2020-01-01 00:00:00' WHERE id = 9200")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE messages SET created_at = '2020-06-01 00:00:00' WHERE id = 9201")
+            .execute(&pool)
+            .await
+            .unwrap();
+        pin_message_typed(&pool, MessageId::new(9200), channel)
+            .await
+            .unwrap();
+
+        let page = crate::message_search::search_messages_page(
+            &pool,
+            &crate::message_search::MessageSearch {
+                channel_ids: &[channel],
+                query: None,
+                author_id: None,
+                after: None,
+                before: None,
+                pinned: Some(true),
+                mentions_user_id: None,
+                has: &[],
+                limit: 25,
+                offset: 0,
+                order: crate::message_search::MessageSearchOrder::Newest,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.messages[0].id, 9200);
+
+        let links = crate::message_search::search_messages_page(
+            &pool,
+            &crate::message_search::MessageSearch {
+                channel_ids: &[channel],
+                query: None,
+                author_id: None,
+                after: None,
+                before: None,
+                pinned: None,
+                mentions_user_id: None,
+                has: &[crate::message_search::MessageHas::Link],
+                limit: 25,
+                offset: 0,
+                order: crate::message_search::MessageSearchOrder::Newest,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(links.total, 1);
+        assert_eq!(links.messages[0].id, 9201);
+
+        let both = crate::message_search::search_messages_page(
+            &pool,
+            &crate::message_search::MessageSearch {
+                channel_ids: &[channel],
+                query: Some("note"),
+                author_id: None,
+                after: None,
+                before: None,
+                pinned: None,
+                mentions_user_id: None,
+                has: &[],
+                limit: 10,
+                offset: 0,
+                order: crate::message_search::MessageSearchOrder::Newest,
+            },
+        )
+        .await
+        .unwrap();
+        let ids: Vec<i64> = both.messages.iter().map(|message| message.id).collect();
+        assert_eq!(ids, vec![9201, 9200]);
     }
 
     #[tokio::test]

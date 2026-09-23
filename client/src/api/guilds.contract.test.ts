@@ -20,7 +20,7 @@ describe('production guild HTTP contracts', () => {
     const response = await api.getAll();
     expect(response.data).toBe(data);
     expect(response.data.map(guild => guild.member_count)).toEqual([4, 2]);
-    expect(response.data[0]).not.toHaveProperty('banner_hash');
+    expect(response.data[0]).not.toHaveProperty('vanity_url_code');
     expect(adapter.mock.calls[0][0]).toMatchObject({ method: 'get', url: '/users/@me/guilds' });
   });
 

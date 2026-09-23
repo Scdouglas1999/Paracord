@@ -16,7 +16,7 @@
 //     two runs each created a connection for the same server — two sessions,
 //     two streams, one of them orphaned with nothing left to close it.
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useServerListStore } from '../stores/serverListStore';
 import { useAuthStore } from '../stores/authStore';
 import type { GatewayPayload, User } from '../types';
@@ -24,6 +24,7 @@ import { connectionManager, type ServerConnection } from './connectionManager';
 import { isTauri } from './tauriEnv';
 import { createApiClient } from '../api/client';
 import { acceptDatabaseHistoryEpoch, clearDatabaseHistoryMemory } from './databaseHistory';
+import { loadValidators } from '../api/contractValidators';
 
 vi.mock('../gateway/dispatch', () => ({ dispatchGatewayEvent: vi.fn() }));
 vi.mock('./messages/accountMessagingRuntime', () => ({ pauseAccountMessagingForRecovery: vi.fn() }));
@@ -73,7 +74,7 @@ let posts: string[] = [];
 
 /** A complete `GET /users/@me` body, so the real response contract accepts it. */
 const currentUser = {
-  avatar_hash: null, banner_hash: null, bio: null, bot: false,
+  avatar_hash: null, banner_hash: null, accent_color: null, bio: null, bot: false,
   created_at: '2026-01-01T00:00:00Z', discriminator: 0, display_name: null,
   email: 'owner@example.test', email_verified: true, flags: 0,
   has_public_key: false, id: scope.userId, linked_accounts: [], pronouns: null,
@@ -120,6 +121,12 @@ async function advance(ms: number): Promise<void> {
     await vi.advanceTimersByTimeAsync(Math.min(step, ms - elapsed));
   }
 }
+
+// The response validators are their own chunk; load it before the fake clock
+// takes over, as the app has by the time a reconnect runs.
+beforeAll(async () => {
+  await loadValidators();
+});
 
 beforeEach(() => {
   vi.useFakeTimers();

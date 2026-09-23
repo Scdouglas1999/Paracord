@@ -12,7 +12,7 @@ import {
   EyeOff,
   X,
 } from 'lucide-react';
-import { RoomEvent, Track, VideoQuality } from 'livekit-client';
+import { livekit } from '../../stores/voice/livekitRuntime';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { useAuthStore } from '../../stores/authStore';
 import {
@@ -339,13 +339,13 @@ export function StreamViewer({
       for (const participant of room.remoteParticipants.values()) {
         const shouldSubscribe = targetIdentities.has(participant.identity);
         for (const publication of participant.videoTrackPublications.values()) {
-          if (publication.source !== Track.Source.ScreenShare) continue;
+          if (publication.source !== livekit().Track.Source.ScreenShare) continue;
           if (publication.isSubscribed !== shouldSubscribe) {
             publication.setSubscribed(shouldSubscribe);
           }
         }
         for (const publication of participant.audioTrackPublications.values()) {
-          if (publication.source !== Track.Source.ScreenShareAudio) continue;
+          if (publication.source !== livekit().Track.Source.ScreenShareAudio) continue;
           if (publication.isSubscribed !== shouldSubscribe) {
             publication.setSubscribed(shouldSubscribe);
           }
@@ -383,7 +383,7 @@ export function StreamViewer({
     if (watchingSelf) {
       for (const publication of room.localParticipant.videoTrackPublications.values()) {
         if (
-          publication.source === Track.Source.ScreenShare &&
+          publication.source === livekit().Track.Source.ScreenShare &&
           publication.track &&
           publication.track.mediaStreamTrack?.readyState !== 'ended'
         ) {
@@ -398,15 +398,15 @@ export function StreamViewer({
         foundStreamer = participant.name || participant.identity;
         for (const publication of participant.videoTrackPublications.values()) {
           if (
-            publication.source === Track.Source.ScreenShare &&
+            publication.source === livekit().Track.Source.ScreenShare &&
             publication.track &&
             publication.track.mediaStreamTrack?.readyState !== 'ended'
           ) {
             if (quality !== 'auto') {
-              if (quality === 'low') publication.setVideoQuality(VideoQuality.LOW);
-              if (quality === 'medium') publication.setVideoQuality(VideoQuality.MEDIUM);
+              if (quality === 'low') publication.setVideoQuality(livekit().VideoQuality.LOW);
+              if (quality === 'medium') publication.setVideoQuality(livekit().VideoQuality.MEDIUM);
               if (quality === 'high' || quality === 'source') {
-                publication.setVideoQuality(VideoQuality.HIGH);
+                publication.setVideoQuality(livekit().VideoQuality.HIGH);
               }
             }
             foundVideoTrack = publication.track.mediaStreamTrack;
@@ -415,7 +415,7 @@ export function StreamViewer({
         }
         const audioPubs = [...participant.audioTrackPublications.values()];
         for (const publication of audioPubs) {
-          if (publication.source !== Track.Source.ScreenShareAudio) continue;
+          if (publication.source !== livekit().Track.Source.ScreenShareAudio) continue;
           if (!publication.isSubscribed) {
             publication.setSubscribed(true);
           }
@@ -683,6 +683,7 @@ export function StreamViewer({
 
     const onRoomEvent = () => attachTrackRef.current();
     onRoomEvent();
+    const { RoomEvent } = livekit();
     room.on(RoomEvent.TrackSubscribed, onRoomEvent);
     room.on(RoomEvent.TrackUnsubscribed, onRoomEvent);
     room.on(RoomEvent.TrackPublished, onRoomEvent);

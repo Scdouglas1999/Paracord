@@ -6,27 +6,22 @@ import { accountScopeKey, type AccountScope } from '../lib/serverScope';
 import { subscribeServerDisconnect } from '../lib/serverDisconnect';
 import { gateway } from '../gateway/manager';
 import { CallSession, type CallPhase } from './voice/callSession';
-import {
+// Types only: the library itself is loaded on the one path that builds a
+// LiveKit room (see `voice/livekitRuntime.ts`), not with this store at startup.
+import type {
   Room,
-  RoomEvent,
-  ParticipantEvent,
-  Track,
-  LogLevel,
-  setLogLevel,
   DisconnectReason,
-  ConnectionState,
-  AudioPresets,
-  createAudioAnalyser,
-  type AudioCaptureOptions,
-  type Participant,
-  type RemoteParticipant,
-  type LocalParticipant,
-  type LocalAudioTrack,
-  type RemoteTrack,
-  type RemoteTrackPublication,
-  type LocalTrackPublication,
-  type TrackPublication,
+  AudioCaptureOptions,
+  Participant,
+  RemoteParticipant,
+  LocalParticipant,
+  LocalAudioTrack,
+  RemoteTrack,
+  RemoteTrackPublication,
+  LocalTrackPublication,
+  TrackPublication,
 } from 'livekit-client';
+import { livekit, loadLivekit } from './voice/livekitRuntime';
 import { useAuthStore } from './authStore';
 import { playVoiceJoinSound, playVoiceLeaveSound } from '../lib/features/voiceSounds';
 import { isTauri } from '../lib/tauriEnv';
@@ -187,7 +182,7 @@ function configureLivekitLogging(): void {
   // LiveKit emits verbose websocket lifecycle logs (including expected
   // close/error events during disconnect), which can look like fatal errors.
   if (typeof window !== 'undefined' && import.meta.env.PROD) {
-    setLogLevel(LogLevel.warn);
+    livekit().setLogLevel(livekit().LogLevel.warn);
   }
 }
 
@@ -267,7 +262,7 @@ function suppressVoiceForStream(suppress: boolean): void {
 
 /** True only when the room's signaling transport is fully connected. */
 function isRoomConnected(room: Room | null): boolean {
-  return room != null && room.state === ConnectionState.Connected;
+  return room != null && room.state === livekit().ConnectionState.Connected;
 }
 
 function clearActiveRoomListeners(): void {
@@ -448,7 +443,7 @@ function startLocalAudioUplinkMonitor(room: Room): void {
         });
         return;
       }
-      const publication = room.localParticipant.getTrackPublication(Track.Source.Microphone);
+      const publication = room.localParticipant.getTrackPublication(livekit().Track.Source.Microphone);
       const track = publication?.track as LocalAudioTrack | undefined;
       if (!publication || !track || publication.isMuted) {
         localAudioLastBytesSent = null;
@@ -564,7 +559,7 @@ function refreshAudioCodecCompatibility(room: Room, reason = 'refresh'): void {
   const state = useVoiceStore.getState();
   if (!state.connected || state.selfMute || state.selfDeaf) return;
 
-  const publication = room.localParticipant.getTrackPublication(Track.Source.Microphone);
+  const publication = room.localParticipant.getTrackPublication(livekit().Track.Source.Microphone);
   const currentMime = (publication?.mimeType || '').toLowerCase();
   const hasKnownMime = currentMime.length > 0;
   const currentMatchesPolicy =
@@ -587,7 +582,7 @@ function refreshAudioCodecCompatibility(room: Room, reason = 'refresh'): void {
   void setMicrophoneEnabledWithFallback(room, true, getSavedInputDeviceId()).then((ok) => {
     if (!ok) return;
     startLocalAudioUplinkMonitor(room);
-    const afterMime = room.localParticipant.getTrackPublication(Track.Source.Microphone)?.mimeType;
+    const afterMime = room.localParticipant.getTrackPublication(livekit().Track.Source.Microphone)?.mimeType;
     console.info(`[voice] Microphone codec after republish: ${afterMime || 'unknown'}`);
   });
 }
@@ -598,9 +593,9 @@ function startLocalMicAnalyser(room: Room): void {
   const localUserId = currentCallUser()?.id;
   if (!localUserId) return;
 
-  const publication = room.localParticipant.getTrackPublication(Track.Source.Microphone);
+  const publication = room.localParticipant.getTrackPublication(livekit().Track.Source.Microphone);
   const track = publication?.track;
-  if (!track || track.kind !== Track.Kind.Audio) {
+  if (!track || track.kind !== livekit().Track.Kind.Audio) {
     useVoiceStore.setState({
       micInputActive: false,
       micInputLevel: 0,
@@ -609,7 +604,7 @@ function startLocalMicAnalyser(room: Room): void {
   }
 
   try {
-    const { calculateVolume, cleanup } = createAudioAnalyser(track as LocalAudioTrack, {
+    const { calculateVolume, cleanup } = livekit().createAudioAnalyser(track as LocalAudioTrack, {
       cloneTrack: true,
       smoothingTimeConstant: 0.45,
     });
@@ -618,7 +613,7 @@ function startLocalMicAnalyser(room: Room): void {
     localMicAnalyserInterval = setInterval(() => {
       if (localMicAnalyserRoom !== room) return;
       const state = useVoiceStore.getState();
-      const micPublication = room.localParticipant.getTrackPublication(Track.Source.Microphone);
+      const micPublication = room.localParticipant.getTrackPublication(livekit().Track.Source.Microphone);
       const locallyMuted =
         state.selfMute || state.selfDeaf || micPublication?.isMuted === true || !state.connected;
       const rawVolume = calculateVolume();
@@ -676,14 +671,14 @@ function synthesizeVoiceStateFromParticipant(
   for (const pub of participant.videoTrackPublications.values()) {
     const hasUsableTrack = !pub.track || pub.track.mediaStreamTrack?.readyState !== 'ended';
     if (
-      pub.source === Track.Source.ScreenShare &&
+      pub.source === livekit().Track.Source.ScreenShare &&
       !pub.isMuted &&
       hasUsableTrack
     ) {
       hasScreenShare = true;
     }
     if (
-      pub.source === Track.Source.Camera &&
+      pub.source === livekit().Track.Source.Camera &&
       !pub.isMuted &&
       hasUsableTrack
     ) {
@@ -974,7 +969,7 @@ async function applyMicrophoneProcessor(
   room: Room,
   profile: MicCaptureProfile
 ): Promise<void> {
-  const publication = room.localParticipant.getTrackPublication(Track.Source.Microphone);
+  const publication = room.localParticipant.getTrackPublication(livekit().Track.Source.Microphone);
   const localTrack = publication?.track;
   if (!localTrack) return;
 
@@ -1155,7 +1150,7 @@ function attachRemoteAudioTrack(
   muted: boolean,
   participantIdentity?: string
 ): void {
-  if (typeof document === 'undefined' || track.kind !== Track.Kind.Audio) return;
+  if (typeof document === 'undefined' || track.kind !== livekit().Track.Kind.Audio) return;
   const key = trackKey(track, publication, participantIdentity);
   const existing = attachedRemoteAudioElements.get(key);
 
@@ -1243,7 +1238,7 @@ function detachRemoteAudioTrack(
   publication: RemoteTrackPublication,
   participantIdentity?: string
 ): void {
-  if (track.kind !== Track.Kind.Audio) return;
+  if (track.kind !== livekit().Track.Kind.Audio) return;
   const key = trackKey(track, publication, participantIdentity);
   const existing = attachedRemoteAudioElements.get(key);
   if (existing) {
@@ -1330,7 +1325,7 @@ async function setMicrophoneEnabledWithFallback(
   const redPreferred = forceRedForCompatibility || shouldForceRedCompatibility(room);
   forceRedForCompatibility = redPreferred;
   const microphonePublishOptions = {
-    audioPreset: AudioPresets.speech,
+    audioPreset: livekit().AudioPresets.speech,
     // Keep DTX off for speech stability. DTX/VAD can clip word starts/ends
     // on some microphones and noisy environments.
     dtx: false,
@@ -1340,7 +1335,7 @@ async function setMicrophoneEnabledWithFallback(
     stopMicTrackOnMute: false,
   };
   const ensurePublishedTrackUnmuted = async () => {
-    const publication = room.localParticipant.getTrackPublication(Track.Source.Microphone);
+    const publication = room.localParticipant.getTrackPublication(livekit().Track.Source.Microphone);
     if (!publication?.isMuted) return;
     try {
       await publication.unmute();
@@ -1390,7 +1385,7 @@ async function setMicrophoneEnabledWithFallback(
   // If a mic track is already published, just unmute it instead of tearing
   // down and re-publishing. This avoids a failure window where the disable
   // succeeds but the re-enable fails, leaving the mic stuck off.
-  const existingPublication = room.localParticipant.getTrackPublication(Track.Source.Microphone);
+  const existingPublication = room.localParticipant.getTrackPublication(livekit().Track.Source.Microphone);
   if (existingPublication) {
     try {
       await ensurePublishedTrackUnmuted();
@@ -1452,14 +1447,14 @@ function syncRemoteAudioTracks(room: Room, muted: boolean): void {
   if (!isCurrentRoom(room)) return;
   for (const participant of room.remoteParticipants.values()) {
     for (const publication of participant.trackPublications.values()) {
-      if (publication.source === Track.Source.ScreenShareAudio) {
+      if (publication.source === livekit().Track.Source.ScreenShareAudio) {
         continue;
       }
-      if (publication.kind === Track.Kind.Audio && !publication.isSubscribed) {
+      if (publication.kind === livekit().Track.Kind.Audio && !publication.isSubscribed) {
         publication.setSubscribed(true);
       }
       const track = publication.track;
-      if (track && track.kind === Track.Kind.Audio) {
+      if (track && track.kind === livekit().Track.Kind.Audio) {
         attachRemoteAudioTrack(
           track as RemoteTrack,
           publication as RemoteTrackPublication,
@@ -1496,7 +1491,7 @@ function registerRoomListeners(
       if (isCurrentRoom(room)) setSpeakingForIdentity(identity, speaking);
     };
     speakingHandlers.set(identity, handler);
-    participant.on(ParticipantEvent.IsSpeakingChanged, handler);
+    participant.on(livekit().ParticipantEvent.IsSpeakingChanged, handler);
     if (participant.isSpeaking) {
       setSpeakingForIdentity(identity, true);
     }
@@ -1506,7 +1501,7 @@ function registerRoomListeners(
     if (!identity) return;
     const handler = speakingHandlers.get(identity);
     if (handler) {
-      participant.off(ParticipantEvent.IsSpeakingChanged, handler);
+      participant.off(livekit().ParticipantEvent.IsSpeakingChanged, handler);
       speakingHandlers.delete(identity);
     }
     if (isCurrentRoom(room)) setSpeakingForIdentity(identity, false);
@@ -1546,10 +1541,10 @@ function registerRoomListeners(
     schedule(() => refreshAudioCodecCompatibility(room, 'participant-connected-delayed'), 300);
     schedule(() => refreshAudioCodecCompatibility(room, 'participant-connected-late'), 1500);
     for (const publication of participant.trackPublications.values()) {
-      if (publication.source === Track.Source.ScreenShareAudio) {
+      if (publication.source === livekit().Track.Source.ScreenShareAudio) {
         continue;
       }
-      if (publication.kind === Track.Kind.Audio && !publication.isSubscribed) {
+      if (publication.kind === livekit().Track.Kind.Audio && !publication.isSubscribed) {
         (publication as RemoteTrackPublication).setSubscribed(true);
       }
     }
@@ -1571,12 +1566,12 @@ function registerRoomListeners(
     publication: LocalTrackPublication,
     _participant: LocalParticipant
   ) => {
-    if (publication.source === Track.Source.Microphone) {
+    if (publication.source === livekit().Track.Source.Microphone) {
       stopLocalMicAnalyser();
       stopLocalAudioUplinkMonitor();
     }
     // When the local camera track is unpublished, clear selfVideo.
-    if (publication.source === Track.Source.Camera) {
+    if (publication.source === livekit().Track.Source.Camera) {
       const state = useVoiceStore.getState();
       if (state.selfVideo) {
         console.info('[voice] Local camera track unpublished; clearing selfVideo');
@@ -1594,7 +1589,7 @@ function registerRoomListeners(
     // When the local screen-share track is unpublished (e.g. the user clicked
     // "Stop sharing" in the OS chrome, or the shared window was closed),
     // clear selfStream so the stream viewer UI is removed.
-    if (publication.source === Track.Source.ScreenShare) {
+    if (publication.source === livekit().Track.Source.ScreenShare) {
       suppressVoiceForStream(false);
       const state = useVoiceStore.getState();
       if (state.selfStream) {
@@ -1645,24 +1640,24 @@ function registerRoomListeners(
     publication: RemoteTrackPublication,
     participant: Participant
   ) => {
-    if (publication.source === Track.Source.ScreenShareAudio) return;
+    if (publication.source === livekit().Track.Source.ScreenShareAudio) return;
     attachRemoteAudioTrack(track, publication, useVoiceStore.getState().selfDeaf, participant.identity);
   };
 
   const onTrackPublished = (publication: RemoteTrackPublication, participant: RemoteParticipant) => {
     refreshAudioCodecCompatibility(room, `track-published:${participant.identity}`);
     // Update presence when camera or screen share tracks are published/unpublished
-    if (publication.source === Track.Source.Camera || publication.source === Track.Source.ScreenShare) {
+    if (publication.source === livekit().Track.Source.Camera || publication.source === livekit().Track.Source.ScreenShare) {
       syncLivekitRoomPresence(room);
     }
-    if (publication.source === Track.Source.ScreenShareAudio) return;
-    if (publication.kind !== Track.Kind.Audio) return;
+    if (publication.source === livekit().Track.Source.ScreenShareAudio) return;
+    if (publication.kind !== livekit().Track.Kind.Audio) return;
     if (!publication.isSubscribed) {
       publication.setSubscribed(true);
     }
     // If track is already available at publish time, attach immediately.
     const track = publication.track;
-    if (track && track.kind === Track.Kind.Audio) {
+    if (track && track.kind === livekit().Track.Kind.Audio) {
       attachRemoteAudioTrack(
         track as RemoteTrack,
         publication as RemoteTrackPublication,
@@ -1673,7 +1668,7 @@ function registerRoomListeners(
       // Ensure we attempt attachment again shortly after publication.
       schedule(() => {
         const latestTrack = publication.track;
-        if (latestTrack && latestTrack.kind === Track.Kind.Audio) {
+        if (latestTrack && latestTrack.kind === livekit().Track.Kind.Audio) {
           attachRemoteAudioTrack(
             latestTrack as RemoteTrack,
             publication as RemoteTrackPublication,
@@ -1697,12 +1692,12 @@ function registerRoomListeners(
     participant?: RemoteParticipant
   ) => {
     refreshAudioCodecCompatibility(room, `track-subscription-status:${status}`);
-    if (publication.source === Track.Source.ScreenShareAudio) return;
-    if (publication.kind !== Track.Kind.Audio) return;
+    if (publication.source === livekit().Track.Source.ScreenShareAudio) return;
+    if (publication.kind !== livekit().Track.Kind.Audio) return;
     if (status !== 'subscribed' && !publication.isSubscribed) {
       publication.setSubscribed(true);
     }
-    if (status === 'subscribed' && publication.track && publication.track.kind === Track.Kind.Audio) {
+    if (status === 'subscribed' && publication.track && publication.track.kind === livekit().Track.Kind.Audio) {
       attachRemoteAudioTrack(
         publication.track as RemoteTrack,
         publication as RemoteTrackPublication,
@@ -1721,10 +1716,10 @@ function registerRoomListeners(
     participant: RemoteParticipant
   ) => {
     // ScreenShareAudio is managed by StreamViewer, not the voice audio pipeline.
-    if (publication.source === Track.Source.ScreenShareAudio) return;
+    if (publication.source === livekit().Track.Source.ScreenShareAudio) return;
     detachRemoteAudioTrack(track, publication, participant.identity);
     // Update presence when video tracks are removed so camera/stream icons update
-    if (publication.source === Track.Source.Camera || publication.source === Track.Source.ScreenShare) {
+    if (publication.source === livekit().Track.Source.Camera || publication.source === livekit().Track.Source.ScreenShare) {
       syncLivekitRoomPresence(room);
     }
   };
@@ -1733,7 +1728,7 @@ function registerRoomListeners(
     publication: TrackPublication,
     _participant: Participant
   ) => {
-    if (publication.source === Track.Source.Camera || publication.source === Track.Source.ScreenShare) {
+    if (publication.source === livekit().Track.Source.Camera || publication.source === livekit().Track.Source.ScreenShare) {
       syncLivekitRoomPresence(room);
     }
   };
@@ -1742,7 +1737,7 @@ function registerRoomListeners(
     publication: TrackPublication,
     _participant: Participant
   ) => {
-    if (publication.source === Track.Source.Camera || publication.source === Track.Source.ScreenShare) {
+    if (publication.source === livekit().Track.Source.Camera || publication.source === livekit().Track.Source.ScreenShare) {
       syncLivekitRoomPresence(room);
     }
   };
@@ -1751,7 +1746,7 @@ function registerRoomListeners(
     publication: TrackPublication,
     _participant: Participant
   ) => {
-    if (publication.source === Track.Source.Camera || publication.source === Track.Source.ScreenShare) {
+    if (publication.source === livekit().Track.Source.Camera || publication.source === livekit().Track.Source.ScreenShare) {
       syncLivekitRoomPresence(room);
     }
   };
@@ -1841,6 +1836,7 @@ function registerRoomListeners(
     onDisconnected(reason);
   };
 
+  const { RoomEvent } = livekit();
   room.on(RoomEvent.ActiveSpeakersChanged, guarded(onActiveSpeakersChanged));
   room.on(RoomEvent.ParticipantConnected, guarded(onParticipantConnected));
   room.on(RoomEvent.ParticipantDisconnected, guarded(onParticipantDisconnected));
@@ -2366,7 +2362,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
       setAttachedRemoteAudioMuted(get().selfDeaf);
       syncRemoteAudioTracks(room, get().selfDeaf);
 
-      const screenShareVideoPub = room.localParticipant.getTrackPublication(Track.Source.ScreenShare);
+      const screenShareVideoPub = room.localParticipant.getTrackPublication(livekit().Track.Source.ScreenShare);
       const screenShareVideoTrack = screenShareVideoPub?.track?.mediaStreamTrack;
       if (screenShareVideoTrack) {
         await tuneScreenShareCaptureTrack(screenShareVideoTrack, capture);
@@ -2383,7 +2379,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
         const deadline = Date.now() + timeoutMs;
         while (Date.now() < deadline) {
           const publication = room.localParticipant.getTrackPublication(
-            Track.Source.ScreenShareAudio
+            livekit().Track.Source.ScreenShareAudio
           ) as LocalTrackPublication | undefined;
           if (publication?.track) {
             return publication;
@@ -2392,7 +2388,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
         }
 
         return room.localParticipant.getTrackPublication(
-          Track.Source.ScreenShareAudio
+          livekit().Track.Source.ScreenShareAudio
         ) as LocalTrackPublication | undefined;
       };
 
@@ -2435,7 +2431,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
       // keyframe interval so the encoder doesn't waste bits on ramp-up
       // or too-frequent keyframes.
       try {
-        const pub = room.localParticipant.getTrackPublication(Track.Source.ScreenShare);
+        const pub = room.localParticipant.getTrackPublication(livekit().Track.Source.ScreenShare);
         const sender = pub?.track?.sender;
         if (sender) {
           const params = sender.getParameters();
@@ -2851,7 +2847,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
         state.connected &&
         state.channelId &&
         (
-          (state.room && state.room.state !== ConnectionState.Disconnected) ||
+          (state.room && state.room.state !== livekit().ConnectionState.Disconnected) ||
           state.mediaEngine != null
         )
       ) {
@@ -3010,13 +3006,13 @@ subscribeServerDisconnect(serverId => {
 registerSessionReset('voice', () => useVoiceStore.getState().reset());
 
 function createLivekitRoom(): Room {
-  return new Room({
+  return new (livekit().Room)({
         // Audio capture defaults: read user's voice settings for noise
         // suppression, echo cancellation, and voice isolation.
         audioCaptureDefaults: buildAudioCaptureOptions() as AudioCaptureOptions,
         // Publish defaults tuned for voice chat.
         publishDefaults: {
-          audioPreset: AudioPresets.speech,
+          audioPreset: livekit().AudioPresets.speech,
           dtx: false,
           // Prefer broad compatibility across browsers/WebViews and mixed
           // client versions. Some peers fail to decode RED reliably, causing
@@ -3241,7 +3237,6 @@ function commitCall(owner: CallSession, data: VoiceJoinResponse, media: { room: 
 }
 
 async function performCallJoin(owner: CallSession, previousMute: boolean, previousDeaf: boolean): Promise<void> {
-  configureLivekitLogging();
   const api = createCallVoiceApi(owner.context);
   const { channelId, guildId } = owner.target;
   const isDm = guildId === 'dm';
@@ -3301,6 +3296,10 @@ async function performCallJoin(owner: CallSession, previousMute: boolean, previo
       }
     }
     owner.assertCurrent();
+    // Only now is this call a LiveKit call, so only now is the library loaded.
+    await loadLivekit();
+    owner.assertCurrent();
+    configureLivekitLogging();
     const candidates = buildLivekitConnectCandidates(data.url, data.url_candidates);
     if (!candidates.length) candidates.push(normalizeLivekitUrlFromServerValue(data.url));
     if (TAURI_FAST_CONNECT && candidates.length > 1) {

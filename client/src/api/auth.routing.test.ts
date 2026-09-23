@@ -10,7 +10,7 @@ import { authApi } from './auth';
 
 const meResponse = {
   id: '1', username: 'owner', discriminator: 1, display_name: null,
-  avatar_hash: null, banner_hash: null, bio: null, flags: 0, bot: false,
+  avatar_hash: null, banner_hash: null, accent_color: null, bio: null, flags: 0, bot: false,
   system: false, created_at: '2026-01-01T00:00:00.000Z', pronouns: null,
   linked_accounts: [], email: 'owner@example.com', email_verified: false,
   public_key: null, has_public_key: false,

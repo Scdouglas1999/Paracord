@@ -9,7 +9,7 @@ export interface HomeAroundNowProps {
   people: readonly PersonLight[];
   /** WP1's one-sentence summary (`useAroundNow`). Never composed here. */
   sentence: string;
-  /** Everyone with their lights on across every building. */
+  /** Everyone online across every server. */
   lightsOn: number;
   /** Voice cards already name their people; avoid repeating those faces above them. */
   showFaces?: boolean;
@@ -25,8 +25,8 @@ export interface HomeAroundNowProps {
  */
 export function HomeAroundNow({ people, sentence, lightsOn, showFaces = true }: HomeAroundNowProps) {
   // Only the faces actually on screen count against the tail, and only the lit
-  // ones: the stack can carry a dim face, and "+N lights on" must stay a count
-  // of lights rather than of avatars.
+  // ones: the stack can carry a dim face, and "+N online" must stay a count
+  // of people online rather than of avatars.
   const shownLit = people
     .slice(0, AROUND_NOW_FACES)
     .filter((person) => person.level === 'on').length;

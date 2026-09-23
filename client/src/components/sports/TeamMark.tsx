@@ -17,7 +17,10 @@ export function espnImage(url: string | null | undefined): string | null {
   }
 }
 
-export function TeamMark({ team, size = 'md' }: { team: SportsTeam; size?: 'md' | 'lg' | 'xl' }) {
+/** A club's logo, or its monogram when the logo is missing or not from ESPN. */
+export type MarkTeam = Pick<SportsTeam, 'logo' | 'abbr' | 'short_name' | 'name'>;
+
+export function TeamMark({ team, size = 'md' }: { team: MarkTeam; size?: 'md' | 'lg' | 'xl' }) {
   const [failed, setFailed] = useState(false);
   const logo = espnImage(team.logo) && !failed ? team.logo.trim() : '';
   return (

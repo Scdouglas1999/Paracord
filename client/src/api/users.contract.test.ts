@@ -37,6 +37,7 @@ const currentUser: CurrentUser = {
   display_name: null,
   avatar_hash: null,
   banner_hash: null,
+  accent_color: null,
   bio: null,
   flags: 0,
   bot: false,
@@ -57,6 +58,7 @@ const updatedUser: UpdatedCurrentUser = {
   display_name: 'Wire',
   avatar_hash: null,
   banner_hash: null,
+  accent_color: null,
   bio: 'hi',
   flags: 0,
   bot: false,
@@ -86,6 +88,7 @@ const profile: PublicUserProfile = {
     display_name: 'Subject',
     avatar_hash: null,
     banner_hash: null,
+    accent_color: null,
     bio: null,
     flags: 0,
     bot: false,
@@ -126,6 +129,14 @@ describe('current user contract', () => {
     const { public_key: _pk, ...noKey } = currentUser;
     clientWith(noKey);
     await expect(authApi.getMe()).rejects.toBeInstanceOf(ApiContractError);
+  });
+
+  it('reads an account from a 3.1 instance, which does not send accent_color', async () => {
+    const { accent_color: _accent, ...fromOlderInstance } = currentUser as typeof currentUser & { accent_color?: unknown };
+    clientWith(fromOlderInstance);
+    const response = await authApi.getMe();
+    expect(response.data.accent_color).toBeUndefined();
+    expect(response.data.username).toBe(currentUser.username);
   });
 
   it('rejects a missing email on the update response but accepts the valid shape', async () => {

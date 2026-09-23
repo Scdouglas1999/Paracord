@@ -122,6 +122,7 @@ describe('SportsSettingsSection', () => {
         show_on_server_page: body.show_on_server_page ?? true,
         default_view: body.default_view ?? 'all',
         layout: body.layout ?? 'cards',
+        score_alerts: body.score_alerts ?? false,
       },
     } as never));
   });
@@ -152,6 +153,8 @@ describe('SportsSettingsSection', () => {
     await user.click(await screen.findByRole('button', { name: 'Add Kansas City Chiefs' }));
     await user.click(screen.getByRole('button', { name: 'Remove Kansas City Chiefs' }));
     await user.click(screen.getByRole('button', { name: 'Add Kansas City Chiefs' }));
+    expect(screen.getByText(/Members get a notification for each score in a favorite team's game/)).toBeInTheDocument();
+    await user.click(screen.getByRole('switch', { name: 'Tell members when a favorite team scores' }));
     await user.click(screen.getByRole('button', { name: 'Save changes' }));
 
     await waitFor(() => expect(sportsApi.updateSettings).toHaveBeenCalledWith('guild-1', {
@@ -164,6 +167,7 @@ describe('SportsSettingsSection', () => {
         name: 'Kansas City Chiefs',
       }],
       show_on_server_page: false,
+      score_alerts: true,
       default_view: 'live',
       layout: 'list',
     }));

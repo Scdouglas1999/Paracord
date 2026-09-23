@@ -22,7 +22,7 @@
  * never a server message.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 
 import { useAuthStore } from '../../stores/authStore';
 import { useChannelStore } from '../../stores/channelStore';
@@ -31,7 +31,6 @@ import { usePresenceStore } from '../../stores/presenceStore';
 import { useTypingStore } from '../../stores/typingStore';
 import { useCurrentMessageStore } from '../../hooks/useMessageStore';
 import {
-  useHereNow,
   useLightClock,
   useRoomLights,
   useWindowIsVisible,
@@ -135,6 +134,145 @@ export function useAuthorLights(
       });
     };
   }, [inVoice, presences, serverId]);
+}
+
+/* ---------------------------------------------------------------------------
+ * 1b. A timeline's lights, outside the timeline's own render
+ * ------------------------------------------------------------------------- */
+
+/**
+ * The lights a timeline draws, held where the timeline does not have to
+ * re-render to read them.
+ *
+ * A building's light changes whenever anybody in it speaks, arrives, goes
+ * away or writes anywhere; the timeline used to subscribe to it directly, so
+ * every one of those re-rendered every visible message. The timeline now
+ * renders {@link TimelineLightSource} (which subscribes) and each row's face
+ * reads its own author out of this store with {@link TimelineAuthor}: a row
+ * re-renders when its author's light changes, and nothing else does.
+ */
+export interface TimelineLightStore {
+  subscribe: (listener: () => void) => () => void;
+  /** The author resolver for the timeline's building. */
+  resolver: () => AuthorLightResolver | null;
+  /** Voice rooms that lit up while the timeline was open. */
+  events: () => RoomLitEvent[];
+}
+
+interface TimelineLightStoreImpl extends TimelineLightStore {
+  stage: (resolver: AuthorLightResolver, events: RoomLitEvent[]) => void;
+  notify: () => void;
+}
+
+function sameEvents(a: readonly RoomLitEvent[], b: readonly RoomLitEvent[]): boolean {
+  return (
+    a.length === b.length
+    && a.every((event, index) => {
+      const other = b[index];
+      return (
+        event.key === other.key
+        && event.atMs === other.atMs
+        && event.headline === other.headline
+        && event.detail === other.detail
+        && event.channelId === other.channelId
+        && event.guildId === other.guildId
+        && event.roomName === other.roomName
+      );
+    })
+  );
+}
+
+export function createTimelineLightStore(): TimelineLightStore {
+  let currentResolver: AuthorLightResolver | null = null;
+  let currentEvents: RoomLitEvent[] = NO_EVENTS;
+  let dirty = false;
+  const listeners = new Set<() => void>();
+  const store: TimelineLightStoreImpl = {
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    resolver: () => currentResolver,
+    events: () => currentEvents,
+    stage(resolver, events) {
+      if (resolver !== currentResolver) {
+        currentResolver = resolver;
+        dirty = true;
+      }
+      // An unchanged list keeps its identity, so the timeline does not rebuild
+      // its rows because a room light was recomputed around the same events.
+      if (!sameEvents(events, currentEvents)) {
+        currentEvents = events;
+        dirty = true;
+      }
+    },
+    notify() {
+      if (!dirty) return;
+      dirty = false;
+      for (const listener of listeners) listener();
+    },
+  };
+  return store;
+}
+
+export interface TimelineLightSourceProps {
+  guildId: string | null | undefined;
+  serverId: string | null | undefined;
+  store: TimelineLightStore;
+}
+
+/**
+ * Subscribes to the building's light on the timeline's behalf and hands it to
+ * the store. Render it before any row that reads the store: it stages the
+ * light during its own render, so rows rendered after it in the same pass see
+ * it, and tells everybody else once it commits.
+ */
+export const TimelineLightSource = memo(function TimelineLightSource({
+  guildId,
+  serverId,
+  store,
+}: TimelineLightSourceProps) {
+  const resolver = useAuthorLights(guildId, serverId);
+  const events = useRoomLitEvents(guildId);
+  const impl = store as TimelineLightStoreImpl;
+  impl.stage(resolver, events);
+  useLayoutEffect(() => {
+    impl.notify();
+  }, [impl, resolver, events]);
+  return null;
+});
+
+/** Everything a row draws from a person's light, as one comparable string. */
+function lightSignature(person: PersonLight): string {
+  return JSON.stringify(person);
+}
+
+/** One author's light, re-rendering only when that author's light changes. */
+export function useTimelineAuthorLight(store: TimelineLightStore, author: MessageAuthorRef): PersonLight {
+  const { id, name, avatar = null } = author;
+  const read = (): PersonLight => {
+    const resolver = store.resolver();
+    if (!resolver) {
+      throw new Error('A timeline row read its author light before TimelineLightSource rendered.');
+    }
+    return resolver({ id, name, avatar });
+  };
+  const signature = useSyncExternalStore(store.subscribe, () => lightSignature(read()));
+  // A `PersonLight` is plain data, so the signature is the light itself; the
+  // object is rebuilt only when it changes.
+  return useMemo(() => JSON.parse(signature) as PersonLight, [signature]);
+}
+
+export interface TimelineAuthorProps {
+  store: TimelineLightStore;
+  author: MessageAuthorRef;
+  children: (person: PersonLight) => ReactNode;
+}
+
+/** A piece of a row that draws its author's light (the face, the meta). */
+export function TimelineAuthor({ store, author, children }: TimelineAuthorProps) {
+  const person = useTimelineAuthorLight(store, author);
+  return children(person);
 }
 
 /* ---------------------------------------------------------------------------
@@ -315,37 +453,15 @@ export function isReading(room: RoomLight | null, userId: string | undefined): b
 }
 
 /**
- * "Ren · lights on · reading this" (§7.6).
+ * "Ren · online · here now" (§7.6).
  *
  * The third clause is only added when the room can actually tell the peer is
  * here — a fresh channel-bound signal, by WP1's definition. Presence alone is
- * "lights on" and says so.
+ * "online" and says so.
  */
 export function peerLightSentence(peer: PersonLight, reading: boolean): string {
   const state = peer.label.toLocaleLowerCase();
-  return reading ? `${peer.name} · ${state} · reading this` : `${peer.name} · ${state}`;
-}
-
-/**
- * The people this conversation can tell are here right now — whoever the
- * surface is (§7.4, §7.6).
- *
- * A guild text room asks the building (`useHereNow`); a DM has no building, so
- * it is lit as a text room in its own right. Both go through WP1's definition
- * of "reading", so the composer's "Say something to the 5 people reading" means
- * the same thing in both places.
- */
-export function useConversationReaders(
-  guildId: string | null | undefined,
-  channelId: string | undefined,
-  scope: AccountScope | null,
-): PersonLight[] {
-  const hereNow = useHereNow(guildId, channelId);
-  const dm = useDmLight(guildId ? undefined : channelId, scope);
-  return useMemo(
-    () => (guildId ? hereNow.people : dm.hereNow.people),
-    [dm.hereNow.people, guildId, hereNow.people],
-  );
+  return reading ? `${peer.name} · ${state} · here now` : `${peer.name} · ${state}`;
 }
 
 /* ---------------------------------------------------------------------------
@@ -358,7 +474,7 @@ export interface RoomLitEvent {
   channelId: string;
   guildId: string | null;
   roomName: string;
-  /** "Shop floor lit up". */
+  /** "Shop floor is live". */
   headline: string;
   /** "Mara, Priya and Ren are in there now". */
   detail: string;
@@ -434,7 +550,7 @@ export function useRoomLitEvents(guildId: string | null | undefined): RoomLitEve
         channelId: room.channelId,
         guildId: room.guildId,
         roomName: room.name,
-        headline: `${room.name} lit up`,
+        headline: `${room.name} is live`,
         detail: occupantSentence(room),
         atMs,
       });

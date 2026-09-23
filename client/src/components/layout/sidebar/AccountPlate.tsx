@@ -16,7 +16,7 @@ import { writeClipboardText } from '../../../lib/clipboard';
 import type { UserSettings } from '../../../types';
 
 /**
- * AccountPlate — "sam.douglas · Lights on", pinned to the bottom of the
+ * AccountPlate — "sam.douglas · Online", pinned to the bottom of the
  * Buildings column (docs/lantern-stage-spec.md §7.1, §8).
  *
  * It replaces `components/layout/UserPanel.tsx` and keeps everything that panel
@@ -34,11 +34,13 @@ export type PresenceStatus = UserSettings['status'];
  * so each option carries a swatch in the light vocabulary, not a colour.
  */
 const STATUS_OPTIONS: Array<{ id: PresenceStatus; label: string; swatch: string }> = [
-  { id: 'online', label: 'Lights on', swatch: 'pc-lit' },
+  { id: 'online', label: 'Online', swatch: 'pc-lit' },
   { id: 'idle', label: 'Away', swatch: 'pc-dim' },
   { id: 'dnd', label: 'Do not disturb', swatch: 'pc-dim pc-dnd' },
-  { id: 'invisible', label: 'Lights off', swatch: 'pc-dim' },
+  { id: 'invisible', label: 'Invisible', swatch: 'pc-dim' },
 ];
+
+const INVISIBLE_LABEL = 'Invisible';
 
 export interface AccountPlateProps {
   user: { id: string; username: string; display_name?: string | null; avatar_hash?: string | null; flags?: number } | null;
@@ -56,7 +58,11 @@ function mapForGateway(status: PresenceStatus): 'online' | 'idle' | 'dnd' | 'off
   return 'online';
 }
 
-/** "Lights on" / "Away · muted" — the plate's second line, always in words (§9). */
+/**
+ * "Online" / "Away · muted" — the plate's second line, always in words (§9).
+ * Invisible is what you chose, so the plate says so: everyone else sees you
+ * as offline, and you should not have to guess which one you are.
+ */
 export function accountCaption(
   status: PresenceStatus | undefined,
   custom: string | null | undefined,
@@ -65,7 +71,9 @@ export function accountCaption(
 ): string {
   const base = custom?.trim()
     ? custom.trim()
-    : presenceLight(status === 'invisible' ? 'offline' : status).label;
+    : status === 'invisible'
+      ? INVISIBLE_LABEL
+      : presenceLight(status).label;
   if (deafened) return `${base} · deafened`;
   if (muted) return `${base} · muted`;
   return base;
@@ -171,7 +179,7 @@ export function AccountPlate({
         label="Account"
         className="w-60"
       >
-        <MenuLabel>Your lights</MenuLabel>
+        <MenuLabel>Status</MenuLabel>
         {STATUS_OPTIONS.map((option) => (
           <MenuItem
             key={option.id}

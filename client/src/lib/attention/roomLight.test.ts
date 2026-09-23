@@ -50,7 +50,7 @@ describe('who is reading a text room', () => {
   it('never counts presence alone — a lit person in no room reads nothing', () => {
     expect(text().readers).toHaveLength(0);
     expect(text().level).toBe('dark');
-    expect(text().caption).toBe('Dark · nobody in');
+    expect(text().caption).toBe('Nobody here');
   });
 
   it('counts somebody typing in the room', () => {
@@ -58,7 +58,7 @@ describe('who is reading a text room', () => {
     expect(room.readers.map((r) => r.person.userId)).toEqual(['1']);
     expect(room.readers[0].reason).toBe('typing');
     expect(room.level).toBe('amber');
-    expect(room.caption).toBe('1 reading');
+    expect(room.caption).toBe('1 here');
   });
 
   it('counts somebody who posted inside the reading window', () => {
@@ -138,10 +138,10 @@ describe('voice room light', () => {
     });
   }
 
-  it('is dark with nobody in it, and says so', () => {
+  it('is empty with nobody in it, and says so', () => {
     const room = voice();
     expect(room.level).toBe('dark');
-    expect(room.caption).toBe('Dark · nobody in');
+    expect(room.caption).toBe('Empty');
     expect(room.durationMs).toBeNull();
     expect(room.thumbnail).toMatchObject({ live: false, reason: 'no-publisher' });
   });
@@ -193,7 +193,7 @@ describe('voice room light', () => {
   });
 
   it('captions occupancy without inventing a talker', () => {
-    expect(voiceRoomCaption(0, 0, false)).toBe('Dark · nobody in');
+    expect(voiceRoomCaption(0, 0, false)).toBe('Empty');
     expect(voiceRoomCaption(2, 0, false)).toBe('2 in');
     expect(voiceRoomCaption(2, 3, true)).toBe("you're here");
   });

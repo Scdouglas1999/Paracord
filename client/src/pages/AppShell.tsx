@@ -1,7 +1,8 @@
 import { useFreshRelationships } from '../hooks/useFreshRelationships';
 import { useCurrentChannelStore } from '../hooks/useChannels';
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
-import { Outlet, useLocation, useParams } from 'react-router';
+import { Outlet, useLocation, useNavigate, useParams } from 'react-router';
+import { registerAppNavigate } from '../lib/appNavigate';
 // §5.1/§5.3: every overlay here rides the shared recipes — backdrops fade
 // (pc-fade), panels enter/exit on pc-enter/pc-exit, drawers slide on the
 // pc-drawer set — and usePresence keeps each mounted for its leave. The
@@ -48,6 +49,11 @@ import { ErrorBoundary } from '../components/ErrorBoundary';
  */
 export function AppShell() {
   useKeyboardNavigation();
+  const navigate = useNavigate();
+  useEffect(() => {
+    registerAppNavigate(navigate);
+    return () => registerAppNavigate(null);
+  }, [navigate]);
 
   const sidebarCollapsed = useUIStore((s) => s.sidebarCollapsed);
   const setSidebarCollapsed = useUIStore((s) => s.setSidebarCollapsed);
@@ -151,9 +157,11 @@ export function AppShell() {
     && (activeChannel?.type === 3 || activeChannel?.channel_type === 3);
   const contextPanelRouteValid =
     contextPanelMode === null
-    || ((contextPanelMode === 'search' || contextPanelMode === 'pins') && Boolean(channelId))
+    || (contextPanelMode === 'search' && Boolean(guildId || channelId))
+    || (contextPanelMode === 'pins' && Boolean(channelId))
     || (contextPanelMode === 'threads' && Boolean(guildId && channelId))
     || (contextPanelMode === 'economy' && Boolean(guildId))
+    || (contextPanelMode === 'media' && Boolean(guildId || channelId))
     || (contextPanelMode === 'recipients' && isGroupDmContext);
 
   useEffect(() => {
@@ -161,6 +169,18 @@ export function AppShell() {
       setContextPanelMode(null);
     }
   }, [contextPanelMode, contextPanelRouteValid, setContextPanelMode]);
+
+  // The command palette asks for search before the server route has mounted
+  // the panel. Open it once the server id is in the URL, then drop the flag.
+  useEffect(() => {
+    const state = location.state as { openSearch?: boolean } | null;
+    if (!state?.openSearch || !guildId) return;
+    setContextPanelMode('search');
+    navigate(
+      { pathname: location.pathname, search: location.search, hash: location.hash },
+      { replace: true, state: null },
+    );
+  }, [location.state, location.pathname, location.search, location.hash, guildId, navigate, setContextPanelMode]);
 
   // Mobile persistent call surface: the sidebar CallDock is unreachable while the
   // overlay sidebar is closed, so the mobile bottom dock stays mounted whenever
@@ -309,7 +329,8 @@ export function AppShell() {
         {contextPresence.mounted && (
           <div
             className={cn(
-              'fixed inset-0 z-[80] flex justify-end md:hidden modal-backdrop',
+              'fixed inset-0 z-[80] flex md:hidden modal-backdrop',
+              contextPanelMode !== 'search' && 'justify-end',
               contextPresence.exiting ? 'pc-fade-out' : 'pc-fade-in',
             )}
             onClick={() => setContextPanelMode(null)}
@@ -318,13 +339,18 @@ export function AppShell() {
               ref={contextOverlayRef}
               role="dialog"
               aria-modal="true"
-              aria-label="Details"
+              aria-label={contextPanelMode === 'search' ? 'Search messages' : 'Details'}
               tabIndex={-1}
-              className={cn(
-                'context-panel-overlay h-full w-[var(--w-context-panel)] max-w-[88vw] overflow-hidden shadow-[var(--shadow-plate)] outline-none',
-                contextPresence.exiting ? 'pc-drawer-out-right' : 'pc-drawer-in-right',
-              )}
               onClick={(e) => e.stopPropagation()}
+              className={cn(
+                'context-panel-overlay h-full overflow-hidden shadow-[var(--shadow-plate)] outline-none',
+                contextPanelMode === 'search'
+                  ? 'w-full'
+                  : 'w-[var(--w-context-panel)] max-w-[88vw]',
+                contextPanelMode === 'search'
+                  ? (contextPresence.exiting ? 'pc-sheet-out' : 'pc-search-sheet-in')
+                  : (contextPresence.exiting ? 'pc-drawer-out-right' : 'pc-drawer-in-right'),
+              )}
               {...contextPresence.scenery}
             >
               <ContextPanel guildId={guildId ?? null} channelId={channelId ?? null} />

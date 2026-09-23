@@ -13,14 +13,14 @@ import { personLight } from '../../lib/attention/light';
  * Four things this package promises, each checked against the words the spec
  * puts on the surface rather than against a class name:
  *
- *   1. the header strip says "5 reading · 19 lights on" and there is no member
+ *   1. the header strip says "5 here · 19 online" and there is no member
  *      list anywhere near it (§6.5, §7.4);
  *   2. a message's meta says "in Shop floor · 9:12 AM" when its author is in a
  *      room right now, and only then (§7.4);
  *   3. a room that lights up while you are reading appears in the timeline as
  *      an event, and disappears again when it empties (§7.4);
- *   4. the composer invites the people who will read it, and falls back to the
- *      room when nobody else is there (§6.9, §7.4).
+ *   4. the composer says where the message goes: "Message #general"
+ *      (docs/server-home-spec.md, "Plain words").
  */
 
 /* ---------------------------------------------------------------------------
@@ -51,7 +51,7 @@ vi.mock('../../hooks/useLights', async () => {
       ),
       here: readers.length,
       lightsOn: 19,
-      caption: `${readers.length} here · 19 lights on`,
+      caption: `${readers.length} here · 19 online`,
     }),
     useRoomLight: () => ({ lit: true, kind: 'text' }),
   };
@@ -142,10 +142,10 @@ describe('the text room header (§7.4)', () => {
     mockUIState.contextPanelMode = null;
   });
 
-  it('says how many people are reading, and how many have their lights on', async () => {
+  it('says how many people are here, and how many are online', async () => {
     renderTextRoomHeader();
-    expect(await screen.findByText('5 reading')).toBeVisible();
-    expect(screen.getByText(/19 lights on/)).toBeVisible();
+    expect(await screen.findByText('5 here')).toBeVisible();
+    expect(screen.getByText(/19 online/)).toBeVisible();
   });
 
   it('names the server and the topic beside the room, and the server is the way back', () => {
@@ -158,7 +158,7 @@ describe('the text room header (§7.4)', () => {
     renderTextRoomHeader();
     expect(screen.queryByRole('button', { name: 'Member List' })).not.toBeInTheDocument();
     // The strip itself is the way to the only full list in the product.
-    expect(screen.getByRole('button', { expanded: false, name: /reading/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { expanded: false, name: /here/ })).toBeInTheDocument();
   });
 
   it('carries the pins count on the pins control', async () => {
@@ -192,7 +192,7 @@ describe('a message author, as light (§7.4)', () => {
     expect(screen.queryByText(/^in /)).not.toBeInTheDocument();
     expect(screen.getByText('9:12 AM')).toBeVisible();
     // §9: the rim is a light state, so it still says its words somewhere.
-    expect(screen.getByText('Lights on')).toBeInTheDocument();
+    expect(screen.getByText('Online')).toBeInTheDocument();
   });
 
   it('never claims a room for somebody whose lights are off', () => {
@@ -239,30 +239,30 @@ describe('a room lighting up, in the timeline (§7.4)', () => {
  * 4. The composer's copy, and the rest of the timeline's small shapes
  * ------------------------------------------------------------------------- */
 
-describe('the composer invites people, not a channel (§6.9, §7.4)', () => {
-  it('names the people who will read it', () => {
-    expect(composerPlaceholder(5, 'build-log')).toBe('Say something to the 5 people reading');
-    expect(composerPlaceholder(1, 'build-log')).toBe('Say something to the 1 person reading');
+describe('the composer says where the message goes (plain words)', () => {
+  it('names the channel, the group or the person', () => {
+    expect(composerPlaceholder('general')).toBe('Message #general');
+    expect(composerPlaceholder('Ade, Jonas', 'group')).toBe('Message Ade, Jonas');
+    expect(composerPlaceholder('Mara', 'person')).toBe('Message Mara');
   });
 
-  it('has a short form that fits a phone, and still names who is there', () => {
-    expect(composerPlaceholder(5, 'build-log', 'room', true)).toBe('Say something to 5 people');
-    expect(composerPlaceholder(1, 'build-log', 'room', true)).toBe('Say something to 1 person');
-    // A channel name can be any length, so the short form does not carry one.
-    expect(composerPlaceholder(0, 'a-very-long-channel-name-indeed', 'room', true)).toBe('Say something');
-    for (const n of [0, 1, 5, 42]) {
-      expect(composerPlaceholder(n, 'build-log', 'room', true).length).toBeLessThanOrEqual(26);
+  it('has a phone form that drops a name too long to fit', () => {
+    expect(composerPlaceholder('build-log', 'channel', true)).toBe('Message #build-log');
+    // A channel name can be any length, so past what fits the name is dropped.
+    expect(composerPlaceholder('a-very-long-channel-name-indeed', 'channel', true)).toBe('Write a message');
+    for (const name of ['general', 'build-log', 'a-very-long-channel-name-indeed']) {
+      expect(composerPlaceholder(name, 'channel', true).length).toBeLessThanOrEqual(26);
     }
   });
 
-  it('falls back to the room when nobody else is here', () => {
-    expect(composerPlaceholder(0, 'build-log')).toBe('Say something in build-log');
+  it('asks for a message when it has no name to give', () => {
+    expect(composerPlaceholder()).toBe('Write a message');
+    expect(composerPlaceholder(null, 'person')).toBe('Write a message');
   });
 
-  it('never says "Message #channel"', () => {
-    for (const copy of [composerPlaceholder(0, 'build-log'), composerPlaceholder(3, 'build-log'), composerPlaceholder(0)]) {
-      expect(copy).not.toMatch(/^Message /);
-      expect(copy).not.toContain('#');
+  it('never counts who is reading', () => {
+    for (const copy of [composerPlaceholder('build-log'), composerPlaceholder('Mara', 'person'), composerPlaceholder()]) {
+      expect(copy).not.toMatch(/reading|people|person/);
     }
   });
 });

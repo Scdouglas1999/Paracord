@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { Track } from 'livekit-client';
 
 import { StageSpeakers } from './StageSpeakers';
+import { loadLivekit } from '../../stores/voice/livekitRuntime';
 import { personLight } from '../../lib/attention/light';
 import type { RoomOccupant } from '../../lib/attention/light';
 
@@ -85,6 +86,12 @@ function occupant(
 }
 
 describe('StageSpeakers', () => {
+  // A LiveKit room only exists once the library has been loaded; the fake rooms
+  // below stand in for one.
+  beforeAll(async () => {
+    await loadLivekit();
+  });
+
   beforeEach(() => {
     voiceState.current = { room: null, mediaEngine: null, connected: false, speakingUsers: new Set<string>(), participants: new Map(), selfVideo: false };
     authState.current = { user: null };

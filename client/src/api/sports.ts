@@ -39,6 +39,8 @@ export interface SportsSettings {
   layout?: SportsLayout;
   /** Live game pinned above a text channel. Absent until the server stores one. */
   channel_pins?: ChannelPin[];
+  /** Members are told when a favorite team scores. Absent on an older server. */
+  score_alerts?: boolean;
   updated_at: string;
 }
 
@@ -48,6 +50,12 @@ export interface ChannelPin {
   game: string;
   pinned_by: string;
   pinned_at: string;
+  /** The pin drops off at the final instead of a few hours after it. */
+  unpin_at_final?: boolean;
+}
+
+export interface PinGameOptions {
+  unpin_at_final?: boolean;
 }
 
 /** Every field optional. `guild_id` and `updated_at` are not writable. */
@@ -58,6 +66,7 @@ export interface SportsSettingsUpdate {
   show_on_server_page?: boolean;
   default_view?: SportsDefaultView;
   layout?: SportsLayout;
+  score_alerts?: boolean;
 }
 
 export interface SportsRosterTeam {
@@ -142,6 +151,68 @@ export interface SportsBoard {
   date?: string;
   leagues: SportsBoardLeague[];
   games: SportsGame[];
+}
+
+export interface StandingsColumn {
+  /** ESPN stat type, e.g. `winpercent`. */
+  key: string;
+  /** Short heading, e.g. `PCT`. */
+  label: string;
+  /** What the heading means. */
+  title: string;
+}
+
+export interface StandingsRow {
+  team: SportsRosterTeam;
+  /** One per column, in column order. Empty when the feed has no value. */
+  values: string[];
+  seed: number | null;
+  /** ESPN's clinch mark, such as `x`, `y`, `z` or `e`. */
+  clincher: string | null;
+  favorite: boolean;
+}
+
+export interface StandingsGroup {
+  name: string;
+  /** The conference a division sits in, when the league nests them. */
+  parent: string | null;
+  rows: StandingsRow[];
+}
+
+export interface LeagueStandings {
+  league: string;
+  label: string;
+  season: string | null;
+  fetched_at: string;
+  /** The last refresh failed and this is the last good table. */
+  stale: boolean;
+  columns: StandingsColumn[];
+  groups: StandingsGroup[];
+}
+
+/** Sent to a server's members for each score in a favorite team's game, and its final. */
+export interface SportsScoreEvent {
+  guild_id: string;
+  /** `sport/league/event_id`. */
+  game: string;
+  league_path: string;
+  event_id: string;
+  kind: 'score' | 'final';
+  /** The same sentence a pinned channel gets. */
+  content: string;
+  /** The team that scored, or null for the final. */
+  team_id: string | null;
+  favorite_team_ids: string[];
+  home: SportsScoreEventTeam;
+  away: SportsScoreEventTeam;
+}
+
+export interface SportsScoreEventTeam {
+  id: string;
+  abbr: string;
+  name: string;
+  score: number | null;
+  logo: string;
 }
 
 export type GameDetailKind = 'football' | 'baseball' | 'other';
@@ -358,10 +429,15 @@ export function createSportsApi(getApi: () => RestClient) {
       if (message) return Promise.reject(new Error(message));
       return getApi().get<SportsRoster>(`/sports/leagues/${leaguePath.trim()}/teams`);
     },
-    pinGame: (guildId: string, channelId: string, game: string) =>
-      getApi().put<SportsSettings>(`/guilds/${guildId}/sports/pins/${channelId}`, { game }),
+    pinGame: (guildId: string, channelId: string, game: string, options: PinGameOptions = {}) =>
+      getApi().put<SportsSettings>(`/guilds/${guildId}/sports/pins/${channelId}`, { game, ...options }),
     unpinGame: (guildId: string, channelId: string) =>
       getApi().delete<SportsSettings>(`/guilds/${guildId}/sports/pins/${channelId}`),
+    getStandings: (guildId: string, leaguePath: string) => {
+      const message = leaguePathError(leaguePath);
+      if (message) return Promise.reject(new Error(message));
+      return getApi().get<LeagueStandings>(`/guilds/${guildId}/sports/standings/${leaguePath.trim()}`);
+    },
     getGame: (guildId: string, sport: string, league: string, eventId: string) => {
       const message = leaguePathError(`${sport}/${league}`);
       if (message) return Promise.reject(new Error(message));

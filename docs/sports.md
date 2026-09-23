@@ -29,6 +29,23 @@ quarter or inning by inning, and who scored.
 You can look at another day, from two weeks back through two weeks ahead. The
 page you get when you don't pick a day is today.
 
+## Standings
+
+The Sports page has two views, **Scores** and **Standings**. Standings shows
+one league's table at a time, grouped the way the league groups it: division
+under conference for the NFL, NBA and NHL, division under league for Major
+League Baseball, and one table for most soccer leagues. It opens on a league
+with one of your favorite teams, and those teams are highlighted.
+
+The columns follow the sport. Football shows wins, losses, ties, percentage,
+points for and against, the difference and the streak. Baseball shows games
+behind and the last ten. Hockey shows overtime losses and points. Soccer shows
+draws, goal difference and points. A letter after a team is the clinch mark
+ESPN puts there.
+
+The server fetches a league's standings when someone opens them and keeps them
+for ten minutes.
+
 ## Pin a game to a channel
 
 On a game, someone who can manage channels can pin it to a text channel. The
@@ -41,7 +58,8 @@ While the game is on, Sports posts into the channel:
 - the end of regulation
 - the final
 
-It does not post at the end of every quarter or inning. The message is from
+It does not post at the end of every quarter or inning. A game pinned while
+it is already under way starts with its latest score, not every score so far. The message is from
 **Sports**, with a Bot mark, and the text is the whole update. A touchdown
 reads like this:
 
@@ -60,14 +78,42 @@ the pin instead of posting.
 A server can pin up to 32 games. A pin drops off once the game has been over
 for a few hours, or when the server stops following that league.
 
+To drop it at the final instead, turn on **Unpin at the final** in the list of
+channels before you pick one. The final score still posts first.
+
+### Turning a phone sideways
+
+On a phone, turn it on its side while a pinned game is live and the field or
+ballpark fills the screen, with the score across it. **Back to the chat**
+closes it, and it stays closed until you turn the phone upright and back
+again. It does not open while you are typing a message.
+
+## Score alerts
+
+In **Add-ons**, **Tell members when a favorite team scores** sends everyone in
+the server a notification for each score in a favorite team's game, whichever
+side scored, and for the final. The notification uses the same sentence a
+pinned channel gets.
+
+Each person can turn score alerts off for themselves with the **Score alerts**
+switch on the Sports page. The switch is kept on that device, so someone who
+uses Paracord on a phone and a computer turns it off on each. Alerts also stay
+quiet for anyone who has muted the server or turned on **Hide scores**. Someone
+in two servers that follow the same team gets one notification, not two.
+
+While score alerts are on, the server checks the leagues your favorite teams
+play in every few minutes, and every few seconds while one of their games is
+on, even if nobody has the Sports page open. When the server restarts, it picks
+up from the current score instead of repeating earlier ones.
+
 ## Where the scores come from
 
 ESPN publishes a public scoreboard. The server asks ESPN for it. Members do
 not.
 
 What gets sent is the league, such as `football/nfl`, and, when someone opens
-a game or a channel is waiting on one, that game's number. Names, messages,
-and the rest of the server are not sent.
+a game or a channel or a score alert is waiting on one, that game's number.
+Names, messages, and the rest of the server are not sent.
 
 The server keeps the answer for a few seconds while a game is on, and longer
 when nothing is live, so it isn't fetched on every look. A day other than

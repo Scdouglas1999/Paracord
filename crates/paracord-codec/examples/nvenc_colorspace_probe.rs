@@ -352,7 +352,7 @@ fn ffprobe_color_space(bitstream: &[u8], dir: &std::path::Path) -> Result<String
 /// A full-frame solid BGRA buffer for one patch (byte order B,G,R,A).
 fn solid_bgra(patch: &Patch) -> Vec<u8> {
     let mut buf = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
-    for px in buf.chunks_exact_mut(4) {
+    for px in buf.as_chunks_mut::<4>().0 {
         px[0] = patch.b;
         px[1] = patch.g;
         px[2] = patch.r;

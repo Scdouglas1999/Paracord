@@ -11,7 +11,7 @@ import {
   UserPlus,
   X,
 } from 'lucide-react';
-import { RoomEvent, Track } from 'livekit-client';
+import { livekit } from '../../stores/voice/livekitRuntime';
 import { useNavigate } from 'react-router';
 
 import { StreamViewer } from '../../components/voice/StreamViewer';
@@ -392,7 +392,7 @@ export function VoiceStageChannel({
       if (currentUserId) {
         for (const publication of room.localParticipant.videoTrackPublications.values()) {
           if (
-            publication.source === Track.Source.ScreenShare &&
+            publication.source === livekit().Track.Source.ScreenShare &&
             publication.track &&
             publication.track.mediaStreamTrack?.readyState !== 'ended'
           ) {
@@ -408,7 +408,7 @@ export function VoiceStageChannel({
           const hasUsableTrack =
             publication.track == null ||
             publication.track.mediaStreamTrack?.readyState !== 'ended';
-          if (publication.source === Track.Source.ScreenShare && hasUsableTrack) {
+          if (publication.source === livekit().Track.Source.ScreenShare && hasUsableTrack) {
             isStreaming = true;
             break;
           }
@@ -427,6 +427,7 @@ export function VoiceStageChannel({
 
     recomputeActiveStreamers();
 
+    const { RoomEvent } = livekit();
     room.on(RoomEvent.TrackSubscribed, recomputeActiveStreamers);
     room.on(RoomEvent.TrackUnsubscribed, recomputeActiveStreamers);
     room.on(RoomEvent.TrackPublished, recomputeActiveStreamers);

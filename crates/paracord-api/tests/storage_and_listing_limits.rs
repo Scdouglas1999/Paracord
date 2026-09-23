@@ -394,6 +394,7 @@ async fn sticker_count_per_space_is_capped() -> anyhow::Result<()> {
             guild_id,
             &format!("filler{index}"),
             None,
+            "",
             1,
             Some("stickers/filler"),
             Some("image/png"),

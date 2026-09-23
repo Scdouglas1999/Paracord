@@ -1,6 +1,6 @@
 import { getApi } from './activeClient';
 import { responseContract } from './responseContracts';
-import { isRelationshipList } from './generated/validators';
+import { isRelationshipList } from './contractValidators';
 import type { RelationshipUser } from './generated/RelationshipList';
 import type { CreateRelationshipRequest } from './generated/CreateRelationshipRequest';
 

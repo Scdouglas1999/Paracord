@@ -12,7 +12,7 @@ import {
 } from './themes';
 
 describe('THEME_IDS', () => {
-  it('is the four themes and the three looks, in the order Settings shows them', () => {
+  it('is the four themes and the four looks, in the order Settings shows them', () => {
     expect([...THEME_IDS]).toEqual([
       'dark',
       'light',
@@ -20,12 +20,13 @@ describe('THEME_IDS', () => {
       'high-contrast',
       'dusk',
       'paper',
+      'slate',
       'voices',
     ]);
   });
 
-  it('names Night as the default', () => {
-    expect(DEFAULT_THEME).toBe('voices');
+  it('names Slate as the default', () => {
+    expect(DEFAULT_THEME).toBe('slate');
     expect(THEME_IDS).toContain(DEFAULT_THEME);
   });
 });
@@ -49,9 +50,9 @@ describe('asThemeId', () => {
   });
 
   it('collapses an unknown value to Night', () => {
-    expect(asThemeId('sepia')).toBe('voices');
-    expect(asThemeId(undefined)).toBe('voices');
-    expect(asThemeId(null)).toBe('voices');
+    expect(asThemeId('sepia')).toBe('slate');
+    expect(asThemeId(undefined)).toBe('slate');
+    expect(asThemeId(null)).toBe('slate');
   });
 
   it('takes an explicit fallback', () => {
@@ -65,7 +66,7 @@ describe('LIGHT_THEMES', () => {
   });
 
   it('leaves every dark theme and dark look out', () => {
-    for (const id of ['dark', 'amoled', 'high-contrast', 'dusk', 'voices'] as ThemeId[]) {
+    for (const id of ['dark', 'amoled', 'high-contrast', 'dusk', 'slate', 'voices'] as ThemeId[]) {
       expect(LIGHT_THEMES.has(id)).toBe(false);
     }
   });
@@ -76,8 +77,8 @@ describe('LIGHT_THEMES', () => {
 });
 
 describe('LOOK_THEMES', () => {
-  it('is the three looks', () => {
-    expect([...LOOK_THEMES].sort()).toEqual(['dusk', 'paper', 'voices']);
+  it('is the four looks', () => {
+    expect([...LOOK_THEMES].sort()).toEqual(['dusk', 'paper', 'slate', 'voices']);
   });
 
   it('leaves the four themes out — they keep the accent and base-colour controls', () => {
@@ -92,13 +93,14 @@ describe('LOOK_THEMES', () => {
 });
 
 describe('messageStyleFor', () => {
-  it('gives Voices bubbles', () => {
+  it('gives Slate and Aubergine bubbles', () => {
+    expect(messageStyleFor('slate')).toBe('bubbles');
     expect(messageStyleFor('voices')).toBe('bubbles');
   });
 
   it('gives every other theme and look rows', () => {
     for (const id of THEME_IDS) {
-      if (id === 'voices') continue;
+      if (id === 'voices' || id === 'slate') continue;
       expect(messageStyleFor(id)).toBe('rows');
     }
   });

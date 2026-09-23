@@ -30,7 +30,7 @@ export interface OpenThread {
 /**
  * One building in the Buildings column (docs/lantern-stage-spec.md §7.1).
  *
- *   "Kestrel Robotics · 24 in"   the section label, sentence case (§2, §6.8)
+ *   "Kestrel Robotics · 24 online"   the section label, sentence case (§2, §6.8)
  *   the window map plate          one window per room; it is the building's
  *                                 front door — activating it opens the Lobby
  *   the rooms, as rows            lit voice first, then dark voice, then text
@@ -123,9 +123,9 @@ export function BuildingSection({
         meta={
           <span className="flex items-center gap-1.5">
             {muted && <BellOff size={12} aria-label="Muted" className="shrink-0" />}
-            {/* "24 in" — §5.1's re-roll; the section label is read as a
+            {/* "24 online" — §5.1's re-roll; the section label is read as a
                 whole, so the number does not announce itself twice. A building
-                whose roster has not arrived shows no count at all: "0 in" would
+                whose roster has not arrived shows no count at all: "0 online" would
                 be a claim, and it would be the wrong one. */}
             {building.rosterKnown && (
               <RollingNumber
