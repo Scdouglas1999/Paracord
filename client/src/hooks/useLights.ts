@@ -475,8 +475,14 @@ export function useHereNow(
   channelId: string | null | undefined,
 ): HereNow {
   const building = useBuildingLight(guildId);
+  const scope = useCurrentAccountScope();
+  // A thread has no room of its own: it is part of the room it lives in.
+  const parentId = useChannelStore((state) =>
+    scope && channelId ? state.channelsById[entityScopeKey(scope, channelId)]?.parent_id ?? null : null,
+  );
   return useMemo(() => {
-    const room = building?.rooms.find((entry) => entry.channelId === channelId) ?? null;
+    const room = building?.rooms.find((entry) => entry.channelId === channelId)
+      ?? (parentId ? building?.rooms.find((entry) => entry.channelId === parentId) ?? null : null);
     const present = room
       ? room.kind === 'voice'
         ? room.occupants.map((occupant) => occupant.person)
@@ -494,7 +500,7 @@ export function useHereNow(
       lightsOn,
       caption: hereNowCaption(present.length, lightsOn),
     };
-  }, [building, channelId]);
+  }, [building, channelId, parentId]);
 }
 
 /** Somebody else on the call, for the on-air pill. */
