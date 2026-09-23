@@ -66,6 +66,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
     discriminator: 1,
     avatar_hash: null,
     banner_hash: null,
+    accent_color: null,
     bio: null,
     pronouns: null,
     email: 'smoke-user@example.test',
@@ -167,6 +168,9 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
         actions: Object.fromEntries(['send', 'poll', 'schedule', 'attach', 'summary', 'voice', 'video', 'screen_share'].map(action => [action, { supported: true, allowed: !(compositionRevoked && ['send', 'poll', 'attach', 'schedule'].includes(action)), reason: compositionRevoked && ['send', 'poll', 'attach', 'schedule'].includes(action) ? 'Your role no longer allows posting in this channel.' : null }])) });
     }
     if (path === '/api/v1/users/@me/dms' && method === 'GET') return json(200, showDmFixtures ? dmFixtures : []);
+    if (path === '/api/v1/users/@me/reminders' && method === 'GET') return json(200, { items: [] });
+    if (path === `/api/v1/guilds/${guildId}/feed` && method === 'GET') return json(200, { items: [], next_cursor: null });
+    if (path === `/api/v1/guilds/${guildId}/attachments` && method === 'GET') return json(200, { items: [], next_cursor: null });
     if (showDmFixtures && method === 'GET') {
       const dm = dmFixtures.find(item => path === `/api/v1/channels/${item.id}` || path === `/api/v1/channels/${item.id}/recipients`);
       if (dm) return json(200, path.endsWith('/recipients') ? dm.recipients : dm);
@@ -430,7 +434,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   for (const width of responsiveWidths) {
     await page.setViewportSize({ width, height: 900 });
     await expect(page.getByRole('main')).toBeVisible();
-    await expect(page.getByPlaceholder(/Say something( in qa-general-channel| to |$)/)).toBeVisible();
+    await expect(page.getByPlaceholder(/^(Message #qa-general-channel|Message |Write a message$)/)).toBeVisible();
     await expect
       .poll(async () =>
         page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
@@ -446,7 +450,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   for (const viewport of desktopViewports) {
     await page.setViewportSize(viewport);
     await expect(page.getByRole('main')).toBeVisible();
-    await expect(page.getByPlaceholder(/Say something( in qa-general-channel| to |$)/)).toBeVisible();
+    await expect(page.getByPlaceholder(/^(Message #qa-general-channel|Message |Write a message$)/)).toBeVisible();
     await expect
       .poll(async () =>
         page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
@@ -598,7 +602,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
     if (dm.type === 3) {
       await page.setViewportSize({ width: 1280, height: 800 });
       // The strip's sheet is the only full list of people in the product.
-      await dmHeader.getByRole('button', { name: /reading/ }).click();
+      await dmHeader.getByRole('button', { name: / here · / }).click();
       await expect(page.getByRole('dialog', { name: 'People here now' })).toBeVisible();
       await page.keyboard.press('Escape');
     }
@@ -606,7 +610,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   showDmFixtures = false;
   await page.goto(`/app/guilds/${guildId}/channels/${textChannelId}`);
 
-  const composer = page.getByPlaceholder(/Say something( in qa-general-channel| to |$)/);
+  const composer = page.getByPlaceholder(/^(Message #qa-general-channel|Message |Write a message$)/);
   for (const width of [320, 390, 768]) {
     await page.setViewportSize({ width, height: 800 });
     await expect(composer).toBeVisible();
@@ -697,35 +701,21 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   await page.keyboard.press('Enter');
   await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}/channels/${voiceChannelId}`));
 
-  // Guild Home = the Lobby, the building seen from the street
-  // (lantern-stage-spec §7.3). Voice/stage channels render as room cards in the
-  // "Rooms" grid; text rooms are rows below; the space-settings entry lives in
-  // the Lobby header.
+  // The server home (docs/server-home-spec.md): cover and head, voice channels
+  // (or what is live), then the Latest feed. It deliberately lists no text
+  // channels; those live in the sidebar.
   await page.goto(`/app/guilds/${guildId}`);
   await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}$`));
   await expect(page.getByRole('heading', { name: /QA Guild/i })).toBeVisible();
-  // `exact` because "Text rooms" is the landmark right below it.
   await expect(page.getByRole('region', { name: 'Voice channels', exact: true })).toBeVisible();
-  const textChannelsRegion = page.getByRole('region', { name: 'Text channels' });
-  await expect(textChannelsRegion).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Latest', exact: true })).toBeVisible();
 
-  // Building settings now open from the guild-home header (MANAGE_GUILD-gated),
-  // not the deleted channel-column dropdown.
+  // Server settings open from the home's header (MANAGE_GUILD-gated).
   await page.getByRole('button', { name: 'Server settings' }).click();
   const serverSettingsDialog = page.getByRole('dialog', { name: 'Server settings' });
   await expect(serverSettingsDialog).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(serverSettingsDialog).toBeHidden();
-
-  // Text-room navigation + keyboard activation from the Lobby. The row and its
-  // "…" (the room menu's phone door) both name the room; the row is `.first()`.
-  const textChannelButton = textChannelsRegion
-    .getByRole('button', { name: /qa-general-channel/i })
-    .first();
-  await textChannelButton.focus();
-  await expect(textChannelButton).toBeFocused();
-  await page.keyboard.press('Enter');
-  await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}/channels/${textChannelId}`));
 
   // The Buildings column merges every connected server's guilds into buildings
   // (lantern-stage-spec §7.1). The expanded column is one roving listbox whose
@@ -738,6 +728,13 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }, testInfo)
   await expect(
     building.getByRole('option', { name: literal(`${GUILD_NAME} lobby`) }),
   ).toBeVisible();
+
+  // A text channel opens from its row in the column, by keyboard.
+  const textChannelOption = building.getByRole('option', { name: /qa-general-channel/i });
+  await textChannelOption.focus();
+  await expect(textChannelOption).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}/channels/${textChannelId}`));
 
   await page.goto(`/app/guilds/${guildId}/channels/999999999`);
   await expect(page.getByRole('heading', { name: 'Channel not found' })).toBeVisible();

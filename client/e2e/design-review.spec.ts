@@ -61,6 +61,7 @@ test('capture the design-review screens', async ({ page }) => {
     discriminator: 1,
     avatar_hash: null,
     banner_hash: null,
+    accent_color: null,
     bio: null,
     pronouns: null,
     email: 'sam@example.test',
