@@ -153,15 +153,20 @@
 
 /* ---- Live ------------------------------------------------------------------- */
 
-/* The breath is two still glows crossfading, never an animated box-shadow.
+/* The glow breathes only while somebody in that voice channel is talking
+   (`.is-speaking`, set by LiveNow.tsx from the same flag the avatars breathe
+   on). Otherwise, including a call where everyone is silent, the card holds
+   its resting glow and nothing on it animates.
+
+   The breath is two still glows crossfading, never an animated box-shadow.
    Animating the shadow itself repaints the card's blurred glow on every frame
-   of the 2 s cycle, forever, for as long as anyone is in voice: on the Linux
-   desktop webview (WebKitGTK, shared-memory frames) two live cards held the
-   server home at ~1.8 CPU cores and 49 fps while nothing on screen changed.
-   Opacity on a layer is composited, not painted: the same page idles at
-   ~0.7 core and 60 fps. The two layers are the old keyframes' two ends, so the
-   card rests and peaks where it did; in between it blends rather than tweens
-   the blur radius. */
+   of the 2 s cycle, forever: on the Linux desktop webview (WebKitGTK,
+   shared-memory frames) two live cards held the server home at ~1.8 CPU cores
+   and 49 fps while nothing on screen changed. Opacity on a layer is
+   composited, not painted: the same page idles at ~0.7 core and 60 fps. The
+   two layers are the old keyframes' two ends, so the card rests and peaks
+   where it did; in between it blends rather than tweens the blur radius. When
+   the talking stops the layers ease back to rest instead of snapping. */
 @keyframes pc-home-glow-rest {
   50% {
     opacity: 0;
@@ -189,6 +194,11 @@
   inset: 0;
   border-radius: inherit;
   pointer-events: none;
+  transition: opacity var(--duration-dim) var(--ease-out);
+}
+
+.pc-home-live.is-speaking::before,
+.pc-home-live.is-speaking::after {
   animation: 2s var(--ease-in-out) infinite;
 }
 
@@ -197,6 +207,9 @@
     0 0 0 1px color-mix(in oklch, var(--light-amber) 38%, transparent),
     0 0 22px color-mix(in oklch, var(--light-amber) 10%, transparent),
     var(--shadow-raised);
+}
+
+.pc-home-live.is-speaking::before {
   animation-name: pc-home-glow-rest;
 }
 
@@ -206,6 +219,9 @@
     0 0 34px color-mix(in oklch, var(--light-amber) 20%, transparent),
     var(--shadow-raised);
   opacity: 0;
+}
+
+.pc-home-live.is-speaking::after {
   animation-name: pc-home-glow-peak;
 }
 

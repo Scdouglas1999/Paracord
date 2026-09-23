@@ -114,7 +114,13 @@ members-joined grouping.
 - Sections enter with a 40 ms stagger, 420 ms, translateY 8 px → 0 and scale
   0.99 → 1, from a visible rest state.
 - Cards lift by 2 px on hover.
-- Live cards' glow breathes on a 2 s cycle.
+- A live voice or stage card's glow breathes on a 2 s cycle only while somebody in
+  that channel is talking, driven by the same speaking flag the avatars breathe on.
+  People in a call with nobody talking, events and games keep the still live glow
+  (amber edge and halo) and nothing on the card animates. When the talking stops
+  the glow eases back to rest rather than snapping. The breath is two still glow
+  layers crossfading in opacity, never an animated box-shadow (composited, not
+  repainted, which matters on the Linux webview).
 - Poll bars grow.
 - Photos scale to 1.04 on hover and their caption fades in.
 - `prefers-reduced-motion` turns all of it off.

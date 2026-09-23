@@ -1,0 +1,50 @@
+<!doctype html>
+<!--
+  The README banner and the bare wordmark, composed from the mark.html masters in
+  out/ (render.mjs draws those first). Views, by URL hash:
+    view=banner                 mark + "Paracord" on the Slate ground
+    view=banner&ground=light    the same on a light ground
+    view=wordmark               "Paracord" alone, transparent, for the loading screen
+-->
+<html>
+<head>
+<link rel="stylesheet" href="../node_modules/@fontsource/gabarito/800.css">
+<style>
+  body { margin: 0; background: transparent; }
+  #art { position: relative; overflow: hidden; }
+  .word { font: 800 150px/1 Gabarito, sans-serif; letter-spacing: -0.045em; color: #f4f5f6; }
+
+  .banner { width: 1280px; height: 400px; display: flex; align-items: center; justify-content: center; gap: 44px;
+    background: linear-gradient(180deg, #1d242b 0%, #12171c 55%, #0a0d10 100%); }
+  .banner .glow { position: absolute; left: 400px; top: 250px; width: 900px; height: 900px; transform: translate(-50%, -50%);
+    border-radius: 50%; background: radial-gradient(circle, rgba(255,196,110,.22), rgba(255,160,70,.07) 38%, transparent 66%); }
+  .banner img { position: relative; width: 480px; height: 480px; margin: 10px -120px 0 -150px; }
+  .banner .word { position: relative; padding-bottom: 14px; }
+
+  .banner.light { background: linear-gradient(180deg, #f7f4ee 0%, #efe9df 100%); }
+  .banner.light .glow { background: radial-gradient(circle, rgba(255,186,96,.30), rgba(255,170,80,.08) 38%, transparent 66%); }
+  .banner.light .word { color: #14181c; }
+
+  .wordmark { display: inline-block; padding: 24px 32px; }
+</style>
+</head>
+<body>
+<div id="art"></div>
+<script>
+const P = new URLSearchParams(location.hash.slice(1));
+const art = document.getElementById('art');
+const view = P.get('view') || 'banner';
+if (view === 'wordmark') {
+  art.className = 'wordmark';
+  art.innerHTML = '<div class="word">Paracord</div>';
+} else {
+  art.className = `banner ${P.get('ground') === 'light' ? 'light' : ''}`;
+  art.innerHTML = '<div class="glow"></div><img src="out/free.png" alt=""><div class="word">Paracord</div>';
+}
+Promise.all([
+  document.fonts.load('800 150px Gabarito'),
+  ...[...art.querySelectorAll('img')].map((img) => img.decode()),
+]).then(() => { window.DONE = true; });
+</script>
+</body>
+</html>

@@ -153,12 +153,31 @@ function LiveCard({
   }
 }
 
-function LiveShell({ children, label, shared }: { children: ReactNode; label: string; shared?: string }) {
+/**
+ * The card every live thing sits on: the amber edge and glow, still.
+ *
+ * `speaking` makes the glow breathe, and only a voice or stage card whose
+ * channel has somebody talking right now passes it. People sitting in a call
+ * in silence, an event and a game all keep the still glow: the breath means
+ * "someone is talking in there", and it costs frames on every one of them.
+ */
+function LiveShell({
+  children,
+  label,
+  shared,
+  speaking = false,
+}: {
+  children: ReactNode;
+  label: string;
+  shared?: string;
+  speaking?: boolean;
+}) {
   return (
     <article
       aria-label={label}
       data-motion-shared={shared}
-      className="pc-home-live flex min-w-0 flex-col gap-3 px-4 pb-3.5 pt-3.5"
+      data-speaking={speaking ? '' : undefined}
+      className={cn('pc-home-live flex min-w-0 flex-col gap-3 px-4 pb-3.5 pt-3.5', speaking && 'is-speaking')}
     >
       {children}
     </article>
@@ -186,6 +205,9 @@ function LiveRoomCard({
   onJoin: (room: RoomLight, origin: Element | null) => void;
 }) {
   const talking = room.occupants.filter((occupant) => occupant.speaking).map((occupant) => occupant.person.name);
+  // The same flag the faces below breathe on (LitAvatar's `pc-speaking`), so
+  // the card and the avatars start and stop together.
+  const speaking = room.occupants.some((occupant) => occupant.person.speaking);
   const size = compact ? 30 : 38;
   const faces = room.occupants.slice(0, compact ? 3 : 4);
   const extra = room.occupants.length - faces.length;
@@ -217,7 +239,7 @@ function LiveRoomCard({
     </div>
   );
   return (
-    <LiveShell label={`${room.name}, live`} shared={roomSharedName(room.channelId)}>
+    <LiveShell label={`${room.name}, live`} shared={roomSharedName(room.channelId)} speaking={speaking}>
       <div className="flex items-start gap-2">
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <Kicker icon={stage ? <Radio size={12} aria-hidden /> : <Mic size={12} aria-hidden />}>

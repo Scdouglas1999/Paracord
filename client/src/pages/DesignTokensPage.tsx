@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { AppMark } from '../components/brand/AppMark';
 import {
   Bell,
   Hash,
@@ -1595,6 +1596,27 @@ export default function DesignTokensPage() {
             here, the component is wrong.
           </p>
         </header>
+
+        <Section
+          id="mark"
+          title="Mark"
+          blurb="A hurricane lantern on a braided teal paracord handle. In the app it is the bare drawing, set by its height; at 32 px and below it switches to the simplified drawing with a bolder cord. The Slate tile is only for the operating system's icon. Source: client/brand/mark.html."
+        >
+          <Row>
+            {[16, 24, 32, 40, 48, 64].map((size) => (
+              <figure key={size} className="flex w-16 flex-col items-center gap-2">
+                <div className="flex h-16 items-end">
+                  <AppMark size={size} />
+                </div>
+                <figcaption className="pc-mono text-meta text-text-faint">{size}</figcaption>
+              </figure>
+            ))}
+            <figure className="ml-6 flex flex-col items-center gap-2">
+              <img src="/pwa-192x192.png" width={96} height={96} alt="The app icon on its Slate tile" />
+              <figcaption className="pc-mono text-meta text-text-faint">app icon</figcaption>
+            </figure>
+          </Row>
+        </Section>
 
         <Section
           id="surfaces"
