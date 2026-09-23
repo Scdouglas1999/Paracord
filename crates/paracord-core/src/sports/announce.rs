@@ -138,7 +138,10 @@ pub fn plan_score_updates(
     let mut next = previous.clone();
     let mut messages = Vec::new();
     let start = match previous.through.as_deref() {
-        None => 0,
+        // First sight of this pin. A game pinned while it is under way gets
+        // its latest score, which says where the game stands, rather than
+        // every score so far posted at once.
+        None => detail.plays.len().saturating_sub(1),
         Some(id) => match detail.plays.iter().position(|play| play.id == id) {
             Some(index) => index + 1,
             None => detail.plays.len(),
@@ -384,6 +387,18 @@ mod tests {
         assert_eq!(cursor.through.as_deref(), Some("9001"));
         let (again, _) = plan_score_updates(&cursor, &detail);
         assert!(again.is_empty());
+    }
+
+    #[test]
+    fn a_game_pinned_while_under_way_posts_only_its_latest_score() {
+        let mut detail = snap("in", "3:58 - 2nd", 2, 14, 10);
+        detail.plays.push(touchdown("1", 0, 7));
+        detail.plays.push(touchdown("2", 7, 7));
+        detail.plays.push(touchdown("3", 14, 10));
+        let (lines, cursor) = plan_score_updates(&AnnounceCursor::default(), &detail);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].play_id.as_deref(), Some("3"));
+        assert_eq!(cursor.through.as_deref(), Some("3"));
     }
 
     #[test]

@@ -58,7 +58,8 @@ While the game is on, Sports posts into the channel:
 - the end of regulation
 - the final
 
-It does not post at the end of every quarter or inning. The message is from
+It does not post at the end of every quarter or inning. A game pinned while
+it is already under way starts with its latest score, not every score so far. The message is from
 **Sports**, with a Bot mark, and the text is the whole update. A touchdown
 reads like this:
 
