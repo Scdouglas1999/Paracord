@@ -331,8 +331,10 @@ export function AuthStep({
     // The first field, not the group: a wizard that parks focus on a heading
     // makes every step cost an extra Tab, and a wizard that traps focus is a
     // §9 failure. Nothing here removes anything from the tab order.
+    // A step that asks a choice rather than for text starts on the chosen
+    // option, which is the radio group's one tab stop.
     const first = ref.current?.querySelector<HTMLElement>(
-      'input:not([type="hidden"]):not([disabled]), textarea:not([disabled]), select:not([disabled])',
+      'input:not([type="hidden"]):not([disabled]), textarea:not([disabled]), select:not([disabled]), [role="radio"][tabindex="0"]:not([disabled])',
     );
     first?.focus();
   }, [title]);
