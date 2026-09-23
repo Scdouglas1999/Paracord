@@ -66,29 +66,21 @@ pub async fn ensure_certs(
 ) -> Result<RustlsConfig> {
     let cert_path = Path::new(&tls_config.cert_path);
     let key_path = Path::new(&tls_config.key_path);
-    let missing_initial = !cert_path.exists() || !key_path.exists();
-
-    if tls_config.acme.enabled {
-        match run_acme_automation_cycle(tls_config).await {
-            Ok(changed) => {
-                if changed {
-                    tracing::info!("ACME automation cycle completed");
-                }
-            }
-            Err(err) => {
-                if missing_initial {
-                    tracing::warn!("ACME bootstrap failed with missing certs: {}", err);
-                } else {
-                    tracing::warn!(
-                        "ACME renewal attempt failed; continuing with existing certs: {}",
-                        err
-                    );
-                }
-            }
-        }
-    }
-
+    // ACME is never run here. Let's Encrypt checks the domain by fetching a
+    // challenge file over plain HTTP, and nothing is listening yet at this
+    // point, so a request made now always fails. The renewal task requests
+    // the certificate a few seconds after the listeners are up (see
+    // `spawn_acme_renewal_task`) and swaps it in without a restart.
     if !cert_path.exists() || !key_path.exists() {
+        if tls_config.acme.enabled {
+            tracing::warn!(
+                "No certificate yet: starting with a temporary self-signed one. The real certificate for {:?} is requested from the ACME server once this server is listening, and replaces it without a restart.",
+                tls_config.acme.domains
+            );
+            generate_self_signed(cert_path, key_path, external_ip, local_ip)?;
+            let server_config = build_server_config_from_files(cert_path, key_path)?;
+            return Ok(RustlsConfig::from_config(Arc::new(server_config)));
+        }
         if !tls_config.auto_generate {
             anyhow::bail!(
                 "TLS cert/key not found at {:?} / {:?} and auto_generate is disabled",
@@ -157,49 +149,77 @@ pub async fn maybe_serve_acme_http_challenge(
     }
 }
 
+/// Requests and renews the ACME certificate once the server is listening.
+///
+/// The first attempt runs a few seconds after startup, when the plain-HTTP
+/// listener can answer Let's Encrypt's challenge. A failed attempt is retried
+/// after 1, 2, 4... minutes (capped at the renewal interval), so a DNS record
+/// that is still propagating does not leave the server on its temporary
+/// certificate for a whole renewal period. With `auto_renew = false` it stops
+/// after the first success.
 pub fn spawn_acme_renewal_task(
     tls_config: TlsConfig,
     rustls_config: RustlsConfig,
     shutdown: Arc<tokio::sync::Notify>,
 ) {
-    if !tls_config.acme.enabled || !tls_config.acme.auto_renew {
+    if !tls_config.acme.enabled {
         return;
     }
     let interval_seconds = tls_config.acme.renew_interval_seconds.max(300);
 
     tokio::spawn(async move {
         tracing::info!(
-            "ACME renewer enabled (interval={}s, cert_name='{}')",
+            "ACME enabled (first request shortly, then every {}s; cert_name='{}')",
             interval_seconds,
             tls_config.acme.cert_name
         );
-
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_seconds));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        interval.tick().await;
-
+        let mut delay = std::time::Duration::from_secs(5);
+        let mut failures: u32 = 0;
         loop {
             tokio::select! {
-                _ = shutdown.notified() => {
-                    break;
-                }
-                _ = interval.tick() => {
-                    match run_acme_automation_cycle(&tls_config).await {
-                        Ok(changed) => {
-                            if changed {
-                                if let Err(err) = reload_rustls_from_disk(&rustls_config, &tls_config) {
-                                    tracing::warn!("ACME cert reload failed: {}", err);
-                                } else {
-                                    tracing::info!("TLS certificate reloaded after ACME cycle");
-                                }
+                _ = shutdown.notified() => break,
+                _ = tokio::time::sleep(delay) => {}
+            }
+            match run_acme_automation_cycle(&tls_config).await {
+                Ok(changed) => {
+                    failures = 0;
+                    if changed {
+                        match reload_rustls_from_disk(&rustls_config, &tls_config) {
+                            Ok(()) => tracing::info!("TLS certificate loaded from ACME"),
+                            Err(err) => {
+                                tracing::error!("ACME certificate could not be loaded: {}", err)
                             }
                         }
-                        Err(err) => tracing::warn!("ACME automation cycle failed: {}", err),
                     }
+                    if !tls_config.acme.auto_renew {
+                        break;
+                    }
+                    delay = std::time::Duration::from_secs(interval_seconds);
+                }
+                Err(err) => {
+                    failures = failures.saturating_add(1);
+                    let retry = acme_retry_delay(failures, interval_seconds);
+                    tracing::error!(
+                        "ACME certificate request failed (attempt {}); retrying in {}s: {}",
+                        failures,
+                        retry.as_secs(),
+                        err
+                    );
+                    delay = retry;
                 }
             }
         }
     });
+}
+
+/// 60s, 120s, 240s... after each consecutive failure, never longer than the
+/// renewal interval.
+fn acme_retry_delay(failures: u32, interval_seconds: u64) -> std::time::Duration {
+    let exp = failures.saturating_sub(1).min(16);
+    let secs = 60u64
+        .saturating_mul(1u64 << exp)
+        .min(interval_seconds.max(60));
+    std::time::Duration::from_secs(secs)
 }
 
 async fn run_acme_automation_cycle(tls_config: &TlsConfig) -> Result<bool> {
@@ -466,4 +486,18 @@ fn generate_self_signed(
     tracing::info!("Self-signed TLS certificate written to {:?}", cert_path);
     tracing::info!("TLS private key written to {:?}", key_path);
     Ok(())
+}
+
+#[cfg(test)]
+mod acme_retry_tests {
+    use super::acme_retry_delay;
+
+    #[test]
+    fn retries_back_off_and_cap_at_the_interval() {
+        assert_eq!(acme_retry_delay(1, 43_200).as_secs(), 60);
+        assert_eq!(acme_retry_delay(2, 43_200).as_secs(), 120);
+        assert_eq!(acme_retry_delay(3, 43_200).as_secs(), 240);
+        assert_eq!(acme_retry_delay(30, 43_200).as_secs(), 43_200);
+        assert_eq!(acme_retry_delay(5, 300).as_secs(), 300);
+    }
 }

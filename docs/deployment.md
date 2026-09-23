@@ -97,11 +97,13 @@ and invite links carry a name instead of an address.
    domains = ["chat.example.com"]
    ```
 
-   Restart the server. Paracord runs certbot, answers its check, puts the
-   certificate in place and renews it by itself. It asks when it starts and then
-   on its renewal schedule (`renew_interval_seconds`, every 12 hours by default),
-   and the server log says whether each attempt worked. Until the first
-   certificate arrives, the server keeps using its own.
+   Restart the server. A few seconds after it starts listening, Paracord runs
+   certbot, answers its check, and swaps the new certificate in without a
+   restart. Until then it uses a temporary certificate of its own. If the
+   request fails (for example because the DNS record hasn't reached everyone
+   yet), it tries again after 1, 2, 4... minutes, and the server log says what
+   went wrong each time. After that it renews on its own schedule
+   (`renew_interval_seconds`, every 12 hours by default).
 
 If you would rather run a reverse proxy such as Caddy or nginx on the standard
 ports, the next section covers that instead. Either way, the self-made
