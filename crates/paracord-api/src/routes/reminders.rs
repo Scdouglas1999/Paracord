@@ -20,6 +20,10 @@ pub struct PutReminderRequest {
 
 const PREVIEW_CHARS: usize = 200;
 
+/// Most reminders one person can have waiting at once. The Inbox lists this
+/// many, so a waiting reminder is never hidden behind the rest.
+pub const MAX_PENDING_REMINDERS: i64 = 100;
+
 pub async fn list_my_reminders(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -82,6 +86,15 @@ pub async fn put_reminder(
 
     let (message, channel) =
         require_readable_message(&state, auth.user_id, channel_id, message_id).await?;
+    let waiting =
+        paracord_db::reminders::count_pending_reminders_except(&state.db, auth.user_id, message_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    if waiting >= MAX_PENDING_REMINDERS {
+        return Err(ApiError::BadRequest(format!(
+            "You already have {MAX_PENDING_REMINDERS} reminders waiting. Cancel one in the Inbox before setting another."
+        )));
+    }
     let id = paracord_util::snowflake::generate(1);
     let reminder = paracord_db::reminders::upsert_reminder(
         &state.db,
@@ -161,13 +174,8 @@ async fn require_readable_message(
     ),
     ApiError,
 > {
-    let message = paracord_db::messages::get_message(&state.db, message_id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
-        .ok_or(ApiError::NotFound)?;
-    if message.channel_id != channel_id {
-        return Err(ApiError::NotFound);
-    }
+    // Access first, so a message id in a channel the person cannot read
+    // answers the same way whether or not it exists.
     let channel = paracord_db::channels::get_channel(&state.db, channel_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
@@ -179,6 +187,13 @@ async fn require_readable_message(
         &[Permissions::VIEW_CHANNEL, Permissions::READ_MESSAGE_HISTORY],
     )
     .await?;
+    let message = paracord_db::messages::get_message(&state.db, message_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    if message.channel_id != channel_id {
+        return Err(ApiError::NotFound);
+    }
     Ok((message, channel))
 }
 

@@ -137,6 +137,68 @@ fn attachment_json(row: &PostedAttachment) -> Value {
     })
 }
 
+/// Show each item's author the way the message itself shows them.
+///
+/// A post in an anonymous channel and a webhook post are both stored under a
+/// real user id. The message list swaps in the alias or the webhook; the
+/// gallery must do the same, or it would name who wrote an anonymous post.
+async fn mask_authors(state: &AppState, mut page: Value) -> Result<Value, ApiError> {
+    let Some(items) = page.get_mut("items").and_then(Value::as_array_mut) else {
+        return Ok(page);
+    };
+    let mut message_ids: Vec<i64> = items
+        .iter()
+        .filter_map(|item| item.get("message_id")?.as_str()?.parse().ok())
+        .collect();
+    message_ids.sort_unstable();
+    message_ids.dedup();
+    if message_ids.is_empty() {
+        return Ok(page);
+    }
+    let anonymous =
+        paracord_db::messages::get_anonymous_messages_for_message_ids(&state.db, &message_ids)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let webhooks = paracord_db::webhooks::get_webhooks_for_message_ids(&state.db, &message_ids)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    if anonymous.is_empty() && webhooks.is_empty() {
+        return Ok(page);
+    }
+    let mut masks = std::collections::HashMap::new();
+    for row in anonymous {
+        masks.insert(
+            row.message_id,
+            json!({
+                "id": format!("anon:{}:{}", row.channel_id, row.alias),
+                "username": row.alias,
+                "display_name": null,
+                "avatar_hash": null,
+            }),
+        );
+    }
+    for (message_id, webhook_id, name) in webhooks {
+        masks.entry(message_id).or_insert_with(|| {
+            json!({
+                "id": webhook_id.to_string(),
+                "username": name,
+                "display_name": null,
+                "avatar_hash": null,
+            })
+        });
+    }
+    for item in items.iter_mut() {
+        let id = item
+            .get("message_id")
+            .and_then(Value::as_str)
+            .and_then(|id| id.parse::<i64>().ok());
+        if let Some(mask) = id.and_then(|id| masks.get(&id)) {
+            item["author"] = mask.clone();
+        }
+    }
+    Ok(page)
+}
+
 fn page(items: Vec<Value>, next_before: Option<i64>) -> Value {
     json!({
         "items": items,
@@ -191,7 +253,8 @@ async fn readable_guild_channels(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     let mut readable = Vec::new();
     for channel in channels {
-        if channel.channel_type == 1 || channel.channel_type == 3 {
+        // Direct messages never belong to a server; a category holds no messages.
+        if matches!(channel.channel_type, 1 | 3 | 4) {
             continue;
         }
         let perms = paracord_core::permissions::compute_channel_permissions_cached(
@@ -206,6 +269,11 @@ async fn readable_guild_channels(
         if perms.contains(Permissions::VIEW_CHANNEL | Permissions::READ_MESSAGE_HISTORY) {
             readable.push(channel.id);
         }
+    }
+    if readable.len() > paracord_db::attachments::MAX_GALLERY_CHANNELS {
+        return Err(ApiError::BadRequest(
+            "This server has too many channels to gather its media at once. Open a channel's media instead.".into(),
+        ));
     }
     Ok(readable)
 }
@@ -232,10 +300,13 @@ pub async fn list_channel_attachments(
     let next_before = (rows.len() as i64 == limit)
         .then(|| rows.last().map(|row| row.id))
         .flatten();
-    Ok(Json(page(
-        rows.iter().map(attachment_json).collect(),
-        next_before,
-    )))
+    Ok(Json(
+        mask_authors(
+            &state,
+            page(rows.iter().map(attachment_json).collect(), next_before),
+        )
+        .await?,
+    ))
 }
 
 pub async fn list_guild_attachments(
@@ -270,10 +341,13 @@ pub async fn list_guild_attachments(
     let next_before = (rows.len() as i64 == limit)
         .then(|| rows.last().map(|row| row.id))
         .flatten();
-    Ok(Json(page(
-        rows.iter().map(attachment_json).collect(),
-        next_before,
-    )))
+    Ok(Json(
+        mask_authors(
+            &state,
+            page(rows.iter().map(attachment_json).collect(), next_before),
+        )
+        .await?,
+    ))
 }
 
 fn embed_for_url(
@@ -382,6 +456,10 @@ pub async fn list_channel_links(
     let limit = parse_limit(query.limit)?;
     let before = parse_before(query.before.as_deref())?;
     Ok(Json(
-        list_links(&state, &[channel_id], before, limit).await?,
+        mask_authors(
+            &state,
+            list_links(&state, &[channel_id], before, limit).await?,
+        )
+        .await?,
     ))
 }

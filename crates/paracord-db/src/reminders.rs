@@ -83,7 +83,26 @@ pub async fn delete_reminder_by_id(pool: &DbPool, id: i64) -> Result<(), DbError
     Ok(())
 }
 
-/// Pending and fired reminders, newest first.
+/// How many reminders this person has waiting, not counting one on `message_id`
+/// (setting that one again moves it rather than adding another).
+pub async fn count_pending_reminders_except(
+    pool: &DbPool,
+    user_id: i64,
+    message_id: i64,
+) -> Result<i64, DbError> {
+    let row = sqlx::query(
+        "SELECT COUNT(*) AS n FROM message_reminders
+         WHERE user_id = $1 AND fired_at IS NULL AND message_id <> $2",
+    )
+    .bind(user_id)
+    .bind(message_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(row.try_get::<i64, _>("n")?)
+}
+
+/// Waiting reminders first, then fired ones; newest first within each, so a
+/// reminder that has not gone off yet never falls off the list behind old ones.
 pub async fn list_reminders_for_user(
     pool: &DbPool,
     user_id: i64,
@@ -92,7 +111,7 @@ pub async fn list_reminders_for_user(
     let rows = sqlx::query_as::<_, ReminderRow>(&format!(
         "SELECT {REMINDER_COLUMNS} FROM message_reminders
          WHERE user_id = $1
-         ORDER BY created_at DESC, id DESC
+         ORDER BY CASE WHEN fired_at IS NULL THEN 0 ELSE 1 END, created_at DESC, id DESC
          LIMIT $2"
     ))
     .bind(user_id)

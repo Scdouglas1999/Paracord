@@ -839,21 +839,36 @@ pub async fn send_message(
         }
     }
 
-    // AutoMod. Scoped to human sends through the REST API — the operator-authored
-    // paths (bots, webhooks, scheduled delivery) are deliberately not filtered.
-    // Runs before creation so a blocked message is never persisted.
-    let automod = if let Some(guild_id) = channel.guild_id() {
-        run_automod(&state, guild_id, channel_id, auth.user_id, &body.content).await?
-    } else {
-        paracord_core::automod_enforce::AutomodVerdict::default()
-    };
-
     // Resolve the forward before the row exists so a message the sender cannot
     // read never lands in the destination.
     let resolved_forward = if let Some(request) = body.forwarded_from.as_ref() {
         Some(resolve_forward(&state, auth.user_id, &channel, request).await?)
     } else {
         None
+    };
+
+    // AutoMod. Scoped to human sends through the REST API — the operator-authored
+    // paths (bots, webhooks, scheduled delivery) are deliberately not filtered.
+    // Runs before creation so a blocked message is never persisted. A forward's
+    // quoted text is posted into this channel too, so this server's rules read
+    // it along with the note.
+    let automod = if let Some(guild_id) = channel.guild_id() {
+        let forwarded_text = resolved_forward
+            .as_ref()
+            .and_then(|forward| super::forwards::forwarded_content(&forward.json));
+        let checked = match forwarded_text {
+            Some(quoted) if !quoted.trim().is_empty() => format!("{}\n{quoted}", body.content),
+            _ => body.content.clone(),
+        };
+        match run_automod(&state, guild_id, channel_id, auth.user_id, &checked).await {
+            Ok(verdict) => verdict,
+            Err(err) => {
+                discard_forward_copies(&state, resolved_forward.as_ref()).await;
+                return Err(err);
+            }
+        }
+    } else {
+        paracord_core::automod_enforce::AutomodVerdict::default()
     };
 
     let msg_id = paracord_util::snowflake::generate(1);
@@ -867,7 +882,7 @@ pub async fn send_message(
             header: payload.header,
         });
 
-    let (mut msg, mentioned_users) = paracord_core::message::create_message_with_attention(
+    let created = paracord_core::message::create_message_with_attention(
         &state.db,
         msg_id,
         channel_id,
@@ -883,7 +898,16 @@ pub async fn send_message(
             nonce,
         },
     )
-    .await?;
+    .await;
+    let (mut msg, mentioned_users) = match created {
+        Ok(created) => created,
+        Err(err) => {
+            // The send was refused (slowmode, a locked thread, a timeout): the
+            // forward's file copies will never be linked.
+            discard_forward_copies(&state, resolved_forward.as_ref()).await;
+            return Err(err.into());
+        }
+    };
     let created_new = !has_nonce || msg.id == msg_id;
     if let Some(forward) = resolved_forward.as_ref() {
         if created_new {
@@ -1660,6 +1684,15 @@ async fn prepare_automod(
         &state.db, guild_id, channel_id, author_id, content, perms,
     )
     .await?)
+}
+
+async fn discard_forward_copies(
+    state: &AppState,
+    forward: Option<&super::forwards::ResolvedForward>,
+) {
+    if let Some(forward) = forward {
+        super::forwards::discard_all(state, &forward.staged_attachments).await;
+    }
 }
 
 async fn run_automod(

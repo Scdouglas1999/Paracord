@@ -284,7 +284,9 @@ fn sql_pair(
         }
     };
     let filters = format!(
-        "AND (${author_idx} IS NULL OR m.author_id = ${author_idx}) \
+        "AND (${author_idx} IS NULL OR (m.author_id = ${author_idx} \
+              AND NOT EXISTS (SELECT 1 FROM anonymous_messages am WHERE am.message_id = m.id) \
+              AND NOT EXISTS (SELECT 1 FROM webhook_messages wm WHERE wm.message_id = m.id))) \
          AND (${after_idx} IS NULL OR m.created_at >= ${after_idx}) \
          AND (${before_idx} IS NULL OR m.created_at <= ${before_idx}) \
          AND (${pinned_idx} IS NULL OR (CASE WHEN m.pinned THEN 1 ELSE 0 END) = ${pinned_idx}) \
