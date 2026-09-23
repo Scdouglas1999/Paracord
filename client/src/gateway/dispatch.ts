@@ -309,7 +309,7 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
           const names = currentUserId ? new Map([[currentUserId, 'you']]) : undefined;
           const raw = data.content || '';
           if (!data.e2ee && guildId && /<@&\d+>/.test(raw)) {
-            void fetchGuildRoles(guildId)
+            void fetchGuildRoles(guildId, memberScope ?? undefined)
               .then((roles) => {
                 const body = messagePreviewText(raw, names, new Map(roles.map((role) => [role.id, role.name]))).slice(0, 200) || '(attachment)';
                 void sendNotification(title, body);

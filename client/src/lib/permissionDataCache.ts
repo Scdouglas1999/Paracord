@@ -1,7 +1,7 @@
 import { createChannelApi } from '../api/channels';
 import { createGuildApi } from '../api/guilds';
-import { captureOperationContext } from './operationContext';
-import { entityScopeKey, entityKeyBelongsToScope } from './serverScope';
+import { captureOperationContext, captureScopedOperation } from './operationContext';
+import { entityScopeKey, entityKeyBelongsToScope, type AccountScope } from './serverScope';
 import { registerAccountHistoryReset } from './databaseHistory';
 import type { ChannelOverwrite, Role } from '../types';
 
@@ -74,8 +74,13 @@ function share<T>(
   return inflight;
 }
 
-export async function fetchGuildRoles(guildId: string): Promise<Role[]> {
-  const context = captureOperationContext();
+/**
+ * A guild's roles. Pass `scope` whenever the guild may belong to an instance
+ * other than the active one (Home, gateway notifications, reminders): without
+ * it the request goes to the active instance.
+ */
+export async function fetchGuildRoles(guildId: string, scope?: AccountScope): Promise<Role[]> {
+  const context = scope ? captureScopedOperation(scope) : captureOperationContext();
   return share(roleCache, entityScopeKey(context.scope, guildId), guildId,
     () => createGuildApi(() => context.api).getRoles(guildId).then(({ data }) => data),
   ).finally(() => context.dispose());

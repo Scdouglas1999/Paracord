@@ -164,7 +164,7 @@ export function useHomeMessagePreview(entry: ConversationEntry, mode: 'attention
         let roleNames: Map<string, string> | undefined;
         if (message && entry.guildId && /<@&\d+>/.test(message.content ?? '')) {
           try {
-            const roles = await fetchGuildRoles(entry.guildId);
+            const roles = await fetchGuildRoles(entry.guildId, { serverId, userId });
             if (disposed) return;
             roleNames = new Map(roles.map((role) => [role.id, role.name]));
           } catch (err) {
@@ -197,7 +197,7 @@ export function useHomeMessagePreview(entry: ConversationEntry, mode: 'attention
       context?.dispose();
       window.removeEventListener('paracord:conversation-capabilities-changed', invalidateCapabilities);
     };
-  }, [entry.channelId, entry.lastActivityId, serverId, userId, revision, kind, after, historyUnavailable]);
+  }, [entry.channelId, entry.guildId, entry.lastActivityId, serverId, userId, revision, kind, after, historyUnavailable]);
 
   const fresh = preview?.revision === revision && !preview.failed ? preview : null;
   const roleFailure = preview?.revision === revision && preview.failed && preview.text.startsWith('Could not load roles')

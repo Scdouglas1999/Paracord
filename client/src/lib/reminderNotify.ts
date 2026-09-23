@@ -72,7 +72,7 @@ async function plainWords(scope: AccountScope | null, item: ReminderItem, line: 
     }
   }
   const roleNames = guildId && /<@&\d+>/.test(line)
-    ? new Map((await fetchGuildRoles(guildId)).map((role) => [role.id, role.name]))
+    ? new Map((await fetchGuildRoles(guildId, scope ?? undefined)).map((role) => [role.id, role.name]))
     : undefined;
   return messagePreviewText(line, names, roleNames);
 }
