@@ -80,7 +80,7 @@ const FILTER_GUIDE: Array<{ insert: string; hint: string; icon: LucideIcon; serv
   { insert: 'mentions:', hint: 'a person', icon: AtSign },
   { insert: 'before:', hint: 'a date', icon: Calendar },
   { insert: 'after:', hint: 'a date', icon: Calendar },
-  { insert: 'during:', hint: '2026-09-01, yesterday, last week', icon: Calendar },
+  { insert: 'during:', hint: '2026-09-01, today, yesterday, last week', icon: Calendar },
   { insert: 'is:pinned', hint: 'pinned messages', icon: Pin },
 ];
 

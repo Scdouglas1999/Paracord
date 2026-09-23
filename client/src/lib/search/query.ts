@@ -117,12 +117,13 @@ function addDays(date: Date, days: number): Date {
 }
 
 /**
- * Accepts `YYYY-MM-DD`, `yesterday`, and `last week`.
+ * Accepts `YYYY-MM-DD`, `today`, `yesterday`, and `last week`.
  * Returns the calendar day, or null when the text is not one of those.
  */
 export function parseSearchDay(raw: string, now: Date): string | null {
   const value = raw.trim().toLowerCase();
   if (!value) return null;
+  if (value === 'today') return formatLocalDay(now);
   if (value === 'yesterday') return formatLocalDay(addDays(now, -1));
   if (value === 'last week') return formatLocalDay(addDays(now, -7));
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
@@ -256,7 +257,7 @@ function tokenError(key: FilterKey, raw: string): string {
     return 'has: is link, image, video, file, poll, or embed.';
   }
   if (key === 'is') return 'is: only accepts pinned.';
-  return 'Use a date like 2026-09-01, yesterday, or last week.';
+  return 'Use a date like 2026-09-01, today, yesterday, or last week.';
 }
 
 function chipFromToken(
@@ -396,6 +397,7 @@ export function suggestionsFor(
   }
   if (DATE_KEYS.has(active.key)) {
     const options = [
+      { label: 'today', day: parseSearchDay('today', now)! },
       { label: 'yesterday', day: parseSearchDay('yesterday', now)! },
       { label: 'last week', day: parseSearchDay('last week', now)! },
     ];

@@ -30,8 +30,9 @@ function interpret(draft: string) {
 }
 
 describe('parseSearchDay', () => {
-  it('accepts a calendar day, yesterday, and last week', () => {
+  it('accepts a calendar day, today, yesterday, and last week', () => {
     expect(parseSearchDay('2026-09-01', NOW)).toBe('2026-09-01');
+    expect(parseSearchDay('today', NOW)).toBe('2026-09-22');
     expect(parseSearchDay('yesterday', NOW)).toBe('2026-09-21');
     expect(parseSearchDay('last week', NOW)).toBe('2026-09-15');
   });
@@ -130,9 +131,10 @@ describe('interpretSearchDraft', () => {
     expect(labels('gen')).toEqual(['#general']);
   });
 
-  it('offers yesterday and last week with the parsed day for a date filter', () => {
+  it('offers today, yesterday and last week with the parsed day for a date filter', () => {
     const items = suggestionsFor({ key: 'during', raw: '' }, MEMBERS, CHANNELS, NOW);
     expect(items.map((item) => [item.label, item.hint])).toEqual([
+      ['today', '2026-09-22'],
       ['yesterday', '2026-09-21'],
       ['last week', '2026-09-15'],
     ]);
