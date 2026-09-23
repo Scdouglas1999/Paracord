@@ -95,9 +95,10 @@ side scored, and for the final. The notification uses the same sentence a
 pinned channel gets.
 
 Each person can turn score alerts off for themselves with the **Score alerts**
-switch on the Sports page. They also stay quiet for anyone who has muted the
-server or turned on **Hide scores**. Someone in two servers that follow the
-same team gets one notification, not two.
+switch on the Sports page. The switch is kept on that device, so someone who
+uses Paracord on a phone and a computer turns it off on each. Alerts also stay
+quiet for anyone who has muted the server or turned on **Hide scores**. Someone
+in two servers that follow the same team gets one notification, not two.
 
 While score alerts are on, the server checks the leagues your favorite teams
 play in every few minutes, and every few seconds while one of their games is
