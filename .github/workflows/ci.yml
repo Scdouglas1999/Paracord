@@ -523,7 +523,7 @@ jobs:
         # unavailable (cargo-llvm-cov not installed on the dev machine), so it is set
         # below the expected line coverage. Ratchet it up once CI reports the real
         # number in this step's summary output.
-        run: cargo llvm-cov --workspace --all-targets --lcov --output-path coverage/rust.lcov --fail-under-lines 40
+        run: mkdir -p coverage && cargo llvm-cov --workspace --all-targets --lcov --output-path coverage/rust.lcov --fail-under-lines 40
       - name: Client coverage
         working-directory: client
         run: npm run test:unit:coverage -- --reporter=dot
