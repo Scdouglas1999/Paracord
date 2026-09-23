@@ -47,6 +47,8 @@ pub const MIGRATION_TABLE_ORDER: &[&str] = &[
     // No FK into `users`: the claimed-owner id is recorded, not enforced, so
     // deleting the owner can never reopen setup by cascading this row away.
     "instance_setup",
+    // No FKs: see the invite_signups migration.
+    "invite_signups",
     "rate_limit_counters",
     "server_keypair",
     "server_settings",

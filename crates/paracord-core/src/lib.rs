@@ -20,6 +20,8 @@ pub mod message_attention;
 pub mod observability;
 pub mod permissions;
 pub mod presence_manager;
+pub mod registration;
+pub mod router_access;
 pub mod share_address;
 pub mod shutdown;
 pub mod sports;
@@ -60,6 +62,10 @@ pub fn is_bot(flags: i32) -> bool {
 #[derive(Clone, Debug)]
 pub struct RuntimeSettings {
     pub registration_enabled: bool,
+    /// Who may create an account: anyone, or only people holding an invite.
+    /// Starts from `[auth] registration_mode` and is overridden by a choice
+    /// saved from the admin page or first-run setup.
+    pub registration_mode: registration::RegistrationMode,
     pub server_name: String,
     pub server_description: String,
     pub max_guilds_per_user: u32,
@@ -70,6 +76,7 @@ impl Default for RuntimeSettings {
     fn default() -> Self {
         Self {
             registration_enabled: true,
+            registration_mode: registration::RegistrationMode::Open,
             server_name: "Paracord Server".to_string(),
             server_description: String::new(),
             max_guilds_per_user: 100,

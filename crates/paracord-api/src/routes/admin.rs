@@ -131,6 +131,7 @@ async fn settings_payload(state: &AppState) -> Value {
 
     json!({
         "registration_enabled": settings.registration_enabled.to_string(),
+        "registration_mode": settings.registration_mode.as_str(),
         "server_name": settings.server_name,
         "server_description": settings.server_description,
         "max_guilds_per_user": settings.max_guilds_per_user.to_string(),
@@ -151,6 +152,7 @@ pub async fn get_settings(
 
 const ALLOWED_SETTINGS: &[&str] = &[
     "registration_enabled",
+    "registration_mode",
     "server_name",
     "server_description",
     "max_guilds_per_user",
@@ -168,6 +170,11 @@ fn validate_setting(key: &str, value: &str) -> Result<(), String> {
         "registration_enabled" => {
             if value != "true" && value != "false" {
                 return Err(format!("{key}: must be \"true\" or \"false\""));
+            }
+        }
+        "registration_mode" => {
+            if paracord_core::registration::RegistrationMode::parse(value).is_none() {
+                return Err(format!("{key}: must be \"invite_only\" or \"open\""));
             }
         }
         "server_name" => {
@@ -236,6 +243,10 @@ pub async fn update_settings(
         .map(|(key, value)| {
             let value = match key.as_str() {
                 "server_name" | "server_description" => value.trim().to_string(),
+                // Stored in its one canonical spelling.
+                "registration_mode" => paracord_core::registration::RegistrationMode::parse(&value)
+                    .map(|mode| mode.as_str().to_string())
+                    .unwrap_or(value),
                 _ => value,
             };
             (key, value)
@@ -255,6 +266,11 @@ pub async fn update_settings(
         match key.as_str() {
             "registration_enabled" => {
                 settings.registration_enabled = value == "true";
+            }
+            "registration_mode" => {
+                if let Some(mode) = paracord_core::registration::RegistrationMode::parse(value) {
+                    settings.registration_mode = mode;
+                }
             }
             "server_name" => {
                 settings.server_name = value.clone();
@@ -292,6 +308,53 @@ pub async fn update_settings(
     drop(settings);
 
     Ok(Json(settings_payload(&state).await))
+}
+
+// ── Router (who outside the home network can connect) ───────────────────
+
+/// `GET /api/v1/admin/network` — whether this server asks the router to let
+/// people outside the home network in, and whether a change is waiting for a
+/// restart.
+pub async fn get_network(
+    _admin: AdminUser,
+) -> Json<paracord_core::router_access::RouterAccessView> {
+    Json(paracord_core::router_access::current().view())
+}
+
+#[derive(Deserialize)]
+pub struct UpdateNetworkRequest {
+    pub auto_port_forward: bool,
+}
+
+/// `PATCH /api/v1/admin/network` — save the choice to the config file. It
+/// applies when the server next starts; the running server is not changed.
+pub async fn update_network(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    admin: AdminUser,
+    headers: HeaderMap,
+    Json(body): Json<UpdateNetworkRequest>,
+) -> Result<Json<paracord_core::router_access::RouterAccessView>, ApiError> {
+    use paracord_core::router_access::{save_choice, SaveError};
+    let saved = save_choice(body.auto_port_forward).map_err(|err| {
+        if matches!(err, SaveError::Write { .. }) {
+            tracing::error!(error = %err, "failed to save auto_port_forward to the config file");
+        }
+        ApiError::SettingNotSaved(err.to_string())
+    })?;
+    let peer_ip = addr.ip().to_string();
+    security::log_security_event(
+        &state,
+        "admin.network.auto_port_forward",
+        Some(admin.user_id),
+        None,
+        None,
+        Some(&headers),
+        Some(peer_ip.as_str()),
+        Some(json!({ "auto_port_forward": body.auto_port_forward })),
+    )
+    .await;
+    Ok(Json(saved.view()))
 }
 
 // ── Users ───────────────────────────────────────────────────────────────

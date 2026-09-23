@@ -84,6 +84,14 @@ pub async fn release_first_admin_slot(pool: &DbPool) -> Result<(), DbError> {
     Ok(())
 }
 
+/// How many local people have accounts here: not bots, not federated
+/// placeholders, not system users. Zero means the next registration would make
+/// the first account on this instance.
+pub async fn count_local_human_users(pool: &DbPool) -> Result<i64, DbError> {
+    let mut conn = pool.acquire().await?;
+    Ok(count_local_human_users_for_first_admin(&mut conn).await?)
+}
+
 async fn count_local_human_users_for_first_admin(
     executor: &mut sqlx::AnyConnection,
 ) -> Result<i64, sqlx::Error> {

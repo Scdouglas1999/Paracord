@@ -24,6 +24,7 @@ pub mod guild_templates;
 pub mod guilds;
 pub mod instance_setup;
 pub mod interaction_tokens;
+pub mod invite_signups;
 pub mod invites;
 pub mod members;
 pub mod message_recovery;

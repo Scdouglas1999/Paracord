@@ -78,6 +78,9 @@ pub struct NetworkHealth {
     pub tls_enabled: bool,
     pub tls_self_signed: bool,
     pub registration_open: bool,
+    /// Who can create an account right now: `"open"`, `"invite_only"`, or
+    /// `"closed"` when registration is turned off.
+    pub registration: &'static str,
     pub federation_enabled: bool,
 }
 
@@ -189,12 +192,26 @@ pub async fn build_report(state: &AppState) -> Result<HealthReport, crate::error
         total_bytes: backups.iter().map(|b| b.size_bytes).sum(),
     };
 
+    let (registration_open, registration) = {
+        let runtime = state.runtime.read().await;
+        let mode = runtime.registration_mode;
+        if !runtime.registration_enabled {
+            (false, "closed")
+        } else {
+            (
+                mode == crate::registration::RegistrationMode::Open,
+                mode.as_str(),
+            )
+        }
+    };
+
     let network = NetworkHealth {
         bind_address: config.bind_address.clone(),
         public_url: config.public_url.clone(),
         tls_enabled: config.tls_enabled,
         tls_self_signed: config.tls_self_signed,
-        registration_open: config.registration_enabled,
+        registration_open,
+        registration,
         federation_enabled: config.federation_enabled,
     };
 
@@ -377,6 +394,7 @@ mod tests {
             tls_enabled: true,
             tls_self_signed: false,
             registration_open: true,
+            registration: "open",
             federation_enabled: false,
         }
     }

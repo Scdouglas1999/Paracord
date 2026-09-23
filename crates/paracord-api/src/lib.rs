@@ -1045,6 +1045,10 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
             "/api/v1/admin/settings",
             get(routes::admin::get_settings).patch(routes::admin::update_settings),
         )
+        .route(
+            "/api/v1/admin/network",
+            get(routes::admin::get_network).patch(routes::admin::update_network),
+        )
         .route("/api/v1/admin/users", get(routes::admin::list_users))
         .route(
             "/api/v1/admin/users/{user_id}",

@@ -42,6 +42,15 @@ pub struct SetupStatusResponse {
     /// Operator-chosen name for this instance, once it has been claimed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instance_name: Option<String>,
+    /// While setup is pending: whether this server asks the home router to let
+    /// people outside the network in, so the setup page can say which way the
+    /// server was installed. Not shown once the server has an owner.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub router_forwarding: Option<bool>,
+    /// While setup is pending: who can create an account right now, so the
+    /// setup page starts from the installed choice.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registration_mode: Option<paracord_core::registration::RegistrationMode>,
 }
 
 /// `GET /api/v1/setup/status` — public.
@@ -51,9 +60,20 @@ pub async fn setup_status(
     let row = paracord_db::instance_setup::get(&state.db)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let pending = row.is_pending();
+    let registration_mode = if pending {
+        Some(state.runtime.read().await.registration_mode)
+    } else {
+        None
+    };
     Ok(Json(SetupStatusResponse {
-        setup_required: row.is_pending(),
+        setup_required: pending,
         instance_name: row.instance_name,
+        router_forwarding: pending.then(|| {
+            let access = paracord_core::router_access::current();
+            access.running && !access.loopback_bind
+        }),
+        registration_mode,
     }))
 }
 
@@ -89,6 +109,10 @@ pub struct ClaimRequest {
     pub initial_space_icon: Option<String>,
     #[serde(default)]
     pub display_name: Option<String>,
+    /// Who can create an account from now on. Saved with the server when
+    /// given; otherwise the config file's `[auth] registration_mode` stands.
+    #[serde(default)]
+    pub registration_mode: Option<paracord_core::registration::RegistrationMode>,
 }
 
 #[derive(Serialize)]
@@ -206,6 +230,16 @@ pub async fn claim_instance(
 
     let password_hash = paracord_core::auth::hash_password(&body.password)
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    // The owner's answer to "who can create an account", saved before the claim
+    // spends the token: if it cannot be saved, the owner is told and can retry,
+    // rather than finishing setup with a mode they did not choose.
+    if let Some(mode) = body.registration_mode {
+        paracord_db::server_settings::set_setting(&state.db, "registration_mode", mode.as_str())
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        state.runtime.write().await.registration_mode = mode;
+    }
 
     // `users.email` is NOT NULL UNIQUE, so an optional-email deployment needs a
     // placeholder at insert time — but the canonical one registration uses is

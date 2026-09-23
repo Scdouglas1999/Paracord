@@ -236,8 +236,22 @@ pub async fn create_invite(
 /// the person is using is no use to anybody else (`localhost`), which is exactly
 /// the owner who set the server up on the machine it runs on. Members already
 /// know an address that reaches the server, so this tells them nothing new.
-pub async fn share_address(_auth: AuthUser) -> Json<paracord_core::share_address::ShareAddress> {
-    Json(paracord_core::share_address::share_address())
+pub async fn share_address(_auth: AuthUser) -> Json<ShareAddressResponse> {
+    let access = paracord_core::router_access::current();
+    Json(ShareAddressResponse {
+        address: paracord_core::share_address::share_address(),
+        asks_router: access.running && !access.loopback_bind,
+    })
+}
+
+#[derive(serde::Serialize)]
+pub struct ShareAddressResponse {
+    #[serde(flatten)]
+    pub address: paracord_core::share_address::ShareAddress,
+    /// Whether this server asks the home router to let people outside the
+    /// network in. When it does not, the invite dialog points at the setting
+    /// that turns it on rather than at the router.
+    pub asks_router: bool,
 }
 
 /// The verification gate as a newcomer needs to see it: whether they must

@@ -1788,6 +1788,10 @@ pub struct RegisterRequest {
     pub username: String,
     pub password: String,
     pub display_name: Option<String>,
+    /// The invite the newcomer arrived with. Required while the instance is
+    /// invite-only; ignored otherwise.
+    #[serde(default)]
+    pub invite_code: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1828,6 +1832,11 @@ pub struct AuthSessionView {
 pub struct AuthOptionsResponse {
     pub allow_username_login: bool,
     pub require_email: bool,
+    /// False when the admin has turned account creation off entirely.
+    pub registration_enabled: bool,
+    /// `"invite_only"` or `"open"`: whether a new account needs an invite. The
+    /// register page reads this so it can say so before anyone fills it in.
+    pub registration_mode: paracord_core::registration::RegistrationMode,
 }
 
 pub async fn auth_options(State(state): State<AppState>) -> Json<AuthOptionsResponse> {
@@ -1835,10 +1844,111 @@ pub async fn auth_options(State(state): State<AppState>) -> Json<AuthOptionsResp
         state.config.allow_username_login,
         state.config.require_email,
     );
+    let runtime = state.runtime.read().await;
     Json(AuthOptionsResponse {
         allow_username_login,
         require_email: state.config.require_email,
+        registration_enabled: runtime.registration_enabled,
+        registration_mode: runtime.registration_mode,
     })
+}
+
+/// The invite a new account was created with, while the instance is invite-only.
+pub(crate) struct SignupInvite {
+    code: String,
+    /// The invite's `max_uses`; zero means no limit.
+    max_accounts: i64,
+}
+
+/// Decide whether a new account may be created, as far as invites go.
+///
+/// Open instances need nothing. Invite-only instances need a live invite
+/// (unexpired, not used up) to a server that exists here. The one exception is
+/// the very first account on an instance started with `[setup] require_claim =
+/// false`: nobody exists yet who could have sent an invite, and that mode
+/// already makes the first registrant the owner.
+///
+/// Checking does not spend the invite. See [`reserve_signup_slot`].
+pub(crate) async fn signup_invite_gate(
+    state: &AppState,
+    invite_code: Option<&str>,
+) -> Result<Option<SignupInvite>, ApiError> {
+    use paracord_core::registration::{
+        RegistrationMode, INVITE_NOT_USABLE_MESSAGE, INVITE_REQUIRED_MESSAGE,
+    };
+    if state.runtime.read().await.registration_mode == RegistrationMode::Open {
+        return Ok(None);
+    }
+    let first_account = paracord_db::users::count_local_human_users(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        == 0;
+    if first_account {
+        return Ok(None);
+    }
+    let Some(code) = invite_code.map(str::trim).filter(|code| !code.is_empty()) else {
+        return Err(ApiError::InviteRequired(INVITE_REQUIRED_MESSAGE.into()));
+    };
+    let not_usable = || ApiError::InviteRequired(INVITE_NOT_USABLE_MESSAGE.into());
+    // `get_invite` only returns an invite that is unexpired and not used up.
+    let invite = paracord_db::invites::get_invite(&state.db, code)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or_else(not_usable)?;
+    let channel = paracord_db::channels::get_channel(&state.db, invite.channel_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or_else(not_usable)?;
+    let guild_id = channel.guild_id().ok_or_else(not_usable)?;
+    paracord_db::guilds::get_guild(&state.db, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or_else(not_usable)?;
+    Ok(Some(SignupInvite {
+        code: invite.code,
+        max_accounts: i64::from(invite.max_uses.unwrap_or(0)),
+    }))
+}
+
+/// Take one of the invite's account slots for the account about to be created.
+///
+/// An invite that allows five uses creates at most five accounts, even before
+/// any of them has joined its server (which is what spends a use).
+pub(crate) async fn reserve_signup_slot(
+    state: &AppState,
+    invite: Option<&SignupInvite>,
+    user_id: i64,
+) -> Result<(), ApiError> {
+    let Some(invite) = invite else {
+        return Ok(());
+    };
+    let reserved =
+        paracord_db::invite_signups::reserve(&state.db, &invite.code, user_id, invite.max_accounts)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    if reserved {
+        Ok(())
+    } else {
+        Err(ApiError::InviteRequired(
+            paracord_core::registration::INVITE_NOT_USABLE_MESSAGE.into(),
+        ))
+    }
+}
+
+/// Give the slot back when the account insert after it failed.
+async fn release_signup_slot(state: &AppState, invite: Option<&SignupInvite>, user_id: i64) {
+    if invite.is_none() {
+        return;
+    }
+    if let Err(err) = paracord_db::invite_signups::release(&state.db, user_id).await {
+        tracing::warn!(user_id, error = %err, "failed to release an invite signup slot");
+    }
+}
+
+/// Whether a refused invite should count against the auth guard: guessing
+/// invite codes is abuse, arriving without one is not.
+fn invite_refusal_counts_against_guard(invite_code: Option<&str>) -> bool {
+    invite_code.is_some_and(|code| !code.trim().is_empty())
 }
 
 /// True when `username` is already registered at discriminator 0 — the slot
@@ -1997,6 +2107,22 @@ pub async fn register(
         return Err(ApiError::Forbidden);
     }
 
+    let signup_invite = match signup_invite_gate(&state, body.invite_code.as_deref()).await {
+        Ok(invite) => invite,
+        Err(err) => {
+            if invite_refusal_counts_against_guard(body.invite_code.as_deref()) {
+                auth_guard_record_failure(
+                    &state,
+                    &headers,
+                    Some(peer_ip.as_str()),
+                    Some(&account_hint),
+                )
+                .await;
+            }
+            return Err(err);
+        }
+    };
+
     if let Some(rejection) = new_account_input_error(
         &state,
         &body.username,
@@ -2063,6 +2189,7 @@ pub async fn register(
     } else {
         normalized_email.clone()
     };
+    reserve_signup_slot(&state, signup_invite.as_ref(), id).await?;
     let mut user = match paracord_db::users::create_user_as_first_admin(
         &state.db,
         id,
@@ -2076,6 +2203,7 @@ pub async fn register(
     {
         Ok(user) => user,
         Err(err) => {
+            release_signup_slot(&state, signup_invite.as_ref(), id).await;
             // The checks above are not atomic with the insert: two concurrent
             // registrations for the same username/email race here. Answer with
             // the same generic message rather than leaking the collision as a
@@ -3753,6 +3881,10 @@ pub struct VerifyRequest {
     pub signature: String,
     pub username: String,
     pub display_name: Option<String>,
+    /// The invite the newcomer arrived with, used only when this request
+    /// creates the account and the instance is invite-only.
+    #[serde(default)]
+    pub invite_code: Option<String>,
 }
 
 pub async fn verify(
@@ -3945,6 +4077,16 @@ pub async fn verify(
             user
         }
         None => {
+            // A key creates an account here, so it answers to every rule
+            // `register` does. An unclaimed instance gets its first account
+            // only through the setup claim; without this check the first key
+            // to arrive became the administrator.
+            if paracord_db::instance_setup::is_pending(&state.db)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+            {
+                return Err(ApiError::Conflict(SETUP_REQUIRED_MESSAGE.into()));
+            }
             if !state.runtime.read().await.registration_enabled {
                 auth_guard_record_failure(
                     &state,
@@ -3955,10 +4097,27 @@ pub async fn verify(
                 .await;
                 return Err(ApiError::Forbidden);
             }
+            let signup_invite = match signup_invite_gate(&state, body.invite_code.as_deref()).await
+            {
+                Ok(invite) => invite,
+                Err(err) => {
+                    if invite_refusal_counts_against_guard(body.invite_code.as_deref()) {
+                        auth_guard_record_failure(
+                            &state,
+                            &headers,
+                            Some(peer_ip.as_str()),
+                            Some(&body.public_key),
+                        )
+                        .await;
+                    }
+                    return Err(err);
+                }
+            };
 
             // Auto-register: create new user from public key.
             let id = paracord_util::snowflake::generate(1);
-            let new_user = paracord_db::users::create_user_from_pubkey_as_first_admin(
+            reserve_signup_slot(&state, signup_invite.as_ref(), id).await?;
+            let new_user = match paracord_db::users::create_user_from_pubkey_as_first_admin(
                 &state.db,
                 id,
                 &body.public_key,
@@ -3967,7 +4126,13 @@ pub async fn verify(
                 paracord_core::USER_FLAG_ADMIN,
             )
             .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+            {
+                Ok(user) => user,
+                Err(e) => {
+                    release_signup_slot(&state, signup_invite.as_ref(), id).await;
+                    return Err(ApiError::Internal(anyhow::anyhow!(e.to_string())));
+                }
+            };
 
             auto_join_public_spaces(&state, new_user.id).await?;
 
