@@ -123,12 +123,12 @@ export function PollMessageCard({ channelId, poll, canVote }: PollMessageCardPro
                 style={{ width: `${votePercent}%` }}
               />
               <span className="relative z-[1] flex items-center gap-2.5">
-                <span className="min-w-0 flex-1 truncate text-label text-text-primary">
+                <span className="min-w-0 flex-1 break-words text-label text-text-primary">
                   {option.emoji ? `${option.emoji} ` : ''}
                   {option.text}
                 </span>
-                <span className="text-meta font-semibold tabular-nums text-text-secondary">{votePercent}%</span>
-                <span className="text-meta font-semibold tabular-nums text-text-muted">{option.vote_count}</span>
+                <span className="shrink-0 text-meta font-semibold tabular-nums text-text-secondary">{votePercent}%</span>
+                <span className="shrink-0 text-meta font-semibold tabular-nums text-text-muted">{option.vote_count}</span>
                 {option.voted && (
                   <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent-tint-strong text-accent-primary">
                     <Check size={12} />
