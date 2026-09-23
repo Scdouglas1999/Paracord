@@ -606,7 +606,7 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
     case GatewayEvents.POLL_VOTE_ADD:
     case GatewayEvents.POLL_VOTE_REMOVE:
       if (data.poll) {
-        usePollStore.getState().upsertPoll(data.poll as Poll);
+        usePollStore.getState().applyVoteEvent(data.poll as Poll, data.user_id, getServerUser(serverId)?.id);
       }
       break;
 
