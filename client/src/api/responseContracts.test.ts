@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AxiosHeaders, type AxiosResponse } from 'axios';
-import { ApiContractError, responseContract } from './responseContracts';
+import { ApiContractError, hasListField, responseContract } from './responseContracts';
 import { isCreateGuildRequest, isGuildDetail, isGuildSummaryList } from './generated/validators';
 
 // The public wire shape uses nullable keys, decimal string IDs and an actual
@@ -62,5 +62,18 @@ describe('Rust-derived wire validation', () => {
   it('preserves upstream authentication, ownership and transport failures', async () => {
     const failure = new Error('request ownership expired');
     await expect(responseContract(Promise.reject(failure), isGuildDetail, 'GuildDetail')).rejects.toBe(failure);
+  });
+});
+
+describe('list endpoints without a generated contract', () => {
+  it('refuses a body without its list instead of passing undefined along', async () => {
+    const guard = hasListField<{ items: unknown[] }>('items');
+    for (const body of [[], null, 'text', { items: null }, { rows: [] }]) {
+      const failure = await responseContract(Promise.resolve(response(body)), guard, 'server feed').catch(error => error);
+      expect(failure).toBeInstanceOf(ApiContractError);
+      expect(failure.message).toBe('The server returned an invalid server feed response. Update the server and try again.');
+    }
+    const body = { items: [], next_cursor: null };
+    expect((await responseContract(Promise.resolve(response(body)), guard, 'server feed')).data).toBe(body);
   });
 });

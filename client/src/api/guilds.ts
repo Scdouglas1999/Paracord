@@ -1,7 +1,7 @@
 import type { RestClient } from './restClient';
 import type { AxiosRequestConfig } from 'axios';
 import { getApi as getActiveApi } from './activeClient';
-import { responseContract } from './responseContracts';
+import { hasListField, responseContract } from './responseContracts';
 import { isGuildDetail, isGuildInvite, isGuildInviteList, isGuildSummaryList, isOwnershipTransferResponse } from './contractValidators';
 import type { UpdateGuildRequest } from './generated/UpdateGuildRequest';
 import type { CreateInviteRequest } from './generated/CreateInviteRequest';
@@ -212,8 +212,10 @@ export function createGuildApi(getApi: () => RestClient) {
       getApi().delete(`/guilds/${guildId}/stickers/${stickerId}`),
 
     searchMessages: async (guildId: string, params: GuildMessageSearchParams) =>
-      getApi().get<GuildMessageSearchResponse>(
-        `/guilds/${guildId}/messages/search?${guildMessageSearchQuery(params)}`,
+      responseContract(
+        getApi().get<unknown>(`/guilds/${guildId}/messages/search?${guildMessageSearchQuery(params)}`),
+        hasListField<GuildMessageSearchResponse>('messages'),
+        'message search',
       ),
     updateSticker: async (
       guildId: string,

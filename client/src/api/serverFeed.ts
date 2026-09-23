@@ -1,4 +1,5 @@
 import { getApi } from './activeClient';
+import { hasListField, responseContract } from './responseContracts';
 import type { Message } from '../types';
 
 /**
@@ -76,6 +77,10 @@ export const serverFeedApi = {
   page: (guildId: string, before: string | null, limit = 20) => {
     const params = new URLSearchParams({ limit: String(limit) });
     if (before) params.set('before', before);
-    return getApi().get<FeedPage>(`/guilds/${guildId}/feed?${params.toString()}`);
+    return responseContract(
+      getApi().get<unknown>(`/guilds/${guildId}/feed?${params.toString()}`),
+      hasListField<FeedPage>('items'),
+      'server feed',
+    );
   },
 };

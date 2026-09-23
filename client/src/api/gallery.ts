@@ -1,4 +1,5 @@
 import { getApi } from './activeClient';
+import { hasListField, responseContract } from './responseContracts';
 
 export interface GalleryAuthor {
   id: string;
@@ -57,13 +58,21 @@ function queryString(query: GalleryQuery): string {
 
 export const galleryApi = {
   channelAttachments: (channelId: string, query: GalleryQuery = {}) =>
-    getApi().get<GalleryPage<GalleryAttachment>>(
-      `/channels/${channelId}/attachments${queryString(query)}`,
+    responseContract(
+      getApi().get<unknown>(`/channels/${channelId}/attachments${queryString(query)}`),
+      hasListField<GalleryPage<GalleryAttachment>>('items'),
+      'media gallery',
     ),
   guildAttachments: (guildId: string, query: GalleryQuery = {}) =>
-    getApi().get<GalleryPage<GalleryAttachment>>(
-      `/guilds/${guildId}/attachments${queryString(query)}`,
+    responseContract(
+      getApi().get<unknown>(`/guilds/${guildId}/attachments${queryString(query)}`),
+      hasListField<GalleryPage<GalleryAttachment>>('items'),
+      'media gallery',
     ),
   channelLinks: (channelId: string, query: Pick<GalleryQuery, 'before' | 'limit'> = {}) =>
-    getApi().get<GalleryPage<GalleryLink>>(`/channels/${channelId}/links${queryString(query)}`),
+    responseContract(
+      getApi().get<unknown>(`/channels/${channelId}/links${queryString(query)}`),
+      hasListField<GalleryPage<GalleryLink>>('items'),
+      'link list',
+    ),
 };

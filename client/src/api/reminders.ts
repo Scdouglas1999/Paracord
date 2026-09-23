@@ -1,5 +1,6 @@
 import type { Message } from '../types';
 import { getApi } from './activeClient';
+import { hasListField, responseContract } from './responseContracts';
 
 export interface ReminderItem {
   id: string;
@@ -23,7 +24,11 @@ export interface ReactionPerson {
 }
 
 export const remindersApi = {
-  list: async () => getApi().get<{ items: ReminderItem[] }>('/users/@me/reminders'),
+  list: async () => responseContract(
+    getApi().get<unknown>('/users/@me/reminders'),
+    hasListField<{ items: ReminderItem[] }>('items'),
+    'reminder list',
+  ),
   put: async (channelId: string, messageId: string, remindAt: string) =>
     getApi().put<ReminderItem>(`/channels/${channelId}/messages/${messageId}/reminder`, {
       remind_at: remindAt,
