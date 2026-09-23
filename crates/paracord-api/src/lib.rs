@@ -403,6 +403,10 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
             get(routes::sports::get_game),
         )
         .route(
+            "/api/v1/guilds/{guild_id}/sports/standings/{sport}/{league}",
+            get(routes::sports::get_standings),
+        )
+        .route(
             "/api/v1/guilds/{guild_id}/members/@me",
             put(routes::members::join_public_guild).delete(routes::members::leave_guild),
         )

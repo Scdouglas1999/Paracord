@@ -20,6 +20,8 @@ pub struct GuildSportsRow {
     pub layout: String,
     /// JSON array of channel pins. `[]` when the server has none.
     pub channel_pins: String,
+    /// Members are told when a favorite team scores.
+    pub score_alerts: bool,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -42,6 +44,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for GuildSportsRow {
                 .try_get::<Option<String>, _>("channel_pins")?
                 .filter(|text| !text.is_empty())
                 .unwrap_or_else(|| "[]".to_string()),
+            score_alerts: bool_from_any_row(row, "score_alerts")?,
             updated_at: datetime_from_db_text(&updated_at)?,
         })
     }
@@ -49,7 +52,8 @@ impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for GuildSportsRow {
 
 const ROW_COLUMNS: &str =
     "guild_id, CAST(enabled AS INTEGER) AS enabled, leagues, favorite_teams, \
-     CAST(show_on_server_page AS INTEGER) AS show_on_server_page, default_view, layout, channel_pins, updated_at";
+     CAST(show_on_server_page AS INTEGER) AS show_on_server_page, default_view, layout, channel_pins, \
+     CAST(score_alerts AS INTEGER) AS score_alerts, updated_at";
 
 pub async fn get(pool: &DbPool, guild_id: i64) -> Result<Option<GuildSportsRow>, DbError> {
     let row = sqlx::query_as::<_, GuildSportsRow>(&format!(
@@ -71,11 +75,12 @@ pub async fn upsert(
     show_on_server_page: bool,
     default_view: &str,
     layout: &str,
+    score_alerts: bool,
 ) -> Result<GuildSportsRow, DbError> {
     let row = sqlx::query_as::<_, GuildSportsRow>(&format!(
         "INSERT INTO guild_sports_settings
-            (guild_id, enabled, leagues, favorite_teams, show_on_server_page, default_view, layout, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            (guild_id, enabled, leagues, favorite_teams, show_on_server_page, default_view, layout, score_alerts, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          ON CONFLICT (guild_id) DO UPDATE SET
             enabled = EXCLUDED.enabled,
             leagues = EXCLUDED.leagues,
@@ -83,6 +88,7 @@ pub async fn upsert(
             show_on_server_page = EXCLUDED.show_on_server_page,
             default_view = EXCLUDED.default_view,
             layout = EXCLUDED.layout,
+            score_alerts = EXCLUDED.score_alerts,
             updated_at = EXCLUDED.updated_at
          RETURNING {ROW_COLUMNS}"
     ))
@@ -93,6 +99,7 @@ pub async fn upsert(
     .bind(show_on_server_page)
     .bind(default_view)
     .bind(layout)
+    .bind(score_alerts)
     .bind(datetime_to_db_text(Utc::now()))
     .fetch_one(pool)
     .await?;
@@ -103,6 +110,18 @@ pub async fn upsert(
 pub async fn list_enabled_with_pins(pool: &DbPool) -> Result<Vec<GuildSportsRow>, DbError> {
     let rows = sqlx::query_as::<_, GuildSportsRow>(&format!(
         "SELECT {ROW_COLUMNS} FROM guild_sports_settings WHERE enabled = $1 AND channel_pins <> '[]'"
+    ))
+    .bind(true)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Enabled servers that tell members when a favorite team scores and have at least one favorite.
+pub async fn list_enabled_with_alerts(pool: &DbPool) -> Result<Vec<GuildSportsRow>, DbError> {
+    let rows = sqlx::query_as::<_, GuildSportsRow>(&format!(
+        "SELECT {ROW_COLUMNS} FROM guild_sports_settings \
+         WHERE enabled = $1 AND score_alerts = $1 AND favorite_teams IS NOT NULL AND favorite_teams <> '[]'"
     ))
     .bind(true)
     .fetch_all(pool)
@@ -164,6 +183,7 @@ mod tests {
             false,
             "favorites",
             "list",
+            true,
         )
         .await
         .unwrap();
@@ -173,6 +193,7 @@ mod tests {
         assert_eq!(saved.layout, "list");
         assert_eq!(saved.leagues, r#"["hockey/nhl"]"#);
         assert_eq!(saved.channel_pins, "[]");
+        assert!(saved.score_alerts);
 
         let pinned = set_channel_pins(&pool, guild_id, r#"[{"channel_id":"1"}]"#)
             .await
@@ -192,6 +213,7 @@ mod tests {
             true,
             "live",
             "cards",
+            false,
         )
         .await
         .unwrap();
@@ -200,6 +222,7 @@ mod tests {
         assert_eq!(again.default_view, "live");
         assert_eq!(again.layout, "cards");
         assert_eq!(again.favorite_teams, "[]");
+        assert!(!again.score_alerts);
         assert_eq!(get(&pool, guild_id).await.unwrap().unwrap(), again);
     }
 
@@ -207,17 +230,51 @@ mod tests {
     async fn list_enabled_with_pins_skips_off_and_empty() {
         let (pool, guild_id) = seeded().await;
         assert!(list_enabled_with_pins(&pool).await.unwrap().is_empty());
-        upsert(&pool, guild_id, true, "[]", "[]", true, "all", "cards")
-            .await
-            .unwrap();
+        upsert(
+            &pool, guild_id, true, "[]", "[]", true, "all", "cards", false,
+        )
+        .await
+        .unwrap();
         assert!(list_enabled_with_pins(&pool).await.unwrap().is_empty());
         set_channel_pins(&pool, guild_id, r#"[{"channel_id":"1"}]"#)
             .await
             .unwrap();
         assert_eq!(list_enabled_with_pins(&pool).await.unwrap().len(), 1);
-        upsert(&pool, guild_id, false, "[]", "[]", true, "all", "cards")
-            .await
-            .unwrap();
+        upsert(
+            &pool, guild_id, false, "[]", "[]", true, "all", "cards", false,
+        )
+        .await
+        .unwrap();
         assert!(list_enabled_with_pins(&pool).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_enabled_with_alerts_needs_the_switch_and_a_favorite() {
+        let (pool, guild_id) = seeded().await;
+        let team = r#"[{"league":"football/nfl","team_id":"12","abbr":"KC","name":"Chiefs"}]"#;
+        upsert(
+            &pool, guild_id, true, "[]", team, true, "all", "cards", false,
+        )
+        .await
+        .unwrap();
+        assert!(list_enabled_with_alerts(&pool).await.unwrap().is_empty());
+        upsert(
+            &pool, guild_id, true, "[]", "[]", true, "all", "cards", true,
+        )
+        .await
+        .unwrap();
+        assert!(list_enabled_with_alerts(&pool).await.unwrap().is_empty());
+        upsert(
+            &pool, guild_id, true, "[]", team, true, "all", "cards", true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(list_enabled_with_alerts(&pool).await.unwrap().len(), 1);
+        upsert(
+            &pool, guild_id, false, "[]", team, true, "all", "cards", true,
+        )
+        .await
+        .unwrap();
+        assert!(list_enabled_with_alerts(&pool).await.unwrap().is_empty());
     }
 }

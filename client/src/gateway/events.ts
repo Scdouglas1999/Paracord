@@ -1,4 +1,7 @@
 export const GatewayEvents = {
+  // Sports add-on: a score in a favorite team's game
+  SPORTS_SCORE: 'SPORTS_SCORE',
+
   // Connection lifecycle
   READY: 'READY',
   RESUMED: 'RESUMED',

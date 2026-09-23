@@ -30,6 +30,7 @@ const MAX_NAME: usize = 80;
 const ADDON_OFF: &str = "The sports add-on is not turned on for this server.";
 const TEAMS_UNAVAILABLE: &str = "The team list for this league is unavailable.";
 const DETAIL_UNAVAILABLE: &str = "This game's detail is unavailable.";
+const STANDINGS_UNAVAILABLE: &str = "Standings for this league are unavailable.";
 const LEAGUE_NOT_FOLLOWED: &str = "This server is not following that league.";
 const EVENT_ID: &str = "An event id must be 1 to 20 digits.";
 const LEAGUE_PATH: &str = "A league path must be one sport/league segment using only letters, digits, dots, and hyphens, at most 48 characters.";
@@ -64,6 +65,10 @@ pub(crate) struct ChannelPin {
     pub(crate) announced_regulation: bool,
     #[serde(default)]
     pub(crate) announce_blocked: Option<String>,
+    /// Drop the pin at the final instead of a few hours after it. The final
+    /// score line still posts first when the pin announces.
+    #[serde(default)]
+    pub(crate) unpin_at_final: bool,
 }
 
 struct StoredSports {
@@ -74,6 +79,7 @@ struct StoredSports {
     default_view: String,
     layout: String,
     pins: Vec<ChannelPin>,
+    score_alerts: bool,
     stored: bool,
     updated_at: DateTime<Utc>,
 }
@@ -91,6 +97,7 @@ impl StoredSports {
             default_view: "all".to_string(),
             layout: "cards".to_string(),
             pins: Vec::new(),
+            score_alerts: false,
             stored: false,
             updated_at: DateTime::<Utc>::UNIX_EPOCH,
         }
@@ -112,6 +119,7 @@ impl StoredSports {
             default_view: row.default_view,
             layout: row.layout,
             pins,
+            score_alerts: row.score_alerts,
             stored: true,
             updated_at: row.updated_at,
         })
@@ -127,6 +135,7 @@ impl StoredSports {
             default_view: self.default_view.clone(),
             layout: self.layout.clone(),
             channel_pins: self.pins.clone(),
+            score_alerts: self.score_alerts,
             updated_at: format_rfc3339(self.updated_at),
         }
     }
@@ -142,6 +151,7 @@ pub struct SportsSettingsResponse {
     default_view: String,
     layout: String,
     channel_pins: Vec<ChannelPin>,
+    score_alerts: bool,
     updated_at: String,
 }
 
@@ -152,6 +162,7 @@ struct SettingsPatch {
     show_on_server_page: Option<bool>,
     default_view: Option<String>,
     layout: Option<String>,
+    score_alerts: Option<bool>,
 }
 
 pub async fn list_leagues(_auth: AuthUser) -> Json<Value> {
@@ -211,7 +222,18 @@ pub async fn put_pin(
         .iter()
         .find(|item| item.channel_id == channel_key)
         .cloned();
-    let announce = pin_announce(&body, previous.as_ref().map(|pin| pin.announce))?;
+    let announce = pin_flag(
+        &body,
+        "announce",
+        previous.as_ref().map(|pin| pin.announce),
+        true,
+    )?;
+    let unpin_at_final = pin_flag(
+        &body,
+        "unpin_at_final",
+        previous.as_ref().map(|pin| pin.unpin_at_final),
+        false,
+    )?;
     let carried = previous.as_ref().filter(|pin| pin.game == game);
     let pin = ChannelPin {
         channel_id: channel_key.clone(),
@@ -224,6 +246,7 @@ pub async fn put_pin(
         announced_halftime: carried.is_some_and(|pin| pin.announced_halftime),
         announced_regulation: carried.is_some_and(|pin| pin.announced_regulation),
         announce_blocked: carried.and_then(|pin| pin.announce_blocked.clone()),
+        unpin_at_final,
     };
     if let Some(existing) = settings
         .pins
@@ -291,6 +314,9 @@ pub async fn put_settings(
     if let Some(layout) = patch.layout {
         settings.layout = layout;
     }
+    if let Some(alerts) = patch.score_alerts {
+        settings.score_alerts = alerts;
+    }
     validate_settings(&settings)?;
 
     let leagues_json = serde_json::to_string(&settings.leagues)
@@ -306,6 +332,7 @@ pub async fn put_settings(
         settings.show_on_server_page,
         &settings.default_view,
         &settings.layout,
+        settings.score_alerts,
     )
     .await?;
     let saved = StoredSports::from_row(row)?;
@@ -325,6 +352,7 @@ pub async fn put_settings(
                 "show_on_server_page": saved.show_on_server_page,
                 "default_view": saved.default_view,
                 "layout": saved.layout,
+                "score_alerts": saved.score_alerts,
             }
         })),
     )
@@ -401,6 +429,46 @@ pub async fn get_game(
         Ok(detail) => Ok(Json(detail).into_response()),
         Err(_) => Ok(detail_unavailable()),
     }
+}
+
+pub async fn get_standings(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((guild_id, sport, league)): Path<(i64, String, String)>,
+) -> Result<Response, ApiError> {
+    ensure_member(&state, guild_id, auth.user_id).await?;
+    let settings = load_settings(&state, guild_id).await?;
+    if !settings.enabled {
+        return Ok(addon_disabled());
+    }
+    let path = format!("{sport}/{league}").to_ascii_lowercase();
+    if !is_valid_league_path(&path) {
+        return Err(ApiError::BadRequest(LEAGUE_PATH.to_string()));
+    }
+    if !settings
+        .leagues
+        .iter()
+        .any(|followed| followed.eq_ignore_ascii_case(&path))
+    {
+        return Err(ApiError::BadRequest(LEAGUE_NOT_FOLLOWED.to_string()));
+    }
+    match scoreboard().standings(&path, &settings.favorites).await {
+        Ok(table) => Ok(Json(table).into_response()),
+        Err(_) => Ok(bad_gateway(STANDINGS_UNAVAILABLE)),
+    }
+}
+
+fn bad_gateway(message: &str) -> Response {
+    (
+        StatusCode::BAD_GATEWAY,
+        Json(json!({
+            "code": "BAD_GATEWAY",
+            "message": message,
+            "error": message,
+            "details": Value::Null,
+        })),
+    )
+        .into_response()
 }
 
 fn detail_unavailable() -> Response {
@@ -485,8 +553,15 @@ fn pin_still_current(pin: &ChannelPin, leagues: &[String], now: DateTime<Utc>) -
     }
     match cached.games.iter().find(|game| game.id == event_id) {
         None => false,
-        Some(game) => !game.state.eq_ignore_ascii_case("post") || now - game.start <= PIN_FINAL_FOR,
+        Some(game) if !game.state.eq_ignore_ascii_case("post") => true,
+        Some(_) if pin.unpin_at_final && final_is_out(pin) => false,
+        Some(game) => now - game.start <= PIN_FINAL_FOR,
     }
+}
+
+/// Nothing is left to post for this pin: the final went out, or it never will.
+fn final_is_out(pin: &ChannelPin) -> bool {
+    !pin.announce || pin.announce_blocked.is_some() || pin.announced_final
 }
 
 pub(crate) fn split_pin_game(game: &str) -> Option<(String, String)> {
@@ -503,13 +578,19 @@ pub(crate) fn split_pin_game(game: &str) -> Option<(String, String)> {
     Some((league.to_ascii_lowercase(), event_id.to_string()))
 }
 
-fn pin_announce(body: &Value, previous: Option<bool>) -> Result<bool, ApiError> {
-    match body.get("announce") {
-        None | Some(Value::Null) => Ok(previous.unwrap_or(true)),
+/// A pin's switch from the request, or what the channel's pin already had, or `default`.
+fn pin_flag(
+    body: &Value,
+    key: &str,
+    previous: Option<bool>,
+    default: bool,
+) -> Result<bool, ApiError> {
+    match body.get(key) {
+        None | Some(Value::Null) => Ok(previous.unwrap_or(default)),
         Some(Value::Bool(value)) => Ok(*value),
-        Some(_) => Err(ApiError::BadRequest(
-            "announce must be true or false.".to_string(),
-        )),
+        Some(_) => Err(ApiError::BadRequest(format!(
+            "{key} must be true or false."
+        ))),
     }
 }
 
@@ -643,6 +724,7 @@ fn parse_patch(body: &Value) -> Result<SettingsPatch, ApiError> {
         show_on_server_page: optional_bool(object, "show_on_server_page")?,
         default_view: optional_view(object)?,
         layout: optional_layout(object)?,
+        score_alerts: optional_bool(object, "score_alerts")?,
     })
 }
 
@@ -847,5 +929,35 @@ mod tests {
         assert!(!pin.announced_final);
         assert!(pin.announced_through.is_none());
         assert!(pin.announce_blocked.is_none());
+        assert!(!pin.unpin_at_final);
+    }
+
+    #[test]
+    fn unpin_at_final_waits_for_the_final_line() {
+        let mut pin: ChannelPin = serde_json::from_str(
+            r#"{"channel_id":"1","game":"football/nfl/100","pinned_by":"2","pinned_at":"2026-09-22T00:00:00Z","unpin_at_final":true}"#,
+        )
+        .expect("pin");
+        assert!(pin.unpin_at_final);
+        assert!(!final_is_out(&pin));
+        pin.announced_final = true;
+        assert!(final_is_out(&pin));
+        pin.announced_final = false;
+        pin.announce = false;
+        assert!(final_is_out(&pin));
+        pin.announce = true;
+        pin.announce_blocked = Some("encrypted".to_string());
+        assert!(final_is_out(&pin));
+    }
+
+    #[test]
+    fn a_pin_flag_keeps_the_previous_value_when_absent() {
+        let body = json!({ "game": "football/nfl/1" });
+        assert!(pin_flag(&body, "unpin_at_final", Some(true), false).unwrap());
+        assert!(!pin_flag(&body, "unpin_at_final", None, false).unwrap());
+        let body = json!({ "game": "football/nfl/1", "unpin_at_final": true });
+        assert!(pin_flag(&body, "unpin_at_final", Some(false), false).unwrap());
+        let body = json!({ "unpin_at_final": "yes" });
+        assert!(pin_flag(&body, "unpin_at_final", None, false).is_err());
     }
 }

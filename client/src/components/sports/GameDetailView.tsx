@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { cn } from '../../lib/utils';
 import { Link } from 'react-router';
 import type { FootballDetail, GameDetail, SportsGame } from '../../api/sports';
@@ -353,7 +353,8 @@ function FootballBody({
   const scoredPlay = useRef<string | null>(null);
 
   const drive = drives.find((item) => item.id === driveId) ?? liveDrive;
-  const plays = drive?.plays ?? [];
+  const drivePlays = drive?.plays;
+  const plays = useMemo(() => drivePlays ?? [], [drivePlays]);
   const count = plays.length;
   const play = plays[Math.min(playIndex, Math.max(0, count - 1))] ?? null;
   const following = live && !manual && (driveId == null || drive?.id === liveDrive?.id);

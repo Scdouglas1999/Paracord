@@ -343,6 +343,9 @@ async fn store_progress(
         pin.announce_blocked = update.announce_blocked.clone();
         changed = true;
     }
+    let before = pins.len();
+    pins.retain(|pin| !(pin.unpin_at_final && pin.announced_final));
+    changed |= pins.len() != before;
     if !changed {
         return Ok(());
     }

@@ -61,7 +61,7 @@ export function teamLabel(team: SportsTeam): string {
   return team.short_name || team.abbr || team.name || 'Team';
 }
 
-export function teamMonogram(team: SportsTeam): string {
+export function teamMonogram(team: Pick<SportsTeam, 'abbr' | 'short_name' | 'name'>): string {
   const source = (team.abbr || team.short_name || team.name || '?').trim();
   return source.slice(0, 2).toUpperCase() || '?';
 }
