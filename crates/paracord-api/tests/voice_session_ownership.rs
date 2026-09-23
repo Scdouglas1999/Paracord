@@ -521,3 +521,86 @@ async fn dm_leave_without_membership_still_announces_but_stale_leave_stays_silen
     f.assert_current(f.dm, receipt(&current)).await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn sharing_a_screen_leaves_mute_and_deafen_as_they_were() -> anyhow::Result<()> {
+    let f = Fixture::new(true).await?;
+    let current = f.join(f.voice).await?;
+    // Mute the way the app does, through the voice state endpoint.
+    let (status, body) = dispatch_json(
+        &f.ctx.app,
+        build_json_request(
+            Method::POST,
+            "/api/v2/voice/state",
+            Some(json!({
+                "guild_id": f.guild.to_string(),
+                "channel_id": f.voice.to_string(),
+                "self_mute": true,
+                "self_deaf": false,
+            })),
+            Some(&f.token),
+        )?,
+    )
+    .await?;
+    assert!(status.is_success(), "{status} {body}");
+    let mut events = f.ctx.event_bus.subscribe_system();
+    let voice_updates =
+        |events: &mut tokio::sync::broadcast::Receiver<paracord_core::events::ServerEvent>| {
+            let mut seen = Vec::new();
+            while let Ok(event) = events.try_recv() {
+                if event.event_type == "VOICE_STATE_UPDATE" {
+                    seen.push((*event.payload).clone());
+                }
+            }
+            seen
+        };
+
+    let (status, body) = f
+        .post(&format!(
+            "/api/v1/voice/{}/stream?session_id={}",
+            f.voice,
+            receipt(&current)
+        ))
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let started = voice_updates(&mut events);
+    let last = started.last().context("a stream start announces itself")?;
+    assert_eq!(last["self_stream"], true, "{last}");
+    assert_eq!(last["self_mute"], true, "{last}");
+
+    // Deafening while sharing keeps the share on for everyone else.
+    let (status, body) = dispatch_json(
+        &f.ctx.app,
+        build_json_request(
+            Method::POST,
+            "/api/v2/voice/state",
+            Some(json!({
+                "guild_id": f.guild.to_string(),
+                "channel_id": f.voice.to_string(),
+                "self_mute": true,
+                "self_deaf": true,
+            })),
+            Some(&f.token),
+        )?,
+    )
+    .await?;
+    assert!(status.is_success(), "{status} {body}");
+    let changed = voice_updates(&mut events);
+    let last = changed.last().context("a deafen announces itself")?;
+    assert_eq!(last["self_stream"], true, "{last}");
+    assert_eq!(last["self_deaf"], true, "{last}");
+
+    let (status, _) = f
+        .post(&format!(
+            "/api/v1/voice/{}/stream/stop?session_id={}",
+            f.voice,
+            receipt(&current)
+        ))
+        .await?;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let stopped = voice_updates(&mut events);
+    let last = stopped.last().context("a stream stop announces itself")?;
+    assert_eq!(last["self_stream"], false, "{last}");
+    assert_eq!(last["self_mute"], true, "{last}");
+    Ok(())
+}
