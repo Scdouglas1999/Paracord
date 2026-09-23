@@ -29,7 +29,7 @@ afterEach(() => {
 
 /** The base-colour presets, found by their hints so "Dusk" cannot collide with
  *  the "Dusk sky" look. */
-const hearth = () => screen.getByRole('button', { name: /Warm brown, lamp-lit/ });
+const hearth = () => screen.getByRole('button', { name: /Warm brown, the default/ });
 const swatch = () => screen.getByRole('button', { name: 'Set accent Emerald' });
 const hueSlider = () => screen.getByRole('slider');
 

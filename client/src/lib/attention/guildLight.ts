@@ -183,6 +183,10 @@ export function guildRooms(input: GuildLightInput, people: readonly PersonLight[
   const history = input.litHistory ?? roomLitHistory;
   const peopleById = new Map(people.map((person) => [person.userId, person]));
   const rooms: RoomLight[] = [];
+  // Reading a thread is being in the room that owns it.
+  const selectedRoomId = input.selectedChannelId
+    ? threadParents(input.channels).get(input.selectedChannelId) ?? input.selectedChannelId
+    : null;
 
   for (const channel of input.channels) {
     if (channel.type === ChannelType.Category) continue;
@@ -242,7 +246,7 @@ export function guildRooms(input: GuildLightInput, people: readonly PersonLight[
       recentAuthors: recentAuthorsOf(input.messages, channel.id),
       selfUserId: input.selfUserId ?? null,
       selfIsViewing:
-        Boolean(input.windowVisible) && input.selectedChannelId === channel.id,
+        Boolean(input.windowVisible) && selectedRoomId === channel.id,
       lastLitMs: history.peek(key).lastLitMs,
       nowMs: input.nowMs,
     });

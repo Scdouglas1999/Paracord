@@ -92,13 +92,13 @@ pub async fn resolve_forward(
         Some(inner) => inner,
         None => {
             let content = forward_content(source_is_dm, dest_is_dm, &message, request)?;
-            let author_name = author_label(state, message.author_id).await?;
+            let (author_id, author_name) = source_author(state, &message).await?;
             let channel_name = channel_label(&channel, source_is_dm)?;
             let stored = json!({
                 "channel_id": channel.id.to_string(),
                 "message_id": message.id.to_string(),
                 "guild_id": channel.guild_id().map(|id| id.to_string()),
-                "author_id": message.author_id.to_string(),
+                "author_id": author_id,
                 "author_name": author_name,
                 "sent_at": message.created_at.to_rfc3339(),
                 "channel_name": channel_name,
@@ -202,6 +202,39 @@ fn forward_content(
     Ok(Some(message.content.clone().unwrap_or_default()))
 }
 
+/// Who the source message says wrote it, as its readers see it.
+///
+/// The attribution is stored once and shown to everyone who can read the
+/// destination, so it must never be more than the source showed its own
+/// readers: a post in an anonymous channel is credited to its alias, and a
+/// webhook post to the webhook rather than the person who created the hook
+/// (both are stored under a real user id).
+async fn source_author(
+    state: &AppState,
+    message: &paracord_db::messages::MessageRow,
+) -> Result<(String, String), ApiError> {
+    let anonymous =
+        paracord_db::messages::get_anonymous_messages_for_message_ids(&state.db, &[message.id])
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    if let Some(anonymous) = anonymous.into_iter().next() {
+        return Ok((
+            format!("anon:{}:{}", anonymous.channel_id, anonymous.alias),
+            anonymous.alias,
+        ));
+    }
+    let webhooks = paracord_db::webhooks::get_webhooks_for_message_ids(&state.db, &[message.id])
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    if let Some((_, webhook_id, name)) = webhooks.into_iter().next() {
+        return Ok((webhook_id.to_string(), name));
+    }
+    Ok((
+        message.author_id.to_string(),
+        author_label(state, message.author_id).await?,
+    ))
+}
+
 async fn author_label(state: &AppState, author_id: i64) -> Result<String, ApiError> {
     let user = paracord_db::users::get_user_by_id(&state.db, author_id)
         .await
@@ -231,6 +264,15 @@ fn channel_label(
         .filter(|name| !name.is_empty())
         .map(str::to_string)
         .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("channel {} has no name", channel.id)))
+}
+
+/// The quoted text a resolved forward carries into its destination, if any.
+pub fn forwarded_content(stored: &str) -> Option<String> {
+    serde_json::from_str::<Value>(stored)
+        .ok()?
+        .get("content")?
+        .as_str()
+        .map(str::to_string)
 }
 
 /// Parse a stored forward so message JSON hands the client an object.

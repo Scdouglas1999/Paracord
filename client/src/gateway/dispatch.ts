@@ -28,7 +28,9 @@ import {
 } from '../lib/features/messageNotifications';
 import { useNotificationPreferenceStore } from '../stores/notificationPreferenceStore';
 import { accountScopeKey } from '../lib/serverScope';
-import { isScoreEvent, scoreAlertText, shouldAlert } from '../components/sports/scoreAlerts';
+import { isScoreEvent, scoreAlertText, shouldAlert, sportsLineOnce } from '../components/sports/scoreAlerts';
+import { readHideScores } from '../components/sports/model';
+import { isSportsScoreAuthor } from '../components/sports/scoreUpdate';
 import type { Channel, Guild, Member, Message, Poll, Presence, User, VoiceState } from '../types';
 import type { Component } from '../types/components';
 import { InteractionCallbackType } from '../types/interactions';
@@ -298,10 +300,14 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
           currentUserId,
           Boolean(roomSetting?.suppress_everyone ?? buildingSetting?.suppress_everyone),
         );
+        // A Sports post is a score: it keeps quiet for someone hiding scores,
+        // and it is said once when a score alert carries the same sentence.
+        const sportsPost = Boolean(data.author && isSportsScoreAuthor(data.author));
         if (
           authorId !== currentUserId &&
           !(isDocumentFocused && focusedChannelId === data.channel_id) &&
-          shouldNotifyForMessage(level, addressesReader)
+          shouldNotifyForMessage(level, addressesReader) &&
+          !(sportsPost && (readHideScores() || !sportsLineOnce(data.content || '')))
         ) {
           const channelName = channels.channelsById[data.channel_id]?.name;
           const authorName = data.author?.username ?? 'Someone';
@@ -339,7 +345,7 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
         ? useNotificationPreferenceStore.getState().byAccount[preferenceKey]?.[data.guild_id]
         : undefined;
       const serverMuted = effectiveNotificationLevel(undefined, serverSetting) === 2;
-      if (shouldAlert(data, { serverMuted })) {
+      if (shouldAlert(data, { serverMuted }) && sportsLineOnce(data.content)) {
         const { title, body } = scoreAlertText(data);
         void sendNotification(title, body);
       }
@@ -600,7 +606,7 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
     case GatewayEvents.POLL_VOTE_ADD:
     case GatewayEvents.POLL_VOTE_REMOVE:
       if (data.poll) {
-        usePollStore.getState().upsertPoll(data.poll as Poll);
+        usePollStore.getState().applyVoteEvent(data.poll as Poll, data.user_id, getServerUser(serverId)?.id);
       }
       break;
 

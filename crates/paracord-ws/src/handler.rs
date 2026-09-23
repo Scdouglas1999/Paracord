@@ -3411,11 +3411,35 @@ async fn handle_client_message(
                             .update_self_video(channel_id, session.user_id, self_video)
                             .await;
 
-                        // Read actual self_stream from VoiceManager instead of hardcoding false
+                        // A native call keeps its stream flag in the stored
+                        // voice state, not the VoiceManager: a mute while
+                        // sharing must not announce that the share stopped.
                         let current_self_stream = state
                             .voice
                             .get_participant_stream_state(channel_id, session.user_id)
-                            .await;
+                            .await
+                            || existing.as_ref().is_some_and(|current| {
+                                current.channel_id == channel_id && current.self_stream
+                            });
+                        // Record the flags, so a later stream start or stop
+                        // announces them as they are.
+                        if let Err(err) = paracord_db::voice_states::update_voice_state(
+                            &state.db,
+                            session.user_id,
+                            Some(guild_id),
+                            self_mute,
+                            self_deaf,
+                            current_self_stream,
+                            self_video,
+                        )
+                        .await
+                        {
+                            tracing::warn!(
+                                user_id = session.user_id,
+                                channel_id,
+                                "failed to record voice flags: {err}"
+                            );
+                        }
 
                         state.event_bus.dispatch(
                             EVENT_VOICE_STATE_UPDATE,

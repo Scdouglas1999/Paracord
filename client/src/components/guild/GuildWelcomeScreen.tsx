@@ -1,5 +1,5 @@
 import { Hash, Volume2, MessageSquare, Users, Compass } from 'lucide-react';
-import type { Guild, Channel } from '../../types';
+import { ChannelType, type Guild, type Channel } from '../../types';
 import { safeStoredImageDataUrl } from '../../lib/security';
 import { Button } from '../ui/Button';
 import { Divider } from '../ui/Divider';
@@ -32,6 +32,8 @@ export function GuildWelcomeScreen({ guild, channels, onDismiss }: GuildWelcomeS
 
   for (const ch of channels) {
     if (ch.type === 4) continue; // skip category channels themselves
+    // A thread is one conversation inside a channel, not a channel to explore.
+    if (ch.type === ChannelType.Thread) continue;
     const parentId = ch.parent_id || null;
     if (!categories.has(parentId)) {
       categories.set(parentId, {

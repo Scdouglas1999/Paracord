@@ -163,6 +163,31 @@ describe('SearchOverlay', () => {
     expect(saved.map((entry: { label: string }) => entry.label)).toEqual(['postgres']);
   });
 
+  it('does not open a result from the previous words while the new search is on its way', async () => {
+    const user = userEvent.setup();
+    vi.mocked(guildApi.searchMessages).mockResolvedValueOnce({
+      data: {
+        total: 1,
+        messages: [{ message: { ...message, id: 'old', content: 'postgres elsewhere' }, channel_id: 'channel-2', channel_name: 'design' }],
+      },
+    } as never);
+    let finish: (value: unknown) => void = () => {};
+    vi.mocked(guildApi.searchMessages).mockImplementationOnce(
+      () => new Promise((resolve) => { finish = resolve; }) as never,
+    );
+    const { onClose } = renderSearchOverlay();
+    const field = screen.getByRole('combobox', { name: 'Search messages' });
+    await user.type(field, 'postgres');
+    expect(await screen.findByText('1 result')).toBeInTheDocument();
+    await user.type(field, ' density{Enter}');
+    expect(onClose).not.toHaveBeenCalled();
+    await act(async () => {
+      finish({ data: { total: 0, messages: [] } });
+    });
+    await user.keyboard('{Enter}');
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it('searches a direct conversation on this device only', async () => {
     const user = userEvent.setup();
     renderSearchOverlay(vi.fn(), { guildId: null });

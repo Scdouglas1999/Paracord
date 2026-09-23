@@ -80,7 +80,7 @@ const FILTER_GUIDE: Array<{ insert: string; hint: string; icon: LucideIcon; serv
   { insert: 'mentions:', hint: 'a person', icon: AtSign },
   { insert: 'before:', hint: 'a date', icon: Calendar },
   { insert: 'after:', hint: 'a date', icon: Calendar },
-  { insert: 'during:', hint: '2026-09-01, yesterday, last week', icon: Calendar },
+  { insert: 'during:', hint: '2026-09-01, today, yesterday, last week', icon: Calendar },
   { insert: 'is:pinned', hint: 'pinned messages', icon: Pin },
 ];
 
@@ -526,9 +526,11 @@ export function SearchOverlay({
     } else if (event.key === 'ArrowUp') {
       event.preventDefault();
       setSelected((index) => Math.max(index - 1, 0));
-    } else if (event.key === 'Enter' && orderedHits[selected]) {
+    } else if (event.key === 'Enter') {
       event.preventDefault();
-      jumpTo(orderedHits[selected]);
+      // While a search is on its way, the list on screen answers the previous
+      // words: Enter waits for the results rather than opening one of those.
+      if (!searching && orderedHits[selected]) jumpTo(orderedHits[selected]);
     }
   };
 

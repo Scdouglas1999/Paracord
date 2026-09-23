@@ -94,3 +94,25 @@ export function shouldAlert(
   if (!readScoreAlertsOn(event.guild_id)) return false;
   return fresh(event, now);
 }
+
+/**
+ * One score, one notification. A member of a server that has both a pinned
+ * channel and score alerts used to hear every score twice: once for the Sports
+ * post in the channel and once for the alert, with the same sentence. Both
+ * paths note the sentence here and stay quiet when the other already said it.
+ */
+export function createSportsLineOnce(windowMs = 2 * 60 * 1000) {
+  const said = new Map<string, number>();
+  return (content: string, now = Date.now()): boolean => {
+    for (const [line, at] of said) {
+      if (now - at > windowMs) said.delete(line);
+    }
+    const line = content.trim();
+    if (said.has(line)) return false;
+    said.set(line, now);
+    return true;
+  };
+}
+
+export const sportsLineOnce = createSportsLineOnce();
+

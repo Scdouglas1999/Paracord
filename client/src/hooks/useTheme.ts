@@ -54,7 +54,7 @@ export const ACCENT_PRESETS = {
  * the semantic accents and the identity palette all stay exactly where they are.
  */
 export const BASE_HUE_PRESETS = {
-  hearth: { label: 'Hearth', hint: 'Warm brown, lamp-lit — the default', hue: 65, tint: 1 },
+  hearth: { label: 'Hearth', hint: 'Warm brown, the default', hue: 65, tint: 1 },
   ash: { label: 'Ash', hint: 'A true neutral charcoal, no tint at all', hue: 65, tint: 0 },
   harbour: { label: 'Harbour', hint: 'Cool slate, like weather off the water', hue: 245, tint: 1 },
   moss: { label: 'Moss', hint: 'Green-leaning, quiet and outdoors', hue: 150, tint: 1 },

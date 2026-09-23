@@ -212,6 +212,8 @@ function LiveRoomCard({
   const faces = room.occupants.slice(0, compact ? 3 : 4);
   const extra = room.occupants.length - faces.length;
   const line = voiceLine(talking, room.occupants.length, room.durationMs);
+  // Already in this call: the button takes you back to it, it does not join again.
+  const action = room.youAreHere ? 'Return to' : stage ? 'Enter' : 'Join';
   const pile = (
     <div className="flex shrink-0 items-center" aria-hidden>
       {faces.map((occupant, index) => (
@@ -251,10 +253,10 @@ function LiveRoomCard({
           variant="light"
           size="sm"
           onClick={(event) => onJoin(room, event.currentTarget.closest('[data-motion-shared]'))}
-          aria-label={`${stage ? 'Enter' : 'Join'} ${room.name}`}
+          aria-label={`${action} ${room.name}`}
           className="shrink-0"
         >
-          {stage ? 'Enter' : 'Join'}
+          {room.youAreHere ? 'Return' : action}
         </Button>
       </div>
       {compact ? (

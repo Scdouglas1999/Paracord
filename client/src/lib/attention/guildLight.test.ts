@@ -155,6 +155,19 @@ describe('guildLight — the store seam', () => {
     expect(hidden.rooms.find((room) => room.channelId === 't1')!.readingCount).toBe(0);
   });
 
+  it('counts someone reading a thread as here in the channel that owns it', () => {
+    const base = input();
+    const building = guildLight(
+      input({
+        channels: [...base.channels, { id: 'th1', type: ChannelType.Thread, name: 'follow-ups', position: 5, parent_id: 't1' }],
+        selectedChannelId: 'th1',
+        windowVisible: true,
+      }),
+    );
+    expect(building.rooms.find((room) => room.channelId === 't1')!.readingCount).toBe(1);
+    expect(building.rooms.find((room) => room.channelId === 't2')!.readingCount).toBe(0);
+  });
+
   it('records the call start so a duration counts from what this client saw', () => {
     const history = createLitHistory();
     const participants = new Map([['v1', [voiceState({ user_id: '1' })]]]);

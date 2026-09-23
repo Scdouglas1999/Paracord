@@ -356,7 +356,8 @@ pub struct LinkCandidate {
     pub author_avatar_hash: Option<String>,
 }
 
-const MAX_GALLERY_CHANNELS: usize = 500;
+/// The same ceiling as server-wide search.
+pub const MAX_GALLERY_CHANNELS: usize = 2_000;
 
 fn ensure_channel_list(channel_ids: &[i64]) -> Result<(), DbError> {
     if channel_ids.is_empty() {

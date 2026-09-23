@@ -1,10 +1,13 @@
 import { memo, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
+import { ForwardedCard } from '../../message/ForwardedCard';
 import { PollMessageCard } from '../../message/PollMessageCard';
 import { ReactionChip } from '../../message/ReactionPeople';
 import { CustomEmojiImage } from '../../ui/ResourceImage';
 import type { FeedMessageItem, FeedUser } from '../../../api/serverFeed';
+import { useCurrentAccountScope } from '../../../hooks/useCurrentUser';
 import { useDownloadTicket } from '../../../hooks/useDownloadTicket';
+import { forwardQuote } from '../../../lib/forwardedMessage';
 import { parseCustomEmojiToken } from '../../../lib/customEmoji';
 import { displayName } from '../../../lib/displayName';
 import { parseMarkdown } from '../../../lib/markdown';
@@ -51,6 +54,7 @@ export const FeedItemMessage = memo(function FeedItemMessage({
   compact = false,
 }: FeedItemMessageProps) {
   const { message } = item;
+  const scope = useCurrentAccountScope();
   const author: FeedUser = {
     id: message.author.id,
     username: message.author.username,
@@ -81,6 +85,9 @@ export const FeedItemMessage = memo(function FeedItemMessage({
         <div className="flex min-w-0 flex-1 flex-col gap-2.5">
           {!compact && (
             <span className="pc-display truncate pt-[7px] text-name leading-none text-text-primary">{displayName(author)}</span>
+          )}
+          {message.forwarded_from && (
+            <ForwardedCard forward={message.forwarded_from} quote={forwardQuote(message)} scope={scope} />
           )}
           {nodes.length > 0 && <ClampedText>{nodes}</ClampedText>}
           <PhotoGrid images={images} />

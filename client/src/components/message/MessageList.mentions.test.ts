@@ -78,4 +78,15 @@ describe('messageMentionsUser', () => {
       ),
     ).toBe(false);
   });
+
+  it('reaches the reader through a role they hold, and only that role', () => {
+    const roleMention = msg({
+      content: 'heads up <@&42> the tokens landed',
+      mention_everyone: false,
+      author: { id: 'other', username: 'o', discriminator: '0' },
+    });
+    expect(messageMentionsUser(roleMention, 'me', new Set(['42']))).toBe(true);
+    expect(messageMentionsUser(roleMention, 'me', new Set(['7']))).toBe(false);
+    expect(messageMentionsUser(roleMention, 'me')).toBe(false);
+  });
 });

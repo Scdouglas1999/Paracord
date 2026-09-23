@@ -3,6 +3,7 @@ import type { SportsScoreEvent } from '../../api/sports';
 import { writeHideScores } from './model';
 import {
   createRepeatFilter,
+  createSportsLineOnce,
   isScoreEvent,
   readScoreAlertsOn,
   scoreAlertText,
@@ -70,5 +71,14 @@ describe('score alerts', () => {
     expect(fresh(event({ guild_id: 'g2' }), 1_000)).toBe(false);
     expect(fresh(event({ kind: 'final', content: 'Final — Chiefs 21, Colts 7' }), 2_000)).toBe(true);
     expect(fresh(event(), 70_000)).toBe(true);
+  });
+
+  it('says a score once when the channel post and the alert carry the same sentence', () => {
+    const once = createSportsLineOnce(120_000);
+    const line = 'Field goal — Chiefs 33, Colts 30 · 0:00 OT · Harrison Butker 40 Yd Field Goal';
+    expect(once(line, 0)).toBe(true);
+    expect(once(`${line} `, 50)).toBe(false);
+    expect(once('Final — Chiefs 33, Colts 30 (OT)', 60)).toBe(true);
+    expect(once(line, 200_000)).toBe(true);
   });
 });

@@ -862,3 +862,283 @@ async fn mention_count(p: &People, user_id: i64) -> i32 {
         .unwrap()
         .map_or(0, |row| row.mention_count)
 }
+
+/// An anonymous post stays anonymous everywhere a reader can reach it: in a
+/// forward, in the media gallery, and in a server search by author.
+#[tokio::test]
+async fn anonymous_posts_stay_anonymous_in_forwards_gallery_and_search() {
+    let p = people("anon").await;
+    let (status, features) = call(
+        &p.app,
+        &p.owner,
+        Method::PATCH,
+        &format!("/api/v1/channels/{}/features", p.channel),
+        Some(json!({"anonymous_posting_enabled": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{features}");
+
+    let upload_id = upload(&p, &p.member, "secret.txt", b"who wrote this").await;
+    let (status, posted) = call(
+        &p.app,
+        &p.member,
+        Method::POST,
+        &format!("/api/v1/channels/{}/messages", p.channel),
+        Some(json!({"content": "an anonymous word", "attachment_ids": [upload_id]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{posted}");
+    let posted_id = posted["id"].as_str().unwrap().to_string();
+    let member_name = "anonmember";
+
+    // Forwarded by the owner, who could see behind the alias: the stored
+    // attribution is what every reader of the destination sees, so it is the alias.
+    let (status, forwarded) = call(
+        &p.app,
+        &p.owner,
+        Method::POST,
+        &format!("/api/v1/channels/{}/messages", p.channel),
+        Some(json!({
+            "content": "",
+            "forwarded_from": {"channel_id": p.channel.to_string(), "message_id": posted_id}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{forwarded}");
+    let attribution = &forwarded["forwarded_from"];
+    assert_ne!(
+        attribution["author_id"],
+        p.member_id.to_string(),
+        "{attribution}"
+    );
+    assert!(
+        attribution["author_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("anon:"),
+        "{attribution}"
+    );
+    assert_ne!(attribution["author_name"], member_name, "{attribution}");
+
+    // The gallery names the alias, not the member.
+    let (status, gallery) = call(
+        &p.app,
+        &p.owner,
+        Method::GET,
+        &format!("/api/v1/channels/{}/attachments", p.channel),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{gallery}");
+    let items = gallery["items"].as_array().unwrap();
+    let theirs: Vec<&Value> = items
+        .iter()
+        .filter(|item| item["message_id"] == posted_id)
+        .collect();
+    assert!(!theirs.is_empty(), "{gallery}");
+    for item in theirs {
+        assert_ne!(item["author"]["id"], p.member_id.to_string(), "{item}");
+        assert_ne!(item["author"]["username"], member_name, "{item}");
+    }
+
+    // Searching the server by the member does not tie them to the alias.
+    let (status, found) = call(
+        &p.app,
+        &p.owner,
+        Method::GET,
+        &format!(
+            "/api/v1/guilds/{}/messages/search?author_id={}",
+            p.guild, p.member_id
+        ),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{found}");
+    assert_eq!(found["total"], 0, "{found}");
+}
+
+#[tokio::test]
+async fn a_reminder_on_a_hidden_channel_does_not_reveal_whether_the_message_exists() {
+    let p = people("remindhide").await;
+    let hidden = send(&p, &p.owner, "owner only").await;
+    let hidden_id = hidden["id"].as_str().unwrap();
+    // Take the member's view of the channel away.
+    paracord_db::channel_overwrites::upsert_channel_overwrite(
+        &p.app.db,
+        p.channel,
+        p.guild,
+        0,
+        0,
+        Permissions::VIEW_CHANNEL.bits(),
+    )
+    .await
+    .unwrap();
+    p.app
+        .state
+        .permission_cache
+        .invalidate_channel(p.channel)
+        .await;
+    let when = (Utc::now() + Duration::hours(1)).to_rfc3339();
+    let (real, _) = call(
+        &p.app,
+        &p.member,
+        Method::PUT,
+        &format!(
+            "/api/v1/channels/{}/messages/{hidden_id}/reminder",
+            p.channel
+        ),
+        Some(json!({"remind_at": when})),
+    )
+    .await;
+    let (made_up, _) = call(
+        &p.app,
+        &p.member,
+        Method::PUT,
+        &format!("/api/v1/channels/{}/messages/1/reminder", p.channel),
+        Some(json!({"remind_at": when})),
+    )
+    .await;
+    assert_eq!(real, made_up);
+    assert_eq!(real, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn the_destination_servers_automod_reads_a_forwards_quoted_text() {
+    let p = people("fwdmod").await;
+    let source = send(&p, &p.member, "a triggerword said elsewhere").await;
+    let (status, strict) = call(
+        &p.app,
+        &p.owner,
+        Method::POST,
+        "/api/v1/guilds",
+        Some(json!({"name":"Strict"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{strict}");
+    let strict_id: i64 = strict["id"].as_str().unwrap().parse().unwrap();
+    let (_, channels) = call(
+        &p.app,
+        &p.owner,
+        Method::GET,
+        &format!("/api/v1/guilds/{strict_id}/channels"),
+        None,
+    )
+    .await;
+    let strict_channel = channels
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["type"] == 0)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    paracord_db::members::add_member(&p.app.db, p.member_id, strict_id)
+        .await
+        .unwrap();
+    paracord_db::roles::add_member_role(&p.app.db, p.member_id, strict_id, strict_id)
+        .await
+        .unwrap();
+    paracord_db::automod::create_rule(
+        &p.app.db,
+        912001,
+        strict_id,
+        "No triggerword",
+        p.owner_id,
+        1,
+        1,
+        &json!({"kind":"keyword", "keywords":["triggerword"]}).to_string(),
+        &json!([{"kind":"block_message", "reason":"Not here"}]).to_string(),
+        true,
+        "[]",
+        "[]",
+    )
+    .await
+    .unwrap();
+    // The owner is exempt from AutoMod; a member forwards it.
+    let (status, refused) = call(
+        &p.app,
+        &p.member,
+        Method::POST,
+        &format!("/api/v1/channels/{strict_channel}/messages"),
+        Some(json!({
+            "content": "look at this",
+            "forwarded_from": {
+                "channel_id": p.channel.to_string(),
+                "message_id": source["id"].as_str().unwrap()
+            }
+        })),
+    )
+    .await;
+    assert_ne!(status, StatusCode::CREATED, "{refused}");
+    let (_, history) = call(
+        &p.app,
+        &p.owner,
+        Method::GET,
+        &format!("/api/v1/channels/{strict_channel}/messages"),
+        None,
+    )
+    .await;
+    assert!(!history.to_string().contains("triggerword"), "{history}");
+}
+
+#[tokio::test]
+async fn one_person_can_keep_a_hundred_reminders_waiting_and_move_any_of_them() {
+    let p = people("remindcap").await;
+    let when = (Utc::now() + Duration::hours(2)).to_rfc3339();
+    let mut ids = Vec::new();
+    for n in 0..101 {
+        let message = send(&p, &p.owner, &format!("note {n}")).await;
+        ids.push(message["id"].as_str().unwrap().to_string());
+    }
+    for id in &ids[..100] {
+        let (status, body) = call(
+            &p.app,
+            &p.member,
+            Method::PUT,
+            &format!("/api/v1/channels/{}/messages/{id}/reminder", p.channel),
+            Some(json!({"remind_at": when})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    let (status, body) = call(
+        &p.app,
+        &p.member,
+        Method::PUT,
+        &format!(
+            "/api/v1/channels/{}/messages/{}/reminder",
+            p.channel, ids[100]
+        ),
+        Some(json!({"remind_at": when})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    // Moving one that is already waiting is not a new reminder.
+    let later = (Utc::now() + Duration::hours(3)).to_rfc3339();
+    let (status, body) = call(
+        &p.app,
+        &p.member,
+        Method::PUT,
+        &format!(
+            "/api/v1/channels/{}/messages/{}/reminder",
+            p.channel, ids[0]
+        ),
+        Some(json!({"remind_at": later})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, listed) = call(
+        &p.app,
+        &p.member,
+        Method::GET,
+        "/api/v1/users/@me/reminders",
+        None,
+    )
+    .await;
+    assert_eq!(
+        listed["items"].as_array().map(Vec::len),
+        Some(100),
+        "{listed}"
+    );
+}

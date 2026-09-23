@@ -255,14 +255,26 @@ function getCachedParsedMarkdown(
 }
 
 /** Match gateway mention logic: @everyone or <@id> / <@!id> in content. */
-export function messageMentionsUser(msg: Message, userId: string | undefined | null): boolean {
+export function messageMentionsUser(
+  msg: Message,
+  userId: string | undefined | null,
+  roleIds: ReadonlySet<string> = NO_ROLE_IDS,
+): boolean {
   // `author` is typed as required but a malformed payload can omit it; never
   // let a mention check be the thing that throws inside a render.
   if (!userId || msg.author?.id === userId) return false;
   if (mentionsEveryone(msg)) return true;
   const content = typeof msg.content === 'string' ? msg.content : '';
-  return new RegExp(`<@!?${userId}>`).test(content);
+  if (new RegExp(`<@!?${userId}>`).test(content)) return true;
+  // A role the reader holds reaches them like their own name does.
+  if (roleIds.size === 0) return false;
+  for (const match of content.matchAll(/<@&(\d+)>/g)) {
+    if (roleIds.has(match[1])) return true;
+  }
+  return false;
 }
+
+const NO_ROLE_IDS: ReadonlySet<string> = new Set();
 
 const MAX_REPLY_NEST_DEPTH = 6;
 
@@ -1099,6 +1111,16 @@ function OwnedMessageList({
   const jumpHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [jumpHighlightId, setJumpHighlightId] = useState<string | null>(null);
   const hasHydratedChannelRef = useRef(false);
+  /**
+   * The reader is at the newest message and wants to stay there. Set by the
+   * reader's own scrolling; content growing underneath (an image, an embed or
+   * a forwarded card finishing its load after the message arrived) does not
+   * scroll, so it cannot clear it.
+   */
+  const followBottomRef = useRef(true);
+  const followObserverRef = useRef<ResizeObserver | null>(null);
+  /** When the reader last scrolled by hand (wheel, touch, scrollbar or keys). */
+  const lastReaderScrollRef = useRef(0);
   const lastReadStateMessageIdRef = useRef<string | null>(null);
   const prevMessagesLenRef = useRef(0);
   const isLoadingMoreRef = useRef(false);
@@ -1113,6 +1135,11 @@ function OwnedMessageList({
       [activeGuildId, memberScope],
     ),
   );
+  // The reader's own roles here, so a role mention reads as addressed to them.
+  const myRoleIds = useMemo<ReadonlySet<string>>(() => {
+    const mine = activeGuildMembers.find((member) => (member.user?.id ?? member.user_id) === me);
+    return mine?.roles?.length ? new Set(mine.roles) : NO_ROLE_IDS;
+  }, [activeGuildMembers, me]);
 
   // Build mention map: userId -> display name for @mention rendering.
   // Select only the active guild membership list to avoid rebuilding on unrelated guild updates.
@@ -1343,6 +1370,8 @@ function OwnedMessageList({
     (messageId: string, rowIndex: number) => {
       const element = scrollRef.current;
       if (!element) return;
+      // A jump is the reader choosing a place: stop holding the bottom.
+      followBottomRef.current = false;
       virtualizer.scrollToIndex(rowIndex, { align: 'center' });
       let frames = 0;
       let settled = 0;
@@ -1526,6 +1555,7 @@ function OwnedMessageList({
 
   useEffect(() => {
     hasHydratedChannelRef.current = false;
+    followBottomRef.current = true;
     lastReadStateMessageIdRef.current = null;
     // A deep link is per-channel; re-arm the once-guard so navigating away and
     // back to a `#msg-` link still jumps.
@@ -1676,6 +1706,37 @@ function OwnedMessageList({
     const { isNearBottom, scrollToEnd } = scrollDepsRef.current;
     if (isNearBottom()) scrollToEnd();
   }, [activeTyping.length]);
+
+  // A message that grows after it lands (its picture decodes, a link preview
+  // or a forwarded card fills in) made the timeline taller after the arrival
+  // scroll had settled, and a reader at the bottom was left looking at the
+  // message above it with "Jump to present" showing. Hold the bottom through
+  // that growth for as long as the reader has not scrolled away.
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    const mark = () => {
+      lastReaderScrollRef.current = performance.now();
+    };
+    const events = ['wheel', 'touchstart', 'touchmove', 'touchend', 'pointerdown', 'keydown'] as const;
+    for (const name of events) scroller.addEventListener(name, mark, { passive: true });
+    return () => {
+      for (const name of events) scroller.removeEventListener(name, mark);
+    };
+  }, [channelId]);
+
+  const timelineContentRef = useCallback((node: HTMLDivElement | null) => {
+    followObserverRef.current?.disconnect();
+    followObserverRef.current = null;
+    if (!node || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      const element = scrollRef.current;
+      if (!element || !followBottomRef.current || isLoadingMoreRef.current) return;
+      element.scrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
+    });
+    observer.observe(node);
+    followObserverRef.current = observer;
+  }, []);
 
   const highlightJumpTarget = useCallback((messageId: string) => {
     setJumpHighlightId(messageId);
@@ -1947,6 +2008,11 @@ function OwnedMessageList({
     const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
     const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
     const nearBottom = distanceFromBottom <= 140;
+    // Only the reader can leave the bottom. The virtualizer also moves
+    // scrollTop when a row above the fold measures taller, and that must not
+    // count as the reader scrolling away.
+    if (nearBottom) followBottomRef.current = true;
+    else if (performance.now() - lastReaderScrollRef.current < 1000) followBottomRef.current = false;
     setShowScrollButton(!nearBottom && distanceFromBottom > 200);
     if (nearBottom) {
       markLatestRead();
@@ -2625,7 +2691,7 @@ function OwnedMessageList({
     };
     // A message that pings the reader gets the mention-line treatment (§7):
     // a persistent emerald tint plus a 2px accent left border, hover-independent.
-    const mentionsMe = messageMentionsUser(msg, me);
+    const mentionsMe = messageMentionsUser(msg, me, myRoleIds);
     const isActiveRow = hoveredMessageId === msg.id || focusedMessageId === msg.id;
     // "From the room": written by somebody who is in the call right now (§7.2).
     const fromRoom = Boolean(inRoomUserIds?.has(msg.author.id));
@@ -3598,7 +3664,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
           // §7.4: a room reads from the bottom. `mt-auto` only has room to act
           // when the timeline is shorter than the plate; past that it scrolls.
           <>
-            <div className="mt-auto shrink-0 py-6" style={{ height: virtualizer.getTotalSize(), width: '100%', position: 'relative' }}>
+            <div ref={timelineContentRef} className="mt-auto shrink-0 py-6" style={{ height: virtualizer.getTotalSize(), width: '100%', position: 'relative' }}>
               {virtualItems.map((virtualRow) => {
                 const row = rows[virtualRow.index];
                 // Every virtual row is `transform`ed, and a transform opens a

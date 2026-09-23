@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router';
+import { extractApiError } from '../../api/client';
 import type { ChannelPin, SportsGame } from '../../api/sports';
 import { sportsApi } from '../../api/sports';
 import { useGuildChannels } from '../../hooks/useChannels';
@@ -70,8 +71,8 @@ export function PinGameButton({
       const res = await sportsApi.pinGame(guildId, channelId, key, { unpin_at_final: untilFinal });
       useSportsStore.getState().adoptSettings(res.data);
       setOpen(false);
-    } catch {
-      setError('That channel could not be pinned.');
+    } catch (err) {
+      setError(`That channel could not be pinned: ${extractApiError(err)}`);
     }
   };
   return (
@@ -100,7 +101,7 @@ export function PinGameButton({
           ))}
         </ul>
       )}
-      {error && <p role="status" className="text-meta text-text-secondary">{error}</p>}
+      {error && <p role="alert" className="text-meta text-accent-danger">{error}</p>}
     </div>
   );
 }

@@ -816,6 +816,42 @@ async fn require_stream_receipt(
     Ok(())
 }
 
+/// The voice flags a stream start or stop must leave as they are.
+struct HeldVoiceFlags {
+    self_mute: bool,
+    self_deaf: bool,
+    self_video: bool,
+    suppress: bool,
+}
+
+/// The flags as last recorded for this call (every mute, deafen and camera
+/// change writes them). Someone not in this call has none to hold.
+async fn held_voice_flags(
+    state: &AppState,
+    channel_id: i64,
+    user_id: i64,
+    guild_id: Option<i64>,
+) -> Result<HeldVoiceFlags, ApiError> {
+    let row = paracord_db::voice_states::get_user_voice_state(&state.db, user_id, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .filter(|row| row.channel_id == channel_id);
+    Ok(match row {
+        Some(row) => HeldVoiceFlags {
+            self_mute: row.self_mute,
+            self_deaf: row.self_deaf,
+            self_video: row.self_video,
+            suppress: row.suppress,
+        },
+        None => HeldVoiceFlags {
+            self_mute: false,
+            self_deaf: false,
+            self_video: false,
+            suppress: false,
+        },
+    })
+}
+
 pub async fn start_stream(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -884,6 +920,10 @@ pub async fn start_stream(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
+    // Sharing a screen changes only the stream flag. The person's mute,
+    // deafen and camera stay as they are, or everyone else sees a muted
+    // streamer as unmuted until their next change.
+    let held = held_voice_flags(&state, channel_id, auth.user_id, Some(guild_id)).await?;
 
     let requested_quality = body
         .as_ref()
@@ -936,10 +976,10 @@ pub async fn start_stream(
                                 &state.db,
                                 auth.user_id,
                                 Some(guild_id),
-                                false,
-                                false,
+                                held.self_mute,
+                                held.self_deaf,
                                 true,
-                                false,
+                                held.self_video,
                             )
                             .await;
                             state.event_bus.dispatch(
@@ -948,11 +988,11 @@ pub async fn start_stream(
                                     "user_id": auth.user_id.to_string(),
                                     "channel_id": channel_id.to_string(),
                                     "guild_id": Some(guild_id.to_string()),
-                                    "self_mute": false,
-                                    "self_deaf": false,
+                                    "self_mute": held.self_mute,
+                                    "self_deaf": held.self_deaf,
                                     "self_stream": true,
-                                    "self_video": false,
-                                    "suppress": false,
+                                    "self_video": held.self_video,
+                                    "suppress": held.suppress,
                                     "mute": false,
                                     "deaf": false,
                                     "username": &user.username,
@@ -1016,10 +1056,10 @@ pub async fn start_stream(
             &state.db,
             auth.user_id,
             Some(guild_id),
-            false,
-            false,
+            held.self_mute,
+            held.self_deaf,
             true,
-            false,
+            held.self_video,
         )
         .await;
 
@@ -1029,11 +1069,11 @@ pub async fn start_stream(
                 "user_id": auth.user_id.to_string(),
                 "channel_id": channel_id.to_string(),
                 "guild_id": Some(guild_id.to_string()),
-                "self_mute": false,
-                "self_deaf": false,
+                "self_mute": held.self_mute,
+                "self_deaf": held.self_deaf,
                 "self_stream": true,
-                "self_video": false,
-                "suppress": false,
+                "self_video": held.self_video,
+                "suppress": held.suppress,
                 "mute": false,
                 "deaf": false,
                 "username": &user.username,
@@ -1077,10 +1117,10 @@ pub async fn start_stream(
         &state.db,
         auth.user_id,
         Some(guild_id),
-        false,
-        false,
+        held.self_mute,
+        held.self_deaf,
         true,
-        false,
+        held.self_video,
     )
     .await;
 
@@ -1090,11 +1130,11 @@ pub async fn start_stream(
             "user_id": auth.user_id.to_string(),
             "channel_id": channel_id.to_string(),
             "guild_id": Some(guild_id.to_string()),
-            "self_mute": false,
-            "self_deaf": false,
+            "self_mute": held.self_mute,
+            "self_deaf": held.self_deaf,
             "self_stream": true,
-            "self_video": false,
-            "suppress": false,
+            "self_video": held.self_video,
+            "suppress": held.suppress,
             "mute": false,
             "deaf": false,
             "username": &user.username,
@@ -1215,6 +1255,8 @@ pub async fn stop_stream(
         }
     }
 
+    let held = held_voice_flags(&state, channel_id, auth.user_id, guild_id).await?;
+
     // Clear stream state in the voice manager.
     state.voice.stop_stream(channel_id, auth.user_id).await;
 
@@ -1224,10 +1266,10 @@ pub async fn stop_stream(
             &state.db,
             auth.user_id,
             Some(gid),
+            held.self_mute,
+            held.self_deaf,
             false,
-            false,
-            false,
-            false,
+            held.self_video,
         )
         .await;
     }
@@ -1243,11 +1285,11 @@ pub async fn stop_stream(
             "user_id": auth.user_id.to_string(),
             "channel_id": channel_id.to_string(),
             "guild_id": guild_id.map(|id| id.to_string()),
-            "self_mute": false,
-            "self_deaf": false,
+            "self_mute": held.self_mute,
+            "self_deaf": held.self_deaf,
             "self_stream": false,
-            "self_video": false,
-            "suppress": false,
+            "self_video": held.self_video,
+            "suppress": held.suppress,
             "mute": false,
             "deaf": false,
             "username": user.as_ref().map(|u| u.username.as_str()),

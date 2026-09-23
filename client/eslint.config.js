@@ -125,8 +125,9 @@ export default tseslint.config(
     },
   },
   {
-    // Playwright harness scripts run under Node.
-    files: ['e2e/**/*.{ts,mjs,js}'],
+    // Playwright harness scripts, and the brand renderer that drives a page
+    // the same way, run under Node.
+    files: ['e2e/**/*.{ts,mjs,js}', 'brand/**/*.mjs'],
     languageOptions: {
       globals: {
         ...globals.node,
