@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router';
 import type { ChannelPin, SportsGame } from '../../api/sports';
@@ -16,6 +16,7 @@ import { latestPlayText, pinGameKey } from './timeline';
 import { TeamMark } from './TeamMark';
 import { Switch } from '../ui';
 import { editingText, useSidewaysPhone } from './sideways';
+import { useFocusTrap } from '../../hooks/useFocusTrap';
 
 const NIGHT_KEY = 'paracord.sports.game-night';
 
@@ -191,6 +192,7 @@ export function AmbientStrip({
   const stageable = game.sport === 'football' || game.sport === 'baseball';
   const [open, setOpen] = useState(() => stageable && readNight(channelId));
   const [turned, setTurned] = useState(false);
+  const closeTurned = useCallback(() => setTurned(false), []);
   const live = game.state === 'in';
   // Opens on the turn itself, so closing it stays closed until the phone is turned back.
   useSidewaysPhone((sideways) => {
@@ -281,7 +283,7 @@ export function AmbientStrip({
           guildId={guildId}
           game={game}
           hideScores={hideScores}
-          onClose={() => setTurned(false)}
+          onClose={closeTurned}
         />
       )}
       {!open && !hideScores && (
@@ -305,32 +307,25 @@ function SidewaysStage({
   guildId: string;
   game: SportsGame;
   hideScores: boolean;
+  /** Must be stable: a new function re-runs the focus trap and pulls focus back to the close button. */
   onClose: () => void;
 }) {
-  const closeRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    closeRef.current?.focus({ preventScroll: true });
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('keydown', onKey);
-      previous?.focus({ preventScroll: true });
-    };
-  }, [onClose]);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  // Focus starts on the close button (first in the dialog), stays inside while
+  // it is open, Escape closes it, and focus goes back where it was.
+  useFocusTrap(dialogRef, true, onClose);
   return createPortal(
     <div
+      ref={dialogRef}
       className="pc-sports-sideways"
       role="dialog"
       aria-modal="true"
       aria-label={`Pinned game. ${gameAriaLabel(game, hideScores)}`}
     >
-      <GameNight guildId={guildId} game={game} hideScores={hideScores} />
-      <button ref={closeRef} type="button" className="pc-focusable pc-sports-sideways-close" onClick={onClose}>
+      <button type="button" className="pc-focusable pc-sports-sideways-close" onClick={onClose}>
         Back to the chat
       </button>
+      <GameNight guildId={guildId} game={game} hideScores={hideScores} />
     </div>,
     document.body,
   );

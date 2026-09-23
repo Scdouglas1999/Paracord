@@ -156,7 +156,7 @@ describe('a phone turned on its side', () => {
 
   it('fills the screen with the live field, and stays closed once closed until turned again', async () => {
     const user = userEvent.setup();
-    render(
+    const { rerender } = render(
       <MemoryRouter>
         <AmbientStrip guildId="g1" channelId="c1" game={game()} untilFinal canUnpin onUnpin={() => {}} />
       </MemoryRouter>,
@@ -168,6 +168,18 @@ describe('a phone turned on its side', () => {
     const stage = await screen.findByRole('dialog', { name: /Pinned game/ });
     expect(stage.querySelector('.pc-sports-pin-stage')).not.toBeNull();
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Back to the chat' }));
+
+    // A poll re-renders the strip: focus someone moved inside the stage stays put.
+    const inside = document.createElement('button');
+    stage.appendChild(inside);
+    inside.focus();
+    rerender(
+      <MemoryRouter>
+        <AmbientStrip guildId="g1" channelId="c1" game={game()} untilFinal canUnpin onUnpin={() => {}} />
+      </MemoryRouter>,
+    );
+    expect(document.activeElement).toBe(inside);
+    inside.remove();
 
     await user.click(screen.getByRole('button', { name: 'Back to the chat' }));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
