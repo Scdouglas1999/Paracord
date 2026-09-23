@@ -526,9 +526,11 @@ export function SearchOverlay({
     } else if (event.key === 'ArrowUp') {
       event.preventDefault();
       setSelected((index) => Math.max(index - 1, 0));
-    } else if (event.key === 'Enter' && orderedHits[selected]) {
+    } else if (event.key === 'Enter') {
       event.preventDefault();
-      jumpTo(orderedHits[selected]);
+      // While a search is on its way, the list on screen answers the previous
+      // words: Enter waits for the results rather than opening one of those.
+      if (!searching && orderedHits[selected]) jumpTo(orderedHits[selected]);
     }
   };
 
