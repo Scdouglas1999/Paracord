@@ -40,6 +40,7 @@ import { cn } from '../../lib/utils';
 import { asThemeId, DEFAULT_THEME, type ThemeId } from '../../lib/themes';
 import { confirm } from '../../stores/confirmStore';
 import { toast } from '../../stores/toastStore';
+import { AppMark } from '../brand/AppMark';
 import { ErrorBanner } from '../ui/Feedback';
 import { Button } from '../ui/Button';
 import { Input, Textarea, Select } from '../ui/Input';
@@ -2171,8 +2172,11 @@ export function UserSettings({ onClose }: UserSettingsProps) {
               <div>
                 <SettingsHeader title="About" description="What you're running and who built it." />
                 <section>
-                  <div className="flex items-baseline justify-between gap-4 border-b border-border-subtle pb-4">
-                    <div className="font-display text-title text-text-primary">{APP_NAME}</div>
+                  <div className="flex items-end justify-between gap-4 border-b border-border-subtle pb-4">
+                    <div className="flex items-end gap-3">
+                      <AppMark size={56} />
+                      <div className="font-display text-title text-text-primary">{APP_NAME}</div>
+                    </div>
                     <div className="font-code text-meta text-text-muted">Version {APP_VERSION}</div>
                   </div>
                   <p className="mt-5 max-w-xl text-body text-text-secondary">
