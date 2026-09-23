@@ -14,7 +14,12 @@ pub struct UserCore {
     pub avatar_hash: Option<String>,
     pub banner_hash: Option<String>,
     pub bio: Option<String>,
-    /// Profile accent as `0xRRGGBB`, or null when the member has not chosen one.
+    /// Profile accent as `0xRRGGBB`. Omitted when the member has not chosen one.
+    ///
+    /// New in 3.2. Unlike the other nullable fields it may be absent rather
+    /// than null, so a 3.2 client can still read accounts from a 3.1 instance,
+    /// which never sends it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accent_color: Option<i32>,
     pub flags: i32,
     pub bot: bool,

@@ -131,6 +131,14 @@ describe('current user contract', () => {
     await expect(authApi.getMe()).rejects.toBeInstanceOf(ApiContractError);
   });
 
+  it('reads an account from a 3.1 instance, which does not send accent_color', async () => {
+    const { accent_color: _accent, ...fromOlderInstance } = currentUser as typeof currentUser & { accent_color?: unknown };
+    clientWith(fromOlderInstance);
+    const response = await authApi.getMe();
+    expect(response.data.accent_color).toBeUndefined();
+    expect(response.data.username).toBe(currentUser.username);
+  });
+
   it('rejects a missing email on the update response but accepts the valid shape', async () => {
     clientWith(updatedUser);
     expect((await authApi.updateMe({ display_name: 'Wire' })).data).toEqual(updatedUser);
