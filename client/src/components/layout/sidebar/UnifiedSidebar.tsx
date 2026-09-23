@@ -208,18 +208,25 @@ export function UnifiedSidebar() {
     (room: RoomLight, origin?: Element | null) => {
       if (!room.guildId) return;
       const guildId = room.guildId;
-      void walkIntoRoom({
-        channelId: room.channelId,
-        origin,
-        go: () => {
-          try {
-            activateGuild({ id: guildId, scope: room.scope });
-            navigate(`/app/guilds/${guildId}/channels/${room.channelId}`);
-          } catch (error) {
-            toast.error(`Failed to open ${room.name}: ${extractApiError(error)}`);
-          }
-        },
-      });
+      const go = () => {
+        try {
+          activateGuild({ id: guildId, scope: room.scope });
+          navigate(`/app/guilds/${guildId}/channels/${room.channelId}`);
+        } catch (error) {
+          toast.error(`Failed to open ${room.name}: ${extractApiError(error)}`);
+        }
+      };
+      // Only a voice channel has a Stage tile for the row to become. A text
+      // channel has no destination carrying the room's shared name, so the
+      // walk waited out its whole 700 ms destination budget every time —
+      // inside a View Transition, where the browser shows a frozen frame for
+      // as long as the update runs — and then crossfaded for another 380 ms.
+      // A text channel opens on the spot.
+      if (room.kind !== 'voice') {
+        go();
+        return;
+      }
+      void walkIntoRoom({ channelId: room.channelId, origin, go });
     },
     [navigate],
   );

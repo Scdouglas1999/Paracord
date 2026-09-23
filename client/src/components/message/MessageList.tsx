@@ -1,7 +1,7 @@
 import { useCurrentChannelStore, useChannelActions } from '../../hooks/useChannels';
 import { entityScopeKey as memberScopeKey, type AccountScope } from '../../lib/serverScope';
 import { useCurrentUser, useCurrentAccountScope } from '../../hooks/useCurrentUser';
-import { useRef, useEffect, useMemo, useState, useReducer, useCallback, type CSSProperties, type MouseEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { memo, useRef, useEffect, useMemo, useState, useReducer, useCallback, type CSSProperties, type MouseEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { captureScopedOperation, type OperationContext } from '../../lib/operationContext';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -103,7 +103,12 @@ interface ReactionTally {
  * commit, so a message scrolling into view with six reactions on it is still,
  * and only a reaction that ARRIVES while you are looking pops.
  */
-function ReactionRow({
+// Memoised so the list hook's layout effect (which measures every chip) runs
+// when THIS message's reactions change, not on every render of the timeline:
+// scrolling re-renders every visible row, and the forced layouts were the
+// largest single item left in a scroll profile once `wallClock` stopped
+// building a formatter per call.
+const ReactionRow = memo(function ReactionRow({
   reactions,
   guildId,
   channelId,
@@ -114,7 +119,7 @@ function ReactionRow({
   guildId: string | null | undefined;
   channelId: string;
   messageId: string;
-  onToggle: (reaction: ReactionTally) => void;
+  onToggle: (messageId: string, reaction: ReactionTally) => void;
 }) {
   const rowRef = useFlipList<HTMLDivElement>({ enter: 'pop' });
   // A custom-emoji reaction is an authenticated image; re-render when the
@@ -132,7 +137,7 @@ function ReactionRow({
             me={r.me}
             channelId={channelId}
             messageId={messageId}
-            onToggle={() => onToggle(r)}
+            onToggle={() => onToggle(messageId, r)}
             glyph={
               parsedCustomEmoji && guildId ? (
                 <CustomEmojiImage
@@ -153,7 +158,7 @@ function ReactionRow({
       })}
     </div>
   );
-}
+});
 
 /**
  * Three dots breathing while somebody types (§5.1 "speaking is a breath", and
@@ -1964,7 +1969,7 @@ function OwnedMessageList({
     }
   };
 
-  const toggleReaction = async (
+  const toggleReaction = useCallback(async (
     messageId: string,
     reaction: { emoji: string; me: boolean },
   ) => {
@@ -1978,7 +1983,11 @@ function OwnedMessageList({
       const action = reaction.me ? 'remove' : 'add';
       toast.error(`Failed to ${action} reaction: ${extractApiError(err)}`);
     }
-  };
+  }, [addReaction, channelId, removeReaction]);
+  const toggleReactionFromRow = useCallback(
+    (messageId: string, reaction: ReactionTally) => void toggleReaction(messageId, reaction),
+    [toggleReaction],
+  );
 
   const deanonymizeMessage = async (message: Message) => {
     if (!message.anonymous?.can_deanonymize || deanonymizingId) return;
@@ -2928,7 +2937,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
               guildId={activeGuildId}
               channelId={channelId}
               messageId={msg.id}
-              onToggle={(reaction) => void toggleReaction(msg.id, reaction)}
+              onToggle={toggleReactionFromRow}
             />
           )}
           {msg.stickers && msg.stickers.length > 0 && (

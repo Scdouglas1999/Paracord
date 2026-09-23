@@ -153,30 +153,60 @@
 
 /* ---- Live ------------------------------------------------------------------- */
 
-@keyframes pc-home-glow {
-  0%,
-  100% {
-    box-shadow:
-      0 0 0 1px color-mix(in oklch, var(--light-amber) 38%, transparent),
-      0 0 22px color-mix(in oklch, var(--light-amber) 10%, transparent),
-      var(--shadow-raised);
-  }
+/* The breath is two still glows crossfading, never an animated box-shadow.
+   Animating the shadow itself repaints the card's blurred glow on every frame
+   of the 2 s cycle, forever, for as long as anyone is in voice: on the Linux
+   desktop webview (WebKitGTK, shared-memory frames) two live cards held the
+   server home at ~1.8 CPU cores and 49 fps while nothing on screen changed.
+   Opacity on a layer is composited, not painted: the same page idles at
+   ~0.7 core and 60 fps. The two layers are the old keyframes' two ends, so the
+   card rests and peaks where it did; in between it blends rather than tweens
+   the blur radius. */
+@keyframes pc-home-glow-rest {
   50% {
-    box-shadow:
-      0 0 0 1px color-mix(in oklch, var(--light-amber) 58%, transparent),
-      0 0 34px color-mix(in oklch, var(--light-amber) 20%, transparent),
-      var(--shadow-raised);
+    opacity: 0;
+  }
+}
+
+@keyframes pc-home-glow-peak {
+  50% {
+    opacity: 1;
   }
 }
 
 .pc-home-live {
   position: relative;
-  overflow: hidden;
   background:
     radial-gradient(120% 90% at 0% 0%, color-mix(in oklch, var(--light-amber) 9%, transparent), transparent 70%),
     var(--bg-raised);
   border-radius: var(--radius-card);
-  animation: pc-home-glow 2s var(--ease-in-out) infinite;
+}
+
+.pc-home-live::before,
+.pc-home-live::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  animation: 2s var(--ease-in-out) infinite;
+}
+
+.pc-home-live::before {
+  box-shadow:
+    0 0 0 1px color-mix(in oklch, var(--light-amber) 38%, transparent),
+    0 0 22px color-mix(in oklch, var(--light-amber) 10%, transparent),
+    var(--shadow-raised);
+  animation-name: pc-home-glow-rest;
+}
+
+.pc-home-live::after {
+  box-shadow:
+    0 0 0 1px color-mix(in oklch, var(--light-amber) 58%, transparent),
+    0 0 34px color-mix(in oklch, var(--light-amber) 20%, transparent),
+    var(--shadow-raised);
+  opacity: 0;
+  animation-name: pc-home-glow-peak;
 }
 
 .pc-home-live-dot {
@@ -283,7 +313,6 @@
 /* ---- Reduced motion ------------------------------------------------------------ */
 
 :root[data-motion='reduced'] .pc-home-enter,
-:root[data-motion='reduced'] .pc-home-live,
 :root[data-motion='reduced'] .pc-home-poll button > span.absolute,
 :root[data-motion='reduced'] .pc-home-bar > span {
   animation: none !important;
@@ -295,6 +324,11 @@
 :root[data-motion='reduced'] .pc-home-photo video,
 :root[data-motion='reduced'] .pc-home-photo-caption {
   transform: none !important;
+}
+
+:root[data-motion='reduced'] .pc-home-live::before,
+:root[data-motion='reduced'] .pc-home-live::after {
+  display: none;
 }
 
 :root[data-motion='reduced'] .pc-home-live {
