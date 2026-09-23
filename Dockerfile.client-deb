@@ -30,6 +30,8 @@ WORKDIR /src
 # Copy workspace manifests for Rust dependency caching
 COPY Cargo.toml Cargo.lock* ./
 COPY crates/ crates/
+COPY third_party/ third_party/
+COPY vendor/ vendor/
 
 # Copy client source
 COPY client/ client/

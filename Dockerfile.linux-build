@@ -32,6 +32,8 @@ WORKDIR /src
 # Copy workspace manifests first for dependency caching
 COPY Cargo.toml Cargo.lock* ./
 COPY crates/ crates/
+COPY third_party/ third_party/
+COPY vendor/ vendor/
 
 # The workspace includes client/src-tauri — copy its manifest and a stub
 # so cargo can resolve the workspace, even though we only build the server.

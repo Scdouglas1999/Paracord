@@ -26,6 +26,8 @@ COPY Cargo.toml Cargo.lock* ./
 COPY crates/ crates/
 COPY client/src-tauri/ client/src-tauri/
 COPY third_party/ third_party/
+# Sys crates patched in the root Cargo.toml ([patch.crates-io]).
+COPY vendor/ vendor/
 
 # Copy the built client dist into the expected location
 COPY --from=client-builder /src/client/dist/ client/dist/
