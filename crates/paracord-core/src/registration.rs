@@ -3,7 +3,7 @@
 //! Two answers: anyone who can reach the server, or only people holding a live
 //! invite to one of its servers. A freshly generated config writes
 //! `invite_only`; a config that predates the setting has no key and keeps the
-//! behaviour it always had, which is open.
+//! behavior it always had, which is open.
 
 use serde::{Deserialize, Serialize};
 

@@ -25,7 +25,11 @@
 #      web server, asserting checksum verification runs and succeeds.
 #   8. Negative test: a wrong checksum aborts before touching the install dir.
 #   9. Bare-binary PARACORD_LOCAL_ARCHIVE (a plain executable, not a tarball).
-#  10. When passwordless sudo + systemd are available (and PARACORD_SMOKE_SKIP_ROOT
+#  10. The router question: a run with no terminal answers no; --allow-internet,
+#      --home-network-only and PARACORD_ALLOW_INTERNET decide it up front; a
+#      run with a terminal asks and takes the answer (driven through `script`);
+#      whatever it decided is what the config says; an upgrade never changes it.
+#  11. When passwordless sudo + systemd are available (and PARACORD_SMOKE_SKIP_ROOT
 #      is not 1): the root path creates
 #      the `paracord` user and a working system unit (using the stub binary so
 #      no real ports are bound), then cleans up everything it created.
@@ -162,6 +166,10 @@ url = "sqlite://./data/paracord.db?mode=rwc"
 jwt_secret = "$secret"
 [storage]
 path = "./data/uploads"
+[network]
+# Ask your router (UPnP / NAT-PMP) to let friends outside your home network in.
+auto_port_forward = false
+port_forward_lease_seconds = 3600
 [tls]
 enabled = true
 port = 8443
@@ -243,6 +251,16 @@ assert_contains "$WORK/install1.log" "open your server in the app and press Invi
 assert_contains "$WORK/install1.log" "To update later, run this same command again" "ending says how to update"
 assert_contains "$WORK/install1.log" "Address:" "Details block prints the address"
 assert_contains "$WORK/install1.log" "$INST/config/paracord.toml" "Details block prints the settings path"
+# No terminal and no flag: the router is left alone, and the config says so.
+assert_contains "$INST/config/paracord.toml" "^auto_port_forward = false$" "no-terminal install leaves the router alone"
+assert_contains "$WORK/install1.log" "Only people on your home network can join for now" "ending says it is home network only"
+assert_contains "$WORK/install1.log" "Let friends outside your home network connect" "ending names the setting that changes it"
+cfg_mode="$(stat -c %a "$INST/config/paracord.toml" 2>/dev/null || stat -f %Lp "$INST/config/paracord.toml")"
+if [ "$cfg_mode" = "600" ]; then
+    pass "config keeps its owner-only mode after the router answer is written"
+else
+    fail "config mode after writing the router answer is $cfg_mode, expected 600"
+fi
 # `paracord-server init` prints its own operator walkthrough; the installer
 # holds it back so there is exactly one set of closing instructions.
 if grep -qiE "claim token|Next steps" "$WORK/install1.log"; then
@@ -346,10 +364,19 @@ else
     fail "closing block uses jargon: $JARGON"
 fi
 ENDING_LINES="$(wc -l < "$WORK/ending.txt")"
-if [ "$ENDING_LINES" -le 13 ]; then
+if [ "$ENDING_LINES" -le 15 ]; then
     pass "closing block is short ($ENDING_LINES lines)"
 else
-    fail "closing block is $ENDING_LINES lines; it should be at most 13"
+    fail "closing block is $ENDING_LINES lines; it should be at most 15"
+fi
+# The better path comes first: a domain and real certificates, then clicking
+# through the warning for someone only trying it out.
+domain_line="$(grep -n "give this server a domain name" "$WORK/ending.txt" | head -n 1 | cut -d: -f1)"
+warning_line="$(grep -n "choose Advanced, then Continue" "$WORK/ending.txt" | head -n 1 | cut -d: -f1)"
+if [ -n "$domain_line" ] && [ -n "$warning_line" ] && [ "$domain_line" -lt "$warning_line" ]; then
+    pass "ending leads with a domain name, and clicking through the warning comes second"
+else
+    fail "ending should name a domain name before clicking through the certificate warning"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -437,7 +464,115 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-echo "== Step 10: root + systemd path (only when safely testable)"
+echo "== Step 10: the router question"
+
+# router_install <dir> <log> [installer args...] — a fresh install with no
+# terminal. Extra environment is passed by the caller in front of it.
+router_install() {
+    rdir="$1"; rlog="$2"; shift 2
+    PARACORD_LOCAL_ARCHIVE="$WORK/$ASSET" \
+    PARACORD_INSTALL_DIR="$rdir" \
+    PARACORD_LINK_DIR=none \
+    PARACORD_NO_SYSTEMD=1 \
+    PARACORD_NO_BROWSER=1 \
+        sh scripts/install.sh "$@" < /dev/null > "$rlog" 2>&1
+}
+
+if router_install "$WORK/r_flag_yes" "$WORK/router_flag_yes.log" --allow-internet; then
+    assert_contains "$WORK/r_flag_yes/config/paracord.toml" "^auto_port_forward = true$" "--allow-internet writes auto_port_forward = true"
+    assert_contains "$WORK/router_flag_yes.log" "Paracord asks your router to let them in" "ending says the router is asked"
+    if [ "$(grep -c '^auto_port_forward' "$WORK/r_flag_yes/config/paracord.toml")" = "1" ]; then
+        pass "the router answer replaces the line rather than adding a second one"
+    else
+        fail "the config has more than one auto_port_forward line"
+    fi
+else
+    cat "$WORK/router_flag_yes.log"; fail "--allow-internet install exited non-zero"
+fi
+
+if PARACORD_ALLOW_INTERNET=1 router_install "$WORK/r_env_yes" "$WORK/router_env_yes.log"; then
+    assert_contains "$WORK/r_env_yes/config/paracord.toml" "^auto_port_forward = true$" "PARACORD_ALLOW_INTERNET=1 writes auto_port_forward = true"
+else
+    cat "$WORK/router_env_yes.log"; fail "PARACORD_ALLOW_INTERNET=1 install exited non-zero"
+fi
+
+if PARACORD_ALLOW_INTERNET=1 router_install "$WORK/r_flag_no" "$WORK/router_flag_no.log" --home-network-only; then
+    assert_contains "$WORK/r_flag_no/config/paracord.toml" "^auto_port_forward = false$" "--home-network-only wins over the variable"
+else
+    cat "$WORK/router_flag_no.log"; fail "--home-network-only install exited non-zero"
+fi
+
+if PARACORD_ALLOW_INTERNET=maybe router_install "$WORK/r_env_bad" "$WORK/router_env_bad.log"; then
+    fail "PARACORD_ALLOW_INTERNET=maybe should refuse to install"
+else
+    assert_contains "$WORK/router_env_bad.log" "PARACORD_ALLOW_INTERNET is 'maybe'" "an unclear PARACORD_ALLOW_INTERNET is refused, not guessed"
+fi
+
+if router_install "$WORK/r_bad_flag" "$WORK/router_bad_flag.log" --open-everything; then
+    fail "an unknown option should be refused"
+else
+    assert_contains "$WORK/router_bad_flag.log" "unknown option --open-everything" "an unknown option is refused by name"
+fi
+
+# CI=true with no flag: decided without asking, and the answer is no.
+if CI=true router_install "$WORK/r_ci" "$WORK/router_ci.log"; then
+    assert_contains "$WORK/r_ci/config/paracord.toml" "^auto_port_forward = false$" "a CI run with no flag answers no"
+else
+    cat "$WORK/router_ci.log"; fail "CI install exited non-zero"
+fi
+
+# An upgrade never changes a running install's answer, flag or no flag.
+cp "$WORK/r_flag_yes/config/paracord.toml" "$WORK/r_flag_yes.before"
+if router_install "$WORK/r_flag_yes" "$WORK/router_upgrade.log" --home-network-only; then
+    if cmp -s "$WORK/r_flag_yes.before" "$WORK/r_flag_yes/config/paracord.toml"; then
+        pass "an upgrade keeps the existing router answer"
+    else
+        fail "an upgrade changed the existing config"
+    fi
+    assert_contains "$WORK/router_upgrade.log" "only apply to a fresh install" "an upgrade says the flag did not apply"
+else
+    cat "$WORK/router_upgrade.log"; fail "upgrade with --home-network-only exited non-zero"
+fi
+
+# With a terminal the installer asks. `script` gives it one; what is typed is
+# the answer, and pressing Enter is no.
+if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>&1; then
+    for answer in y n ""; do
+        tdir="$WORK/r_tty_${answer:-enter}"
+        printf '%s\n' "$answer" | env -u CI \
+            PARACORD_LOCAL_ARCHIVE="$WORK/$ASSET" \
+            PARACORD_INSTALL_DIR="$tdir" \
+            PARACORD_LINK_DIR=none \
+            PARACORD_NO_SYSTEMD=1 \
+            PARACORD_NO_BROWSER=1 \
+            script -qec "sh scripts/install.sh" /dev/null > "$WORK/router_tty_${answer:-enter}.log" 2>&1 || true
+        expected=false
+        [ "$answer" = "y" ] && expected=true
+        if grep -q "Let friends outside your home network connect? Paracord can ask your router" "$WORK/router_tty_${answer:-enter}.log"; then
+            pass "with a terminal the installer asks the router question (answer '${answer:-Enter}')"
+        else
+            fail "with a terminal the installer did not ask (answer '${answer:-Enter}')"
+        fi
+        assert_contains "$tdir/config/paracord.toml" "^auto_port_forward = $expected$" "answer '${answer:-Enter}' writes auto_port_forward = $expected"
+    done
+else
+    note "no working \`script\` command — the interactive question is not exercised here"
+fi
+
+# The root-path stub writes a config with no [network] section at all; the
+# answer is still written, as a section of its own.
+STUB_CFG="$WORK/stubcfg"
+mkdir -p "$STUB_CFG"
+if PARACORD_LOCAL_ARCHIVE="$WORK/$STUB_ASSET" PARACORD_INSTALL_DIR="$STUB_CFG" PARACORD_LINK_DIR=none \
+    PARACORD_NO_SYSTEMD=1 PARACORD_NO_BROWSER=1 sh scripts/install.sh --allow-internet < /dev/null > "$WORK/router_stub.log" 2>&1; then
+    assert_contains "$STUB_CFG/config/paracord.toml" "^\[network\]$" "a config without [network] gets the section"
+    assert_contains "$STUB_CFG/config/paracord.toml" "^auto_port_forward = true$" "...with the answer in it"
+else
+    cat "$WORK/router_stub.log"; fail "install over a config without [network] exited non-zero"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+echo "== Step 11: root + systemd path (only when safely testable)"
 
 ROOT_OK=0
 ROOT_NOTED=0   # set when a specific skip reason was already printed

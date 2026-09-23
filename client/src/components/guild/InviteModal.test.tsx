@@ -145,7 +145,7 @@ describe('InviteModal', () => {
 });
 
 describe('isPrivateNetworkOrigin', () => {
-  it('recognises home-network addresses and nothing else', () => {
+  it('recognizes home-network addresses and nothing else', () => {
     for (const origin of [
       'https://192.168.1.5:8443',
       'https://10.0.0.2',
