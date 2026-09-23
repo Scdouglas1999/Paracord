@@ -7,6 +7,7 @@ import { AppProviders } from './lib/AppProviders';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { getDesktopDiagnosticsLogPath, logVoiceDiagnostic } from './lib/desktopDiagnostics';
 import { isTauri } from './lib/tauriEnv';
+import { useBootSplashHandoff } from './lib/bootSplash';
 import { syncTrustedHosts } from './lib/trustedHosts';
 import { useServerListStore } from './stores/serverListStore';
 import { toast } from './stores/toastStore';
@@ -114,21 +115,28 @@ void getDesktopDiagnosticsLogPath().then((path) => {
   }
 });
 
+/**
+ * Outermost, so its effect runs after everything in the first commit —
+ * including a root ErrorBoundary's recovery screen, which must never sit
+ * hidden behind the loading screen.
+ */
+function BootHandoff({ children }: { children: React.ReactNode }) {
+  useBootSplashHandoff();
+  return <>{children}</>;
+}
+
+// The desktop window is shown by public/boot-window.js as soon as the loading
+// screen is in the document, not here after the bundle has loaded.
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <ErrorBoundary>
-      <BrowserRouter>
-        <AppProviders>
-          <App />
-        </AppProviders>
-      </BrowserRouter>
-    </ErrorBoundary>
+    <BootHandoff>
+      <ErrorBoundary>
+        <BrowserRouter>
+          <AppProviders>
+            <App />
+          </AppProviders>
+        </BrowserRouter>
+      </ErrorBoundary>
+    </BootHandoff>
   </React.StrictMode>
 );
-
-// Desktop-only: show window after React renders (prevents white flash)
-if (isTauri()) {
-  import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
-    getCurrentWindow().show();
-  });
-}
