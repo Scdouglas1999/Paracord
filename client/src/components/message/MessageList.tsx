@@ -255,14 +255,26 @@ function getCachedParsedMarkdown(
 }
 
 /** Match gateway mention logic: @everyone or <@id> / <@!id> in content. */
-export function messageMentionsUser(msg: Message, userId: string | undefined | null): boolean {
+export function messageMentionsUser(
+  msg: Message,
+  userId: string | undefined | null,
+  roleIds: ReadonlySet<string> = NO_ROLE_IDS,
+): boolean {
   // `author` is typed as required but a malformed payload can omit it; never
   // let a mention check be the thing that throws inside a render.
   if (!userId || msg.author?.id === userId) return false;
   if (mentionsEveryone(msg)) return true;
   const content = typeof msg.content === 'string' ? msg.content : '';
-  return new RegExp(`<@!?${userId}>`).test(content);
+  if (new RegExp(`<@!?${userId}>`).test(content)) return true;
+  // A role the reader holds reaches them like their own name does.
+  if (roleIds.size === 0) return false;
+  for (const match of content.matchAll(/<@&(\d+)>/g)) {
+    if (roleIds.has(match[1])) return true;
+  }
+  return false;
 }
+
+const NO_ROLE_IDS: ReadonlySet<string> = new Set();
 
 const MAX_REPLY_NEST_DEPTH = 6;
 
@@ -1123,6 +1135,11 @@ function OwnedMessageList({
       [activeGuildId, memberScope],
     ),
   );
+  // The reader's own roles here, so a role mention reads as addressed to them.
+  const myRoleIds = useMemo<ReadonlySet<string>>(() => {
+    const mine = activeGuildMembers.find((member) => (member.user?.id ?? member.user_id) === me);
+    return mine?.roles?.length ? new Set(mine.roles) : NO_ROLE_IDS;
+  }, [activeGuildMembers, me]);
 
   // Build mention map: userId -> display name for @mention rendering.
   // Select only the active guild membership list to avoid rebuilding on unrelated guild updates.
@@ -2674,7 +2691,7 @@ function OwnedMessageList({
     };
     // A message that pings the reader gets the mention-line treatment (§7):
     // a persistent emerald tint plus a 2px accent left border, hover-independent.
-    const mentionsMe = messageMentionsUser(msg, me);
+    const mentionsMe = messageMentionsUser(msg, me, myRoleIds);
     const isActiveRow = hoveredMessageId === msg.id || focusedMessageId === msg.id;
     // "From the room": written by somebody who is in the call right now (§7.2).
     const fromRoom = Boolean(inRoomUserIds?.has(msg.author.id));
