@@ -16,6 +16,11 @@ export type ShareReach = 'internet' | 'local_network' | 'this_computer' | 'unkno
 export interface ShareAddress {
   url: string | null;
   reach: ShareReach;
+  /**
+   * Whether the server asks the home router to let people outside the network
+   * in. Absent on servers before 3.2.
+   */
+  asks_router?: boolean;
 }
 
 export function createInviteApi(getApi: () => RestClient) {

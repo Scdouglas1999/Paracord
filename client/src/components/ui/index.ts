@@ -25,6 +25,7 @@ export { Divider, type DividerProps } from './Divider';
 export { Popover, MenuItem, MenuLabel, type PopoverProps, type MenuItemProps } from './Popover';
 export { Tooltip } from './Tooltip';
 export { Switch, ToggleRow, type SwitchProps, type ToggleRowProps } from './Switch';
+export { ChoiceCards, type ChoiceCardsProps, type ChoiceOption } from './ChoiceCards';
 export { Tabs, type TabsProps, type TabItem } from './Tabs';
 export {
   SettingsShell,

@@ -12,6 +12,13 @@ import {
   registrationPasswordError,
 } from '../lib/registrationPassword';
 import { ErrorBanner } from '../components/ui/Feedback';
+import { ChoiceCards } from '../components/ui/ChoiceCards';
+import type { RegistrationMode } from '../api/auth';
+import {
+  REGISTRATION_CHOICES,
+  ROUTER_SETTING_LABEL,
+  reachLabel,
+} from '../lib/instanceAccess';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import {
@@ -126,6 +133,8 @@ export interface ClaimDraft {
   confirmPassword: string;
   instanceName: string;
   spaceName: string;
+  /** Who can create an account once setup is done. */
+  registrationMode: RegistrationMode;
 }
 
 /**
@@ -142,6 +151,7 @@ export const CLAIM_STEPS = [
   { id: 'owner', fields: ['username', 'email'] },
   { id: 'password', fields: ['password', 'confirmPassword'] },
   { id: 'place', fields: ['instanceName', 'spaceName'] },
+  { id: 'access', fields: [] },
 ] as const satisfies ReadonlyArray<{ id: string; fields: readonly ClaimField[] }>;
 
 export type ClaimStepId = (typeof CLAIM_STEPS)[number]['id'];
@@ -202,7 +212,21 @@ export function claimStepError(
         };
       }
       return null;
+    case 'access':
+      // Both answers are valid; one is always chosen.
+      return null;
   }
+}
+
+/**
+ * What the owner is told about how this server can be reached, from what the
+ * server itself reported. `null` when an older server did not say.
+ */
+export function reachExplanation(routerForwarding: boolean | undefined): string | null {
+  if (routerForwarding === undefined) return null;
+  return routerForwarding
+    ? 'Paracord asks your router to let friends outside your home network connect. You can turn this off later in Admin → Settings.'
+    : `Only people on your home network (the same Wi-Fi) can connect for now. To let friends elsewhere join, turn on “${ROUTER_SETTING_LABEL}” in Admin → Settings later.`;
 }
 
 /**
@@ -232,6 +256,8 @@ export function InstanceSetupPage() {
   const [statusError, setStatusError] = useState('');
   const [requirements, setRequirements] = useState<PasswordRequirements | null>(null);
   const [requireEmail, setRequireEmail] = useState(false);
+  const [routerForwarding, setRouterForwarding] = useState<boolean | undefined>(undefined);
+  const accessLabelId = useId();
 
   // Read once, on the first render: reading it scrubs it from the address bar.
   const [codeFromLink] = useState(() => takeSetupCodeFromLocation());
@@ -247,6 +273,8 @@ export function InstanceSetupPage() {
     confirmPassword: '',
     instanceName: '',
     spaceName: '',
+    // Invite-only unless the owner chooses otherwise.
+    registrationMode: 'invite_only',
   });
   const [stepIndex, setStepIndex] = useState(codeFromLink != null ? 1 : 0);
   const [fieldError, setFieldError] = useState<{ field: ClaimField; message: string } | null>(null);
@@ -270,7 +298,7 @@ export function InstanceSetupPage() {
    * survives the edit that answers it reads like the field is still wrong.
    */
   const edit = useCallback(
-    (field: keyof ClaimDraft, value: string) => {
+    <K extends keyof ClaimDraft>(field: K, value: ClaimDraft[K]) => {
       setDraft((previous) => ({ ...previous, [field]: value }));
       setFieldError((previous) => (previous?.field === field ? null : previous));
     },
@@ -309,6 +337,7 @@ export function InstanceSetupPage() {
           navigate('/login', { replace: true });
           return;
         }
+        setRouterForwarding(data.router_forwarding);
         setChecking(false);
       })
       .catch((err: unknown) => {
@@ -379,6 +408,7 @@ export function InstanceSetupPage() {
         instance_name: draft.instanceName.trim(),
         initial_space_name: draft.spaceName.trim(),
         display_name: draft.displayName.trim() || undefined,
+        registration_mode: draft.registrationMode,
       });
       setAccessToken(data.token);
       setRefreshToken(data.refresh_token ?? null);
@@ -510,7 +540,7 @@ export function InstanceSetupPage() {
               dense
               progress={progress}
               title="Create the owner account"
-              description="This account administers the instance: settings, moderation, backups. It is a normal account too — you can chat with it. Everyone who arrives later signs up normally and joins as a member."
+              description="This account administers the instance: settings, moderation, backups. It is a normal account too — you can chat with it. Everyone who arrives later makes an account of their own and joins as a member."
             >
               <AuthScroll paired>
                 <Field
@@ -693,6 +723,41 @@ export function InstanceSetupPage() {
                     aria-describedby={spaceErrorId}
                   />
                 </Field>
+              </AuthScroll>
+            </AuthStep>
+          )}
+
+          {step.id === 'access' && (
+            <AuthStep
+              key="access"
+              dense
+              progress={progress}
+              title="Who can get in"
+              description="You can change both of these later in Admin → Settings."
+            >
+              <AuthScroll>
+                <div className="flex flex-col gap-2">
+                  <span id={accessLabelId} className="text-label font-medium text-text-secondary">
+                    Who can create an account
+                  </span>
+                  <ChoiceCards
+                    labelledBy={accessLabelId}
+                    options={REGISTRATION_CHOICES}
+                    value={draft.registrationMode}
+                    onChange={(next) => edit('registrationMode', next)}
+                  />
+                </div>
+                {reachExplanation(routerForwarding) && (
+                  <div className="pc-well mt-4 flex flex-col gap-1 px-4 py-3">
+                    <span className="text-meta text-text-faint">How this server was installed</span>
+                    <span className="text-label font-semibold text-text-primary">
+                      {reachLabel(Boolean(routerForwarding))}
+                    </span>
+                    <span className="text-meta leading-relaxed text-text-secondary">
+                      {reachExplanation(routerForwarding)}
+                    </span>
+                  </div>
+                )}
               </AuthScroll>
             </AuthStep>
           )}

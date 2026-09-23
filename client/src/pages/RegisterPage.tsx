@@ -10,8 +10,14 @@ import {
   registrationPasswordError,
 } from '../lib/registrationPassword';
 import { ErrorBanner } from '../components/ui/Feedback';
-import { Button } from '../components/ui/Button';
+import { Button, buttonVariants } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
+import {
+  INVITE_ONLY_MESSAGE,
+  PENDING_INVITE_KEY,
+  readPendingInvite,
+} from '../lib/instanceAccess';
+import type { RegistrationMode } from '../api/auth';
 import {
   AUTH_FORM,
   AppMark,
@@ -77,6 +83,27 @@ export function registerStepError(
   return null;
 }
 
+/**
+ * Why this page cannot make an account right now, or nothing when it can.
+ * Decided from what the server said it accepts, before anyone types anything.
+ */
+export function registrationUnavailable(options: {
+  registrationEnabled: boolean;
+  registrationMode: RegistrationMode;
+  hasInvite: boolean;
+}): { title: string; message: string } | null {
+  if (!options.registrationEnabled) {
+    return {
+      title: 'Sign-ups are closed',
+      message: 'This server isn’t taking new accounts right now. Ask the person who runs it.',
+    };
+  }
+  if (options.registrationMode === 'invite_only' && !options.hasInvite) {
+    return { title: 'You need an invite', message: INVITE_ONLY_MESSAGE };
+  }
+  return null;
+}
+
 export function RegisterPage() {
   const emailErrorId = useId();
   const usernameErrorId = useId();
@@ -100,6 +127,12 @@ export function RegisterPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [requireEmail, setRequireEmail] = useState(false);
+  // What the server accepts. Until it answers, the form is shown: the server
+  // decides on submit either way, and a refusal says why.
+  const [registrationEnabled, setRegistrationEnabled] = useState(true);
+  const [registrationMode, setRegistrationMode] = useState<RegistrationMode>('open');
+  // Read once: the invite page leaves it here for exactly this page.
+  const [pendingInvite] = useState(readPendingInvite);
   const navigate = useNavigate();
   const register = useAuthStore((s) => s.register);
   const formRef = useRef<HTMLFormElement>(null);
@@ -120,6 +153,8 @@ export function RegisterPage() {
       .then(({ data }) => {
         if (cancelled) return;
         setRequireEmail(data.require_email);
+        setRegistrationEnabled(data.registration_enabled ?? true);
+        setRegistrationMode(data.registration_mode ?? 'open');
       })
       .catch(() => {
         // Keep conservative defaults when options are unavailable.
@@ -164,22 +199,26 @@ export function RegisterPage() {
     setError('');
     setLoading(true);
     try {
+      // The invite rides along: on an invite-only server it is what lets this
+      // account be made at all. Joining its server still happens afterwards,
+      // on the invite page, so any questions that server asks are still asked.
       await register(
         draft.email.trim(),
         draft.username.trim(),
         draft.password,
         draft.displayName.trim(),
+        pendingInvite ?? undefined,
       );
 
       // Somebody who arrived by an invite made this account in order to use
       // it. Sending them to an empty app instead lost the invite entirely —
       // only the sign-in path ever looked for it.
-      let pendingInvite: string | null = null;
-      try {
-        pendingInvite = sessionStorage.getItem('paracord:pending-invite');
-        if (pendingInvite) sessionStorage.removeItem('paracord:pending-invite');
-      } catch {
-        /* storage unavailable: fall through to the app */
+      if (pendingInvite) {
+        try {
+          sessionStorage.removeItem(PENDING_INVITE_KEY);
+        } catch {
+          /* storage unavailable: fall through to the app */
+        }
       }
       navigate(destinationAfterLogin(pendingInvite, true) ?? '/app');
     } catch (err: unknown) {
@@ -215,6 +254,38 @@ export function RegisterPage() {
     setError('');
     setStepIndex((index) => Math.max(0, index - 1));
   };
+
+  const unavailable = registrationUnavailable({
+    registrationEnabled,
+    registrationMode,
+    hasInvite: pendingInvite != null,
+  });
+  if (unavailable) {
+    return (
+      <AuthCanvas>
+        <AuthCard className="max-w-md">
+          <div className={AUTH_FORM}>
+            <header className="flex items-center gap-3">
+              <AppMark size={34} />
+              <h1 className="pc-display text-title text-text-primary">{unavailable.title}</h1>
+            </header>
+            <p className="text-body leading-relaxed text-text-secondary" role="status">
+              {unavailable.message}
+            </p>
+            {registrationEnabled && (
+              <p className="text-meta leading-relaxed text-text-faint">
+                When you have the link, open it in this browser and choose “Create an account to
+                join”.
+              </p>
+            )}
+            <Link to="/login" className={buttonVariants({ variant: 'primary', size: 'lg' })}>
+              Sign in instead
+            </Link>
+          </div>
+        </AuthCard>
+      </AuthCanvas>
+    );
+  }
 
   const confirmMismatch =
     draft.confirmPassword.length > 0 && draft.password !== draft.confirmPassword;

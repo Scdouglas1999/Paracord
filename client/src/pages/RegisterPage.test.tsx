@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { authApi } from '../api/auth';
-import { RegisterPage, registerStepError } from './RegisterPage';
+import { RegisterPage, registerStepError, registrationUnavailable } from './RegisterPage';
 
 const mockAuthState = vi.hoisted(() => ({
   token: 'access-token' as string | null,
@@ -223,7 +223,7 @@ describe('RegisterPage', () => {
     await user.click(createButton());
 
     await waitFor(() => {
-      expect(mockAuthState.register).toHaveBeenCalledWith('', 'ada', password, '');
+      expect(mockAuthState.register).toHaveBeenCalledWith('', 'ada', password, '', undefined);
     });
     expect(await screen.findByText('App shell')).toBeInTheDocument();
   });
@@ -247,6 +247,7 @@ describe('RegisterPage', () => {
         'ada',
         VALID_PASSWORD,
         'Ada Lovelace',
+        undefined,
       );
     });
     expect(mockServerListState.addServer).not.toHaveBeenCalled();
@@ -333,6 +334,79 @@ describe('RegisterPage', () => {
 
     expect(await screen.findByText('You must agree to the terms of service')).toBeInTheDocument();
     expect(mockAuthState.register).not.toHaveBeenCalled();
+  });
+});
+
+describe('RegisterPage on an invite-only server', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionStorage.clear();
+    mockAuthState.register.mockResolvedValue(undefined);
+    mockGetSetupStatus.mockResolvedValue({ data: { setup_required: false } });
+    vi.mocked(authApi.options).mockResolvedValue({
+      data: {
+        allow_username_login: true,
+        require_email: false,
+        registration_enabled: true,
+        registration_mode: 'invite_only',
+      },
+    } as never);
+  });
+
+  it('says so plainly instead of showing a form that will fail', async () => {
+    renderRegisterPage();
+
+    expect(
+      await screen.findByText(
+        'This server is invite-only. Ask the person who runs it for an invite link.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Continue' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Sign in instead' })).toHaveAttribute('href', '/login');
+  });
+
+  it('shows the form to someone who came from an invite, and sends the invite along', async () => {
+    sessionStorage.setItem('paracord:pending-invite', 'abc123');
+    const user = userEvent.setup();
+    renderRegisterPage();
+
+    await passIdentity(user);
+    await fillPassword(user, VALID_PASSWORD);
+    await user.click(createButton());
+
+    await waitFor(() => {
+      expect(mockAuthState.register).toHaveBeenCalledWith('', 'ada', VALID_PASSWORD, '', 'abc123');
+    });
+    // Consumed once the account exists, and the person goes on to join.
+    expect(sessionStorage.getItem('paracord:pending-invite')).toBeNull();
+  });
+});
+
+describe('registrationUnavailable', () => {
+  it('lets an open server, or an invite-only one with an invite, show the form', () => {
+    expect(
+      registrationUnavailable({ registrationEnabled: true, registrationMode: 'open', hasInvite: false }),
+    ).toBeNull();
+    expect(
+      registrationUnavailable({
+        registrationEnabled: true,
+        registrationMode: 'invite_only',
+        hasInvite: true,
+      }),
+    ).toBeNull();
+  });
+
+  it('explains a closed server and an invite-only one without an invite', () => {
+    expect(
+      registrationUnavailable({ registrationEnabled: false, registrationMode: 'open', hasInvite: true }),
+    ).toMatchObject({ title: 'Sign-ups are closed' });
+    expect(
+      registrationUnavailable({
+        registrationEnabled: true,
+        registrationMode: 'invite_only',
+        hasInvite: false,
+      }),
+    ).toMatchObject({ title: 'You need an invite' });
   });
 });
 

@@ -49,7 +49,13 @@ interface AuthState {
   error: string | null;
 
   login: (identifier: string, password: string) => Promise<void>;
-  register: (email: string, username: string, password: string, displayName?: string) => Promise<void>;
+  register: (
+    email: string,
+    username: string,
+    password: string,
+    displayName?: string,
+    inviteCode?: string,
+  ) => Promise<void>;
   initializeSession: () => Promise<void>;
   setToken: (token: string | null) => void;
   logout: () => Promise<void>;
@@ -147,7 +153,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
     }
   },
 
-  register: async (email, username, password, displayName) => {
+  register: async (email, username, password, displayName, inviteCode) => {
     set({ isLoading: true, error: null });
     try {
       const { data } = await authApi.register({
@@ -155,6 +161,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
         username,
         password,
         display_name: displayName || undefined,
+        invite_code: inviteCode || undefined,
       });
       resetRefreshCoordination();
       setAccessToken(data.token);

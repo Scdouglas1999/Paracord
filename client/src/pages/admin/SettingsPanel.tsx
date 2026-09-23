@@ -1,19 +1,26 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useId } from 'react';
 import { Check } from 'lucide-react';
-import { adminApi } from '../../api/admin';
+import { adminApi, type RouterAccess } from '../../api/admin';
 import { extractApiError } from '../../api/client';
 import { toast } from '../../stores/toastStore';
 import {
   Button,
+  ChoiceCards,
   Divider,
+  ErrorBanner,
   SettingsSectionHeader,
   TextField,
   ToggleRow,
 } from '../../components/ui';
 import { Textarea } from '../../components/ui/Input';
+import { REGISTRATION_CHOICES, ROUTER_SETTING_LABEL, reachLabel } from '../../lib/instanceAccess';
 
 export function SettingsPanel() {
+  const registrationLabelId = useId();
   const [settings, setSettings] = useState<Record<string, string>>({});
+  const [router, setRouter] = useState<RouterAccess | null>(null);
+  const [routerDraft, setRouterDraft] = useState<boolean | null>(null);
+  const [routerError, setRouterError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
@@ -24,13 +31,35 @@ export function SettingsPanel() {
       .catch((err) => {
         toast.error(`Failed to load settings: ${extractApiError(err)}`);
       });
+    adminApi
+      .getRouterAccess()
+      .then(({ data }) => {
+        setRouter(data);
+        setRouterDraft(data.saved);
+      })
+      .catch((err) => {
+        setRouterError(`Couldn't read the network setting: ${extractApiError(err)}`);
+      });
   }, []);
 
   const handleSave = async () => {
     setSaving(true);
+    setRouterError(null);
     try {
       const { data } = await adminApi.updateSettings(settings);
       setSettings(data);
+      if (router && routerDraft !== null && routerDraft !== router.saved) {
+        try {
+          const { data: next } = await adminApi.updateRouterAccess(routerDraft);
+          setRouter(next);
+          setRouterDraft(next.saved);
+        } catch (err) {
+          // Said next to the switch it belongs to, and kept there: this one
+          // usually needs the owner to do something by hand.
+          setRouterError(extractApiError(err));
+          throw err;
+        }
+      }
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (err) {
@@ -79,11 +108,28 @@ export function SettingsPanel() {
           </div>
 
           <ToggleRow
-            label="Open registration"
-            description="Allow anyone to create a new account on this instance."
+            label="New accounts"
+            description="Let new people create accounts here. Turn this off to stop all sign-ups; people who already have an account can still sign in."
             checked={settings.registration_enabled === 'true'}
             onChange={(next) => update('registration_enabled', next ? 'true' : 'false')}
           />
+
+          <div className="flex flex-col gap-2">
+            <span
+              id={registrationLabelId}
+              className="text-label font-medium text-text-secondary"
+            >
+              Who can create an account
+            </span>
+            <ChoiceCards
+              labelledBy={registrationLabelId}
+              options={REGISTRATION_CHOICES}
+              value={settings.registration_mode === 'open' ? 'open' : 'invite_only'}
+              onChange={(next) => update('registration_mode', next)}
+              disabled={settings.registration_enabled !== 'true' || !settings.registration_mode}
+              layout="row"
+            />
+          </div>
 
           <div className="grid gap-5 sm:grid-cols-2">
             <TextField
@@ -101,6 +147,47 @@ export function SettingsPanel() {
               onChange={(e) => update('max_members_per_guild', e.target.value)}
             />
           </div>
+        </section>
+
+        <section className="flex flex-col gap-3">
+          <Divider />
+          <h3 className="pc-display text-heading text-text-primary">Network</h3>
+          {router && (
+            <p className="text-label text-text-secondary">
+              Right now: <span className="font-semibold text-text-primary">{reachLabel(router.running && !router.loopback_bind)}</span>
+            </p>
+          )}
+          <ToggleRow
+            className="py-0"
+            label={ROUTER_SETTING_LABEL}
+            description="Paracord asks your router to open a port for this server (UPnP). Off means only people on your home network can connect. If you set up port forwarding by hand, or reach the server through a domain, leave this off."
+            checked={routerDraft ?? false}
+            onChange={(next) => {
+              setRouterDraft(next);
+              setRouterError(null);
+              setSaved(false);
+            }}
+            disabled={!router || Boolean(router.locked_by)}
+          />
+          {router?.locked_by && (
+            <p className="text-meta leading-relaxed text-text-faint">
+              This is set by <code className="pc-mono">{router.locked_by}</code> where the server is
+              started, so it can’t be changed here.
+            </p>
+          )}
+          {router?.loopback_bind && (
+            <p className="text-meta leading-relaxed text-text-faint">
+              This server only listens on this computer, so nobody else can reach it either way.
+            </p>
+          )}
+          {router && routerDraft !== null && routerDraft !== router.running && (
+            <p className="text-meta leading-relaxed text-text-secondary" role="status">
+              {routerDraft === router.saved
+                ? 'Saved. Restart the server for this to take effect.'
+                : 'Takes effect after you save and restart the server.'}
+            </p>
+          )}
+          {routerError && <ErrorBanner message={routerError} multiline />}
         </section>
 
         <section className="flex flex-col gap-5">

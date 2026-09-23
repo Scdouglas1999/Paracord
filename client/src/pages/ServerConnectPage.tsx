@@ -234,6 +234,20 @@ async function probeServer(serverUrl: string): Promise<{ name: string; canonical
   return probeServerViaFetch(serverUrl);
 }
 
+/**
+ * The server's own sentence when it refused to create an account for this
+ * device: an invite-only server without a usable invite. `null` for anything
+ * else, which the generic handling below explains.
+ */
+export function accountRefusalMessage(err: unknown): string | null {
+  const data = (err as { response?: { data?: { code?: unknown; message?: unknown } } } | null)
+    ?.response?.data;
+  if (data?.code === 'INVITE_REQUIRED' && typeof data.message === 'string' && data.message) {
+    return data.message;
+  }
+  return null;
+}
+
 export function toFriendlyConnectionError(err: unknown): string {
   if (err instanceof CorsBlockedError) {
     // Already the specific, actionable sentence — never fold it into the
@@ -384,9 +398,16 @@ export function ServerConnectPage() {
       // If not, just save the server and redirect to login for password auth.
       setStatus('Signing you in…');
       try {
-        await gateway.connectServer(serverId);
+        await gateway.connectServer(serverId, { inviteCode });
       } catch (authErr) {
         gateway.disconnectServer(serverId);
+        const refusal = accountRefusalMessage(authErr);
+        if (refusal) {
+          // The server is up and said exactly why it will not make an account
+          // here (invite-only, or sign-ups closed). That sentence is the answer.
+          useServerListStore.getState().removeServer(serverId);
+          throw new Error(refusal);
+        }
         const msg = authErr instanceof Error ? authErr.message : '';
         if (msg.includes('not unlocked') || msg.includes('No server token')) {
           // Account not set up for challenge-response — fall through to login

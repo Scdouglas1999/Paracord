@@ -1,6 +1,7 @@
 import { getApi as getActiveApi, getServerApi } from './activeClient';
 import { LOCAL_SERVER_ID } from '../lib/serverScope';
 import type { LoginResponse } from '../types';
+import type { RegistrationMode } from './auth';
 
 // Setup belongs to the server this client is *signed in to*, never to whichever
 // remote server happens to be selected — claiming an instance creates an
@@ -32,6 +33,13 @@ export interface InstanceInfo {
 export interface SetupStatus {
   setup_required: boolean;
   instance_name?: string;
+  /**
+   * While setup is pending: whether the server asks the home router to let
+   * people outside the network in. Absent on servers before 3.2.
+   */
+  router_forwarding?: boolean;
+  /** While setup is pending: who can create an account right now. */
+  registration_mode?: RegistrationMode;
 }
 
 /**
@@ -56,6 +64,8 @@ export interface ClaimInstanceRequest {
   instance_name: string;
   initial_space_name: string;
   display_name?: string;
+  /** Who can create an account from now on. */
+  registration_mode?: RegistrationMode;
 }
 
 /** Registration's session payload, plus what the claim additionally created. */

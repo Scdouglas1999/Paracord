@@ -20,6 +20,7 @@ import { extractApiError } from '../../api/client';
 import { writeClipboardText } from '../../lib/clipboard';
 import { toast } from '../../stores/toastStore';
 import { cn } from '../../lib/utils';
+import { ROUTER_SETTING_LABEL } from '../../lib/instanceAccess';
 
 interface InviteModalProps {
   guildName: string;
@@ -78,6 +79,24 @@ function ownServerBaseUrl(): string {
   return window.location.origin;
 }
 
+/**
+ * A private (RFC 1918) or link-local IPv4 address: a link built on one only
+ * works for people on the same network, whatever the server says.
+ */
+export function isPrivateNetworkOrigin(origin: string): boolean {
+  try {
+    const host = new URL(origin).hostname;
+    const parts = host.split('.').map(Number);
+    if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+      return false;
+    }
+    const [a, b] = parts;
+    return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
+  } catch {
+    return false;
+  }
+}
+
 function isLoopbackOrigin(origin: string): boolean {
   try {
     const host = new URL(origin).hostname.replace(/^\[|\]$/g, '');
@@ -95,21 +114,40 @@ function isLoopbackOrigin(origin: string): boolean {
  * it runs on, and whose links used to send every friend to the friend's own
  * computer. Then, and only then, the server is asked what it is reachable as.
  */
-async function resolveShareAddress(): Promise<ShareAddress> {
+export async function resolveShareAddress(): Promise<ShareAddress> {
   const own = ownServerBaseUrl();
-  if (!isLoopbackOrigin(own)) return { url: own, reach: 'unknown' };
+  const loopback = isLoopbackOrigin(own);
+  // An address on the home network is no use to a friend elsewhere either, so
+  // ask the server whether it has a better one (its router-mapped address).
+  const lan = !loopback && isPrivateNetworkOrigin(own);
+  if (!loopback && !lan) return { url: own, reach: 'unknown' };
   try {
     const { data } = await inviteApi.shareAddress();
-    if (data?.url && !isLoopbackOrigin(data.url)) return { url: data.url, reach: data.reach };
+    if (data?.url && !isLoopbackOrigin(data.url)) {
+      if (lan && data.reach !== 'internet') {
+        return { url: own, reach: 'local_network', asks_router: data.asks_router };
+      }
+      return { url: data.url, reach: data.reach, asks_router: data.asks_router };
+    }
+    if (lan) return { url: own, reach: 'local_network', asks_router: data?.asks_router };
   } catch {
     // An older server has no such endpoint. The note below says what that means.
+    if (lan) return { url: own, reach: 'local_network' };
   }
   return { url: null, reach: 'this_computer' };
 }
 
-function reachNote(reach: ShareReach): string {
+/**
+ * Who a link will work for, and — when it only works at home — the one thing
+ * that changes that. A server that was installed home-only is pointed at the
+ * setting that opens it up; one whose router said no is pointed at the router.
+ */
+export function reachNote(reach: ShareReach, asksRouter?: boolean): string {
   switch (reach) {
     case 'local_network':
+      if (asksRouter === false) {
+        return `Right now this only works for people on the same network (the same Wi-Fi) as the server: it is set up to be reachable on your home network only. To let friends elsewhere join, whoever runs the server can turn on “${ROUTER_SETTING_LABEL}” in Admin → Settings and restart it.`;
+      }
       return 'Right now this only works for people on the same network (the same Wi-Fi) as the server. For friends elsewhere, the router needs a port opened: see “Friends outside your network” in the Paracord docs.';
     case 'this_computer':
       return 'This server can only be reached from this computer right now, so nobody else can use an invite yet. It needs to be started so that other computers can reach it.';
@@ -127,6 +165,7 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
   const [portableLink, setPortableLink] = useState('');
   const [inviteLink, setInviteLink] = useState('');
   const [reach, setReach] = useState<ShareReach>('unknown');
+  const [asksRouter, setAsksRouter] = useState<boolean | undefined>(undefined);
   const [loading, setLoading] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [copyError, setCopyError] = useState<string | null>(null);
@@ -152,6 +191,7 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
       const share = await resolveShareAddress();
       setInviteCode(code);
       setReach(share.reach);
+      setAsksRouter(share.asks_router);
       setInviteLink(share.url ? `${share.url}/invite/${code}` : '');
       setPortableLink(share.url ? toPortableUri(share.url, code) : '');
       setOptionsDirty(false);
@@ -279,7 +319,7 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
                 )}
               </Button>
             </InviteReadout>
-            <p className="mt-1.5 text-meta leading-relaxed text-text-muted">{reachNote(reach)}</p>
+            <p className="mt-1.5 text-meta leading-relaxed text-text-muted">{reachNote(reach, asksRouter)}</p>
             {portableLink && !optionsDirty && (
               <button
                 type="button"

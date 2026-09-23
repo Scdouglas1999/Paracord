@@ -139,7 +139,14 @@ function HealthBody({ health }: { health: HealthReport }) {
             : 'Off',
         ],
         ['Public URL', health.network.public_url ?? 'not set', true],
-        ['Registration', health.network.registration_open ? 'Open' : 'Closed'],
+        [
+          'Who can sign up',
+          health.network.registration === 'invite_only'
+            ? 'People with an invite'
+            : health.network.registration === 'closed' || !health.network.registration_open
+              ? 'Nobody (closed)'
+              : 'Anyone',
+        ],
       ],
     },
     {

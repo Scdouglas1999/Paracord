@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { inviteApi } from '../../api/invites';
 import { writeClipboardText } from '../../lib/clipboard';
-import { InviteModal } from './InviteModal';
+import { InviteModal, isPrivateNetworkOrigin } from './InviteModal';
 
 vi.mock('../../api/invites', () => ({
   inviteApi: {
@@ -82,6 +82,29 @@ describe('InviteModal', () => {
     expect(screen.getByText(/same network \(the same Wi-Fi\)/)).toBeInTheDocument();
   });
 
+  it('points at the setting when the server was installed for the home network only', async () => {
+    vi.mocked(inviteApi.shareAddress).mockResolvedValue({
+      data: { url: 'https://192.168.1.50:8443', reach: 'local_network', asks_router: false },
+    } as never);
+
+    render(<InviteModal guildName="Launch Guild" channelId="channel-1" onClose={vi.fn()} />);
+
+    expect(
+      await screen.findByText(/turn on “Let friends outside your home network connect” in Admin → Settings/),
+    ).toBeInTheDocument();
+  });
+
+  it('points at the router when the server asked it and the router said no', async () => {
+    vi.mocked(inviteApi.shareAddress).mockResolvedValue({
+      data: { url: 'https://192.168.1.50:8443', reach: 'local_network', asks_router: true },
+    } as never);
+
+    render(<InviteModal guildName="Launch Guild" channelId="channel-1" onClose={vi.fn()} />);
+
+    expect(await screen.findByText(/the router needs a port opened/)).toBeInTheDocument();
+    expect(screen.queryByText(/Admin → Settings/)).not.toBeInTheDocument();
+  });
+
   it('offers no link at all rather than one that points at localhost', async () => {
     vi.mocked(inviteApi.shareAddress).mockRejectedValue(new Error('404'));
 
@@ -118,5 +141,28 @@ describe('InviteModal', () => {
 
     // ...and revokes the previously-minted invite so it can't be reused.
     await waitFor(() => expect(inviteApi.delete).toHaveBeenCalledWith('abc123'));
+  });
+});
+
+describe('isPrivateNetworkOrigin', () => {
+  it('recognises home-network addresses and nothing else', () => {
+    for (const origin of [
+      'https://192.168.1.5:8443',
+      'https://10.0.0.2',
+      'http://172.16.4.1:8090',
+      'https://172.31.255.255',
+      'https://169.254.1.1',
+    ]) {
+      expect(isPrivateNetworkOrigin(origin)).toBe(true);
+    }
+    for (const origin of [
+      'https://203.0.113.7:8443',
+      'https://172.32.0.1',
+      'https://chat.example.com',
+      'https://localhost:8443',
+      'not a url',
+    ]) {
+      expect(isPrivateNetworkOrigin(origin)).toBe(false);
+    }
   });
 });

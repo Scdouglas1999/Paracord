@@ -20,6 +20,8 @@ export interface RegisterRequest {
   username: string;
   password: string;
   display_name?: string;
+  /** The invite the newcomer arrived with; required on an invite-only server. */
+  invite_code?: string;
 }
 
 export type { CreateGuildRequest } from '../api/generated/CreateGuildRequest';
