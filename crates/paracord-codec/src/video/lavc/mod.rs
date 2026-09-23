@@ -335,7 +335,7 @@ mod hw_smoke {
         let mut buf = vec![0u8; w * h * 4];
         let f = frame as usize;
         for (y, row) in buf.chunks_exact_mut(w * 4).enumerate().take(h) {
-            for (x, px) in row.chunks_exact_mut(4).enumerate().take(w) {
+            for (x, px) in row.as_chunks_mut::<4>().0.iter_mut().enumerate().take(w) {
                 px[0] = (x + f * 3) as u8; // B
                 px[1] = (y + f * 2) as u8; // G
                 px[2] = ((x ^ y) as u8).wrapping_add(f as u8); // R

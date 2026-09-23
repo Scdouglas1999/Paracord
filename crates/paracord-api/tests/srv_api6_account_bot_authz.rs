@@ -385,8 +385,10 @@ async fn concurrent_first_invite_accepts_consume_one_use_and_emit_one_join() -> 
     }
     let mut joins = 0;
     while let Ok(event) = observer.try_recv() {
-        if event.event_type == "GUILD_MEMBER_ADD" && event.payload["user_id"] == member.to_string()
-        {
+        let joined = event.payload["user_id"]
+            .as_str()
+            .and_then(|id| id.parse::<i64>().ok());
+        if event.event_type == "GUILD_MEMBER_ADD" && joined == Some(member) {
             joins += 1;
         }
     }

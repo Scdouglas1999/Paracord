@@ -895,7 +895,7 @@ mod tests {
 
         // Create a red RGBA frame
         let mut rgba = vec![0u8; (w * h * 4) as usize];
-        for pixel in rgba.chunks_exact_mut(4) {
+        for pixel in rgba.as_chunks_mut::<4>().0 {
             pixel[0] = 200; // R
             pixel[1] = 50; // G
             pixel[2] = 30; // B
@@ -912,7 +912,7 @@ mod tests {
         i420_to_rgba(&i420, w, h, &mut rgba2);
 
         // Check that the round-tripped values are close (lossy conversion)
-        for pixel in rgba2.chunks_exact(4) {
+        for pixel in rgba2.as_chunks::<4>().0 {
             // Allow +/- 5 due to rounding in YUV conversion
             assert!(
                 (pixel[0] as i16 - 200).unsigned_abs() <= 5,

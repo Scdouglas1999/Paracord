@@ -1254,7 +1254,7 @@ mod tests {
         serde_json::from_str(include_str!("fixtures/mlb_summary.json")).expect("mlb fixture")
     }
 
-    fn status<'a>(summary: &'a Value) -> &'a Value {
+    fn status(summary: &Value) -> &Value {
         &summary["header"]["competitions"][0]["status"]
     }
 

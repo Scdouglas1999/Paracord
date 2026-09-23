@@ -416,8 +416,10 @@ mod tests {
     fn a_missing_play_id_does_not_replay_the_list() {
         let mut detail = snap("in", "8:41 - 2nd", 2, 14, 7);
         detail.plays.push(touchdown("9001", 14, 7));
-        let mut cursor = AnnounceCursor::default();
-        cursor.through = Some("gone".to_string());
+        let cursor = AnnounceCursor {
+            through: Some("gone".to_string()),
+            ..AnnounceCursor::default()
+        };
         let (lines, next) = plan_score_updates(&cursor, &detail);
         assert!(lines.is_empty());
         assert_eq!(next.through.as_deref(), Some("gone"));
@@ -497,11 +499,15 @@ mod tests {
     fn announce_off_and_an_encrypted_channel_post_nothing() {
         let mut detail = snap("in", "8:41 - 2nd", 2, 14, 7);
         detail.plays.push(touchdown("9001", 14, 7));
-        let mut off = AnnounceCursor::default();
-        off.announce = false;
+        let off = AnnounceCursor {
+            announce: false,
+            ..AnnounceCursor::default()
+        };
         assert!(plan_score_updates(&off, &detail).0.is_empty());
-        let mut blocked = AnnounceCursor::default();
-        blocked.blocked = Some("encrypted".to_string());
+        let blocked = AnnounceCursor {
+            blocked: Some("encrypted".to_string()),
+            ..AnnounceCursor::default()
+        };
         let (lines, cursor) = plan_score_updates(&blocked, &detail);
         assert!(lines.is_empty());
         assert_eq!(cursor.blocked.as_deref(), Some("encrypted"));
