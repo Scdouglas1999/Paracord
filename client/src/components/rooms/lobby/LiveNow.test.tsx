@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { personLight, voiceRoomLight } from '../../../lib/attention/light';
 import { LiveNow } from './LiveNow';
-import { liveNow } from './liveNow';
+import { liveNow } from './liveNowModel';
 import { toHomeEvent, type HomeEvent } from './useUpcomingEvents';
 
 const scope = { serverId: 'instance', userId: 'me' };

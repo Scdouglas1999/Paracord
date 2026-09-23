@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import { useAuthenticatedImage } from '../../../lib/authenticatedImage';
-import { identityTone, toneFromPixels, type CoverTone } from './serverCover';
+import { identityTone, toneFromPixels, type CoverTone } from './serverCoverModel';
 
 /** Pixels sampled per side; the colour of a logo survives being this small. */
 const SAMPLE = 24;

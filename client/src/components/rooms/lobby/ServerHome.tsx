@@ -33,7 +33,7 @@ import { InviteModal } from '../../guild/InviteModal';
 import { Modal, ModalBody, ModalHeader, ModalTitle, Plate } from '../../ui';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '../../ui/ContextMenu';
 import { LiveNow } from './LiveNow';
-import { liveNow } from './liveNow';
+import { liveNow } from './liveNowModel';
 import { ServerCover } from './ServerCover';
 import { ServerFeed } from './ServerFeed';
 import { ServerHead } from './ServerHead';

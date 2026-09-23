@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { coverRecipe, coverStyle, identityTone, toneFromPixels } from './serverCover';
+import { coverRecipe, coverStyle, identityTone, toneFromPixels } from './serverCoverModel';
 
 function pixels(rgba: [number, number, number, number], count = 16): number[] {
   return Array.from({ length: count }, () => rgba).flat();

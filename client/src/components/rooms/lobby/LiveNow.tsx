@@ -13,7 +13,7 @@ import { wallClock } from '../../../lib/formatters';
 import { roomSharedName } from '../../../lib/motion';
 import { cn } from '../../../lib/utils';
 import { NOBODY_IN_VOICE, liveCountLine, moreLine, voiceLine } from './homeCaptions';
-import type { LiveItem, LiveNow as LiveNowModel } from './liveNow';
+import type { LiveItem, LiveNow as LiveNowModel } from './liveNowModel';
 import type { HomeEvent } from './useUpcomingEvents';
 import { useHideScores } from './useHideScores';
 

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { SportsGame } from '../../../api/sports';
 import type { RoomLight } from '../../../lib/attention/light';
-import { liveNow } from './liveNow';
+import { liveNow } from './liveNowModel';
 import { toHomeEvent, upcomingEvents, type HomeEvent } from './useUpcomingEvents';
 
 function room(channelId: string, occupants: number, order = 0, talking = 0): RoomLight {

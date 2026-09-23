@@ -95,10 +95,9 @@ fn banner_extension(data: &[u8], declared: Option<&str>) -> Result<&'static str,
     };
     if let Some(declared) = declared {
         let declared = declared.split(';').next().unwrap_or(declared).trim();
-        if !declared.is_empty()
-            && !declared.eq_ignore_ascii_case(content_type)
-            && !(declared.eq_ignore_ascii_case("image/jpg") && content_type == "image/jpeg")
-        {
+        let agrees = declared.eq_ignore_ascii_case(content_type)
+            || (declared.eq_ignore_ascii_case("image/jpg") && content_type == "image/jpeg");
+        if !declared.is_empty() && !agrees {
             return Err(ApiError::BadRequest(
                 "Banner content type does not match the image".into(),
             ));

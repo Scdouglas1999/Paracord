@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 
 import { ResourceImage } from '../../ui/ResourceImage';
-import { coverRecipe, coverStyle } from './serverCover';
+import { coverRecipe, coverStyle } from './serverCoverModel';
 import { useIconTone } from './useIconTone';
 
 export interface ServerCoverProps {
