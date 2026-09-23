@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/brand/banner.png" alt="Paracord: a lantern on a braided cord, and the name" width="760"/>
+  <img src="docs/images/brand/paracord.webp" alt="The Paracord mark: a lantern on a braided cord handle lights up above the name Paracord" width="520"/>
 </p>
 
 <p align="center">
@@ -7,14 +7,15 @@
 </p>
 
 <p align="center">
-  <a href="../../releases/latest"><img src="https://img.shields.io/github/v/release/Scdouglas1999/Paracord?label=release&color=24b78b" alt="Latest release"/></a>
-  <img src="https://img.shields.io/badge/desktop-Windows%20%7C%20Linux%20%7C%20macOS-17221b" alt="Desktop app for Windows, Linux and macOS"/>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-source--available-315f4b" alt="Source-available license"/></a>
+  <a href="../../releases/latest"><img src="https://img.shields.io/github/v/release/Scdouglas1999/Paracord?label=release&color=2bb39a" alt="Latest release"/></a>
+  <img src="https://img.shields.io/badge/desktop-Windows%20%7C%20Linux%20%7C%20macOS-1b232b" alt="Desktop app for Windows, Linux and macOS"/>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-source--available-2f3b46" alt="Source-available license"/></a>
 </p>
 
 <p align="center">
   <a href="../../releases/latest">Download</a> ·
   <a href="#getting-started">Getting started</a> ·
+  <a href="#a-look-around">A look around</a> ·
   <a href="#whats-in-it">What's in it</a> ·
   <a href="#running-it">Running it</a> ·
   <a href="#development">Development</a> ·
@@ -22,32 +23,29 @@
 </p>
 
 <p align="center">
-  Current release: <strong>v3.1.1</strong> — <a href="RELEASE_NOTES.md">what changed</a>
+  Current release: <strong>v3.1.1</strong> — <a href="RELEASE_NOTES.md">what changed</a>.
+  The screenshots below are from <strong>3.2</strong>, which is in final testing and out soon.
 </p>
 
 ---
 
-![A text channel with several people talking. Each message sits in a bubble tinted with its author's colour, and your own messages are on the right.](docs/images/readme/hero.jpg)
+![Basecamp's front page: a banner of mountains at dusk, the server's name, eight people online, a Live now row with two voice channels and a baseball game, a column of upcoming events and recent photos, and a feed of what people shared.](docs/images/readme/server.jpg)
 
-Paracord looks and works about how you'd expect from Discord: servers, text channels,
-voice channels, direct messages, roles, moderation. The difference is that there is no
-company in the middle. Somebody in your group runs the Paracord server on a computer
-that stays on, and everyone else joins it with a link.
+Paracord works about how you'd expect from Discord: servers, text and voice channels,
+direct messages, roles, moderation. The difference is that there's no company in the
+middle. Somebody in your group runs the Paracord server on a computer that stays on, and
+everyone else joins with a link.
 
 Setting that up is one command. It downloads Paracord, sets it to start by itself, asks
-your router to let people in, and opens a link in your browser where you make your
-account and name your server. Friends open an invite link in any browser, or install the
-desktop app for Windows, Linux or macOS.
+your router to let people in, and opens a link in your browser where you make your account
+and name your server. Friends open an invite link in any browser, or install the desktop
+app for Windows, Linux or macOS.
 
-Inside a server you get text channels with replies, threads, reactions, polls,
-attachments and code that arrives readable, plus voice channels with video and screen
-sharing. Direct messages and group messages are encrypted end to end. There are roles and
-permissions, automatic moderation, bots and webhooks, and an optional link between two
-Paracord servers so their members can talk. The voice and video are Paracord's own code,
-so there is no third-party media service to sign up for.
+Direct messages and group messages are encrypted end to end. Voice and video run on
+Paracord's own code, so there's no third-party media service to sign up for.
 
 It suits a group that has somebody willing to keep a machine on and read a docs page when
-something breaks. Nobody is hosting this for you, and it is a young project, so the
+something breaks. Nobody is hosting this for you, and it's a young project, so the
 [things that don't work yet](#good-to-know) are worth reading before you move a community
 onto it.
 
@@ -162,35 +160,52 @@ a domain name, PostgreSQL and backups see [Deployment](docs/deployment.md).
 
 ## A look around
 
-| | |
-| :--- | :--- |
-| ![Home, showing who is online, the servers you belong to, and the conversation you were last in.](docs/images/readme/home.jpg) | ![A server's front page, listing its voice channels with the people currently in them, and its text channels below.](docs/images/readme/server.jpg) |
-| Home opens on people and conversations: who's around, your servers, and where you left off. | A server's front page. Voice channels show who is in them before you join. |
+Every picture here is the real app, running on a server with eight friends in it.
+
+**A server's front page.** Walk into a server and see who's in voice, what's coming up,
+and what people have been sharing: photos, polls you can vote in right there, new forum
+questions, the latest announcement. When it's quiet, the page is still full of what
+people made, not a list of empty channels.
 
 | | |
 | :--- | :--- |
-| ![A voice call with three video tiles, a row of controls for microphone, camera and screen sharing, and the call's chat at the side.](docs/images/readme/call.jpg) | ![An encrypted group conversation, with a note in the header saying the messages are end-to-end encrypted.](docs/images/readme/dm.jpg) |
-| A call with three people on camera. The pictures in the tiles are test patterns, not webcams; the call itself is real. | Direct messages and group messages are encrypted end to end, attachments included. |
+| ![A photos channel. Each message sits in a bubble tinted with its author's colour, with a campfire photo and a desk setup.](docs/images/readme/hero.jpg) | ![Home: a greeting, who is around, your three servers with who is in voice, and the conversations you were last in.](docs/images/readme/home.jpg) |
+| Every message wears its author's colour. | Home: who's around, your servers, and where you left off. |
+| ![A voice call with five people. One tile is outlined because that person is talking, and the call's own chat runs down the side.](docs/images/readme/call.jpg) | ![The Sports page for a live baseball game: the score by inning, win probability, the batter and pitcher, and the field with runners on base.](docs/images/readme/sports.jpg) |
+| Voice channels with video, screen sharing and a chat of their own. | Sports: follow a game together, live. |
 
-It works at phone width too.
+**Search a whole server.** Type `from:`, `in:`, `has:image` or `before:` and they turn into
+filters as you go. Results are grouped by channel, and Enter jumps to the message.
+
+![The search panel on the right with two filter chips, from Brendan and has image, and one result: Brendan's summit photo in the photos channel.](docs/images/readme/search.jpg)
+
+| | |
+| :--- | :--- |
+| ![Hovering a reaction on a mountain photo shows a small card listing the three people who reacted.](docs/images/readme/reactions.jpg) | ![The server's Media panel: photos from every channel, grouped by month, beside the server's front page.](docs/images/readme/media.jpg) |
+| See who reacted, and have Paracord remind you about a message later. | Every photo, file and link a server has shared, in one place. |
+
+It's built for phones too.
 
 <p align="center">
-  <img src="docs/images/readme/phone-home.jpg" alt="Home on a phone-width screen, listing people and servers in a single column." width="300"/> <img src="docs/images/readme/phone-channel.jpg" alt="A text channel on a phone-width screen, with the composer at the bottom." width="300"/>
+  <img src="docs/images/readme/phone-server.jpg" alt="Basecamp's front page on a phone: the banner, the server's name, and two live voice channels." width="300"/> <img src="docs/images/readme/phone-channel.jpg" alt="The photos channel on a phone, with a campfire photo and the message box at the bottom." width="300"/>
 </p>
 
 ## What's in it
 
-**Talking.** Text channels, announcement channels, forums and threads. Replies, mentions,
-reactions, pins and saved messages. Markdown, syntax-highlighted code, attachments, image
-previews and link embeds. Polls, scheduled messages, slash commands, GIFs, stickers and
-custom emoji. Search, an inbox, unread counts and per-channel notification settings.
+**Talking.** Text channels, announcement channels, forums and threads. Replies, mentions
+(of people and roles), reactions with who reacted, pins, saved messages and reminders.
+Forward a message to up to five places with a note. Markdown, syntax-highlighted code,
+attachments, image previews and link embeds. Polls, scheduled messages, slash commands,
+GIFs, stickers and custom emoji. Search across a whole server with filters, an inbox,
+unread counts and per-channel notification settings.
+
+**A front page for every server.** A banner, who's around, what's live, what's coming up,
+and a feed of what people shared. Owners choose which panels show and in what order.
 
 **Voice, video and screen sharing.** Voice channels, video grids, screen sharing and device
 controls, over Paracord's own QUIC transport: raw QUIC in the desktop app, WebTransport in
 the browser. Opus audio with RNNoise noise suppression, VP9 video, speaker detection, and
-media frames the relay cannot read. A LiveKit path is still in the codebase for anyone who
-specifically wants a WebRTC SFU, but it is not the route that gets tested and it needs a
-LiveKit server of its own.
+media frames the relay cannot read.
 
 **Direct messages.** One-to-one and group conversations, encrypted end to end. Text and
 attachments are both encrypted on your device, so the server stores files it cannot read and
@@ -206,12 +221,16 @@ the server can and cannot see in each case.
 
 **Running a community.** Roles and fine-grained permissions. Invites, discovery, templates,
 welcome screens and member onboarding. Bans, reports, moderation templates and audit logs.
-Events, custom emoji, storage limits, and a community economy if you want one. Automatic
-moderation covers keywords, patterns, links, invites, mention floods and spam, with block,
-timeout and moderator-alert actions ([AutoMod](docs/automod.md) has the details). A
-server can follow games and post the score into a channel ([Sports](docs/sports.md)). There's
-also a health page that reports backups, database size, transport security and capacity, and
-says what to fix.
+Events with RSVP, banners, custom emoji and stickers, storage limits, and a community
+economy if you want one. Automatic moderation covers keywords, patterns, links, invites,
+mention floods and spam, with block, timeout and moderator-alert actions
+([AutoMod](docs/automod.md) has the details). There's also a health page that reports
+backups, database size, transport security and capacity, and says what to fix.
+
+**Sports.** A server can follow leagues and teams: live scores, standings, a game page with
+the field or the diamond, and games pinned above a channel that post each score as it
+happens. The server fetches scores from ESPN's public scoreboard, so your members' devices
+never talk to ESPN. See [Sports](docs/sports.md).
 
 **Bots and other servers.** Bot applications with slash commands and interaction components,
 webhooks, and a [bot SDK](packages/paracord-bot-sdk). One client can connect to several
@@ -221,30 +240,18 @@ switch to flip, so read [Federation Protocol](docs/federation-protocol.md) first
 
 ### Looks and themes
 
-There are four themes (Night, Daylight, AMOLED and High contrast), and you can set their
-base colour and accent to any hue you like without the text becoming unreadable. On top of
-those are three looks, each of which brings a whole palette of its own:
+**Slate** is the default: a cool charcoal where every message sits in its author's colour.
+Settings → Appearance switches instantly between it and the other looks: **Dusk sky** (a
+sunset behind dark glass), **Paper & ink** (a light, printed look) and **Aubergine**, plus
+four themes whose base colour and accent you can set to any hue without the text becoming
+unreadable (Night, Daylight, AMOLED and High contrast).
 
-- **Voices**, the default, puts every message in a bubble tinted with its author's colour,
-  with your own on the right.
-- **Dusk sky** puts a sunset behind the app, with dark glass panels over it.
-- **Paper & ink** is a light look: cream paper, dark ink, hard printed-style shadows.
+The same channel in three of them:
 
-A look supplies its own colours, so the base and accent pickers switch off while one is on;
-pick any of the four themes to get them back. Looks switch instantly and the colour changes
-as you drag. Names in chat are written in each person's own colour throughout, and the
-Friends list uses the same colours.
-
-The same channel in each:
-
-| | |
-| :--- | :--- |
-| ![A text channel in Voices: message bubbles tinted by author on a dark aubergine background.](docs/images/readme/hero.jpg) | ![The same channel in Dusk sky: a sunset gradient behind dark glass panels.](docs/images/readme/look-dusk.jpg) |
-| Voices | Dusk sky |
-| ![The same channel in Paper & ink: cream background, dark text, a solid blue sidebar.](docs/images/readme/look-paper.jpg) | ![The same channel in Night: warm dark panels beside a deep blue sidebar.](docs/images/readme/look-night.jpg) |
-| Paper & ink | Night |
-
-<p align="center"><img src="docs/images/readme/appearance.jpg" alt="Settings, Appearance: the four themes, the three looks, and pickers for base colour, accent and motion." width="880"/></p>
+| | | |
+| :---: | :---: | :---: |
+| ![The photos channel in Paper and ink: cream background, dark text, a solid blue sidebar.](docs/images/readme/look-paper.jpg) | ![The photos channel in Dusk sky: a purple-to-rose sunset behind dark glass panels.](docs/images/readme/look-dusk.jpg) | ![The photos channel in Night: warm dark panels beside a deep blue sidebar.](docs/images/readme/look-night.jpg) |
+| Paper & ink | Dusk sky | Night |
 
 ## Good to know
 
@@ -264,8 +271,8 @@ lives in [known limitations](docs/known-limitations.md) and in the release notes
   with each release, which isn't set up. Download the new version when there is one; for
   the server, re-run the install command.
 - macOS builds are unsigned unless a Developer ID is configured, so the first launch needs
-  right-click → Open. These packages are new in this release and were built by CI rather
-  than run by hand, so expect rough edges. macOS system-audio capture isn't implemented, so
+  right-click → Open. The macOS packages are built by CI rather than run by hand, so
+  expect rough edges. macOS system-audio capture isn't implemented, so
   a screen share from a Mac carries no system sound.
 - Linux screen sharing works but leans on your desktop's PipeWire and portal setup, so try
   it before you need it.
@@ -275,15 +282,13 @@ lives in [known limitations](docs/known-limitations.md) and in the release notes
   affected. The AppImage is a separate problem and is still broken there, so install the
   `.deb` or build from source. `PARACORD_WEBKIT_ACCELERATION=ondemand` overrides the choice
   if your driver has since been fixed.
-- The Windows installer was rewritten for this release and has been checked by tools but
-  not run by hand on a Windows machine. If it misbehaves, download `install.ps1` and run it
+- The Windows installer has been checked by tools but not run by hand on a Windows
+  machine. If it misbehaves, download `install.ps1` and run it
   with `powershell -ExecutionPolicy Bypass -File .\install.ps1`.
 - After a long time away the desktop app sometimes opens as "Unknown user" with no servers,
   instead of taking you to the sign-in screen. Open Settings, log out, and sign in again.
 - There is no way to publish a bot to the bot store, so it is empty. A bot can only be
   installed by whoever made it.
-- Home and a server's front page look empty when a server is quiet. That's a layout job for
-  a later release.
 
 ## Running it
 
@@ -424,7 +429,7 @@ cannot read the relocation sections a modern linker emits.
 | [Bot Development](docs/bot-development.md) | bots, commands, interactions, webhooks |
 | [Federation Protocol](docs/federation-protocol.md) | signed requests between servers and the trust model |
 | [Backup Recovery](docs/backup-recovery.md) | restoring an archive, and what it can't restore |
-| [Release Notes](RELEASE_NOTES.md) | what changed in v3.1.0 |
+| [Release Notes](RELEASE_NOTES.md) | what changed in each release |
 
 ## Licence and contributing
 
