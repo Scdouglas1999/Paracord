@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/logo-banner.svg" alt="Paracord" width="760"/>
+  <img src="docs/images/brand/banner.png" alt="Paracord: a lantern on a braided cord, and the name" width="760"/>
 </p>
 
 <p align="center">
