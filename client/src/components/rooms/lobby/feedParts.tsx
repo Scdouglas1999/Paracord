@@ -206,6 +206,7 @@ export function FileChips({ files, onOpen }: { files: readonly Attachment[]; onO
           key={file.id}
           type="button"
           onClick={onOpen}
+          aria-label={`${file.filename}. Open the message`}
           className={cn(
             'pc-focusable inline-flex max-w-full items-center gap-2 rounded-[var(--radius-control)] bg-bg-well px-2.5 py-1.5',
             'text-label text-text-body shadow-[var(--shadow-well)] transition-colors duration-[var(--duration-fast)] hover:text-text-primary',

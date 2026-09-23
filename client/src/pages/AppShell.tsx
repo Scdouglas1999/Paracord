@@ -341,6 +341,7 @@ export function AppShell() {
               aria-modal="true"
               aria-label={contextPanelMode === 'search' ? 'Search messages' : 'Details'}
               tabIndex={-1}
+              onClick={(e) => e.stopPropagation()}
               className={cn(
                 'context-panel-overlay h-full overflow-hidden shadow-[var(--shadow-plate)] outline-none',
                 contextPanelMode === 'search'
@@ -350,7 +351,6 @@ export function AppShell() {
                   ? (contextPresence.exiting ? 'pc-sheet-out' : 'pc-search-sheet-in')
                   : (contextPresence.exiting ? 'pc-drawer-out-right' : 'pc-drawer-in-right'),
               )}
-              onClick={(e) => e.stopPropagation()}
               {...contextPresence.scenery}
             >
               <ContextPanel guildId={guildId ?? null} channelId={channelId ?? null} />

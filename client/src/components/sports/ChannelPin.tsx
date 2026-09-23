@@ -321,6 +321,7 @@ function SidewaysStage({
       role="dialog"
       aria-modal="true"
       aria-label={`Pinned game. ${gameAriaLabel(game, hideScores)}`}
+      tabIndex={-1}
     >
       <button type="button" className="pc-focusable pc-sports-sideways-close" onClick={onClose}>
         Back to the chat

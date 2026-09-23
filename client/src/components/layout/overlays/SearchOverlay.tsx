@@ -547,15 +547,14 @@ export function SearchOverlay({
   const header = (
     <header className="shrink-0 border-b border-border-subtle px-3 pb-3 pt-3">
       <div className="flex items-start gap-2">
-        <div
+        {/* A label for the field: a click anywhere in the well that is not a chip focuses it. */}
+        <label
+          htmlFor="message-search-field"
           className={cn(
             'pc-well flex min-h-[var(--h-control-phone)] min-w-0 flex-1 flex-wrap items-center gap-1.5 rounded-[var(--radius-well)] py-1.5 pl-2 pr-2',
             'transition-[box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
             'focus-within:shadow-[var(--shadow-well),var(--focus-ring)]',
           )}
-          onClick={(event) => {
-            if (event.target === event.currentTarget) focusField();
-          }}
         >
           <Search size={16} className="ml-0.5 shrink-0 text-text-muted" aria-hidden />
           {canScopeChannel ? (
@@ -607,7 +606,7 @@ export function SearchOverlay({
             onChange={(event) => commitDraft(event.target.value)}
             onKeyDown={onKeyDown}
           />
-        </div>
+        </label>
         <button
           type="button"
           onClick={onClose}
