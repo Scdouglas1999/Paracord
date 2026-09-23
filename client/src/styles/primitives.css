@@ -67,6 +67,13 @@
   box-shadow: var(--shadow-floating);
 }
 
+/* A card that floats over the page without a scrim (a profile card) carries
+   text of its own, so the page must not read through it. The floating colour
+   laid over the opaque plate: the same shade, with nothing ghosting behind. */
+.pc-dialog-opaque {
+  background: linear-gradient(var(--bg-floating), var(--bg-floating)), var(--bg-plate);
+}
+
 /* §3: on a phone, plates round up. */
 @media (max-width: 640px) {
   .pc-dialog {

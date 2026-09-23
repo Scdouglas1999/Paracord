@@ -520,7 +520,7 @@ function UserProfileCard({
           the anchor's side — and slides back out that way on --ease-in. */}
       <div
         className={cn(
-          'pc-dialog fixed z-50 w-[min(21.5rem,calc(100vw-1rem))] overflow-hidden',
+          'pc-dialog pc-dialog-opaque fixed z-50 w-[min(21.5rem,calc(100vw-1rem))] overflow-hidden',
           fitsLeft
             ? exiting ? 'pc-drawer-out-right' : 'pc-drawer-in-right'
             : exiting ? 'pc-drawer-out-left' : 'pc-drawer-in-left',
