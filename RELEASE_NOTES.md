@@ -1,3 +1,91 @@
+# Paracord 3.2.0
+
+The biggest release since 3.0. A server's front page is no longer a list of empty channels, there's a lot more you can do with a message, search covers a whole server, and there's a new Sports add-on. Paracord also has a proper logo now, and it's noticeably lighter on your computer.
+
+Compare: [v3.1.1...v3.2.0](https://github.com/Scdouglas1999/Paracord/compare/v3.1.1...v3.2.0)
+
+## A server's front page
+
+Opening a server used to show its voice channels and a list of text channels, which looked empty whenever nobody was in voice. It's now a front page:
+
+- The server's banner and name at the top, with who's online and an Invite button.
+- **Live now**: voice channels with people in them, games that are on, and events that are happening. When nothing is live it shrinks to one line of voice channels you can jump into.
+- **Latest**: a feed of what people shared across the server's channels. That means announcements, photos and files, polls you can vote in right there, pinned and well-reacted messages, new forum questions, and who joined. Everyday chatter stays in the channels.
+- A column of small panels: what's coming up (with RSVP), recent photos, who's been most active this week, the next game, the latest pin, and new members. Owners pick which ones show and in what order under Server settings → Server hub → Home page. A panel with nothing to show is hidden.
+- The live cards glow only while someone in that channel is actually talking.
+
+## Search a whole server
+
+Search used to cover one channel. It now covers every channel you can read in a server.
+
+- Type filters as you go and they turn into chips: `from:`, `in:`, `has:link` / `image` / `video` / `file` / `poll`, `mentions:`, `before:`, `after:`, `during:` (dates like `yesterday` or `last week` work), and `is:pinned`.
+- Results are grouped by channel with the matching words marked. Use the arrow keys and Enter to jump to a message.
+- Open it with Ctrl/⌘+F, the search icon, or "Search this server" in the command palette. On a phone it's a full-screen sheet.
+- In a direct message, search looks through the messages already on your device, because the server can't read encrypted conversations.
+
+## More you can do with a message
+
+- **See who reacted.** Hover a reaction (or long-press on a phone) to see who's behind it.
+- **Remind me.** Right-click a message and pick 20 minutes, an hour, tomorrow morning, next week or your own time. You get a notification when it's due, and the Inbox has a new Reminders tab.
+- **Forward.** Send a message to up to five channels or conversations at once, with a note. The copy links back to the original for anyone who can see it. Moving text out of an encrypted conversation into a server channel asks first, and files from an encrypted conversation can't be forwarded.
+- **Role mentions.** Typing `@` suggests roles as well as people, a role mention shows as a coloured chip, and it notifies the people who have that role.
+
+## Profiles, banners and stickers
+
+- You can upload a profile banner (with a crop step) and pick an accent colour. Servers can have a banner too, which shows on the front page.
+- Server settings has a Stickers section for uploading, renaming, tagging and removing stickers.
+- A Media panel in every channel, and one for the whole server, collects photos and videos by month, plus files and links. Photos open in the viewer, and you can step through them with the arrow keys.
+
+## Sports
+
+Server owners can turn on Sports under Server settings → Add-ons. It shows live scores for the leagues you pick (NFL and MLB to start, plus NBA, NHL, soccer and more). Your server fetches them from ESPN's public scoreboard, so your members' devices never talk to ESPN.
+
+- A scoreboard page with any day's games, and standings for each league.
+- A game page with the field or the diamond, the score by quarter or inning, the play-by-play, leaders and the box score.
+- Pin a game above a channel and Paracord posts each score, halftime and the final into it. Pinning a game that's already under way starts from the current score rather than replaying every earlier one.
+- On a phone you can turn a game sideways for a bigger field.
+
+Full guide: [docs/sports.md](docs/sports.md).
+
+## A new look by default
+
+- **Slate** is the new default: a cool charcoal with each message in its author's colour. The old aubergine default is still in Settings → Appearance as **Aubergine**. If you never picked a theme, you'll now see Slate; if you did, you keep your choice.
+- Presence is described in plain words: "online", "here", "in voice", "Nobody in voice", where it used to say things like "lights on" or "reading".
+- Paracord has a logo: a lantern on a paracord handle. It's the app icon on every system, it shows while the app starts, and it's on the sign-in screens.
+
+## Faster
+
+The app does a lot less work, especially the desktop app on Linux:
+
+- Sitting on a server's front page with people in voice used about 1.8 CPU cores in the desktop app. It now uses about 0.1 when nobody is talking.
+- Clicking a text channel in the sidebar used to freeze the screen for most of a second. It now opens straight away, and the sidebar no longer shuffles under your pointer when you do.
+- Scrolling a busy channel does about half the work it did.
+- Someone starting or stopping talking no longer re-draws every message on screen.
+- The app loads about a quarter less code at startup.
+
+## Fixes
+
+Found while testing this release. Most were in the new features, but a few were older.
+
+- Voice: starting or stopping a screen share showed a muted person as unmuted to everyone else, and muting while sharing told others the share had ended.
+- Polls: someone else's vote showed up as your own tick until the next refresh.
+- Channels with pictures sometimes opened short of the newest message, with "Jump to present" showing.
+- A thread's header said "0 here" while you were reading it.
+- The welcome screen listed threads as if they were channels.
+- Poll options were cut off on a phone.
+- Anonymous posts stay anonymous everywhere a new feature can show them: forwards, the media gallery, search by author, and the server's front page. Webhook posts show the webhook, not the person who set it up.
+- A 3.2 app can still sign into a 3.1 server and load your account. Upgrade the server to get the new features.
+
+## Upgrading
+
+Run the install command again, or download the new installers below. Your data and settings carry over.
+
+- Servers that had a banner in the old Server hub setting get it converted to the new banner automatically.
+- Accounts that never picked a theme move from the old aubergine default to Slate. If you liked it, pick **Aubergine** in Settings → Appearance.
+- The desktop app still doesn't update itself; download the new version.
+
+---
+
 # Paracord 3.1.1
 
 A small follow-up to 3.1.0. These were all found while taking the new screenshots for the README, by using the app the way a newcomer would.
