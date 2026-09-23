@@ -58,13 +58,15 @@ export function RoleMentionChip({ guildId, roleId }: { guildId?: string; roleId:
 
   const tint = role && role.color !== 0 ? roleColorToHex(role.color) : null;
   const label = error && !role ? error : `@${role?.name ?? '…'}`;
-  // Subscribing to the presence map re-renders the list when someone arrives or leaves.
-  const presences = usePresenceStore((state) => state.presences);
+  // While the card is open, subscribing to the presence map re-renders the list
+  // when someone arrives or leaves. A closed chip does not re-render on presence.
+  const presences = usePresenceStore((state) => (open ? state.presences : null));
   const holders = useMemo(
     () => (members ?? []).filter((member) => roleId === guildId || member.roles.includes(roleId)),
     [members, roleId, guildId],
   );
   const present = useMemo(() => {
+    if (!presences) return [];
     const getPresence = usePresenceStore.getState().getPresence;
     return holders
       .map((member) => ({ member, status: getPresence(member.user.id, scope?.serverId)?.status }))

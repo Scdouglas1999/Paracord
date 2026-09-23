@@ -211,13 +211,9 @@ export function ServerHome({ guildId }: ServerHomeProps) {
   const liveGameShown = !phone && sports.games.some((game) => game.state === 'in');
 
   // ---- the banner ------------------------------------------------------------------
-  const downloadTicket = useDownloadTicket();
-  const bannerUrl = useMemo(
-    () => (guild?.banner_hash ? resolveBannerUrl(guild.banner_hash) : null),
-    // The ticket is not read here; the URL is re-resolved once it is minted.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [guild?.banner_hash, downloadTicket],
-  );
+  // Subscribing to the ticket re-renders, and so re-resolves the URL, once it is minted.
+  useDownloadTicket();
+  const bannerUrl = guild?.banner_hash ? resolveBannerUrl(guild.banner_hash) : null;
   const iconSrc = guild ? resolveGuildIconUrl(guild) : null;
 
   // ---- actions -----------------------------------------------------------------

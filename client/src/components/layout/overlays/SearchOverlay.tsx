@@ -347,6 +347,7 @@ export function SearchOverlay({
   const groups = useMemo(() => groupHits(visibleHits), [visibleHits]);
   // Keyboard order is the order on screen, which grouping can change.
   const orderedHits = useMemo(() => groups.flatMap((group) => group.hits), [groups]);
+  const hitOrder = useMemo(() => new Map(orderedHits.map((hit, index) => [hit, index])), [orderedHits]);
 
   useEffect(() => {
     setSelected(0);
@@ -804,7 +805,6 @@ export function SearchOverlay({
       </div>
     );
   } else {
-    let rowIndex = 0;
     body = (
       <div id="search-results" key={resultKey}>
         <p className="flex items-center justify-between px-3 pb-1 pt-2 text-meta text-text-muted" aria-live="polite">
@@ -823,8 +823,7 @@ export function SearchOverlay({
             )}
             <ul className="px-1">
               {group.hits.map((hit) => {
-                const index = rowIndex;
-                rowIndex += 1;
+                const index = hitOrder.get(hit) ?? 0;
                 const animate = index < ANIMATED_ROWS;
                 const author = hit.message.author;
                 const authorName = displayName(author);

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { Upload, X } from 'lucide-react';
 
 import { Button, buttonVariants } from '../ui/Button';
@@ -60,9 +60,9 @@ export function BannerEditor({
   const [error, setError] = useState<string | null>(null);
   const drag = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
 
-  const downloadTicket = useDownloadTicket();
-  // The ticket is not read here; it re-resolves the URL once it is minted.
-  const currentSrc = useMemo(() => resolveBannerUrl(bannerHash), [bannerHash, downloadTicket]);
+  // Subscribing to the ticket re-renders, and so re-resolves the URL, once it is minted.
+  useDownloadTicket();
+  const currentSrc = resolveBannerUrl(bannerHash);
   const accent = accentCssColor(accentColor);
 
   const releaseLoaded = (next: LoadedImage | null) => {

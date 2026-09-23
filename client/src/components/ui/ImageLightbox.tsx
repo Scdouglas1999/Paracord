@@ -7,6 +7,7 @@ import { safeClientResourceUrl } from '../../lib/security';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { usePresence } from '../../lib/motion';
 import { cn } from '../../lib/utils';
+import { MediaPreview } from '../file/MediaPreview';
 
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 4;
@@ -242,13 +243,17 @@ export function ImageLightbox() {
             <p className="pc-tag px-3 py-2 text-label">Loading…</p>
           )
         ) : currentImage.kind === 'video' ? (
-          <video
-            key={safeImageSrc}
-            src={safeImageSrc}
-            controls
-            autoPlay
-            style={{ maxWidth: '90vw', maxHeight: '85vh' }}
-          />
+          // The same player as a message's video, so a gallery video can take captions too.
+          <div className="pc-tag px-3 py-2">
+            <MediaPreview
+              key={safeImageSrc}
+              src={safeImageSrc}
+              filename={currentImage.filename}
+              kind="video"
+              autoPlay
+              videoStyle={{ maxWidth: '88vw', maxHeight: 'calc(85vh - 4.5rem)' }}
+            />
+          </div>
         ) : (
           <img
             src={safeImageSrc}

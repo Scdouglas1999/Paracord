@@ -1,13 +1,17 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState, type CSSProperties } from 'react';
 
 interface MediaPreviewProps {
   src: string;
   filename: string;
   kind: 'audio' | 'video';
+  /** Starts playing once loaded (the lightbox opens a video to watch it). */
+  autoPlay?: boolean;
+  /** Replaces the inline size of a video, for a surface that is not a message row. */
+  videoStyle?: CSSProperties;
 }
 
 /** User-supplied media can be paired with a local caption file without uploading it. */
-export function MediaPreview({ src, filename, kind }: MediaPreviewProps) {
+export function MediaPreview({ src, filename, kind, autoPlay, videoStyle }: MediaPreviewProps) {
   const inputId = useId();
   const selection = useRef(0);
   const audioCaptionTrack = useRef<HTMLTrackElement>(null);
@@ -54,7 +58,14 @@ export function MediaPreview({ src, filename, kind }: MediaPreviewProps) {
       {kind === 'video' ? (
         // Caption tracks are attached below when the user supplies a file; this rule cannot inspect conditional children.
         // eslint-disable-next-line jsx-a11y/media-has-caption
-        <video src={src} controls aria-label={filename} className="max-h-72 w-full rounded-[var(--radius-thumb)] bg-bg-base">
+        <video
+          src={src}
+          controls
+          autoPlay={autoPlay}
+          aria-label={filename}
+          className={videoStyle ? 'rounded-[var(--radius-thumb)] bg-bg-base' : 'max-h-72 w-full rounded-[var(--radius-thumb)] bg-bg-base'}
+          style={videoStyle}
+        >
           {captions && <track key={captions.url} kind="captions" label={captions.name} src={captions.url} default />}
         </video>
       ) : (

@@ -305,9 +305,9 @@ function UserProfileCard({
   const mutualGuilds = profileData?.mutual_guilds ?? [];
   const mutualFriends = profileData?.mutual_friends ?? [];
   const bannerHash = profileData ? profileData.user.banner_hash : user.banner_hash;
-  const downloadTicket = useDownloadTicket();
-  // The ticket is not read here; it re-resolves the URL once it is minted.
-  const bannerSrc = useMemo(() => resolveBannerUrl(bannerHash), [bannerHash, downloadTicket]);
+  // Subscribing to the ticket re-renders, and so re-resolves the URL, once it is minted.
+  useDownloadTicket();
+  const bannerSrc = resolveBannerUrl(bannerHash);
   const accent = accentCssColor(profileData ? profileData.user.accent_color : user.accent_color);
   const bio = profileData?.user?.bio ?? user.bio;
   const pronouns = profileData?.user?.pronouns ?? user.pronouns;
