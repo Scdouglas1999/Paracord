@@ -26,9 +26,16 @@ export interface AuthSession {
   expires_at: string;
 }
 
+/** Who can create an account on a server. */
+export type RegistrationMode = 'invite_only' | 'open';
+
 export interface AuthOptions {
   allow_username_login: boolean;
   require_email: boolean;
+  /** False when the server takes no new accounts at all. Absent before 3.2. */
+  registration_enabled?: boolean;
+  /** Whether a new account needs an invite. Absent before 3.2 (open). */
+  registration_mode?: RegistrationMode;
 }
 
 export const authApi = {

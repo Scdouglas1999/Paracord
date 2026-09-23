@@ -436,6 +436,17 @@ async fn main() -> Result<()> {
         }))
     };
     let port_mapping_attempted = matches!(portmap_start, PortMapStart::Running(_));
+    // What the admin page shows and changes. The change is written to the
+    // config file and applies at the next start.
+    paracord_core::router_access::init(paracord_core::router_access::RouterAccess {
+        running: config.network.auto_port_forward,
+        saved: config.network.auto_port_forward,
+        env_override: std::env::var(paracord_core::router_access::ENV_OVERRIDE)
+            .ok()
+            .is_some_and(|value| value.parse::<bool>().is_ok()),
+        loopback_bind: bind_is_loopback,
+        config_path: Some(std::path::PathBuf::from(&args.config)),
+    });
 
     // The public address of this network. LiveKit needs it for ICE candidates;
     // the port mapper needs it because a NAT-PMP gateway never reports one, and
@@ -566,7 +577,7 @@ async fn main() -> Result<()> {
     }
 
     // ── Load runtime settings from database ─────────────────────────────────
-    let runtime = load_runtime_settings(&db).await;
+    let runtime = load_runtime_settings(&db, config.auth.registration_mode).await;
     let runtime = Arc::new(RwLock::new(runtime));
 
     // Create LiveKit config for the media layer
@@ -1586,13 +1597,32 @@ fn harden_secret_file_permissions(path: &Path) {
     }
 }
 
-async fn load_runtime_settings(db: &paracord_db::DbPool) -> paracord_core::RuntimeSettings {
-    let mut settings = paracord_core::RuntimeSettings::default();
+async fn load_runtime_settings(
+    db: &paracord_db::DbPool,
+    configured_registration_mode: paracord_core::registration::RegistrationMode,
+) -> paracord_core::RuntimeSettings {
+    let mut settings = paracord_core::RuntimeSettings {
+        registration_mode: configured_registration_mode,
+        ..Default::default()
+    };
 
     if let Ok(all) = paracord_db::server_settings::get_all_settings(db).await {
         for (key, value) in all {
             match key.as_str() {
                 "registration_enabled" => settings.registration_enabled = value == "true",
+                // Saved from the admin page or first-run setup; it wins over
+                // the config file. The admin route only ever stores a valid
+                // spelling, so anything else is a hand edit worth refusing.
+                "registration_mode" => {
+                    match paracord_core::registration::RegistrationMode::parse(&value) {
+                        Some(mode) => settings.registration_mode = mode,
+                        None => tracing::error!(
+                            "server_settings.registration_mode is '{}', which is neither \"invite_only\" nor \"open\"; using [auth] registration_mode = \"{}\" from the config instead",
+                            value,
+                            configured_registration_mode.as_str()
+                        ),
+                    }
+                }
                 "server_name" => settings.server_name = value,
                 "server_description" => settings.server_description = value,
                 "max_guilds_per_user" => {
@@ -3641,10 +3671,11 @@ fn invite_lines(
             "this computer can join, at:".to_string(),
             format!("     {share_url}"),
             String::new(),
-            "Paracord was told not to ask your router for anything".to_string(),
-            "([network] auto_port_forward = false). To let anyone".to_string(),
-            format!("else in, {ports}"),
-            format!("must reach {this_computer}."),
+            "This server does not ask your router to let people in".to_string(),
+            "from outside. To change that, turn on \"Let friends".to_string(),
+            "outside your home network connect\" in Admin -> Settings".to_string(),
+            "and restart the server. Or open the way yourself:".to_string(),
+            format!("{ports} must reach {this_computer}."),
             "docs/port-forwarding.md walks through it — look for".to_string(),
             "\"port forwarding\" on your router.".to_string(),
         ],
@@ -3684,10 +3715,16 @@ fn invite_lines(
 ///
 /// Printed only when it applies, because a warning that does not happen is worse
 /// than no warning: the owner starts distrusting the rest of the page.
-const SELF_MADE_CERT_LINES: [&str; 3] = [
-    "Your browser will show a one-time security warning",
-    "because this server made its own certificate — choose",
-    "Advanced, then Continue. The desktop app does not show this.",
+///
+/// The better path comes first: a domain name with automatic certificates, which
+/// no browser warns about. Clicking through is for trying Paracord out.
+const SELF_MADE_CERT_LINES: [&str; 6] = [
+    "For friends to connect without a browser warning,",
+    "give this server a domain name and turn on automatic",
+    "certificates ([tls.acme]; docs/deployment.md shows how).",
+    "Just trying it out? The browser warns once because this",
+    "server made its own certificate: choose Advanced, then",
+    "Continue. The desktop app does not show this.",
 ];
 
 /// True when HTTPS is on and the certificate is the one this server generated
@@ -5105,7 +5142,8 @@ mod tests {
             &portmap::Outcome::Skipped(portmap::SkipReason::Disabled),
             Some("192.168.1.5"),
         );
-        assert!(text.contains("auto_port_forward = false"), "{text}");
+        assert!(text.contains("Admin -> Settings"), "{text}");
+        assert!(text.contains("Let friends"), "{text}");
         assert!(text.contains("docs/port-forwarding.md"), "{text}");
         assert!(text.contains("port 8443 (TCP and UDP)"), "{text}");
     }

@@ -40,21 +40,74 @@ auto-start scheduled task running as `SYSTEM` with crash restarts, and opens the
 inbound firewall for the configured app (TCP) and voice (UDP) ports.
 
 Both installers finish by opening the one-time setup link in a browser
-(`PARACORD_NO_BROWSER=1` only prints it), and the server asks the router to
-forward its ports by itself (`[network] auto_port_forward`, on by default;
-see [port-forwarding.md](port-forwarding.md)). On a server you expose
-deliberately behind a reverse proxy or a cloud firewall, turn that off.
+(`PARACORD_NO_BROWSER=1` only prints it). On a fresh install they ask one
+question first: may Paracord ask the router to let friends outside the home
+network connect? The answer is written to `[network] auto_port_forward` and
+defaults to no. Without a terminal to ask on (CI, a pipe with no TTY) the answer
+is no unless `--allow-internet` (`-AllowInternet` on Windows) or
+`PARACORD_ALLOW_INTERNET=1` says otherwise; see
+[port-forwarding.md](port-forwarding.md). On a server you expose deliberately
+behind a reverse proxy or a cloud firewall, leave it off.
+
+New servers are invite-only: `[auth] registration_mode = "invite_only"`. Only
+someone holding a live invite to one of the server's servers can create an
+account. Set it to `"open"`, or use **Admin → Settings**, to let anyone who can
+reach the server sign up. A config written before this setting existed has no
+`registration_mode` and stays open.
 
 That gives you a working self-signed-HTTPS server on `8443`. The rest of this
 page is about turning that into an internet-facing production deployment: a
 real domain, proxy-terminated TLS, `public_url`, and optionally PostgreSQL.
 
-> **Integrity note.** The release pipeline currently does **not** publish
-> SHA-256 checksums for the archives, so the installer verifies the download
-> only via TLS to the official GitHub releases and prints a prominent warning.
-> If you need out-of-band verification, download the archive yourself, check it,
-> and install with `PARACORD_LOCAL_ARCHIVE=<file>` (a sibling `<file>.sha256`
-> is then verified when present).
+> **Integrity.** Every release publishes `SHA256SUMS.txt` covering all its
+> files, and the installers check the archive against it and refuse one that
+> does not match. To check a download yourself, see
+> [Check a download](../README.md#check-a-download). For an offline install,
+> download and check the archive, then install with
+> `PARACORD_LOCAL_ARCHIVE=<file>` (a sibling `<file>.sha256` is verified when
+> present).
+
+## A domain name and automatic certificates
+
+This is the setup to aim for once other people use your server. With a domain
+name and a certificate from Let's Encrypt, browsers connect without any warning,
+and invite links carry a name instead of an address.
+
+1. **Get a domain name and point it at the server.** Buy one, or use a free
+   dynamic-DNS name, and create an `A` record pointing at your home or server's
+   public IP address. Dynamic-DNS services can keep that record up to date when
+   your address changes.
+2. **Let the internet reach the server on port 80 and your HTTPS port.** Let's
+   Encrypt checks you own the name by fetching a file over plain HTTP on port 80.
+   Paracord answers that check on its plain-HTTP port (the one in `[server]
+   bind_address`, 8090 by default), so on the router forward outside TCP port 80
+   to that port on this computer, and your HTTPS port (8443 by default) to the
+   same port ([port-forwarding.md](port-forwarding.md) shows how).
+3. **Install certbot** (the Let's Encrypt client), for example
+   `sudo apt install certbot` on Debian or Ubuntu.
+4. **Turn on automatic certificates** in `config/paracord.toml`:
+
+   ```toml
+   [server]
+   public_url = "https://chat.example.com:8443"
+
+   [tls.acme]
+   enabled = true
+   email = "you@example.com"
+   domains = ["chat.example.com"]
+   ```
+
+   Restart the server. A few seconds after it starts listening, Paracord runs
+   certbot, answers its check, and swaps the new certificate in without a
+   restart. Until then it uses a temporary certificate of its own. If the
+   request fails (for example because the DNS record hasn't reached everyone
+   yet), it tries again after 1, 2, 4... minutes, and the server log says what
+   went wrong each time. After that it renews on its own schedule
+   (`renew_interval_seconds`, every 12 hours by default).
+
+If you would rather run a reverse proxy such as Caddy or nginx on the standard
+ports, the next section covers that instead. Either way, the self-made
+certificate and its browser warning are only for trying Paracord out.
 
 ## 1. TLS: terminate at a reverse proxy
 

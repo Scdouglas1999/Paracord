@@ -228,10 +228,11 @@ test.describe('first-run and account screens fit a native window', () => {
     await page.goto('/setup-server');
 
     const steps = [
-      { title: /Enter your setup code/, counter: 'Step 1 of 4' },
-      { title: /Create the owner account/, counter: 'Step 2 of 4' },
-      { title: /Protect the owner account/, counter: 'Step 3 of 4' },
-      { title: /Name the place/, counter: 'Step 4 of 4' },
+      { title: /Enter your setup code/, counter: 'Step 1 of 5' },
+      { title: /Create the owner account/, counter: 'Step 2 of 5' },
+      { title: /Protect the owner account/, counter: 'Step 3 of 5' },
+      { title: /Name the place/, counter: 'Step 4 of 5' },
+      { title: /Who can get in/, counter: 'Step 5 of 5' },
     ];
 
     const fill = async (label: RegExp, value: string) => {
@@ -243,8 +244,11 @@ test.describe('first-run and account screens fit a native window', () => {
       await expect(page.getByText(step.counter, { exact: true })).toBeVisible();
 
       // The step's own first field has focus, so the whole wizard is typeable
-      // without reaching for the mouse.
-      await expect(page.locator('input:focus')).toHaveCount(1);
+      // without reaching for the mouse. The last step is a choice, and starts
+      // on the chosen option.
+      await expect(
+        page.locator(index === steps.length - 1 ? '[role="radio"]:focus' : 'input:focus'),
+      ).toHaveCount(1);
 
       const action = page
         .getByRole('button', { name: index === steps.length - 1 ? /^Claim this instance$/ : /^Continue$/ })
@@ -263,11 +267,17 @@ test.describe('first-run and account screens fit a native window', () => {
         await fill(/^Password/, 'Riverside-123!');
         await fill(/Confirm password/, 'Riverside-123!');
       }
+      if (index === 3) {
+        await fill(/Instance name/, 'Riverside Studio');
+        await fill(/First server name/, 'The Lounge');
+      }
       // Enter advances, exactly like the visible button.
       await page.keyboard.press('Enter');
     }
 
     // Back keeps every typed value, on every step it walks past.
+    await page.getByRole('button', { name: /^Back$/ }).click();
+    await expect(page.getByLabel(/Instance name/)).toHaveValue('Riverside Studio');
     await page.getByRole('button', { name: /^Back$/ }).click();
     await expect(page.getByLabel(/Confirm password/)).toHaveValue('Riverside-123!');
     await page.getByRole('button', { name: /^Back$/ }).click();

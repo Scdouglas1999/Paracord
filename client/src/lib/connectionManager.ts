@@ -693,15 +693,21 @@ class ConnectionManager {
     return this.connections.get(LOCAL_SERVER_ID)?.apiClient;
   }
 
-  /** Authenticate with a server using challenge-response, then connect gateway */
-  async connectServer(serverId: string): Promise<void> {
+  /**
+   * Authenticate with a server using challenge-response, then connect gateway.
+   *
+   * `inviteCode` is the invite the person is joining with. It only matters
+   * when signing in with the device key creates the account on that server,
+   * which an invite-only server allows only with a live invite.
+   */
+  async connectServer(serverId: string, options: { inviteCode?: string } = {}): Promise<void> {
     const inFlight = this.connecting.get(serverId);
     if (inFlight) {
       await inFlight;
       return;
     }
 
-    const connectTask = this.connectServerInternal(serverId);
+    const connectTask = this.connectServerInternal(serverId, options.inviteCode);
     this.connecting.set(serverId, connectTask);
     try {
       await connectTask;
@@ -1049,7 +1055,7 @@ class ConnectionManager {
     return Boolean(useAuthStore.getState().token || getAccessToken() || getRefreshToken());
   }
 
-  private async connectServerInternal(serverId: string): Promise<void> {
+  private async connectServerInternal(serverId: string, inviteCode?: string): Promise<void> {
     const existing = this.connections.get(serverId);
     if (existing && this.credentialIsGone(serverId)) {
       // The credential this connection was built on is gone — a sign-out, a
@@ -1204,7 +1210,13 @@ class ConnectionManager {
         // unreachable server reaches here too, and it has ended nothing.
         throw new Error('No server token and local account is not unlocked');
       }
-      const token = await this.authenticate(client, server, account.publicKey!, account.username!);
+      const token = await this.authenticate(
+        client,
+        server,
+        account.publicKey!,
+        account.username!,
+        inviteCode,
+      );
       useServerListStore.getState().updateToken(serverId, token);
       serverToken = token;
       // A session that has just been re-established did not end. A spent
@@ -1274,6 +1286,7 @@ class ConnectionManager {
     server: ServerEntry,
     publicKey: string,
     username: string,
+    inviteCode?: string,
   ): Promise<string> {
     // Step 1: Get challenge
     const { data: challenge } = await client.post<{
@@ -1316,6 +1329,8 @@ class ConnectionManager {
       signature,
       username,
       display_name: displayName || undefined,
+      // Only read by the server when this creates the account.
+      invite_code: inviteCode || undefined,
     });
 
     // Store the user's server-local ID. The remote identity lives on the

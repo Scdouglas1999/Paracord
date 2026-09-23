@@ -5,12 +5,17 @@ straight away. People anywhere else cannot — not because anything is broken, b
 because your router does not yet know that traffic arriving from the internet
 should be handed to your computer.
 
-Paracord tries to arrange that for you when it starts. If it managed it, the
-startup message says **"Friends anywhere can join at ..."** and you are done —
-there is nothing on this page you need to do.
+There are two ways to change that:
 
-If it says only people on your own network can join, this page is the fix. It
-takes about five minutes and you only do it once.
+- **Let Paracord ask your router.** The installer asks whether it should, and
+  the answer is no unless you say yes. You can turn it on later in the app under
+  **Admin → Settings → Let friends outside your home network connect**, then
+  restart the server. When it works, the startup message says **"Friends anywhere
+  can join at ..."** and there is nothing on this page you need to do.
+- **Set it up on the router yourself**, which is what the rest of this page walks
+  through. It takes about five minutes and you only do it once. Do this if your
+  router refuses Paracord's request, or if you would rather nothing change your
+  router's settings for you.
 
 ---
 
@@ -149,18 +154,23 @@ The router is only the first door. Your computer has one too.
   app does not show this warning. To get rid of it entirely, point a domain name
   at your address and turn on automatic certificates (`[tls] acme`).
 
-## Turning the automatic attempt off
+## Asking the router automatically, or not
 
-Paracord asks your router on every start. To stop it — for instance because you
-have set the rule up by hand and would rather nothing touch it — set:
+Whether Paracord asks your router (UPnP, then NAT-PMP) is one setting. New
+installs leave it off unless you answered yes to the installer's question. To
+change it, use **Admin → Settings → Let friends outside your home network
+connect** in the app and restart the server, or edit the settings file:
 
 ```toml
 [network]
-auto_port_forward = false
+auto_port_forward = true   # or false
 ```
 
-or start the server with `PARACORD_AUTO_PORT_FORWARD=false`. The startup message
-then says so plainly instead of pretending it tried.
+`PARACORD_AUTO_PORT_FORWARD=true|false` overrides the file; while it is set, the
+admin page shows the setting but cannot change it. When the setting is on,
+Paracord asks on every start and renews the request while it runs. When it is
+off, the startup message says so plainly instead of pretending it tried.
+An install that already had it on keeps it on after upgrading.
 
 ## Is it safe to be reachable?
 
@@ -170,6 +180,8 @@ to. Two things protect a brand-new server:
 - Until you finish setting it up, **nobody can create an account**, including
   anyone who finds the address before you do. That is what the one-time link the
   server prints is for.
-- After that, people join the way you let them: an invite link, or registration
-  if you leave it open. You can turn registration off entirely
-  (`[auth] registration_enabled = false`) and hand out invites only.
+- After that, people join the way you let them. A new server is **invite-only**:
+  an account can only be made with an invite link to one of your servers
+  (`[auth] registration_mode = "invite_only"`, or **Admin → Settings → Who can
+  create an account**). You can open it to anyone, or turn new accounts off
+  entirely.

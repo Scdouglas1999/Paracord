@@ -20,9 +20,18 @@
     Re-running upgrades the binary in place: config\ and data\ are preserved and
     the previous paracord-server.exe is kept under backups\.
 
-    It also still works as a file:
+    It also still works as a file, which is the way to read it before running it:
 
+        irm https://raw.githubusercontent.com/Scdouglas1999/Paracord/main/scripts/install.ps1 -OutFile install.ps1
+        notepad install.ps1
         powershell -ExecutionPolicy Bypass -File install.ps1
+
+    On a fresh install it asks one question: may Paracord ask your router to let
+    friends outside your home network connect (UPnP)? The default is no, and the
+    answer is written into the config ([network] auto_port_forward). It only
+    asks when there is someone to ask; otherwise -AllowInternet,
+    -HomeNetworkOnly or PARACORD_ALLOW_INTERNET decide, and without them the
+    answer is no. An upgrade keeps the existing answer.
 
 .PARAMETER Version
     Release version to install ("2.0.0" or "v2.0.0"). Defaults to the latest
@@ -55,6 +64,15 @@
     Never ask for administrator permission; install just for this user.
     Env fallback: PARACORD_NO_ELEVATE=1.
 
+.PARAMETER AllowInternet
+    Answer the router question yes without asking: Paracord asks your router
+    to let friends outside your home network connect.
+    Env fallback: PARACORD_ALLOW_INTERNET=1.
+
+.PARAMETER HomeNetworkOnly
+    Answer the router question no without asking: only people on your home
+    network can connect. Env fallback: PARACORD_ALLOW_INTERNET=0.
+
 .PARAMETER Relaunched
     Internal. Set on the copy this script starts for itself after the Windows
     permission box is accepted, so it can say the window is safe to close.
@@ -69,6 +87,8 @@ param(
     [switch]$NoService,
     [switch]$NoBrowser,
     [switch]$NoElevate,
+    [switch]$AllowInternet,
+    [switch]$HomeNetworkOnly,
     [switch]$Relaunched
 )
 
@@ -93,10 +113,14 @@ if (-not $ReleaseBaseUrl) { $ReleaseBaseUrl = "https://github.com/$GitHubRepo/re
 if ($env:PARACORD_NO_SERVICE -eq '1') { $NoService = [switch]$true }
 if ($env:PARACORD_NO_BROWSER -eq '1') { $NoBrowser = [switch]$true }
 if ($env:PARACORD_NO_ELEVATE -eq '1') { $NoElevate = [switch]$true }
+if ($AllowInternet -and $HomeNetworkOnly) {
+    throw 'paracord-install: error: pass -AllowInternet or -HomeNetworkOnly, not both.'
+}
 
 $TaskName = 'Paracord Server'
 $ApiUrl   = "https://api.github.com/repos/$GitHubRepo/releases/latest"
 $DocsUrl  = "https://github.com/$GitHubRepo/blob/main/docs/port-forwarding.md"
+$DomainDocsUrl = "https://github.com/$GitHubRepo/blob/main/docs/deployment.md#a-domain-name-and-automatic-certificates"
 $SelfUrl  = $env:PARACORD_SCRIPT_URL
 if (-not $SelfUrl) { $SelfUrl = "https://raw.githubusercontent.com/$GitHubRepo/main/scripts/install.ps1" }
 
@@ -147,6 +171,72 @@ function Get-TomlValue([string]$path, [string]$section, [string]$key) {
     return ''
 }
 
+# Set `key = true|false` inside [section] of the config, as text, keeping every
+# other line. An existing (uncommented) line in the section is replaced; a
+# section without the key gets it at its end; a config without the section gets
+# the section appended. Read back afterwards, and it fails loudly if the file
+# does not say what was written.
+function Set-TomlBool([string]$path, [string]$section, [string]$key, [bool]$value) {
+    $val = if ($value) { 'true' } else { 'false' }
+    $assignment = "$key = $val"
+    $out = New-Object System.Collections.Generic.List[string]
+    $inSection = $false
+    $done = $false
+    foreach ($line in (Get-Content -Path $path)) {
+        $trimmed = $line.Trim()
+        $header = $trimmed
+        $hash = $header.IndexOf('#')
+        if ($hash -ge 0) { $header = $header.Substring(0, $hash).Trim() }
+        if ($header -match '^\[([^\[\]]+)\]$') {
+            if ($inSection -and -not $done) { $out.Add($assignment); $done = $true }
+            $inSection = ($Matches[1].Trim() -eq $section)
+            $out.Add($line)
+            continue
+        }
+        if ($inSection -and -not $done -and -not $trimmed.StartsWith('#') -and
+            $trimmed -match ('^' + [regex]::Escape($key) + '\s*=')) {
+            $out.Add($assignment)
+            $done = $true
+            continue
+        }
+        $out.Add($line)
+    }
+    if (-not $done) {
+        if (-not $inSection) { $out.Add(''); $out.Add("[$section]") }
+        $out.Add($assignment)
+    }
+    # Rewritten in place (not replaced) so the file keeps its owner-only ACL,
+    # and UTF-8 without a BOM, which the TOML parser needs.
+    $text = ($out -join "`n") + "`n"
+    [System.IO.File]::WriteAllText($path, $text, (New-Object System.Text.UTF8Encoding $false))
+    $got = Get-TomlValue $path $section $key
+    if ($got -ne $val) {
+        Fail "wrote $key = $val under [$section] in $path, but reading it back gave '$got'"
+    }
+}
+
+# The one question a fresh install asks. Deterministic without someone to ask:
+# a switch or PARACORD_ALLOW_INTERNET decides, and otherwise the answer is no.
+function Get-InternetAccessChoice {
+    if ($AllowInternet) { return $true }
+    if ($HomeNetworkOnly) { return $false }
+    $fromEnv = $env:PARACORD_ALLOW_INTERNET
+    if ($fromEnv) {
+        switch -Regex ($fromEnv) {
+            '^(1|yes|y|true)$' { return $true }
+            '^(0|no|n|false)$' { return $false }
+            default { Fail "PARACORD_ALLOW_INTERNET is '$fromEnv'; use 1 (yes) or 0 (no)" }
+        }
+    }
+    if ($env:CI) { return $false }
+    $canAsk = [Environment]::UserInteractive
+    try { if ([Console]::IsInputRedirected) { $canAsk = $false } } catch { $canAsk = $false }
+    if (-not $canAsk) { return $false }
+    Write-Host ''
+    $answer = Read-Host 'Let friends outside your home network connect? Paracord can ask your router to open a port for it (UPnP). [y/N]'
+    return ($answer -match '^(y|yes)$')
+}
+
 # -- Platform check -----------------------------------------------------------
 $arch = $env:PROCESSOR_ARCHITECTURE
 if ($env:PROCESSOR_ARCHITEW6432) { $arch = $env:PROCESSOR_ARCHITEW6432 }
@@ -194,6 +284,12 @@ if ($canElevate) {
         if ($GitHubRepo)     { $psArgs += @('-GitHubRepo',     ('"' + $GitHubRepo + '"')) }
         if ($NoService)      { $psArgs += '-NoService' }
         if ($NoBrowser)      { $psArgs += '-NoBrowser' }
+        if ($AllowInternet)  { $psArgs += '-AllowInternet' }
+        if ($HomeNetworkOnly) { $psArgs += '-HomeNetworkOnly' }
+        if ($env:PARACORD_ALLOW_INTERNET -and -not $AllowInternet -and -not $HomeNetworkOnly) {
+            if ($env:PARACORD_ALLOW_INTERNET -match '^(1|yes|y|true)$') { $psArgs += '-AllowInternet' }
+            elseif ($env:PARACORD_ALLOW_INTERNET -match '^(0|no|n|false)$') { $psArgs += '-HomeNetworkOnly' }
+        }
         Start-Process -FilePath 'powershell' -Verb RunAs -ArgumentList $psArgs | Out-Null
         $handedOver = $true
     } catch {
@@ -292,7 +388,9 @@ try {
         $expected = (Get-Content "$archive.sha256" -Raw).Trim().Split(' ')[0]
         $csumFound = $true
     } elseif (-not $LocalArchive) {
-        foreach ($name in @("$asset.sha256", 'SHA256SUMS', 'SHA256SUMS.txt', 'checksums.txt')) {
+        # Releases from 3.2 on publish SHA256SUMS.txt; the other names cover a
+        # mirror that publishes its own. The first hit wins.
+        foreach ($name in @('SHA256SUMS.txt', "$asset.sha256", 'SHA256SUMS', 'checksums.txt')) {
             $cfile = Join-Path $TmpDir $name
             try {
                 Invoke-WebRequest -Uri "$ReleaseBaseUrl/$tag/$name" -OutFile $cfile -Headers $headers
@@ -317,7 +415,7 @@ try {
     } elseif ($csumFound) {
         Write-Warning "paracord-install: a checksum file was published but has no entry for $asset; cannot verify - installing anyway"
     } else {
-        Write-Warning "paracord-install: this release does not publish SHA-256 checksums - the archive cannot be integrity-verified. Downloaded from the official $GitHubRepo releases over TLS."
+        Write-Warning "paracord-install: this release publishes no SHA-256 checksums (releases before 3.2 did not) - the archive cannot be integrity-verified. Downloaded from the official $GitHubRepo releases over TLS."
     }
 
     # -- Extract -------------------------------------------------------------
@@ -370,7 +468,11 @@ try {
     # -- Config generation ---------------------------------------------------
     if (Test-Path $ConfigPath) {
         Write-Host "Existing config preserved at $ConfigPath"
+        if ($AllowInternet -or $HomeNetworkOnly -or $env:PARACORD_ALLOW_INTERNET) {
+            Write-Warning "paracord-install: kept the existing router setting: -AllowInternet, -HomeNetworkOnly and PARACORD_ALLOW_INTERNET only apply to a fresh install (change it in the app's Admin settings)"
+        }
     } else {
+        $allowInternetChoice = Get-InternetAccessChoice
         Write-Step "Generating configuration"
         # `init` prints its own operator walkthrough. Hold it back: this
         # installer prints one short set of instructions at the end, and two
@@ -405,7 +507,15 @@ try {
         # Windows PowerShell 5.1, which the TOML parser may reject.
         [System.IO.File]::WriteAllText($ConfigPath, $toml, (New-Object System.Text.UTF8Encoding $false))
         Write-Host "Settings written to $ConfigPath"
+
+        Set-TomlBool $ConfigPath 'network' 'auto_port_forward' $allowInternetChoice
+        if ($allowInternetChoice) {
+            Write-Host 'Friends outside your home network can connect: Paracord will ask your router to open a port.'
+        } else {
+            Write-Host "Only people on your home network can connect. You can change this later in the app's Admin settings."
+        }
     }
+    $routerAsked = (Get-TomlValue $ConfigPath 'network' 'auto_port_forward') -eq 'true'
 
     # -- Addresses, read from the config the server actually uses ------------
     $tlsOn     = Get-TomlValue $ConfigPath 'tls' 'enabled'
@@ -656,8 +766,10 @@ try {
                 Write-Host '1. Finish setting up - open this link in your browser:'
             }
             Write-Host "     $claimLink"
-            Write-Host '   Your browser may show a one-time security warning because the server made its own'
-            Write-Host '   certificate - choose Advanced, then Continue. (The desktop app never shows this.)'
+            Write-Host '   For friends to connect without a browser warning, give this server a domain name'
+            Write-Host "   and turn on automatic certificates: $DomainDocsUrl"
+            Write-Host "   Just trying it out? The browser warns once about the server's own certificate:"
+            Write-Host '   choose Advanced, then Continue. (The desktop app never shows this.)'
         } elseif ($serverStarted) {
             Write-Host '1. Finish setting up - open this link in your browser:'
             Write-Host "     $localUrl/setup-server"
@@ -673,8 +785,13 @@ try {
         }
         Write-Host '2. Then invite friends: open your server in the app and press Invite.'
         Write-Host ''
-        Write-Host 'Friends outside your home network: the server tries to open the door on your'
-        Write-Host "router by itself. If someone can't connect, see $DocsUrl"
+        if ($routerAsked) {
+            Write-Host 'Friends outside your home network: Paracord asks your router to let them in.'
+            Write-Host "If someone can't connect, see $DocsUrl"
+        } else {
+            Write-Host 'Only people on your home network can join for now. To let friends elsewhere in,'
+            Write-Host "turn on `"Let friends outside your home network connect`" in the app's Admin settings."
+        }
         Write-Host ''
         Write-Host 'To update later, run this same command again. Your data is kept.'
     }
@@ -693,6 +810,11 @@ try {
     }
     if ($firewallNote) { Write-Dim "  Firewall:  $firewallNote" }
     Write-Dim "  Address:   $shareUrl"
+    if ($routerAsked) {
+        Write-Dim '  Router:    asked to forward the ports ([network] auto_port_forward = true)'
+    } else {
+        Write-Dim '  Router:    left alone, home network only ([network] auto_port_forward = false)'
+    }
     if (-not $IsAdmin) {
         Write-Dim '  Installed for you only. Re-run this in an administrator window to install it'
         Write-Dim '  for the whole computer.'

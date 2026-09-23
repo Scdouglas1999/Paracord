@@ -57,7 +57,7 @@ const env = {
   PARACORD_STORAGE_PATH: join(dataDir, 'uploads'),
   PARACORD_MEDIA_STORAGE_PATH: join(dataDir, 'files'),
   PARACORD_BACKUP_DIR: join(dataDir, 'backups'),
-  PARACORD_REGISTRATION_ENABLED: 'true',
+  PARACORD_REGISTRATION_ENABLED: 'true', PARACORD_REGISTRATION_MODE: 'open',
   PARACORD_AUTH_REQUIRE_EMAIL: 'true',
   // This smoke registers its own first account through the REST API, so the
   // instance is bootstrapped without a first-owner claim: the first account

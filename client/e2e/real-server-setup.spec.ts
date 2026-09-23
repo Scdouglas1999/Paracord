@@ -239,7 +239,7 @@ test.describe('first-owner claim on a real unclaimed server', () => {
       await expect(page).toHaveURL(/\/setup-server$/);
 
       // 2. Step one says who this is for, and where the token comes from.
-      await expect(page.getByText('Step 1 of 4')).toBeVisible();
+      await expect(page.getByText('Step 1 of 5')).toBeVisible();
       await expect(
         page.getByText(/This makes you the owner/),
       ).toBeVisible();
@@ -259,21 +259,28 @@ test.describe('first-owner claim on a real unclaimed server', () => {
       await page.getByLabel(/Setup code/).fill('X'.repeat(CLAIM_TOKEN.length));
       await continueButton.click();
 
-      await expect(page.getByText('Step 2 of 4')).toBeVisible();
+      await expect(page.getByText('Step 2 of 5')).toBeVisible();
       await page.getByLabel(/Username/).fill(ownerName);
       await page.getByLabel(/Email/).fill(`${ownerName}@example.test`);
       await continueButton.click();
 
       // The server's own password rules are stated on the step that asks for one.
-      await expect(page.getByText('Step 3 of 4')).toBeVisible();
+      await expect(page.getByText('Step 3 of 5')).toBeVisible();
       await expect(page.getByText(/10–128 bytes/)).toBeVisible();
       await page.getByLabel(/^Password/).fill(OWNER_PASSWORD);
       await page.getByLabel(/Confirm password/).fill(OWNER_PASSWORD);
       await continueButton.click();
 
-      await expect(page.getByText('Step 4 of 4')).toBeVisible();
+      await expect(page.getByText('Step 4 of 5')).toBeVisible();
       await page.getByLabel(/Instance name/).fill('Riverside Studio');
       await page.getByLabel(/First server name/).fill('The Lounge');
+      await continueButton.click();
+
+      // The last step: who can create an account, invite-only unless changed.
+      await expect(page.getByText('Step 5 of 5')).toBeVisible();
+      await expect(
+        page.getByRole('radio', { name: /People with an invite link/ }),
+      ).toHaveAttribute('aria-checked', 'true');
       await claimButton.click();
       await expect(page.getByText(/not the one your server printed/)).toBeVisible();
       await expect(page).toHaveURL(/\/setup-server$/);
@@ -289,6 +296,7 @@ test.describe('first-owner claim on a real unclaimed server', () => {
       await continueButton.click();
       await expect(page.getByLabel(/Instance name/)).toHaveValue('Riverside Studio');
       await expect(page.getByLabel(/First server name/)).toHaveValue('The Lounge');
+      await continueButton.click();
 
       // 5. The real token claims the server and lands the owner in the space it
       //    just created.
@@ -333,16 +341,49 @@ test.describe('first-owner claim on a real unclaimed server', () => {
         await stranger.close();
       }
 
-      // 8. Somebody else arriving afterwards registers normally and is a
-      //    member, not an operator. This is the distinction the setup page
-      //    promises, checked against the server rather than the copy.
+      // 8. The server is invite-only, as the last setup step chose: somebody
+      //    arriving without an invite is refused, and says why. With the
+      //    owner's invite they register, as a member, not an operator. This is
+      //    the distinction the setup page promises, checked against the server
+      //    rather than the copy.
       const memberContext = await browser.newContext({ baseURL: base });
       try {
+        const refused = await memberContext.request.post(`${base}/api/v1/auth/register`, {
+          data: {
+            email: `${memberName}@example.test`,
+            username: memberName,
+            password: MEMBER_PASSWORD,
+          },
+        });
+        expect(refused.status(), await refused.text()).toBe(403);
+        expect((await refused.json()).code).toBe('INVITE_REQUIRED');
+
+        const ownerLogin = await memberContext.request.post(`${base}/api/v1/auth/login`, {
+          data: { email: `${ownerName}@example.test`, password: OWNER_PASSWORD },
+        });
+        expect(ownerLogin.status(), await ownerLogin.text()).toBe(200);
+        const ownerAuth = { Authorization: `Bearer ${(await ownerLogin.json()).token}` };
+        const guilds = await memberContext.request.get(`${base}/api/v1/users/@me/guilds`, {
+          headers: ownerAuth,
+        });
+        const guildId = (await guilds.json())[0].id;
+        const channels = await memberContext.request.get(`${base}/api/v1/guilds/${guildId}/channels`, {
+          headers: ownerAuth,
+        });
+        const channelId = (await channels.json()).find((c: { type: number }) => c.type === 0).id;
+        const invite = await memberContext.request.post(`${base}/api/v1/channels/${channelId}/invites`, {
+          headers: ownerAuth,
+          data: { max_uses: 1, max_age: 3600 },
+        });
+        expect(invite.status(), await invite.text()).toBe(201);
+        await memberContext.clearCookies();
+
         const registration = await memberContext.request.post(`${base}/api/v1/auth/register`, {
           data: {
             email: `${memberName}@example.test`,
             username: memberName,
             password: MEMBER_PASSWORD,
+            invite_code: (await invite.json()).code,
           },
         });
         expect(registration.status(), await registration.text()).toBe(201);

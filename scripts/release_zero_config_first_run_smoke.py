@@ -213,6 +213,16 @@ def run_smoke(args: argparse.Namespace) -> None:
                 )
                 if status.get("setup_required") is not True:
                     raise AssertionError(f"fresh instance must require setup: {status!r}")
+                # A new install is invite-only and leaves the router alone, and
+                # the setup page is told so it can say which way it was installed.
+                if status.get("registration_mode") != "invite_only":
+                    raise AssertionError(f"a new config must be invite-only: {status!r}")
+                if status.get("router_forwarding") is not False:
+                    raise AssertionError(f"a new config must not ask the router: {status!r}")
+                config_text = config_toml.read_text(encoding="utf-8")
+                for line in ('registration_mode = "invite_only"', "auto_port_forward = false"):
+                    if line not in config_text:
+                        raise AssertionError(f"generated config lacks {line!r}")
 
                 # Ordinary registration is refused: nobody can take this server
                 # by being the first stranger to find it.
@@ -301,7 +311,40 @@ def run_smoke(args: argparse.Namespace) -> None:
                 if status.get("setup_required") is not False:
                     raise AssertionError(f"claimed instance must not require setup: {status!r}")
 
-                # Registration reopens, and the people who use it are members.
+                # Registration reopens for people with an invite, and they are
+                # members. Without one it is refused, and says why.
+                refused = request_json(
+                    "POST",
+                    base_url,
+                    "/api/v1/auth/register",
+                    body={
+                        "email": "stranger@example.com",
+                        "username": "stranger",
+                        "password": "Strangerpass123!",
+                    },
+                    expected=403,
+                    label="register without an invite on an invite-only server",
+                )
+                if refused.get("code") != "INVITE_REQUIRED":
+                    raise AssertionError(f"refusal must say an invite is needed: {refused!r}")
+                space_id = owner["space"]["id"]
+                channels = request_json(
+                    "GET",
+                    base_url,
+                    f"/api/v1/guilds/{space_id}/channels",
+                    token=owner_token,
+                    label="list the first space's channels",
+                )
+                text_channel = next(c for c in channels if c.get("type") == 0)
+                invite = request_json(
+                    "POST",
+                    base_url,
+                    f"/api/v1/channels/{text_channel['id']}/invites",
+                    token=owner_token,
+                    body={"max_uses": 5, "max_age": 3600},
+                    expected=201,
+                    label="owner creates an invite",
+                )
                 second = request_json(
                     "POST",
                     base_url,
@@ -310,9 +353,10 @@ def run_smoke(args: argparse.Namespace) -> None:
                         "email": "second@example.com",
                         "username": "seconduser",
                         "password": "Secondpass123!",
+                        "invite_code": invite["code"],
                     },
                     expected=201,
-                    label="register second account",
+                    label="register second account with an invite",
                 )
                 second_flags = second.get("user", {}).get("flags")
                 if not isinstance(second_flags, int) or (second_flags & USER_FLAG_ADMIN) != 0:

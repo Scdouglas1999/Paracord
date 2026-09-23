@@ -168,6 +168,14 @@ pub struct AuthConfig {
     pub jwt_expiry_seconds: u64,
     #[serde(default = "default_true")]
     pub registration_enabled: bool,
+    /// Who may create an account: `"invite_only"` (a live invite to a server
+    /// here is required) or `"open"` (anyone who can reach the server).
+    ///
+    /// A freshly generated config writes `invite_only`. A config written before
+    /// this setting existed has no key and stays `open`, which is how it has
+    /// always behaved, so upgrading never locks anyone out.
+    #[serde(default = "registration_mode_for_existing_configs")]
+    pub registration_mode: paracord_core::registration::RegistrationMode,
     #[serde(default = "default_true")]
     pub allow_username_login: bool,
     #[serde(default = "default_false")]
@@ -182,6 +190,8 @@ impl Default for AuthConfig {
             jwt_secret: generate_random_hex(64),
             jwt_expiry_seconds: default_jwt_expiry(),
             registration_enabled: true,
+            // New installs: nobody can sign up without an invite.
+            registration_mode: paracord_core::registration::RegistrationMode::InviteOnly,
             allow_username_login: true,
             require_email: false,
             require_email_verification: false,
@@ -312,12 +322,11 @@ pub struct NetworkConfig {
     #[serde(default = "default_false")]
     pub windows_firewall_auto_allow: bool,
     /// Ask the router, on startup, to let people outside this network reach the
-    /// server (UPnP IGD, then NAT-PMP/PCP). On by default: without it a
-    /// first-time owner has to log into their router before a single friend
-    /// outside the house can join, which is the one step nothing else can
-    /// automate away. Exposure is safe by default because an unclaimed server
-    /// refuses every registration until its owner finishes setup.
-    #[serde(default = "default_true")]
+    /// server (UPnP IGD, then NAT-PMP/PCP). Off unless the owner chose it: the
+    /// installers ask, and the admin page can turn it on later. Opening a home
+    /// network to the internet is a decision for the person who owns it, not a
+    /// default. A config that says `true` keeps it.
+    #[serde(default = "default_false")]
     pub auto_port_forward: bool,
     /// How long each requested mapping should last, in seconds. Refreshed at
     /// half this interval for as long as the server runs, so a router reboot
@@ -330,7 +339,7 @@ impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
             windows_firewall_auto_allow: false,
-            auto_port_forward: true,
+            auto_port_forward: false,
             port_forward_lease_seconds: default_port_forward_lease_seconds(),
         }
     }
@@ -633,6 +642,9 @@ fn default_true() -> bool {
 fn default_false() -> bool {
     false
 }
+fn registration_mode_for_existing_configs() -> paracord_core::registration::RegistrationMode {
+    paracord_core::registration::RegistrationMode::Open
+}
 fn default_port_forward_lease_seconds() -> u32 {
     3600
 }
@@ -816,6 +828,13 @@ maintenance_work_mem_mb = {maintenance_work_mem_mb}
 jwt_secret = "{jwt_secret}"
 jwt_expiry_seconds = {jwt_expiry}
 registration_enabled = {registration_enabled}
+# Who can create an account on this server:
+#   "invite_only" - only people with an invite link to one of your servers
+#   "open"        - anyone who can reach this server
+# Changing it in Admin -> Settings (or at first-run setup) saves the choice with
+# the server, and that saved choice then takes precedence over this line.
+# Env override: PARACORD_REGISTRATION_MODE
+registration_mode = "{registration_mode}"
 # Allow username logins for password auth (in addition to email).
 allow_username_login = {allow_username_login}
 # Require email during password registration.
@@ -918,9 +937,10 @@ allow_discovery = {federation_allow_discovery}
 [network]
 # On Windows, optionally auto-create local firewall allow rules.
 windows_firewall_auto_allow = {windows_firewall_auto_allow}
-# Ask your router to let friends outside your home network reach this server, so
-# you never have to open its settings page yourself. Set to false if you would
-# rather set up port forwarding by hand (see docs/port-forwarding.md).
+# Ask your router (UPnP / NAT-PMP) to let friends outside your home network reach
+# this server. false = only people on your home network can connect. Turn it on
+# here or in Admin -> Settings (restart the server afterwards). If you set up port
+# forwarding by hand or use a domain, leave it off (see docs/port-forwarding.md).
 # Env override: PARACORD_AUTO_PORT_FORWARD
 auto_port_forward = {auto_port_forward}
 # How long each router entry lasts, in seconds. It is refreshed automatically
@@ -1015,6 +1035,7 @@ timeout_seconds = {ai_timeout_seconds}
         jwt_secret = config.auth.jwt_secret,
         jwt_expiry = config.auth.jwt_expiry_seconds,
         registration_enabled = config.auth.registration_enabled,
+        registration_mode = config.auth.registration_mode.as_str(),
         setup_require_claim = config.setup.require_claim,
         allow_username_login = config.auth.allow_username_login,
         require_email = config.auth.require_email,
@@ -1200,6 +1221,16 @@ impl Config {
             if let Ok(parsed) = value.parse::<bool>() {
                 config.auth.registration_enabled = parsed;
             }
+        }
+        if let Ok(value) = std::env::var("PARACORD_REGISTRATION_MODE") {
+            // A typo here must not quietly leave a server open (or shut): say
+            // what is wrong and refuse to start.
+            config.auth.registration_mode =
+                paracord_core::registration::RegistrationMode::parse(&value).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "PARACORD_REGISTRATION_MODE is '{value}'; it must be \"invite_only\" or \"open\""
+                    )
+                })?;
         }
         if let Ok(value) = std::env::var("PARACORD_AUTH_ALLOW_USERNAME_LOGIN") {
             if let Ok(parsed) = value.parse::<bool>() {
@@ -1804,14 +1835,81 @@ mod tests {
         assert!(config.s3.use_aws_credential_chain);
     }
 
-    /// Asking the router to let friends in is the default, because the whole
-    /// point is that a first-time owner never has to find their router's
-    /// settings page. Anything else would leave the hardest step un-automated.
+    /// A new server does not open the owner's home network to the internet
+    /// unless they chose it (the installers ask, and the admin page can).
     #[test]
-    fn asking_the_router_is_on_by_default() {
+    fn asking_the_router_is_off_by_default() {
         let config = Config::default();
-        assert!(config.network.auto_port_forward);
+        assert!(!config.network.auto_port_forward);
         assert_eq!(config.network.port_forward_lease_seconds, 3600);
+    }
+
+    /// An existing config that turned it on keeps it, and one that never
+    /// mentioned it reads as off.
+    #[test]
+    fn an_existing_config_keeps_its_router_choice() {
+        let mut on = generate_config_template(&Config::default());
+        on = on.replace("auto_port_forward = false", "auto_port_forward = true");
+        let parsed: Config = toml::from_str(&on).expect("template must parse");
+        assert!(parsed.network.auto_port_forward);
+
+        let without_key =
+            generate_config_template(&Config::default()).replace("auto_port_forward = false\n", "");
+        let parsed: Config = toml::from_str(&without_key).expect("template must parse");
+        assert!(!parsed.network.auto_port_forward);
+    }
+
+    /// A new config is invite-only; a config from before the setting existed has
+    /// no key and stays open, so an upgrade never locks anybody out.
+    #[test]
+    fn new_configs_are_invite_only_and_old_ones_stay_open() {
+        use paracord_core::registration::RegistrationMode;
+        let template = generate_config_template(&Config::default());
+        assert!(
+            template.contains("registration_mode = \"invite_only\""),
+            "generated config must write invite_only:\n{template}"
+        );
+        assert!(template.contains("PARACORD_REGISTRATION_MODE"));
+        let parsed: Config = toml::from_str(&template).expect("template must round-trip");
+        assert_eq!(parsed.auth.registration_mode, RegistrationMode::InviteOnly);
+
+        let old = template.replace("registration_mode = \"invite_only\"\n", "");
+        assert!(!old.contains("registration_mode ="));
+        let parsed: Config = toml::from_str(&old).expect("old config must parse");
+        assert_eq!(parsed.auth.registration_mode, RegistrationMode::Open);
+
+        let typo = template.replace("\"invite_only\"", "\"invite\"");
+        assert!(
+            toml::from_str::<Config>(&typo).is_err(),
+            "an unknown mode must be refused, not read as either value"
+        );
+    }
+
+    #[test]
+    fn env_override_sets_the_registration_mode_and_refuses_a_typo() {
+        use paracord_core::registration::RegistrationMode;
+        let _guard = ENV_LOCK.lock().expect("env lock poisoned");
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::env::set_var("PARACORD_JWT_SECRET", "0123456789abcdef0123456789abcdef");
+
+        std::env::set_var("PARACORD_REGISTRATION_MODE", "open");
+        let open_path = temp.path().join("open.toml");
+        let open = Config::load(open_path.to_str().expect("utf8")).expect("load config");
+        assert_eq!(open.auth.registration_mode, RegistrationMode::Open);
+        // The file itself still says what a new install should.
+        let written = std::fs::read_to_string(&open_path).expect("read config");
+        assert!(written.contains("registration_mode = \"invite_only\""));
+
+        std::env::set_var("PARACORD_REGISTRATION_MODE", "sometimes");
+        let err = Config::load(open_path.to_str().expect("utf8"))
+            .expect_err("a typo must stop the server");
+        assert!(
+            err.to_string().contains("PARACORD_REGISTRATION_MODE"),
+            "{err}"
+        );
+
+        std::env::remove_var("PARACORD_REGISTRATION_MODE");
+        std::env::remove_var("PARACORD_JWT_SECRET");
     }
 
     /// The generated config file both documents the option and round-trips it,
@@ -1820,7 +1918,7 @@ mod tests {
     fn generated_config_documents_and_round_trips_auto_port_forward() {
         let template = generate_config_template(&Config::default());
         assert!(
-            template.contains("auto_port_forward = true"),
+            template.contains("auto_port_forward = false"),
             "generated config must set the option explicitly:\n{template}"
         );
         assert!(
@@ -1832,7 +1930,7 @@ mod tests {
             "generated config must set the lease:\n{template}"
         );
         let parsed: Config = toml::from_str(&template).expect("template must round-trip");
-        assert!(parsed.network.auto_port_forward);
+        assert!(!parsed.network.auto_port_forward);
         assert_eq!(parsed.network.port_forward_lease_seconds, 3600);
     }
 
@@ -1859,13 +1957,13 @@ mod tests {
         assert!(on.network.auto_port_forward);
         assert_eq!(on.network.port_forward_lease_seconds, 3600);
 
-        // A value that is not a boolean must leave the default alone rather
-        // than silently disabling the feature.
+        // A value that is not a boolean must leave the file's value alone
+        // rather than silently turning the feature on.
         std::env::set_var("PARACORD_AUTO_PORT_FORWARD", "maybe");
         let junk_path = temp.path().join("junk.toml");
         let junk =
             Config::load(junk_path.to_str().expect("config path utf8")).expect("load config");
-        assert!(junk.network.auto_port_forward);
+        assert!(!junk.network.auto_port_forward);
 
         std::env::remove_var("PARACORD_AUTO_PORT_FORWARD");
         std::env::remove_var("PARACORD_JWT_SECRET");

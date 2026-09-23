@@ -68,6 +68,15 @@ max_connections = 20
 jwt_secret = "CHANGE_ME_TO_A_RANDOM_64_CHAR_STRING"
 jwt_expiry_seconds = 900
 registration_enabled = true
+# Who can create an account:
+#   "invite_only" - only people with an invite link to one of your servers
+#   "open"        - anyone who can reach this server
+# A freshly generated config writes "invite_only". A config without this line
+# stays "open", which is how Paracord behaved before the setting existed.
+# Changing it in Admin -> Settings (or at first-run setup) saves the choice with
+# the server, and that saved choice then takes precedence over this line.
+# Env override: PARACORD_REGISTRATION_MODE
+registration_mode = "invite_only"
 # Allow users to log in with username (in addition to email) for password auth.
 allow_username_login = true
 # Require email during password registration.
@@ -162,11 +171,13 @@ allow_discovery = false
 [network]
 # On Windows, optionally auto-create local firewall allow rules for Paracord binaries.
 windows_firewall_auto_allow = false
-# Ask your router to let friends outside your home network reach this server, so
-# you never have to open its settings page yourself. Set to false if you would
-# rather set up port forwarding by hand (see docs/port-forwarding.md).
+# Ask your router (UPnP / NAT-PMP) to let friends outside your home network reach
+# this server. false = only people on your home network can connect. Turn it on
+# here or in Admin -> Settings (restart the server afterwards). If you set up port
+# forwarding by hand or use a domain, leave it off (see docs/port-forwarding.md).
+# A config without this line reads as false; one that says true keeps it.
 # Env override: PARACORD_AUTO_PORT_FORWARD
-auto_port_forward = true
+auto_port_forward = false
 # How long each router entry lasts, in seconds. It is refreshed automatically
 # while the server runs. Env override: PARACORD_PORT_FORWARD_LEASE_SECONDS
 port_forward_lease_seconds = 3600

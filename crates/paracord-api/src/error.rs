@@ -32,6 +32,17 @@ pub enum ApiError {
     AutomodBlocked(String),
     #[error("upgrade required: {0}")]
     UpgradeRequired(String),
+    /// Account creation refused because this instance is invite-only and the
+    /// request carried no usable invite. The message is shown to the person
+    /// verbatim, and the distinct code lets a client explain it without
+    /// matching on words.
+    #[error("{0}")]
+    InviteRequired(String),
+    /// An admin change the server could not save (the config file is not
+    /// writable, or an environment variable decides the value). The message
+    /// says what to do instead and is shown verbatim.
+    #[error("{0}")]
+    SettingNotSaved(String),
     /// Rate limited. The i64 value is retry_after in seconds (0 = generic rate limit).
     #[error("rate limited")]
     RateLimited(i64),
@@ -62,6 +73,8 @@ impl ApiError {
             ApiError::EditCancelled => "EDIT_CANCELLED",
             ApiError::AutomodBlocked(_) => "AUTOMOD_BLOCKED",
             ApiError::UpgradeRequired(_) => "UPGRADE_REQUIRED",
+            ApiError::InviteRequired(_) => "INVITE_REQUIRED",
+            ApiError::SettingNotSaved(_) => "SETTING_NOT_SAVED",
             ApiError::RateLimited(_) => "RATE_LIMITED",
             ApiError::ServiceUnavailable(_) => "SERVICE_UNAVAILABLE",
             ApiError::NotConfigured(_) => "SERVICE_UNAVAILABLE",
@@ -82,6 +95,8 @@ impl ApiError {
             ApiError::EditCancelled => StatusCode::GONE,
             ApiError::AutomodBlocked(_) => StatusCode::FORBIDDEN,
             ApiError::UpgradeRequired(_) => StatusCode::UPGRADE_REQUIRED,
+            ApiError::InviteRequired(_) => StatusCode::FORBIDDEN,
+            ApiError::SettingNotSaved(_) => StatusCode::CONFLICT,
             ApiError::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
             ApiError::ServiceUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             ApiError::NotConfigured(_) => StatusCode::SERVICE_UNAVAILABLE,

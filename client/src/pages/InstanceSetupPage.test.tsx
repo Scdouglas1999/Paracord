@@ -6,6 +6,7 @@ import {
   InstanceSetupPage,
   claimStepError,
   passwordRulesMismatch,
+  reachExplanation,
   takeSetupCodeFromLocation,
 } from './InstanceSetupPage';
 
@@ -100,13 +101,20 @@ async function passPassword(user: User, password = VALID_PASSWORD) {
   await user.click(continueButton());
 }
 
+/** Step 4 → step 5. */
+async function passPlace(user: User) {
+  await user.type(await screen.findByLabelText(/Instance name/), 'Riverside Studio');
+  await user.type(screen.getByLabelText(/First server name/), 'The Lounge');
+  await user.click(continueButton());
+}
+
 /** Everything up to, but not including, the claim itself. */
 async function walkToLastStep(user: User) {
   await passToken(user);
   await passOwner(user);
   await passPassword(user);
-  await user.type(await screen.findByLabelText(/Instance name/), 'Riverside Studio');
-  await user.type(screen.getByLabelText(/First server name/), 'The Lounge');
+  await passPlace(user);
+  await screen.findByText('Who can get in');
 }
 
 describe('InstanceSetupPage', () => {
@@ -144,22 +152,25 @@ describe('InstanceSetupPage', () => {
     const user = userEvent.setup();
     renderPage();
 
-    expect(await screen.findByText('Step 1 of 4')).toBeInTheDocument();
+    expect(await screen.findByText('Step 1 of 5')).toBeInTheDocument();
     // Only this step's field is on screen — the rest of the form is not below
     // a fold, it is not rendered yet.
     expect(screen.queryByLabelText(/Instance name/)).not.toBeInTheDocument();
     expect(screen.getByLabelText(/Setup code/)).toHaveFocus();
 
     await passToken(user);
-    expect(await screen.findByText('Step 2 of 4')).toBeInTheDocument();
+    expect(await screen.findByText('Step 2 of 5')).toBeInTheDocument();
     expect(screen.getByLabelText(/Username/)).toHaveFocus();
     expect(screen.queryByLabelText(/Setup code/)).not.toBeInTheDocument();
 
     await passOwner(user);
-    expect(await screen.findByText('Step 3 of 4')).toBeInTheDocument();
+    expect(await screen.findByText('Step 3 of 5')).toBeInTheDocument();
 
     await passPassword(user);
-    expect(await screen.findByText('Step 4 of 4')).toBeInTheDocument();
+    expect(await screen.findByText('Step 4 of 5')).toBeInTheDocument();
+
+    await passPlace(user);
+    expect(await screen.findByText('Step 5 of 5')).toBeInTheDocument();
     // The last step is the one that claims, and says so.
     expect(claimButton()).toBeInTheDocument();
   });
@@ -170,7 +181,7 @@ describe('InstanceSetupPage', () => {
 
     await passToken(user);
 
-    const live = await screen.findByText('Step 2 of 4');
+    const live = await screen.findByText('Step 2 of 5');
     const region = live.closest('[aria-live]');
     expect(region).toHaveAttribute('aria-live', 'polite');
     expect(region).toHaveTextContent('Create the owner account');
@@ -190,7 +201,7 @@ describe('InstanceSetupPage', () => {
     ).toBeInTheDocument();
     expect(screen.getByLabelText(/Setup code/)).toHaveAttribute('aria-invalid', 'true');
     // Still on step 1.
-    expect(screen.getByText('Step 1 of 4')).toBeInTheDocument();
+    expect(screen.getByText('Step 1 of 5')).toBeInTheDocument();
   });
 
   it('withdraws a field rejection as soon as the field is edited', async () => {
@@ -211,7 +222,7 @@ describe('InstanceSetupPage', () => {
 
     await user.type(await screen.findByLabelText(/Setup code/), `${CLAIM_TOKEN}{Enter}`);
 
-    expect(await screen.findByText('Step 2 of 4')).toBeInTheDocument();
+    expect(await screen.findByText('Step 2 of 5')).toBeInTheDocument();
   });
 
   it('shows the complete password requirements on the step that asks for one', async () => {
@@ -254,7 +265,7 @@ describe('InstanceSetupPage', () => {
     await user.type(await screen.findByLabelText(/Email/), 'not-an-email');
     await user.click(await screen.findByRole('button', { name: 'Back' }));
 
-    expect(await screen.findByText('Step 1 of 4')).toBeInTheDocument();
+    expect(await screen.findByText('Step 1 of 5')).toBeInTheDocument();
     expect(screen.queryByText(/doesn’t look like an email address/)).not.toBeInTheDocument();
   });
 
@@ -291,7 +302,7 @@ describe('InstanceSetupPage', () => {
     await user.click(continueButton());
 
     expect(await screen.findByText(message)).toBeInTheDocument();
-    expect(screen.getByText('Step 3 of 4')).toBeInTheDocument();
+    expect(screen.getByText('Step 3 of 5')).toBeInTheDocument();
     expect(mockClaimInstance).not.toHaveBeenCalled();
   });
 
@@ -320,6 +331,7 @@ describe('InstanceSetupPage', () => {
       instance_name: 'Riverside Studio',
       initial_space_name: 'The Lounge',
       display_name: undefined,
+      registration_mode: 'invite_only',
     });
     expect(mockSetAccessToken).toHaveBeenCalledWith('access-token');
     expect(mockSetRefreshToken).toHaveBeenCalledWith('refresh-token');
@@ -345,8 +357,8 @@ describe('InstanceSetupPage', () => {
     await user.type(screen.getByLabelText(/Email/), 'ada@example.test');
     await user.click(continueButton());
     await passPassword(user);
-    await user.type(await screen.findByLabelText(/Instance name/), 'Riverside Studio');
-    await user.type(screen.getByLabelText(/First server name/), 'The Lounge');
+    await passPlace(user);
+    await user.click(await screen.findByRole('radio', { name: /Anyone who can reach this server/ }));
     await user.click(claimButton());
 
     await waitFor(() =>
@@ -354,6 +366,7 @@ describe('InstanceSetupPage', () => {
         expect.objectContaining({
           email: 'ada@example.test',
           display_name: 'Ada Lovelace',
+          registration_mode: 'open',
         }),
       ),
     );
@@ -427,17 +440,58 @@ describe('InstanceSetupPage', () => {
     expect(await screen.findByText(/This instance has already been set up/)).toBeInTheDocument();
   });
 
-  it('will not claim with a field cleared after its step was passed', async () => {
+  it('will not go on to the claim with a field cleared after its step was passed', async () => {
     const user = userEvent.setup();
     renderPage();
 
     await walkToLastStep(user);
-    await user.clear(screen.getByLabelText(/Instance name/));
-    await user.click(claimButton());
+    await user.click(screen.getByRole('button', { name: 'Back' }));
+    await user.clear(await screen.findByLabelText(/Instance name/));
+    await user.click(continueButton());
 
     expect(await screen.findByText(/Give this instance a name/)).toBeInTheDocument();
-    expect(screen.getByText('Step 4 of 4')).toBeInTheDocument();
+    expect(screen.getByText('Step 4 of 5')).toBeInTheDocument();
     expect(mockClaimInstance).not.toHaveBeenCalled();
+  });
+
+  it('asks who can create an account, invite-only unless the owner chooses otherwise', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await walkToLastStep(user);
+
+    const inviteOnly = screen.getByRole('radio', { name: /People with an invite link/ });
+    const anyone = screen.getByRole('radio', { name: /Anyone who can reach this server/ });
+    expect(inviteOnly).toHaveAttribute('aria-checked', 'true');
+    expect(anyone).toHaveAttribute('aria-checked', 'false');
+
+    // One tab stop; the arrow keys move the choice.
+    inviteOnly.focus();
+    await user.keyboard('{ArrowDown}');
+    expect(anyone).toHaveAttribute('aria-checked', 'true');
+    expect(anyone).toHaveFocus();
+  });
+
+  it.each([
+    [false, 'Only reachable on your home network', /turn on “Let friends outside your home network connect”/],
+    [true, 'Reachable from the internet through your router', /asks your router/],
+  ])('says which way the server was installed (router asked: %s)', async (routerForwarding, label, detail) => {
+    const user = userEvent.setup();
+    mockGetSetupStatus.mockResolvedValue({
+      data: { setup_required: true, router_forwarding: routerForwarding, registration_mode: 'invite_only' },
+    });
+    renderPage();
+    await walkToLastStep(user);
+
+    expect(screen.getByText(label)).toBeInTheDocument();
+    expect(screen.getByText(detail)).toBeInTheDocument();
+  });
+
+  it('says nothing about the network when an older server did not report it', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await walkToLastStep(user);
+    expect(screen.queryByText(/How this server was installed/)).not.toBeInTheDocument();
+    expect(reachExplanation(undefined)).toBeNull();
   });
 });
 
@@ -451,11 +505,12 @@ describe('claimStepError', () => {
     confirmPassword: VALID_PASSWORD,
     instanceName: 'Riverside Studio',
     spaceName: 'The Lounge',
+    registrationMode: 'invite_only' as const,
   };
   const options = { requireEmail: false };
 
   it('passes a complete draft at every step', () => {
-    for (const step of ['token', 'owner', 'password', 'place'] as const) {
+    for (const step of ['token', 'owner', 'password', 'place', 'access'] as const) {
       expect(claimStepError(step, draft, options)).toBeNull();
     }
   });
@@ -550,13 +605,14 @@ describe('InstanceSetupPage, opened from the link the server printed', () => {
 
     expect(await screen.findByLabelText(/Username/)).toBeInTheDocument();
     expect(screen.queryByLabelText(/Setup code/)).not.toBeInTheDocument();
-    expect(screen.getByText('Step 1 of 3')).toBeInTheDocument();
+    expect(screen.getByText('Step 1 of 4')).toBeInTheDocument();
     expect(window.location.hash).toBe('');
 
     await passOwner(user);
     await passPassword(user);
     for (const input of await screen.findAllByRole('textbox')) await user.type(input, 'Home');
-    await user.click(claimButton());
+    await user.click(continueButton());
+    await user.click(await screen.findByRole('button', { name: 'Claim this instance' }));
     await waitFor(() =>
       expect(mockClaimInstance).toHaveBeenCalledWith(expect.objectContaining({ token: CLAIM_TOKEN })),
     );
@@ -570,7 +626,8 @@ describe('InstanceSetupPage, opened from the link the server printed', () => {
     await passPassword(user);
     const inputs = await screen.findAllByRole('textbox');
     for (const input of inputs) await user.type(input, 'Home');
-    await user.click(claimButton());
+    await user.click(continueButton());
+    await user.click(await screen.findByRole('button', { name: 'Claim this instance' }));
 
     expect(await screen.findByLabelText(/Setup code/)).toHaveValue(CLAIM_TOKEN);
     expect(screen.getByText(/not the one your server printed/)).toBeInTheDocument();

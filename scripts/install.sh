@@ -4,18 +4,29 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/Scdouglas1999/Paracord/main/scripts/install.sh | sh
 #
+# Or download it, read it, then run it:
+#
+#   curl -fsSLO https://raw.githubusercontent.com/Scdouglas1999/Paracord/main/scripts/install.sh
+#   less install.sh
+#   sh install.sh
+#
 # What it does:
 #   - detects the OS/architecture and picks the matching server archive
 #     (Linux x86_64 only — there are no prebuilt ARM/macOS server releases)
 #   - resolves the latest release tag from the GitHub API (overridable)
-#   - verifies SHA-256 when the release publishes checksums; warns loudly when
-#     it does not (releases currently ship no checksum files — see docs)
+#   - verifies the archive's SHA-256 against the release's SHA256SUMS.txt and
+#     refuses to install on a mismatch (warns loudly for an old release that
+#     published no checksums)
 #   - installs into /opt/paracord as root, or ~/.local/share/paracord otherwise
 #   - as root on a systemd host: creates a `paracord` system user and a
 #     hardened, auto-restarting systemd unit; as a regular user with a systemd
 #     user manager: a per-user unit; otherwise prints the command to run
 #   - runs `paracord-server init` to generate config/paracord.toml (fresh JWT
 #     secret, self-signed TLS defaults) and prints the URL to open
+#   - on a fresh install, asks one question: may Paracord ask your router to
+#     let friends outside your home network connect (UPnP)? The default is no,
+#     and the answer is written into the config ([network] auto_port_forward).
+#     An upgrade keeps the existing answer.
 #   - waits for the running server to mint the one-time owner setup token, turns
 #     it into a ready-to-open link (<local-url>/setup-server#claim=<TOKEN> — a
 #     fragment, so the token never reaches a server log or proxy log), opens it
@@ -34,6 +45,17 @@
 #   PARACORD_NO_BROWSER=1       never open a browser; just print the setup link
 #   PARACORD_GITHUB_REPO        owner/repo for release lookup
 #                               (default Scdouglas1999/Paracord)
+#   PARACORD_ALLOW_INTERNET=1   answer the router question "yes" without
+#                               asking (0 answers "no"); the same as the
+#                               --allow-internet / --home-network-only flags
+#
+# Flags (after `sh -s --` when piping):
+#   --allow-internet            let friends outside your home network connect
+#   --home-network-only         only people on your home network can connect
+#
+# The router question is only asked when there is a terminal to ask on. Piped
+# with no terminal, under CI, or with a flag or PARACORD_ALLOW_INTERNET, it is
+# decided without asking, and without a flag or variable the answer is no.
 #
 # POSIX sh — works under dash, bash, ash. `set -eu` everywhere; any failure
 # aborts before the install directory is left half-written.
@@ -49,9 +71,13 @@ LAUNCHD_LABEL="com.paracord.server"
 OS_FAMILY="linux"
 RUN_USER="paracord"
 DOCS_URL="https://github.com/${GITHUB_REPO}/blob/main/docs/port-forwarding.md"
+DOMAIN_DOCS_URL="https://github.com/${GITHUB_REPO}/blob/main/docs/deployment.md#a-domain-name-and-automatic-certificates"
 
 # State the ending text reads. Set before anything can print.
 IS_UPGRADE=0
+# The router question: "" until decided, then 1 (ask the router) or 0.
+ALLOW_INTERNET=""
+ALLOW_INTERNET_FLAG=""
 SERVER_STARTED=0
 # Set only when this run handed the server to a service manager that started it.
 SERVICE_MANAGED=0
@@ -93,24 +119,37 @@ usage() {
 Paracord server installer
 
 Usage:
-  sh install.sh [--help]
+  sh install.sh [--allow-internet | --home-network-only] [--help]
+
+  --allow-internet      let friends outside your home network connect: Paracord
+                        asks your router to open a port for it (UPnP)
+  --home-network-only   only people on your home network can connect (the default)
+
+On a fresh install with a terminal, the installer asks. Without a terminal (piped
+with no TTY, CI) and without a flag, the answer is home network only.
 
 Common invocations:
   curl -fsSL https://raw.githubusercontent.com/Scdouglas1999/Paracord/main/scripts/install.sh | sh
+  curl -fsSL ... | sh -s -- --allow-internet                # answer the question up front
   curl -fsSL ... | sudo sh                                  # system install to /opt/paracord
   PARACORD_VERSION=2.0.0 sh install.sh                      # pin a release
   PARACORD_LOCAL_ARCHIVE=./paracord-server-linux-x64-2.0.0.tar.gz sh install.sh
 
 Environment overrides: PARACORD_VERSION, PARACORD_RELEASE_BASE_URL,
 PARACORD_LOCAL_ARCHIVE, PARACORD_INSTALL_DIR, PARACORD_LINK_DIR,
-PARACORD_NO_SYSTEMD=1, PARACORD_NO_BROWSER=1, PARACORD_GITHUB_REPO.
+PARACORD_NO_SYSTEMD=1, PARACORD_NO_BROWSER=1, PARACORD_GITHUB_REPO,
+PARACORD_ALLOW_INTERNET=1|0.
 EOF
 }
 
-if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
-    usage
-    exit 0
-fi
+for arg in "$@"; do
+    case "$arg" in
+        --help|-h) usage; exit 0 ;;
+        --allow-internet) ALLOW_INTERNET_FLAG=1 ;;
+        --home-network-only) ALLOW_INTERNET_FLAG=0 ;;
+        *) printf '%s: error: unknown option %s (see --help)\n' "$PROG" "$arg" >&2; exit 2 ;;
+    esac
+done
 
 # ── Tool checks ──────────────────────────────────────────────────────────────
 
@@ -222,9 +261,9 @@ maybe_verify_archive() {
         expected="$(awk '{print $1}' "${archive}.sha256" | head -n 1)"
         csum_found=1
     elif [ -z "${PARACORD_LOCAL_ARCHIVE:-}" ]; then
-        # Probe the checksum filenames a release might publish. The current
-        # release workflow ships none — the first hit wins.
-        for name in "${ASSET}.sha256" "SHA256SUMS" "SHA256SUMS.txt" "checksums.txt"; do
+        # Releases from 3.2 on publish SHA256SUMS.txt. The other names cover a
+        # mirror that publishes its own. The first hit wins.
+        for name in "SHA256SUMS.txt" "${ASSET}.sha256" "SHA256SUMS" "checksums.txt"; do
             cfile="$TMP_DIR/$name"
             if fetch "${RELEASE_BASE_URL}/${TAG}/${name}" "$cfile" 2>/dev/null; then
                 if [ "$name" = "${ASSET}.sha256" ]; then
@@ -243,7 +282,7 @@ maybe_verify_archive() {
     elif [ "$csum_found" -eq 1 ]; then
         warn "a checksum file was published but has no entry for ${ASSET}; cannot verify — installing anyway"
     else
-        warn "this release does not publish SHA-256 checksums — the archive cannot be integrity-verified.
+        warn "this release publishes no SHA-256 checksums (releases before 3.2 did not) — the archive cannot be integrity-verified.
        Downloaded from the official ${GITHUB_REPO} releases over TLS; if you need
        stronger guarantees, download the archive yourself, verify it out-of-band,
        and install with PARACORD_LOCAL_ARCHIVE=<file>."
@@ -400,11 +439,118 @@ absolutize_data_paths() {
     say "Pinned data paths in $CONFIG_PATH to $DATA_DIR"
 }
 
+# set_config_bool <section> <key> <true|false> — write one boolean into the
+# config as text, keeping every other line and the file's owner and mode. An
+# existing (uncommented) line in the section is replaced; a section without the
+# key gets it at the end of the section; a config without the section gets the
+# section appended.
+set_config_bool() {
+    sect="$1"; key="$2"; val="$3"
+    tmp="$TMP_DIR/config.edit"
+    awk -v sect="$sect" -v key="$key" -v val="$val" '
+        function header_name(line,   n) {
+            n = line
+            sub(/#.*/, "", n)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", n)
+            if (n !~ /^\[[^][]+\]$/) return ""
+            n = substr(n, 2, length(n) - 2)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", n)
+            return n
+        }
+        {
+            name = header_name($0)
+            if (name != "") {
+                if (in_s && !done) { print key " = " val; done = 1 }
+                in_s = (name == sect)
+                print
+                next
+            }
+            if (in_s && !done) {
+                line = $0
+                sub(/#.*/, "", line)
+                if (line ~ ("^[[:space:]]*" key "[[:space:]]*=")) {
+                    print key " = " val
+                    done = 1
+                    next
+                }
+            }
+            print
+        }
+        END {
+            if (!done) {
+                if (!in_s) printf "\n[%s]\n", sect
+                print key " = " val
+            }
+        }' "$CONFIG_PATH" > "$tmp" || die "could not update $CONFIG_PATH"
+    # Rewrite in place rather than replace: the file keeps its owner and its
+    # owner-only mode (it holds the server's secret key).
+    cat "$tmp" > "$CONFIG_PATH" || die "could not write $CONFIG_PATH"
+    rm -f "$tmp"
+    got="$(config_value "$sect" "$key")"
+    [ "$got" = "$val" ] \
+        || die "wrote $key = $val under [$sect] in $CONFIG_PATH, but reading it back gave '$got'"
+}
+
+# The one question a fresh install asks: may Paracord ask the router to let
+# friends outside the home network connect? Deterministic without a terminal:
+# a flag or PARACORD_ALLOW_INTERNET decides, and otherwise the answer is no.
+# Only a run with a terminal to ask on actually asks.
+decide_internet_access() {
+    if [ -n "$ALLOW_INTERNET_FLAG" ]; then
+        ALLOW_INTERNET="$ALLOW_INTERNET_FLAG"
+        return 0
+    fi
+    if [ -n "${PARACORD_ALLOW_INTERNET:-}" ]; then
+        case "$PARACORD_ALLOW_INTERNET" in
+            1|yes|YES|true|TRUE|y|Y) ALLOW_INTERNET=1 ;;
+            0|no|NO|false|FALSE|n|N) ALLOW_INTERNET=0 ;;
+            *) die "PARACORD_ALLOW_INTERNET is '$PARACORD_ALLOW_INTERNET'; use 1 (yes) or 0 (no)" ;;
+        esac
+        return 0
+    fi
+    if [ -n "${CI:-}" ]; then
+        ALLOW_INTERNET=0
+        return 0
+    fi
+    # `curl ... | sh` has the script on stdin, so the question goes to the
+    # terminal itself. No terminal (a service, a container build, a pipe from
+    # another program) means nobody to ask.
+    # In a subshell: a failed redirection on a builtin ends a POSIX shell.
+    if ! ( : </dev/tty ) 2>/dev/null; then
+        ALLOW_INTERNET=0
+        return 0
+    fi
+    printf '\n%s\n%s ' \
+        "Let friends outside your home network connect? Paracord can ask your router to" \
+        "open a port for it (UPnP). [y/N]" > /dev/tty
+    answer=""
+    read -r answer < /dev/tty || answer=""
+    case "$answer" in
+        y|Y|yes|YES|Yes) ALLOW_INTERNET=1 ;;
+        *) ALLOW_INTERNET=0 ;;
+    esac
+    return 0
+}
+
+apply_internet_access() {
+    if [ "$ALLOW_INTERNET" = "1" ]; then
+        set_config_bool network auto_port_forward true
+        say "Friends outside your home network can connect: Paracord will ask your router to open a port."
+    else
+        set_config_bool network auto_port_forward false
+        say "Only people on your home network can connect. You can change this later in the app's Admin settings."
+    fi
+}
+
 run_init() {
     if [ -f "$CONFIG_PATH" ]; then
         say "Existing config preserved at $CONFIG_PATH"
+        if [ -n "$ALLOW_INTERNET_FLAG" ] || [ -n "${PARACORD_ALLOW_INTERNET:-}" ]; then
+            warn "kept the existing router setting: --allow-internet, --home-network-only and PARACORD_ALLOW_INTERNET only apply to a fresh install (change it in the app's Admin settings)"
+        fi
         return 0
     fi
+    decide_internet_access
     step "Generating configuration"
     # `init` prints its own operator-facing walkthrough. Hold it back: this
     # installer prints one short set of instructions at the end, and two
@@ -432,6 +578,7 @@ run_init() {
     [ -f "$CONFIG_PATH" ] || { cat "$init_log" >&2; die "paracord-server init did not create $CONFIG_PATH"; }
     say "Settings written to $CONFIG_PATH"
     absolutize_data_paths
+    apply_internet_access
     # sed -i above recreated the config as root; hand it back to the service user.
     [ "$(id -u)" = "0" ] && chown "$RUN_USER:$RUN_USER" "$CONFIG_PATH"
     return 0
@@ -966,6 +1113,11 @@ print_details() {
         say "  Ports:     $WEB_PORT TCP (app), $VOICE_PORT UDP (voice and video)"
     fi
     say "  Address:   $SHARE_URL"
+    if [ "$(config_value network auto_port_forward)" = "true" ]; then
+        say "  Router:    asked to forward the ports ([network] auto_port_forward = true)"
+    else
+        say "  Router:    left alone, home network only ([network] auto_port_forward = false)"
+    fi
     if [ "$(id -u)" != "0" ] && [ -z "${PARACORD_INSTALL_DIR:-}" ]; then
         say "  Installed for you only. For every account on this computer, run the"
         say "  same command with sudo."
@@ -1013,8 +1165,10 @@ print_summary() {
             say "1. Finish setting up - open this link in your browser:"
         fi
         say "     $CLAIM_LINK"
-        say "   Your browser may show a one-time security warning because the server made its own"
-        say "   certificate - choose Advanced, then Continue. (The desktop app never shows this.)"
+        say "   For friends to connect without a browser warning, give this server a domain name"
+        say "   and turn on automatic certificates: $DOMAIN_DOCS_URL"
+        say "   Just trying it out? The browser warns once about the server's own certificate:"
+        say "   choose Advanced, then Continue. (The desktop app never shows this.)"
     elif [ "$SERVER_STARTED" = "1" ]; then
         say "1. Finish setting up - open this link in your browser:"
         say "     $LOCAL_URL/setup-server"
@@ -1030,8 +1184,13 @@ print_summary() {
     fi
     say "2. Then invite friends: open your server in the app and press Invite."
     say ""
-    say "Friends outside your home network: the server tries to open the door on your"
-    say "router by itself. If someone can't connect, see $DOCS_URL"
+    if [ "$(config_value network auto_port_forward)" = "true" ]; then
+        say "Friends outside your home network: Paracord asks your router to let them in."
+        say "If someone can't connect, see $DOCS_URL"
+    else
+        say "Only people on your home network can join for now. To let friends elsewhere in,"
+        say "turn on \"Let friends outside your home network connect\" in the app's Admin settings."
+    fi
     if [ -n "$LINGER_HINT" ]; then
         say ""
         say "One thing this computer would not let the installer do: keep the server running"

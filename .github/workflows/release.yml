@@ -782,6 +782,18 @@ jobs:
           | Client (macOS, Intel) | `Paracord_*_x64.dmg` |
           | Server (macOS) | `paracord-server-macos-*.tar.gz` |
           | Signed updater manifest, when signing artifacts are configured | `latest.json` |
+          | SHA-256 checksums of every file above | `SHA256SUMS.txt` |
+
+          ### Check a download
+
+          Put `SHA256SUMS.txt` in the same folder as the file you downloaded, then:
+
+          - Linux: `sha256sum --ignore-missing -c SHA256SUMS.txt`
+          - macOS: `shasum -a 256 --ignore-missing -c SHA256SUMS.txt`
+          - Windows (PowerShell): `(Get-FileHash .\<file>).Hash` and compare it with that
+            file's line in `SHA256SUMS.txt`
+
+          The install scripts do this check themselves and refuse a file that does not match.
           DOWNLOADS
 
       - name: Verify required release artifacts
@@ -804,6 +816,56 @@ jobs:
               exit 1
             fi
           done
+
+      # Every file the release publishes is copied into one folder first, and
+      # SHA256SUMS.txt is computed over exactly that folder, so the checksums
+      # can never cover a different set of files than the release attaches.
+      - name: Gather release assets and write SHA256SUMS.txt
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          mkdir -p release-assets
+          patterns=(
+            "artifacts/server-windows/*.zip"
+            "artifacts/server-linux/*.tar.gz"
+            "artifacts/client-windows-installer/*.exe"
+            "artifacts/client-windows-msi/*.msi"
+            "artifacts/client-windows-msi/*.msi.sig"
+            "artifacts/client-linux-appimage/*.AppImage"
+            "artifacts/client-linux-appimage/*.AppImage.sig"
+            "artifacts/client-linux-deb/*.deb"
+            "artifacts/client-linux-deb/*.deb.sig"
+            "artifacts/client-linux-rpm/*.rpm"
+            "artifacts/client-linux-rpm/*.rpm.sig"
+            "artifacts/server-macos-arm64/*.tar.gz"
+            "artifacts/server-macos-x64/*.tar.gz"
+            "artifacts/client-macos-aarch64/dmg/*.dmg"
+            "artifacts/client-macos-aarch64/macos/*.app.tar.gz"
+            "artifacts/client-macos-aarch64/macos/*.app.tar.gz.sig"
+            "artifacts/client-macos-x86_64/dmg/*.dmg"
+            "artifacts/client-macos-x86_64/macos/*.app.tar.gz"
+            "artifacts/client-macos-x86_64/macos/*.app.tar.gz.sig"
+            "artifacts/latest.json"
+          )
+          for pattern in "${patterns[@]}"; do
+            for file in $pattern; do
+              name="$(basename "$file")"
+              # Release assets are flat: two files with one name would publish
+              # only one of them, and the checksum list would lie about which.
+              if [ -e "release-assets/$name" ]; then
+                echo "Two release files are both named $name" >&2
+                exit 1
+              fi
+              cp "$file" "release-assets/$name"
+            done
+          done
+          cd release-assets
+          # Bare file names, one per line, in the format `sha256sum -c` reads.
+          sha256sum -- * > ../SHA256SUMS.txt
+          mv ../SHA256SUMS.txt SHA256SUMS.txt
+          sha256sum -c SHA256SUMS.txt
+          cat SHA256SUMS.txt
 
       - name: Delete existing release assets
         shell: bash
@@ -828,25 +890,8 @@ jobs:
           # hand from the GitHub Releases page.
           draft: true
           body_path: artifacts/body.md
-          fail_on_unmatched_files: false
+          # Everything, including SHA256SUMS.txt, was gathered by the step
+          # above; the checksums cover exactly this set.
+          fail_on_unmatched_files: true
           files: |
-            artifacts/server-windows/*.zip
-            artifacts/server-linux/*.tar.gz
-            artifacts/client-windows-installer/*.exe
-            artifacts/client-windows-msi/*.msi
-            artifacts/client-windows-msi/*.msi.sig
-            artifacts/client-linux-appimage/*.AppImage
-            artifacts/client-linux-appimage/*.AppImage.sig
-            artifacts/client-linux-deb/*.deb
-            artifacts/client-linux-deb/*.deb.sig
-            artifacts/client-linux-rpm/*.rpm
-            artifacts/client-linux-rpm/*.rpm.sig
-            artifacts/server-macos-arm64/*.tar.gz
-            artifacts/server-macos-x64/*.tar.gz
-            artifacts/client-macos-aarch64/dmg/*.dmg
-            artifacts/client-macos-aarch64/macos/*.app.tar.gz
-            artifacts/client-macos-aarch64/macos/*.app.tar.gz.sig
-            artifacts/client-macos-x86_64/dmg/*.dmg
-            artifacts/client-macos-x86_64/macos/*.app.tar.gz
-            artifacts/client-macos-x86_64/macos/*.app.tar.gz.sig
-            artifacts/latest.json
+            release-assets/*

@@ -74,6 +74,8 @@ export interface HealthReport {
     tls_enabled: boolean;
     tls_self_signed: boolean;
     registration_open: boolean;
+    /** Who can create an account right now. Absent on servers before 3.2. */
+    registration?: 'open' | 'invite_only' | 'closed';
     federation_enabled: boolean;
   };
   media: { native_enabled: boolean; native_port: number; livekit_available: boolean };
@@ -85,6 +87,23 @@ export interface HealthReport {
     online_users: number;
   };
   checks: HealthCheck[];
+}
+
+/**
+ * Whether this server asks the home router to let people outside the network
+ * in (`[network] auto_port_forward`). The router is asked at startup, so a
+ * change applies after a restart.
+ */
+export interface RouterAccess {
+  /** What the running server did. */
+  running: boolean;
+  /** What it will do after the next restart. */
+  saved: boolean;
+  restart_required: boolean;
+  /** Set when an environment variable decides this and the page cannot. */
+  locked_by?: string;
+  /** The server only listens on this computer, so there is nothing to forward. */
+  loopback_bind: boolean;
 }
 
 export const adminApi = {
@@ -103,6 +122,11 @@ export const adminApi = {
 
   updateSettings: async (data: Record<string, string>) =>
     getApi().patch<Record<string, string>>('/admin/settings', data),
+
+  getRouterAccess: async () => getApi().get<RouterAccess>('/admin/network'),
+
+  updateRouterAccess: async (autoPortForward: boolean) =>
+    getApi().patch<RouterAccess>('/admin/network', { auto_port_forward: autoPortForward }),
 
   getUsers: async (params?: { cursor?: number; offset?: number; limit?: number }) =>
     getApi().get<{
