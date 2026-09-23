@@ -150,7 +150,14 @@ export function ImageLightbox() {
       aria-label="Image viewer"
       tabIndex={-1}
       style={{
-        backgroundColor: 'var(--overlay-backdrop)',
+        // The modal scrim, laid three times: a picture needs the page behind
+        // it gone, not dimmed. One layer is 40-45% in the light themes, which
+        // left the page (and its text) reading straight through the viewer.
+        background: [
+          'linear-gradient(var(--overlay-backdrop), var(--overlay-backdrop))',
+          'linear-gradient(var(--overlay-backdrop), var(--overlay-backdrop))',
+          'var(--overlay-backdrop)',
+        ].join(', '),
       }}
       onClick={handleBackdropClick}
       {...scenery}
