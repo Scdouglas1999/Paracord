@@ -243,7 +243,7 @@ export function BannerEditor({
               <input
                 type="color"
                 className="h-7 w-10 cursor-pointer rounded-[var(--radius-chip)] border-0 bg-transparent p-0"
-                aria-label="Accent colour"
+                aria-label="Accent color"
                 value={accent ?? accentCssColor(0x5c6b7a) ?? ''}
                 onChange={(event) => {
                   const next = Number.parseInt(event.target.value.slice(1), 16);

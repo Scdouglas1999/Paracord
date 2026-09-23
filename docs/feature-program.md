@@ -47,11 +47,11 @@ Migration prefixes are reserved per workstream so branches merge cleanly:
 
 ## Log
 
-- 2026-09-22 (evening): wave 1 and the server home are merged into `feat/program` with the Slate default and plain words. The full gate is green: fmt, clippy, every workspace test, 2,993 client tests, tsc, the colour lint and the contrast audit. `main` is untouched until the Sports session commits.
+- 2026-09-22 (evening): wave 1 and the server home are merged into `feat/program` with the Slate default and plain words. The full gate is green: fmt, clippy, every workspace test, 2,993 client tests, tsc, the color lint and the contrast audit. `main` is untouched until the Sports session commits.
 
 - 2026-09-22: branches merge into an integration branch first, not straight into `main`. `main` has another session's uncommitted Sports work in files these branches also touch (`paracord-api/src/lib.rs`, `routes/mod.rs`).
 
-- 2026-09-22: the default look is now **Slate** (cool charcoal, author-coloured bubbles, amber) instead of the purple "voices" look, which read as AI-generated. The purple look stays as "Aubergine". Stored `voices` settings migrate to `slate`. Comparison: https://claude.ai/artifact/DVLoZVSoyuJN23tAso36Ne
+- 2026-09-22: the default look is now **Slate** (cool charcoal, author-colored bubbles, amber) instead of the purple "voices" look, which read as AI-generated. The purple look stays as "Aubergine". Stored `voices` settings migrate to `slate`. Comparison: https://claude.ai/artifact/DVLoZVSoyuJN23tAso36Ne
 
 - 2026-09-22: server home direction chosen: A with B's widgets (mock-ups https://claude.ai/artifact/L3DeqnGyQQGAo6rqtz5T3h).
 - 2026-09-22: program agreed. Wave 1 (1a, 1b, 1c) started in worktrees.

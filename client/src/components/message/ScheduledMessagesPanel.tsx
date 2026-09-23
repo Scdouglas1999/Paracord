@@ -32,7 +32,7 @@ function statusLabel(status: number): string {
     case STATUS_SENT:
       return 'Sent';
     case STATUS_CANCELLED:
-      return 'Cancelled';
+      return 'Canceled';
     case STATUS_FAILED:
       return 'Failed';
     default:
@@ -159,7 +159,7 @@ export function ScheduledMessagesPanel({
         return next;
       });
       if (editingId === item.id) cancelEdit();
-      toast.success('Scheduled message cancelled.');
+      toast.success('Scheduled message canceled.');
     } catch (err) {
       toast.error(`Failed to cancel scheduled message: ${extractApiError(err)}`);
     } finally {

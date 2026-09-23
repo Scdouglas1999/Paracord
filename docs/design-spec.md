@@ -3,7 +3,7 @@
 **The visual contract is [`docs/lantern-stage-spec.md`](lantern-stage-spec.md)
 ("Lantern Stage").** This file used to hold "Emerald Commons", the v1 system:
 a warm-neutral green-black ramp, a single emerald spent on meaning, Fraunces
-headings, glass rails, and status-coloured presence dots. Every one of those
+headings, glass rails, and status-colored presence dots. Every one of those
 decisions was replaced by the v2 overhaul (WP0–WP8 on `design/lantern-stage`),
 so its recipes would now mislead anyone who followed them. It is kept as this
 pointer rather than deleted because other documents, checkpoints and commit

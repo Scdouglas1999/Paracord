@@ -2,7 +2,7 @@
 
 Target: **v3.0.1**, released as **v3.1.0** on 2026-09-20. The 3.0.1 candidate was never published; its work shipped in 3.1.0 together with the new looks.
 
-**What was run on the 3.1.0 sources (2026-09-20, Linux):** `cargo fmt --check` and `cargo clippy --workspace -D warnings` clean; `cargo test --workspace --no-fail-fast` 1,732 passed, 0 failed, 4 ignored across 102 suites (SQLite); client `tsc` clean, 2,839 unit tests in 291 files, contrast, literal-colour and static accessibility audits; 92 mocked Playwright cases; 16 real-server Playwright cases against the release binary; `client/scripts/live-drive.mjs` 25/25 against a live instance of the release binary. PostgreSQL, Windows and macOS were left to CI.
+**What was run on the 3.1.0 sources (2026-09-20, Linux):** `cargo fmt --check` and `cargo clippy --workspace -D warnings` clean; `cargo test --workspace --no-fail-fast` 1,732 passed, 0 failed, 4 ignored across 102 suites (SQLite); client `tsc` clean, 2,839 unit tests in 291 files, contrast, literal-color and static accessibility audits; 92 mocked Playwright cases; 16 real-server Playwright cases against the release binary; `client/scripts/live-drive.mjs` 25/25 against a live instance of the release binary. PostgreSQL, Windows and macOS were left to CI.
 
 **Not repeated for 3.1.0:** the open items under "Release gates still open" below (three-instance federation, bot gateway runtime, native screen portal end to end, Windows/systemd installer branches). The table that follows records the state on 2026-09-19 and has not been re-run line by line.
 

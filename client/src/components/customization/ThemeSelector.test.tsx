@@ -54,7 +54,7 @@ describe('ThemeSelector', () => {
     // spec §6.8: a section label is never uppercased.
     expect(heading.className).not.toContain('uppercase');
     expect(
-      screen.getByText('A look is a whole palette. It brings its own accent and ground colours.'),
+      screen.getByText('A look is a whole palette. It brings its own accent and ground colors.'),
     ).toBeInTheDocument();
   });
 
@@ -86,7 +86,7 @@ describe('ThemeSelector', () => {
     expect(hearth()).toBeEnabled();
     expect(swatch()).toBeEnabled();
     expect(hueSlider()).toBeEnabled();
-    expect(screen.queryByText(/brings its own colours/)).toBeNull();
+    expect(screen.queryByText(/brings its own colors/)).toBeNull();
   });
 
   it('disables the base colour and the accent for a look, and says which look', () => {
@@ -101,7 +101,7 @@ describe('ThemeSelector', () => {
     // Named for the look that is in charge, and shown twice: once under each
     // control it explains. Disabled, never hidden.
     const notes = screen.getAllByText(
-      'Dusk sky brings its own colours. Pick Night, Daylight, AMOLED or High contrast to change these.',
+      'Dusk sky brings its own colors. Pick Night, Daylight, AMOLED or High contrast to change these.',
     );
     expect(notes).toHaveLength(2);
     expect(screen.getByRole('heading', { name: 'Base color' })).toBeInTheDocument();
@@ -111,7 +111,7 @@ describe('ThemeSelector', () => {
   it('names the note after whichever look is active', () => {
     render(<ThemeSelector currentTheme="paper" />);
 
-    expect(screen.getAllByText(/^Paper & ink brings its own colours\./)).toHaveLength(2);
+    expect(screen.getAllByText(/^Paper & ink brings its own colors\./)).toHaveLength(2);
   });
 
   it('does not change the base colour while a look is active', () => {
@@ -133,6 +133,6 @@ describe('ThemeSelector', () => {
 
     expect(hearth()).toBeEnabled();
     expect(swatch()).toBeEnabled();
-    expect(screen.queryByText(/brings its own colours/)).toBeNull();
+    expect(screen.queryByText(/brings its own colors/)).toBeNull();
   });
 });

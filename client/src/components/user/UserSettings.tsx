@@ -1070,7 +1070,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                     accentColor={accentColor}
                     outputWidth={1500}
                     outputHeight={500}
-                    hint="Shown at the top of your profile card. The banner saves right away as a 1500 by 500 image, up to 8 MB; the accent colour saves with the rest of your profile."
+                    hint="Shown at the top of your profile card. The banner saves right away as a 1500 by 500 image, up to 8 MB; the accent color saves with the rest of your profile."
                     onAccentChange={setAccentColor}
                     onUpload={async (file) => {
                       const { data } = await authApi.uploadBanner(file);

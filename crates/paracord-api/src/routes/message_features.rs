@@ -391,7 +391,7 @@ pub async fn delete_scheduled_message(
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     if cancelled.is_none() {
         return Err(ApiError::Conflict(
-            "Scheduled message can no longer be cancelled".into(),
+            "Scheduled message can no longer be canceled".into(),
         ));
     }
     Ok(StatusCode::NO_CONTENT)

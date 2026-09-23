@@ -40,19 +40,19 @@ const LOOK_OPTIONS: ThemeOption[] = [
   {
     id: 'paper',
     label: 'Paper & ink',
-    hint: 'Cream stock, ink, and three spot colours',
+    hint: 'Cream stock, ink, and three spot colors',
     icon: <Newspaper size={16} />,
   },
   {
     id: 'slate',
     label: 'Slate',
-    hint: 'The default: cool charcoal, every message in its author’s colour',
+    hint: 'The default: cool charcoal, every message in its author’s color',
     icon: <MessagesSquare size={16} />,
   },
   {
     id: 'voices',
     label: 'Aubergine',
-    hint: 'A plum ground, every message in its author’s colour',
+    hint: 'A plum ground, every message in its author’s color',
     icon: <MessagesSquare size={16} />,
   },
 ];
@@ -242,7 +242,7 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
   // screen and say why — a control that vanishes reads as a bug.
   const isLook = LOOK_THEMES.has(theme);
   const activeLook = LOOK_OPTIONS.find((option) => option.id === theme);
-  const lockNote = `${activeLook?.label ?? 'This look'} brings its own colours. Pick Night, Daylight, AMOLED or High contrast to change these.`;
+  const lockNote = `${activeLook?.label ?? 'This look'} brings its own colors. Pick Night, Daylight, AMOLED or High contrast to change these.`;
 
   // A preset with no tint is chosen by its tint alone: at chroma 0 the hue
   // stops meaning anything, so an Ash at 245 degrees is still Ash.
@@ -273,7 +273,7 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
             Looks
           </h4>
           <p className="mb-3 mt-0.5 max-w-prose text-meta leading-relaxed text-text-faint">
-            A look is a whole palette. It brings its own accent and ground colours.
+            A look is a whole palette. It brings its own accent and ground colors.
           </p>
           <div className="grid gap-3 sm:grid-cols-2">
             {LOOK_OPTIONS.map((option) => (
@@ -377,7 +377,7 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
           </div>
         </div>
         <p id={`${hueSliderId}-hint`} className="mt-3 max-w-prose text-meta leading-relaxed text-text-faint">
-          The base color is every surface, hairline, wash and grey the app paints — nothing else
+          The base color is every surface, hairline, wash and gray the app paints — nothing else
           moves with it. The glow that shows who is in a channel, the emerald that means an action
           you can take, warnings and danger, and the color a person or a server wears all stay
           exactly where they are. Every setting keeps the same contrast, because only the hue
@@ -434,7 +434,7 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
         </p>
         <p className="mt-1 max-w-prose text-meta leading-relaxed text-text-faint">
           The accent drives primary buttons, active navigation, mentions and focus rings. The
-          light that shows who is in a channel never changes colour.
+          glow that shows who is in a channel never changes color.
         </p>
       </section>
 

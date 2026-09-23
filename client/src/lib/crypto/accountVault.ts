@@ -270,7 +270,7 @@ export class AccountVault {
       this.controller.signal.addEventListener('abort', cancel, { once: true });
       const cleanup = () => this.controller.signal.removeEventListener('abort', cancel);
       tx.oncomplete = () => { cleanup(); resolve(); };
-      tx.onabort = () => { cleanup(); reject(tx.error ?? new Error('Encrypted storage commit was cancelled.')); };
+      tx.onabort = () => { cleanup(); reject(tx.error ?? new Error('Encrypted storage commit was canceled.')); };
       tx.onerror = () => { /* The default error handler aborts the entire transaction. */ };
       try {
         for (const write of writes) {

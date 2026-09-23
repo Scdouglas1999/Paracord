@@ -856,7 +856,7 @@ function UserProfileCard({
               <button
                 className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-chip border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-150 hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[.97] ${FOCUS_RING}`}
                 aria-label={`Cancel friend request to ${user.username}`}
-                onClick={() => void handleRemoveRelationship(`Cancelled friend request to ${user.username}.`)}
+                onClick={() => void handleRemoveRelationship(`Canceled friend request to ${user.username}.`)}
               >
                 <UserX size={16} />
                 Cancel request

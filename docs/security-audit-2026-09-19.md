@@ -104,7 +104,7 @@ The three soundness warnings are `glib 0.18.5` (GTK/Tauri's `VariantStrIter`), `
 | Check | Result |
 | --- | --- |
 | Rust workspace `cargo test --workspace -j 2` | 1,675 passed, zero failed across 98 test/doc-test suites; 4 environment-dependent tests ignored (3 GPU, 1 system-audio capture). Final invite-redemption and mechanical iterator edits are verified separately below. |
-| Client `npm test` | 284 test files, 2,749 tests passed; TypeScript and literal-colour checks passed. |
+| Client `npm test` | 284 test files, 2,749 tests passed; TypeScript and literal-color checks passed. |
 | Chromium encrypted storage, durable DM, and prekey enrollment | 29 Playwright tests passed using actual browser cryptography/persistence and controlled API fixtures. |
 | General/security API suites on PostgreSQL 16 | 35 passed: route smoke 2, realtime/SSE 13, attachment encryption 1, federation deep regressions 16, webhook delivery 3. |
 | Federation API suites on SQLite | 51 passed: availability 7, deep regressions 16, regressions 25, scope 3; none ignored. |

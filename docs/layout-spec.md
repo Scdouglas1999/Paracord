@@ -362,7 +362,7 @@ collapse; expanded width = `sidebarWidth` (user-resizable within `--sidebar-min`
 >
 > Tokens only, no hard-coded hex. The kill-list that applies is
 > lantern-stage-spec §6: no glow without a source, no gradient wash, light
-> tokens never spent on emphasis, no docked member list, no status-colour dots,
+> tokens never spent on emphasis, no docked member list, no status-color dots,
 > no uppercase section labels, no identical-card tiling.
 
 ### 7.1 The Lobby — a server seen from the street (`components/rooms/lobby/`)
@@ -426,7 +426,7 @@ their pools before selecting direct attention and recent conversations.
 
 `TopBar` is the channel header: window dot, `ChannelSwitcher`, the server as
 breadcrumb with the topic, the here-now strip, and `ConversationHeaderActions`
-(search, pins, threads, one labelled overflow). `messageLight.ts` drives the
+(search, pins, threads, one labeled overflow). `messageLight.ts` drives the
 inline channel events ("Shop floor lit up · …"); `TimelineParts` draws the timeline.
 A DM is the same plate (lantern-stage-spec §7.6); the header strip carries the
 peer's light and the encryption state as a plain label.
@@ -450,7 +450,7 @@ menu rather than a hover-only control.
 
 On narrow screens the header keeps only the local high-frequency actions visible.
 Summary, pins, threads, follows, economy, settings, Inbox and help move into one
-labelled overflow menu; they remain keyboard-accessible without crowding the channel
+labeled overflow menu; they remain keyboard-accessible without crowding the channel
 name.
 
 ---

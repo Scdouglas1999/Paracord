@@ -168,8 +168,8 @@ people made, not a list of empty channels.
 
 | | |
 | :--- | :--- |
-| ![A photos channel. Each message sits in a bubble tinted with its author's colour, with a campfire photo and a desk setup.](docs/images/readme/hero.jpg) | ![Home: a greeting, who is around, your three servers with who is in voice, and the conversations you were last in.](docs/images/readme/home.jpg) |
-| Every message wears its author's colour. | Home: who's around, your servers, and where you left off. |
+| ![A photos channel. Each message sits in a bubble tinted with its author's color, with a campfire photo and a desk setup.](docs/images/readme/hero.jpg) | ![Home: a greeting, who is around, your three servers with who is in voice, and the conversations you were last in.](docs/images/readme/home.jpg) |
+| Every message wears its author's color. | Home: who's around, your servers, and where you left off. |
 | ![A voice call with five people. One tile is outlined because that person is talking, and the call's own chat runs down the side.](docs/images/readme/call.jpg) | ![The Sports page for a live baseball game: the score by inning, win probability, the batter and pitcher, and the field with runners on base.](docs/images/readme/sports.jpg) |
 | Voice channels with video, screen sharing and a chat of their own. | Sports: follow a game together, live. |
 
@@ -239,10 +239,10 @@ switch to flip, so read [Federation Protocol](docs/federation-protocol.md) first
 
 ### Looks and themes
 
-**Slate** is the default: a cool charcoal where every message sits in its author's colour.
+**Slate** is the default: a cool charcoal where every message sits in its author's color.
 Settings → Appearance switches instantly between it and the other looks: **Dusk sky** (a
 sunset behind dark glass), **Paper & ink** (a light, printed look) and **Aubergine**, plus
-four themes whose base colour and accent you can set to any hue without the text becoming
+four themes whose base color and accent you can set to any hue without the text becoming
 unreadable (Night, Daylight, AMOLED and High contrast).
 
 The same channel in three of them:
@@ -258,7 +258,7 @@ Things that will come up, in rough order of how likely you are to hit them. The 
 lives in [known limitations](docs/known-limitations.md) and in the release notes.
 
 - The browser shows a certificate warning the first time anyone visits, because a new
-  server makes its own certificate and browsers do not recognise it. Choose Advanced, then
+  server makes its own certificate and browsers do not recognize it. Choose Advanced, then
   Continue; it happens once per browser. The desktop app trusts the server's certificate by
   itself and never asks. Pointing a domain name at the server and turning on automatic
   certificates (`[tls.acme]`) gets rid of the warning for good.
@@ -430,7 +430,7 @@ cannot read the relocation sections a modern linker emits.
 | [Backup Recovery](docs/backup-recovery.md) | restoring an archive, and what it can't restore |
 | [Release Notes](RELEASE_NOTES.md) | what changed in each release |
 
-## Licence and contributing
+## License and contributing
 
 Paracord is source-available rather than open source, under the [Paracord Source-Available
 License](LICENSE). You can run it for anything, including a business. You can read the

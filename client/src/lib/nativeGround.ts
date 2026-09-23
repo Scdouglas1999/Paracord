@@ -88,13 +88,13 @@ const isSentinel = (pixel: Pixel) => SENTINEL_PIXEL.every((channel, i) => pixel[
  */
 export function readCssColor(color: string, doc: Document = document): GroundReading {
   const computed = color.trim();
-  if (computed === '') return { hex: null, computed, why: 'the renderer computed no colour at all' };
+  if (computed === '') return { hex: null, computed, why: 'the renderer computed no color at all' };
 
   const canvas = doc.createElement('canvas');
   canvas.width = 1;
   canvas.height = 1;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) return { hex: null, computed, why: 'this engine has no 2d canvas to resolve a colour with' };
+  if (!ctx) return { hex: null, computed, why: 'this engine has no 2d canvas to resolve a color with' };
 
   const proof = paintAndRead(ctx, SENTINEL);
   if (!proof || !isSentinel(proof)) {
@@ -109,7 +109,7 @@ export function readCssColor(color: string, doc: Document = document): GroundRea
   if (!painted) return { hex: null, computed, why: 'the painted pixel could not be read back' };
   if (painted[3] === 0) return { hex: null, computed, why: 'it painted nothing at all — the ground is transparent' };
   if (isSentinel(painted) && computed.toLowerCase() !== SENTINEL) {
-    return { hex: null, computed, why: 'the engine refused the colour and left the sentinel standing' };
+    return { hex: null, computed, why: 'the engine refused the color and left the sentinel standing' };
   }
   return { hex: `#${hex2(painted[0])}${hex2(painted[1])}${hex2(painted[2])}`, computed, why: '' };
 }
@@ -241,6 +241,6 @@ export async function reportGroundColor(invoke?: GroundInvoke): Promise<void> {
       theme: document.documentElement.getAttribute('data-theme'),
     });
   } catch (err) {
-    logVoiceDiagnostic(`[native-render] the shell refused the ground colour ${reading.hex}`, { err: String(err) });
+    logVoiceDiagnostic(`[native-render] the shell refused the ground color ${reading.hex}`, { err: String(err) });
   }
 }

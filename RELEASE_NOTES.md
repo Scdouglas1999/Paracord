@@ -28,11 +28,11 @@ Search used to cover one channel. It now covers every channel you can read in a 
 - **See who reacted.** Hover a reaction (or long-press on a phone) to see who's behind it.
 - **Remind me.** Right-click a message and pick 20 minutes, an hour, tomorrow morning, next week or your own time. You get a notification when it's due, and the Inbox has a new Reminders tab.
 - **Forward.** Send a message to up to five channels or conversations at once, with a note. The copy links back to the original for anyone who can see it. Moving text out of an encrypted conversation into a server channel asks first, and files from an encrypted conversation can't be forwarded.
-- **Role mentions.** Typing `@` suggests roles as well as people, a role mention shows as a coloured chip, and it notifies the people who have that role.
+- **Role mentions.** Typing `@` suggests roles as well as people, a role mention shows as a colored chip, and it notifies the people who have that role.
 
 ## Profiles, banners and stickers
 
-- You can upload a profile banner (with a crop step) and pick an accent colour. Servers can have a banner too, which shows on the front page.
+- You can upload a profile banner (with a crop step) and pick an accent color. Servers can have a banner too, which shows on the front page.
 - Server settings has a Stickers section for uploading, renaming, tagging and removing stickers.
 - A Media panel in every channel, and one for the whole server, collects photos and videos by month, plus files and links. Photos open in the viewer, and you can step through them with the arrow keys.
 
@@ -49,7 +49,7 @@ Full guide: [docs/sports.md](docs/sports.md).
 
 ## A new look by default
 
-- **Slate** is the new default: a cool charcoal with each message in its author's colour. The old aubergine default is still in Settings → Appearance as **Aubergine**. If you never picked a theme, you'll now see Slate; if you did, you keep your choice.
+- **Slate** is the new default: a cool charcoal with each message in its author's color. The old aubergine default is still in Settings → Appearance as **Aubergine**. If you never picked a theme, you'll now see Slate; if you did, you keep your choice.
 - Presence is described in plain words: "online", "here", "in voice", "Nobody in voice", where it used to say things like "lights on" or "reading".
 - Paracord has a logo: a lantern on a paracord handle. It's the app icon on every system, it shows while the app starts, and it's on the sign-in screens.
 
@@ -91,7 +91,7 @@ Run the install command again, or download the new installers below. Your data a
 A small follow-up to 3.1.0. These were all found while taking the new screenshots for the README, by using the app the way a newcomer would.
 
 - On a phone, the message box's hint text was cut off mid-phrase ("Say something to the 1"). It now uses a shorter hint that fits.
-- In Paper & ink, the mention count in the sidebar was a dark red number on the blue sidebar and nearly impossible to read. The sidebar now has its own readable colours for counts and warnings.
+- In Paper & ink, the mention count in the sidebar was a dark red number on the blue sidebar and nearly impossible to read. The sidebar now has its own readable colors for counts and warnings.
 - A channel's "last message" line on a server's front page showed a number like `<@3604144…>` when the message started with an @mention. It shows the person's name now. The same fix applies to Home's conversation previews and to desktop notifications.
 - Replying to a message that starts with a code block showed the raw ``` markers in the little quote above your reply. It shows the code itself now.
 - A new server was created with a text channel called "general" and a voice channel called "General", which looked like a mistake sitting next to each other. The voice channel is now called "Lounge". Existing servers aren't touched, and you can rename it like any other channel.
@@ -110,17 +110,17 @@ Compare: [v2.0.0...v3.1.0](https://github.com/Scdouglas1999/Paracord/compare/v2.
 
 ## Three new looks
 
-The dark theme was too grey. Most of the screen was the same near-black with small grey text, and the only colour came from people being online, so a quiet server looked dead.
+The dark theme was too gray. Most of the screen was the same near-black with small gray text, and the only color came from people being online, so a quiet server looked dead.
 
-- The default dark theme now has real colour: the sidebar side is a deep blue, the panels you read in are warm, and empty channels no longer show up as black holes.
+- The default dark theme now has real color: the sidebar side is a deep blue, the panels you read in are warm, and empty channels no longer show up as black holes.
 - **Voices is the new default** for fresh installs and for accounts that never picked a theme. If you chose a theme before, you keep it.
 - Settings → Appearance has three new options under the existing themes. They switch instantly.
   - **Dusk sky** puts a sunset behind the whole app, with dark glass panels over it.
   - **Paper & ink** is a light look: cream paper, dark ink, a solid blue sidebar and hard printed-style shadows.
-  - **Voices** puts every message in a bubble tinted with its author's colour. Yours sit on the right.
-- Each of the three brings its own colours, so the accent and base colour pickers are switched off while one is on. Pick Night, Daylight, AMOLED or High contrast to get them back.
-- You can pick the base colour of the four regular themes (a few presets or any hue), and it changes as you drag. Text stays readable whatever you pick.
-- Names in chat are written in each person's own colour, and the Friends list uses the same colours instead of green for everyone.
+  - **Voices** puts every message in a bubble tinted with its author's color. Yours sit on the right.
+- Each of the three brings its own colors, so the accent and base color pickers are switched off while one is on. Pick Night, Daylight, AMOLED or High contrast to get them back.
+- You can pick the base color of the four regular themes (a few presets or any hue), and it changes as you drag. Text stays readable whatever you pick.
+- Names in chat are written in each person's own color, and the Friends list uses the same colors instead of green for everyone.
 
 ## Installing and joining are much simpler
 
@@ -158,7 +158,7 @@ Home now leads with people and conversations: who's around, your servers, and th
 - If you already answered the system's screen-share picker, the app doesn't ask you for permission again.
 - Screen shares could fail to start ("did not start capturing within 3s") on machines where the video encoder takes a few seconds to warm up, and after one failure every retry in the same call failed too. Both fixed.
 - Turning the camera on with no camera connected made the app appear to hang. It now says there's no camera straight away.
-- **Linux with NVIDIA's driver:** the app opened a black window and crashed when you clicked anything. It now turns off WebKit's GPU compositing on those machines and renders normally. Video never went through that path, so it's unaffected. Set `PARACORD_WEBKIT_ACCELERATION=ondemand` to get the old behaviour back if your driver copes.
+- **Linux with NVIDIA's driver:** the app opened a black window and crashed when you clicked anything. It now turns off WebKit's GPU compositing on those machines and renders normally. Video never went through that path, so it's unaffected. Set `PARACORD_WEBKIT_ACCELERATION=ondemand` to get the old behavior back if your driver copes.
 
 ## Other fixes
 
@@ -213,7 +213,7 @@ We went through the server and clients looking for ways to get around permission
 
 ## How this was tested
 
-- The server's own tests (1,732 of them) and the client's (2,839) pass. So do the colour-contrast check across all seven themes, the accessibility check, and 92 browser tests against a mocked server.
+- The server's own tests (1,732 of them) and the client's (2,839) pass. So do the color-contrast check across all seven themes, the accessibility check, and 92 browser tests against a mocked server.
 - 16 browser tests ran against the real server binary, including two people in a call who hear and see each other, a backup being restored under connected clients, and claiming a brand-new instance.
 - Three real accounts were driven through one live instance of this build: making a server, joining by invite, chatting live, an encrypted DM, an encrypted group DM, removing someone from the group and checking they can no longer read it, edits, reactions and deletes. All 25 steps passed. The new owner and newcomer paths were each walked in a real browser against this build: from the link the server prints to a working invite, and from that invite to a new member's first message screen.
 - Windows and macOS builds are compiled and packaged by the release pipeline. They weren't run by hand on those systems before this was written; the macOS builds in particular are new.
@@ -269,7 +269,7 @@ The wording has been made consistent throughout, and it is Discord's: a communit
 - Channels can be created inside categories. That was broken.
 - Admin actions are reachable on phones.
 - Scheduled events with invalid dates are rejected instead of silently disappearing from the calendar.
-- Various inputs that accepted anything (reactions, channel types, role colours, scheduled send times, permission bits) are now checked.
+- Various inputs that accepted anything (reactions, channel types, role colors, scheduled send times, permission bits) are now checked.
 
 ## Installing and running an instance
 

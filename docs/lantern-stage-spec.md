@@ -18,7 +18,7 @@ lit when someone is in the channel — **white light** for a voice channel with
 people talking, **amber light** for a text channel with people reading — and
 dark when it is empty. People who have the app open have their **lights on**:
 their avatar carries a rim of warm light; away or offline avatars are matte. The
-centre of the app is **the channel**: when you are in a call you are on the
+center of the app is **the channel**: when you are in a call you are on the
 **Stage** (screen share, cameras, speakers), and text chat is a ribbon beside it;
 when you are not, you are in the **Lobby**, looking at the server from the
 street. There is no docked member list anywhere — the people who are here *now*
@@ -52,15 +52,15 @@ preserved in every theme by remapping, not removed.
 
 ### 1.0 The base hue — one number the whole neutral ramp turns on
 
-Every ground, well, hairline, wash, scrim and grey ink is written
+Every ground, well, hairline, wash, scrim and gray ink is written
 `oklch(L C var(--ui-hue))`. **L and C are the ramp** — fixed per token, per
 theme — and **only H moves**, under the reader's control in Settings ›
 Appearance (`--ui-hue` in degrees, `--ui-chroma` 0–1 for how much of it).
 
-This is what makes the base colour safe to hand to a person. Relative luminance
+This is what makes the base color safe to hand to a person. Relative luminance
 is carried almost entirely by L at these chromas, so holding L and C and varying
 H leaves every contrast pair where the ramp put it: the interface cannot be made
-illegible by a colour choice, at any setting. `npm run test:contrast` proves it
+illegible by a color choice, at any setting. `npm run test:contrast` proves it
 rather than asserting it — the whole circle every 30°, at full tint and none,
 across all four themes, plus an sRGB gamut check on every token.
 
@@ -71,7 +71,7 @@ What does **not** follow the hue, and why:
 - the semantic accents (§1.3) and the identity palette. They carry meaning, and
   a meaning that drifts is not one.
 - a plate's warm 1px top highlight — it is the lamp above the plate, so it stays
-  the colour of the light rather than the colour of the wall.
+  the color of the light rather than the color of the wall.
 
 Where an accent sits *on* the ground — a selection wash, a hover wash — it **is**
 written in the base hue. That is what keeps the chrome of one piece.
@@ -81,9 +81,9 @@ per device like the theme, applied live by `useTheme`; no relaunch.
 
 **Two temperatures (2026-09-20).** The street is not the room. `--bg-base`, the
 scrim and an unlit window take `--ui-hue-street` (268, dusk blue) instead of
-`--ui-hue`: outside is the night sky, inside is lamp-warm, and the colour of the
+`--ui-hue`: outside is the night sky, inside is lamp-warm, and the color of the
 app is the difference between the two. The first ramp ran every ground at
-chroma .007–.012 in one hue, which measures as warm and reads as grey — on a
+chroma .007–.012 in one hue, which measures as warm and reads as gray — on a
 quiet instance, where no window is lit, the whole app was monochrome. The
 reader still paints the walls (`--ui-hue`); the sky stays the sky. The street
 takes `--ui-chroma`, so Ash is still neutral end to end. Daylight does the same
@@ -101,11 +101,11 @@ brackets is the default setting, for reference only — never hard-code it.
 | `--bg-raised` | `oklch(26.5% .028 H)` | Raised inside a plate: chips, composer, hover cards, popovers. |
 | `--bg-well` | `oklch(16.5% .016 H)` | Recessed inside a plate: search, tiles' background, "here now" strip, event cards. |
 | `--bg-floating` | `oklch(22% .022 H / .97)` | Menus, tooltips over content. |
-| `--bg-mod-subtle` | `oklch(76% .11 H / .07)` | Hover wash on rows — warm, not grey. |
+| `--bg-mod-subtle` | `oklch(76% .11 H / .07)` | Hover wash on rows — warm, not gray. |
 | `--bg-mod-strong` | `oklch(76% .11 H / .15)` | Pressed wash. |
 | `--bg-selected` | `oklch(76% .115 H / .17)` | The row you are on. |
 | `--window-dark` | `oklch(27% .05 S)` | An unlit window. Glass, so it reflects the street's sky rather than being a black hole. |
-| `--row-selected` | `var(--bg-selected)` | The same, but a server's group overrides it with `color-mix(in srgb, var(--identity) 16%, transparent)` so the selected row wears that server's colour. |
+| `--row-selected` | `var(--bg-selected)` | The same, but a server's group overrides it with `color-mix(in srgb, var(--identity) 16%, transparent)` so the selected row wears that server's color. |
 
 Depth is delivered by a **1px warm top highlight** (`0 1px 0 rgba(243,234,216,.07) inset`)
 plus a deep shadow (`0 20px 44px rgba(0,0,0,.5)`) on plates, and an **inset
@@ -136,20 +136,20 @@ Text/icon on white light: `--text-on-light = #0A0C10`. On emerald: `--text-on-ac
 
 Eight fixed hues (`--color-avatar-1…8`) say **who somebody is** and **which
 server this is**. Identity never carries state, never glows, and never moves:
-not with the theme, and not with the base hue. A person's colour is who they
+not with the theme, and not with the base hue. A person's color is who they
 are, not where the app is and not what ground the reader picked.
 
 | Where | Which token |
 |---|---|
 | Avatar fallback, server mark on a section label, Home card, Lobby header | `--color-avatar-N` (the fill) |
-| An author's name in the timeline, unless a role has coloured it | `--identity-ink-N` |
+| An author's name in the timeline, unless a role has colored it | `--identity-ink-N` |
 
 The split exists because a fill and a piece of text are not the same problem:
 apricot inside a 28px circle is fine on paper, and apricot written as a name on
 paper measures about 2:1. On a dark ground the ink **is** the fill; Daylight
 carries its own deepened set (same hue, L 48%, the most chroma that stays in
 sRGB), which clears 4.9:1 on the darkest paper ground at every base hue.
-A role colour outranks identity — a role is something the server said about
+A role color outranks identity — a role is something the server said about
 somebody, and it should win.
 
 ### 1.3 Semantic (unchanged in meaning; re-tuned to the warm neutral)
@@ -169,7 +169,7 @@ confirmation toasts; never reuse light tokens for semantics.
 | `--text-faint` | `oklch(66% .028 H)` | Meta (timestamps, counts, section labels). |
 
 The ink carries the room's hue at roughly three times the first ramp's chroma,
-so grey text reads as warm taupe rather than neutral grey.
+so gray text reads as warm taupe rather than neutral gray.
 
 > **Corrected in WP0.** This step read `#6C6E70` (the value in the reference
 > renders), which measures **3.51:1** on `--bg-plate` and so cannot satisfy §9's
@@ -178,9 +178,9 @@ so grey text reads as warm taupe rather than neutral grey.
 
 ### 1.5 Presence
 
-Presence is **light**, not a coloured dot. Online = lit rim; idle/away = dim; do
+Presence is **light**, not a colored dot. Online = lit rim; idle/away = dim; do
 not disturb = dim + a small `--accent-danger` slash on the rim; offline = dim, no
-rim. The old status-colour dots (`--color-status-*`) are removed from the UI.
+rim. The old status-color dots (`--color-status-*`) are removed from the UI.
 
 ### 1.6 Borders
 
@@ -205,16 +205,16 @@ Themes remap the *tokens*, never the recipes:
 - **High contrast** — rims 2px, alpha ×1.5, text ramp collapsed to two steps.
   **It takes the base hue in the chrome only.** The two extremes that do its
   legibility work — the black street and wells, and the white ink — are literal
-  black and white and carry no hue at all, so no colour choice can soften them;
+  black and white and carry no hue at all, so no color choice can soften them;
   the surfaces between them and the hairlines follow `--ui-hue`, so the reader's
   choice is still visible and the chrome is still of one piece.
 
 Every theme's ramp is expressed the same way (§1.0), so a theme and a base
-colour compose rather than fight: picking Daylight and picking Harbour are two
+color compose rather than fight: picking Daylight and picking Harbour are two
 independent choices and every pair of them passes §9.
 
 Accent presets (existing `ACCENT_PRESETS`) recolour `--accent-primary` only.
-Base-colour presets (`BASE_HUE_PRESETS`) move `--ui-hue` / `--ui-chroma` only.
+Base-color presets (`BASE_HUE_PRESETS`) move `--ui-hue` / `--ui-chroma` only.
 Neither ever touches the light tokens.
 
 ---
@@ -230,8 +230,8 @@ as flat dark panels; these change its character, and the person chooses.
 | Look | `data-theme` | What it is |
 |---|---|---|
 | **Dusk sky** | `dusk` | One gradient sky behind the whole shell (indigo overhead, magenta and ember at the horizon); every panel is smoked glass over it. No backdrop blur — a blurred smooth gradient is the same gradient, and blur is what the Linux webview pays for. |
-| **Paper & ink** | `paper` | Light. Cream stock with a grain, near-black ink, flat spot colours, hard offset shadows, tightened radii. The sidebar is the spine: a solid block of cobalt with its own ink set (`--spine-*`). |
-| **Voices** | `voices` | A deep aubergine ground and a timeline of bubbles, each taking its author's identity colour (`--who`); yours sit on the right at a stronger mix. `data-message-style="bubbles"` on `<html>` is what turns the bubbles on, so the timeline treatment can be separated from the palette later. |
+| **Paper & ink** | `paper` | Light. Cream stock with a grain, near-black ink, flat spot colors, hard offset shadows, tightened radii. The sidebar is the spine: a solid block of cobalt with its own ink set (`--spine-*`). |
+| **Voices** | `voices` | A deep aubergine ground and a timeline of bubbles, each taking its author's identity color (`--who`); yours sit on the right at a stronger mix. `data-message-style="bubbles"` on `<html>` is what turns the bubbles on, so the timeline treatment can be separated from the palette later. |
 
 Rules a look lives by:
 
@@ -239,17 +239,17 @@ Rules a look lives by:
   never chose a theme, gets Voices: `DEFAULT_THEME` in `client/src/lib/themes.ts`
   and in `crates/paracord-api/src/routes/users.rs` must agree, because the client
   adopts the server's value on first sign-in. Night remains one click away.
-- **It brings its own colours.** A look defines its accent and its grounds, so
-  the accent presets and the base-colour control are inert (shown disabled, with
+- **It brings its own colors.** A look defines its accent and its grounds, so
+  the accent presets and the base-color control are inert (shown disabled, with
   the reason) while one is on. `lib/themes.ts` `LOOK_THEMES` is the list.
 - **It may break §6, and only it may.** A painted backdrop, translucent plates,
-  a texture, colour taken from an author: allowed inside a look because it is a
+  a texture, color taken from an author: allowed inside a look because it is a
   single named choice, forbidden everywhere else exactly as before. Structure
   lives in `styles/looks.css`, where every selector is scoped to a look, and no
-  colour is written there — a look's colours are tokens in `tokens.css`.
+  color is written there — a look's colors are tokens in `tokens.css`.
 - **It still answers to §9.** `npm run test:contrast` audits all seven.
   Translucent grounds are composited over `--audit-backdrop`, the brightest
-  colour they can sit over, so a plate is only as transparent as the worst of
+  color they can sit over, so a plate is only as transparent as the worst of
   the sky allows; the spine's ink set and all eight bubbles (both mixes) are
   measured too.
 - **Light still means people.** A look may recolour the two lights for its
@@ -412,7 +412,7 @@ reviewer rejects motion that has none.
   ring simply breathes. See `docs/design/wp9d-checkpoint.md`.)*
 - **The lights change.** Changing the theme crosses the whole shell over
   `--duration-dim` — View Transitions where the webview has them, a dip through
-  the street's own colour everywhere else — and the light elements re-bloom once
+  the street's own color everywhere else — and the light elements re-bloom once
   the new ground has settled. The gateway being away is drawn on the server
   rather than beside it: it dims 30% and holds there until it is back, and
   **never a spinner on the street**. Coming back replays "lights on" for the
@@ -422,9 +422,9 @@ reviewer rejects motion that has none.
   The outage waits out a 600 ms grace, because a gateway blips several times an
   hour and a server that dims for 80 ms is a flashing blocker. The theme is
   applied INSIDE the crossfade by `useTheme`'s own effect, so the engine is told
-  how to recognise that it landed rather than guessing at frames; and nothing
+  how to recognize that it landed rather than guessing at frames; and nothing
   else may be a transition for the length of the one that matters — a theme swap
-  otherwise starts several hundred colour transitions underneath it.)*
+  otherwise starts several hundred color transitions underneath it.)*
 - **Controls are tactile.** Hover: 1 px lift + faint bloom (`--bg-mod-subtle`
   wash, 120 ms). Press: 0.96 scale, 80 ms, then spring back. Toggles, tabs and
   segmented controls slide their indicator on the spring-settle curve.
@@ -499,7 +499,7 @@ on `/design-tokens` › Motion with a Replay button and the tokens it spends.
 3. **Light tokens are never used for emphasis** — not for badges, not for "new", not for brand moments.
 4. **No fake video.** Camera tiles without frames show the initials avatar on a dark tile, never a silhouette illustration.
 5. **No docked member list.** Presence is the "here now" strip and lit avatars in context.
-6. **No status-colour dots.** Presence is light (§1.5).
+6. **No status-color dots.** Presence is light (§1.5).
 7. **No LIVE badge louder than the channel.** The LIVE dot is 6px and the label is 10.5–11px; the thumbnail carries the weight.
 8. **No emoji as UI chrome; no uppercase section labels; no over-rounding** (radii in §3); **no identical-card tiling** (the Lobby mixes a lit card, a dark card and an add tile; text channels are rows, not cards).
 9. **Copy is specific and truthful.** Use the light vocabulary for presence ("5 reading", "3 talking", "lights on"). Everyday greetings, participant names and "Quiet for now" are welcome where they describe the actual state. Do not manufacture activity or make ordinary conversation sound like work the reader owes somebody.
@@ -532,7 +532,7 @@ Plate with: header (channel name, server · duration, **here-now strip**, Invite
 Layout / more) · **share or focused speaker as the dominant tile** (16:9,
 `meet` fit, name tag bottom-left, transport readout top-right in mono) ·
 speaker strip beneath (equal columns, speaking ring, mute glyph on tag) ·
-control bar centred (mic **on = white light**, headphones, camera, share, leave
+control bar centered (mic **on = white light**, headphones, camera, share, leave
 in danger). When nobody shares, the grid is speakers only (VideoGrid rules).
 The chat ribbon (336px) shows the voice channel's text chat with lit avatars, a
 "from the call" highlight on messages written by someone currently in the call,
@@ -665,7 +665,7 @@ visual **and** automated — no package is done without inspected screenshots.
 |---|---|---|---|
 | **WP0 Tokens & type** | New token set (§1–§4), fonts (`@fontsource/gabarito`, `@fontsource/onest`), theme remaps (§1.7), delete glass/noise/ambient tokens, `useTheme` presets, `text-*` utilities; a `/design-tokens` dev page rendering every recipe. | `client/src/styles/tokens.css`, `globals.css`, `hooks/useTheme.ts`, `package.json` | — |
 | **WP1 Light primitives** | `WindowMap`, `BuildingPlate`, `LitAvatar`, `HereNowStrip`, `RoomThumbnail`, `OnAirPill`, motion (§5), presence-as-light selectors (who is talking/reading where, per server, across instances — extend `lib/attention` and the voice/read-state stores; the channel-thumbnail frame source from the native stream pipeline at ≤2fps). | `components/light/*`, `lib/attention/*`, `stores/voice*`, `lib/media/*` (read-only frame tap) | WP0 |
-| **WP2 Servers column** | Replace the sidebar body with §7.1; remove Needs-you from the sidebar; keep collapse/keyboard behaviour from `layout-spec` §5. | `components/layout/sidebar/*`, `Sidebar*.tsx` | WP1 |
+| **WP2 Servers column** | Replace the sidebar body with §7.1; remove Needs-you from the sidebar; keep collapse/keyboard behavior from `layout-spec` §5. | `components/layout/sidebar/*`, `Sidebar*.tsx` | WP1 |
 | **WP3 Stage** | §7.2 desktop + phone: restructure `VideoGrid`/`StreamViewer`/`FocusedWebcamView`/`VoiceControlBar` into the Stage plate; chat ribbon; here-now strip; `MiniVoiceBar → OnAirPill`. Keep every media-engine contract untouched (see `native-streaming-pipeline` memory). | `components/voice/*`, `pages/GuildPage` (voice route), `components/message/*` (ribbon variant) | WP1 |
 | **WP4 Lobby** | §7.3 on top of `RoomsView`/`RoomCard`/`AroundNowStrip`/`TextChannelList`; event card from scheduled events; media strip from recent attachments. | `components/rooms/*`, `pages/GuildHomePage` | WP1 |
 | **WP5 Text channel & DMs** | §7.4 + §7.6: header strip, timeline restyle, channel events inline, composer copy; keep the durable-delivery/recovery regions. | `components/message/*`, `components/layout/TopBar*`, `pages/DMPage` | WP1 |

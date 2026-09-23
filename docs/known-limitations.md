@@ -70,7 +70,7 @@ This page documents support boundaries for the v3.1.0 release. Items here are no
   recipient's timeline labels such an attachment as not end-to-end encrypted rather than
   presenting it beside genuinely encrypted files.
 - Queued attachments live in the account's encrypted vault until delivery, so they survive a
-  reload and are removed when the queued message is discarded. They are **not** synchronised
+  reload and are removed when the queued message is discarded. They are **not** synchronized
   between devices: a message queued on one device can only be sent from that device.
 
 ## Linux desktop app
@@ -104,7 +104,7 @@ This page documents support boundaries for the v3.1.0 release. Items here are no
 
 ## Native Media
 
-- The voice connection check reports a real transport attempt from the client's network, but it deliberately stops short of authenticating with the relay: a diagnostic session carries no call token, and the relay only acknowledges tokens bound to an active call. A passing transport step therefore proves the UDP path, the QUIC handshake and the certificate — not that a join would be authorised.
+- The voice connection check reports a real transport attempt from the client's network, but it deliberately stops short of authenticating with the relay: a diagnostic session carries no call token, and the relay only acknowledges tokens bound to an active call. A passing transport step therefore proves the UDP path, the QUIC handshake and the certificate — not that a join would be authorized.
 - Inside the desktop app the media connection is opened by the native QUIC stack in the Tauri binary, which has no probe that avoids joining a call. The desktop check reports the transport step as skipped, with that reason, instead of guessing. Running the same check from a browser against the same server does exercise the UDP path.
 - Browser voice needs a browser that can pin a self-signed certificate by fingerprint (`serverCertificateHashes`). Chromium-based browsers implement it; Firefox and Safari do not, so they cannot join native-media calls on a self-hosted server. The connection check reports this at the certificate step rather than letting the connection fail opaquely.
 - The media certificate is **short-lived by necessity**. Chromium accepts a `serverCertificateHashes` pin only for an ECDSA P-256 certificate whose total validity window is at most 14 days, so the server issues one valid for 13 days (back-dated an hour for clock skew) and rotates it roughly every 7 days while it runs. Rotation swaps the certificate the media port presents and republishes the fingerprint atomically; calls already in progress are unaffected, because QUIC authenticates once at handshake. This is entirely internal to the media port — an operator running a reverse proxy in front of Paracord never supplies, renews or sees this certificate, and a CA-issued certificate configured for HTTPS is never presented on the QUIC media port.

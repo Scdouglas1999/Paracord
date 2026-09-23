@@ -180,7 +180,7 @@ Evidence is saved in `output/improvement-program/channel-isolation/`.
   Selection retains an account-qualified channel reference. Local UI views expose
   IDs only inside an explicit account and keep action identities stable.
 - Guild-channel and DM list requests capture verified operation contexts. Lists
-  coalesce within their own collection without cancelling other guilds or hosts.
+  coalesce within their own collection without canceling other guilds or hosts.
   Pending snapshots reconcile creates, partial edits, last-message activity and
   deletes. Journals coalesce fields, enforce a 10,000-channel bound and explicitly
   invalidate overflow. Revocation/reset cancel ownership and clear the journal;
@@ -397,7 +397,7 @@ Evidence is saved in `output/improvement-program/message-isolation/`.
   identity lookup now uses the originating server's verified profile.
 - Account revocation clears the store and cancels its operations. Retained
   callbacks cannot repopulate revoked stores, and sends through an ended session
-  reject. Cancelled history releases loading immediately; old completion cannot
+  reject. Canceled history releases loading immediately; old completion cannot
   clear a replacement request or publish into another account. Independent
   servers can load colliding conversation IDs concurrently, with their own
   realtime reconciliation journals. Cache limits remain 500 messages per
@@ -953,14 +953,14 @@ Evidence: `output/improvement-program/delivery-resolution/`.
 The server exposes authenticated
 `POST /channels/{channel_id}/message-deliveries/{nonce}/resolve`. It atomically
 competes with creation for the existing author/channel/nonce receipt. If
-resolution wins, the nonce is permanently reserved as cancelled and every delayed
+resolution wins, the nonce is permanently reserved as canceled and every delayed
 create receives `410 DELIVERY_CANCELLED`. If creation already committed, the
 response identifies its message; after deletion it reports the same ID as deleted.
 Resolution never edits/deletes an existing message or alters the channel tail.
 Normal edit/delete endpoints retain their authorization and event behavior.
 
-Both database migrations add an explicit cancelled flag, defaulting existing
-receipts to delivered. A cancelled reservation allocates a snowflake for its
+Both database migrations add an explicit canceled flag, defaulting existing
+receipts to delivered. A canceled reservation allocates a snowflake for its
 receipt without inserting a message. Cancellation differs from a previously
 delivered message that was deleted, so API errors and response states remain
 truthful. The unique receipt and transaction arbitrate concurrent create/resolve
@@ -971,7 +971,7 @@ claim or inspect the caller's receipt through a shared nonce.
 
 The captured client transport validates status, author, channel, nonce, outcome
 and exact decimal message IDs. It rejects malformed, mismatched and asynchronous
-acceptance responses. A cancelled creation response leaves a prepared send in
+acceptance responses. A canceled creation response leaves a prepared send in
 the failed queue; the sender does not falsely acknowledge it or discard crypto
 state needed for subsequent messages. The API contract documents the sealing
 side effect and the required encryption reconciliation.
@@ -1000,7 +1000,7 @@ Verification:
 The full outbox requirement remains unfinished. Next, a durable client mutation
 must record the requested edit/discard, resolve its nonce, and reconcile the
 relevant Signal generation plus any remote edit/delete before removing the
-prepared queue item. Both cancelled initial requests and already-deleted initial
+prepared queue item. Both canceled initial requests and already-deleted initial
 messages can strand later drafts if their generation is reused blindly; the
 current low-level deleted-receipt handling still needs that coordinated change.
 Ratchets must not be rolled back over newly received messages. The production
@@ -1290,8 +1290,8 @@ Evidence: `output/improvement-program/prepared-message-editing/`.
 
 The server can now resolve an uncertain edit before its replacement is sent.
 The new actor-owned POST endpoint reports applied or deleted successful edits,
-or atomically seals an absent edit as cancelled. A delayed PATCH cannot apply a
-cancelled operation; a live target returns `410 EDIT_CANCELLED`. Resolution does
+or atomically seals an absent edit as canceled. A delayed PATCH cannot apply a
+canceled operation; a live target returns `410 EDIT_CANCELLED`. Resolution does
 not change content, history or moderation hits. It requires channel visibility,
 remains available during a timeout, and cannot cancel another actor's operation.
 A nonce bound to a different target conflicts. The new migration adds a

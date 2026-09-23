@@ -300,7 +300,7 @@ pub enum FileTransferError {
     AuthFailed(String),
     #[error("transfer rejected: {0}")]
     Rejected(String),
-    #[error("transfer cancelled")]
+    #[error("transfer canceled")]
     Cancelled,
     #[error("file too large: {size} bytes (max {MAX_FILE_SIZE})")]
     FileTooLarge { size: u64 },

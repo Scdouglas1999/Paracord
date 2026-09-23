@@ -242,7 +242,7 @@ export class DurableDelivery {
           throw new DeliveryProtocolError('The replacement draft must keep its conversation and order with a new delivery identity.');
         }
         if (JSON.parse(current.serializedRequest).e2ee) {
-          if (!this.options.reconcileRemoved) throw new Error('The cancelled encryption generation must be resolved before replacement.');
+          if (!this.options.reconcileRemoved) throw new Error('The canceled encryption generation must be resolved before replacement.');
           await this.options.reconcileRemoved(tx, current);
         }
         tx.remove(OUTBOX_NAMESPACE, current.id);

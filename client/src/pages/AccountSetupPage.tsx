@@ -197,7 +197,7 @@ function OwnedAccountSetupPage() {
                 {(signedInUser?.public_key ?? '').slice(-8)}
               </span>
               . Creating a new identity here instead would replace it, and nobody who has already
-              verified you would recognise the new one.
+              verified you would recognize the new one.
             </p>
             <Button size="lg" className="w-full" onClick={() => navigate('/recover')}>
               <KeyRound size={16} aria-hidden />

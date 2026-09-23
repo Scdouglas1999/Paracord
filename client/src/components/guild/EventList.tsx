@@ -53,7 +53,7 @@ const STATUS_LABELS: Record<number, string> = {
   1: 'Scheduled',
   2: 'Active',
   3: 'Completed',
-  4: 'Cancelled',
+  4: 'Canceled',
 };
 
 // Status is carried by the word first; the chip's ink only seconds it (§9 —

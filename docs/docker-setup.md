@@ -46,7 +46,7 @@ or use the `PARACORD_BUILD_CONTEXT` variant which needs no published image.
 
 With neither override set, `docker compose up -d` in a checkout builds the local
 source exactly as before — the defaults (`pull_policy: build`, `build: .`) keep
-existing behaviour unchanged.
+existing behavior unchanged.
 
 ## TLS & Voice
 

@@ -190,13 +190,13 @@ cannot resolve a cryptographic ownership conflict.
   - Response: `{ channel_id, author_id, nonce, state: "cancelled" }` if resolution wins before creation. A delayed POST with that nonce receives `410` with code `DELIVERY_CANCELLED`.
   - If creation committed first: `{ channel_id, author_id, nonce, state: "delivered", message_id }`. If that message has since been deleted, `state` is `"deleted"` and the same `message_id` remains. IDs are decimal strings.
   - Scope is the authenticated author plus channel and nonce. Repeated requests return the current durable outcome. Existing messages are never changed; ordinary message edit/delete authorization still applies.
-  - Clients must retain uncertain prepared requests until the resolution and any affected encryption generation are reconciled atomically in local storage. A cancelled initial X3DH request cannot simply be removed while later messages reuse its unestablished generation.
+  - Clients must retain uncertain prepared requests until the resolution and any affected encryption generation are reconciled atomically in local storage. A canceled initial X3DH request cannot simply be removed while later messages reuse its unestablished generation.
 - `POST /api/v1/channels/{channel_id}/messages/bulk-delete`
 - `GET /api/v1/channels/{channel_id}/messages/search`
 - `GET /api/v1/channels/{channel_id}/summary`
 - `POST /api/v1/channels/{channel_id}/messages/{message_id}/edits/{edit_nonce}/resolve`
   - Resolves the authenticated actor's edit nonce under current channel visibility. The response identifies `channel_id`, `actor_id`, `message_id`, `edit_nonce`, and `state` (`cancelled`, `applied`, or `deleted`).
-  - An absent operation is atomically sealed as cancelled. A delayed PATCH using that nonce cannot change the target; a live target returns `410 EDIT_CANCELLED`. A successful receipt stays applied, even if newer edits exist. If its target was deleted, resolution returns deleted. No content, history, or moderation verdict is changed by resolution.
+  - An absent operation is atomically sealed as canceled. A delayed PATCH using that nonce cannot change the target; a live target returns `410 EDIT_CANCELLED`. A successful receipt stays applied, even if newer edits exist. If its target was deleted, resolution returns deleted. No content, history, or moderation verdict is changed by resolution.
   - Nonces are scoped to actor and channel, have the same 1-64-byte bounds as PATCH, and bind one target. A different target conflicts. Resolution remains available during a timeout, but loss of channel visibility denies access. Its actor-owned cancellation does not authorize a future edit.
   - Before replacing an uncertain PATCH, clients must persist the replacement intent and resolve the preceding edit. This seals a missing operation so that its delayed first attempt cannot overwrite the replacement. A storage or HTTP failure is not a cancellation acknowledgement.
 - `PATCH /api/v1/channels/{channel_id}/messages/{message_id}`

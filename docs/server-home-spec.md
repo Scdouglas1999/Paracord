@@ -14,7 +14,7 @@ who is online right now.
 
 1. **Cover.** The server banner (`guilds.banner_hash`, uploaded by workstream 1c),
    180 px tall, fading into the plate at the bottom. A server with no banner gets a
-   generated cover: layered soft gradients seeded from the server icon's colour and
+   generated cover: layered soft gradients seeded from the server icon's color and
    the server id, the same every time. This is the designed look for "no banner", not
    an error state.
 2. **Head.** It overlaps the cover by about 58 px:

@@ -306,7 +306,7 @@ pub async fn reconcile_committed_delivery(
     })
     .bind(message_id)
     .bind(if cancelled != 0 {
-        Some("Message delivery was cancelled")
+        Some("Message delivery was canceled")
     } else {
         None
     })

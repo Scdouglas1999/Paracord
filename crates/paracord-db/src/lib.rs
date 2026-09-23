@@ -104,9 +104,9 @@ pub enum DbError {
     Conflict(String),
     #[error("This message was already delivered and has since been deleted.")]
     DeliveryAlreadyDeleted,
-    #[error("This message delivery was cancelled before it was created.")]
+    #[error("This message delivery was canceled before it was created.")]
     DeliveryCancelled,
-    #[error("This message edit was cancelled before it committed.")]
+    #[error("This message edit was canceled before it committed.")]
     EditCancelled,
     /// A per-resource limit was reached (e.g. the maximum number of pinned
     /// messages in a channel). The API layer maps this to HTTP 409 Conflict.

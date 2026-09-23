@@ -203,7 +203,7 @@ export class QUICFileUploader {
           transfer_id: token.transfer_id,
         };
         await writer.write(encodeControlFrame(cancelMsg));
-        throw new Error('Upload cancelled');
+        throw new Error('Upload canceled');
       }
 
       // 4. Send EndOfData
