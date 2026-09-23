@@ -52,7 +52,7 @@ const env = {
   PARACORD_STORAGE_PATH: join(dataDir, 'uploads'),
   PARACORD_MEDIA_STORAGE_PATH: join(dataDir, 'files'),
   PARACORD_BACKUP_DIR: join(dataDir, 'backups'),
-  PARACORD_REGISTRATION_ENABLED: 'true',
+  PARACORD_REGISTRATION_ENABLED: 'true', PARACORD_REGISTRATION_MODE: 'open',
   PARACORD_AUTH_REQUIRE_EMAIL: 'true',
   // The first account registered owns the instance, as pre-claim releases
   // behaved. The claim flow has its own coverage.

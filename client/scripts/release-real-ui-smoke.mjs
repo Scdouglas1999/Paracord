@@ -322,7 +322,7 @@ async function runSmoke() {
     PARACORD_STORAGE_PATH: uploadDir,
     PARACORD_MEDIA_STORAGE_PATH: path.join(tempDir, 'files'),
     PARACORD_BACKUP_DIR: path.join(tempDir, 'backups'),
-    PARACORD_REGISTRATION_ENABLED: 'true',
+    PARACORD_REGISTRATION_ENABLED: 'true', PARACORD_REGISTRATION_MODE: 'open',
     PARACORD_AUTH_REQUIRE_EMAIL: 'true',
     PARACORD_FEDERATION_ENABLED: 'true',
     PARACORD_FEDERATION_DOMAIN: 'real-ui-smoke.local',

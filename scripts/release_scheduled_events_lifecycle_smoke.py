@@ -173,6 +173,7 @@ def run_smoke(args: argparse.Namespace) -> None:
                 "PARACORD_MEDIA_STORAGE_PATH": str(data / "files"),
                 "PARACORD_BACKUP_DIR": str(data / "backups"),
                 "PARACORD_REGISTRATION_ENABLED": "true",
+                "PARACORD_REGISTRATION_MODE": "open",
                 # This smoke creates its own first account over REST, so the
                 # instance is bootstrapped without a first-owner claim: the
                 # first registration owns it, as pre-claim releases behaved.
