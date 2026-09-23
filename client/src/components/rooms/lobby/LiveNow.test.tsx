@@ -14,9 +14,10 @@ function person(userId: string, speaking = false) {
   return personLight({ userId, name: userId, status: 'online', inRoom: true, speaking, roomName: 'room' });
 }
 
-function room(channelId: string, people: Array<{ id: string; speaking?: boolean }>) {
+function room(channelId: string, people: Array<{ id: string; speaking?: boolean }>, selfUserId?: string) {
   return voiceRoomLight({
     scope,
+    selfUserId,
     guildId: 'guild',
     channelId,
     name: channelId,
@@ -100,5 +101,17 @@ describe('live card glow', () => {
     renderLive([], [event]);
     expect(card('Jam, happening now')).toHaveClass('pc-home-live');
     expect(card('Jam, happening now')).not.toHaveClass('is-speaking');
+  });
+});
+
+describe('live card action', () => {
+  it('offers to join a call you are not in, and to return to one you are', () => {
+    renderLive([
+      room('Lounge', [{ id: 'mara' }]),
+      room('Studio', [{ id: 'me' }, { id: 'ken' }], 'me'),
+    ]);
+    expect(screen.getByRole('button', { name: 'Join Lounge' })).toHaveTextContent('Join');
+    expect(screen.getByRole('button', { name: 'Return to Studio' })).toHaveTextContent('Return');
+    expect(screen.queryByRole('button', { name: 'Join Studio' })).not.toBeInTheDocument();
   });
 });
