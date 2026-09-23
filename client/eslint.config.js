@@ -28,6 +28,8 @@ export default tseslint.config(
       'playwright-report/**',
       '.probe-*.mjs',
       'scripts/**',
+      // Node build tooling for the brand assets, like scripts/.
+      'brand/**',
       '*.config.js',
       '*.config.ts',
     ],
