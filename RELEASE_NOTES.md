@@ -4,6 +4,19 @@ The biggest release since 3.0. A server's front page is no longer a list of empt
 
 Compare: [v3.1.1...v3.2.0](https://github.com/Scdouglas1999/Paracord/compare/v3.1.1...v3.2.0)
 
+## Safer by default
+
+A new server no longer opens itself to the whole internet without asking.
+
+- **New servers are invite-only.** Someone without an invite link sees a page saying so instead of a sign-up form. Owners can open sign-up to anyone under Admin → Settings → Who can create an account, and first-run setup asks.
+- **The router is left alone unless you say yes.** The installer asks whether friends outside your home network should be able to connect, and only then asks your router to open a port. You can change it later under Admin → Settings → Network.
+- **Existing servers keep working exactly as before.** Both settings only change on new installs.
+- **A proper domain and certificate is now the recommended setup.** Automatic certificates from Let's Encrypt now arrive a few seconds after the server starts. Before, the first request always failed and the real certificate took up to 12 hours to arrive.
+- **Checksums for every download.** Each release has a `SHA256SUMS.txt`, and the README shows how to check a download before you run it.
+- **How the encryption works** is written up in [docs/encryption.md](docs/encryption.md): direct messages use the Signal protocol design (X3DH and the Double Ratchet), groups use signed sender keys, and it spells out what the server can and can't see. It's Paracord's own implementation and hasn't been independently audited yet.
+- **Reporting a security problem:** see [SECURITY.md](SECURITY.md).
+- Fixed: on a server that hadn't been set up yet, signing in with a brand-new key could create the owner account and skip the setup link.
+
 ## A server's front page
 
 Opening a server used to show its voice channels and a list of text channels, which looked empty whenever nobody was in voice. It's now a front page:
@@ -75,6 +88,7 @@ Found while testing this release. Most were in the new features, but a few were 
 - Poll options were cut off on a phone.
 - Anonymous posts stay anonymous everywhere a new feature can show them: forwards, the media gallery, search by author, and the server's front page. Webhook posts show the webhook, not the person who set it up.
 - A 3.2 app can still sign into a 3.1 server and load your account. Upgrade the server to get the new features.
+- The Docker image builds again (it was missing the patched system libraries).
 
 ## Upgrading
 
