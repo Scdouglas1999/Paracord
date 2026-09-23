@@ -3715,10 +3715,16 @@ fn invite_lines(
 ///
 /// Printed only when it applies, because a warning that does not happen is worse
 /// than no warning: the owner starts distrusting the rest of the page.
-const SELF_MADE_CERT_LINES: [&str; 3] = [
-    "Your browser will show a one-time security warning",
-    "because this server made its own certificate — choose",
-    "Advanced, then Continue. The desktop app does not show this.",
+///
+/// The better path comes first: a domain name with automatic certificates, which
+/// no browser warns about. Clicking through is for trying Paracord out.
+const SELF_MADE_CERT_LINES: [&str; 6] = [
+    "For friends to connect without a browser warning,",
+    "give this server a domain name and turn on automatic",
+    "certificates ([tls.acme]; docs/deployment.md shows how).",
+    "Just trying it out? The browser warns once because this",
+    "server made its own certificate: choose Advanced, then",
+    "Continue. The desktop app does not show this.",
 ];
 
 /// True when HTTPS is on and the certificate is the one this server generated
