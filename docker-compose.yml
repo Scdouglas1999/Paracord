@@ -41,6 +41,9 @@ services:
       # jwt_secret on first run and persists it to /data/paracord.toml, then
       # reuses it on every restart. Nothing to set, nothing to leak in env.
       - PARACORD_REGISTRATION_ENABLED=true
+      # Who can create an account. A new config is invite-only; set "open" to
+      # let anyone who can reach the server sign up.
+      # - PARACORD_REGISTRATION_MODE=open
 
       # First-owner claim: until this server is claimed nobody can register,
       # which is what stops whoever finds the address first from owning it.

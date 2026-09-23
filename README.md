@@ -36,12 +36,14 @@ middle. Somebody in your group runs the Paracord server on a computer that stays
 everyone else joins with a link.
 
 Setting that up is one command. It downloads Paracord, sets it to start by itself, asks
-your router to let people in, and opens a link in your browser where you make your account
-and name your server. Friends open an invite link in any browser, or install the desktop
-app for Windows, Linux or macOS.
+whether friends outside your home network should be able to connect, and opens a link in
+your browser where you make your account and name your server. A new server is
+invite-only: friends open an invite link in any browser, or install the desktop app for
+Windows, Linux or macOS.
 
-Direct messages and group messages are encrypted end to end. Voice and video run on
-Paracord's own code, so there's no third-party media service to sign up for.
+Direct messages and group messages are encrypted end to end
+([how that works](docs/encryption.md)). Voice and video run on Paracord's own code, so
+there's no third-party media service to sign up for.
 
 It suits a group that has somebody willing to keep a machine on and read a docs page when
 something breaks. Nobody is hosting this for you, and it's a young project, so the
@@ -76,11 +78,40 @@ curl -fsSL https://raw.githubusercontent.com/Scdouglas1999/Paracord/main/scripts
 irm https://raw.githubusercontent.com/Scdouglas1999/Paracord/main/scripts/install.ps1 | iex
 ```
 
+Rather read the script before it runs? Download it, look through it, then run it:
+
+```bash
+# Linux or macOS
+curl -fsSLO https://raw.githubusercontent.com/Scdouglas1999/Paracord/main/scripts/install.sh
+less install.sh
+sh install.sh
+```
+
+```powershell
+# Windows
+irm https://raw.githubusercontent.com/Scdouglas1999/Paracord/main/scripts/install.ps1 -OutFile install.ps1
+notepad install.ps1
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+The installer asks one question: **Let friends outside your home network connect?** If you
+say yes, Paracord asks your router to open a port for it (UPnP). The answer is no unless
+you say yes, so a new server is only reachable on your home network until you decide
+otherwise. You can change it later in **Admin → Settings**. For an unattended install, pass
+`--allow-internet` or `--home-network-only` (`-AllowInternet` or `-HomeNetworkOnly` on
+Windows); with no terminal and no flag, the answer is no.
+
 **1. Finish setting up.** The installer opens a link in your browser, and prints it as well.
-Choose your name and password, name your server, done. That link works once and only for
-you, so nobody who finds your server first can take it over. Your browser shows a one-time
-security warning on the way in, because the server made its own certificate: choose
-Advanced, then Continue. The desktop app never shows this.
+Choose your name and password, name your server, and choose who can create an account:
+people with an invite link (the default), or anyone who can reach the server. That link
+works once and only for you, so nobody who finds your server first can take it over.
+
+For other people to connect without a browser warning, give the server a domain name and
+turn on automatic certificates:
+[A domain name and automatic certificates](docs/deployment.md#a-domain-name-and-automatic-certificates)
+takes about fifteen minutes. If you are only trying Paracord out, the browser instead shows
+a one-time security warning, because the server made its own certificate: choose Advanced,
+then Continue. The desktop app never shows this.
 
 <p align="center"><img src="docs/images/readme/setup.jpg" alt="The first setup screen in a browser: step 1 of 3, creating the owner's account with a username, display name and optional email." width="720"/></p>
 
@@ -90,10 +121,11 @@ your Wi-Fi.
 
 <p align="center"><img src="docs/images/readme/invite.jpg" alt="The Invite dialog, showing an invite link with a copy button and a line saying who the link will work for." width="620"/></p>
 
-The server asks your router to let outside traffic through when it starts, and most routers
-say yes. If yours refuses, the Invite dialog and the server's startup message both say so,
-and [Friends outside your network](docs/port-forwarding.md) walks through the one router
-setting to change.
+If you let friends outside your home network connect, the server asks your router to let
+that traffic through when it starts, and most routers say yes. If yours refuses, or the
+server was set up for your home network only, the Invite dialog and the server's startup
+message both say so and say what to change.
+[Friends outside your network](docs/port-forwarding.md) walks through the router side.
 
 Running the same command again later updates Paracord and keeps all your data.
 
@@ -108,11 +140,12 @@ registers an auto-start task running as `SYSTEM`, and opens the firewall for the
 voice ports; without it, it installs just for you under `%LOCALAPPDATA%\Paracord`.
 Upgrades keep your config and data and back up the old binary. `PARACORD_NO_BROWSER=1`
 prints the setup link instead of opening it, and the header of `scripts/install.sh` lists
-the other overrides. The server maps its ports on the router with UPnP or NAT-PMP; turn
-that off with `auto_port_forward = false` under `[network]`.
+the other overrides. When you let friends outside your home network connect, the server
+maps its ports on the router with UPnP or NAT-PMP; that is `auto_port_forward` under
+`[network]` in the settings file.
 
-Downloads are verified by TLS to the official GitHub releases and nothing else. The
-release pipeline does not publish checksums yet, and the installer says so while it runs.
+The installer checks the download against the release's `SHA256SUMS.txt` and refuses to
+install a file that does not match.
 
 </details>
 
@@ -136,6 +169,29 @@ run it:
 First run creates its settings file, its database and its own certificate, then prints the
 one-time link that finishes setup. The same link is saved next to the config as
 `first-owner-claim-link.txt`.
+
+### Check a download
+
+Every release has a `SHA256SUMS.txt` listing the SHA-256 checksum of each of its files.
+Download it into the same folder as the file you want to check, then:
+
+```bash
+# Linux
+sha256sum --ignore-missing -c SHA256SUMS.txt
+
+# macOS
+shasum -a 256 --ignore-missing -c SHA256SUMS.txt
+```
+
+Each file you have should say `OK`. On Windows, in PowerShell:
+
+```powershell
+(Get-FileHash .\paracord-server-windows-x64-3.2.0.zip).Hash
+```
+
+and compare the result with that file's line in `SHA256SUMS.txt` (the case of the letters
+does not matter). If a checksum does not match, do not run the file: download it again, and
+[report it](SECURITY.md) if it still does not match.
 
 ### Docker Compose
 
@@ -206,7 +262,8 @@ controls, over Paracord's own QUIC transport: raw QUIC in the desktop app, WebTr
 the browser. Opus audio with RNNoise noise suppression, VP9 video, speaker detection, and
 media frames the relay cannot read.
 
-**Direct messages.** One-to-one and group conversations, encrypted end to end. Text and
+**Direct messages.** One-to-one and group conversations, encrypted end to end
+([how it works](docs/encryption.md)). Text and
 attachments are both encrypted on your device, so the server stores files it cannot read and
 does not learn their names or types. Group keys change whenever somebody joins or leaves, so
 a person who left cannot read what is said afterwards, and every message is signed, so one
@@ -257,11 +314,14 @@ The same channel in three of them:
 Things that will come up, in rough order of how likely you are to hit them. The full list
 lives in [known limitations](docs/known-limitations.md) and in the release notes.
 
-- The browser shows a certificate warning the first time anyone visits, because a new
-  server makes its own certificate and browsers do not recognise it. Choose Advanced, then
-  Continue; it happens once per browser. The desktop app trusts the server's certificate by
-  itself and never asks. Pointing a domain name at the server and turning on automatic
-  certificates (`[tls.acme]`) gets rid of the warning for good.
+- Give the server a domain name and turn on automatic certificates (`[tls.acme]`, see
+  [A domain name and automatic certificates](docs/deployment.md#a-domain-name-and-automatic-certificates)),
+  and browsers connect without a warning. Without that, a new server makes its own
+  certificate, which browsers do not recognize: the first visit shows a warning, and you
+  choose Advanced, then Continue, once per browser. That is fine for trying it out. The
+  desktop app trusts the server's certificate by itself and never asks.
+- New servers are invite-only. Somebody without an invite link sees a page saying so, not a
+  sign-up form. Admin → Settings → Who can create an account opens it to anyone.
 - Joining a call from the browser needs a Chromium-based browser, such as Chrome or Edge.
   It depends on pinning that self-made certificate by fingerprint, which Chromium supports
   and Firefox and Safari do not. The desktop app is unaffected and works in any case; if a
@@ -300,8 +360,9 @@ One port number covers everything, over both protocols:
 | TCP `8443` | the web client, the API and the realtime connection |
 | UDP `8443` | voice, video and screen sharing |
 
-The server asks the router to forward both when it starts, using UPnP or NAT-PMP. If the
-router refuses, forward both by hand. UDP is the half people forget, and calls are silent
+If you let friends outside your home network connect (the installer's question, or
+Admin → Settings), the server asks the router to forward both when it starts, using UPnP
+or NAT-PMP. Otherwise, or if the router refuses, forward both by hand. UDP is the half people forget, and calls are silent
 without it. [Friends outside your network](docs/port-forwarding.md) has the steps and a way
 to check it worked. Under Docker the app stays on loopback and a reverse proxy provides the
 public HTTPS.
@@ -424,13 +485,15 @@ cannot read the relocation sections a modern linker emits.
 | [Deployment](docs/deployment.md) | a domain name, TLS at a proxy, PostgreSQL, backups |
 | [Docker Setup](docs/docker-setup.md) | compose services, volumes, reverse proxy |
 | [Known Limitations](docs/known-limitations.md) | the full list of what does and doesn't work |
+| [How encryption works](docs/encryption.md) | what is end-to-end encrypted, what the server still sees, checking a contact's key |
+| [Security policy](SECURITY.md) | how to report a vulnerability privately |
 | [AutoMod](docs/automod.md) | rules, triggers, actions, exemptions, the rule API |
 | [Bot Development](docs/bot-development.md) | bots, commands, interactions, webhooks |
 | [Federation Protocol](docs/federation-protocol.md) | signed requests between servers and the trust model |
 | [Backup Recovery](docs/backup-recovery.md) | restoring an archive, and what it can't restore |
 | [Release Notes](RELEASE_NOTES.md) | what changed in each release |
 
-## Licence and contributing
+## License and contributing
 
 Paracord is source-available rather than open source, under the [Paracord Source-Available
 License](LICENSE). You can run it for anything, including a business. You can read the
@@ -441,3 +504,6 @@ from the author.
 Issues and pull requests are welcome. For a bug, say what you did and what happened. If it
 involves voice, screen sharing or encryption, include the platform and whether you were in
 the browser or the desktop app, because those behave differently.
+
+Found a security problem? Please don't open an issue for it. Report it privately as
+[SECURITY.md](SECURITY.md) describes.

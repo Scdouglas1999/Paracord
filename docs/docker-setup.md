@@ -81,6 +81,8 @@ All configuration can be overridden via environment variables in `docker-compose
 | `PARACORD_JWT_SECRET` | auto-generated | Not set in Docker. The server generates and persists a random secret to `/data/paracord.toml` on first run and reuses it thereafter |
 | `PARACORD_VOICE_NATIVE_MEDIA` | `true` | Native QUIC/WebTransport voice (the default media path); no LiveKit required |
 | `PARACORD_REGISTRATION_ENABLED` | `true` | Allow new user registrations |
+| `PARACORD_REGISTRATION_MODE` | `invite_only` in a new config | Who can create an account: `invite_only` (needs an invite link) or `open` (anyone) |
+| `PARACORD_AUTO_PORT_FORWARD` | `false` in a new config | Ask the home router (UPnP / NAT-PMP) to let people outside the network in |
 | `PARACORD_STORAGE_PATH` | `/data/uploads` | File upload storage path |
 | `PARACORD_MEDIA_STORAGE_PATH` | `/data/files` | Media file storage path |
 | `PARACORD_BACKUP_DIR` | `/data/backups` | Backup storage directory |

@@ -125,9 +125,20 @@ Open the link from the installer or the server. It takes you straight to
 creating **your** account — the owner's — then asks you to name things. That is
 the whole setup.
 
-Your browser may show a one-time security warning first, because the server made
-its own certificate: choose **Advanced**, then **Continue**. The desktop app
-never shows this.
+The better way to reach it is by a domain name: point one at the server and turn
+on automatic certificates (see
+[A domain name and automatic certificates](deployment.md#a-domain-name-and-automatic-certificates)),
+and nobody sees a browser warning. If you are only trying Paracord out, the
+browser shows a one-time security warning instead, because the server made its
+own certificate: choose **Advanced**, then **Continue**. The desktop app never
+shows this.
+
+The last step asks **who can create an account**. The answer starts as *people
+with an invite link*: nobody can sign up unless someone on the server sent them
+an invite. You can open it to anyone who can reach the server instead. It also
+says how the server was installed: only reachable on your home network, or
+reachable from the internet through your router. Both can be changed later in
+**Admin → Settings**.
 
 The link works once and only for you. Until it has been used nobody can create
 an account on your server, so somebody who finds the address before you cannot
@@ -157,17 +168,19 @@ plainly who it will work for:
 
 - **Anyone** — your router let Paracord open the way in, or you have a public
   address configured. Send the link to whoever you like.
-- **Only people on the same Wi-Fi** — your router refused. Friends elsewhere
-  can't connect until one setting is changed on the router;
-  [Friends outside your network](port-forwarding.md) walks through it and shows
-  how to check it worked.
+- **Only people on the same Wi-Fi** — the server was installed for your home
+  network only, or your router refused. If it was installed home-only, the
+  dialog points you at **Admin → Settings → Let friends outside your home network
+  connect**; otherwise [Friends outside your network](port-forwarding.md) walks
+  through the one router setting and shows how to check it worked.
 
-The server asks the router by itself every time it starts (UPnP, then NAT-PMP).
-To turn that off, set `auto_port_forward = false` under `[network]` in the
-settings file.
+The server only asks the router to let people in when that setting is on
+(`auto_port_forward` under `[network]`). New installs leave it off unless you
+said yes when the installer asked.
 
 A friend who opens the link in a browser presses **Create an account to join**
-and lands in your server. A friend with the [desktop app](../../releases/latest)
+and lands in your server. On an invite-only server that is the only way in: the
+invite link is what lets them make an account. A friend with the [desktop app](../../releases/latest)
 pastes the same link into it. The browser shows the one-time certificate warning
 described above; the desktop app does not.
 

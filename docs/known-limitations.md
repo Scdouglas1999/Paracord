@@ -13,6 +13,24 @@ This page documents support boundaries for the v3.1.0 release. Items here are no
 
 ## Direct Message Encryption
 
+[How encryption works](encryption.md) explains the design in plain words first, then in
+detail: what is encrypted, how keys are kept on a device, what the server can still see, and
+how to check a contact's key. In short:
+
+- It is Paracord's own implementation of the Signal design (X3DH and the Double Ratchet for
+  DMs, sender keys for groups), not Signal's libsignal library, and **it has not been
+  independently audited**.
+- Messages in a server's channels are **not** end-to-end encrypted.
+- Group DMs have no ratchet within an epoch: one sender key covers a member's messages until
+  the membership changes. Envelopes are wrapped under the two members' long-term identity
+  keys and kept by the server, so a stolen identity private key plus the server's stored data
+  opens every group message that account could read.
+- Only one device per account handles encrypted messages at a time. Restoring from the
+  recovery phrase brings the identity back, not earlier conversations.
+- Reactions in DMs are stored unencrypted.
+- Voice and video frames are encrypted, but the per-call keys are not tied to identity keys
+  and cannot be verified, so a modified server could swap them.
+
 - Direct-message **text and attachments** are end-to-end encrypted. A file is encrypted on the
   sending device under its own AES-256-GCM key and uploaded as ciphertext with a generated
   `<32 hex>.bin` name and `application/octet-stream`; the file key, original filename, media
@@ -70,7 +88,7 @@ This page documents support boundaries for the v3.1.0 release. Items here are no
   recipient's timeline labels such an attachment as not end-to-end encrypted rather than
   presenting it beside genuinely encrypted files.
 - Queued attachments live in the account's encrypted vault until delivery, so they survive a
-  reload and are removed when the queued message is discarded. They are **not** synchronised
+  reload and are removed when the queued message is discarded. They are **not** synchronized
   between devices: a message queued on one device can only be sent from that device.
 
 ## Linux desktop app
