@@ -119,11 +119,21 @@ export function TogetherHost() {
 
   // Lay the player over the slot, following it through layout changes and the
   // Stage's own entrance motion.
+  //
+  // It follows in BURSTS, not forever: a frame loop that reads the slot's box
+  // on every frame keeps the main thread awake on a screen where nothing moves
+  // (the motion law: an idle screen runs nothing). A burst of frame-by-frame
+  // following starts whenever something could have moved the slot — it
+  // resized, the window resized or scrolled, or an animation or transition
+  // started anywhere (the Stage entering, a panel easing in) — and stops once
+  // the slot has held still for a little while. The box moves by transform, so
+  // following a moving slot is a compositor job rather than a relayout.
   useLayoutEffect(() => {
     const box = boxRef.current;
     if (!box) return;
     let frame = 0;
     let last = '';
+    let stillFrames = 0;
     const place = () => {
       const rect = slot?.getBoundingClientRect();
       const visible = rect && rect.width > 0 && rect.height > 0;
@@ -132,19 +142,44 @@ export function TogetherHost() {
         : PARKED;
       const key = `${next.left}|${next.top}|${next.width}|${next.height}`;
       if (key !== last) {
+        const sized = !last.endsWith(`|${next.width}|${next.height}`);
         last = key;
-        box.style.left = `${next.left}px`;
-        box.style.top = `${next.top}px`;
-        box.style.width = `${next.width}px`;
-        box.style.height = `${next.height}px`;
+        stillFrames = 0;
+        box.style.left = '0px';
+        box.style.top = '0px';
+        box.style.transform = `translate3d(${next.left}px, ${next.top}px, 0)`;
+        if (sized) {
+          box.style.width = `${next.width}px`;
+          box.style.height = `${next.height}px`;
+        }
         box.style.opacity = visible ? '1' : '0';
         box.style.pointerEvents = visible ? 'auto' : 'none';
         box.setAttribute('aria-hidden', visible ? 'false' : 'true');
+      } else {
+        stillFrames += 1;
       }
-      if (slot) frame = window.requestAnimationFrame(place);
+      // Half a second of stillness ends the burst.
+      frame = slot && stillFrames < 30 ? window.requestAnimationFrame(place) : 0;
+    };
+    const follow = () => {
+      stillFrames = 0;
+      if (!frame) frame = window.requestAnimationFrame(place);
     };
     place();
-    return () => window.cancelAnimationFrame(frame);
+    const resize = typeof ResizeObserver === 'function' ? new ResizeObserver(follow) : null;
+    if (slot && resize) resize.observe(slot);
+    window.addEventListener('resize', follow);
+    document.addEventListener('scroll', follow, true);
+    document.addEventListener('animationstart', follow, true);
+    document.addEventListener('transitionrun', follow, true);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      resize?.disconnect();
+      window.removeEventListener('resize', follow);
+      document.removeEventListener('scroll', follow, true);
+      document.removeEventListener('animationstart', follow, true);
+      document.removeEventListener('transitionrun', follow, true);
+    };
   }, [slot, session != null]);
 
   const onStatus = useCallback(
@@ -162,7 +197,11 @@ export function TogetherHost() {
       data-together-host=""
       className="fixed z-[5] overflow-hidden"
       style={{
-        ...PARKED,
+        left: 0,
+        top: 0,
+        width: PARKED.width,
+        height: PARKED.height,
+        transform: `translate3d(${PARKED.left}px, ${PARKED.top}px, 0)`,
         borderRadius: variant === 'stage' ? 'var(--radius-card)' : 'var(--radius-control)',
       }}
     >

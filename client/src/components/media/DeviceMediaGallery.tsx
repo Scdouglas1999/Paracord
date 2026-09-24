@@ -231,7 +231,7 @@ function DeviceMediaTile({ item, decryptedUrl, onOpen }: {
           src={src}
           alt=""
           draggable={false}
-          className="h-full w-full object-cover transition-transform duration-[var(--duration-fast)] ease-[var(--ease-out)] motion-safe:group-hover:scale-[1.02]"
+          className="h-full w-full object-cover transition-transform duration-[var(--duration-fast)] ease-[var(--ease-out)] group-hover:scale-[1.02]"
         />
       ) : failed ? (
         <FileWarning className="absolute inset-0 m-auto h-5 w-5 text-text-muted" aria-hidden />

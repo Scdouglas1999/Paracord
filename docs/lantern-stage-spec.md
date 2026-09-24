@@ -485,6 +485,13 @@ milliseconds.)*
   the spot while its neighbours animate. Two named exceptions: an autocomplete
   (slash commands, mentions) closes the instant the query stops matching,
   because it follows keystrokes; and a surface under reduced motion.
+- **Enforced.** `npm run test:motion-lint` (`client/scripts/motion-lint.mjs`,
+  part of `npm test` and so of CI) fails on a `box-shadow`, `width`, `height`,
+  `filter`, `top`, `left` or `all` inside any `transition`, `@keyframes`,
+  Tailwind `transition-[…]`/`transition-all`/`transition-shadow`, inline
+  transition string or Web Animations keyframe, and on any
+  `prefers-reduced-motion` media query or `motion-safe:`/`motion-reduce:`
+  variant. Its few allowances are named in the script, each with its reason.
 - **Idle is still.** No infinite animation except explicit live indicators (the
   speaking breath, a live dot, typing dots, a loading pulse), which are
   composited-only and pause while the window is hidden (`data-visibility`,

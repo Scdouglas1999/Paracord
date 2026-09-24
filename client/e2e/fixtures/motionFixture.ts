@@ -31,6 +31,8 @@ export const MOTION_HISTORY_EPOCH = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
  * voice room to walk into and three other people to turn their lights on and
  * walk in and out of it.
  */
+/** The guild's name — the server home is the region `${name} home`. */
+export const MOTION_GUILD_NAME = 'Kestrel Robotics';
 export const MOTION_VOICE_CHANNEL_ID = '2002';
 export const MOTION_VOICE_CHANNEL_NAME = 'Shop floor';
 export const MOTION_LOUNGE_CHANNEL_ID = '2003';
@@ -106,7 +108,7 @@ export function litBuilding(inRoom: readonly string[] = ['43', '45', '46']): Rec
       {
         id: MOTION_GUILD_ID,
         owner_id: '42',
-        name: 'Kestrel Robotics',
+        name: MOTION_GUILD_NAME,
         icon_hash: null,
         created_at: new Date().toISOString(),
         member_count: 24,
@@ -380,7 +382,7 @@ export async function installMotionMocks(page: Page): Promise<void> {
       return json(200, [
         guildSummaryFixture({
           id: MOTION_GUILD_ID,
-          name: 'Kestrel Robotics',
+          name: MOTION_GUILD_NAME,
           server_url: 'https://motion.paracord.local',
           owner_id: user.id,
           member_count: 24,
@@ -393,7 +395,7 @@ export async function installMotionMocks(page: Page): Promise<void> {
         200,
         guildDetailFixture({
           id: MOTION_GUILD_ID,
-          name: 'Kestrel Robotics',
+          name: MOTION_GUILD_NAME,
           server_url: 'https://motion.paracord.local',
           owner_id: user.id,
           member_count: 24,

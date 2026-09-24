@@ -31,7 +31,7 @@
 }
 
 .pc-word-row.is-shaking {
-  animation: pc-word-shake 240ms var(--ease-out);
+  animation: pc-word-shake var(--duration-slow) var(--ease-out);
 }
 
 .pc-word-tile {
@@ -78,14 +78,20 @@
 }
 
 .pc-word-tile.is-typed {
-  animation: pc-word-pop 120ms var(--ease-out);
+  animation: pc-word-pop var(--duration-fast) var(--ease-out);
 }
 
 /* The reveal: each tile turns over in 180 ms, one after the other. The
    color lands at the halfway point, when the tile is edge-on. */
 .pc-word-tile.is-revealing {
-  animation: pc-word-flip 180ms var(--ease-out) both;
-  animation-delay: calc(var(--i, 0) * 180ms);
+  animation: pc-word-flip var(--duration-normal) var(--ease-out) both;
+  animation-delay: calc(var(--i, 0) * var(--duration-normal));
+}
+
+/* Reduced motion lands the whole row at once: the global switch shortens every
+   animation to nothing, but a stagger delay would still hold each tile back. */
+:root[data-motion='reduced'] .pc-word-tile.is-revealing {
+  animation-delay: 0s;
 }
 
 @keyframes pc-word-flip {
@@ -160,7 +166,7 @@
   font-size: 0.9375rem;
   text-transform: uppercase;
   box-shadow: var(--shadow-lifted);
-  transition: background-color var(--duration-normal) var(--ease-out), transform var(--duration-fast) var(--ease-out);
+  transition: background-color var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out);
 }
 
 .pc-word-key:hover:not(:disabled) {
@@ -168,7 +174,7 @@
 }
 
 .pc-word-key:active:not(:disabled) {
-  transform: scale(0.97);
+  transform: scale(0.98);
 }
 
 .pc-word-key:disabled {

@@ -196,10 +196,10 @@ a.pc-feed-more:hover {
   text-underline-offset: 2px;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .pc-feed-run-row {
-    transition: none;
-  }
+/* Reduced motion is the one `data-motion` switch (utilities.css), never a
+   media query. */
+:root[data-motion='reduced'] .pc-feed-run-row {
+  transition: none;
 }
 
 /* Add-ons hub */
@@ -237,7 +237,7 @@ a.pc-feed-more:hover {
 }
 
 .pc-feed-source-tile:not(:disabled):active {
-  transform: scale(0.99);
+  transform: scale(0.98);
 }
 
 .pc-feed-source-tile:disabled {
@@ -246,33 +246,33 @@ a.pc-feed-more:hover {
 }
 
 .pc-feed-row {
-  animation: pc-feed-row-in var(--duration-normal) var(--ease-out) both;
+  animation: pc-feed-row-in var(--duration-normal) var(--ease-out) backwards;
 }
 
+/* A run row arriving: the shared 4px rise over --duration-normal. Declares
+   only its off state, like every entrance in primitives.css. */
 @keyframes pc-feed-row-in {
   from {
     opacity: 0;
-    transform: translateY(3px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
+    transform: translate3d(0, 4px, 0);
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .pc-feed-row {
-    animation: none;
-  }
-  .pc-feed-media img,
-  .pc-feed-play,
-  .pc-feed-source-tile {
-    transition: none;
-  }
-  .pc-feed-media:hover img {
-    transform: none;
-  }
-  .pc-feed-media:hover .pc-feed-play {
-    transform: translate(-50%, -50%);
-  }
+:root[data-motion='reduced'] .pc-feed-row {
+  animation: none;
 }
+
+:root[data-motion='reduced'] .pc-feed-media img,
+:root[data-motion='reduced'] .pc-feed-play,
+:root[data-motion='reduced'] .pc-feed-source-tile {
+  transition: none;
+}
+
+:root[data-motion='reduced'] .pc-feed-media:hover img {
+  transform: none;
+}
+
+:root[data-motion='reduced'] .pc-feed-media:hover .pc-feed-play {
+  transform: translate(-50%, -50%);
+}
+

@@ -300,6 +300,12 @@
   --duration-warm-up: 220ms;
   --duration-dim: 400ms;
   --duration-breathe: 1600ms;
+  /* A live card's glow breathes slower than a face does (server-home-spec:
+     "a 2 s cycle"): a card is a room, not a person. */
+  --duration-glow: 2000ms;
+  /* A soundboard play's mark on the tile: the emoji pops in, holds long enough
+     to be read, and lifts away — one beat somebody caused. */
+  --duration-burst: 1400ms;
   /* A shared element travelling from where you clicked to where it lands
      (§5.1 "the thing you click becomes the thing you look at"). The one
      movement longer than a panel, and still inside the page-entrance range. */

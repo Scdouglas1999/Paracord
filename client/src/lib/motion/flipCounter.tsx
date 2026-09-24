@@ -63,7 +63,7 @@ export function RollingNumber({ value, format, className, announce = true }: Rol
             { transform: 'translate3d(0, 0, 0)', opacity: 1 },
             { transform: 'translate3d(0, -100%, 0)', opacity: 0 },
           ],
-          { duration, easing, fill: 'forwards' },
+          { duration, easing, fill: 'forwards', id: 'data-motion-recipe:roll' },
         ),
       );
     }
@@ -74,7 +74,7 @@ export function RollingNumber({ value, format, className, announce = true }: Rol
             { transform: 'translate3d(0, 100%, 0)', opacity: 0 },
             { transform: 'translate3d(0, 0, 0)', opacity: 1 },
           ],
-          { duration, easing, fill: 'backwards' },
+          { duration, easing, fill: 'backwards', id: 'data-motion-recipe:roll' },
         ),
       );
     }

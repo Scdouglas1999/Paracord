@@ -7,7 +7,7 @@ import { useAuthStore } from '../../stores/authStore';
 import { usePermissions } from '../../hooks/usePermissions';
 import { hasPermission, Permissions } from '../../types';
 import { cn } from '../../lib/utils';
-import { walkOutOfRoom } from '../../lib/motion';
+import { useLingering, walkOutOfRoom } from '../../lib/motion';
 import { IconButton } from '../ui';
 import { Tooltip } from '../ui/Tooltip';
 import { StageControlBar } from './stage';
@@ -119,6 +119,8 @@ export function VoiceControlBar({
     const [screenSources, setScreenSources] = useState<ScreenShareSource[]>([]);
     const [sourcesLoading, setSourcesLoading] = useState(false);
     const [showSoundboard, setShowSoundboard] = useState(false);
+    // The soundboard leaves the way it came (§5.2): kept for its exit beat.
+    const soundboardLayer = useLingering(showSoundboard);
 
     const streamMenuRef = useRef<HTMLDivElement>(null);
     const qualityTriggerRef = useRef<HTMLButtonElement>(null);
@@ -525,12 +527,13 @@ export function VoiceControlBar({
                 </IconButton>
             </Tooltip>
         </StageControlBar>
-        {showSoundboard && guildScope && channelId && (
+        {soundboardLayer.value && guildScope && channelId && (
             <SoundboardPopover
                 guildId={guildScope}
                 channelId={channelId}
                 coords={soundboardCoords}
                 panelRef={soundboardPanelRef}
+                leaving={soundboardLayer.leaving}
             />
         )}
         {showSourcePicker && !selfStream && (

@@ -121,7 +121,7 @@ export function TogetherQueue({ session, api, selfUserId, nameOf, onAdd, classNa
                   size="sm"
                   tone="ghost"
                   onClick={() => void runTogether(() => api.removeItem(channelId, item.id))}
-                  className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 group-focus-within:opacity-100"
+                  className="opacity-0 transition-opacity duration-[var(--duration-fast)] ease-[var(--ease-out)] group-hover:opacity-100 focus-visible:opacity-100 group-focus-within:opacity-100"
                 >
                   <X size={14} />
                 </IconButton>
