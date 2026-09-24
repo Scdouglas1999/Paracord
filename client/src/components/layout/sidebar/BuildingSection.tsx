@@ -10,6 +10,9 @@ import { litMembersCaption, type BuildingLight, type RoomLight } from '../../../
 import { useSportsPolling, useSportsSettings } from '../../../hooks/useSportsBoard';
 import { isSportsPath, liveCount } from '../../sports/model';
 import { SportsSidebarRow } from '../../sports/SportsSidebarRow';
+import { DailyWordSidebarRow } from '../../dailyWord/DailyWordSidebarRow';
+import { isDailyWordPath } from '../../dailyWord/model';
+import { useDailyWordSettings } from '../../../hooks/useDailyWord';
 import { RoomRow, ThreadRow, type RoomAttention } from './RoomRow';
 
 /**
@@ -69,6 +72,8 @@ export interface BuildingSectionProps {
   activeNavIndex: number;
   /** Opens the sports board without a full page load. */
   onOpenSports?: (guildId: string) => void;
+  /** Opens the daily word without a full page load. */
+  onOpenDailyWord?: (guildId: string) => void;
 }
 
 export function BuildingSection({
@@ -90,12 +95,17 @@ export function BuildingSection({
   navIndexStart,
   activeNavIndex,
   onOpenSports,
+  onOpenDailyWord,
 }: BuildingSectionProps) {
   const plateIndex = navIndexStart;
   const { settings, board } = useSportsSettings(building.guildId);
   const sportsOn = settings?.enabled === true;
   useSportsPolling(building.guildId, sportsOn, 'sidebar');
   const sportsOpen = sportsOn && isSportsPath(building.guildId);
+  const { enabled: wordOn } = useDailyWordSettings(building.guildId);
+  const wordOpen = wordOn && isDailyWordPath(building.guildId);
+  // A page of its own (Sports, Daily word) is open: the plate is not the current page.
+  const pageOpen = sportsOpen || wordOpen;
   // The server's own colour — the same one its Home card and its Lobby header
   // wear, so the eye learns it. Identity, never state (§6.3): it says WHICH
   // server this is, and it says nothing at all about who is in it.
@@ -148,16 +158,16 @@ export function BuildingSection({
       <button
         type="button"
         role="option"
-        aria-selected={active && !sportsOpen}
-        aria-current={active && !sportsOpen ? 'page' : undefined}
+        aria-selected={active && !pageOpen}
+        aria-current={active && !pageOpen ? 'page' : undefined}
         aria-label={`${building.name} lobby — ${building.caption}`}
         data-nav-index={plateIndex}
-        tabIndex={plateIndex === activeNavIndex && !sportsOpen ? 0 : -1}
+        tabIndex={plateIndex === activeNavIndex && !pageOpen ? 0 : -1}
         onClick={() => onOpenLobby(building)}
         onContextMenu={(event) => onContextMenu?.(event, building)}
         className={cn(
           'pc-focusable mb-1.5 block w-full rounded-[var(--radius-card)] text-left',
-          active && !sportsOpen && 'outline outline-1 outline-offset-2 outline-border-strong',
+          active && !pageOpen && 'outline outline-1 outline-offset-2 outline-border-strong',
         )}
       >
         <BuildingPlate building={building} scale="sidebar" />
@@ -170,6 +180,15 @@ export function BuildingSection({
           active={sportsOpen}
           tabStop={sportsOpen}
           onOpen={onOpenSports}
+        />
+      )}
+
+      {wordOn && (
+        <DailyWordSidebarRow
+          guildId={building.guildId}
+          active={wordOpen}
+          tabStop={wordOpen}
+          onOpen={onOpenDailyWord}
         />
       )}
 

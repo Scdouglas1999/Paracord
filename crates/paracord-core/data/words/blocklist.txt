@@ -1,0 +1,84 @@
+# Words the daily word never uses as an answer and does not accept as a guess.
+# Hand-written for Paracord; one five-letter word per line, "#" starts a comment.
+# Slurs and derogatory words for groups of people.
+chink
+coons
+darky
+dagos
+dykes
+fagot
+faggy
+gooks
+gyppy
+gypsy
+homos
+honky
+kikes
+lesbo
+negro
+nigga
+paddy
+pikey
+pygmy
+spics
+tards
+welsh
+# Insults aimed at people.
+bimbo
+bitch
+idiot
+leper
+loony
+moron
+sissy
+skank
+sluts
+whore
+# Sexual or anatomical.
+anals
+bawdy
+boner
+boobs
+booty
+bosom
+buxom
+clits
+dildo
+harem
+horny
+kinky
+lusty
+milfs
+penis
+prick
+pubic
+pussy
+queer
+semen
+sperm
+spank
+thong
+twats
+wanks
+# Bodily, grim or charged.
+fecal
+feces
+fetal
+fetus
+lynch
+nappy
+obese
+ovary
+slave
+uteri
+vomit
+# Names and words with a proper-noun reading.
+china
+homer
+mecca
+peter
+sheik
+trump
+fanny
+urine
+bowel

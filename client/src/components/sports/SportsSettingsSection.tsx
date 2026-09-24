@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
+import { useCallback, useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { ArrowDown, ArrowUp, Plus, X } from 'lucide-react';
 import {
   FAVORITE_MAX,
@@ -54,7 +54,11 @@ const ADDONS = [
   },
 ] as const;
 
-export function SportsSettingsSection({ guildId }: { guildId: string }) {
+/**
+ * `extra` renders under the Sports card, inside the same scroll: other add-ons
+ * sit there until the add-ons hub lists them itself.
+ */
+export function SportsSettingsSection({ guildId, extra }: { guildId: string; extra?: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -417,6 +421,7 @@ export function SportsSettingsSection({ guildId }: { guildId: string }) {
           </li>
         ))}
       </ul>
+      {extra}
       </div>
       {enabled && dirty && (
         <div className="pc-sports-savebar">

@@ -20,6 +20,7 @@ const GuildPage = lazy(() => import('./pages/GuildPage').then(m => ({ default: m
 const GuildSettingsPage = lazy(() => import('./pages/GuildSettingsPage').then(m => ({ default: m.GuildSettingsPage })));
 const GuildSportsPage = lazy(() => import('./pages/GuildSportsPage').then(m => ({ default: m.GuildSportsPage })));
 const GuildSportsGamePage = lazy(() => import('./pages/GuildSportsGamePage').then(m => ({ default: m.GuildSportsGamePage })));
+const GuildDailyWordPage = lazy(() => import('./pages/GuildDailyWordPage').then(m => ({ default: m.GuildDailyWordPage })));
 const DMPage = lazy(() => import('./pages/DMPage').then(m => ({ default: m.DMPage })));
 const FriendsPage = lazy(() => import('./pages/FriendsPage').then(m => ({ default: m.FriendsPage })));
 const InvitePage = lazy(() => import('./pages/InvitePage').then(m => ({ default: m.InvitePage })));
@@ -498,6 +499,7 @@ export default function App() {
         <Route path="guilds/:guildId/settings" element={lazyRoute(<GuildSettingsPage />)} />
         <Route path="guilds/:guildId/sports" element={lazyRoute(<GuildSportsPage />)} />
         <Route path="guilds/:guildId/sports/:sport/:league/:eventId" element={lazyRoute(<GuildSportsGamePage />)} />
+        <Route path="guilds/:guildId/daily-word" element={lazyRoute(<GuildDailyWordPage />)} />
         <Route path="guilds/:guildId/channels/:channelId" element={lazyRoute(<GuildPage />)} />
         <Route path="dms" element={lazyRoute(<DMPage />)} />
         <Route path="dms/:channelId" element={lazyRoute(<DMPage />)} />

@@ -33,6 +33,8 @@ pub const MIGRATION_TABLE_ORDER: &[&str] = &[
     // Roots (no FK dependencies on other application tables).
     "auth_guard_state",
     "channel_follows",
+    // Each day's answer; no FKs.
+    "daily_word_puzzles",
     "federated_servers",
     "federation_delivery_attempts",
     "federation_events",
@@ -58,6 +60,7 @@ pub const MIGRATION_TABLE_ORDER: &[&str] = &[
     "auth_sessions",
     "bot_applications",
     "bot_reviews",
+    "daily_word_results",
     "email_verification_tokens",
     "federation_remote_users",
     "interaction_tokens",
@@ -124,6 +127,7 @@ pub const MIGRATION_TABLE_ORDER: &[&str] = &[
     "channel_overwrites",
     "event_rsvps",
     "federation_message_map",
+    "guild_daily_word_settings",
     "guild_level_roles",
     "guild_onboarding_role_options",
     "member_roles",

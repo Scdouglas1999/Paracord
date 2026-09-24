@@ -187,6 +187,10 @@ export function UnifiedSidebar() {
     navigate(`/app/guilds/${guildId}/sports`);
   }, [navigate]);
 
+  const openDailyWord = useCallback((guildId: string) => {
+    navigate(`/app/guilds/${guildId}/daily-word`);
+  }, [navigate]);
+
   const openLobby = useCallback(
     (building: BuildingLight) => {
       try {
@@ -380,6 +384,7 @@ export function UnifiedSidebar() {
             openThread={openThread}
             onOpenThread={onOpenThread}
             onOpenSports={openSports}
+            onOpenDailyWord={openDailyWord}
             footer={
               <div className="flex flex-col gap-2">
                 <CallDock />

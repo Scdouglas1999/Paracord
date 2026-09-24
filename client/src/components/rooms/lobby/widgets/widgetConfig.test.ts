@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { DEFAULT_HOME_WIDGETS, HOME_WIDGET_IDS, enabledWidgets, moveWidget, readHomeWidgets } from './widgetConfig';
+import { DEFAULT_HOME_WIDGETS, HOME_WIDGET_IDS, enabledWidgets, listedWidgets, moveWidget, readHomeWidgets } from './widgetConfig';
 
 describe('readHomeWidgets', () => {
   it('gives a server that never chose every widget, in the default order', () => {
@@ -23,6 +23,7 @@ describe('readHomeWidgets', () => {
       'game',
       'pinned',
       'new_here',
+      'daily_word',
     ]);
     expect(read[0]).toEqual({ id: 'media', enabled: false });
     expect(read.slice(2).every((widget) => widget.enabled)).toBe(true);
@@ -50,18 +51,35 @@ describe('enabledWidgets', () => {
           { id: 'pinned', enabled: true },
         ],
       }),
-    ).toEqual(['new_here', 'pinned']);
+      // Daily word came after this list was saved, so it is appended, switched on.
+    ).toEqual(['new_here', 'pinned', 'daily_word']);
   });
 });
 
 describe('moveWidget', () => {
   it('moves one entry and leaves the rest in order', () => {
     const moved = moveWidget(DEFAULT_HOME_WIDGETS, 4, 0).map((widget) => widget.id);
-    expect(moved).toEqual(['pinned', 'coming_up', 'media', 'most_active', 'game', 'new_here']);
+    expect(moved).toEqual(['pinned', 'coming_up', 'media', 'most_active', 'game', 'new_here', 'daily_word']);
   });
 
   it('ignores a move off either end', () => {
     expect(moveWidget(DEFAULT_HOME_WIDGETS, 0, -1)).toEqual(DEFAULT_HOME_WIDGETS);
-    expect(moveWidget(DEFAULT_HOME_WIDGETS, 5, 6)).toEqual(DEFAULT_HOME_WIDGETS);
+    expect(moveWidget(DEFAULT_HOME_WIDGETS, 6, 7)).toEqual(DEFAULT_HOME_WIDGETS);
+  });
+});
+
+describe('listedWidgets', () => {
+  const all = readHomeWidgets(null);
+
+  it('leaves Daily word out while the add-on is off and the saved list never named it', () => {
+    const saved = { widgets: HOME_WIDGET_IDS.filter((id) => id !== 'daily_word').map((id) => ({ id, enabled: true })) };
+    expect(listedWidgets(all, saved, false).map((widget) => widget.id)).not.toContain('daily_word');
+    expect(listedWidgets(all, null, false)).toHaveLength(HOME_WIDGET_IDS.length - 1);
+  });
+
+  it('lists it when the add-on is on, or when the saved list already has it', () => {
+    expect(listedWidgets(all, null, true).map((widget) => widget.id)).toContain('daily_word');
+    const saved = { widgets: [{ id: 'daily_word', enabled: false }] };
+    expect(listedWidgets(readHomeWidgets(saved), saved, false)[0]).toEqual({ id: 'daily_word', enabled: false });
   });
 });

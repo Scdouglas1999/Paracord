@@ -17,6 +17,7 @@ export const HOME_WIDGET_IDS = [
   'game',
   'pinned',
   'new_here',
+  'daily_word',
 ] as const;
 
 export type HomeWidgetId = (typeof HOME_WIDGET_IDS)[number];
@@ -34,6 +35,7 @@ export const HOME_WIDGET_LABELS: Record<HomeWidgetId, string> = {
   game: 'Game',
   pinned: 'Pinned',
   new_here: 'New here',
+  daily_word: 'Daily word',
 };
 
 /** One line under each toggle in settings: when it shows, and what it holds. */
@@ -44,6 +46,7 @@ export const HOME_WIDGET_HINTS: Record<HomeWidgetId, string> = {
   game: 'A live or upcoming game for the teams you follow. Needs Sports.',
   pinned: 'The latest pin in an announcement channel.',
   new_here: 'People who joined in the last 14 days.',
+  daily_word: "Who solved today's word, and your own result. Needs Daily word.",
 };
 
 /** A server that never configured its home page gets every widget, in this order. */
@@ -77,6 +80,23 @@ export function readHomeWidgets(settings: HubSettings | null | undefined): HomeW
     if (!seen.has(id)) out.push({ id, enabled: true });
   }
   return out;
+}
+
+/**
+ * The list the home page settings show and save. The Daily word widget is left
+ * out while the add-on is off on this server, unless the saved list already
+ * names it: a server from before the add-on refuses a widget id it does not
+ * know, so a list that never had it must not gain it there.
+ */
+export function listedWidgets(
+  list: readonly HomeWidgetSetting[],
+  settings: HubSettings | null | undefined,
+  dailyWordOn: boolean,
+): HomeWidgetSetting[] {
+  const saved = Array.isArray(settings?.widgets)
+    && settings.widgets.some((entry) => (entry as { id?: unknown } | null)?.id === 'daily_word');
+  if (dailyWordOn || saved) return [...list];
+  return list.filter((widget) => widget.id !== 'daily_word');
 }
 
 /** The enabled widgets, in order. */
