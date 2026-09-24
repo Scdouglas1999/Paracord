@@ -722,6 +722,28 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
       }));
       break;
 
+    case GatewayEvents.GUILD_SOUNDS_UPDATE: {
+      const soundsGuildId = data.guild_id ? String(data.guild_id) : null;
+      if (soundsGuildId) {
+        void import('../stores/soundboardStore').then(({ useSoundboardStore }) => {
+          const payload = data as { sound?: import('../api/guilds').SoundboardSound; deleted_sound_id?: string };
+          useSoundboardStore
+            .getState()
+            .applySoundsUpdate(soundsGuildId, payload.sound ?? null, payload.deleted_sound_id ?? null);
+        });
+        window.dispatchEvent(new CustomEvent('paracord:sounds-changed', {
+          detail: { guild_id: data.guild_id },
+        }));
+      }
+      break;
+    }
+
+    case GatewayEvents.SOUNDBOARD_PLAY:
+      void import('../lib/features/soundboard')
+        .then(({ handleSoundboardPlay }) => handleSoundboardPlay(data))
+        .catch(() => {});
+      break;
+
     case GatewayEvents.STAGE_INSTANCE_CREATE:
     case GatewayEvents.STAGE_INSTANCE_UPDATE:
     case GatewayEvents.STAGE_INSTANCE_DELETE:

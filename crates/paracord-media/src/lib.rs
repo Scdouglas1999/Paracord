@@ -1,3 +1,4 @@
+pub mod audio;
 pub mod livekit;
 pub mod s3;
 pub mod storage;

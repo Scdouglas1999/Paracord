@@ -38,6 +38,7 @@ pub mod roles;
 pub mod security;
 pub mod server_feed;
 pub mod setup;
+pub mod soundboard;
 pub mod sports;
 pub mod sports_alerts;
 pub mod sports_announce;

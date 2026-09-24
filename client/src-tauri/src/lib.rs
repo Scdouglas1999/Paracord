@@ -1848,6 +1848,7 @@ pub fn run() {
         native_media::commands::voice_set_noise_suppression,
         native_media::commands::voice_switch_input_device,
         native_media::commands::voice_switch_output_device,
+        native_media::commands::voice_play_soundboard,
         native_media::commands::voice_list_output_devices,
         native_media::commands::voice_list_input_devices,
         native_media::commands::voice_enable_video,

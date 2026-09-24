@@ -718,6 +718,79 @@
   opacity: 0.6;
 }
 
+/* -----------------------------------------------------------------------------
+   Soundboard burst — the mark a play leaves on the player's voice tile. The
+   ring breathes out of the tile's edge and the sound's emoji pops in, holds,
+   and lifts away; the whole thing is a single 1.4s beat (§5: it animates
+   because somebody caused it). Reduced motion keeps the emoji, stills the
+   ring, and drops the lift.
+   -------------------------------------------------------------------------- */
+@keyframes pc-soundboard-ring {
+  from {
+    opacity: 0.85;
+    transform: scale(0.94);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.18);
+  }
+}
+
+@keyframes pc-soundboard-emoji {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 6px, 0) scale(0.8);
+  }
+  18% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  70% {
+    opacity: 1;
+    transform: translate3d(0, -2px, 0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(0, -8px, 0) scale(0.96);
+  }
+}
+
+.pc-soundboard-burst {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  /* The burst sits inside the tile's clipped layer, so the ring follows the
+     tile's corners. */
+  border-radius: inherit;
+}
+
+.pc-soundboard-burst::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow:
+    inset 0 0 0 2px rgba(var(--light-ring-rgb), 0.7),
+    0 0 14px rgba(var(--light-ring-rgb), 0.35);
+  animation: pc-soundboard-ring 550ms var(--ease-out) forwards;
+}
+
+.pc-soundboard-burst .pc-soundboard-burst-emoji {
+  animation: pc-soundboard-emoji 1400ms var(--ease-out) forwards;
+}
+
+:root[data-motion='reduced'] .pc-soundboard-burst::before {
+  animation: none;
+  opacity: 0;
+}
+
+:root[data-motion='reduced'] .pc-soundboard-burst .pc-soundboard-burst-emoji {
+  animation: pc-fade 1200ms var(--ease-out) reverse forwards;
+}
+
 /* The on-air pill's live dot breathes only while somebody is actually
    speaking — never as decoration (§5.1, §6.7). */
 /* The breath is the speaking ring's two still layers (see `.pc-speaking`); the

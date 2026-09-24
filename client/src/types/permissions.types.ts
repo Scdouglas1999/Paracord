@@ -29,6 +29,9 @@ export const Permissions = {
   MANAGE_ROLES: 1n << 28n,
   MANAGE_WEBHOOKS: 1n << 29n,
   MANAGE_EMOJIS: 1n << 30n,
+  // Bits 31..=41 are unassigned; 42 is Discord's USE_SOUNDBOARD slot, matching
+  // the server's bit-compatibility convention.
+  USE_SOUNDBOARD: 1n << 42n,
 } as const;
 
 export function hasPermission(permissions: bigint, flag: bigint): boolean {

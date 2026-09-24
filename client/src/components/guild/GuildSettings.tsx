@@ -2,7 +2,7 @@ import { useCurrentAccountScope } from '../../hooks/useCurrentUser';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ChangeEvent, ReactNode } from 'react';
-import { Shield, ShieldAlert, Users, Hash, Link, Gavel, ScrollText, RefreshCw, Smile, Sticker, Calendar, Bot, HardDrive, LayoutTemplate, MessageSquare, TrendingUp, Puzzle } from 'lucide-react';
+import { Shield, ShieldAlert, Users, Hash, Link, Gavel, ScrollText, RefreshCw, Smile, Sticker, Calendar, Bot, HardDrive, LayoutTemplate, MessageSquare, TrendingUp, Puzzle, AudioLines } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router';
 import { guildApi } from '../../api/guilds';
 import { inviteApi } from '../../api/invites';
@@ -11,7 +11,7 @@ import { botApi, type BotApplication, type GuildBotEntry } from '../../api/bots'
 import { emojiApi } from '../../api/emojis';
 import { AutomodSection } from './AutomodSection';
 import { useGuildStore } from '../../stores/guildStore';
-import { invalidateGuildPermissionCache, usePermissions } from '../../hooks/usePermissions';
+import { invalidateGuildPermissionCache, toPermissionBits, usePermissions } from '../../hooks/usePermissions';
 import { Permissions, hasPermission } from '../../types';
 import type { AuditLogEntry, Ban, Channel, Guild, GuildBotConfig, GuildEmoji, Invite, Member, ModerationReport, Role } from '../../types';
 import type { Webhook } from '../../types';
@@ -26,6 +26,7 @@ import { ChannelManager } from './ChannelManager';
 import { FileStorageSection } from './FileStorageSection';
 import { ServerHubSettings } from './ServerHubSettings';
 import { StickersSection } from './StickersSection';
+import { SoundboardSection } from './SoundboardSection';
 import { BotStoreSection } from './BotStoreSection';
 import { OnboardingSettingsSection } from './OnboardingSettingsSection';
 import { EconomySettingsSection } from './EconomySettingsSection';
@@ -63,7 +64,7 @@ interface GuildSettingsProps {
   initialChannelId?: string | null;
 }
 
-type SettingsSection = 'overview' | 'server-hub' | 'bot-store' | 'roles' | 'members' | 'channels' | 'invites' | 'emojis' | 'stickers' | 'webhooks' | 'bots' | 'events' | 'onboarding' | 'bans' | 'reports' | 'audit-log' | 'file-storage' | 'mod-templates' | 'automod' | 'economy' | 'sports';
+type SettingsSection = 'overview' | 'server-hub' | 'bot-store' | 'roles' | 'members' | 'channels' | 'invites' | 'emojis' | 'stickers' | 'soundboard' | 'webhooks' | 'bots' | 'events' | 'onboarding' | 'bans' | 'reports' | 'audit-log' | 'file-storage' | 'mod-templates' | 'automod' | 'economy' | 'sports';
 
 import { DEFAULT_ROLE_COLOR } from '../../lib/colors';
 
@@ -89,6 +90,7 @@ const NAV_ITEMS: { id: SettingsSection; label: string; icon: ReactNode; group: N
   { id: 'channels', label: 'Channels', icon: <Hash size={16} />, group: 'The server' },
   { id: 'emojis', label: 'Emojis', icon: <Smile size={16} />, group: 'The server' },
   { id: 'stickers', label: 'Stickers', icon: <Sticker size={16} />, group: 'The server' },
+  { id: 'soundboard', label: 'Soundboard', icon: <AudioLines size={16} />, group: 'The server' },
   { id: 'events', label: 'Events', icon: <Calendar size={16} />, group: 'The server' },
   { id: 'sports', label: 'Add-ons', icon: <Puzzle size={16} />, group: 'The server' },
   { id: 'file-storage', label: 'File storage', icon: <HardDrive size={16} />, group: 'The server' },
@@ -175,7 +177,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
   const [newRoleName, setNewRoleName] = useState('');
   const [newRoleColor, setNewRoleColor] = useState(DEFAULT_ROLE_COLOR);
   const [editingRoleId, setEditingRoleId] = useState<string | null>(null);
-  const [editingRolePermissions, setEditingRolePermissions] = useState<number>(0);
+  const [editingRolePermissions, setEditingRolePermissions] = useState<bigint>(0n);
   const [editingRoleColor, setEditingRoleColor] = useState(DEFAULT_ROLE_COLOR);
   const [editingRoleHoist, setEditingRoleHoist] = useState(false);
   const [editingRoleMentionable, setEditingRoleMentionable] = useState(false);
@@ -453,6 +455,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
           return canCreateInvite || canManageRoleSettings;
         case 'emojis':
         case 'stickers':
+        case 'soundboard':
           return canManageEmojis || canManageRoleSettings;
         case 'webhooks':
           return canManageWebhooks || canManageRoleSettings;
@@ -521,6 +524,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
       requested === 'invites' ||
       requested === 'emojis' ||
       requested === 'stickers' ||
+      requested === 'soundboard' ||
       requested === 'webhooks' ||
       requested === 'bots' ||
       requested === 'events' ||
@@ -673,7 +677,10 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
   const startEditingRole = (role: Role) => {
     setEditingRoleId(role.id);
     setEditingRoleColor('#' + (role.color || 0).toString(16).padStart(6, '0'));
-    setEditingRolePermissions(typeof role.permissions === 'string' ? parseInt(role.permissions, 10) || 0 : role.permissions);
+    // BigInt keeps bits above 31 (e.g. Use Soundboard at bit 42) that JS
+    // `number` bitwise math would truncate. `role.permissions` arrives as a
+    // string for fresh large masks or a number for small ones.
+    setEditingRolePermissions(toPermissionBits(role.permissions));
     setEditingRoleHoist(role.hoist);
     setEditingRoleMentionable(role.mentionable);
   };
@@ -685,7 +692,9 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
     await runAction(async () => {
       await guildApi.updateRole(guildId, editingRoleId!, {
         color: colorInt,
-        permissions: editingRolePermissions,
+        // The role endpoint takes the bitset as a JSON i64. Every defined bit
+        // fits below 2^53, so narrowing bigint → number here is lossless.
+        permissions: Number(editingRolePermissions),
         hoist: editingRoleHoist,
         mentionable: editingRoleMentionable,
       } as Partial<Role>);
@@ -699,7 +708,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
     setEditingRoleId(null);
   };
 
-  const togglePermission = (flag: number) => {
+  const togglePermission = (flag: bigint) => {
     setEditingRolePermissions((prev) =>
       (prev & flag) ? prev & ~flag : prev | flag
     );
@@ -1281,6 +1290,10 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
 
         {activeSection === 'stickers' && (
           <StickersSection guildId={guildId} canManage={canManageEmojis} />
+        )}
+
+        {activeSection === 'soundboard' && (
+          <SoundboardSection guildId={guildId} canManage={canManageEmojis} />
         )}
 
         {activeSection === 'emojis' && (

@@ -426,6 +426,79 @@ pub async fn voice_set_noise_suppression(
     Ok(())
 }
 
+/// Play a soundboard clip through the call's output device.
+///
+/// `pcm` is 48 kHz interleaved-stereo f32, decoded and resampled in the webview
+/// (`OfflineAudioContext`) — the native session has no compressed-audio decoder
+/// and needs none here. Each play registers a fresh stereo mixer source under a
+/// counter-assigned source id (`SOUNDBOARD_SSRC_*`), so overlapping sounds mix
+/// like overlapping speakers. The mixer-side channel is 50 frames deep, which
+/// paces delivery: `send` blocks once the buffer is full, so frames arrive at
+/// playback rate without a timer. The shared `deafened` flag is checked before
+/// every frame — a deafen mid-clip silences the rest, matching remote audio.
+/// Switching the output device rebuilds the mixer and closes this channel, so
+/// an in-flight clip ends on switch rather than playing to the old device.
+#[tauri::command]
+pub async fn voice_play_soundboard(
+    pcm: Vec<f32>,
+    gain: f32,
+    owner_id: String,
+    state: State<'_, MediaState>,
+) -> Result<(), String> {
+    // Source ids for soundboard plays live in their own counter range so they
+    // can never collide with a participant's hash-derived voice/stream SSRC.
+    static NEXT_SOUNDBOARD_SSRC: std::sync::atomic::AtomicU32 =
+        std::sync::atomic::AtomicU32::new(0x53B0_0000);
+
+    state.calls.check(&owner_id)?;
+
+    let guard = state.session.lock().await;
+    let session = guard.as_ref().ok_or("no active session")?;
+    if session.deafened.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+    if pcm.is_empty() || pcm.len() > 1920 * 250 {
+        // The server caps sounds at 5 s / 1 MB; anything larger is a bug in the
+        // webview's decode-and-resample step, not something to push at the mixer.
+        return Err("soundboard clip is empty or longer than 5 seconds".to_string());
+    }
+    let ssrc = NEXT_SOUNDBOARD_SSRC.fetch_add(1, Ordering::SeqCst);
+    let tx = session
+        .audio_actor
+        .add_stream_playback_source(ssrc)
+        .await
+        .ok_or("audio playback is not running")?;
+    session
+        .audio_actor
+        .set_source_gain(ssrc, gain.clamp(0.0, 2.0));
+    let deafened = session.deafened.clone();
+    drop(guard);
+
+    tokio::spawn(async move {
+        for chunk in pcm.chunks(1920) {
+            if deafened.load(Ordering::SeqCst) {
+                break;
+            }
+            // The fixed-input resampler drops non-960-frame inputs, so the
+            // trailing partial frame is zero-padded to a full 20 ms.
+            let frame = if chunk.len() == 1920 {
+                chunk.to_vec()
+            } else {
+                let mut padded = Vec::with_capacity(1920);
+                padded.extend_from_slice(chunk);
+                padded.resize(1920, 0.0);
+                padded
+            };
+            if tx.send(frame).await.is_err() {
+                break;
+            }
+        }
+        // Dropping `tx` closes the source channel; the mixer task removes the
+        // source once it drains.
+    });
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn voice_switch_input_device(
     device_id: String,

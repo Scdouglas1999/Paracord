@@ -364,58 +364,58 @@ export function OverviewSection({
 // given Manage Webhooks, Manage Emojis or Manage Nicknames from this screen at
 // all, and View Channel could not be taken away.
 //
-// The highest bit the server defines is 1 << 30, so `number` bitwise maths
-// stays inside int32. A flag above that would need this editor to move to
-// BigInt first.
-const PERMISSION_GROUPS: { group: string; perms: { name: string; flag: number }[] }[] = [
+// Flags are bigint: Use Soundboard is bit 42 (Discord's slot for it), which
+// JavaScript `number` bitwise operators silently truncate to int32.
+const PERMISSION_GROUPS: { group: string; perms: { name: string; flag: bigint }[] }[] = [
   {
     group: 'General',
     perms: [
-      { name: 'Manage Channels', flag: 1 << 4 },
-      { name: 'Manage Server', flag: 1 << 5 },
-      { name: 'Manage Roles', flag: 1 << 28 },
-      { name: 'Manage Webhooks', flag: 1 << 29 },
-      { name: 'Manage Emojis', flag: 1 << 30 },
-      { name: 'View Audit log', flag: 1 << 7 },
-      { name: 'Create Invite', flag: 1 << 0 },
+      { name: 'Manage Channels', flag: 1n << 4n },
+      { name: 'Manage Server', flag: 1n << 5n },
+      { name: 'Manage Roles', flag: 1n << 28n },
+      { name: 'Manage Webhooks', flag: 1n << 29n },
+      { name: 'Manage Emojis', flag: 1n << 30n },
+      { name: 'View Audit log', flag: 1n << 7n },
+      { name: 'Create Invite', flag: 1n << 0n },
     ],
   },
   {
     group: 'Membership',
     perms: [
-      { name: 'Kick Members', flag: 1 << 1 },
-      { name: 'Ban Members', flag: 1 << 2 },
-      { name: 'Change Nickname', flag: 1 << 26 },
-      { name: 'Manage Nicknames', flag: 1 << 27 },
-      { name: 'Administrator', flag: 1 << 3 },
+      { name: 'Kick Members', flag: 1n << 1n },
+      { name: 'Ban Members', flag: 1n << 2n },
+      { name: 'Change Nickname', flag: 1n << 26n },
+      { name: 'Manage Nicknames', flag: 1n << 27n },
+      { name: 'Administrator', flag: 1n << 3n },
     ],
   },
   {
     group: 'Text',
     perms: [
-      { name: 'View Channel', flag: 1 << 10 },
-      { name: 'Send Messages', flag: 1 << 11 },
-      { name: 'Read Message History', flag: 1 << 16 },
-      { name: 'Manage Messages', flag: 1 << 13 },
-      { name: 'Attach Files', flag: 1 << 15 },
-      { name: 'Embed Links', flag: 1 << 14 },
-      { name: 'Add reactions', flag: 1 << 6 },
-      { name: 'Use External Emojis', flag: 1 << 18 },
-      { name: 'Mention Everyone', flag: 1 << 17 },
-      { name: 'Send TTS Messages', flag: 1 << 12 },
+      { name: 'View Channel', flag: 1n << 10n },
+      { name: 'Send Messages', flag: 1n << 11n },
+      { name: 'Read Message History', flag: 1n << 16n },
+      { name: 'Manage Messages', flag: 1n << 13n },
+      { name: 'Attach Files', flag: 1n << 15n },
+      { name: 'Embed Links', flag: 1n << 14n },
+      { name: 'Add reactions', flag: 1n << 6n },
+      { name: 'Use External Emojis', flag: 1n << 18n },
+      { name: 'Mention Everyone', flag: 1n << 17n },
+      { name: 'Send TTS Messages', flag: 1n << 12n },
     ],
   },
   {
     group: 'Voice',
     perms: [
-      { name: 'Connect', flag: 1 << 20 },
-      { name: 'Speak', flag: 1 << 21 },
-      { name: 'Stream', flag: 1 << 9 },
-      { name: 'Use Voice Activity', flag: 1 << 25 },
-      { name: 'Priority Speaker', flag: 1 << 8 },
-      { name: 'Mute Members', flag: 1 << 22 },
-      { name: 'Deafen Members', flag: 1 << 23 },
-      { name: 'Move Members', flag: 1 << 24 },
+      { name: 'Connect', flag: 1n << 20n },
+      { name: 'Speak', flag: 1n << 21n },
+      { name: 'Stream', flag: 1n << 9n },
+      { name: 'Use Voice Activity', flag: 1n << 25n },
+      { name: 'Priority Speaker', flag: 1n << 8n },
+      { name: 'Use Soundboard', flag: 1n << 42n },
+      { name: 'Mute Members', flag: 1n << 22n },
+      { name: 'Deafen Members', flag: 1n << 23n },
+      { name: 'Move Members', flag: 1n << 24n },
     ],
   },
 ];
@@ -427,14 +427,14 @@ interface RolesSectionProps {
   newRoleName: string;
   newRoleColor: string;
   editingRoleId: string | null;
-  editingRolePermissions: number;
+  editingRolePermissions: bigint;
   editingRoleColor: string;
   editingRoleHoist: boolean;
   editingRoleMentionable: boolean;
   onNewRoleNameChange: (v: string) => void;
   onNewRoleColorChange: (v: string) => void;
   onEditingRoleColorChange: (v: string) => void;
-  onEditingRolePermissionsToggle: (flag: number) => void;
+  onEditingRolePermissionsToggle: (flag: bigint) => void;
   onEditingRoleHoistChange: (v: boolean) => void;
   onEditingRoleMentionableChange: (v: boolean) => void;
   onCreateRole: () => void;
@@ -636,7 +636,7 @@ export function RolesSection({
                               <ToggleRow
                                 key={perm.name}
                                 label={perm.name}
-                                checked={(editingRolePermissions & perm.flag) !== 0}
+                                checked={(editingRolePermissions & perm.flag) !== 0n}
                                 onChange={() => onEditingRolePermissionsToggle(perm.flag)}
                               />
                             ))}

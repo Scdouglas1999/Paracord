@@ -3234,6 +3234,22 @@ function commitCall(owner: CallSession, data: VoiceJoinResponse, media: { room: 
   });
   if ('room' in media) syncLivekitRoomPresence(media.room);
   playVoiceJoinSound();
+  // Preload the guild's soundboard so the first play is instant. The lazy
+  // import keeps the audio engine out of this module's import graph.
+  if (owner.target.guildId && owner.target.guildId !== 'dm') {
+    const preloadGuildId = owner.target.guildId;
+    void Promise.all([
+      import('./soundboardStore'),
+      import('../lib/features/soundboard'),
+    ])
+      .then(async ([{ useSoundboardStore }, { preloadGuildSounds }]) => {
+        const sounds = await useSoundboardStore.getState().loadSounds(preloadGuildId);
+        preloadGuildSounds(sounds);
+      })
+      .catch(() => {
+        /* a soundboard that fails to preload must not affect the call */
+      });
+  }
 }
 
 async function performCallJoin(owner: CallSession, previousMute: boolean, previousDeaf: boolean): Promise<void> {

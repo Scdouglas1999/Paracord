@@ -1,9 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Mic, MicOff, Headphones, HeadphoneOff, MonitorUp, PhoneOff, ChevronUp, AlertTriangle, MonitorOff, MessageSquare, Radio, Check, Video, VideoOff, Hand } from 'lucide-react';
+import { Mic, MicOff, Headphones, HeadphoneOff, MonitorUp, PhoneOff, ChevronUp, AlertTriangle, MonitorOff, MessageSquare, Radio, Check, Video, VideoOff, Hand, AudioLines } from 'lucide-react';
 import { useVoice } from '../../hooks/useVoice';
 import { useStream } from '../../hooks/useStream';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { useAuthStore } from '../../stores/authStore';
+import { usePermissions } from '../../hooks/usePermissions';
+import { hasPermission, Permissions } from '../../types';
 import { cn } from '../../lib/utils';
 import { walkOutOfRoom } from '../../lib/motion';
 import { IconButton } from '../ui';
@@ -11,6 +13,7 @@ import { Tooltip } from '../ui/Tooltip';
 import { StageControlBar } from './stage';
 import { ScreenSharePickerModal } from './ScreenSharePickerModal';
 import { InCallDeviceMenu } from './InCallDeviceMenu';
+import { SoundboardPopover } from './SoundboardPopover';
 import {
   StreamOverlayPortal,
   useAnchoredOverlayCoords,
@@ -88,6 +91,7 @@ export function VoiceControlBar({
         toggleVideo,
         leaveChannel,
         channelId,
+        guildId,
     } = useVoice();
     const { selfStream, startStream, stopStream } = useStream();
     const streamAudioWarning = useVoiceStore((s) => s.streamAudioWarning);
@@ -111,18 +115,29 @@ export function VoiceControlBar({
     const [showSourcePicker, setShowSourcePicker] = useState(false);
     const [screenSources, setScreenSources] = useState<ScreenShareSource[]>([]);
     const [sourcesLoading, setSourcesLoading] = useState(false);
+    const [showSoundboard, setShowSoundboard] = useState(false);
 
     const streamMenuRef = useRef<HTMLDivElement>(null);
     const qualityTriggerRef = useRef<HTMLButtonElement>(null);
     const qualityPanelRef = useRef<HTMLDivElement>(null);
     const warningTriggerRef = useRef<HTMLButtonElement>(null);
     const warningPanelRef = useRef<HTMLDivElement>(null);
+    const soundboardTriggerRef = useRef<HTMLButtonElement>(null);
+    const soundboardPanelRef = useRef<HTMLDivElement>(null);
 
     const streamIssueMessage = streamError || streamAudioWarning;
+
+    // The soundboard button rides on the guild-level grant; the server applies
+    // channel overwrites authoritatively on play.
+    const guildScope = guildId && guildId !== 'dm' ? guildId : null;
+    const { permissions: guildPermissions, isAdmin: isGuildAdmin } = usePermissions(guildScope);
+    const canUseSoundboard =
+        isGuildAdmin || hasPermission(guildPermissions, Permissions.USE_SOUNDBOARD);
 
     const closeStreamOverlays = useCallback(() => {
         setShowStreamMenu(false);
         setShowError(false);
+        setShowSoundboard(false);
     }, []);
 
     const streamOverlayInside = useCallback(
@@ -130,15 +145,24 @@ export function VoiceControlBar({
             Boolean(
                 streamMenuRef.current?.contains(target) ||
                     qualityPanelRef.current?.contains(target) ||
-                    warningPanelRef.current?.contains(target),
+                    warningPanelRef.current?.contains(target) ||
+                    soundboardTriggerRef.current?.contains(target) ||
+                    soundboardPanelRef.current?.contains(target),
             ),
         [],
     );
 
     useOverlayDismiss(
-        showStreamMenu || showError,
+        showStreamMenu || showError || showSoundboard,
         closeStreamOverlays,
         streamOverlayInside,
+    );
+
+    const soundboardCoords = useAnchoredOverlayCoords(
+        showSoundboard,
+        soundboardTriggerRef,
+        'above-end',
+        300,
     );
 
     const qualityCoords = useAnchoredOverlayCoords(
@@ -311,6 +335,21 @@ export function VoiceControlBar({
                 </IconButton>
             </Tooltip>
 
+            {guildScope && canUseSoundboard && (
+                <Tooltip content="Soundboard" side="top">
+                    <IconButton
+                        ref={soundboardTriggerRef}
+                        label={showSoundboard ? 'Close soundboard' : 'Open soundboard'}
+                        size="stage"
+                        tone="raised"
+                        active={showSoundboard}
+                        onClick={() => setShowSoundboard((v) => !v)}
+                    >
+                        <AudioLines size={20} />
+                    </IconButton>
+                </Tooltip>
+            )}
+
             {!listenOnly && <Tooltip content={selfVideo ? 'Turn off camera' : 'Turn on camera'} side="top">
                 <IconButton
                     label={selfVideo ? 'Turn off camera' : 'Turn on camera'}
@@ -478,6 +517,14 @@ export function VoiceControlBar({
                 </IconButton>
             </Tooltip>
         </StageControlBar>
+        {showSoundboard && guildScope && channelId && (
+            <SoundboardPopover
+                guildId={guildScope}
+                channelId={channelId}
+                coords={soundboardCoords}
+                panelRef={soundboardPanelRef}
+            />
+        )}
         {showSourcePicker && !selfStream && (
             <ScreenSharePickerModal
                 sources={screenSources}

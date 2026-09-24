@@ -40,6 +40,14 @@ bitflags! {
         const MANAGE_ROLES         = 1 << 28;
         const MANAGE_WEBHOOKS      = 1 << 29;
         const MANAGE_EMOJIS        = 1 << 30;
+        // Bits 31..=41 are unassigned Paracord-side (Discord fills some of them
+        // with permissions we do not implement). Bit 42 is Discord's
+        // USE_SOUNDBOARD slot; keeping its numbering preserves the same
+        // bit-compatibility convention the rest of this table follows. Older
+        // clients and servers ignore unknown bits (`from_bits` rejects them on
+        // role writes, `from_bits_truncate` drops them on reads), so a bitmask
+        // carrying it round-trips safely.
+        const USE_SOUNDBOARD       = 1 << 42;
     }
 }
 
@@ -80,6 +88,7 @@ impl Default for Permissions {
             | Self::SPEAK
             | Self::STREAM
             | Self::USE_VAD
+            | Self::USE_SOUNDBOARD
             | Self::CHANGE_NICKNAME
     }
 }
@@ -89,20 +98,32 @@ mod tests {
     use super::Permissions;
 
     #[test]
-    fn all_bitmask_is_contiguous_except_reserved_bit_19() {
-        // Highest defined flag is MANAGE_EMOJIS (bit 30), so every bit 0..=30 is
-        // set except bit 19, which is intentionally reserved (see the flag
-        // definitions). This guards against accidentally filling the gap or
-        // shifting a flag, which would silently reinterpret stored bitmasks.
-        let expected = ((1_i64 << 31) - 1) & !(1_i64 << 19);
+    fn all_bitmask_is_contiguous_except_reserved_bit_19_and_unused_31_to_41() {
+        // Bits 0..=30 are set except bit 19 (intentionally reserved; see the
+        // flag definitions), plus USE_SOUNDBOARD at bit 42 — Discord's slot for
+        // it. Bits 31..=41 stay unassigned. This guards against accidentally
+        // filling a gap or shifting a flag, which would silently reinterpret
+        // stored bitmasks.
+        let expected = (((1_i64 << 31) - 1) & !(1_i64 << 19)) | (1_i64 << 42);
         assert_eq!(Permissions::all().bits(), expected);
-        assert_eq!(Permissions::all().bits(), 0x7FF7_FFFF);
         // The reserved bit must never be part of `all()`.
         assert_eq!(Permissions::all().bits() & (1_i64 << 19), 0);
         // `from_bits_truncate` must drop the reserved bit rather than surface it.
         assert_eq!(
             Permissions::from_bits_truncate(1_i64 << 19),
             Permissions::empty()
+        );
+    }
+
+    #[test]
+    fn use_soundboard_uses_discord_bit_42_and_defaults_on() {
+        assert_eq!(Permissions::USE_SOUNDBOARD.bits(), 1_i64 << 42);
+        assert!(Permissions::default().contains(Permissions::USE_SOUNDBOARD));
+        // An unknown-bit payload from a newer peer still parses to the flags
+        // this build knows about.
+        assert_eq!(
+            Permissions::from_bits_truncate(1_i64 << 42 | 1_i64 << 63),
+            Permissions::USE_SOUNDBOARD
         );
     }
 

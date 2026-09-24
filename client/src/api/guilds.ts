@@ -61,6 +61,24 @@ export interface Sticker {
   created_at: string;
 }
 
+/** A soundboard sound: `GET /guilds/{id}/sounds` etc. */
+export interface SoundboardSound {
+  id: string;
+  guild_id: string;
+  name: string;
+  /** Unicode emoji or a `<a?:name:id>` custom-emoji token; null = default mark. */
+  emoji?: string | null;
+  /** 0–100; combined client-side with the listener's own soundboard volume. */
+  volume: number;
+  duration_ms: number;
+  content_type: string;
+  size: number;
+  creator_id?: string | null;
+  /** Authenticated asset URL — resolve with `resolveResourceUrl` + ticket. */
+  sound_url: string;
+  created_at: string;
+}
+
 export interface GuildMessageSearchHit {
   message: Message;
   channel_id: string;
@@ -222,6 +240,31 @@ export function createGuildApi(getApi: () => RestClient) {
       stickerId: string,
       payload: { name?: string; tags?: string[] },
     ) => getApi().patch<Sticker>(`/guilds/${guildId}/stickers/${stickerId}`, payload),
+
+    listSounds: async (guildId: string) =>
+      getApi().get<SoundboardSound[]>(`/guilds/${guildId}/sounds`),
+    createSound: async (
+      guildId: string,
+      payload: { name: string; emoji?: string; volume?: number; file: File },
+    ) => {
+      const formData = new FormData();
+      formData.append('name', payload.name);
+      if (payload.emoji) formData.append('emoji', payload.emoji);
+      if (payload.volume != null) formData.append('volume', String(payload.volume));
+      formData.append('file', payload.file);
+      // Same note as sticker uploads: without the explicit multipart content
+      // type axios re-encodes FormData as JSON and the file never arrives.
+      return getApi().post<SoundboardSound>(`/guilds/${guildId}/sounds`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+    },
+    updateSound: async (
+      guildId: string,
+      soundId: string,
+      payload: { name?: string; emoji?: string; volume?: number },
+    ) => getApi().patch<SoundboardSound>(`/guilds/${guildId}/sounds/${soundId}`, payload),
+    deleteSound: async (guildId: string, soundId: string) =>
+      getApi().delete(`/guilds/${guildId}/sounds/${soundId}`),
     uploadBanner: async (guildId: string, file: File) => {
       const formData = new FormData();
       formData.append('banner', file);

@@ -67,6 +67,7 @@ const PERMISSION_GROUPS: { group: string; perms: { key: PermKey; label: string }
       { key: 'MUTE_MEMBERS', label: 'Mute Members' },
       { key: 'DEAFEN_MEMBERS', label: 'Deafen Members' },
       { key: 'MOVE_MEMBERS', label: 'Move Members' },
+      { key: 'USE_SOUNDBOARD', label: 'Use Soundboard' },
     ],
   },
 ];
