@@ -846,7 +846,9 @@ jobs:
             "artifacts/client-macos-x86_64/dmg/*.dmg"
             "artifacts/client-macos-x86_64/macos/*.app.tar.gz"
             "artifacts/client-macos-x86_64/macos/*.app.tar.gz.sig"
-            "artifacts/latest.json"
+            # Only produced when an updater signing key is configured; a
+            # bracket glob so nullglob drops it when it was not generated.
+            "artifacts/latest[.]json"
           )
           for pattern in "${patterns[@]}"; do
             for file in $pattern; do
