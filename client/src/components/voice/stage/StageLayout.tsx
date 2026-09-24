@@ -38,6 +38,8 @@ export interface StageLayoutProps extends Omit<React.HTMLAttributes<HTMLDivEleme
    * rises 80ms behind the tile landing.
    */
   sharedName?: string | null;
+  /** Phone only: a taller dominant tile (a shared video with its controls). */
+  phoneDominantHeight?: number;
 }
 
 /**
@@ -61,6 +63,7 @@ export const StageLayout = React.forwardRef<HTMLDivElement, StageLayoutProps>(
       ribbon,
       phone = false,
       sharedName = null,
+      phoneDominantHeight,
       className,
       ...props
     },
@@ -83,7 +86,7 @@ export const StageLayout = React.forwardRef<HTMLDivElement, StageLayoutProps>(
             <div
               className="shrink-0"
               data-motion-shared={sharedName ?? undefined}
-              style={{ height: PHONE_DOMINANT_HEIGHT }}
+              style={{ height: phoneDominantHeight ?? PHONE_DOMINANT_HEIGHT }}
             >
               {dominant}
             </div>
@@ -121,6 +124,9 @@ export const StageLayout = React.forwardRef<HTMLDivElement, StageLayoutProps>(
             className="grid min-h-0 flex-1 gap-[var(--gutter)]"
             data-motion-shared={sharedName ?? undefined}
             style={{
+              // One column that never grows past the plate: a dominant tile
+              // with a measured width (a fitted shared video) must not widen it.
+              gridTemplateColumns: 'minmax(0, 1fr)',
               gridTemplateRows: speakers && dominant
                 ? `minmax(0, 1fr) ${SPEAKER_STRIP_HEIGHT}px`
                 : 'minmax(0, 1fr)',

@@ -795,6 +795,7 @@ async fn main() -> Result<()> {
             .max_capacity(10_000)
             .time_to_live(std::time::Duration::from_secs(300))
             .build(),
+        together: Arc::new(paracord_core::together::TogetherManager::new()),
     };
 
     // Membership is what decides a guild event's audience. Wiring the index to

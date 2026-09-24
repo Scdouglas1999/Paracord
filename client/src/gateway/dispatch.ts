@@ -7,6 +7,8 @@ import { useMemberStore } from '../stores/memberStore';
 import { usePresenceStore } from '../stores/presenceStore';
 import { republishPresenceAfterReconnect } from '../lib/presenceActivities';
 import { useVoiceStore } from '../stores/voiceStore';
+import { useTogetherStore } from '../stores/togetherStore';
+import type { TogetherActivityUpdate, TogetherSessionUpdate } from '../lib/together/model';
 import { useTypingStore } from '../stores/typingStore';
 import { useRelationshipStore } from '../stores/relationshipStore';
 import { useUIStore } from '../stores/uiStore';
@@ -103,6 +105,19 @@ export function resolveEmojiKey(emoji: EmojiRef | undefined): string | undefined
 function warnDispatchParseFailure(event: string, reason: string): void {
   // Redacted: never log payload contents, only the event name and cause.
   console.warn(`[gateway] dropping malformed ${event} payload: ${reason}`);
+}
+
+function isTogetherSessionUpdate(data: unknown): data is TogetherSessionUpdate {
+  const update = data as Partial<TogetherSessionUpdate> | null;
+  return typeof update?.channel_id === 'string' && typeof update.revision === 'number' && 'session' in update;
+}
+
+function isTogetherActivityUpdate(data: unknown): data is TogetherActivityUpdate {
+  const update = data as Partial<TogetherActivityUpdate> | null;
+  return typeof update?.guild_id === 'string'
+    && typeof update.channel_id === 'string'
+    && typeof update.revision === 'number'
+    && 'activity' in update;
 }
 
 function isCompleteMember(data: unknown): data is Member {
@@ -775,6 +790,22 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
         if (selfUserId && eventUserId && eventUserId === selfUserId) {
           if (memberScope) refreshGuildChannelVisibility(data.guild_id, memberScope);
         }
+      }
+      break;
+
+    case GatewayEvents.TOGETHER_SESSION_UPDATE:
+      if (isTogetherSessionUpdate(data)) {
+        useTogetherStore.getState().applySessionUpdate(data, getServerUser(serverId)?.id ?? null);
+      } else {
+        warnDispatchParseFailure(event, 'missing channel_id or revision');
+      }
+      break;
+
+    case GatewayEvents.TOGETHER_ACTIVITY_UPDATE:
+      if (isTogetherActivityUpdate(data)) {
+        useTogetherStore.getState().applyActivityUpdate(data);
+      } else {
+        warnDispatchParseFailure(event, 'missing guild_id, channel_id or revision');
       }
       break;
 

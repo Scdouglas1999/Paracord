@@ -7,6 +7,7 @@ import { cn } from '../../../lib/utils';
 import { NavRow, SectionLabel } from '../../ui';
 import { BuildingPlate } from '../../light';
 import { litMembersCaption, type BuildingLight, type RoomLight } from '../../../lib/attention/light';
+import { useGuildTogether } from '../../../hooks/useGuildTogether';
 import { useSportsPolling, useSportsSettings } from '../../../hooks/useSportsBoard';
 import { isSportsPath, liveCount } from '../../sports/model';
 import { SportsSidebarRow } from '../../sports/SportsSidebarRow';
@@ -101,6 +102,8 @@ export function BuildingSection({
   const { settings, board } = useSportsSettings(building.guildId);
   const sportsOn = settings?.enabled === true;
   useSportsPolling(building.guildId, sportsOn, 'sidebar');
+  // "Watching …" under the voice channels that have a session going.
+  useGuildTogether(building.guildId);
   const sportsOpen = sportsOn && isSportsPath(building.guildId);
   const { enabled: wordOn } = useDailyWordSettings(building.guildId);
   const wordOpen = wordOn && isDailyWordPath(building.guildId);

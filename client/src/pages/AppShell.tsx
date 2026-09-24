@@ -14,6 +14,7 @@ import { ContextPanel } from '../components/layout/ContextPanel';
 import { CommandPalette } from '../components/layout/CommandPalette';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { OnAirDock } from '../components/voice/OnAirDock';
+import { TogetherHost } from '../components/voice/together/TogetherHost';
 import { MotionDirector } from '../components/motion/MotionDirector';
 import { MobileBottomNav } from '../components/layout/MobileBottomNav';
 import { useUIStore } from '../stores/uiStore';
@@ -236,6 +237,13 @@ export function AppShell() {
             (§5.1). It renders nothing — it is one subscription and two effects,
             mounted once so four subtrees cannot each grow their own copy. */}
         <MotionDirector />
+
+        {/* The shared Watch/Listen together player of the call you are in:
+            one for the whole app, laid over the Stage when you are there and
+            still playing when you are not. */}
+        <ErrorBoundary variant="section" label="Watch together">
+          <TogetherHost />
+        </ErrorBoundary>
 
         {/* Skip-to-content for keyboard/screen-reader users */}
         <a

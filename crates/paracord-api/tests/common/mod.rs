@@ -464,6 +464,7 @@ pub async fn build_test_app(options: TestAppOptions) -> anyhow::Result<TestApp> 
             .max_capacity(10_000)
             .time_to_live(std::time::Duration::from_secs(300))
             .build(),
+        together: Arc::new(paracord_core::together::TogetherManager::new()),
     };
 
     // Production wiring (see `paracord-server/src/main.rs`): recording a

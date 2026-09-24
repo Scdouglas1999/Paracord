@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, type ReactNode } from 'react';
 import { Mic, MicOff, Headphones, HeadphoneOff, MonitorUp, PhoneOff, ChevronUp, AlertTriangle, MonitorOff, MessageSquare, Radio, Check, Video, VideoOff, Hand, AudioLines } from 'lucide-react';
 import { useVoice } from '../../hooks/useVoice';
 import { useStream } from '../../hooks/useStream';
@@ -71,6 +71,7 @@ export function VoiceControlBar({
     requestToSpeakPending = false,
     requestBusy = false,
     onToggleRequestToSpeak,
+    extraControls,
 }: {
     onToggleChat?: () => void;
     isChatOpen?: boolean;
@@ -78,6 +79,8 @@ export function VoiceControlBar({
     requestToSpeakPending?: boolean;
     requestBusy?: boolean;
     onToggleRequestToSpeak?: () => void;
+    /** Call-specific controls placed before the chat toggle (Watch together). */
+    extraControls?: ReactNode;
 }) {
     const {
         selfMute,
@@ -480,6 +483,8 @@ export function VoiceControlBar({
                     </div>
                 )}
             </div>}
+
+            {extraControls}
 
             {onToggleChat && (
                 <Tooltip content={isChatOpen ? 'Hide chat' : 'Show chat'} side="top">

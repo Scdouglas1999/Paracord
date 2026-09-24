@@ -24,6 +24,21 @@ function event(id: string, start: string, status = 1, end?: string): HomeEvent {
 }
 
 describe('liveNow', () => {
+  it('leads with a call watching together, in place of its plain call card', () => {
+    const live = liveNow({
+      rooms: [room('big', 4), room('movie', 2), room('empty', 0)],
+      stageChannelIds: new Set(),
+      events: [],
+      games: [],
+      together: {
+        movie: { session_id: 's', kind: 'watch', started_by: 'u', playing: true, title: 'Film', source: 'url', thumbnail: null, item_count: 1 },
+        // A session in its empty-call grace has nobody to show.
+        empty: { session_id: 't', kind: 'listen', started_by: 'u', playing: true, title: 'Song', source: 'url', thumbnail: null, item_count: 1 },
+      },
+    });
+    expect(live.all.map((item) => item.key)).toEqual(['together:movie', 'voice:big']);
+  });
+
   it('is empty when nothing is live', () => {
     const live = liveNow({ rooms: [room('a', 0), room('b', 0)], stageChannelIds: new Set(), events: [], games: [] });
     expect(live.all).toEqual([]);

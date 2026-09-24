@@ -21,7 +21,6 @@ use crate::session::Session;
 const HEARTBEAT_INTERVAL_MS: u64 = 41250;
 const HEARTBEAT_TIMEOUT_MS: u64 = 90000;
 const SESSION_TTL_SECONDS: i64 = 3600;
-const HEARTBEAT_ACK_MSG: &str = r#"{"op":11}"#;
 const HELLO_MSG_PREFIX: &str = r#"{"op":10,"d":{"heartbeat_interval":"#;
 const HELLO_MSG_SUFFIX: &str = r#"}}"#;
 const SESSION_CACHE_MAX_ENTRIES_DEFAULT: usize = 20_000;
@@ -2989,9 +2988,16 @@ async fn handle_client_message(
 
     match op {
         OP_HEARTBEAT => {
+            // The ACK carries the server's wall clock so a client can estimate
+            // its offset from the round trip (shared playback in Watch
+            // together needs it). Older clients ignore `d`.
+            let ack = format!(
+                r#"{{"op":{OP_HEARTBEAT_ACK},"d":{{"server_time_ms":{}}}}}"#,
+                chrono::Utc::now().timestamp_millis()
+            );
             let _ = send_ws_text_logged(
                 sender,
-                HEARTBEAT_ACK_MSG.to_string(),
+                ack,
                 compressor,
                 Some(session.user_id),
                 Some(session.session_id.as_str()),

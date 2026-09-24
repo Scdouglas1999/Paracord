@@ -99,6 +99,11 @@ export const GatewayEvents = {
 
   // Economy
   GUILD_MEMBER_XP_UPDATE: 'GUILD_MEMBER_XP_UPDATE',
+
+  // Watch together / Listen together: the full session to the people in the
+  // call, and a slim summary to everyone who can see the voice channel.
+  TOGETHER_SESSION_UPDATE: 'TOGETHER_SESSION_UPDATE',
+  TOGETHER_ACTIVITY_UPDATE: 'TOGETHER_ACTIVITY_UPDATE',
 } as const;
 
 export type GatewayEvent = (typeof GatewayEvents)[keyof typeof GatewayEvents];

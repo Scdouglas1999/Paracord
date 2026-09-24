@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Check,
   ChevronLeft,
+  Clapperboard,
   EyeOff,
   Hand,
   LayoutList,
@@ -45,6 +46,13 @@ import { RoomChat } from './RoomChat';
 import { displayName } from '../../lib/displayName';
 import { roomSharedName, walkOutOfRoom } from '../../lib/motion';
 import { ErrorBoundary } from '../../components/ErrorBoundary';
+import { TogetherButton, TogetherSheetFor } from '../../components/voice/together/TogetherButton';
+import {
+  PHONE_WATCH_HEIGHT,
+  TogetherNowPlaying,
+  TogetherWatchStage,
+} from '../../components/voice/together/TogetherStage';
+import { useTogether } from '../../components/voice/together/useTogether';
 
 type VideoLayout = 'top' | 'side' | 'pip' | 'hidden';
 
@@ -100,6 +108,11 @@ export function VoiceStageChannel({
   const mediaEngine = useVoiceStore((s) => s.mediaEngine);
   const webcamTiles = useWebcamTiles();
   const navigate = useNavigate();
+  // Watch together / Listen together in this call, if one is playing.
+  const togetherInCall = useTogether();
+  const together = togetherInCall && togetherInCall.channelId === channelId ? togetherInCall : null;
+  const togetherKind = together?.session?.kind ?? null;
+  const [togetherSheetOpen, setTogetherSheetOpen] = useState(false);
 
   // The room, as light (WP1). Who is here, how long it has been lit and what
   // the header says all come from here — the Stage never re-derives a light.
@@ -789,6 +802,12 @@ export function VoiceStageChannel({
                   Invite people
                 </Button>
               )}
+              {isPhoneLayout && together && !isStage && (
+                <Button variant="ghost" onClick={() => { setTogetherSheetOpen(true); setMoreMenuOpen(false); }}>
+                  <Clapperboard size={16} className="mr-1.5" />
+                  {together.session ? 'Add to what is playing' : 'Watch or listen together'}
+                </Button>
+              )}
               <VoiceConnectionCheckButton variant="ghost" label="Run a connection check" />
             </div>
           </Popover>
@@ -893,8 +912,18 @@ export function VoiceStageChannel({
     </Raised>
   ) : undefined;
 
+  // A share someone chose to watch keeps the big tile; otherwise a Watch
+  // together session takes it and the people move to the strip.
+  const watchTogether = together && togetherKind === 'watch' && videoLayout !== 'side' && !watchedStreamerId;
   const dominant = (() => {
     if (videoLayout === 'side') return splitElement;
+    if (watchTogether && together) {
+      return (
+        <ErrorBoundary variant="section" label="Watch together">
+          <TogetherWatchStage together={together} phone={isPhoneLayout} />
+        </ErrorBoundary>
+      );
+    }
     if (!watchedStreamerId) return null;
     if (videoLayout === 'pip') {
       return (
@@ -1025,8 +1054,20 @@ export function VoiceStageChannel({
         phone={isPhoneLayout}
         sharedName={channelId ? roomSharedName(channelId) : null}
         header={header}
-        notice={reconnectNotice}
+        notice={
+          reconnectNotice || (together?.session && !watchTogether) ? (
+            <>
+              {reconnectNotice}
+              {together?.session && !watchTogether && (
+                <ErrorBoundary variant="section" label="Listen together">
+                  <TogetherNowPlaying together={together} phone={isPhoneLayout} />
+                </ErrorBoundary>
+              )}
+            </>
+          ) : undefined
+        }
         dominant={dominant}
+        phoneDominantHeight={watchTogether ? PHONE_WATCH_HEIGHT : undefined}
         speakers={showSpeakerStrip ? renderSpeakers(Boolean(dominant)) : undefined}
         controls={
           <VoiceControlBar
@@ -1039,11 +1080,15 @@ export function VoiceStageChannel({
             requestToSpeakPending={hasRequestedToSpeak}
             requestBusy={stageRequestBusy}
             onToggleRequestToSpeak={() => { void toggleSpeakerRequest(); }}
+            extraControls={!isStage && !isPhoneLayout ? <TogetherButton /> : undefined}
           />
         }
         ribbon={ribbon}
       />
       {inviteModal}
+      {isPhoneLayout && (
+        <TogetherSheetFor anchor={moreAnchor} open={togetherSheetOpen} onClose={() => setTogetherSheetOpen(false)} />
+      )}
     </div>
   );
 }
