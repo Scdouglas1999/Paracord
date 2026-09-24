@@ -49,6 +49,8 @@ import { isAllowedImageMimeType, safeClientResourceUrl } from '../../lib/securit
 import { mentionsEveryone } from '../../lib/mentions';
 import { MessageEmbedCard, extractUrls } from './MessageEmbed';
 import { LitAvatar } from '../light';
+import { FeedPostCard, isFeedEmbed } from '../feeds/FeedPostCard';
+import { FeedSourceIcon } from '../feeds/feedKinds';
 import { Chip } from '../ui';
 import {
   AttachmentFrame,
@@ -2680,6 +2682,10 @@ function OwnedMessageList({
     const authorName = displayName(msg.author, authorGuildMember?.nick);
     const bubbleText = messageBubbleText(msg);
     const scoreUpdate = isSportsScoreAuthor(msg.author) ? parseScoreUpdate(msg.content || '') : null;
+    // A feed's post reads as the feed: its picture, its name, a Feed tag, and
+    // the item as a card instead of the text.
+    const feedPost = msg.feed ?? null;
+    const feedEmbed = feedPost ? (msg.embeds ?? []).find(isFeedEmbed) ?? null : null;
     const scoreSides = scoreUpdate ? resolveScoreSides(pinnedSportsGame, scoreUpdate) : null;
     const authorRoleColor = authorGuildMember ? getHighestRoleColor(authorGuildMember.roles ?? [], guildRoles) : undefined;
     // §1.5: a person is a rim of light, not a coloured dot. The author's light
@@ -2807,6 +2813,10 @@ function OwnedMessageList({
             <span className={cn('pc-sports-trophy', ribbon && 'is-ribbon')} aria-hidden>
               <Trophy size={ribbon ? 14 : 16} />
             </span>
+          ) : feedPost ? (
+            <span className={cn('pc-feed-author h-9 w-9', ribbon && 'h-7 w-7')} aria-hidden>
+              <FeedSourceIcon kind={feedPost.kind} iconUrl={feedPost.icon_url} size={ribbon ? 28 : 36} />
+            </span>
           ) : (
           <button
             type="button"
@@ -2859,6 +2869,9 @@ function OwnedMessageList({
           )}
           {!isGrouped && (
             <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+              {feedPost ? (
+                <span className="pc-display text-name leading-tight text-text-primary">{feedPost.name}</span>
+              ) : (
               <button
                 type="button"
                 className="pc-display rounded-[var(--radius-window)] text-left text-name leading-tight hover:underline focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
@@ -2872,12 +2885,17 @@ function OwnedMessageList({
               >
                 {authorName}
               </button>
+              )}
               {msg.anonymous?.is_anonymous && (
                 <Chip size="sm" className="text-accent-warning">
                   Anonymous
                 </Chip>
               )}
-              {msg.author.bot && (
+              {feedPost ? (
+                <Chip size="sm" className="text-accent-primary">
+                  Feed
+                </Chip>
+              ) : msg.author.bot && (
                 <Chip size="sm" className="text-accent-primary">
                   Bot
                 </Chip>
@@ -3000,6 +3018,8 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
                   other={scoreSides.other}
                   href={scoreUpdateHref(activeGuildId || '', pinnedSportsGame)}
                 />
+              ) : !msg.poll && feedEmbed ? (
+                <FeedPostCard embed={feedEmbed} />
               ) : !msg.poll ? (
                 <div className={cn('mt-0.5 break-words text-body text-text-body', ribbon && 'text-ribbon')}>
                   {msg.forwarded_from && (
@@ -3063,7 +3083,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
           )}
 
           {/* URL Embeds — server-provided or client-extracted */}
-          {(() => {
+          {!feedEmbed && (() => {
             const embeds = msg.embeds || [];
             const contentUrls = embeds.length === 0 ? extractUrls(msg.content) : [];
             const allEmbeds = embeds.length > 0
@@ -3140,7 +3160,7 @@ className="w-full resize-none rounded-[var(--radius-well)] bg-bg-well px-3 py-2 
             </div>
           )}
           {/* Attachments */}
-          {msg.attachments && msg.attachments.length > 0 && (
+          {!feedEmbed && msg.attachments && msg.attachments.length > 0 && (
             <div className="mt-1.5 flex flex-col gap-2">
               {msg.attachments.filter((att) => !inForwardCard(msg, att)).map((att) => {
                 // Encrypted attachment seam: in an end-to-end encrypted

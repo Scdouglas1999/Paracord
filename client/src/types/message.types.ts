@@ -1,5 +1,6 @@
 import type { Component } from './components';
 import type { EncryptedAttachmentDescriptor } from '../lib/messages/attachments/attachmentEnvelope';
+import type { FeedEmbedMeta, MessageFeed } from '../api/feeds';
 
 export enum MessageType {
   Default = 0,
@@ -28,6 +29,10 @@ export interface MessageEmbed {
   image?: string;
   color?: string;
   type?: 'link' | 'image' | 'video' | 'rich';
+  /** When the item was published, RFC 3339. Set on feed cards. */
+  timestamp?: string | null;
+  /** Present on a card a feed posted. */
+  feed?: FeedEmbedMeta | null;
 }
 
 export interface MessageAuthor {
@@ -37,6 +42,8 @@ export interface MessageAuthor {
   discriminator: string;
   avatar?: string;
   avatar_hash?: string | null;
+  /** A webhook's or feed's own picture, when it has one. */
+  avatar_url?: string | null;
   public_key?: string | null;
   bot?: boolean;
   flags?: number;
@@ -156,6 +163,8 @@ export interface Message {
    * server has it, and null when both ends are end-to-end encrypted.
    */
   forwarded_from?: ForwardedFrom | null;
+  /** Set when a feed (Server settings → Add-ons → Feeds) posted this message. */
+  feed?: MessageFeed | null;
 }
 
 /** Attribution stored with a forwarded message and returned on message objects. */

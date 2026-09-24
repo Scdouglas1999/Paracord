@@ -5685,6 +5685,7 @@ dependencies = [
  "paracord-relay",
  "paracord-transport",
  "paracord-util",
+ "quick-xml",
  "rand 0.8.6",
  "regex",
  "reqwest 0.12.28",

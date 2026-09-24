@@ -9,6 +9,7 @@ pub mod backup;
 pub mod channel;
 pub mod error;
 pub mod events;
+pub mod feeds;
 pub mod guild;
 pub mod health;
 pub mod identity;

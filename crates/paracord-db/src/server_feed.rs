@@ -22,7 +22,10 @@ const MESSAGE_COLUMNS: &str =
      m.message_type, m.flags, m.edited_at, CASE WHEN m.pinned THEN 1 ELSE 0 END AS pinned, \
      m.reference_id, m.e2ee_header, m.created_at, m.embeds, m.components, m.recovery_revision, m.forwarded_from";
 
-/// What makes a message worth a place in the feed. Any one is enough.
+/// What makes a message worth a place in the feed. Any one is enough. A card
+/// from a feed add-on with "Show on the front page" on is notable too, and a
+/// feed's post is never on the page otherwise: not when that setting is off
+/// (whatever channel it is in, poster or not), and never the "and N more" line.
 pub struct NotableMessages<'a> {
     /// Channels whose messages may appear at all (already permission-filtered).
     pub channel_ids: &'a [i64],
@@ -93,10 +96,18 @@ pub async fn list_notable_messages(
         "SELECT {MESSAGE_COLUMNS} FROM messages m \
          WHERE {channels} \
            AND (m.flags & {MESSAGE_FLAG_DM_E2EE}) = 0 \
+           AND NOT EXISTS (SELECT 1 FROM feed_messages fx WHERE fx.message_id = m.id \
+                AND ((CASE WHEN fx.overflow THEN 1 ELSE 0 END) = 1 \
+                     OR NOT EXISTS (SELECT 1 FROM guild_feeds gx WHERE gx.id = fx.feed_id \
+                          AND (CASE WHEN gx.show_on_front_page THEN 1 ELSE 0 END) = 1))) \
            {before} \
            AND ( {announcements} \
               OR (CASE WHEN m.pinned THEN 1 ELSE 0 END) = 1 \
               OR EXISTS (SELECT 1 FROM attachments a WHERE a.message_id = m.id) \
+              OR EXISTS (SELECT 1 FROM feed_messages fm JOIN guild_feeds gf ON gf.id = fm.feed_id \
+                         WHERE fm.message_id = m.id \
+                           AND (CASE WHEN fm.overflow THEN 1 ELSE 0 END) = 0 \
+                           AND (CASE WHEN gf.show_on_front_page THEN 1 ELSE 0 END) = 1) \
               OR EXISTS (SELECT 1 FROM polls p WHERE p.message_id = m.id) \
               OR (SELECT COUNT(*) FROM reactions r WHERE r.message_id = m.id) >= ${reactions_idx} \
               OR {starters} ) \

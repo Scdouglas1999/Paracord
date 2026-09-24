@@ -1,7 +1,7 @@
 import { useCurrentUser } from '../hooks/useCurrentUser';
 import { useState, type KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router';
-import { Users, Server, Settings, BarChart3, Shield, HardDrive, Globe2 } from 'lucide-react';
+import { Users, Server, Settings, BarChart3, Shield, HardDrive, Globe2, Puzzle } from 'lucide-react';
 import { isAdmin } from '../types';
 import {
   Button,
@@ -19,8 +19,9 @@ import { SettingsPanel } from './admin/SettingsPanel';
 import { FederationPanel } from './admin/FederationPanel';
 import { SecurityPanel } from './admin/SecurityPanel';
 import { BackupsPanel } from './admin/BackupsPanel';
+import { AddonsPanel } from './admin/AddonsPanel';
 
-type Tab = 'overview' | 'users' | 'guilds' | 'settings' | 'federation' | 'security' | 'backups';
+type Tab = 'overview' | 'users' | 'guilds' | 'settings' | 'federation' | 'security' | 'backups' | 'addons';
 
 /**
  * The control plane is a settings surface (spec §4): one plate over the street,
@@ -43,6 +44,7 @@ const NAV_GROUPS: SettingsNavGroup[] = [
     label: 'This deployment',
     items: [
       { id: 'settings', label: 'Settings', icon: <Settings size={16} /> },
+      { id: 'addons', label: 'Add-ons', icon: <Puzzle size={16} /> },
       { id: 'security', label: 'Security', icon: <Shield size={16} /> },
       { id: 'backups', label: 'Backups', icon: <HardDrive size={16} /> },
     ],
@@ -115,6 +117,7 @@ export function AdminPage() {
       {activeTab === 'federation' && <FederationPanel />}
       {activeTab === 'security' && <SecurityPanel />}
       {activeTab === 'backups' && <BackupsPanel />}
+      {activeTab === 'addons' && <AddonsPanel />}
     </SettingsShell>
   );
 }

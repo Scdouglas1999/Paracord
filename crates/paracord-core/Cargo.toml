@@ -30,6 +30,8 @@ rand = { workspace = true }
 # ESPN's public scoreboard. The workspace already depends on reqwest; this crate
 # did not, and the pull-through cache lives here rather than in the HTTP layer.
 reqwest = { workspace = true }
+# Feeds add-on: RSS/Atom parsing. Already in the dependency tree at this version.
+quick-xml = "0.41"
 tracing = { workspace = true }
 thiserror = { workspace = true }
 moka = { workspace = true }
