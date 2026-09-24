@@ -139,6 +139,22 @@ In DMs and group DMs:
   `client/src/lib/messages/attachments/attachmentEnvelope.ts`,
   `crates/paracord-api/src/routes/files.rs`.
 
+## Forwarded messages
+
+- When you forward a message from one DM or group DM into another, the quoted text and
+  where it came from (the conversation, the message, who wrote it and when) go inside the
+  new encrypted message. The server stores none of it. The "Forwarded from" line is written
+  by your device and nobody else checks it, the same as the text you forward.
+- A forward into or out of a server channel goes through the server. It checks that you can
+  read the original and records where it came from. Forwarding out of a DM into a server
+  channel asks you first, because it posts the text unencrypted.
+- Paracord 3.2 put the source of a DM-to-DM forward in a field the server could read. The
+  server now drops that field instead of storing it, so those forwards arrive without their
+  "Forwarded from" line.
+- Source: `client/src/lib/forwardedMessage.ts`,
+  `client/src/lib/messages/attachments/attachmentEnvelope.ts`,
+  `crates/paracord-api/src/routes/channels/forwards.rs`.
+
 ## Algorithms and libraries
 
 The client uses three `@noble` packages (versions from `client/package-lock.json`) plus the

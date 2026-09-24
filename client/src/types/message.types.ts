@@ -1,5 +1,5 @@
 import type { Component } from './components';
-import type { EncryptedAttachmentDescriptor } from '../lib/messages/attachments/attachmentEnvelope';
+import type { EncryptedAttachmentDescriptor, SealedForward } from '../lib/messages/attachments/attachmentEnvelope';
 
 export enum MessageType {
   Default = 0,
@@ -169,6 +169,11 @@ export interface ForwardedFrom {
   channel_name?: string | null;
   content?: string | null;
   error?: string;
+  /**
+   * Client-only: the attribution as it was read from inside the encrypted
+   * body. Never on the wire; an edit re-seals it so the header survives.
+   */
+  sealed?: SealedForward;
 }
 
 /** What a send tells the server. The server rewrites the stored attribution. */

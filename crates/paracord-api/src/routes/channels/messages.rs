@@ -77,7 +77,10 @@ pub struct SendMessageRequest {
     pub e2ee: Option<DmE2eePayloadRequest>,
     pub nonce: Option<String>,
     /// Present when this send is a forward. The server rewrites the stored
-    /// attribution from the source message. Omitted by every other send.
+    /// attribution from the source message. Omitted by every other send, and
+    /// by a forward between two encrypted conversations, whose attribution
+    /// rides inside the encrypted body (older clients that still send it here
+    /// have it dropped, see `resolve_forward`).
     #[serde(default)]
     pub forwarded_from: Option<ForwardedFromRequest>,
 }
@@ -842,7 +845,7 @@ pub async fn send_message(
     // Resolve the forward before the row exists so a message the sender cannot
     // read never lands in the destination.
     let resolved_forward = if let Some(request) = body.forwarded_from.as_ref() {
-        Some(resolve_forward(&state, auth.user_id, &channel, request).await?)
+        resolve_forward(&state, auth.user_id, &channel, request).await?
     } else {
         None
     };

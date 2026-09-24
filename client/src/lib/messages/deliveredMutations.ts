@@ -1,4 +1,5 @@
 import type { Message } from '../../types';
+import type { SealedForward } from './attachments/attachmentEnvelope';
 import type { AccountVault, VaultLifetime, VaultTransaction } from '../crypto/accountVault';
 import { assertSignalMessageId } from '../crypto/signalSessions';
 import { accountScopeKey } from '../serverScope';
@@ -19,6 +20,8 @@ export interface DeliveredMessageTarget {
     | { kind: 'plain' }
     | { kind: 'dm'; peer: { id: string; publicKey: string } }
     | { kind: 'group'; members: Array<{ id: string; publicKey: string }> };
+  /** A sealed forward's attribution, re-stated by an edit so the new body keeps it. */
+  forward?: SealedForward;
 }
 export interface DeliveredMutation {
   id: string;

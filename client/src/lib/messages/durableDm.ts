@@ -7,14 +7,14 @@ import { enqueueMessageIntent, prepareDurableSend, type DurableIntent, type Dura
 import { bytesToHex } from '../crypto/util';
 // Encrypted attachment seam: descriptors live inside the Signal body, and the
 // staged ciphertext lives in this account's vault until the server holds it.
-import { encodeEncryptedBodyWithinBudget, type EncryptedAttachmentDescriptor } from './attachments/attachmentEnvelope';
+import { encodeMessageBody, type EncryptedAttachmentDescriptor, type SealedForward } from './attachments/attachmentEnvelope';
 import { collectUploadedDescriptors, listStagedAttachments, markStagedUploaded, nextPendingUpload, removeStagedAttachments, rekeyStagedAttachments } from './attachments/attachmentStaging';
 import type { EncryptedAttachmentUploader } from './attachments/attachmentProducer';
 
 const PLAINTEXT_NAMESPACE = 'messages.plaintext';
 const SEND_SESSION_NAMESPACE = 'messages.signal-sends';
 const EXTERNAL_REMOVALS_NAMESPACE = 'messages.signal-removals';
-interface SendSession { channelId: string; peer: Peer; referencedMessageId?: string; forwardedFrom?: ForwardedFromRequest; session: SignalSessionReference }
+interface SendSession { channelId: string; peer: Peer; referencedMessageId?: string; forwardedFrom?: ForwardedFromRequest; sealedForward?: SealedForward; session: SignalSessionReference }
 interface Peer { id: string; publicKey: string }
 
 async function cacheId(channelId: string, peer: Peer, payload: MessageE2eePayload): Promise<string> {
@@ -26,14 +26,15 @@ async function cacheId(channelId: string, peer: Peer, payload: MessageE2eePayloa
 export function createDurableDm(vault: AccountVault, privateKey: Uint8Array, keysApi: DmCipherDependencies['keysApi'],
   uploadAttachment?: EncryptedAttachmentUploader) {
   async function build(transaction: VaultTransaction, nonce: string, channelId: string, peer: Peer, content: string, referencedMessageId?: string,
-    attachments: readonly EncryptedAttachmentDescriptor[] = [], forwardedFrom?: ForwardedFromRequest): Promise<SendMessageRequest> {
-    // With attachments the encrypted plaintext becomes a versioned body that
-    // carries their keys and real metadata; without them it stays the bare text
-    // every earlier message used.
-    const body = attachments.length ? encodeEncryptedBodyWithinBudget({ text: content, attachments }) : content;
+    attachments: readonly EncryptedAttachmentDescriptor[] = [], forwardedFrom?: ForwardedFromRequest, sealedForward?: SealedForward): Promise<SendMessageRequest> {
+    // With attachments or a sealed forward the encrypted plaintext becomes a
+    // versioned body that carries them; otherwise it stays the bare text every
+    // earlier message used.
+    if (forwardedFrom && sealedForward) throw new Error('A forward names its source either in the clear or inside the encrypted body, not both.');
+    const body = encodeMessageBody(content, attachments, sealedForward);
     const cipher = createSignalSessionCipher(transaction, channelId, keysApi);
     const { payload: e2ee, session } = await cipher.encryptDmMessageWithSession(channelId, body, privateKey, peer.publicKey, peer.id);
-    transaction.put(SEND_SESSION_NAMESPACE, nonce, { channelId, peer, referencedMessageId, forwardedFrom, session } satisfies SendSession);
+    transaction.put(SEND_SESSION_NAMESPACE, nonce, { channelId, peer, referencedMessageId, forwardedFrom, sealedForward, session } satisfies SendSession);
     const id = await cacheId(channelId, peer, e2ee);
     transaction.put(PLAINTEXT_NAMESPACE, id, { content: body });
     return { nonce, content: '', e2ee, referenced_message_id: referencedMessageId,
@@ -53,7 +54,8 @@ export function createDurableDm(vault: AccountVault, privateKey: Uint8Array, key
       const { serializedRequest: _request, mutation, ...metadata } = follower;
       const content = mutation?.kind === 'edit' ? mutation.next?.content ?? mutation.content : follower.draft.content;
       const intent: DurableIntent = { ...metadata, draft: { content }, revision: crypto.randomUUID(), status: 'pending', error: null,
-        nextAttemptAt: follower.retryAfterAt ?? 0, intent: { encryption: { kind: 'dm', peer: next.peer }, referencedMessageId: next.referencedMessageId } };
+        nextAttemptAt: follower.retryAfterAt ?? 0, intent: { encryption: { kind: 'dm', peer: next.peer }, referencedMessageId: next.referencedMessageId,
+          forwardedFrom: next.forwardedFrom, sealedForward: next.sealedForward } };
       transaction.put(INTENT_NAMESPACE, follower.id, intent);
       transaction.remove(OUTBOX_NAMESPACE, follower.id);
       transaction.remove(SEND_SESSION_NAMESPACE, follower.nonce);
@@ -138,7 +140,8 @@ export function createDurableDm(vault: AccountVault, privateKey: Uint8Array, key
       if (intent.intent.attachmentIds?.length) throw new Error('An encrypted conversation cannot reference a plaintext upload.');
       await reconcileExternalRemovals(transaction, intent.channelId, intent.intent.encryption.peer);
       const attachments = await collectUploadedDescriptors(transaction, intent.id);
-      return build(transaction, intent.nonce, intent.channelId, intent.intent.encryption.peer, intent.draft.content, intent.intent.referencedMessageId, attachments, intent.intent.forwardedFrom);
+      return build(transaction, intent.nonce, intent.channelId, intent.intent.encryption.peer, intent.draft.content, intent.intent.referencedMessageId, attachments,
+        intent.intent.forwardedFrom, intent.intent.sealedForward);
     },
     async prepare(channelId: string, peer: Peer, content: string, referencedMessageId?: string) {
       return prepareDurableSend(vault, channelId, content, (transaction, nonce) => build(transaction, nonce, channelId, peer, content, referencedMessageId));
@@ -155,16 +158,18 @@ export function createDurableDm(vault: AccountVault, privateKey: Uint8Array, key
       await rekeyStagedAttachments(transaction, original.id, nonce);
       return { ...metadata, id: nonce, nonce, draft: { content }, revision: crypto.randomUUID(),
         status: 'pending', attempts: 0, error: null, nextAttemptAt: original.retryAfterAt ?? 0,
-        intent: { encryption: { kind: 'dm', peer: binding.peer }, referencedMessageId: binding.referencedMessageId, forwardedFrom: binding.forwardedFrom } };
+        intent: { encryption: { kind: 'dm', peer: binding.peer }, referencedMessageId: binding.referencedMessageId, forwardedFrom: binding.forwardedFrom,
+          sealedForward: binding.sealedForward } };
     },
     async prepareEdit(transaction: VaultTransaction, original: DurableSend, messageId: string, editNonce: string, content: string): Promise<PreparedDeliveryEdit> {
       const binding = await transaction.get<SendSession>(SEND_SESSION_NAMESPACE, original.nonce);
       if (!binding || binding.channelId !== original.channelId) throw new Error('The original conversation encryption metadata is missing.');
       await retireForMutation(transaction, original, false);
       // An edit replaces the whole encrypted body, so it must re-state the
-      // attachment descriptors or their keys would be lost with the old body.
+      // attachment descriptors (or their keys would be lost with the old body)
+      // and a sealed forward's attribution.
       const attachments = await collectUploadedDescriptors(transaction, original.id);
-      const body = attachments.length ? encodeEncryptedBodyWithinBudget({ text: content, attachments }) : content;
+      const body = encodeMessageBody(content, attachments, binding.sealedForward);
       const cipher = createSignalSessionCipher(transaction, original.channelId, keysApi);
       const { payload: e2ee } = await cipher.encryptDmMessageWithSession(original.channelId, body, privateKey, binding.peer.publicKey, binding.peer.id, { independent: true });
       transaction.put(PLAINTEXT_NAMESPACE, await cacheId(original.channelId, binding.peer, e2ee), { content: body });
@@ -172,10 +177,10 @@ export function createDurableDm(vault: AccountVault, privateKey: Uint8Array, key
     },
     /** Delivered edits also cover old server messages with no local creation binding. */
     async prepareDeliveredEdit(transaction: VaultTransaction, channelId: string, peer: Peer, messageId: string, editNonce: string, content: string,
-      attachments: readonly EncryptedAttachmentDescriptor[] = []): Promise<PreparedDeliveryEdit> {
+      attachments: readonly EncryptedAttachmentDescriptor[] = [], sealedForward?: SealedForward): Promise<PreparedDeliveryEdit> {
       assertSignalMessageId(messageId);
       await retireDeliveredMessage(transaction, channelId, peer);
-      const body = attachments.length ? encodeEncryptedBodyWithinBudget({ text: content, attachments }) : content;
+      const body = encodeMessageBody(content, attachments, sealedForward);
       const cipher = createSignalSessionCipher(transaction, channelId, keysApi);
       const { payload: e2ee } = await cipher.encryptDmMessageWithSession(channelId, body, privateKey, peer.publicKey, peer.id, { independent: true });
       transaction.put(PLAINTEXT_NAMESPACE, await cacheId(channelId, peer, e2ee), { content: body });

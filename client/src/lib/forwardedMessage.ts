@@ -1,4 +1,6 @@
 import type { ForwardedFrom, Message } from '../types';
+import { displayName } from './displayName';
+import type { SealedForward } from './messages/attachments/attachmentEnvelope';
 
 /** Splits a note from a quote inside an encrypted forward. Invisible separator. */
 const QUOTE_MARK = '\n\u2063\n';
@@ -46,6 +48,45 @@ export function forwardBlockedReason(
   }
   if (unreadable) return 'This message cannot be read on this device yet, so it cannot be forwarded.';
   return null;
+}
+
+/**
+ * What a forward from one encrypted conversation into another carries inside
+ * its encrypted body: the quote, and where it came from.
+ *
+ * Forwarding a forward that added no note of its own points at the original,
+ * the same rule the server applies to server channels.
+ */
+export function sealedForwardFor(
+  message: Pick<Message, 'id' | 'channel_id' | 'author' | 'content' | 'forwarded_from' | 'created_at' | 'timestamp'>,
+): { quote: string; forward: SealedForward } {
+  const inner = message.forwarded_from;
+  if (inner && !inner.error && !messageBubbleText(message).trim()) {
+    return { quote: forwardQuote(message).trim(), forward: inner.sealed ?? sealedFromAttribution(inner) };
+  }
+  const sentAt = message.created_at ?? message.timestamp;
+  return {
+    quote: messageBubbleText(message).trim(),
+    forward: {
+      channelId: message.channel_id,
+      messageId: message.id,
+      authorId: message.author.id,
+      authorName: displayName(message.author),
+      ...(sentAt ? { sentAt } : {}),
+    },
+  };
+}
+
+function sealedFromAttribution(forward: ForwardedFrom): SealedForward {
+  return {
+    channelId: forward.channel_id,
+    messageId: forward.message_id,
+    ...(forward.guild_id ? { guildId: forward.guild_id } : {}),
+    ...(forward.channel_name ? { channelName: forward.channel_name } : {}),
+    ...(forward.author_id ? { authorId: forward.author_id } : {}),
+    ...(forward.author_name ? { authorName: forward.author_name } : {}),
+    ...(forward.sent_at ? { sentAt: forward.sent_at } : {}),
+  };
 }
 
 export function forwardAttribution(forward: ForwardedFrom): string {
