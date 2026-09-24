@@ -84,7 +84,7 @@ pub async fn list_sounds(pool: &DbPool, guild_id: i64) -> Result<Vec<SoundboardS
         "SELECT {SOUND_COLUMNS}
          FROM soundboard_sounds
          WHERE guild_id = $1
-         ORDER BY name COLLATE NOCASE ASC"
+         ORDER BY LOWER(name) ASC, id ASC"
     ))
     .bind(guild_id)
     .fetch_all(pool)

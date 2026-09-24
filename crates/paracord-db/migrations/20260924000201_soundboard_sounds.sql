@@ -12,9 +12,9 @@ CREATE TABLE IF NOT EXISTS soundboard_sounds (
     -- 0..100 percent, applied client-side on top of the listener's own
     -- soundboard volume.
     volume      INTEGER NOT NULL DEFAULT 100,
-    duration_ms INTEGER NOT NULL,
+    duration_ms BIGINT NOT NULL,
     content_type TEXT NOT NULL,
-    size        INTEGER NOT NULL,
+    size        BIGINT NOT NULL,
     asset_key   TEXT NOT NULL,
     creator_id  BIGINT REFERENCES users(id),
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
