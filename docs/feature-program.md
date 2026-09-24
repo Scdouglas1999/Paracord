@@ -23,13 +23,13 @@ Principles for all work here:
 
 | # | Workstream | Branch / worktree | Status |
 |---|---|---|---|
-| 1a | Search across a server: filter chips (`from:` `in:` `has:` `before:`), grouped results | `feat/search` | merged into `feat/program`. Carry-overs: result times say "PM", not "pm"; markdown backticks show raw in snippets |
-| 1b | Who reacted, Remind me (+ Reminders inbox), Forward, role mentions | `feat/actions` | merged. Follow-up: move DM-to-DM forward attribution inside the encrypted body; the "React" menu has the same stale-position bug that was fixed for Remind me |
-| 1c | User and server banners, sticker management, media gallery (Media / Files / Links) | `feat/assets` | merged. Old data-URL hub banners are converted at startup. Follow-ups: DM gallery (needs on-device decrypt); avatars have the same stale-cache bug |
-| 4 | Server home (direction A with B's widgets) and the plain-words sweep. Spec: `docs/server-home-spec.md` | `feat/server-home`, `feat/plain-words` | merged. Follow-ups: speaking rings need real audio to show; weekly XP window on the economy API; the Sports add-on's `show_on_server_page` is now unused |
-| 3 | Feeds / add-on framework: Sports becomes one add-on of many (RSS, YouTube, GitHub, Twitch, Jellyfin, game-server status) | — | after the Sports session lands |
-| 2 | Together: watch together, listen together, soundboard, daily game, now playing | — | wave 2 |
-| — | Motion pass across the app | — | after 4 |
+| 1a | Search across a server: filter chips (`from:` `in:` `has:` `before:`), grouped results | `feat/search` | merged. Round-2 carry-overs done (times, plain-text snippets) |
+| 1b | Who reacted, Remind me (+ Reminders inbox), Forward, role mentions | `feat/actions` | merged. Round 2: DM-to-DM forward attribution now inside the encrypted body; React menu position fixed |
+| 1c | User and server banners, sticker management, media gallery (Media / Files / Links) | `feat/assets` | merged. Old data-URL hub banners are converted at startup. Round 2: DM gallery built on-device; avatar cache fixed |
+| 4 | Server home (direction A with B's widgets) and the plain-words sweep. Spec: `docs/server-home-spec.md` | `feat/server-home`, `feat/plain-words` | merged. Round 2: speaking rings verified with real audio and relayed to people outside the call; weekly XP window; `show_on_server_page` gates live games |
+| 3 | Add-ons hub; Feeds (RSS/Atom, YouTube, GitHub, Twitch, Jellyfin) with front-page grouping; Game servers (Minecraft Java/Bedrock, A2S, TCP) | `feat/feeds`, `feat/game-servers` | merged (round 2). Follow-ups: Twitch and real Jellyfin untested live; batch Twitch checks; push game-server status over the gateway; Minecraft SRV records |
+| 2 | Together: watch/listen together, soundboard, Daily word, now playing, speaking signal outside calls | `feat/together`, `feat/soundboard`, `feat/daily-word`, `feat/now-playing`, `feat/speaking-signal` | merged (round 2). Follow-ups: Together in DM calls; macOS now playing (no public API); Watch together from a feed card's actions slot |
+| — | Motion pass across the app | `feat/motion-pass` | merged (round 2): one token set, exits, transform/opacity only, motion lint |
 
 Each workstream brief is in `~/Documents/Paracord-wt/briefs/`. Shared agent tooling
 is in `~/Documents/Paracord-wt/tools/`:
@@ -46,6 +46,8 @@ Migration prefixes are reserved per workstream so branches merge cleanly:
 - default theme (main): `20260923000301`
 
 ## Log
+
+- 2026-09-24: round 2 ("fix all known issues and next steps"). Merged on `feat/program`: pillars 2 and 3, the motion pass, the round-1 carry-overs (search snippets and times, React menu position, avatar cache, weekly XP window, Sports show_on_server_page), encrypted forward attribution and the DM media panel, release infrastructure (flaky tests fixed at the root, Pebble ACME smoke, Windows install smoke, updater key and manifest), the AppImage libwayland fix, and an American-English sweep. Migration prefixes used: `20260924000001` feeds, `…101` together (none), `…201` soundboard, `…301` daily word, `…501` weekly XP, `…801` game servers.
 
 - 2026-09-22 (evening): wave 1 and the server home are merged into `feat/program` with the Slate default and plain words. The full gate is green: fmt, clippy, every workspace test, 2,993 client tests, tsc, the color lint and the contrast audit. `main` is untouched until the Sports session commits.
 
