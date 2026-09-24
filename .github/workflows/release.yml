@@ -608,6 +608,24 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npx tauri build --bundles appimage,deb,rpm
 
+      # linuxdeploy bundles the runner's libwayland, which is older than the one
+      # a current Mesa is built against; loaded first, it keeps the host's
+      # libEGL_mesa from loading and WebKit aborts before the window opens.
+      # The script takes those libraries out, repacks, and re-signs the AppImage.
+      - name: Use the host's Wayland libraries in the AppImage
+        working-directory: client
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          shopt -s nullglob
+          appimages=(../target/release/bundle/appimage/*.AppImage)
+          if [ "${#appimages[@]}" -ne 1 ]; then
+            echo "expected exactly one AppImage, found ${#appimages[@]}: ${appimages[*]}" >&2
+            exit 1
+          fi
+          scripts/finalize-appimage.sh "${appimages[0]}"
+
       - name: Upload client AppImage
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

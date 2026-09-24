@@ -93,26 +93,29 @@ how to check a contact's key. In short:
 
 ## Linux desktop app
 
-- **WebKit's GPU compositing is turned off on NVIDIA's proprietary driver.** On
-  those machines WebKitGTK either aborts the Wayland connection
-  (`Gdk-Message: Error 71 (Protocol error)`) or segfaults inside
-  `libnvidia-eglcore` as soon as it composites, and the window never paints a
-  pixel. A twenty-line GTK + WebKit program reproduces it with none of Paracord
-  involved, so the app detects the NVIDIA EGL vendor at startup and sets
-  WebKit's `hardware-acceleration-policy` to `Never`. Note that the older
-  `WEBKIT_DISABLE_COMPOSITING_MODE` and `WEBKIT_DISABLE_DMABUF_RENDERER`
-  environment variables do **not** control this in WebKitGTK 2.4x — only the
-  settings property does.
-- This costs GPU compositing of the **interface** only. Video still decodes and
-  renders on the GPU: it goes through the `gtk::GLArea` underlay, which owns its
-  own GL context and is unaffected.
-- `PARACORD_WEBKIT_ACCELERATION=never|ondemand|always` overrides the choice, for
-  a machine whose driver has since been fixed or one that misbehaves without
-  NVIDIA. Everything else on Linux keeps WebKit's own default (`ondemand`).
-- The published **AppImage** is a separate problem and is still affected: it
-  bundles its own WebKit, which aborts with `EGL_BAD_ALLOC` before any of the
-  above applies. Build from source on such a machine, or install the `.deb`,
-  which links the host `webkit2gtk-4.1`.
+- **On NVIDIA's proprietary driver, WebKit hands its frames to the window over
+  shared memory.** By default WebKitGTK 2.5x passes each composited frame to the
+  window as a GPU buffer (dmabuf); with NVIDIA's driver that allocation has
+  failed and taken the window down before it painted
+  (`Gdk-Message: Error 71 (Protocol error)`). When
+  the app sees NVIDIA's EGL driver at startup it sets
+  `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1`. WebKit keeps compositing on the GPU; only
+  the hand-off to the window goes through shared memory, which costs a copy per
+  frame. A value already set in the environment wins, so
+  `WEBKIT_DMABUF_RENDERER_FORCE_SHM=0` restores the default on a machine whose
+  driver has since been fixed.
+- Video is not affected: it is drawn by the `gtk::GLArea` underlay, which owns
+  its own GL context.
+- The **AppImage** carries its own WebKit and GTK but uses the host's graphics
+  driver and Wayland client libraries (`libwayland-client` and friends, present
+  on any system with Mesa or GTK). Releases up to 3.2.0 bundled an older
+  `libwayland-client`, which kept a current Mesa (AMD, Intel, software rendering)
+  from loading: the window never appeared and the log ended with
+  `Could not create default EGL display: EGL_BAD_PARAMETER. Aborting...`. On
+  those versions, install the `.deb` or `.rpm` instead.
+- The AppImage runs through XWayland on a Wayland desktop (the GTK packaging
+  step sets `GDK_BACKEND=x11`), so it needs XWayland; the `.deb` and `.rpm`
+  run natively on Wayland.
 
 ## Server Health
 
