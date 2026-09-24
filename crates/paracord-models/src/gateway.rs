@@ -8,6 +8,9 @@ pub const OP_VOICE_STATE_UPDATE: u8 = 4;
 pub const OP_RESUME: u8 = 6;
 pub const OP_REQUEST_GUILD_MEMBERS: u8 = 8;
 pub const OP_TYPING_START: u8 = 5;
+/// The sender's own speaking edge in its voice channel:
+/// `{"channel_id": "…", "speaking": true|false}`. Relayed as `VOICE_SPEAKING`.
+pub const OP_VOICE_SPEAKING: u8 = 18;
 
 // Server -> Client opcodes
 pub const OP_DISPATCH: u8 = 0;
@@ -80,6 +83,8 @@ pub const EVENT_TYPING_STOP: &str = "TYPING_STOP";
 // Voice events
 pub const EVENT_VOICE_STATE_UPDATE: &str = "VOICE_STATE_UPDATE";
 pub const EVENT_VOICE_SERVER_UPDATE: &str = "VOICE_SERVER_UPDATE";
+/// Somebody started or stopped talking in a voice channel you can see.
+pub const EVENT_VOICE_SPEAKING: &str = "VOICE_SPEAKING";
 
 // Invite events
 pub const EVENT_INVITE_CREATE: &str = "INVITE_CREATE";

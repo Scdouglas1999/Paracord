@@ -18,6 +18,7 @@ import { usePresenceStore } from '../stores/presenceStore';
 import { useServerListStore } from '../stores/serverListStore';
 import { useTypingStore } from '../stores/typingStore';
 import { useVoiceStore } from '../stores/voiceStore';
+import { useRemoteSpeakingStore } from '../stores/remoteSpeakingStore';
 import { roomLitHistory } from '../lib/attention/light';
 import { LOCAL_SERVER_ID, entityScopeKey } from '../lib/serverScope';
 import { ChannelType, type Channel, type Member, type VoiceState } from '../types';
@@ -101,11 +102,13 @@ function seed(): void {
     channelId: null,
     guildId: null,
     connected: false,
+    callScope: null,
     selfMute: false,
     selfDeaf: false,
     selfStream: false,
   });
   useTypingStore.setState({ typingByChannel: {} });
+  useRemoteSpeakingStore.getState().reset();
 }
 
 beforeEach(() => {
@@ -198,7 +201,12 @@ describe('useRoomLight and useHereNow', () => {
         channelParticipants: new Map([
           ['v1', [voiceState({ user_id: '1' }), voiceState({ user_id: '2' })]],
         ]),
+        // You are in this call: its engine's flags are the speaking truth.
         speakingUsers: new Set(['1']),
+        connected: true,
+        callScope: SCOPE,
+        guildId: GUILD,
+        channelId: 'v1',
       });
     });
     const { result } = renderHook(() => useRoomLight(GUILD, 'v1'));
@@ -207,6 +215,29 @@ describe('useRoomLight and useHereNow', () => {
       'priya',
     ]);
     expect(result.current?.talkingCount).toBe(1);
+  });
+
+  it('shows who is talking in a call you are not in, from the relayed signal', () => {
+    act(() => {
+      useVoiceStore.setState({
+        channelParticipants: new Map([
+          ['v1', [voiceState({ user_id: '1' }), voiceState({ user_id: '2' })]],
+        ]),
+      });
+      useRemoteSpeakingStore.getState().applyUpdate({
+        guild_id: GUILD, channel_id: 'v1', user_id: '2', speaking: true,
+      });
+    });
+    const { result } = renderHook(() => useRoomLight(GUILD, 'v1'));
+    expect(result.current?.occupants.filter((o) => o.speaking).map((o) => o.person.name)).toEqual(['priya']);
+    expect(result.current?.occupants.find((o) => o.person.name === 'priya')?.person.speaking).toBe(true);
+
+    act(() => {
+      useRemoteSpeakingStore.getState().applyUpdate({
+        guild_id: GUILD, channel_id: 'v1', user_id: '2', speaking: false,
+      });
+    });
+    expect(result.current?.talkingCount).toBe(0);
   });
 
   it('writes the here-now caption', () => {

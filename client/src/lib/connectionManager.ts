@@ -2011,6 +2011,26 @@ class ConnectionManager {
     });
   }
 
+  /**
+   * Report this client's own speaking edge in a server voice channel, so
+   * people outside the call can see who is talking. Ambient and best-effort:
+   * an edge that cannot go out now is dropped rather than queued, because a
+   * late "started" would be wrong by the time it arrived.
+   */
+  updateVoiceSpeaking(serverId: string, channelId: string, speaking: boolean): void {
+    const conn = this.connections.get(serverId);
+    if (!conn) return;
+    if (this.useRealtimeV2) {
+      void this.postRealtimeCommand(conn, 'voice_speaking', {
+        channel_id: channelId,
+        speaking,
+      }).catch(() => { });
+      return;
+    }
+    if (conn.ws?.readyState !== WebSocket.OPEN) return;
+    conn.ws.send(JSON.stringify({ op: 18, d: { channel_id: channelId, speaking } }));
+  }
+
   updatePresenceAll(
     status: string,
     activities: Activity[] = [],

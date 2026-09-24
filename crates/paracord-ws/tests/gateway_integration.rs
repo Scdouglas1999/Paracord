@@ -224,6 +224,7 @@ async fn build_env() -> TestEnv {
             .time_to_live(std::time::Duration::from_secs(300))
             .build(),
         together: Arc::new(paracord_core::together::TogetherManager::new()),
+        speaking: Arc::new(paracord_core::voice_speaking::SpeakingTracker::new()),
     };
 
     TestEnv {
@@ -1600,4 +1601,68 @@ async fn bot_targeted_interactions_recheck_install_and_channel_grants() {
         "uninstalled bot must not replay its old interaction token"
     );
     assert!(session.guild_ids.is_empty());
+}
+
+/// Op 18 carries the sender's own speaking edge; the gateway relays it as
+/// `VOICE_SPEAKING` to people who can view the channel (here the sender, who
+/// owns the guild, is one of them).
+#[tokio::test]
+async fn voice_speaking_op_reports_the_senders_own_edges() {
+    let env = build_env().await;
+    let (user_id, _) = make_user_token(&env).await;
+    let guild_id = make_guild(&env, user_id).await;
+    let channel_id = paracord_util::snowflake::generate(1);
+    let elsewhere_id = paracord_util::snowflake::generate(1);
+    for (id, name) in [(channel_id, "voice"), (elsewhere_id, "lounge")] {
+        paracord_db::channels::create_channel(&env.db, id, guild_id, name, 2, 0, None, None)
+            .await
+            .unwrap();
+    }
+    paracord_db::voice_states::upsert_voice_state(
+        &env.db,
+        user_id,
+        Some(guild_id),
+        channel_id,
+        "call-current",
+    )
+    .await
+    .unwrap();
+    let mut session = Session::new(user_id, vec![guild_id], Default::default());
+    session.guild_owner_ids.insert(guild_id, user_id);
+    let (handle, tx, mut rx) = spawn_session(session, env.state.clone());
+
+    let speak = |channel: i64, speaking: bool| {
+        Message::Text(
+            json!({"op": 18, "d": {"channel_id": channel.to_string(), "speaking": speaking}})
+                .to_string()
+                .into(),
+        )
+    };
+    // Wait until a VOICE_SPEAKING dispatch arrives, or give up.
+    async fn next_speaking(rx: &mut UnboundedReceiver<Message>) -> Option<Value> {
+        while let Some(frame) = next_text(rx, 1000).await {
+            if frame["t"] == "VOICE_SPEAKING" {
+                return Some(frame["d"].clone());
+            }
+        }
+        None
+    }
+
+    // A channel the sender is not in: dropped without a word.
+    tx.send(Ok(speak(elsewhere_id, true))).unwrap();
+    tx.send(Ok(speak(channel_id, true))).unwrap();
+    let started = next_speaking(&mut rx).await.expect("started edge");
+    assert_eq!(started["channel_id"], channel_id.to_string());
+    assert_eq!(started["user_id"], user_id.to_string());
+    assert_eq!(started["speaking"], true);
+    assert!(env.state.speaking.is_speaking(channel_id, user_id));
+    assert!(!env.state.speaking.is_speaking(elsewhere_id, user_id));
+
+    tx.send(Ok(speak(channel_id, false))).unwrap();
+    let stopped = next_speaking(&mut rx).await.expect("stopped edge");
+    assert_eq!(stopped["speaking"], false);
+    assert!(!env.state.speaking.is_speaking(channel_id, user_id));
+
+    drop(tx);
+    handle.await.unwrap();
 }

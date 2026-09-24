@@ -86,6 +86,12 @@ struct TypingStartCommandPayload {
     channel_id: String,
 }
 
+#[derive(Deserialize)]
+struct VoiceSpeakingCommandPayload {
+    channel_id: String,
+    speaking: bool,
+}
+
 // ── Presence normalization (mirrors `paracord_ws::handler`) ────────────────
 //
 // The HTTP command bus writes into the SAME process-global `state.user_presences`
@@ -1346,6 +1352,9 @@ async fn build_ready_payload(
                     "deaf": false,
                     "username": &vs.username,
                     "avatar_hash": &vs.avatar_hash,
+                    // Talking right now, so a fresh page shows a current
+                    // speaker before the next edge arrives.
+                    "speaking": state.speaking.is_speaking(vs.channel_id, vs.user_id),
                 })
             })
             .collect();
@@ -2248,6 +2257,35 @@ pub async fn post_command(
                 state
                     .event_bus
                     .dispatch("TYPING_START", typing_payload, guild_id);
+            }
+        }
+        "voice_speaking" => {
+            let payload: VoiceSpeakingCommandPayload = serde_json::from_value(req.payload.clone())
+                .map_err(|e| {
+                    ApiError::BadRequest(format!("invalid voice_speaking payload: {e}"))
+                })?;
+            let channel_id = payload
+                .channel_id
+                .parse::<i64>()
+                .map_err(|_| ApiError::BadRequest("invalid channel_id".into()))?;
+            let outcome = paracord_core::voice_speaking::report(
+                &state,
+                auth.user_id,
+                channel_id,
+                payload.speaking,
+            )
+            .await?;
+            use paracord_core::voice_speaking::SpeakingReport;
+            match outcome {
+                // Only a start can be refused: a stop clears the caller's own
+                // flag and is a no-op when there is none.
+                SpeakingReport::NotInChannel => return Err(ApiError::Forbidden),
+                // Ambient signal: an over-budget or muted edge is dropped
+                // quietly rather than surfacing as an error.
+                SpeakingReport::Applied
+                | SpeakingReport::Unchanged
+                | SpeakingReport::RateLimited
+                | SpeakingReport::Muted => {}
             }
         }
         _ => {

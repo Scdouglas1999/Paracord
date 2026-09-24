@@ -1929,6 +1929,8 @@ async fn build_ready_guilds(
                             "deaf": false,
                             "username": &vs.username,
                             "avatar_hash": &vs.avatar_hash,
+                            // Talking right now (see `voice_speaking`).
+                            "speaking": state.speaking.is_speaking(vs.channel_id, vs.user_id),
                         })
                     })
                     .collect();
@@ -3122,6 +3124,35 @@ async fn handle_client_message(
                             .dispatch(EVENT_TYPING_START, typing_payload, guild_id);
                     }
                 }
+            }
+        }
+        OP_VOICE_SPEAKING => {
+            // Ambient and best-effort: a malformed, refused or rate-limited
+            // edge is dropped without a reply (the command bus answers the
+            // same call with a status).
+            let Some(d) = payload.get("d") else {
+                return;
+            };
+            let Some(channel_id) = d
+                .get("channel_id")
+                .and_then(|v| v.as_str())
+                .and_then(|raw| raw.parse::<i64>().ok())
+            else {
+                return;
+            };
+            let Some(speaking) = d.get("speaking").and_then(|v| v.as_bool()) else {
+                return;
+            };
+            if let Err(error) =
+                paracord_core::voice_speaking::report(state, session.user_id, channel_id, speaking)
+                    .await
+            {
+                tracing::warn!(
+                    user_id = session.user_id,
+                    channel_id,
+                    %error,
+                    "voice speaking report failed"
+                );
             }
         }
         OP_VOICE_STATE_UPDATE => {

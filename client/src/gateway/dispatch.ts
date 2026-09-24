@@ -8,6 +8,7 @@ import { usePresenceStore } from '../stores/presenceStore';
 import { republishPresenceAfterReconnect } from '../lib/presenceActivities';
 import { useVoiceStore } from '../stores/voiceStore';
 import { useTogetherStore } from '../stores/togetherStore';
+import { isVoiceSpeakingUpdate, useRemoteSpeakingStore } from '../stores/remoteSpeakingStore';
 import type { TogetherActivityUpdate, TogetherSessionUpdate } from '../lib/together/model';
 import { useTypingStore } from '../stores/typingStore';
 import { useRelationshipStore } from '../stores/relationshipStore';
@@ -222,6 +223,7 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
 
         }
         if (memberScope) useVoiceStore.getState().loadVoiceStates(g.id, g.voice_states ?? [], memberScope);
+        if (memberScope) useRemoteSpeakingStore.getState().loadGuild(g.id, g.voice_states ?? []);
         if (g.presences?.length) {
           for (const p of g.presences) {
             usePresenceStore.getState().updatePresence(p, serverId);
@@ -583,7 +585,18 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
       break;
 
     case GatewayEvents.VOICE_STATE_UPDATE:
-      if (memberScope) useVoiceStore.getState().handleVoiceStateUpdate(data as VoiceState, memberScope);
+      if (memberScope) {
+        useVoiceStore.getState().handleVoiceStateUpdate(data as VoiceState, memberScope);
+        useRemoteSpeakingStore.getState().applyVoiceState(data as VoiceState);
+      }
+      break;
+
+    case GatewayEvents.VOICE_SPEAKING:
+      if (isVoiceSpeakingUpdate(data)) {
+        useRemoteSpeakingStore.getState().applyUpdate(data);
+      } else {
+        warnDispatchParseFailure(event, 'missing guild_id, channel_id, user_id or speaking');
+      }
       break;
 
     case GatewayEvents.MESSAGE_REACTION_ADD: {

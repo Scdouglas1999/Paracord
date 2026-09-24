@@ -362,6 +362,7 @@ under `guild`, including:
 - `4`: VOICE_STATE_UPDATE
 - `6`: RESUME
 - `9`: TYPING_START
+- `18`: VOICE_SPEAKING (see Voice speaking signal)
 
 ### Opcodes (server -> client)
 
@@ -387,6 +388,36 @@ under `guild`, including:
 - `GUILD_ROLE_CREATE` / `GUILD_ROLE_UPDATE` / `GUILD_ROLE_DELETE`
 - `GUILD_BAN_ADD` / `GUILD_BAN_REMOVE`
 - `INVITE_CREATE` / `INVITE_DELETE`
+- `VOICE_SPEAKING`
+
+### Voice speaking signal
+
+Speaking is detected on each client by its own media engine, so the people in a
+call see who is talking and nobody else does. To let the server home's Live now
+card and the sidebar's voice rows show it too, a client in a server voice channel
+reports its own speaking edges and the server relays them.
+
+- Report (the sender's own edge only): WebSocket op `18`
+  `{"channel_id": "…", "speaking": true|false}`, or the command bus
+  `POST /api/v2/rt/commands` with `type: "voice_speaking"` and the same payload.
+  Clients send "started" after ~300 ms of speech, "stopped" after ~800 ms of
+  silence or at once on mute, leave or disconnect, at most one edge per 500 ms,
+  and re-send "started" every 10 s while still talking.
+- A "started" is accepted only from a user whose voice state is in that channel
+  and who is not self-muted, deafened, server-muted or suppressed on a stage; on
+  the command bus anyone else gets `403`. A "stopped" is always accepted (it can
+  only clear the sender's own flag). Edges over the per-user budget (a burst of
+  three, then one per 400 ms) are dropped quietly; the gateway never answers op 18.
+- The server keeps current speakers in memory and clears one when they leave or
+  move, mute, or send no refresh for 20 s.
+- `VOICE_SPEAKING` `{guild_id, channel_id, user_id, speaking}` is dispatched to
+  guild members who can view that channel (the same VIEW_CHANNEL gate as
+  `VOICE_STATE_UPDATE`). READY's `voice_states` carry `speaking: true|false` so a
+  fresh page shows a current speaker.
+
+Privacy: this reveals only "is talking now", and only to people who can already
+see who is in that voice channel. No audio, level or timing beyond the edges
+leaves the call, and nothing is stored.
 
 
 ## Conversation action discovery
