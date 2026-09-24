@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
+import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import { ArrowDown, ArrowUp, Plus, X } from 'lucide-react';
 import {
   FAVORITE_MAX,
@@ -29,11 +29,12 @@ import {
   Select,
   Well,
 } from '../ui';
-import { FieldLabel, GroupLabel, SectionHeader, ToggleRow } from '../guild/SettingsPrimitives';
+import { FieldLabel, GroupLabel, ToggleRow } from '../guild/SettingsPrimitives';
 
 /**
- * Add-ons this server can turn on. Sports is the first. A later add-on is
- * another entry here; the card list does not need a new settings section.
+ * The Sports add-on's page in Server settings → Add-ons (the hub lists it from
+ * `components/addons/registry.ts`). It opens with its own card: add it to the
+ * server or remove it, then the leagues and teams.
  */
 function draftKey(draft: {
   leagues: string[];
@@ -54,11 +55,7 @@ const ADDONS = [
   },
 ] as const;
 
-/**
- * `extra` renders under the Sports card, inside the same scroll: other add-ons
- * sit there until the add-ons hub lists them itself.
- */
-export function SportsSettingsSection({ guildId, extra }: { guildId: string; extra?: ReactNode }) {
+export function SportsSettingsSection({ guildId }: { guildId: string }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -330,11 +327,6 @@ export function SportsSettingsSection({ guildId, extra }: { guildId: string; ext
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex min-h-0 flex-1 flex-col gap-8 overflow-y-auto">
-      <SectionHeader
-        title="Add-ons"
-        description="Extras you can add to this server. Everyone in the server can use what you add."
-      />
-
       {error && <ErrorBanner message={error} multiline />}
 
       <ul className="flex flex-col gap-6">
@@ -421,7 +413,6 @@ export function SportsSettingsSection({ guildId, extra }: { guildId: string; ext
           </li>
         ))}
       </ul>
-      {extra}
       </div>
       {enabled && dirty && (
         <div className="pc-sports-savebar">

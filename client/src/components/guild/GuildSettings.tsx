@@ -30,8 +30,7 @@ import { SoundboardSection } from './SoundboardSection';
 import { BotStoreSection } from './BotStoreSection';
 import { OnboardingSettingsSection } from './OnboardingSettingsSection';
 import { EconomySettingsSection } from './EconomySettingsSection';
-import { SportsSettingsSection } from '../sports/SportsSettingsSection';
-import { DailyWordSection } from '../addons/DailyWordSection';
+import { AddonsHub } from '../addons/AddonsHub';
 import {
   AuditLogSection,
   BansSection,
@@ -1447,7 +1446,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
         {activeSection === 'economy' && <EconomySettingsSection guildId={guildId} roles={roles} />}
 
         {activeSection === 'sports' && (
-          <SportsSettingsSection guildId={guildId} extra={<DailyWordSection guildId={guildId} />} />
+          <AddonsHub guildId={guildId} initialAddon={new URLSearchParams(location.search).get('addon')} />
         )}
 
         {activeSection === 'audit-log' && (

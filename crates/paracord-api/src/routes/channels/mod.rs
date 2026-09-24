@@ -462,6 +462,9 @@ struct MessageJsonBatch {
     /// message id. Such a message is stored under its webhook's *creator*, so
     /// without this the author reads back as that person.
     webhooks: HashMap<i64, (i64, String)>,
+    /// The feed that posted a message, keyed by message id. A feed post is
+    /// stored under the internal Feeds user; it reads as the feed.
+    feeds: HashMap<i64, paracord_db::feeds::FeedMessageRow>,
 }
 
 /// Load every per-message collection for a page of messages using a bounded,
@@ -520,6 +523,15 @@ async fn load_message_json_batch(
     {
         for (message_id, webhook_id, name) in webhook_rows {
             batch.webhooks.insert(message_id, (webhook_id, name));
+        }
+    }
+
+    // Feed identities: one query for the whole page.
+    if let Ok(feed_rows) =
+        paracord_db::feeds::get_feed_messages_for_ids(&state.db, &message_ids).await
+    {
+        for row in feed_rows {
+            batch.feeds.insert(row.message_id, row);
         }
     }
 
@@ -701,6 +713,28 @@ fn build_message_json(
         *id
     });
 
+    // A feed post reads as the feed: its name, its icon, and a `feed` object
+    // clients use for the FEED badge. Clients that predate feeds see a bot.
+    let feed_json = batch.feeds.get(&msg.id).map(|feed| {
+        author = json!({
+            "id": feed.feed_id.to_string(),
+            "username": feed.name,
+            "display_name": feed.name,
+            "discriminator": 0,
+            "avatar_hash": null,
+            "avatar_url": feed.icon_url,
+            "public_key": null,
+            "flags": 0,
+            "bot": true,
+        });
+        json!({
+            "id": feed.feed_id.to_string(),
+            "kind": feed.kind,
+            "name": feed.name,
+            "icon_url": feed.icon_url,
+        })
+    });
+
     let mut anonymous_json: Option<Value> = None;
     if let Some(anonymous) = batch.anonymous.get(&msg.id) {
         let can_deanonymize = batch.can_deanonymize.get(&msg.id).copied().unwrap_or(false);
@@ -850,6 +884,7 @@ fn build_message_json(
         "anonymous": anonymous_json,
         "expires_at": expires_at,
         "webhook_id": webhook_id.map(|id| id.to_string()),
+        "feed": feed_json,
         "forwarded_from": forwarded_from_json(msg.forwarded_from.as_deref()),
     })
 }

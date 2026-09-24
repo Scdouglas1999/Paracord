@@ -1,0 +1,224 @@
+/*
+ * Feeds add-on: cards a feed posts in a channel and on the front page, and
+ * the Add-ons hub. Tokens only (docs/lantern-stage-spec.md §0).
+ */
+
+.pc-feed-card {
+  display: flex;
+  width: 520px;
+  max-width: 100%;
+  flex-direction: column;
+  overflow: hidden;
+  margin-top: 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-well);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-chip);
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.pc-feed-card:hover {
+  border-color: var(--border-strong);
+}
+
+.pc-feed-card.is-video {
+  width: 440px;
+}
+
+.pc-feed-title {
+  font-size: var(--text-label);
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+a.pc-feed-title:hover {
+  color: var(--text-link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.pc-feed-media {
+  position: relative;
+  display: block;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  background: var(--bg-well);
+}
+
+.pc-feed-media img {
+  height: 100%;
+  width: 100%;
+  object-fit: cover;
+  transition: transform var(--duration-normal) var(--ease-out);
+}
+
+.pc-feed-media:hover img {
+  transform: scale(1.02);
+}
+
+.pc-feed-play {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: flex;
+  height: 48px;
+  width: 48px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-full);
+  background: var(--tag-fill);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-chip);
+  transform: translate(-50%, -50%);
+  transition:
+    transform var(--duration-fast) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out);
+}
+
+.pc-feed-play svg {
+  margin-left: 2px;
+}
+
+.pc-feed-media:hover .pc-feed-play {
+  transform: translate(-50%, -50%) scale(1.06);
+}
+
+.pc-feed-thumb {
+  border-radius: var(--radius-thumb);
+  background: var(--bg-well);
+}
+
+.pc-feed-thumb.is-square {
+  height: 72px;
+  width: 72px;
+}
+
+.pc-feed-thumb.is-poster {
+  height: 108px;
+  width: 72px;
+}
+
+@media (max-width: 480px) {
+  /* A phone's card is narrow: the time alone leads it. */
+  .pc-feed-host {
+    display: none;
+  }
+  .pc-feed-thumb.is-square {
+    height: 56px;
+    width: 56px;
+  }
+  .pc-feed-thumb.is-poster {
+    height: 84px;
+    width: 56px;
+  }
+}
+
+.pc-feed-more {
+  display: inline-flex;
+  max-width: 520px;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  border-radius: var(--radius-chip);
+  font-size: var(--text-meta);
+  color: var(--text-link);
+}
+
+a.pc-feed-more:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.pc-feed-icon {
+  background: var(--bg-well);
+  box-shadow: var(--shadow-well);
+}
+
+.pc-feed-icon-glyph {
+  color: var(--text-secondary);
+}
+
+/* The author mark beside a feed post: a rounded square, not a person's circle. */
+.pc-feed-author {
+  display: flex;
+  flex: none;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+/* Add-ons hub */
+
+.pc-addon-mark {
+  display: flex;
+  height: 40px;
+  width: 40px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-card);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-raised);
+  color: var(--text-secondary);
+}
+
+.pc-feed-source-tile {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 12px;
+  border-radius: var(--radius-card);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-raised);
+  padding: 12px 14px;
+  text-align: left;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+
+.pc-feed-source-tile:not(:disabled):hover {
+  background: var(--bg-mod-subtle);
+}
+
+.pc-feed-source-tile:not(:disabled):active {
+  transform: scale(0.99);
+}
+
+.pc-feed-source-tile:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.pc-feed-row {
+  animation: pc-feed-row-in var(--duration-normal) var(--ease-out) both;
+}
+
+@keyframes pc-feed-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pc-feed-row {
+    animation: none;
+  }
+  .pc-feed-media img,
+  .pc-feed-play,
+  .pc-feed-source-tile {
+    transition: none;
+  }
+  .pc-feed-media:hover img {
+    transform: none;
+  }
+  .pc-feed-media:hover .pc-feed-play {
+    transform: translate(-50%, -50%);
+  }
+}

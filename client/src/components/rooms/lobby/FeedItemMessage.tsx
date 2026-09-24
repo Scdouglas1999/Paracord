@@ -14,6 +14,8 @@ import { parseMarkdown } from '../../../lib/markdown';
 import { cn } from '../../../lib/utils';
 import type { Reaction } from '../../../types';
 import { FeedAvatar, FeedCardHeader, FileChips, PhotoGrid, ReasonTag, isImageAttachment } from './feedParts';
+import { FeedPostCard, isFeedEmbed } from '../../feeds/FeedPostCard';
+import { FeedSourceIcon } from '../../feeds/feedKinds';
 
 export interface FeedItemMessageProps {
   item: FeedMessageItem;
@@ -69,29 +71,36 @@ export const FeedItemMessage = memo(function FeedItemMessage({
   const images = attachments.filter(isImageAttachment);
   const files = attachments.filter((attachment) => !isImageAttachment(attachment));
   const reactions = (message.reactions as unknown[]).filter(isReaction);
+  // A feed's post: the feed's picture and name, and the item as its card.
+  const feed = message.feed ?? null;
+  const feedEmbed = feed ? (message.embeds ?? []).find(isFeedEmbed) ?? null : null;
+  const authorName = feed ? feed.name : displayName(author);
+  const avatar = (size: number) =>
+    feed ? <FeedSourceIcon kind={feed.kind} iconUrl={feed.icon_url} size={size} /> : <FeedAvatar user={author} size={size} />;
 
   return (
-    <article aria-label={`${displayName(author)} in ${item.channel_name}`} className="pc-home-card flex flex-col gap-3 px-4 pb-4 pt-3">
+    <article aria-label={`${authorName} in ${item.channel_name}`} className="pc-home-card flex flex-col gap-3 px-4 pb-4 pt-3">
       <FeedCardHeader channelName={item.channel_name} when={when} onOpen={onOpen} aside={<ReasonTag reason={item.reason} />} />
       <div className={cn('flex gap-3', compact && 'flex-col gap-2.5')}>
         {compact ? (
           <div className="flex items-center gap-2.5">
-            <FeedAvatar user={author} size={28} />
-            <span className="pc-display min-w-0 truncate text-name text-text-primary">{displayName(author)}</span>
+            {avatar(28)}
+            <span className="pc-display min-w-0 truncate text-name text-text-primary">{authorName}</span>
           </div>
         ) : (
-          <FeedAvatar user={author} size={36} />
+          avatar(36)
         )}
         <div className="flex min-w-0 flex-1 flex-col gap-2.5">
           {!compact && (
-            <span className="pc-display truncate pt-[7px] text-name leading-none text-text-primary">{displayName(author)}</span>
+            <span className="pc-display truncate pt-[7px] text-name leading-none text-text-primary">{authorName}</span>
           )}
+          {feedEmbed && <FeedPostCard embed={feedEmbed} className="mt-0 w-full" />}
           {message.forwarded_from && (
             <ForwardedCard forward={message.forwarded_from} quote={forwardQuote(message)} scope={scope} />
           )}
-          {nodes.length > 0 && <ClampedText>{nodes}</ClampedText>}
-          <PhotoGrid images={images} />
-          <FileChips files={files} onOpen={onOpen} />
+          {!feedEmbed && nodes.length > 0 && <ClampedText>{nodes}</ClampedText>}
+          {!feedEmbed && <PhotoGrid images={images} />}
+          {!feedEmbed && <FileChips files={files} onOpen={onOpen} />}
           {message.poll && (
             <div className="pc-home-poll -mt-1 [&>div]:mt-0 [&>div]:max-w-none [&>div]:border-transparent [&>div]:bg-bg-well [&>div]:shadow-[var(--shadow-well)]">
               <PollMessageCard channelId={message.channel_id} poll={message.poll} canVote />

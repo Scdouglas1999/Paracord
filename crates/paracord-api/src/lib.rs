@@ -448,6 +448,26 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
             get(routes::sports::get_standings),
         )
         .route(
+            "/api/v1/guilds/{guild_id}/feeds",
+            get(routes::feeds::list_feeds).post(routes::feeds::create_feed),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/feeds/settings",
+            put(routes::feeds::put_feed_settings),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/feeds/preview",
+            post(routes::feeds::preview_feed),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/feeds/{feed_id}",
+            patch(routes::feeds::update_feed).delete(routes::feeds::delete_feed),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/feeds/{feed_id}/post-latest",
+            post(routes::feeds::post_latest),
+        )
+        .route(
             "/api/v1/guilds/{guild_id}/members/@me",
             put(routes::members::join_public_guild).delete(routes::members::leave_guild),
         )
@@ -1109,6 +1129,10 @@ pub fn build_router(state: &AppState) -> Router<AppState> {
         .route(
             "/api/v1/admin/network",
             get(routes::admin::get_network).patch(routes::admin::update_network),
+        )
+        .route(
+            "/api/v1/admin/addons",
+            get(routes::feeds::get_admin_addons).patch(routes::feeds::update_admin_addons),
         )
         .route("/api/v1/admin/users", get(routes::admin::list_users))
         .route(

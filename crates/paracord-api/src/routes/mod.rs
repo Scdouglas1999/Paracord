@@ -16,6 +16,8 @@ pub mod economy;
 pub mod emojis;
 pub mod events;
 pub mod federation;
+pub mod feeds;
+pub mod feeds_poll;
 pub mod files;
 pub mod gallery;
 pub mod guild_search;

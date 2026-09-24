@@ -338,6 +338,139 @@ async fn feed_carries_each_notable_reason_and_never_plain_chat() -> anyhow::Resu
     Ok(())
 }
 
+/// Mark a message as posted by a new feed on `guild_id`, the way the feeds
+/// poller links its cards. Returns the feed id.
+async fn link_to_new_feed(
+    ctx: &TestContext,
+    guild_id: &str,
+    channel_id: &str,
+    message_id: &str,
+    show_on_front_page: bool,
+) -> anyhow::Result<i64> {
+    let guild = guild_id.parse::<i64>()?;
+    let key = format!("https://blog.example/{message_id}.xml");
+    let source_id = paracord_db::feeds::upsert_source(
+        &ctx.db,
+        paracord_util::snowflake::generate(1),
+        &paracord_db::feeds::NewSource {
+            kind: "rss",
+            source_key: &key,
+            url: &key,
+            title: Some("Lantern Journal"),
+            site_url: Some("https://blog.example/"),
+            icon_url: None,
+            next_check_at: chrono::Utc::now() + chrono::Duration::days(1),
+        },
+    )
+    .await?;
+    let feed = paracord_db::feeds::create_feed(
+        &ctx.db,
+        &paracord_db::feeds::NewGuildFeed {
+            id: paracord_util::snowflake::generate(1),
+            guild_id: guild,
+            channel_id: channel_id.parse::<i64>()?,
+            source_id,
+            creator_id: 1,
+            kind: "rss",
+            name: "Lantern Journal",
+            options: "{}",
+            secret: None,
+            show_on_front_page,
+        },
+    )
+    .await?;
+    paracord_db::feeds::link_feed_message(
+        &ctx.db,
+        &paracord_db::feeds::NewFeedMessage {
+            message_id: message_id.parse::<i64>()?,
+            feed_id: feed.id,
+            guild_id: guild,
+            kind: "rss",
+            name: "Lantern Journal",
+            icon_url: None,
+            overflow: false,
+        },
+    )
+    .await?;
+    Ok(feed.id)
+}
+
+#[tokio::test]
+async fn feed_posts_shown_on_the_front_page_carry_the_feed_reason() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let guild_id = ctx.create_guild("Feeds Front Page").await?;
+    let general = ctx.create_channel(&guild_id, "general", 0).await?;
+    let news = ctx.create_channel(&guild_id, "news", 5).await?;
+
+    let shown = ctx.post(&general, "A new post").await?;
+    let feed_id = link_to_new_feed(&ctx, &guild_id, &general, &shown, true).await?;
+    // A feed post in an announcement channel is still a feed post.
+    let announced = ctx.post(&news, "Release notes").await?;
+    link_to_new_feed(&ctx, &guild_id, &news, &announced, true).await?;
+    // Front page off: neither its poster nor its announcement channel puts it there.
+    let hidden = ctx.post(&general, "Poster card").await?;
+    attach_image(&ctx, &hidden).await?;
+    link_to_new_feed(&ctx, &guild_id, &general, &hidden, false).await?;
+    let hidden_news = ctx.post(&news, "Quiet release").await?;
+    link_to_new_feed(&ctx, &guild_id, &news, &hidden_news, false).await?;
+
+    // The "and N more" line is a feed post but not news, even in an
+    // announcement channel.
+    let overflow = ctx.post(&news, "and 3 more from Lantern Journal").await?;
+    paracord_db::feeds::link_feed_message(
+        &ctx.db,
+        &paracord_db::feeds::NewFeedMessage {
+            message_id: overflow.parse::<i64>()?,
+            feed_id,
+            guild_id: guild_id.parse::<i64>()?,
+            kind: "rss",
+            name: "Lantern Journal",
+            icon_url: None,
+            overflow: true,
+        },
+    )
+    .await?;
+
+    let page = ctx.feed(&guild_id, "limit=20").await?;
+    let first = items(&page);
+    assert!(message_item(&first, &overflow).is_none(), "{page}");
+    assert!(message_item(&first, &hidden_news).is_none(), "{page}");
+    let shown_item = message_item(&first, &shown).context("feed post on the front page")?;
+    assert_eq!(shown_item["reason"], "feed", "{shown_item}");
+    assert_eq!(shown_item["message"]["feed"]["name"], "Lantern Journal");
+    assert_eq!(
+        shown_item["message"]["author"]["username"],
+        "Lantern Journal"
+    );
+    let announced_item = message_item(&first, &announced).context("announced feed post")?;
+    assert_eq!(announced_item["reason"], "feed");
+    assert!(
+        message_item(&first, &hidden).is_none(),
+        "a feed set to stay off the front page stays off: {page}"
+    );
+
+    // Turning the front page off for a feed takes its posts off.
+    let feed = paracord_db::feeds::get_feed(&ctx.db, feed_id)
+        .await?
+        .context("feed row")?;
+    paracord_db::feeds::update_feed(
+        &ctx.db,
+        feed_id,
+        &paracord_db::feeds::FeedUpdate {
+            source_id: feed.source_id,
+            name: &feed.name,
+            channel_id: feed.channel_id,
+            show_on_front_page: false,
+            paused: false,
+            secret: None,
+        },
+    )
+    .await?;
+    let page = ctx.feed(&guild_id, "limit=20").await?;
+    assert!(message_item(&items(&page), &shown).is_none(), "{page}");
+    Ok(())
+}
+
 #[tokio::test]
 async fn feed_hides_channels_the_viewer_cannot_read() -> anyhow::Result<()> {
     let ctx = TestContext::new().await?;

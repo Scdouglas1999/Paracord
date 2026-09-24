@@ -54,6 +54,7 @@
 @import './components.css' layer(components);
 @import './sports.css' layer(components);
 @import './daily-word.css' layer(components);
+@import './feeds.css' layer(components);
 @import './server-home.css' layer(components);
 @import './utilities.css';
 /* Last, and in a layer of its own: the §9 focus ring outranks the utilities, so

@@ -276,6 +276,9 @@ async fn main() -> Result<()> {
     }
 
     let config = config::Config::load(&args.config)?;
+    if let Some(limit) = config.integrations.feeds_per_server {
+        paracord_core::feeds::configure(limit);
+    }
     if let Some(replay) = config.sports_replay.clone() {
         paracord_core::sports::install_sports_replay(replay.games, replay.speed, replay.start)
             .await;
@@ -978,6 +981,7 @@ async fn main() -> Result<()> {
     spawn_federation_moderation_worker(state.clone(), shutdown_notify.clone());
     spawn_scheduled_message_worker(state.clone(), shutdown_notify.clone());
     spawn_sports_announce_worker(state.clone(), shutdown_notify.clone());
+    spawn_feeds_worker(state.clone(), shutdown_notify.clone());
     spawn_reminder_worker(state.clone(), shutdown_notify.clone());
     spawn_disappearing_message_worker(state.clone(), shutdown_notify.clone());
     spawn_scheduled_event_worker(state.clone(), shutdown_notify.clone());
@@ -2221,6 +2225,24 @@ fn spawn_sports_announce_worker(
                 _ = interval.tick() => {
                     paracord_api::routes::sports_announce::announce_due(&state).await;
                     paracord_api::routes::sports_alerts::alert_due(&state).await;
+                }
+            }
+        }
+    });
+}
+
+/// The feeds add-on's poller. Each source keeps its own schedule (10 min for
+/// RSS, YouTube and GitHub, 5 for Jellyfin, 2 for Twitch, backing off on
+/// errors); this only wakes up to see which are due.
+fn spawn_feeds_worker(state: paracord_core::AppState, shutdown: Arc<tokio::sync::Notify>) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = shutdown.notified() => break,
+                _ = interval.tick() => {
+                    paracord_api::routes::feeds_poll::poll_due(&state).await;
                 }
             }
         }

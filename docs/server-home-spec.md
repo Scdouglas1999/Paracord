@@ -88,7 +88,10 @@ after the fourth feed item, then the feed continues.
 
 - `{ type: 'message', message, channel_id, channel_name, reason }`. `message` has the
   normal message shape: poll, attachments, reactions, viewer reactions. `reason` is one
-  of `announcement | attachment | poll | reactions | pinned | thread_starter`.
+  of `announcement | attachment | poll | reactions | pinned | thread_starter | feed`.
+  `feed` is a card posted by a feed (Server settings → Add-ons → Feeds) with "Show on
+  the front page" on; it wins over every other reason, and such a message carries a
+  `feed` object (`id`, `kind`, `name`, `icon_url`).
 - `{ type: 'forum_post', channel_id, channel_name, thread_id, title, author,
   reply_count, last_reply_at, last_reply_author, participants }`.
 - `{ type: 'members_joined', users: [...], at }`: joins grouped by day.

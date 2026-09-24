@@ -350,6 +350,11 @@ pub async fn get_server_feed(
         })
         .collect();
     let message_json = messages_to_json(&state, &page_messages, auth.user_id).await;
+    let page_ids: Vec<i64> = page_messages.iter().map(|row| row.id).collect();
+    let front_page_feed_posts =
+        paracord_db::feeds::front_page_feed_message_ids(&state.db, &page_ids)
+            .await
+            .map_err(internal)?;
     let mut message_json: HashMap<i64, Value> = page_messages
         .iter()
         .map(|row| row.id)
@@ -377,6 +382,7 @@ pub async fn get_server_feed(
                 let channel_type = channel.map(|c| c.channel_type).unwrap_or(CHANNEL_TYPE_TEXT);
                 let reason = message_reason(
                     &message,
+                    front_page_feed_posts.contains(&row.id),
                     announcement_channels.contains(&row.channel_id),
                     starter_set.contains(&row.id),
                 );
@@ -429,13 +435,20 @@ pub async fn get_server_feed(
 }
 
 /// Why a message is in the feed, in the order a reader would name it.
-fn message_reason(message: &Value, in_announcements: bool, starts_thread: bool) -> &'static str {
+fn message_reason(
+    message: &Value,
+    from_feed: bool,
+    in_announcements: bool,
+    starts_thread: bool,
+) -> &'static str {
     let has_poll = !message["poll"].is_null();
     let has_attachment = message["attachments"]
         .as_array()
         .is_some_and(|items| !items.is_empty());
     let pinned = message["pinned"].as_bool().unwrap_or(false);
-    if in_announcements {
+    if from_feed {
+        "feed"
+    } else if in_announcements {
         "announcement"
     } else if has_poll {
         "poll"

@@ -1,5 +1,5 @@
 import { useMemo, type ReactNode } from 'react';
-import { BarChart3, Hash, Megaphone, MessagesSquare, Paperclip, Pin } from 'lucide-react';
+import { BarChart3, Hash, Megaphone, MessagesSquare, Paperclip, Pin, Rss } from 'lucide-react';
 
 import { LitAvatar } from '../../light';
 import { ResourceImage } from '../../ui/ResourceImage';
@@ -54,6 +54,7 @@ const REASON: Record<FeedReason, { label: string; icon: ReactNode } | null> = {
   thread_starter: { label: 'Thread', icon: <MessagesSquare size={12} aria-hidden /> },
   reactions: null,
   attachment: null,
+  feed: { label: 'Feed', icon: <Rss size={12} aria-hidden /> },
 };
 
 /**

@@ -73,7 +73,7 @@ fn opaque_attachment_filename(attachment_id: i64, requested: &str) -> String {
     }
 }
 
-fn attachment_aad(attachment_id: i64) -> String {
+pub(crate) fn attachment_aad(attachment_id: i64) -> String {
     format!("{ATTACHMENT_AAD_PREFIX}{attachment_id}")
 }
 

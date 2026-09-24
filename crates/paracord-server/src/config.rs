@@ -570,6 +570,10 @@ impl Default for AiConfig {
 pub struct IntegrationsConfig {
     /// Tenor API v2 key for GIF search. Obtain from Google Cloud Console.
     pub tenor_api_key: Option<String>,
+    /// How many feeds (Server settings → Add-ons → Feeds) one server may have.
+    /// Unset means 20. Env: `PARACORD_FEEDS_PER_SERVER`.
+    #[serde(default)]
+    pub feeds_per_server: Option<u32>,
 }
 
 /// First-owner claim ("who owns this server") settings.
@@ -1661,6 +1665,15 @@ impl Config {
             } else {
                 Some(trimmed)
             };
+        }
+
+        if let Ok(value) = std::env::var("PARACORD_FEEDS_PER_SERVER") {
+            match value.trim().parse::<u32>() {
+                Ok(limit) if limit > 0 => config.integrations.feeds_per_server = Some(limit),
+                _ => anyhow::bail!(
+                    "PARACORD_FEEDS_PER_SERVER must be a whole number above 0, got {value:?}"
+                ),
+            }
         }
 
         validate_secret_configuration(&config)?;

@@ -24,7 +24,9 @@ export type FeedReason =
   | 'poll'
   | 'reactions'
   | 'pinned'
-  | 'thread_starter';
+  | 'thread_starter'
+  /** Posted by a feed (Server settings → Add-ons → Feeds) set to show on the front page. */
+  | 'feed';
 
 interface FeedItemBase {
   /** Unique across item types: `m:<id>`, `f:<id>`, `j:<day>`. */
